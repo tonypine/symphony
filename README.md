@@ -98,10 +98,11 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   `Rework` to have the plan made again. A plan run that stopped midway resumes from its workpad
   when the parent is moved to `In Progress`, keeping the sub-tickets already filed. The approved
   parent waits without being re-dispatched until every sub-ticket is closed, then closes out with
-  a Linear project update. Any other ticket whose PR merges with sub-tickets still open (the
-  acceptance gate's follow-ups, or ones an agent filed) waits in `Waiting on sub-tickets` too
-  instead of closing: Symphony promotes its `Backlog` sub-tickets to `Todo` and moves it to `Done`
-  once every sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each ended.
+  a Linear project update. Any other ticket whose PR merges with a sub-ticket still open outside
+  `Backlog` waits in `Waiting on sub-tickets` too instead of closing, and Symphony moves it to `Done`
+  once every such sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each
+  ended. Its `Backlog` sub-tickets (the acceptance gate's follow-ups, or ones an agent filed) stay
+  there for a person to promote and never hold it: with only those open it goes to `Done` on merge.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
   ticket, which waits in `Todo` and runs again once those tickets are done. The design this flow
@@ -421,6 +422,21 @@ mise exec -- mix symphony.pr 123 --intent "fix failing CI"
 
 `Pause` stops new dispatches while in-flight agents continue; `Stop` ends one issue's session and
 records it as `stopped` without changing the Linear issue state.
+
+**Waiting on you.** The dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you`
+list and the menu bar app list every ticket only you can move on, oldest first: a plan or a PR in
+`In Review` or `Human Review`, a `Final verification:` ticket to sign off, and a ticket with an open
+`linear_request_human_action` decision. Each entry shows its kind, the headline of its
+`## Review brief` (the `**What to review:**` line) and how long it has waited; the menu bar icon
+shows a badge while the list is not empty. The list comes from the human-action read
+(`human_actions.interval_ms`, every 5 minutes by default), so a new ticket shows after the next read,
+and a ticket you move on leaves it on the next orchestrator poll. With `human_actions.enabled` off
+everywhere the list stays empty.
+
+Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
+**Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is
+`Me`, order it by **Updated**, and save it as `Waiting on me`. It shows on the phone app
+too. It does not show the brief headline; open the ticket and read its `## Review brief` comment.
 
 When a run hits the Claude or Codex usage limit, Symphony holds new runs of that agent on its own
 and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's

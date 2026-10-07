@@ -9,7 +9,9 @@ defmodule SymphonyElixir.HumanActions.Action do
     and `options`, or an older `## Action needed:` comment written by hand, with its `steps`;
   - `:task`: an issue carrying a deprecated request label (`HumanReview.legacy_request_labels/1`) with no request comment;
   - `:plan_review`: a plan parent waiting in `In Review` for its plan to be approved;
-  - `:qa_blocked`: an issue whose latest QA report says Auto Review was `blocked`;
+  - `:qa_blocked`: the one step only the operator can take (an app update, a tool to install) to
+    clear the cause Auto Review was `blocked` on, for every issue blocked on it, so its `issue` is
+    nil and `unblocks` names them;
   - `:human_review`: an issue waiting in the Human Review state with no other action;
   - `:verification_blocked`: a `Final verification:` ticket whose Auto Review parent walkthrough
     was `blocked` (a QA host without its macOS permissions), listed on the parent's project;

@@ -140,9 +140,11 @@ issues:
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
   a plan ticket whose sub-tickets are all terminal. Any other ticket whose PR merges with a
-  sub-ticket still open moves here instead of `Done`, and its `Backlog` sub-tickets move to `Todo`;
-  Symphony moves it to `Done` itself, with no run and a comment listing how each sub-ticket ended,
-  once every sub-ticket is terminal; one a person moves here waits for them. With the state off it
+  sub-ticket still open outside `Backlog` moves here instead of `Done`; Symphony moves it to `Done`
+  itself, with no run and a comment listing how each sub-ticket ended, once every sub-ticket outside
+  `Backlog` is terminal; one a person moves here waits for them. `Backlog` sub-tickets (the
+  acceptance gate's follow-ups) stay there for a person to promote and hold nothing: with only those
+  open the ticket goes to `Done` on merge. With the state off it
   goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
   parent in a terminal state with sub-tickets still open, without changing anything. When it cannot
@@ -213,8 +215,9 @@ issues:
     an open action request.
 
   The dashboard, `/api/v1/state` (`counts.human_review` and a `human_review` list of the watched
-  tickets in it) and the menu bar show how many tickets wait there, and the human-action update
-  lists them first. A supervisor moves a ticket there when it needs the operator, and never moves
+  tickets in it) show how many tickets wait there, and the human-action update lists them first.
+  The dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you` list and the menu
+  bar list them with the plans and PRs in `In Review` (see `human_actions`). A supervisor moves a ticket there when it needs the operator, and never moves
   one out of it on the operator's behalf.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
@@ -2183,6 +2186,16 @@ human_actions:
 - `min_update_interval_ms` (default `900000`): the least time between two updates to one project. A
   change inside that window is posted once the window has passed, with whatever is open by then.
 
+**Waiting on you.** The same read builds the list `/api/v1/state` returns as `waiting_on_you`, which
+the dashboard and the menu bar app show: one entry per ticket in `In Review` or the
+`issues.states.human_review` state, or with an open request, oldest first. Each entry has
+`issue_identifier`, `title`, `url`, `state`, `kind` (`action` for an open request, else
+`final_verification`, `plan` for a `plan` or `breakdown` parent, or `pr`), `headline` (the text
+after `**What to review:**` in the latest `## Review brief` comment, null without one),
+`waiting_since` (the latest move into its state, else its newest request) and `waiting_seconds`. A
+ticket the orchestrator sees running, or watches outside those states, is dropped before the next
+read. The list is empty while `enabled` is off for every repository.
+
 **Where actions come from.** On each read, in the scope each repository route polls, Symphony
 lists:
 
@@ -2206,7 +2219,14 @@ lists:
 - with the deprecated `human_actions.label`, an issue with the label and no such comment, as a task
   in itself (its description's list items become the steps);
 - a plan ticket in `In Review` or `Human Review`, waiting for its plan to be approved;
-- an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`;
+- an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`
+  for a cause only the operator can clear, read from the report's `Reason:` line: QA tools the
+  running app lacks ("Update the Symphony app"), a tool missing on the Symphony host ("Install `X`
+  on the Symphony host", with the command to run) or the QA host's Screen Recording and
+  Accessibility permissions ("Grant the QA host's permissions"). The issues blocked on the same
+  cause share one action, naming each of them and its reason, and it asks for that one step, never
+  for a test of the PR by hand. A block for any other cause, a QA tool the PR itself adds among
+  them, is left to the supervisor and not listed, not even as "Review <issue>";
 - a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
   such as a QA host without the macOS app's Screen Recording and Accessibility permissions. It is
   listed in the update of the parent's project, as "Grant the QA host's permissions for the final
@@ -2260,8 +2280,8 @@ leaves a state a person moves it out of (anything but `issues.states.active`, th
 the Auto Review state), such as `Human Review` to `Merging`, `Rework` or `Done`. The request's own
 move to `Human Review` keeps it open, and so does the agent's move to `Backlog`. A withdrawal
 closes it, and so does a terminal state. A plan
-review closes when the parent leaves its review state, and a blocked QA pass when the issue leaves
-its review state or its next QA report is not `blocked`. A blocked final verification closes when
+review closes when the parent leaves its review state, and a blocked QA cause when every issue
+blocked on it leaves its review state or its next QA report is not `blocked`. A blocked final verification closes when
 its next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it
 to (`In Review`, `Human Review` when only a person can do the steps left, or `Todo` while gap
 tickets for its failing steps block it). A Human Review action closes when the issue leaves
@@ -2294,12 +2314,22 @@ health set by the project's previous update. No secret value reaches an update:
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
 A rendered example, for a mix of a decision on a missing secret, a plan, a task labelled with the deprecated
-`human_actions.label` and a blocked QA pass:
+`human_actions.label` and two QA passes blocked on QA tools the running app lacks:
 
 ```md
 **4 actions need you.** Quickest first.
 
-### 1. Add the release signing secrets
+### 1. Update the Symphony app
+
+**~5 min** · Unblocks the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)
+
+**Why:** MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.
+
+1. Update the Symphony app to its latest release.
+
+**Done when:** MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.
+
+### 2. Add the release signing secrets
 
 **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
 
@@ -2312,7 +2342,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 
 **Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
 
-### 2. Approve the plan for MOT-40
+### 3. Approve the plan for MOT-40
 
 **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
 
@@ -2324,7 +2354,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 
 **Done when:** MOT-40 leaves In Review.
 
-### 3. Turn on the pre-push hook on your laptop
+### 4. Turn on the pre-push hook on your laptop
 
 Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
@@ -2332,19 +2362,8 @@ Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
 **Done when:** you close MOT-31, or move it on.
 
-### 4. Unblock QA for MOT-52
-
-Unblocks [MOT-52](https://linear.app/acme/issue/MOT-52): the review of its PR
-
-**Why:** Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.
-
-1. Fix the cause above, on the machine QA runs on.
-2. Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back.
-
-**Done when:** MOT-52 leaves In Review, or its next QA report is not blocked.
-
 ---
-_Symphony posts a new update when this list changes · list `6b00e3cd`_
+_Symphony posts a new update when this list changes · list `ee2f8fda`_
 ```
 
 ## `WORKFLOW.md`

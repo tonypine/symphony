@@ -235,6 +235,41 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    func testDecodesWhatWaitsOnYou() throws {
+        let data = try recordedState(replacing: "waiting_on_you", with: [
+            [
+                "issue_id": "id-1", "issue_identifier": "TP-1", "title": "Research issue template",
+                "url": "https://linear.app/tonypine/issue/TP-1", "state": "In Review", "kind": "plan",
+                "headline": "The split", "waiting_since": "2026-10-02T12:16:02Z", "waiting_seconds": 7_200,
+            ],
+            ["issue_id": "id-2", "kind": "final_verification", "headline": NSNull(), "waiting_seconds": NSNull()],
+            ["kind": "pr"],
+            ["issue_identifier": "TP-3", "kind": "action"],
+            ["issue_identifier": "TP-4", "kind": "pr"],
+            ["issue_identifier": "TP-5"],
+        ])
+
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("the state should read")
+        }
+        XCTAssertEqual(snapshot.waitingOnYou, [
+            .init(
+                identifier: "TP-1", title: "Research issue template", url: URL(string: "https://linear.app/tonypine/issue/TP-1"),
+                kind: .plan, headline: "The split", waitingSeconds: 7_200
+            ),
+            .init(identifier: "id-2", kind: .finalVerification),
+            .init(identifier: "TP-3", kind: .action),
+            .init(identifier: "TP-4", kind: .pr),
+            .init(identifier: "TP-5", kind: .other("")),
+        ])
+
+        // The recorded state predates the list, which then reads as empty.
+        XCTAssertEqual(
+            SymphonyState.poll(data: try recordedState(), statusCode: 200),
+            .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns))
+        )
+    }
+
     func testDecodesTheRunningEntries() throws {
         let data = try recordedState(replacing: "running", with: [
             [

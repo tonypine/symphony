@@ -2469,11 +2469,13 @@ An issue is dispatch-eligible only if all are true:
     run). Any other issue in that state is never dispatched, and waits for a human unless the
     merge of its pull request put it there (below).
   - When a pull request of an issue that is not a plan parent merges while the issue has a
-    non-terminal sub-issue, the service moves the issue to the waiting state instead of `Done`,
-    whoever merged it and even when Linear's GitHub integration or a landing run already moved it
-    to `Done`, moves its `Backlog` sub-issues to `Todo` and comments on it. The service records
+    sub-issue that is neither terminal nor in `Backlog`, the service moves the issue to the waiting
+    state instead of `Done`, whoever merged it and even when Linear's GitHub integration or a
+    landing run already moved it to `Done`, and comments on it. It never promotes a sub-issue on
+    merge: a `Backlog` sub-issue waits for a person and does not hold the issue, so with only those
+    open the merge closes it as if it had none. The service records
     durably that the merge put the issue there. On each poll, such a recorded issue in the waiting
-    state with at least one sub-issue, every one terminal, and not running or claimed, is read again
+    state with at least one sub-issue, every one terminal or in `Backlog`, and not running or claimed, is read again
     and, if that still holds, moved to `Done` with a comment listing each sub-issue's state; no run
     starts. An issue a person moved to the waiting state is not recorded, so it is not closed this
     way. A sub-issue added while it waits counts in that check, and a
@@ -2511,6 +2513,11 @@ An issue is dispatch-eligible only if all are true:
   - The human-action update lists issues in the state first, the state API reports
     `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
     moves an issue out of it on the operator's behalf.
+  - The state API reports `waiting_on_you`: one entry per issue in a review state or with an open
+    request, from the latest human-action read, oldest first, with its identifier, title, URL, kind
+    (`action`, `final_verification`, `plan` or `pr`), the headline of its review brief (null
+    without one) and how long it has waited. It MUST drop an issue the orchestrator sees running or
+    watches outside the review states.
 - Plan review rule:
   - The plan run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
     (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),

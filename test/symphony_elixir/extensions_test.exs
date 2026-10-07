@@ -641,6 +641,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                }
              ],
              "human_review" => [],
+             "waiting_on_you" => [],
              "conflicts" => [],
              "retrying" => [
                %{
@@ -1516,6 +1517,95 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _view, html} = live(build_conn(), "/")
     assert html =~ "Human Review"
     assert html =~ "needs you"
+  end
+
+  test "the state api and the dashboard list what waits on you, oldest first, without tickets that left review" do
+    now = DateTime.utc_now()
+
+    entry = fn identifier, kind, hours_ago, headline ->
+      %{
+        issue_id: "issue-" <> identifier,
+        identifier: identifier,
+        title: "Title of " <> identifier,
+        url: "https://linear.app/example/issue/" <> identifier,
+        state: "In Review",
+        kind: kind,
+        waiting_since: hours_ago && DateTime.add(now, -hours_ago * 3_600, :second),
+        headline: headline
+      }
+    end
+
+    human_actions = {:test, make_ref()}
+
+    :persistent_term.put({SymphonyElixir.HumanActions, :waiting_on_you, human_actions}, [
+      entry.("MT-PR", :pr, 1, "The retry fix"),
+      entry.("MT-UNKNOWN", :final_verification, nil, nil),
+      entry.("MT-PLAN", :plan, 3, "The split into four sub-tickets"),
+      entry.("MT-ACTION", :action, 2, nil),
+      entry.("MT-APPROVED", :plan, 4, "Approved already"),
+      entry.("MT-HTTP", :pr, 5, "Running again")
+    ])
+
+    approved = %{
+      issue_id: "issue-MT-APPROVED",
+      repo_key: "default",
+      identifier: "MT-APPROVED",
+      state: "Waiting on sub-tickets",
+      url: nil,
+      last_ran_at: nil,
+      seconds_since_last_run: nil
+    }
+
+    human_review = %{approved | issue_id: "issue-MT-PR", identifier: "MT-PR", state: "Human Review"}
+    snapshot = static_snapshot()
+    snapshot = %{snapshot | watching: snapshot.watching ++ [approved, human_review], running: Enum.map(snapshot.running, &%{&1 | issue_id: "issue-MT-HTTP"})}
+    orchestrator_name = Module.concat(__MODULE__, :WaitingOnYouOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: snapshot,
+        refresh: %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, human_actions: human_actions, snapshot_timeout_ms: 50)
+
+    waiting = json_response(get(build_conn(), "/api/v1/state"), 200)["waiting_on_you"]
+    assert Enum.map(waiting, & &1["issue_identifier"]) == ["MT-PLAN", "MT-ACTION", "MT-PR", "MT-UNKNOWN"]
+
+    assert [
+             %{
+               "issue_id" => "issue-MT-PLAN",
+               "title" => "Title of MT-PLAN",
+               "url" => "https://linear.app/example/issue/MT-PLAN",
+               "state" => "In Review",
+               "kind" => "plan",
+               "headline" => "The split into four sub-tickets",
+               "waiting_since" => waiting_since,
+               "waiting_seconds" => waiting_seconds
+             },
+             %{"kind" => "action", "headline" => nil},
+             %{"kind" => "pr", "state" => "Human Review", "headline" => "The retry fix"},
+             %{"kind" => "final_verification", "waiting_since" => nil, "waiting_seconds" => nil}
+           ] = waiting
+
+    assert is_binary(waiting_since)
+    assert waiting_seconds in 10_799..10_860
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Waiting on you"
+    rows = Regex.scan(~r/<tr class="waiting-on-you-row">.*?<\/tr>/s, html) |> Enum.map(&hd/1)
+    assert length(rows) == 4
+    assert Enum.at(rows, 0) =~ "MT-PLAN"
+    assert Enum.at(rows, 0) =~ "Plan"
+    assert Enum.at(rows, 0) =~ "The split into four sub-tickets"
+    assert Enum.at(rows, 0) =~ "3h ago"
+    assert Enum.at(rows, 1) =~ "Decision"
+    assert Enum.at(rows, 1) =~ "Title of MT-ACTION"
+    assert Enum.at(rows, 2) =~ "PR"
+    assert Enum.at(rows, 3) =~ "Final verification"
+    assert Enum.at(rows, 3) =~ "n/a"
+    refute Enum.any?(rows, &(&1 =~ "MT-APPROVED"))
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do

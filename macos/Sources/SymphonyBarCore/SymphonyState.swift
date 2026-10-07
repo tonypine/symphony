@@ -20,6 +20,61 @@ public struct StateSnapshot: Equatable {
     public var gateAgreement: [String: GateAgreement]?
     /// The running agents, in Symphony's order; empty when none runs.
     public var runs: [Run]
+    /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
+    public var waitingOnYou: [WaitingTicket]
+
+    /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
+    public struct WaitingTicket: Equatable {
+        /// What the operator is asked for.
+        public enum Kind: Equatable {
+            /// A plan waiting for approval.
+            case plan
+            /// A pull request to review.
+            case pr
+            /// A `Final verification:` ticket to sign off.
+            case finalVerification
+            /// A decision an agent asked for with `linear_request_human_action`.
+            case action
+            /// A kind this app doesn't know yet.
+            case other(String)
+
+            public init(_ text: String?) {
+                switch text {
+                case "plan"?: self = .plan
+                case "pr"?: self = .pr
+                case "final_verification"?: self = .finalVerification
+                case "action"?: self = .action
+                default: self = .other(text ?? "")
+                }
+            }
+        }
+
+        public var identifier: String
+        public var title: String?
+        /// The ticket in Linear.
+        public var url: URL?
+        public var kind: Kind
+        /// The `**What to review:**` line of its review brief, nil when it has none.
+        public var headline: String?
+        /// How long it has waited, nil when Symphony couldn't tell.
+        public var waitingSeconds: Int?
+
+        public init(
+            identifier: String,
+            title: String? = nil,
+            url: URL? = nil,
+            kind: Kind = .pr,
+            headline: String? = nil,
+            waitingSeconds: Int? = nil
+        ) {
+            self.identifier = identifier
+            self.title = title
+            self.url = url
+            self.kind = kind
+            self.headline = headline
+            self.waitingSeconds = waitingSeconds
+        }
+    }
 
     /// A running agent, as `/api/v1/state`'s `running` lists it.
     public struct Run: Equatable {
@@ -204,7 +259,8 @@ public struct StateSnapshot: Equatable {
         forced: [ForcedTicket] = [],
         humanReview: Int = 0,
         gateAgreement: [String: GateAgreement]? = nil,
-        runs: [Run] = []
+        runs: [Run] = [],
+        waitingOnYou: [WaitingTicket] = []
     ) {
         self.running = running
         self.retrying = retrying
@@ -216,6 +272,7 @@ public struct StateSnapshot: Equatable {
         self.humanReview = humanReview
         self.gateAgreement = gateAgreement
         self.runs = runs
+        self.waitingOnYou = waitingOnYou
     }
 }
 
@@ -322,6 +379,17 @@ public enum SymphonyState {
                 url: run.url.flatMap(URL.init(string:)),
                 startedAt: run.startedAt.flatMap(parseDate),
                 lastEventAt: run.lastEventAt.flatMap(parseDate)
+            )
+        }
+        snapshot.waitingOnYou = (payload.waitingOnYou ?? []).compactMap { ticket in
+            guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
+            return StateSnapshot.WaitingTicket(
+                identifier: identifier,
+                title: ticket.title,
+                url: ticket.url.flatMap(URL.init(string:)),
+                kind: .init(ticket.kind),
+                headline: ticket.headline,
+                waitingSeconds: ticket.waitingSeconds
             )
         }
         return .state(snapshot)
@@ -467,6 +535,16 @@ public enum SymphonyState {
             let lastEventAt: String?
         }
 
+        struct Waiting: Decodable {
+            let issueId: String?
+            let issueIdentifier: String?
+            let title: String?
+            let url: String?
+            let kind: String?
+            let headline: String?
+            let waitingSeconds: Int?
+        }
+
         let counts: Counts?
         /// Every field is optional, so an entry missing one never fails the whole state.
         let running: [Running]?
@@ -476,6 +554,8 @@ public enum SymphonyState {
         let appUpdate: AppUpdate?
         /// Missing before Symphony reported forced tickets.
         let forced: [Forced]?
+        /// Missing before Symphony listed what waits on the operator.
+        let waitingOnYou: [Waiting]?
         let error: Failure?
     }
 }

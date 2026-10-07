@@ -85,6 +85,15 @@ defmodule SymphonyElixir.HumanReview do
 
   def review_state?(_state_name, _settings), do: false
 
+  @doc "`review_state?/2` against the current settings, with only `In Review` when they can't be read."
+  @spec review_state?(String.t() | nil) :: boolean()
+  def review_state?(state_name) do
+    case Config.settings() do
+      {:ok, settings} -> review_state?(state_name, settings)
+      {:error, _reason} -> review_state?(state_name, nil)
+    end
+  end
+
   @doc "True when `issue` (or a state name) sits in the configured state."
   @spec in_state?(Issue.t() | String.t() | term(), Schema.t() | term()) :: boolean()
   def in_state?(%Issue{state: issue_state}, settings), do: in_state?(issue_state, settings)
@@ -119,7 +128,7 @@ defmodule SymphonyElixir.HumanReview do
     rules = settings.auto_review.acceptance_gate.escalate
     rules = %{rules | labels: Enum.reject(rules.labels, &Issue.breakdown_label?/1)}
 
-    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, human_review_state: state(settings)) != [] or
+    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, review_states: review_states(settings)) != [] or
       author_reviews?(issue)
   end
 

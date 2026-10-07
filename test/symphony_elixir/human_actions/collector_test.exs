@@ -2,7 +2,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{Action, Collector, Request}
+  alias SymphonyElixir.HumanActions.{Action, Collector, Request, Update}
   alias SymphonyElixir.QaAgent.Report
 
   @project %{"id" => "project-1", "name" => "Cycle"}
@@ -66,6 +66,15 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   defp actions(%{"project-1" => %{project: project, actions: actions}}) do
     assert project == %{id: "project-1", name: "Cycle"}
     Enum.sort_by(actions, & &1.key)
+  end
+
+  test "collect_all/2 also lists the issues waiting on a person, from the same read" do
+    nodes = [node("MOT-1", %{"state" => %{"name" => "In Review"}}), node("MOT-2", %{})]
+    client = fn _query, _variables, _opts -> {:ok, page(nodes, %{"hasNextPage" => false})} end
+    opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
+
+    assert {:ok, %{}, [%{identifier: "MOT-1", kind: :pr}]} = Collector.collect_all([:repo], opts)
+    assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
   test "queries the route's scope for labelled, In Review, Human Review or final verification issues that are not terminal" do
@@ -252,50 +261,86 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert [%Action{steps: [_read, "To approve, move the sub-tickets you accept to Todo.", _reject]}] = actions(collected)
   end
 
-  test "lists an In Review issue whose latest QA report is blocked" do
-    blocked_report = "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n**PR head:** `abc`\n\nReason: the QA host has no Screen Recording permission\n"
+  defp blocked_issue(identifier, state, reason) do
+    body = "## Symphony QA Report\n\n**Verdict:** blocked → #{state}\n**PR head:** `abc`\n\n#{if reason, do: "Reason: " <> reason <> "\n"}"
+    node(identifier, %{"state" => %{"name" => state}, "comments" => comments([%{"id" => "c-" <> identifier, "body" => body, "createdAt" => "2026-10-03T10:00:00.000Z"}])})
+  end
 
-    blocked =
-      node("MOT-52", %{
-        "state" => %{"name" => "In Review"},
-        "comments" => comments([%{"id" => "c1", "body" => blocked_report, "createdAt" => "2026-10-03T10:00:00.000Z"}, %{"id" => "c2", "body" => nil}])
-      })
+  test "asks once for the app update that unblocks every issue QA-blocked on the running app" do
+    api_fixtures = blocked_issue("MOT-56", "Human Review", "QA needs `api_fixtures`, which the running app (0.0.1.384) lacks.")
+    put_file = blocked_issue("MOT-52", "In Review", "QA needs `qa_put_file`, which the running app (0.0.1.384) lacks")
 
-    no_reason =
-      node("MOT-53", %{
-        "state" => %{"name" => "in review"},
-        "comments" => comments([%{"id" => "c3", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n", "createdAt" => "2026-10-03T10:00:00.000Z"}])
-      })
-
-    passed = node("MOT-54", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c4", "body" => "## Symphony QA Report\n\n**Verdict:** pass → In Review\n"}])})
-    no_report = node("MOT-55", %{"state" => %{"name" => "In Review"}})
-
-    assert {:ok, collected} = collect([blocked, no_reason, passed, no_report])
+    assert {:ok, collected} = collect([api_fixtures, put_file])
 
     assert [
              %Action{
-               key: "qa:id-MOT-52",
+               key: "qa:app_update:id-MOT-52,id-MOT-56",
                kind: :qa_blocked,
-               title: "Unblock QA for MOT-52",
-               why: "Auto Review could not test the PR: the QA host has no Screen Recording permission",
-               unblocks: "the review of its PR",
-               done_when: "MOT-52 leaves In Review, or its next QA report is not blocked."
-             },
-             %Action{key: "qa:id-MOT-53", why: "Auto Review could not test the PR: see the QA report on MOT-53"}
+               title: "Update the Symphony app",
+               issue: nil,
+               human_review: false,
+               est_minutes: 5,
+               why: "MOT-52: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks. MOT-56: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks.",
+               unblocks: "the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-56](https://linear.app/acme/issue/MOT-56)",
+               steps: ["Update the Symphony app to its latest release."],
+               done_when: "MOT-52 and MOT-56 each leave their review state, or their next QA reports are not blocked."
+             } = action
            ] = actions(collected)
+
+    {body, []} = Update.render([action], ["In Review", "Human Review"])
+    refute body =~ "test the PR"
+    assert body =~ "[MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-56](https://linear.app/acme/issue/MOT-56)"
+  end
+
+  test "asks for the one step a tool missing on the Symphony host or the QA host's permissions need" do
+    package = blocked_issue("MOT-52", "In Review", "`@playwright/mcp@0.0.41` is not installed on the Symphony host; run `npx -y @playwright/mcp@0.0.41 --version` there once")
+    npx = blocked_issue("MOT-53", "In Review", "`npx` (Node.js) is not on Symphony's PATH, so the web playbook's browser could not start")
+    permissions = blocked_issue("MOT-54", "In Review", "the QA host has no Screen Recording permission for the app")
+
+    assert {:ok, collected} = collect([package, npx, permissions])
+
+    assert [
+             %Action{
+               key: "qa:qa_permissions:id-MOT-54",
+               title: "Grant the QA host's permissions",
+               unblocks: "the QA of [MOT-54](https://linear.app/acme/issue/MOT-54)",
+               done_when: "MOT-54 leaves its review state, or its next QA report is not blocked."
+             },
+             %Action{
+               key: "qa:tool:@playwright/mcp@0.0.41:id-MOT-52",
+               title: "Install `@playwright/mcp@0.0.41` on the Symphony host",
+               steps: ["Run `npx -y @playwright/mcp@0.0.41 --version` on the Symphony host once."]
+             },
+             %Action{key: "qa:tool:npx:id-MOT-53", title: "Install Node.js on the Symphony host", unblocks: "the QA of [MOT-53](https://linear.app/acme/issue/MOT-53)"}
+           ] = actions(collected)
+
+    no_url = put_in(package, ["url"], nil)
+    assert {:ok, collected} = collect([no_url])
+    assert [%Action{unblocks: "the QA of MOT-52"}] = actions(collected)
+  end
+
+  test "lists nothing for a QA block with no cause only the operator can clear" do
+    other_cause = blocked_issue("MOT-52", "In Review", "the dev server failed its health check, so the web playbook could not run")
+    pr_adds_tool = blocked_issue("MOT-53", "In Review", "QA needs `qa_put_file`, which this PR adds and the running app (0.0.1.384) lacks")
+    no_reason = blocked_issue("MOT-55", "in review", nil)
+    in_human_review = blocked_issue("MOT-61", "Human Review", "no OpenRouter key")
+
+    passed =
+      node("MOT-54", %{
+        "state" => %{"name" => "In Review"},
+        "comments" => comments([%{"id" => "c4", "body" => "## Symphony QA Report\n\n**Verdict:** pass → In Review\n"}, %{"id" => "c5", "body" => nil}])
+      })
+
+    no_report = node("MOT-57", %{"state" => %{"name" => "In Review"}})
+
+    assert {:ok, collected} = collect([other_cause, pr_adds_tool, no_reason, in_human_review, passed, no_report])
+    assert collected == %{}
   end
 
   test "lists every issue in Human Review, marked so the update puts it first" do
     plan = node("MOT-60", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["breakdown"])})
 
-    blocked =
-      node("MOT-61", %{
-        "state" => %{"name" => "Human Review"},
-        "comments" =>
-          comments([
-            %{"id" => "c1", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → Human Review\n\nReason: no OpenRouter key\n", "createdAt" => "2026-10-03T10:00:00.000Z"}
-          ])
-      })
+    blocked = blocked_issue("MOT-61", "Human Review", "the running app lacks `qa_put_file`")
 
     requested =
       node("MOT-62", %{
@@ -313,7 +358,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert [
              %Action{key: "plan:id-MOT-60", kind: :plan_review, human_review: true, done_when: "MOT-60 leaves Human Review."},
              %Action{key: "plan:id-MOT-64", kind: :plan_review, human_review: false},
-             %Action{key: "qa:id-MOT-61", kind: :qa_blocked, human_review: true, done_when: "MOT-61 leaves Human Review, or its next QA report is not blocked."},
+             %Action{key: "qa:app_update:id-MOT-61", kind: :qa_blocked, human_review: false, title: "Update the Symphony app"},
              %Action{key: "request:comment-1", kind: :request, human_review: true},
              %Action{
                key: "review:id-MOT-63",
@@ -336,11 +381,10 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     usage_limited =
       node("MOT-56", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c5", "body" => usage_limited_report, "createdAt" => "2026-10-04T13:08:00.000Z"}])})
 
-    blocked =
-      node("MOT-57", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c6", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n"}])})
+    blocked = blocked_issue("MOT-57", "In Review", "the running app lacks `qa_put_file`")
 
     assert {:ok, collected} = collect([usage_limited, blocked])
-    assert [%Action{key: "qa:id-MOT-57"}] = actions(collected)
+    assert [%Action{key: "qa:app_update:id-MOT-57"}] = actions(collected)
   end
 
   defp walkthrough_report(identifier, verdict, target_state, attrs \\ %{}) do
@@ -561,5 +605,100 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     assert {:error, {:human_actions_query_failed, ^errors}} =
              Collector.collect([:repo], Keyword.put(opts, :linear_client, fn _query, _variables, _opts -> {:ok, errors} end))
+  end
+
+  describe "an issue with more comments and history than the issue query reads" do
+    defp filler_comments(count), do: for(i <- 1..count, do: %{"id" => "c-#{i}", "body" => "Note #{i}", "createdAt" => "2026-10-02T00:00:00Z"})
+    defp filler_history(count), do: for(_i <- 1..count, do: %{"createdAt" => "2026-09-01T00:00:00Z", "fromState" => nil, "toState" => nil})
+
+    defp long_lived_node do
+      node("MOT-9", %{
+        "state" => %{"name" => "In Review"},
+        "comments" => %{"nodes" => filler_comments(30), "pageInfo" => %{"hasPreviousPage" => true, "startCursor" => "comments-1"}},
+        "history" => %{"nodes" => filler_history(50), "pageInfo" => %{"hasNextPage" => true, "endCursor" => "history-1"}}
+      })
+    end
+
+    defp connection(field, nodes, page_info), do: {:ok, %{"data" => %{"issue" => %{field => %{"nodes" => nodes, "pageInfo" => page_info}}}}}
+
+    defp collect_long_lived(more) do
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        cond do
+          query =~ "SymphonyHumanActionsComments" ->
+            send(test_pid, {:more, :comments, variables})
+            more.(:comments, variables)
+
+          query =~ "SymphonyHumanActionsHistory" ->
+            send(test_pid, {:more, :history, variables})
+            more.(:history, variables)
+
+          true ->
+            {:ok, page([long_lived_node()], %{"hasNextPage" => false})}
+        end
+      end
+
+      opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
+      Collector.collect_all([:repo], opts)
+    end
+
+    test "reads the rest of them, so its waiting_since and headline survive" do
+      brief = %{"id" => "brief", "body" => "## Review brief\n\n**What to review:** The login fix PR\n", "createdAt" => "2026-09-20T00:00:00Z"}
+      moved = %{"createdAt" => "2026-09-21T08:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "In Review"}}
+
+      more = fn
+        :comments, %{cursor: "comments-1"} -> connection("comments", [brief | filler_comments(5)], %{"hasPreviousPage" => false})
+        :history, %{cursor: "history-1"} -> connection("history", filler_history(100), %{"hasNextPage" => true, "endCursor" => "history-2"})
+        :history, %{cursor: "history-2"} -> connection("history", [moved], %{"hasNextPage" => false})
+      end
+
+      assert {:ok, _actions, [entry]} = collect_long_lived(more)
+      assert entry.identifier == "MOT-9"
+      assert entry.headline == "The login fix PR"
+      assert entry.waiting_since == ~U[2026-09-21 08:00:00Z]
+
+      assert_received {:more, :comments, %{id: "id-MOT-9", size: 100, cursor: "comments-1"}}
+      assert_received {:more, :history, %{id: "id-MOT-9", size: 100, cursor: "history-1"}}
+      assert_received {:more, :history, %{cursor: "history-2"}}
+    end
+
+    test "stops after ten more pages and keeps what it read" do
+      more = fn
+        :comments, _variables -> connection("comments", [], %{"hasPreviousPage" => false})
+        :history, %{cursor: cursor} -> connection("history", filler_history(1), %{"hasNextPage" => true, "endCursor" => cursor <> "+"})
+      end
+
+      assert {:ok, _actions, [%{identifier: "MOT-9", waiting_since: nil}]} = collect_long_lived(more)
+
+      {:messages, messages} = Process.info(self(), :messages)
+      assert Enum.count(messages, &match?({:more, :history, _variables}, &1)) == 10
+    end
+
+    test "fails as a whole when the rest cannot be read" do
+      history_done = fn -> connection("history", [], %{"hasNextPage" => false}) end
+
+      assert {:error, :linear_down} = collect_long_lived(fn _field, _variables -> {:error, :linear_down} end)
+
+      errors = %{"errors" => [%{"message" => "rate limited"}]}
+
+      assert {:error, {:human_actions_query_failed, ^errors}} =
+               collect_long_lived(fn
+                 :comments, _variables -> {:ok, errors}
+                 :history, _variables -> history_done.()
+               end)
+
+      assert {:error, {:human_actions_query_failed, "comments"}} =
+               collect_long_lived(fn
+                 :comments, _variables -> {:ok, %{"data" => %{"issue" => %{}}}}
+                 :history, _variables -> history_done.()
+               end)
+
+      assert {:error, :linear_missing_end_cursor} =
+               collect_long_lived(fn
+                 :comments, _variables -> connection("comments", [], %{"hasPreviousPage" => true})
+                 :history, _variables -> history_done.()
+               end)
+    end
   end
 end

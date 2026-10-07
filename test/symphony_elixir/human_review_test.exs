@@ -90,13 +90,17 @@ defmodule SymphonyElixir.HumanReviewTest do
       refute HumanReview.review_state?(nil, settings)
     end
 
-    test "in_state?/1 reads the current settings, and is false when they can't be read" do
+    test "in_state?/1 and review_state?/1 read the current settings, falling back when they can't be read" do
       assert HumanReview.in_state?("Human Review")
       refute HumanReview.in_state?("In Review")
+      assert HumanReview.review_state?("Human Review")
+      refute HumanReview.review_state?("Todo")
 
       File.write!(Workflow.symphony_file_path(), "issues: [")
       Cache.clear()
       refute HumanReview.in_state?("Human Review")
+      refute HumanReview.review_state?("Human Review")
+      assert HumanReview.review_state?("In Review")
     end
   end
 
