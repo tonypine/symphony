@@ -116,7 +116,7 @@ read from the disk next to the `WORKFLOW.md` it renders.
 | `continuation_context` | `attempt` | Retry-attempt guidance shown when Symphony re-activates an issue that is still in an active state. |
 | `default_posture` | — | General operating posture for an unattended issue run: autonomy, status-first routing, single workpad, planning rigor, and when to stop. |
 | `dependency_guardrail` | `lockfile` | Justify dependency changes and keep the lock file diff scoped to the current ticket. |
-| `escape_hatches` | — | Blocked-access and in-execution clarification escape hatches; both move the issue to Backlog and stop. |
+| `escape_hatches` | — | What goes to a person (decisions with options) and what goes to the supervisor (checks an agent can't run), then the blocked-access and in-execution clarification escape hatches. |
 | `guardrails` | — | Cross-cutting safety and process guardrails for an issue run; repos append repo-specific guardrails after the render. |
 | `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on. |
 | `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
