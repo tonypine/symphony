@@ -21,7 +21,7 @@ and start it. To work on Symphony itself, build the app from source and run a ch
 
 ## Install
 
-Symphony.app needs a Mac with Apple silicon and macOS 13 or later. Install it with the install script or by
+Symphony.app needs a Mac with Apple silicon and macOS 26 or later. Install it with the install script or by
 hand. Both put it at `~/Applications/Symphony.app`, which is where the app updates itself and where Launch
 at Login expects it.
 
