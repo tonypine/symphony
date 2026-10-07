@@ -110,8 +110,19 @@ public enum ReposAPI {
     /// Longer than the state poll's, as Symphony reads each checkout's `origin` remote to answer.
     public static let timeout: TimeInterval = 5
 
+    public static let path = "api/v1/repos"
+
     public static func reposURL(base: URL) -> URL {
-        base.appendingPathComponent("api/v1/repos")
+        base.appendingPathComponent(path)
+    }
+
+    /// The repos in what the window's client got for `path`.
+    public static func poll(_ result: EndpointResult) -> ReposPoll {
+        switch result {
+        case let .loaded(data): poll(data: data, statusCode: 200)
+        case .unsupported: .unsupported
+        case let .failed(message): .failed(message)
+        }
     }
 
     /// Asks the Symphony whose control URL is in `stateRoot` for its repos. `fallback` is the control URL used

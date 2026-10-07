@@ -89,4 +89,30 @@ final class APIFixturesTests: XCTestCase {
         let repos = await ReposAPI.fetch(stateRoot: root, fallback: base, transport: shipped.transport)
         guard case .repos = repos else { return XCTFail("the shipped repos fixture doesn't read as repos: \(repos)") }
     }
+
+    func testTheOverviewFixturesServeTheirStateAndLogTheOverviewsControls() async throws {
+        for name in ["flowing", "attention", "paused", "idle"] {
+            let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+            let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+            let state = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL)))
+            XCTAssertNotNil(OverviewState.decode(state.0), name)
+            XCTAssertNotNil(DiagnosticsPayload.decode(state.0), name)
+            let repos = await ReposAPI.fetch(stateRoot: root, fallback: APIFixtures.baseURL, transport: shipped.transport)
+            guard case .repos = repos else { return XCTFail("\(name)'s repos fixture doesn't read as repos: \(repos)") }
+        }
+
+        // Resume Dispatch and Stop Forcing, as the Overview sends them.
+        let shipped = APIFixtures(
+            directory: Self.shippedRunning.deletingLastPathComponent().appendingPathComponent("attention", isDirectory: true),
+            requestLog: root.appendingPathComponent("api-requests.jsonl")
+        )
+        for action in [ControlAction.stopForcing("SHOP-305"), .resume] {
+            let result = await ControlAPI.send(action, stateRoot: root, fallback: APIFixtures.baseURL, token: APIFixtures.token, transport: shipped.transport)
+            XCTAssertEqual(result, .done)
+        }
+        let lines = try String(contentsOf: shipped.requestLog, encoding: .utf8).split(separator: "\n")
+        let entries = try lines.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(entries.map { $0["path"] as? String }, ["/api/v1/control/force", "/api/v1/control/resume"])
+        XCTAssertEqual(entries[0]["body"] as? [String: String], ["identifier": "SHOP-305", "clear": "true"])
+    }
 }
