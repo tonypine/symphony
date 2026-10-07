@@ -30,6 +30,13 @@ decision.
   reviews everything at once.
 - A PR's brief links the PR and says what to check: the behaviour to try, the parts
   that carry the risk, and the QA report when there is one.
+- Next to the brief, update the summary block at the end of the issue description
+  with `linear_update_issue_summary`: the one-line `status` (where the ticket stands,
+  what waits on whom), `links` with the brief's comment URL as `review_brief` and
+  the PR, documents, HTML screens and sub-tickets as `artifacts`, and one
+  `changelog_entry` on what this run changed. Symphony dates the entry, keeps the
+  older ones below it (trimming the oldest) and leaves the rest of the description
+  as it is. Description reads leave the block out, so never take it as requirements.
 
 Use this exact format:
 

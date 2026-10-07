@@ -5,7 +5,7 @@ vars: []
 {% endcomment %}## Guardrails
 
 - If the branch PR is already closed/merged, do not reuse that branch or its prior state; create a new branch from the repo's default branch and restart from reproduction/planning as if fresh.
-- Do not edit the issue body/description for planning or progress tracking.
+- Do not edit the issue body/description except through `linear_update_issue_summary`, which writes only Symphony's summary block at its end; plan and track progress in the workpad.
 - If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.
 - Temporary proof edits are allowed only for local verification and must be reverted before commit.
 - Do not move to `In Review` unless the `Completion bar before In Review` is satisfied.
