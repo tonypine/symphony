@@ -4144,6 +4144,12 @@ Minimum endpoints:
     `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
   - `uptime_seconds` is how long the Symphony answering has run, in whole seconds; the Mac app's
     Diagnostics view shows it.
+  - `shipped_today` lists the tickets Symphony saw reach a done state on the current UTC day, newest
+    first, each with its `repo_key` and `completed_at`; `counts.shipped_today` is their number. The
+    Elixir implementation takes them from the `issue_completed` notification it sends once per
+    ticket, and after a restart from the time it noted that event on the ticket's run record. The
+    Mac app's Overview shows the count as its Shipped today stage.
+  - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
   - Suggested response shape:
 
     ```json
@@ -4156,7 +4162,8 @@ Minimum endpoints:
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,
-        "forced": 1
+        "forced": 1,
+        "shipped_today": 1
       },
       "repos": ["web", "api"],
       "running": [
@@ -4215,10 +4222,20 @@ Minimum endpoints:
           "updated_at": "2026-02-24T20:15:00Z"
         }
       ],
+      "shipped_today": [
+        {
+          "issue_id": "vwx234",
+          "issue_identifier": "MT-640",
+          "title": "Fix the export rounding",
+          "repo_key": "web",
+          "completed_at": "2026-02-24T19:02:11Z"
+        }
+      ],
       "slot_waiting": [
         {
           "issue_id": "mno345",
           "issue_identifier": "MT-653",
+          "repo_key": "web",
           "title": "Add the export button",
           "state": "Todo",
           "reason": "QA pass for MT-655 is waiting for a finishing slot",

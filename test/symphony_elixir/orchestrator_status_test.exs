@@ -4355,6 +4355,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %DateTime{} = run_record.issue_completed_notified_at
     assert %DateTime{} = run_record.watch_closed_at
 
+    assert %{shipped_today: [%{issue_id: ^issue_id, identifier: ^issue_identifier, title: "Terminal on restart", completed_at: %DateTime{}}]} =
+             wait_for_snapshot(pid, &match?(%{shipped_today: [_]}, &1))
+
     GenServer.stop(pid)
     flush_notification_events()
 
@@ -4379,6 +4382,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     state = get_orchestrator_state(restarted_pid)
     refute Map.has_key?(state.completed_run_metadata, issue_id)
+
+    # The ticket shipped today still counts after the restart, from its run's marker.
+    assert %{shipped_today: [%{issue_id: ^issue_id, identifier: ^issue_identifier, repo_key: repo_key}]} =
+             GenServer.call(restarted_pid, :snapshot)
+
+    assert repo_key == Config.repo_key!()
   end
 
   test "orchestrator startup marks interrupted dispatched runs as failures" do

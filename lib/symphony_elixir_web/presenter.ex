@@ -55,6 +55,7 @@ defmodule SymphonyElixirWeb.Presenter do
         run_history = Map.get(snapshot, :run_history, [])
         blocked = Map.get(snapshot, :blocked, [])
         human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
+        shipped_today = Map.get(snapshot, :shipped_today, [])
 
         %{
           generated_at: generated_at,
@@ -68,7 +69,8 @@ defmodule SymphonyElixirWeb.Presenter do
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
-            forced: length(Map.get(snapshot, :forced, []))
+            forced: length(Map.get(snapshot, :forced, [])),
+            shipped_today: length(shipped_today)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
@@ -97,6 +99,7 @@ defmodule SymphonyElixirWeb.Presenter do
           acceptance_gate: acceptance_gate_payload(AcceptanceGate.Agreement.snapshot()),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
+          shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: app_update_payload(blocked),
           forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
@@ -907,10 +910,21 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
+  defp shipped_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      title: entry.title,
+      repo_key: entry.repo_key,
+      completed_at: iso8601(entry.completed_at)
+    }
+  end
+
   defp slot_waiting_payload(entry) do
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
+      repo_key: Map.get(entry, :repo_key),
       title: Map.get(entry, :title),
       state: entry.state,
       reason: entry.reason,
