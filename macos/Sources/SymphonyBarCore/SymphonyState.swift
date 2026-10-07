@@ -453,7 +453,7 @@ public enum SymphonyState {
     }()
 
     /// Symphony writes whole-second UTC timestamps, for example `2026-10-02T12:16:02Z`.
-    private static func parseDate(_ text: String) -> Date? {
+    static func parseDate(_ text: String) -> Date? {
         ISO8601DateFormatter().date(from: text)
     }
 

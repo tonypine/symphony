@@ -19,6 +19,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.HumanReview
+  alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
@@ -543,6 +544,24 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentDocuments($ids: [ID!]!, $first: Int!) {
     documents(filter: { id: { in: $ids } }, first: $first) {
       nodes { id title url updatedAt }
+    }
+  }
+  """
+
+  @issue_description_query """
+  query SymphonyAgentIssueDescription($id: String!) {
+    issue(id: $id) {
+      id
+      description
+    }
+  }
+  """
+
+  @update_issue_description_mutation """
+  mutation SymphonyAgentUpdateIssueDescription($id: String!, $description: String!) {
+    issueUpdate(id: $id, input: { description: $description }) {
+      success
+      issue { id url }
     }
   }
   """
@@ -1631,6 +1650,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> wrap_string_field("title", &PromptSafety.linear_document_title/1)
   end
 
+  @doc """
+  Writes the Symphony summary block at the end of the current issue's description: the status, the
+  review brief and artifact links, and one new changelog entry dated today (UTC) on top of the
+  ones the block holds, capped. The description is read right before the write, and every byte
+  outside the block stays as it is, so a person's edit between runs survives. Fields holding a
+  secret pattern are refused before any Linear call.
+  """
+  @spec update_issue_summary(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def update_issue_summary(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, summary} <- IssueSummary.new(attrs),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts),
+         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0)),
+         variables = %{id: issue_id, description: description},
+         {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
+         {:ok, response} <- check_mutation_success(response, "issueUpdate") do
+      {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "descriptionLength" => String.length(description)}}
+    end
+  end
+
+  defp summary_secret_fields(summary) do
+    links = Enum.flat_map(summary.artifacts, &[artifact_label: &1.label, artifact_url: &1.url])
+    [status: summary.status, changelog_entry: summary.entry, review_brief: summary.review_brief || ""] ++ links
+  end
+
   defp validate_subissue_fields(attrs) do
     title = Map.get(attrs, "title")
     description = Map.get(attrs, "description")
@@ -1802,9 +1848,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
+  # The Symphony summary block is agent-written, so it cannot say a person reviews the plan.
   defp human_reviewed_plan?(issue, settings) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
-    plan = %Issue{title: issue["title"], description: issue["description"], labels: labels}
+    plan = %Issue{title: issue["title"], description: IssueSummary.strip(issue["description"]), labels: labels}
     Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
   end
 

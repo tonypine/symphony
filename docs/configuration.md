@@ -1018,7 +1018,8 @@ pull_requests:
   `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
   the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
   state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
-  or removes the label.
+  or removes the label. So does one on an issue in none of the active states, the review states,
+  the Auto Review state and `Merging` (`Backlog`, say, label or not) until a person promotes it.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
@@ -1031,8 +1032,10 @@ pull_requests:
   `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
   `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
   the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
-  re-run, CI-fix run, escalation or state move, and uses no fix attempt. The normal CI flow resumes
-  once a person moves the issue on or removes the label, or the head turns green.
+  re-run, CI-fix run, escalation or state move, and uses no fix attempt. So does one on an issue in
+  none of the active states, the review states, the Auto Review state and `Merging` (`Backlog`,
+  say, label or not). The normal CI flow resumes once a person moves the issue on or removes the
+  label, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the
@@ -1515,7 +1518,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
@@ -1637,7 +1640,8 @@ host and the worktree checks still apply there. Then:
   host, runs `build` there with the QA user's login environment plus `QA_HOST_PORTS`, and copies
   the bundle into the run directory;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
-  set, over an SSH session that forwards the URL's loopback port on the QA host back to the
+  set, plus `SYMPHONY_BAR_QA_API_FIXTURES` when the agent passes `api_fixtures` (the checked files
+  go over SSH as a tar into a fresh `api-fixtures-<n>/` in the run directory), over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
 - at the start of the pass Symphony picks three free loopback ports on the Symphony host and
   hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment) and to `build`

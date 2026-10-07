@@ -1730,6 +1730,123 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       do: {:ok, %{"data" => %{"documentUpdate" => %{"success" => true, "document" => @created_document}}}}
   end
 
+  describe "update_issue_summary/3" do
+    @summary_attrs %{
+      "status" => "PR open, waiting on Auto Review",
+      "links" => %{
+        "review_brief" => "https://linear.app/acme/issue/TP-7#comment-brief",
+        "artifacts" => [%{"label" => "PR #12", "url" => "https://github.com/acme/app/pull/12"}]
+      },
+      "changelog_entry" => "Opened the PR"
+    }
+
+    test "writes only the summary block, keeping a person's edit made between runs" do
+      linear = description_linear("## Goal\n\nShip it.")
+      client = description_client(self(), linear)
+      context = %{issue_id: "issue-current"}
+
+      assert {:ok, %{"issue" => %{"id" => "issue-current"}, "descriptionLength" => length}} =
+               Linear.update_issue_summary(context, @summary_attrs, linear_client: client, today: ~D[2026-10-06])
+
+      first = Agent.get(linear, & &1)
+      assert length == String.length(first)
+      assert_received {:linear_called, "SymphonyAgentIssueDescription", %{id: "issue-current"}}
+      assert_received {:linear_called, "SymphonyAgentUpdateIssueDescription", %{id: "issue-current"}}
+      assert String.starts_with?(first, "## Goal\n\nShip it.\n\n<!-- symphony:summary:start -->")
+      assert first =~ "**Status:** PR open, waiting on Auto Review"
+      assert first =~ "**Review brief:** [Review brief](https://linear.app/acme/issue/TP-7#comment-brief)"
+      assert first =~ "- [PR #12](https://github.com/acme/app/pull/12)"
+      assert first =~ "- 2026-10-06: Opened the PR"
+
+      # A person edits the text before the block and adds a line after it.
+      Agent.update(linear, fn description -> String.replace(description, "Ship it.", "Ship it, and test it.") <> "\n\nAdded by a person." end)
+
+      second_attrs = %{"status" => "Merged", "links" => %{"artifacts" => []}, "changelog_entry" => "Merged the PR"}
+      assert {:ok, _result} = Linear.update_issue_summary(context, second_attrs, linear_client: client, today: ~D[2026-10-07])
+
+      second = Agent.get(linear, & &1)
+      assert String.starts_with?(second, "## Goal\n\nShip it, and test it.\n\n<!-- symphony:summary:start -->")
+      assert String.ends_with?(second, "<!-- symphony:summary:end -->\n\nAdded by a person.")
+      assert second =~ "**Status:** Merged"
+      refute second =~ "PR open"
+      refute second =~ "pull/12"
+      assert second =~ "- 2026-10-07: Merged the PR\n- 2026-10-06: Opened the PR\n<!-- symphony:summary:end -->"
+      assert SymphonyElixir.IssueSummary.strip(second) == "## Goal\n\nShip it, and test it.\n\nAdded by a person."
+    end
+
+    test "refuses a description with an unterminated block, writing nothing" do
+      linear = description_linear("Goal\n\n<!-- symphony:summary:start -->\nhalf")
+      client = description_client(self(), linear)
+
+      assert {:error, :summary_block_unterminated} =
+               Linear.update_issue_summary(%{issue_id: "issue-current"}, @summary_attrs, linear_client: client)
+
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueDescription", _variables}
+    end
+
+    test "returns Linear's failures" do
+      no_issue = fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => nil}}} end
+
+      assert {:error, :issue_not_found} =
+               Linear.update_issue_summary(%{issue_id: "issue-current"}, @summary_attrs, linear_client: no_issue)
+
+      failed = fn
+        query, _variables, _opts ->
+          if query =~ "SymphonyAgentIssueDescription",
+            do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => nil}}}},
+            else: {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+      end
+
+      assert {:error, {:linear_mutation_failed, "issueUpdate", _response}} =
+               Linear.update_issue_summary(%{issue_id: "issue-current"}, @summary_attrs, linear_client: failed)
+    end
+
+    test "rejects invalid and secret-bearing fields before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-issue-summary-secret")
+      audit_dir = Path.join(workspace, "audit")
+      context = secret_context(workspace)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+
+      try do
+        for {attrs, error} <- [
+              {Map.delete(@summary_attrs, "status"), :invalid_summary_status},
+              {Map.put(@summary_attrs, "changelog_entry", " "), :invalid_summary_changelog_entry},
+              {Map.put(@summary_attrs, "status", "key " <> openai_fixture()), :secret_pattern_detected},
+              {put_in(@summary_attrs, ["links", "artifacts"], [%{"label" => openai_fixture(), "url" => "https://x.dev/a"}]), :secret_pattern_detected}
+            ] do
+          assert {:error, ^error} =
+                   Linear.update_issue_summary(context, attrs, dir: audit_dir, linear_client: no_linear)
+        end
+
+        assert [%{"tool" => "linear_update_issue_summary", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        assert {:error, :missing_current_issue} = Linear.update_issue_summary(%{}, @summary_attrs)
+      after
+        File.rm_rf(workspace)
+      end
+    end
+  end
+
+  defp description_linear(description) do
+    {:ok, linear} = Agent.start_link(fn -> description end)
+    linear
+  end
+
+  defp description_client(test_pid, linear) do
+    fn query, variables, _opts ->
+      [_match, name] = Regex.run(~r/(?:query|mutation) (\w+)/, query)
+      send(test_pid, {:linear_called, name, variables})
+
+      case name do
+        "SymphonyAgentIssueDescription" ->
+          {:ok, %{"data" => %{"issue" => %{"id" => variables.id, "description" => Agent.get(linear, & &1)}}}}
+
+        "SymphonyAgentUpdateIssueDescription" ->
+          Agent.update(linear, fn _description -> variables.description end)
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => variables.id, "url" => "https://linear.app/acme/issue/TP-7"}}}}}
+      end
+    end
+  end
+
   describe "request_human_action/3" do
     @human_action %{
       "title" => "Add the release signing secrets",

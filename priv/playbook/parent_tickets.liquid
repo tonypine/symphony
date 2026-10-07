@@ -14,7 +14,9 @@ ticket has the `plan` label, and when its title starts with `Final verification:
 Rules for every plan ticket run:
 
 - Never create commits, push a branch, open a PR, or attach any other artifact for
-  the parent. Its deliverables are its sub-tickets.
+  the parent. Its deliverables are its sub-tickets, and the Linear documents and
+  the one HTML screens file the `Plan pipeline` asks for when the ticket has an
+  `Artifacts wanted` section.
 - The plan is reviewed before any sub-ticket is worked. The plan run leaves
   its sub-tickets in `Backlog` and moves the parent to `In Review` (Symphony puts
   it in `Human Review` instead when the ticket says a human reviews the plan, such
@@ -42,8 +44,8 @@ Which plan run this is:
 - **Resume:** the parent is in `Todo` or `In Progress`, has sub-tickets in `Backlog`
   only, and no person commented since the plan was last handed over for review. A
   previous run stopped midway (a usage limit, a crash, a person moving it back).
-  Read the workpad and the newest comments, keep every artifact comment and
-  sub-ticket already made, do only what is left of the plan run below (never
+  Read the workpad and the newest comments, keep every artifact document, comment
+  and sub-ticket already made, do only what is left of the plan run below (never
   file a sub-ticket a second time), leave the review brief (see `Review brief`), and
   move the parent to `In Review`.
 - **Revise:** Symphony moved the parent from `In Review` back to `In Progress`
@@ -110,9 +112,11 @@ What triggers it:
    review brief, QA reports, `Action needed` requests, Symphony's promote and cancel
    lists, supervisor notes (`Supervisor review:`, `Supervisor note:`), and integration
    bots. List in the workpad what each comment asks.
-2. Edit the existing artifact comments (use cases, features, journeys and so on) with
-   `linear_update_comment` instead of posting new copies. Start each edited comment
-   with a short note of what changed.
+2. Edit the existing artifacts in place instead of posting new copies: documents
+   with `linear_update_document`, the HTML screens as the `Plan pipeline` says, and
+   artifact comments (use cases, features, journeys and so on) with
+   `linear_update_comment`. Start each edited artifact with a short note of what
+   changed.
 3. Bring the sub-tickets in line with `linear_update_subissue` and
    `linear_create_subissue`: update the description, title and blocked-by links of
    `Backlog` sub-tickets, file new ones (keep the `Final verification:` sub-ticket's

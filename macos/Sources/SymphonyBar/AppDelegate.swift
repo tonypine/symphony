@@ -8,6 +8,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
     private lazy var reposWindow = ReposWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
+    /// The one client the Symphony window's views read Symphony's local API through.
+    private lazy var apiClient = LiveAPIClient(
+        fetch: LiveAPIClient.fetch(
+            base: { [weak self] in
+                let stateRoot = self?.poller.stateRoot() ?? StateRoot.locate(environment: AppStores.current.environment)
+                return StateRoot.controlURL(in: stateRoot, fallback: AppStores.current.apiFallback)
+            },
+            transport: AppStores.current.apiTransport
+        )
+    )
+    private lazy var symphonyWindow = SymphonyWindowController(client: apiClient)
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
     private var usageLimitNotices = UsageLimitNotices()
@@ -65,7 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var exitingOnSignal = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        EditMenu.install()
+        MainMenu.install(
+            settings: menuItem(
+                StatusMenu.settingsTitle,
+                action: #selector(openSettings(_:)),
+                keyEquivalent: StatusMenu.settingsKeyEquivalent
+            ),
+            view: symphonyWindow.viewMenu()
+        )
         terminationSignals = TerminationSignals(queue: .main) { [weak self] number in
             MainActor.assumeIsolated { self?.terminate(onSignal: number) }
         }
@@ -77,6 +95,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(statusTitleItem)
         sourceItem.isEnabled = false
         menu.addItem(sourceItem)
+        menu.addItem(.separator())
+        menu.addItem(
+            menuItem(
+                StatusMenu.openSymphonyTitle,
+                action: #selector(openSymphony(_:)),
+                keyEquivalent: StatusMenu.openSymphonyKeyEquivalent
+            )
+        )
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.startTitle, action: #selector(startSymphony(_:))))
         menu.addItem(menuItem(StatusMenu.stopTitle, action: #selector(stopSymphony(_:))))
@@ -90,10 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         forcedTitleItem.isEnabled = false
         menu.addItem(forcedTitleItem)
         menu.addItem(forceItem)
-        menu.addItem(.separator())
-        menu.addItem(menuItem(StatusMenu.openDashboardTitle, action: #selector(openDashboard(_:))))
-        menu.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
-        menu.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
         menu.addItem(.separator())
         updateAvailableItem.action = #selector(showReleaseNotes(_:))
         updateAvailableItem.target = self
@@ -118,6 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 keyEquivalent: StatusMenu.settingsKeyEquivalent
             )
         )
+        let developer = NSMenu(title: StatusMenu.developerTitle)
+        developer.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
+        developer.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
+        developer.addItem(menuItem(StatusMenu.openWebDashboardTitle, action: #selector(openWebDashboard(_:))))
+        let developerItem = NSMenuItem(title: StatusMenu.developerTitle, action: nil, keyEquivalent: "")
+        developerItem.submenu = developer
+        menu.addItem(developerItem)
         menu.addItem(.separator())
         menu.addItem(
             NSMenuItem(
@@ -159,6 +188,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.restartMachine = { [weak self] in self?.restarter.machine ?? RestartMachine() }
         reposWindow.restartNow = { [weak self] in self?.restartNow(nil) }
         reposWindow.cancelRestart = { [weak self] in self?.cancelRestart(nil) }
+        symphonyWindow.appVersion = updates.current.version ?? ""
+        symphonyWindow.stateRoot = poller.stateRoot
+        symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
+        symphonyWindow.openRepos = { [weak self] in self?.openRepos(nil) }
+        symphonyWindow.openWebDashboard = { [weak self] in self?.openWebDashboard(nil) }
+        symphonyWindow.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard ?? false }
+        symphonyWindow.canOpenLogs = { [weak self] in self?.canOpenLogs ?? false }
+        symphonyWindow.update(status: machine.status, configPath: configPath)
+        apiClient.start()
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
@@ -354,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(startSymphony(_:)):
-            return !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
+            return canStartNow
         case #selector(stopSymphony(_:)):
             menuItem.title = runner.isStopping && !restarting ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
             return runner.isRunning && machine.canStop && !runner.isStopping && !restarting
@@ -382,17 +420,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(stopForcing(_:)):
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
-        case #selector(openDashboard(_:)), #selector(openTerminalDashboard(_:)):
-            switch machine.status {
-            case .running, .paused:
-                return true
-            case .stopped, .starting, .error:
-                return false
-            }
+        case #selector(openTerminalDashboard(_:)):
+            return isAnswering
+        case #selector(openWebDashboard(_:)):
+            return canOpenWebDashboard
         case #selector(openWaitingTicket(_:)):
             return menuItem.representedObject is URL
         case #selector(openLogs(_:)):
-            return FileManager.default.fileExists(atPath: runner.logURL.path)
+            return canOpenLogs
         case #selector(checkForUpdates(_:)):
             menuItem.title = updates.isChecking ? UpdateMenu.checkingTitle : UpdateMenu.checkTitle
             return !updates.isChecking
@@ -466,11 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         let stateRoot = runner.stateRoot
         Task {
-            let result = await ControlAPI.send(
-                action,
-                stateRoot: stateRoot,
-                fallback: AppStores.current.controlURLFallback
-            )
+            let result = await AppStores.current.sendControl(action, stateRoot: stateRoot)
             controlInFlight = nil
             if case let .failed(message) = result { controlError = message }
             showStatus()
@@ -506,11 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         let stateRoot = runner.stateRoot
         Task {
-            let result = await ControlAPI.send(
-                action,
-                stateRoot: stateRoot,
-                fallback: AppStores.current.controlURLFallback
-            )
+            let result = await AppStores.current.sendControl(action, stateRoot: stateRoot)
             forceInFlight = nil
             if case let .failed(message) = result { SymphonyRunner.showAlert(title: message, body: "") }
             poller.pollNow()
@@ -525,7 +552,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         settingsWindow.show()
     }
 
-    @objc private func openDashboard(_ sender: Any?) {
+    @objc private func openSymphony(_ sender: Any?) {
+        symphonyWindow.show()
+    }
+
+    /// Acts on a button of the Symphony window's placeholder (D0).
+    private func perform(_ action: WindowState.Action) {
+        switch action {
+        case .startSymphony:
+            if canStartNow { startSymphony(nil) }
+        case .openLogs:
+            if canOpenLogs { openLogs(nil) }
+        case .restartSymphony:
+            switch StatusMenu.restartPath(machine.status, appRunsSymphony: runner.isRunning) {
+            case .graceful:
+                restart()
+            case .stopAndStart:
+                guard !restarting, !runner.isStopping, !updater.isUpdating else { return }
+                runner.stop { [weak self] in self?.startSymphony(nil) }
+            case .start:
+                if canStartNow { startSymphony(nil) }
+            case nil:
+                break
+            }
+        case .openSettings:
+            settingsWindow.show()
+        }
+    }
+
+    private var canStartNow: Bool {
+        !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
+    }
+
+    private var isAnswering: Bool {
+        switch machine.status {
+        case .running, .paused:
+            return true
+        case .stopped, .starting, .error:
+            return false
+        }
+    }
+
+    /// The web dashboard opens while Symphony answers at a control URL; never the API fixtures' made-up one.
+    private var canOpenWebDashboard: Bool {
+        isAnswering && StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) != nil
+    }
+
+    private var canOpenLogs: Bool {
+        FileManager.default.fileExists(atPath: runner.logURL.path)
+    }
+
+    @objc private func openWebDashboard(_ sender: Any?) {
         guard let url = StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) else {
             return
         }
@@ -829,6 +906,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         // An open Repos window refreshes with each poll.
         reposWindow.update(status: machine.status)
+        symphonyWindow.update(status: machine.status, configPath: configPath)
         switch event {
         case .started:
             // A Pause or Resume error was about the Symphony that was running before.
@@ -927,7 +1005,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             item.toolTip = ticket.title
             return item
         }
-        let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openDashboard(_:)))] } ?? []
+        let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWebDashboard(_:)))] } ?? []
         waitingItems = [.separator(), heading] + rows + more
         let start = menu.index(of: sourceItem) + 1
         for (offset, item) in waitingItems.enumerated() {

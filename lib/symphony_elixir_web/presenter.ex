@@ -60,6 +60,7 @@ defmodule SymphonyElixirWeb.Presenter do
         %{
           generated_at: generated_at,
           build: Map.take(BuildInfo.current(), [:version, :sha]),
+          uptime_seconds: uptime_seconds(),
           repos: repo_keys(snapshot),
           counts: %{
             running: length(snapshot.running),
@@ -319,6 +320,12 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp normalize_token_map(_tokens), do: normalize_token_map(%{})
+
+  # How long this Symphony has run: the Erlang VM's wall clock since it started.
+  defp uptime_seconds do
+    {uptime_ms, _since_last_call} = :erlang.statistics(:wall_clock)
+    div(uptime_ms, 1000)
+  end
 
   defp normalize_pollers(pollers) when is_map(pollers) do
     %{

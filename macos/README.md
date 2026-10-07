@@ -1,8 +1,9 @@
 # Symphony menu bar app
 
-Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Start
-Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a ticket…, Open Dashboard,
-Open Dashboard in Terminal, Open Logs, Check for Updates…, Settings… and Quit.
+Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Open
+Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a ticket…,
+Check for Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs, Open Web
+Dashboard) and Quit. Open Symphony opens the [Symphony window](#the-symphony-window).
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
 self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md)), so
@@ -15,13 +16,14 @@ and start it. To work on Symphony itself, build the app from source and run a ch
 - [Restart](#restart)
 - [Update](#update)
 - [Rollback](#rollback)
+- [The Symphony window](#the-symphony-window)
 - [Development mode](#development-mode)
 - [QA mode](#qa-mode)
 - [Troubleshooting](#troubleshooting)
 
 ## Install
 
-Symphony.app needs a Mac with Apple silicon and macOS 13 or later. Install it with the install script or by
+Symphony.app needs a Mac with Apple silicon and macOS 26 or later. Install it with the install script or by
 hand. Both put it at `~/Applications/Symphony.app`, which is where the app updates itself and where Launch
 at Login expects it.
 
@@ -108,7 +110,7 @@ export `LINEAR_API_KEY`; the app keeps it in a file only you can read.
 5. Click **Save**. The app checks that `symphony.yml` exists, that the app has an embedded Symphony and that
    the key is set, then stores the key in the secrets file (see [Settings](#settings)).
 6. Choose **Start Symphony** from the menu. The icon shows `hourglass` while Symphony starts, then
-   `music.note.list` once it answers. Choose **Open Dashboard** to see it at `http://127.0.0.1:4000`.
+   `music.note.list` once it answers. Choose **Open Symphony** to see it in the Symphony window.
 
 If the icon turns to a warning triangle instead, choose **Open Logs** and see [Troubleshooting](#troubleshooting).
 To have Symphony running after login with no clicks, turn on Launch at Login and "Start Symphony when the
@@ -133,8 +135,10 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
-- **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
-- **Open Dashboard in Terminal** opens a Terminal window running `symphony dashboard`: the live terminal
+- **Open Symphony** (⌘O) opens the [Symphony window](#the-symphony-window), or brings it to the front.
+- **Developer** holds the items for looking under the hood: **Open Web Dashboard** opens Symphony's web
+  dashboard in the browser, **Open Logs** opens Symphony's output log, and **Open Dashboard in Terminal**
+  opens a Terminal window running `symphony dashboard`: the live terminal
   dashboard (running agents, retry queue, recent events) of the Symphony the app watches. It runs the same
   binary as Start (`bin/symphony` from the checkout in Development mode). Press `q` or Ctrl-C, or close the
   window, to quit; Symphony keeps running.
@@ -340,8 +344,8 @@ It keeps App Nap off so the poll keeps that pace in the background.
 While Symphony answers, the menu shows `N running · M retrying`, and while dispatch is paused, the pause
 reason and since when. If a Symphony the app didn't start (for example one started from the CLI) answers,
 the app attaches to it as "running (external)": Start, Stop and Restart stay disabled, so the app neither
-starts a second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
-opens `menubar-child.log`.
+starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
+Open Logs opens `menubar-child.log`.
 
 While tickets wait on you (`waiting_on_you` in `/api/v1/state`: plans and PRs in `In Review` or `Human Review`,
 final verifications to sign off, and open decisions), the icon shows a red dot and the menu lists them under
@@ -825,6 +829,30 @@ there is nothing to skip. To install an older release than the previous
 one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to that release's tag (see
 [With the install script](#with-the-install-script)).
 
+## The Symphony window
+
+**Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
+and, in the toolbar, the view's title, Symphony's connection state (quiet while Symphony answers; the time of
+the last update is in its help) and **Refresh** (⌘R). The sidebar lists the views this version has, in the
+order they will keep as more arrive, on ⌘1 to ⌘8: under **Factory**, **Repos** (which opens the Repos window)
+and **Diagnostics**. Its foot shows Symphony's version and state.
+
+- **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
+  update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
+  caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
+  JSON** copies `/api/v1/state` as Symphony served it, and **Open Logs** and **Open Web Dashboard** do what
+  the menu items do.
+- While Symphony doesn't answer, every view shows one placeholder instead: **Start Symphony** while it is
+  stopped, a spinner while it starts, **Open Logs** and **Restart Symphony** when it stopped answering, and
+  **Open Settings…** while no `symphony.yml` is set. A view whose endpoint an older Symphony doesn't serve
+  says "Update Symphony to see this view."
+
+While the window is open the app is a regular app, with a Dock icon, a ⌘-Tab entry and its main menu. ⌘W
+closes the window and the app goes back to the menu bar only; Symphony keeps running. The window opens at
+1200 × 760 (it can't shrink below 960 × 600) and comes back at the size, position and view it was left at,
+also after a relaunch. It reads Symphony's local API every 2 seconds while it is on screen and every 30
+seconds otherwise.
+
 ## Development mode
 
 Development mode is for working on Symphony itself: the app runs `bin/symphony` from a checkout, through
@@ -901,7 +929,7 @@ In QA mode, under that directory:
 
 | Path | Holds | Instead of |
 | --- | --- | --- |
-| `settings.plist` | the Settings values, Launch at Login, and the pending update across a relaunch | UserDefaults; Launch at Login registers nothing with macOS |
+| `settings.plist` | the Settings values, Launch at Login, the pending update across a relaunch, and the Symphony and Repos windows' frames and selections | UserDefaults; Launch at Login registers nothing with macOS |
 | `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | `~/Library/Application Support/symphony/release/secrets.json` |
 | `logs/` | Symphony's output log | `~/Library/Logs/symphony` |
 | `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |
@@ -926,7 +954,7 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Three more variables, read only in QA mode:
+Four more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -937,6 +965,18 @@ Three more variables, read only in QA mode:
   counts. The Symphony the app runs gets it too and, also only in QA mode, checks and runs OpenRouter models
   against the stub. Outside QA mode the app always talks to `https://openrouter.ai`, whatever the environment
   says. See [OpenRouter in QA](../docs/configuration.md#qa-passes).
+- `SYMPHONY_BAR_QA_API_FIXTURES=<dir>` makes the app read Symphony's local API from files instead of
+  Symphony, so QA walks every view with fixed data and no Linear or model calls: each GET reads
+  `<dir>/<path>.json` (for example `<dir>/api/v1/state.json` for `/api/v1/state`) and answers 404 when the
+  file is missing, and each control POST (Pause, Resume, Force, Stop Run) is appended as one JSON line to
+  `api-requests.jsonl` under the QA root and answered 200. The menu, the Repos window and the Symphony window
+  all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
+  are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running):
+
+  ```bash
+  SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \
+    ./build/Symphony.app/Contents/MacOS/SymphonyBar
+  ```
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses

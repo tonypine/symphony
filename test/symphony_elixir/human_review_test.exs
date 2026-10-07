@@ -170,6 +170,24 @@ defmodule SymphonyElixir.HumanReviewTest do
     end
   end
 
+  describe "held_for_person/3" do
+    test "holds an issue outside every state the pollers move issues on from, label or not" do
+      settings = Config.settings!()
+      held? = &HumanReview.held_for_person(%Issue{id: "issue-1", state: &1, labels: &2}, settings, [])
+
+      for state <- ["Backlog", " backlog ", "Done", "Canceled", nil] do
+        assert held?.(state, []) == {:ok, true}, inspect(state)
+      end
+
+      for state <- ["Todo", " in progress ", "In Review", "Auto Review", "Merging"] do
+        assert held?.(state, []) == {:ok, false}, state
+      end
+
+      assert held?.("Human Review", []) == {:ok, true}
+      assert held?.("In Review", ["needs-human"]) == {:ok, true}
+    end
+  end
+
   describe "parked_for_person/3" do
     @request_body "## Action needed: Add the release signing secrets\n\n**Steps:**\n1. Add them."
 

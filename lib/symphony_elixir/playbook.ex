@@ -31,6 +31,7 @@ defmodule SymphonyElixir.Playbook do
     issue_context
     out_of_scope_backlog
     parent_tickets
+    plan_pipeline
     pr_feedback_sweep
     reproduce_and_blast_radius
     review_brief
@@ -56,6 +57,7 @@ defmodule SymphonyElixir.Playbook do
     {"ci_triage", 70},
     {"escape_hatches", 80},
     {"parent_tickets", 90},
+    {"plan_pipeline", 94},
     {"review_brief", 95},
     {"completion_bar", 100},
     {"guardrails", 110},

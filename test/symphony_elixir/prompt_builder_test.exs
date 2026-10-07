@@ -415,6 +415,21 @@ defmodule SymphonyElixir.PromptBuilderTest do
     refute PromptBuilder.build_prompt(%{issue | sub_issues: []}) =~ "Sub-issues:"
   end
 
+  test "prompt builder leaves Symphony's summary block out of the issue_context description" do
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: ~s({% render "issue_context", issue: issue %}))
+
+    {:ok, summary} = SymphonyElixir.IssueSummary.new(%{"status" => "PR open, waiting on Auto Review", "changelog_entry" => "Opened the PR"})
+    {:ok, description} = SymphonyElixir.IssueSummary.put("## Goal\n\nShip the widget.", summary, ~D[2026-10-06])
+    issue = %Issue{identifier: "ACME-3310", title: "Ship the widget", description: description <> "\n\nA person's note.", state: "In Progress"}
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "<linear_issue_body>\n## Goal\n\nShip the widget.\n\nA person's note.\n</linear_issue_body>"
+    refute prompt =~ "symphony:summary"
+    refute prompt =~ "PR open, waiting on Auto Review"
+    refute prompt =~ "Opened the PR"
+  end
+
   test "prompt builder separates labels with commas through the issue_context partial" do
     write_workflow_file!(Workflow.workflow_file_path(), prompt: ~s({% render "issue_context", issue: issue %}))
 

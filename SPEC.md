@@ -848,7 +848,9 @@ the agent's to fix. A red head on an issue parked for a person, in the
 `issues.states.human_review` state, or outside `tracker.active_states` with `needs-human`, a
 deprecated request label (`human_actions.label`, or `human-action` in the escalate labels) or
 another `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or,
-while that state is off, in `In Review` with an open `## Action needed:` request, gets the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
+while that state is off, in `In Review` with an open `## Action needed:` request, gets the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
+an issue in none of `tracker.active_states`, the review states, the Auto Review state and `Merging`
+(`Backlog`, say), which waits for a person to promote it, label or not. The normal flow
 resumes once a person moves the issue on or removes the label, or the head turns green.
 
 #### 5.4.7 `github` (object)
@@ -1410,7 +1412,10 @@ When enabled:
   build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
   resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
   directory the agent sandbox cannot write, refused under the same worktree check, always with
-  `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
+  `SYMPHONY_BAR_QA_ROOT` set to a private directory; with `api_fixtures`, a directory in the QA
+  worktree, also with `SYMPHONY_BAR_QA_API_FIXTURES` set to a copy of it where the app runs, which
+  MUST resolve inside the worktree and hold only regular files without other hard links, of bounded
+  total size, and MUST hold no symlinks), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
@@ -2239,7 +2244,9 @@ The poller:
   and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
   issue parked for a person (in the `issues.states.human_review` state, or outside
   `tracker.active_states` with a label that asks for one, or with that state off in `In Review`
-  with an open request, as for a red head in the CI poller) is
+  with an open request, as for a red head in the CI poller), or on an issue in none of
+  `tracker.active_states`, the review states, the Auto Review state and `Merging` (`Backlog`, say,
+  label or not), is
   recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
   and no retry used, until a person moves the issue on or removes the label;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
@@ -3454,8 +3461,8 @@ Scoped Linear tool extension contract:
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
   `linear_add_blocked_by`, `linear_create_project_update`, `linear_create_document`,
-  `linear_update_document`, `linear_get_document`, `linear_request_human_action`, and
-  `linear_withdraw_human_action`.
+  `linear_update_document`, `linear_get_document`, `linear_update_issue_summary`,
+  `linear_request_human_action`, and `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
@@ -3533,6 +3540,22 @@ Scoped Linear tool extension contract:
   one it returns the document with its content secret-redacted and wrapped in prompt-safety
   boundary tags like comments. `linear_get_document` is read-only and available to the read-only
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
+- `linear_update_issue_summary` is the only tool that writes the current issue's description, and
+  it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
+  `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
+  (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
+  `url`; URLs MUST be http(s)) and a one-line `changelog_entry`; every field MUST pass the same
+  secret scan as comments before any Linear call. It MUST read the description right before
+  writing and leave every byte outside the block unchanged, appending the block at the end when the
+  description has none; a start marker without an end marker MUST be refused with nothing written.
+  The block renders a `Symphony summary` heading with the status, the review brief link, the
+  artifacts and a changelog of dated entries, newest first: each call replaces the status and links
+  and prepends one entry dated with the UTC date, and the changelog MUST be capped (the Elixir cap
+  is 20, older entries trimmed). Every reader of an issue description that reaches an agent (the
+  issue context in the prompt, `linear_get_current_issue`, the review, QA and acceptance gate
+  prompts, and the acceptance criteria and walkthrough parsers) MUST strip the block, so an agent
+  never reads its own summary as requirements. The read-only reviewer and QA scopes MUST NOT
+  advertise or execute it.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
   `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
   one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
@@ -4124,12 +4147,15 @@ Minimum endpoints:
     store. Any of them is `null` when unknown. The orchestrator logs `Orchestrator slow
     handle_call` / `handle_info` with the message for a callback that takes 1 s or more, and
     `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
+  - `uptime_seconds` is how long the Symphony answering has run, in whole seconds; the Mac app's
+    Diagnostics view shows it.
   - Suggested response shape:
 
     ```json
     {
       "generated_at": "2026-02-24T20:15:30Z",
       "build": {"version": "0.0.1.168", "sha": "d3d301b0123456789abcdef0123456789abcdef0"},
+      "uptime_seconds": 5025,
       "counts": {
         "running": 2,
         "watching": 1,
