@@ -263,13 +263,17 @@ struct SymphonySidebar: View {
             ForEach(model.sidebar.sections, id: \.section) { group in
                 Section {
                     ForEach(group.views, id: \.self) { view in
-                        Label(view.title, systemImage: view.symbol)
-                            .badge(badge(view))
-                            .badgeProminence(.increased)
-                            .tint(view == .inbox ? DesignTokens.Status.you.tint : DesignTokens.Status.problem.tint)
-                            .accessibilityValue(accessibilityValue(view))
-                            .help(shortcutHelp(view))
-                            .tag(view)
+                        HStack(spacing: DesignTokens.Space.s2) {
+                            Label(view.title, systemImage: view.symbol)
+                            Spacer(minLength: 0)
+                            if badge(view) > 0 {
+                                SidebarBadge(count: badge(view), tint: view == .inbox ? DesignTokens.Status.you.tint : DesignTokens.Status.problem.tint)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityValue(accessibilityValue(view))
+                        .help(shortcutHelp(view))
+                        .tag(view)
                     }
                 } header: {
                     if let title = group.section.title { Text(title) }
@@ -332,6 +336,23 @@ struct SymphonySidebar: View {
 
     private func shortcutHelp(_ view: SymphonyView) -> String {
         model.sidebar.shortcut(for: view).map { "\(view.title) (⌘\($0))" } ?? view.title
+    }
+}
+
+/// C1's count: a filled capsule in the view's status colour (`.badge` ignores the tint in a sidebar).
+struct SidebarBadge: View {
+    let count: Int
+    let tint: Color
+
+    var body: some View {
+        Text("\(count)")
+            .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 20, minHeight: 16)
+            .background(tint, in: Capsule())
+            .accessibilityHidden(true)
     }
 }
 

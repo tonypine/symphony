@@ -123,6 +123,7 @@ struct InboxListRows: View {
                         .id(item.id)
                         .contentShape(Rectangle())
                         .onTapGesture { select(item.id) }
+                        .accessibilityAction { select(item.id) }
                 }
             }
             if let hiddenLine = list.hiddenLine {
@@ -300,7 +301,7 @@ private struct BriefSections: View {
                 Card(title: "How to approve, change or reject") {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                         ForEach(Array(parsed.moves.enumerated()), id: \.offset) { _, move in
-                            (Text(move.move.capitalized + ": ").bold() + Text(move.text))
+                            Text("\(Text(move.move.capitalized + ": ").bold())\(move.text)")
                                 .font(DesignTokens.TypeStyle.body.font)
                         }
                     }
