@@ -3,6 +3,8 @@ defmodule SymphonyElixir.PromptSafety do
   Helpers for rendering untrusted Linear text inside LLM prompts.
   """
 
+  alias SymphonyElixir.IssueSummary
+
   @title_limit 500
   @description_limit 10_000
   @comment_limit 5_000
@@ -34,8 +36,13 @@ defmodule SymphonyElixir.PromptSafety do
   @spec linear_issue_title(String.t()) :: String.t()
   def linear_issue_title(value), do: copyable_block(value, "linear_issue_title", @title_limit)
 
+  @doc """
+  Wraps an issue description (or another Linear body) as untrusted text, without the Symphony
+  summary block (`SymphonyElixir.IssueSummary`), so an agent never reads its own summary as
+  requirements.
+  """
   @spec linear_issue_body(String.t()) :: String.t()
-  def linear_issue_body(value), do: copyable_block(value, "linear_issue_body", @description_limit)
+  def linear_issue_body(value), do: value |> IssueSummary.strip() |> copyable_block("linear_issue_body", @description_limit)
 
   @spec linear_issue_comment_body(String.t()) :: String.t()
   def linear_issue_comment_body(value), do: copyable_block(value, "linear_issue_comment_body", @comment_limit)

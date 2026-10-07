@@ -1229,6 +1229,75 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear_update_issue_summary" do
+    test "is advertised to both runners with its fields, and not to the read-only or QA scopes" do
+      specs = Map.new(DynamicTool.tool_specs(), &{&1["name"], &1["inputSchema"]})
+
+      assert %{"required" => ["status", "changelog_entry"], "properties" => properties} = specs["linear_update_issue_summary"]
+      assert properties |> Map.keys() |> Enum.sort() == ["changelog_entry", "links", "status"]
+      assert "linear_update_issue_summary" in Enum.map(SymphonyElixir.McpServer.tool_specs(), & &1["name"])
+
+      for scope <- [:read_only, :qa] do
+        refute "linear_update_issue_summary" in Enum.map(DynamicTool.tool_specs(scope), & &1["name"])
+      end
+
+      response =
+        DynamicTool.execute("linear_update_issue_summary", %{"status" => "x", "changelog_entry" => "y", "description" => "replace it all"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("a smuggled description must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["description"]}} = Jason.decode!(response["output"])
+    end
+
+    test "writes the block through AgentTools.Linear" do
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription" do
+          {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "Goal"}}}}
+        else
+          send(self(), {:description, variables.description})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => "issue-current", "url" => "https://linear.app/acme/issue/TP-7"}}}}}
+        end
+      end
+
+      args = %{
+        "status" => "PR open",
+        "links" => %{"review_brief" => "https://linear.app/acme/issue/TP-7#comment-1", "artifacts" => [%{"label" => "PR", "url" => "https://github.com/a/b/pull/1"}]},
+        "changelog_entry" => "Opened the PR"
+      }
+
+      response = DynamicTool.execute("linear_update_issue_summary", args, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+      assert %{"issue" => %{"id" => "issue-current"}} = Jason.decode!(response["output"])
+      assert_received {:description, "Goal\n\n<!-- symphony:summary:start -->" <> _block}
+    end
+
+    test "returns explicit error payloads for refusals" do
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = [issue: %Issue{id: "issue-current"}, linear_client: no_linear]
+      base = %{"status" => "x", "changelog_entry" => "y"}
+
+      for {args, code} <- [
+            {%{base | "status" => " "}, "invalid_summary_status"},
+            {%{base | "changelog_entry" => " "}, "invalid_summary_changelog_entry"},
+            {Map.put(base, "links", []), "invalid_summary_links"},
+            {Map.put(base, "links", %{"artifacts" => [%{"label" => "PR"}]}), "invalid_summary_artifacts"},
+            {Map.put(base, "links", %{"review_brief" => "ftp://x"}), "invalid_summary_url"}
+          ] do
+        response = DynamicTool.execute("linear_update_issue_summary", args, opts)
+        assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
+        assert is_binary(message)
+      end
+
+      unterminated = fn _query, _variables, _opts ->
+        {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "Goal <!-- symphony:summary:start -->"}}}}
+      end
+
+      response = DynamicTool.execute("linear_update_issue_summary", base, Keyword.put(opts, :linear_client, unterminated))
+      assert %{"error" => %{"code" => "summary_block_unterminated"}} = Jason.decode!(response["output"])
+    end
+  end
+
   describe "linear document tools" do
     @document_scope %{"id" => "issue-current", "identifier" => "TP-7", "project" => %{"id" => "project-1"}, "attachments" => %{"nodes" => []}}
 

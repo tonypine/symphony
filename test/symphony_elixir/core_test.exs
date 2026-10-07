@@ -3068,6 +3068,20 @@ defmodule SymphonyElixir.CoreTest do
     assert enriched_issue.description == "Polled body"
   end
 
+  test "linear client leaves Symphony's summary block out of normalized and enriched descriptions" do
+    block = "<!-- symphony:summary:start -->\n### Symphony summary\n\n- [ ] not a requirement\n<!-- symphony:summary:end -->"
+
+    assert %Issue{description: "## Goal\n\nShip it."} =
+             Client.normalize_issue_for_test(%{"id" => "issue-1", "identifier" => "MT-1", "title" => "T", "description" => "## Goal\n\nShip it.\n\n" <> block})
+
+    graphql_fun = fn _query, _variables ->
+      {:ok, %{"data" => %{"issue" => %{"description" => "Edited\n\n" <> block, "comments" => %{"nodes" => []}, "relations" => %{"nodes" => []}}}}}
+    end
+
+    issue = %Issue{id: "issue-1", identifier: "MT-1"}
+    assert {:ok, %Issue{description: "Edited"}} = Client.fetch_issue_enrichment_for_test(issue, graphql_fun)
+  end
+
   test "linear client reports enrichment errors without changing issue fetchers" do
     issue = %Issue{id: "issue-missing", identifier: "MT-404"}
 

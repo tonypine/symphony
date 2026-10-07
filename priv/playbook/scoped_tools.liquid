@@ -32,6 +32,11 @@ titled `<identifier> · <title>`, and attaches it to the issue;
 reads one with it. They act only on documents this issue's runs created. Edit an
 existing document instead of creating a second one.
 
+The issue description belongs to the person who wrote it. The one part an agent
+writes is the Symphony summary block at its end, through
+`linear_update_issue_summary(status, links, changelog_entry)`; every other byte of
+the description stays as it is (see `Review brief`).
+
 Images and files attached to the ticket appear in the description and comments as
 `https://uploads.linear.app/...` links that Symphony has pre-signed, so they download
 without a Linear key: save one with `curl -sSfL -o "$TMPDIR/<name>" '<link>'` and open
