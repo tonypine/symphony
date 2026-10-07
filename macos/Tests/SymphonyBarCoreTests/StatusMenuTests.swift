@@ -87,21 +87,71 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertNil(StatusMenu.updateUnblocksLine(-1))
     }
 
-    func testDetailLinesSayHowManyTicketsWaitInHumanReview() {
-        var waiting = StateSnapshot(running: 2, retrying: 1, updateUnblocks: 1, humanReview: 3)
+    func testDetailLinesLeaveWhatWaitsOnYouToItsItems() {
+        var waiting = StateSnapshot(
+            running: 2, retrying: 1, updateUnblocks: 1, humanReview: 3,
+            waitingOnYou: [.init(identifier: "TP-1", kind: .pr, waitingSeconds: 60)]
+        )
         waiting.pause = .init(reason: "deploy freeze", since: pausedAt)
 
         XCTAssertEqual(
             StatusMenu.detailLines(.paused(waiting, external: false), now: pausedAt.addingTimeInterval(600), timeZone: utc),
-            [
-                "2 running · 1 retrying",
-                "3 tickets wait on you in Human Review",
-                "Paused since 12:16: deploy freeze",
-                "Update to unblock 1 ticket",
-            ]
+            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze", "Update to unblock 1 ticket"]
         )
-        XCTAssertEqual(StatusMenu.humanReviewLine(1), "1 ticket waits on you in Human Review")
-        XCTAssertNil(StatusMenu.humanReviewLine(0))
+    }
+
+    func testWaitingMenuListsUpToTheLimitThenOpensTheDashboardForTheRest() {
+        let tickets = (1...7).map { StateSnapshot.WaitingTicket(identifier: "TP-\($0)") }
+        let snapshot = StateSnapshot(running: 1, waitingOnYou: tickets)
+
+        XCTAssertEqual(
+            StatusMenu.waitingMenu(.running(snapshot, external: false)),
+            .init(tickets: Array(tickets.prefix(5)), moreTitle: "2 more…")
+        )
+        XCTAssertEqual(
+            StatusMenu.waitingMenu(.paused(snapshot, external: true), limit: 7),
+            .init(tickets: tickets, moreTitle: nil)
+        )
+        XCTAssertEqual(StatusMenu.waitingMenu(.running(StateSnapshot(running: 1), external: false)), .init(tickets: [], moreTitle: nil))
+        for status in [SymphonyStatus.stopped, .starting, .error("boom")] {
+            XCTAssertEqual(StatusMenu.waitingMenu(status), .init(tickets: [], moreTitle: nil))
+        }
+    }
+
+    func testWaitingLineShowsKindHeadlineAndHowLongItWaited() {
+        let plan = StateSnapshot.WaitingTicket(
+            identifier: "TP-123", title: "Research issue template", kind: .plan,
+            headline: "  Split the importer\ninto four sub-tickets ", waitingSeconds: 7_300
+        )
+        XCTAssertEqual(StatusMenu.waitingLine(plan), "TP-123 · Plan · Split the importer into four sub-tickets · 2h")
+
+        // Without a brief the title stands in; without either, only what is known shows.
+        XCTAssertEqual(
+            StatusMenu.waitingLine(.init(identifier: "TP-2", title: "Fix the poller", kind: .pr, headline: " ", waitingSeconds: 30)),
+            "TP-2 · PR · Fix the poller · 30s"
+        )
+        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-3", kind: .finalVerification)), "TP-3 · Final verification")
+        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-4", kind: .action, waitingSeconds: 200_000)), "TP-4 · Decision · 2d")
+        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-5", kind: .other("audit"), waitingSeconds: 900)), "TP-5 · Review · 15m")
+
+        let long = StatusMenu.waitingLine(.init(identifier: "TP-6", headline: String(repeating: "a", count: 80)))
+        XCTAssertEqual(long, "TP-6 · PR · " + String(repeating: "a", count: 59) + "…")
+        XCTAssertEqual(StatusMenu.waitedLabel(-5), "0s")
+    }
+
+    func testBadgeCountsWhatWaitsOnYouWhileSymphonyAnswers() {
+        let waiting = StateSnapshot(running: 1, waitingOnYou: [.init(identifier: "TP-1"), .init(identifier: "TP-2")])
+
+        XCTAssertEqual(StatusMenu.badgeCount(for: .running(waiting, external: false)), 2)
+        XCTAssertEqual(StatusMenu.badgeCount(for: .paused(waiting, external: false)), 2)
+        XCTAssertNil(StatusMenu.badgeCount(for: .running(StateSnapshot(running: 1), external: false)))
+        XCTAssertNil(StatusMenu.badgeCount(for: .stopped))
+        XCTAssertNil(StatusMenu.badgeCount(for: .error("boom")))
+
+        let running = SymphonyStatus.running(waiting, external: false)
+        XCTAssertEqual(StatusMenu.iconLabel(for: running, badge: 2), "Symphony: running, 2 tickets wait on you")
+        XCTAssertEqual(StatusMenu.iconLabel(for: running, badge: 1), "Symphony: running, 1 ticket waits on you")
+        XCTAssertEqual(StatusMenu.iconLabel(for: running, badge: nil), "Symphony: running")
     }
 
     func testForcedTicketsShowOnlyWhileSymphonyAnswers() {
