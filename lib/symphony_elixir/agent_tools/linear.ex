@@ -673,12 +673,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
     %{
       human_action_requested?: CommentRegistry.human_action_requested?(registry),
-      supervisor_check?: CommentRegistry.supervisor_check?(registry)
+      supervisor_check?: CommentRegistry.supervisor_check?(registry),
+      pull_request_created?: CommentRegistry.pull_request_created?(registry)
     }
   end
 
-  defp record_supervisor_check(context, body) do
-    if SupervisorCheck.in_body?(body), do: CommentRegistry.record_supervisor_check(Map.get(context, :comment_registry)), else: :ok
+  defp record_supervisor_check(context, comment_id, body) do
+    CommentRegistry.record_supervisor_check(Map.get(context, :comment_registry), comment_id, SupervisorCheck.in_body?(body))
   end
 
   @spec add_comment(context(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -693,7 +694,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment_id = get_in(response, ["data", "commentCreate", "comment", "id"])
       CommentRegistry.record(Map.get(context, :comment_registry), comment_id)
-      record_supervisor_check(context, body)
+      record_supervisor_check(context, comment_id, body)
       {:ok, response}
     end
   end
@@ -721,7 +722,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_update_comment", opts),
          {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts),
          {:ok, response} <- check_mutation_success(response, "commentUpdate") do
-      record_supervisor_check(context, body)
+      record_supervisor_check(context, comment_id, body)
       {:ok, response}
     end
   end
@@ -1853,8 +1854,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   # A ticket with no pull request whose run left a `## Supervisor check` (its work is already on
   # the default branch, and only a check an agent can't run is left) goes to the supervisor's
-  # `In Review` queue: there is no PR for Auto Review to test.
-  defp supervisor_handoff?(state, issue, %{supervisor_check?: true}) do
+  # `In Review` queue: there is no PR for Auto Review to test. A PR the run opened counts before
+  # Linear's GitHub integration lists it among the issue's attachments.
+  defp supervisor_handoff?(state, issue, %{supervisor_check?: true, pull_request_created?: false}) do
     urls = issue |> get_in(["attachments", "nodes"]) |> List.wrap() |> Enum.map(&(&1["url"] || ""))
     state_name_matches?(state, AutoReview.review_state()) and not Enum.any?(urls, &Regex.match?(@pull_request_url, &1))
   end

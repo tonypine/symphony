@@ -514,7 +514,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                %{
                  "data" => %{
                    "commentCreate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
-                   "commentUpdate" => %{"success" => true, "comment" => %{"id" => "brief-1"}}
+                   "commentUpdate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
+                   "commentDelete" => %{"success" => true}
                  }
                }}
             end
@@ -534,6 +535,24 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert move("In Review", no_pr, comment_registry: registry) == "state-review"
       assert refused?.("Human Review", no_pr)
       assert refused?.("In Review", with_pr)
+
+      # Editing the block away, or deleting the comment that holds it, takes the exemption back.
+      check = "## Supervisor check\n\n**Verify:** no crash on `main`."
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\nNothing left to check."})
+      assert refused?.("In Review", no_pr)
+
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => check})
+      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+
+      comment.("linear_delete_comment", %{"comment_id" => "brief-1"})
+      refute CommentRegistry.supervisor_check?(registry)
+      assert refused?.("In Review", no_pr)
+
+      # A PR the run opened counts before Linear lists it among the issue's attachments.
+      comment.("linear_add_comment", %{"body" => check})
+      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+      CommentRegistry.record_pull_request(registry)
+      assert refused?.("In Review", no_pr)
     end
   end
 
@@ -2002,6 +2021,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
   test "github.create_pull_request uses current branch and configured origin repo" do
     workspace = tmp_workspace!("github-create-pr")
+    {:ok, registry} = CommentRegistry.start_link()
 
     try do
       git_runner = fn
@@ -2033,10 +2053,11 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         DynamicTool.execute(
           "github_create_pull_request",
           %{"title" => "Add tools", "body" => "Body"},
-          github_tool_opts(workspace, gh_runner: gh_runner, git_runner: git_runner)
+          github_tool_opts(workspace, gh_runner: gh_runner, git_runner: git_runner, comment_registry: registry)
         )
 
       assert response["success"] == true
+      assert CommentRegistry.pull_request_created?(registry)
 
       assert %{
                "url" => "https://github.com/acme/symphony/pull/3051",

@@ -1367,9 +1367,9 @@ When enabled:
   redirect. A `linear_request_human_action` request moves its issue to the human review state
   itself, since only a person can move it on; the acceptance gate never approves an issue there. A plan parent and a ticket whose
   title starts with `Final verification:` open no PR, so they MAY move to either state. A ticket
-  with no pull request attachment whose run posted or edited a comment holding a
+  with no pull request attachment, whose run opened no PR and has a comment that still holds a
   `## Supervisor check` heading line (its work is already on the default branch, and only a check
-  an agent can't run is left) MAY move to `In Review`, for the supervisor to run the check.
+  an agent can't run is left), MAY move to `In Review`, for the supervisor to run the check.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
   PR head SHA, at most one per issue and `max_concurrent` overall. GitHub runs no `pull_request`

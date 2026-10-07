@@ -14,14 +14,34 @@ defmodule SymphonyElixir.SupervisorCheckTest do
     refute SupervisorCheck.in_body?(nil)
   end
 
-  test "the run's registry remembers a supervisor check, and a run without one records nothing" do
+  test "the run's registry holds a supervisor check while one of its comments has the block" do
     {:ok, registry} = CommentRegistry.start_link()
     refute CommentRegistry.supervisor_check?(registry)
 
-    assert CommentRegistry.record_supervisor_check(registry) == :ok
+    assert CommentRegistry.record_supervisor_check(registry, "brief-1", true) == :ok
+    assert CommentRegistry.record_supervisor_check(registry, "brief-2", true) == :ok
     assert CommentRegistry.supervisor_check?(registry)
 
-    assert CommentRegistry.record_supervisor_check(nil) == :ok
+    CommentRegistry.record_supervisor_check(registry, "brief-1", false)
+    assert CommentRegistry.supervisor_check?(registry)
+
+    CommentRegistry.remove(registry, "brief-2")
+    refute CommentRegistry.supervisor_check?(registry)
+
+    assert CommentRegistry.record_supervisor_check(nil, "brief-1", true) == :ok
+    assert CommentRegistry.record_supervisor_check(registry, nil, true) == :ok
+    refute CommentRegistry.supervisor_check?(registry)
     refute CommentRegistry.supervisor_check?(nil)
+  end
+
+  test "the run's registry remembers a PR it opened" do
+    {:ok, registry} = CommentRegistry.start_link()
+    refute CommentRegistry.pull_request_created?(registry)
+
+    assert CommentRegistry.record_pull_request(registry) == :ok
+    assert CommentRegistry.pull_request_created?(registry)
+
+    assert CommentRegistry.record_pull_request(nil) == :ok
+    refute CommentRegistry.pull_request_created?(nil)
   end
 end
