@@ -765,7 +765,15 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     attrs = clear_auto_merge_stay(attrs, record, opts)
 
-    case review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now) do
+    action = review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now)
+
+    with {:ok, attrs} <- turn_off_auto_merge_on_exit(attrs, record, activity, action, settings, opts, now) do
+      act_on_review(action, record, attrs, activity, settings, opts, now)
+    end
+  end
+
+  defp act_on_review(action, record, attrs, activity, settings, opts, now) do
+    case action do
       :merged ->
         with {:ok, record} <- finish_merged(record, settings, opts, now) do
           record
@@ -834,23 +842,38 @@ defmodule SymphonyElixir.PrReviewPoller do
   """
   @spec release_auto_merge_hold(String.t(), keyword()) :: :ok
   def release_auto_merge_hold(issue_id, opts \\ []) when is_binary(issue_id) do
+    drop_auto_merge(issue_id, &(AutoMerge.held?(&1) or AutoMerge.conflict?(&1)), "hold", opts)
+  end
+
+  @doc """
+  Forgets the auto-merge state on the issue's PR, whatever it is, so the next poll of a `Merging`
+  stay turns auto-merge on again, even at the head it was on for. The Director's undo of an
+  approval calls it once it turned auto-merge off, so a ticket Linear then keeps in `Merging` is
+  not left with auto-merge off. Failing to forget it is logged.
+  """
+  @spec forget_auto_merge(String.t(), keyword()) :: :ok
+  def forget_auto_merge(issue_id, opts \\ []) when is_binary(issue_id) do
+    drop_auto_merge(issue_id, &is_map/1, "state", opts)
+  end
+
+  defp drop_auto_merge(issue_id, drop?, what, opts) do
     run_store = Keyword.get(opts, :run_store, RunStore)
 
     Enum.each(repo_keys_from_opts(opts), fn repo_key ->
       with {:ok, records} <- list_pr_reviews(run_store, repo_key),
            %{auto_merge: auto_merge} <- Enum.find(records, &(Map.get(&1, :issue_id) == issue_id)),
-           true <- AutoMerge.held?(auto_merge) or AutoMerge.conflict?(auto_merge),
+           true <- drop?.(auto_merge),
            {:error, reason} <- run_store.update_pr_review(repo_key, issue_id, %{auto_merge: nil}) do
-        log_auto_merge_hold_failure(issue_id, reason)
+        log_auto_merge_drop_failure(issue_id, what, reason)
       else
-        {:error, reason} -> log_auto_merge_hold_failure(issue_id, reason)
+        {:error, reason} -> log_auto_merge_drop_failure(issue_id, what, reason)
         _other -> :ok
       end
     end)
   end
 
-  defp log_auto_merge_hold_failure(issue_id, reason) do
-    Logger.warning("Failed to drop the auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
+  defp log_auto_merge_drop_failure(issue_id, what, reason) do
+    Logger.warning("Failed to drop the auto-merge #{what} issue_id=#{issue_id}: #{inspect(reason)}")
   end
 
   @doc "Every PR the poller is landing with auto-merge, with a short status for the dashboard."
@@ -903,6 +926,57 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
+  # An issue that left `Merging` for anything but `Done` (a person's move, or the Director's undo)
+  # must not land on the auto-merge its approval turned on: turn it off, say so on the ticket, and
+  # forget the stay, so the next move to `Merging` turns it on again even at the same head. A merged
+  # or closed PR, or an issue moved to `Done`, keeps it. While GitHub won't turn it off, the stay is
+  # kept and the next poll tries again.
+  defp turn_off_auto_merge_on_exit(attrs, record, activity, action, settings, opts, now) do
+    if left_merging_with_auto_merge?(record, action, settings, opts) do
+      case fetch_review_issue(record, opts) do
+        {:ok, %Issue{state: state}} -> unless_done(state, attrs, record, activity, opts, now)
+        :missing -> disable_auto_merge_on_exit(attrs, record, activity, nil, opts, now)
+        {:error, reason} -> record_poll_error(record, reason, opts, now)
+      end
+    else
+      {:ok, attrs}
+    end
+  end
+
+  defp left_merging_with_auto_merge?(record, action, settings, opts) do
+    action not in [:merged, :closed] and AutoMerge.enabled?(settings) and not auto_merge_issue?(record, opts) and
+      AutoMerge.on?(Map.get(record, :auto_merge))
+  end
+
+  defp unless_done(state, attrs, record, activity, opts, now) do
+    if normalize_state_name(state || "") == normalize_state_name(@done_state),
+      do: {:ok, attrs},
+      else: disable_auto_merge_on_exit(attrs, record, activity, state, opts, now)
+  end
+
+  defp disable_auto_merge_on_exit(attrs, record, activity, state, opts, now) do
+    case AutoMerge.disable_for_exit(record, activity, Map.get(record, :auto_merge), opts, now) do
+      {:ok, _auto_merge} ->
+        {:ok, Map.put(attrs, :auto_merge, nil)}
+
+      {:disabled, auto_merge} ->
+        Logger.info(
+          "Auto-merge #{Map.get(record, :issue_identifier)}: turned GitHub auto-merge off because the issue left Merging for #{state || "an unknown state"} issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha}"
+        )
+
+        record_auto_merge_disabled(record, auto_merge, "left_merging", "GitHub auto-merge turned off because the issue left Merging for #{state || "an unknown state"}")
+        create_auto_merge_comment(record, AutoMerge.exit_comment(Map.get(record, :pr_url), state), "turned off because the issue left Merging", opts)
+        {:ok, Map.put(attrs, :auto_merge, nil)}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Auto-merge #{Map.get(record, :issue_identifier)}: turning GitHub auto-merge off after the issue left Merging failed; tried again on the next poll issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)}: #{inspect(reason)}"
+        )
+
+        record_poll_error(record, {:disable_auto_merge_failed, reason}, opts, now)
+    end
+  end
+
   defp put_auto_merge_conflict(attrs, record, activity, settings, opts, now) do
     previous = Map.get(record, :auto_merge)
 
@@ -931,8 +1005,9 @@ defmodule SymphonyElixir.PrReviewPoller do
           "Auto-merge #{Map.get(record, :issue_identifier)}: turned GitHub auto-merge off because the PR conflicts with the base branch; the fix goes back through review issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha}"
         )
 
-        record_auto_merge_disabled(record, auto_merge)
-        comment_auto_merge_disabled(record, settings, opts)
+        record_auto_merge_disabled(record, auto_merge, "conflict", "GitHub auto-merge turned off because the PR conflicts with the base branch; the conflict fix goes back through review")
+        conflict_comment = AutoMerge.conflict_comment(Map.get(record, :pr_url), AutoMerge.rereview?(settings))
+        create_auto_merge_comment(record, conflict_comment, "turned off for a conflict", opts)
         {:ok, Map.put(attrs, :auto_merge, auto_merge)}
 
       {:error, reason} ->
@@ -944,7 +1019,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp record_auto_merge_disabled(record, auto_merge) do
+  defp record_auto_merge_disabled(record, auto_merge, reason, detail) do
     %{
       event_type: "auto_merge_disabled",
       repo_key: Map.get(record, :repo_key),
@@ -952,8 +1027,8 @@ defmodule SymphonyElixir.PrReviewPoller do
       issue_identifier: Map.get(record, :issue_identifier),
       pr_url: Map.get(record, :pr_url),
       head_sha: auto_merge.head_sha,
-      reason: "conflict",
-      detail: "GitHub auto-merge turned off because the PR conflicts with the base branch; the conflict fix goes back through review"
+      reason: reason,
+      detail: detail
     }
     |> AuditLog.record()
     |> case do
@@ -962,16 +1037,16 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp comment_auto_merge_disabled(record, settings, opts) do
+  defp create_auto_merge_comment(record, body, why, opts) do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case tracker.create_comment(issue_id, AutoMerge.conflict_comment(Map.get(record, :pr_url), AutoMerge.rereview?(settings))) do
+    case tracker.create_comment(issue_id, body) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to comment that auto-merge was turned off for a conflict issue_id=#{issue_id}: #{inspect(reason)}")
+        Logger.warning("Failed to comment that auto-merge was #{why} issue_id=#{issue_id}: #{inspect(reason)}")
         :ok
     end
   end

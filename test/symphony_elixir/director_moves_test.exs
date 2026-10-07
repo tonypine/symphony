@@ -1,12 +1,24 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, DirectorMoves, PlanComments, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, DirectorMoves, PlanComments, PrReviewPoller, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
   defmodule MissingStateTracker do
     def workflow_state_exists?(_state, _teams), do: {:ok, false}
+  end
+
+  defmodule FakeGitHub do
+    def fetch_activity(pr_url, _opts) do
+      send(self(), {:fetch_activity, pr_url})
+      Application.fetch_env!(:symphony_elixir, :director_moves_test_activity)
+    end
+
+    def disable_auto_merge(pr_url, pr_node_id, _opts) do
+      send(self(), {:disable_auto_merge, pr_url, pr_node_id})
+      Application.get_env(:symphony_elixir, :director_moves_test_disable, :ok)
+    end
   end
 
   defmodule CannedLinearClient do
@@ -27,12 +39,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
     clock = :counters.new(1, [])
 
     on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :director_moves_test_activity)
+      Application.delete_env(:symphony_elixir, :director_moves_test_disable)
       SubIssueWait.reset_for_test(@waiting)
       restore_app_env(:audit_log_dir, previous_audit_dir)
       File.rm_rf(audit_dir)
     end)
 
-    %{opts: [server: server, clock: fn -> :counters.get(clock, 1) end], clock: clock}
+    %{opts: [server: server, clock: fn -> :counters.get(clock, 1) end, github: FakeGitHub], clock: clock}
   end
 
   describe "approve_plan" do
@@ -366,6 +380,71 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "undo of approve_pr" do
+    @pr_url "https://github.com/example/repo/pull/40"
+
+    test "turns GitHub auto-merge off before moving the ticket back, and forgets the poller's auto-merge state", %{opts: opts} do
+      auto_merge = %{state: "enabled", head_sha: "head-1", enabled_head_sha: "head-1"}
+      :ok = RunStore.put_pr_review(%{repo_key: "default", issue_id: "pr", pr_url: @pr_url, auto_merge: auto_merge})
+      approve_then_merging(opts, repo_key: "default")
+      github_activity(state: "OPEN", auto_merge_enabled: true)
+
+      log = capture_log(fn -> assert {:ok, %{undone: "approve_pr", to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts) end)
+
+      assert [{:fetch_activity, @pr_url}, {:disable_auto_merge, @pr_url, "PR_node"}, {:memory_tracker_state_update, "pr", "In Review"}] =
+               mailbox()
+
+      assert log =~ "Director undo turned GitHub auto-merge off issue_id=pr issue_identifier=MOT-40"
+      assert PrReviewPoller.auto_merge("pr", repo_key: "default") == nil
+    end
+
+    test "with auto-merge off, or no pull request on the ticket, just moves it back", %{opts: opts} do
+      approve_then_merging(opts)
+      github_activity(state: "OPEN", auto_merge_enabled: false)
+      assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts)
+      assert [{:fetch_activity, @pr_url}, {:memory_tracker_state_update, "pr", "In Review"}] = mailbox()
+
+      put_issues([pr("In Review")])
+      assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
+      put_issues([pr("Merging")])
+      mailbox()
+      assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts)
+      assert [{:memory_tracker_state_update, "pr", "In Review"}] = mailbox()
+    end
+
+    test "refuses a pull request that already merged", %{opts: opts} do
+      approve_then_merging(opts)
+      github_activity(state: "MERGED", auto_merge_enabled: true)
+
+      assert {:error, {:conflict, "MOT-40 already merged; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+      assert [{:fetch_activity, @pr_url}] = mailbox()
+    end
+
+    test "answers GitHub's error and leaves the ticket in Merging when GitHub refuses or can't be read", %{opts: opts} do
+      approve_then_merging(opts)
+      github_activity(state: "OPEN", auto_merge_enabled: true)
+      Application.put_env(:symphony_elixir, :director_moves_test_disable, {:error, :forbidden})
+
+      assert {:error, {:github, message}} = DirectorMoves.undo("MOT-40", opts)
+      assert message == "GitHub refused to turn auto-merge off on #{@pr_url} (:forbidden); MOT-40 stays in Merging"
+      assert [{:fetch_activity, @pr_url}, {:disable_auto_merge, @pr_url, "PR_node"}] = mailbox()
+
+      github_activity(state: "OPEN", auto_merge_enabled: true, pr_node_id: nil)
+      assert {:error, {:github, "GitHub refused to turn auto-merge off on " <> rest}} = DirectorMoves.undo("MOT-40", opts)
+      assert rest =~ "(:missing_pr_node_id)"
+
+      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:error, :gh_down})
+      assert {:error, {:github, "couldn't read #{@pr_url} (:gh_down); MOT-40 stays in Merging"}} == DirectorMoves.undo("MOT-40", opts)
+      refute_received {:memory_tracker_state_update, "pr", "In Review"}
+
+      # The move is still there to undo once GitHub answers.
+      github_activity(state: "OPEN", auto_merge_enabled: true)
+      Application.put_env(:symphony_elixir, :director_moves_test_disable, :ok)
+      capture_log(fn -> assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts) end)
+      assert_received {:memory_tracker_state_update, "pr", "In Review"}
+    end
+  end
+
   test "the Director's comments count as a person's, not as Symphony's own" do
     for body <- [
           DirectorMoves.decisions_comment([%{question: "Where?", answer: "B"}]),
@@ -402,6 +481,24 @@ defmodule SymphonyElixir.DirectorMovesTest do
     assert log =~ "Failed to record director_move audit event"
   after
     Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(System.tmp_dir!(), "unused"))
+  end
+
+  defp approve_then_merging(opts, fields \\ []) do
+    issue = struct(pr("In Review"), [pr_urls: [@pr_url]] ++ fields)
+    put_issues([issue])
+    assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, Keyword.put(opts, :github, FakeGitHub))
+    put_issues([%{issue | state: "Merging"}])
+    mailbox()
+  end
+
+  defp github_activity(fields) do
+    Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
+  end
+
+  defp mailbox do
+    {:messages, messages} = Process.info(self(), :messages)
+    Enum.each(messages, fn message -> receive do: (^message -> :ok) end)
+    messages
   end
 
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)

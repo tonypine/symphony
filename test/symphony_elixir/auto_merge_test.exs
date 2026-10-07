@@ -1376,6 +1376,149 @@ defmodule SymphonyElixir.AutoMergeTest do
     refute_received {:issue_state_update, _issue_id, _state}
   end
 
+  describe "an issue that leaves Merging with auto-merge on" do
+    test "moved back to In Review has auto-merge turned off on the next poll, and a fresh approval turns it on again at the same head" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+      # A person moves the ticket back to In Review while its checks still run.
+      track([issue("In Review")])
+      activity(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+
+      log = capture_log(fn -> assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 30)) end)
+
+      assert [{:disable_auto_merge, @pr_url, "PR_node"}, {:issue_comment, @issue_id, comment}] = mailbox()
+      assert comment == AutoMerge.exit_comment(@pr_url, "In Review")
+      assert comment =~ "Symphony turned off GitHub auto-merge on #{@pr_url} because this ticket left Merging for In Review"
+      assert log =~ "Auto-merge ACME-1780: turned GitHub auto-merge off because the issue left Merging for In Review"
+      assert [%{"reason" => "left_merging", "head_sha" => "head-1", "pr_url" => @pr_url}] = audit_events("auto_merge_disabled")
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+
+      # Nothing more to do on later polls.
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 60))
+      assert mailbox() == []
+
+      track([issue("Merging")])
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 90))
+      assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+    end
+
+    test "already off (the Director's undo turned it off) gets no disable call or comment, and its stay is forgotten" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      mailbox()
+
+      track([issue("In Review")])
+      assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 30))
+      assert mailbox() == []
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+      assert audit_events("auto_merge_disabled") == []
+    end
+
+    test "moved to Done keeps auto-merge, and so does a PR that merged or closed" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      mailbox()
+
+      track([issue("Done")])
+      activity(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+      assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 30))
+      assert [{:fetch_issue_states_by_ids, [@issue_id]}] = mailbox()
+      assert %{state: "enabled", enabled_head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
+
+      track([issue("In Review")])
+      activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
+      capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60)) end)
+      refute_received {:disable_auto_merge, _url, _node_id}
+      assert_received {:issue_state_update, @issue_id, "Done"}
+    end
+
+    test "a ticket gone from Linear has auto-merge turned off too, and a failed comment doesn't hold it" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      mailbox()
+
+      track([])
+      activity(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+      Application.put_env(:symphony_elixir, :auto_merge_test_comment_result, {:error, :linear_down})
+
+      log = capture_log(fn -> assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 30)) end)
+
+      assert [{:fetch_issue_states_by_ids, [@issue_id]}, disable, {:issue_comment, @issue_id, comment}] = mailbox()
+      assert disable == {:disable_auto_merge, @pr_url, "PR_node"}
+
+      assert comment =~ "because this ticket left Merging, so the PR"
+      assert log =~ "left Merging for an unknown state"
+      assert log =~ "Failed to comment that auto-merge was turned off because the issue left Merging issue_id=#{@issue_id}: :linear_down"
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+    end
+
+    test "while GitHub won't turn it off, or the ticket can't be read, the stay is kept and the next poll tries again" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      mailbox()
+
+      track([issue("In Review")])
+      activity(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+      replies(%{disable_auto_merge: {:error, :forbidden}})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{actions: [{:poll_error, @issue_id, {:disable_auto_merge_failed, :forbidden}}]}} = poll(DateTime.add(now, 30))
+        end)
+
+      assert log =~ "turning GitHub auto-merge off after the issue left Merging failed; tried again on the next poll"
+      assert %{state: "enabled", enabled_head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
+      refute_received {:issue_comment, _issue_id, _body}
+
+      track([issue("Rework")])
+      Application.put_env(:symphony_elixir, :auto_merge_test_fetch_result, {:error, :linear_down})
+      capture_log(fn -> assert {:ok, %{actions: [{:poll_error, @issue_id, :linear_down}]}} = poll(DateTime.add(now, 600)) end)
+      assert %{state: "enabled"} = PrReviewPoller.auto_merge(@issue_id)
+
+      Application.delete_env(:symphony_elixir, :auto_merge_test_fetch_result)
+      replies(%{})
+      capture_log(fn -> assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 1200)) end)
+      assert_received {:disable_auto_merge, @pr_url, "PR_node"}
+      assert_received {:issue_comment, @issue_id, "Symphony turned off GitHub auto-merge" <> _rest}
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+    end
+
+    test "forget_auto_merge drops any auto-merge state, and logs when it can't" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+
+      failing_store = [run_store: __MODULE__.HoldFailingRunStore]
+      log = capture_log(fn -> assert :ok = PrReviewPoller.forget_auto_merge(@issue_id, failing_store) end)
+      assert log =~ "Failed to drop the auto-merge state issue_id=#{@issue_id}: :write_failed"
+      assert %{state: "enabled"} = PrReviewPoller.auto_merge(@issue_id)
+
+      assert :ok = PrReviewPoller.forget_auto_merge(@issue_id)
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+      assert :ok = PrReviewPoller.forget_auto_merge("issue-without-review")
+    end
+  end
+
   describe "a merged PR whose issue has sub-tickets" do
     @waiting "Waiting on sub-tickets"
 

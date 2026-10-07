@@ -116,6 +116,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_move(conn, _identifier, {:error, {:conflict, message}}), do: error_response(conn, 409, "move_not_allowed", message)
 
   defp respond_move(conn, _identifier, {:error, {:partial, message}}), do: error_response(conn, 502, "move_incomplete", message)
+  defp respond_move(conn, _identifier, {:error, {:github, message}}), do: error_response(conn, 502, "github_error", message)
 
   defp respond_move(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
