@@ -221,6 +221,20 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertFalse(StatusMenu.canRestart(.paused(snapshot, external: true)))
     }
 
+    func testRestartPathStopsAndStartsTheAppsSymphonyThatDoesntAnswer() {
+        let error = SymphonyStatus.error("Symphony isn't answering")
+        XCTAssertEqual(StatusMenu.restartPath(error, appRunsSymphony: true), .stopAndStart)
+        XCTAssertEqual(StatusMenu.restartPath(error, appRunsSymphony: false), .start)
+        XCTAssertEqual(StatusMenu.restartPath(.stopped, appRunsSymphony: false), .start)
+        XCTAssertNil(StatusMenu.restartPath(.stopped, appRunsSymphony: true))
+        XCTAssertEqual(StatusMenu.restartPath(.running(snapshot, external: false), appRunsSymphony: true), .graceful)
+        XCTAssertEqual(StatusMenu.restartPath(.paused(snapshot, external: false), appRunsSymphony: true), .graceful)
+        XCTAssertNil(StatusMenu.restartPath(.running(snapshot, external: true), appRunsSymphony: false))
+        XCTAssertNil(StatusMenu.restartPath(.paused(snapshot, external: true), appRunsSymphony: false))
+        XCTAssertNil(StatusMenu.restartPath(.starting, appRunsSymphony: true))
+        XCTAssertNil(StatusMenu.restartPath(.starting, appRunsSymphony: false))
+    }
+
     func testRestartTitles() {
         XCTAssertEqual(StatusMenu.restartTitle, "Restart Symphony")
         XCTAssertEqual(StatusMenu.restartingTitle, "Restarting Symphony…")

@@ -353,6 +353,31 @@ public enum StatusMenu {
         }
     }
 
+    /// How Restart Symphony brings Symphony back.
+    public enum RestartPath: Equatable {
+        /// Pauses dispatch, waits for agent runs, stops and starts again, all through the API.
+        case graceful
+        /// Stops the app's Symphony and starts it once it has exited: one that doesn't answer can't pause or report
+        /// its runs.
+        case stopAndStart
+        /// Starts Symphony: the app's one has exited.
+        case start
+    }
+
+    /// How Restart Symphony runs for `status`, nil when it can't. `appRunsSymphony` is true while the app's Symphony
+    /// process is alive, answering or not.
+    public static func restartPath(_ status: SymphonyStatus, appRunsSymphony: Bool) -> RestartPath? {
+        if canRestart(status) { return appRunsSymphony ? .graceful : nil }
+        switch status {
+        case .error:
+            return appRunsSymphony ? .stopAndStart : .start
+        case .stopped:
+            return appRunsSymphony ? nil : .start
+        case .starting, .running, .paused:
+            return nil
+        }
+    }
+
     /// Title of the menu item that opens the Settings window.
     public static let settingsTitle = "Settings…"
 

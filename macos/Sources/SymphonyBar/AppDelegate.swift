@@ -560,8 +560,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .openLogs:
             if canOpenLogs { openLogs(nil) }
         case .restartSymphony:
-            // A Symphony that exited can't restart: start it again instead.
-            if runner.isRunning { restart() } else if canStartNow { startSymphony(nil) }
+            switch StatusMenu.restartPath(machine.status, appRunsSymphony: runner.isRunning) {
+            case .graceful:
+                restart()
+            case .stopAndStart:
+                guard !restarting, !runner.isStopping, !updater.isUpdating else { return }
+                runner.stop { [weak self] in self?.startSymphony(nil) }
+            case .start:
+                if canStartNow { startSymphony(nil) }
+            case nil:
+                break
+            }
         case .openSettings:
             settingsWindow.show()
         }
