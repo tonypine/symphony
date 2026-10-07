@@ -948,7 +948,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       end
     end
 
-    test "creates the sub-issue through the legacy alias and reports the cap past it" do
+    test "creates the sub-issue through the legacy alias and refuses a duplicate title" do
       {:ok, registry} = CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -969,13 +969,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
 
-      for _ <- 1..10 do
-        response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
-        assert response["success"] == true
-      end
+      response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
+      assert response["success"] == true
 
       response = DynamicTool.execute("linear_create_subissue", %{"title" => "Slice", "description" => "body"}, opts)
-      assert %{"error" => %{"code" => "subissue_cap_reached", "cap" => 10}} = Jason.decode!(response["output"])
+      assert %{"error" => %{"code" => "duplicate_subissue", "identifier" => "TP-1", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "already filed TP-1"
     end
 
     test "returns explicit error payloads for invalid input, no registry and no Backlog state" do
@@ -1045,21 +1044,22 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert response["success"] == true
       assert %{"data" => %{"issueCreate" => %{"issue" => %{"blockedBy" => ["TP-2"]}}}} = Jason.decode!(response["output"])
 
-      response = DynamicTool.execute("linear_create_subissue", %{args | "blocked_by" => ["TP-2", "OPS-9"]}, opts)
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2", "blocked_by" => ["TP-2", "OPS-9"]}, opts)
 
       assert %{"error" => %{"code" => "blocked_by_not_sibling", "unknown" => ["OPS-9"], "sub_issues" => ["TP-2", "TP-3"], "message" => message}} =
                Jason.decode!(response["output"])
 
       assert message =~ "Not a sub-issue: OPS-9. Nothing was created."
 
-      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
+      response =
+        DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2"}, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
 
       assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-2", "message" => message}} =
                Jason.decode!(response["output"])
 
       assert message =~ "Created TP-3, but could not mark it blocked by TP-2"
 
-      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 3"}, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
       assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
     end
   end

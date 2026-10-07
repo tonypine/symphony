@@ -3484,8 +3484,10 @@ Scoped Linear tool extension contract:
   after it. The new issue MUST land in the team's `Backlog`
   state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
   other agents; a human promotes it. Title and description MUST pass the same secret scan as
-  comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
-  explicit error past the cap, and MUST be refused when the run has no state to count against.
+  comments before any Linear call. Creation MUST NOT be capped per run; a title matching
+  (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
+  explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
+  run has no state to check against.
   The read-only reviewer scope MUST NOT advertise or execute it.
 - `linear_update_subissue` MUST only change a child of the current issue that is in `Backlog`; a
   sub-issue in any other state, or an issue that is not a child, MUST fail with an explicit error

@@ -148,7 +148,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. Capped per run.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1347,12 +1347,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:subissue_cap_reached, cap}) do
+  defp tool_error_payload({:duplicate_subissue, identifier}) do
     %{
       "error" => %{
-        "code" => "subissue_cap_reached",
-        "message" => "This run already created #{cap} sub-issues, the per-run limit. List the remaining work in the workpad for a human to file instead.",
-        "cap" => cap
+        "code" => "duplicate_subissue",
+        "message" => "This run already filed #{identifier} with this title under the current issue. Nothing was created. Change #{identifier} with linear_update_subissue instead of filing it again.",
+        "identifier" => identifier
       }
     }
   end
@@ -1361,7 +1361,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "subissue_registry_unavailable",
-        "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the sub-issue cap and refused to create the issue."
+        "message" => "Symphony has no per-run tool state for this session, so it cannot check for a duplicate sub-issue and refused to create the issue."
       }
     }
   end

@@ -40,7 +40,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @backlog_state "Backlog"
   # Where a withdrawn request's issue goes back to when its history doesn't say.
   @in_progress_state "In Progress"
-  @subissue_cap_per_run 10
   @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
   # A project update notifies everyone following the project, so a run may post only one.
   @project_update_cap_per_run 1
@@ -838,8 +837,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Creates a Backlog child of the current issue in the same team and project, assigned to the same
   assignee. Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
-  everything that scopes the new issue is read from the current issue. At most
-  #{@subissue_cap_per_run} per run.
+  everything that scopes the new issue is read from the current issue. A title this run already
+  filed under the current issue is refused with the earlier sub-issue's identifier, so a looping run
+  can't file the same sub-issue again and again.
 
   `blocked_by` lists identifiers of sibling sub-issues (the current issue's existing children, or
   sub-issues this run created) that block the new one. Unknown identifiers are refused before
@@ -858,19 +858,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
              "linear_create_subissue",
              opts
            ),
-         :ok <- CommentRegistry.reserve_subissue(registry, @subissue_cap_per_run) do
-      case create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
-        {:ok, response} ->
-          {:ok, response}
-
-        # The issue exists by then, so its slot stays used.
-        {:error, {:blocked_by_relation_failed, _identifier, _blocker, _reason}} = error ->
-          error
-
-        {:error, _reason} = error ->
-          CommentRegistry.release_subissue(registry)
-          error
-      end
+         :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
+      create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts)
     end
   end
 
@@ -1675,7 +1664,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts),
          {:ok, response} <- check_mutation_success(response, "issueCreate"),
          {:ok, identifier, new_id} <- created_subissue(response) do
-      CommentRegistry.record_subissue(registry, identifier, new_id)
+      CommentRegistry.record_subissue(registry, issue_id, title, identifier, new_id)
       link_blockers(response, {identifier, new_id}, blockers, opts)
     end
   end
