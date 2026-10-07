@@ -1479,7 +1479,9 @@ When enabled:
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
 - A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
-  and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. With
+  and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. The
+  playbook's `build` MUST get the same `QA_HOST_PORTS` in its environment, unless the forwards
+  could not open. With
   `worker_host` set, Symphony MUST forward each of them from the QA host's loopback to the same
   port on the Symphony host's `127.0.0.1` for the whole pass (one `ssh -R` session per pass, with
   `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
