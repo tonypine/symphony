@@ -3,11 +3,13 @@ defmodule SymphonyElixir.PlaybookTest do
 
   alias SymphonyElixir.Playbook
   alias SymphonyElixir.Playbook.FileSystem
+  alias SymphonyElixir.PromptBuilder
   alias SymphonyElixir.Workflow
+  alias SymphonyElixir.WorkflowPreview
 
   @workflow_path Path.expand(Path.join([__DIR__, "..", "..", "WORKFLOW.md"]))
   @ticket_types_tag ~s({%- render "ticket_types", issue: issue %})
-  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply.\n"
+  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply."
   @render_opts [strict_variables: true, file_system: {FileSystem, nil}]
 
   @expected_names ~w(
@@ -23,6 +25,7 @@ defmodule SymphonyElixir.PlaybookTest do
     parent_tickets
     pr_feedback_sweep
     reproduce_and_blast_radius
+    review_brief
     scoped_tools
     status_map
     ticket_types
@@ -46,7 +49,7 @@ defmodule SymphonyElixir.PlaybookTest do
   test "parent_tickets ends a breakdown run in In Review and leaves the approval to a human" do
     assert {:ok, body} = Playbook.fetch("parent_tickets")
 
-    assert body =~ "move the\n   parent to `In Review` with `linear_update_state`, and end the turn."
+    assert body =~ "Then move the parent to `In Review` with\n   `linear_update_state` and end the turn."
     assert body =~ "Never move the parent to `Waiting on sub-tickets` yourself"
     assert body =~ "Symphony\n  then moves every sub-ticket still in `Backlog` to `Todo` in one batch"
     assert body =~ "In `Rework` (a re-plan run)"
@@ -91,6 +94,99 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "against the current UTC time (`date -u`), never against local time"
     assert flat =~ "When the job is under 30 minutes old, wait for the CI poller's flaky re-run instead of asking a human."
     assert flat =~ "withdraw it with `linear_withdraw_human_action`"
+
+    assert flat =~
+             "the move ends the run shortly after: first push your committed work (open or update the PR if the rest of the ticket is done) and record the blocker in the workpad, then call it, so the person finds the PR waiting with the ticket."
+
+    assert flat =~ "Never add a label to say a person must act."
+  end
+
+  test "review_brief keeps one brief per ticket, edited in place, with the fixed format and the moves for each kind" do
+    assert {:ok, body} = Playbook.fetch("review_brief")
+    flat = String.replace(body, ~r/\s+/, " ")
+
+    assert flat =~ "The workpad is the agent's log, and the person reviewing never needs to read it."
+    assert flat =~ "One brief per ticket."
+    assert flat =~ "When one exists, edit it in place with `linear_update_comment`, never post a second brief."
+    assert flat =~ "Only the first handoff creates it, with `linear_add_comment`."
+    assert flat =~ "Write it before the state move that hands the ticket over."
+
+    for section <- [
+          "## Review brief",
+          "**What to review:**",
+          "**What changed since the last brief:**",
+          "**Decisions needed:**",
+          "- Options: <A>; <B>",
+          "- Recommendation:",
+          "**How to approve / change / reject:**"
+        ] do
+      assert body =~ section
+    end
+
+    assert flat =~
+             "A plan's brief covers the whole plan in one review: link every artifact (each document or artifact comment, the HTML screens), " <>
+               "list every sub-ticket with its identifier and one line on what it delivers (the `Final verification:` one too), " <>
+               "and put every decision the plan leaves open under `Decisions needed`, so the person reviews everything at once."
+
+    assert flat =~ "A PR's brief links the PR and says what to check"
+
+    for kind <- ["**Plan review**", "**PR review**", "**Human Review**", "**Final verification**"] do
+      assert body =~ kind
+    end
+
+    assert flat =~ "Approve: move the parent to `Waiting on sub-tickets`"
+    assert flat =~ "Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
+    assert flat =~ "Approve: move the ticket to `Merging`; Symphony merges the PR."
+    assert flat =~ "Approve: do the steps in the `## Action needed:` comment, then move the ticket to `Todo`"
+    assert flat =~ "Approve: move the ticket to `Done`; the parent's close-out run follows."
+  end
+
+  test "the playbook aggregate renders review_brief between the repo's Step 4 and the completion bar" do
+    assert {"review_brief", 95} in Playbook.aggregate()
+
+    slots = Map.new(Playbook.aggregate())
+    assert slots["parent_tickets"] < slots["review_brief"] and slots["review_brief"] < slots["completion_bar"]
+  end
+
+  test "the repo WORKFLOW.md renders the review brief and asks for it at every handoff" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: @workflow_path, agent_kind: "claude")
+    flat = String.replace(prompt, ~r/\s+/, " ")
+
+    # The brief's own section, with the plan's brief covering every artifact, decision and sub-ticket.
+    assert prompt =~ "\n## Review brief\n\nThe workpad is the agent's log"
+    assert flat =~ "link every artifact (each document or artifact comment, the HTML screens), list every sub-ticket"
+    assert flat =~ "put every decision the plan leaves open under `Decisions needed`"
+
+    # Plan to In Review / Human Review: the plan run, a resumed plan and a re-plan.
+    assert flat =~
+             "Leave the review brief (see `Review brief`): one brief for the whole plan, linking every artifact, " <>
+               "listing every sub-ticket and every decision needed, with the moves that approve, change or reject it. " <>
+               "Then move the parent to `In Review`"
+
+    assert flat =~ "leave the review brief (see `Review brief`), and move the parent to `In Review`."
+    assert flat =~ "Edit the existing review brief in place with `linear_update_comment`, with what the new plan changes"
+
+    # A second handoff edits the brief instead of adding one: the plan revision run and the PR.
+    assert flat =~
+             "Edit the existing review brief in place with `linear_update_comment` (never post a second one): " <>
+               "bring every part up to date and list under `What changed since the last brief` one line per change"
+
+    assert flat =~ "When one exists, edit it in place with `linear_update_comment`, never post a second brief."
+
+    # PR to In Review.
+    assert flat =~
+             "The review brief is left before the move (see `Review brief`): it links the PR and says what to check. " <>
+               "On a later handoff (review comments addressed, a CI fix), the existing brief is edited in place with `linear_update_comment`"
+
+    # Final verification and human-action handoffs.
+    assert flat =~ "Before either move, leave the review brief (see `Review brief`): the requirements checked"
+    assert flat =~ "After a `linear_request_human_action` request, leave the review brief (see `Review brief`) pointing to the request"
+
+    # The brief is never read as a person's comment on the plan, and the workpad points to it.
+    assert flat =~ "skip the workpad, the review brief, QA reports"
+    assert flat =~ "The workpad is the agent's log: plan, checklist, validation evidence and notes."
+    assert flat =~ "The person reviewing reads the `## Review brief` comment instead"
+    assert flat =~ "The one comment written for the person is the review brief, edited in place at each handoff."
   end
 
   test "scoped_tools lists the document tools for a ticket's long-lived artifacts" do
@@ -103,17 +199,29 @@ defmodule SymphonyElixir.PlaybookTest do
   end
 
   describe "ticket_types" do
-    test "an untyped ticket renders the same WORKFLOW.md prompt as before the partial" do
+    test "the playbook aggregate renders ticket_types right after the repo's Step 0, left-trimmed" do
+      assert {"ticket_types", 52} in Playbook.aggregate()
+
+      {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+      assert body =~ @ticket_types_anchor <> "\n\n" <> @ticket_types_tag <> "\n\n## Step 1: "
+    end
+
+    # Blank lines included: the left-trimmed tag takes the blank line before it, and the
+    # partial renders nothing at all for an untyped ticket.
+    test "an untyped ticket renders the same WORKFLOW.md prompt as without the partial" do
       {without_tag, with_tag} = workflow_bodies()
 
       for labels <- [[], ["bug", "feature", "type:other", "needs-human"]] do
-        assert render(with_tag, labels) == render(without_tag, labels)
+        prompt = render(with_tag, labels)
+        assert prompt == render(without_tag, labels)
+        refute prompt =~ "## Ticket type:"
       end
     end
 
     test "a typed ticket gets its section between Step 0 and Step 1 of WORKFLOW.md" do
-      {_without_tag, with_tag} = workflow_bodies()
-      prompt = render(with_tag, ["type:bug"])
+      {:ok, workflow} = Workflow.load(@workflow_path)
+      issue = %{WorkflowPreview.sample_issue() | labels: ["type:bug"]}
+      prompt = PromptBuilder.build_prompt(issue, workflow: workflow, prompt_mode: :issue, agent_kind: "claude")
 
       assert prompt =~ "still apply.\n\n## Ticket type: bug\n"
       assert prompt =~ ~r/as the regression test\.\n4\. Name the root cause[^\n]*\n\n## Step 1: /
@@ -212,13 +320,14 @@ defmodule SymphonyElixir.PlaybookTest do
     |> String.replace(~r/\s+/, " ")
   end
 
-  # WORKFLOW.md's prompt body without the ticket_types render, and with it right after Step 0.
+  # WORKFLOW.md's prompt body, its instruction files expanded, without and with the ticket_types
+  # render the playbook puts right after Step 0.
   defp workflow_bodies do
-    {:ok, {_front_matter, body}} = Workflow.parse_document(File.read!(@workflow_path))
-    without_tag = String.replace(body, @ticket_types_tag <> "\n", "")
-    assert without_tag =~ @ticket_types_anchor
+    {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+    without_tag = String.replace(body, "\n\n" <> @ticket_types_tag, "")
+    refute without_tag =~ "ticket_types"
 
-    {without_tag, String.replace(without_tag, @ticket_types_anchor, @ticket_types_anchor <> @ticket_types_tag <> "\n")}
+    {without_tag, body}
   end
 
   defp render(source, labels) do

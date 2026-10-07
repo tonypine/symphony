@@ -261,6 +261,21 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "qa_build" do
+    test "gives the build the host ports the QA agent gets", %{worktree: worktree} do
+      bundle = "mkdir -p #{@app}/Contents/MacOS && touch #{@app}/Contents/Info.plist #{@app}/Contents/MacOS/Demo"
+
+      cmd = fn
+        "/bin/sh", ["-c", _build] = args, opts -> Host.cmd("/bin/sh", args, opts)
+        executable, args, opts -> default_cmd(executable, args, opts, replies(%{}))
+      end
+
+      driver = start_driver(worktree, host: host(%{cmd: cmd}), playbook: %{build: ~s(echo "$QA_HOST_PORTS" && #{bundle})})
+      assert {:ok, ports} = QaDriver.host_ports(driver)
+
+      assert {:ok, %{"exit_status" => 0, "output" => output}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert output == Enum.join(ports, ",") <> "\n"
+    end
+
     test "refuses a modified worktree but ignores qa-evidence", %{worktree: worktree} do
       git = fn _args, _cwd -> {"?? qa-evidence/a.png\0 M macos/Sources/App.swift\0", 0} end
       driver = start_driver(worktree, git: git)
@@ -1168,6 +1183,8 @@ defmodule SymphonyElixir.QaDriverTest do
       refute File.exists?(tar)
       assert_received {:cmd, "/bin/sh", ["-c", "make app"], build_opts}
       assert build_opts[:cd] == @run_dir <> "/src"
+      assert_received {:tunnel, ports}
+      assert build_opts[:remote_env] == [{"QA_HOST_PORTS", Enum.join(ports, ",")}]
       assert_received {:cmd, "/bin/sh", ["-c", _script, "sh", @run_dir <> "/src", @app, bundle_dest], _opts}
       assert String.starts_with?(bundle_dest, @run_dir <> "/builds/")
 
@@ -1259,6 +1276,16 @@ defmodule SymphonyElixir.QaDriverTest do
       assert QaDriver.host_ports(driver) == {:error, "ssh exited with status 255: Connection refused"}
       assert_received {:tunnel, _ports}
       refute_received {:tunnel, _ports}
+    end
+
+    test "builds without QA_HOST_PORTS when the tunnel could not open", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([{:error, {:failed, "Connection refused"}}])}))
+      assert {:error, "Connection refused"} = QaDriver.host_ports(driver)
+
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert_received {:cmd, "/bin/sh", ["-c", "make app"], build_opts}
+      assert build_opts[:remote_env] == []
+      refute List.keymember?(build_opts[:env], ~c"QA_HOST_PORTS", 0)
     end
 
     test "opens no tunnel to a QA host it refused", %{worktree: worktree} do

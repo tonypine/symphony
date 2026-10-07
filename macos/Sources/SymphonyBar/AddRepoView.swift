@@ -28,7 +28,13 @@ final class AddRepoViewModel: ObservableObject {
     /// Why the folder picked is still being checked.
     @Published private(set) var isInspectingFolder = false
     /// Why the last Save failed.
-    @Published private(set) var saveError: String?
+    @Published private(set) var saveError: String? {
+        didSet {
+            if let saveError, saveError != oldValue { onSaveError(saveError) }
+        }
+    }
+    /// Called with each new reason Save failed.
+    var onSaveError: (String) -> Void = { _ in }
     /// True while Save waits for `symphony check` on a changed acceptance gate mode.
     @Published private(set) var isSaving = false
     /// Enforce, while its confirmation is open.

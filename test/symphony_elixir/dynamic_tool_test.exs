@@ -408,8 +408,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       plain_plan = %{"title" => "Split the importer", "description" => "Plan it.", "labels" => %{"nodes" => [%{"name" => "breakdown"}]}}
       not_a_plan = %{"title" => "Fix the importer", "labels" => %{"nodes" => [%{"name" => "needs-human"}]}}
 
+      # TP-747: the plan's author says they review its artifacts.
+      reviews_artifacts = %{
+        "title" => "Create a native foreground dashboard to the macOS app",
+        "description" => "Plan the dashboard. I only want to review and validate the artifacts.",
+        "labels" => %{"nodes" => [%{"name" => "plan"}]}
+      }
+
       assert move("In Review", needs_human) == "state-human"
       assert move("in review", must_not) == "state-human"
+      assert move("In Review", reviews_artifacts) == "state-human"
       assert move("In Review", plain_plan) == "state-review"
       assert move("In Review", not_a_plan) == "state-review"
 
@@ -1320,13 +1328,19 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {:ok,
              %{
                "data" => %{
-                 "issue" => %{"id" => "issue-current", "team" => %{"id" => "team-1"}, "labels" => %{"nodes" => [%{"id" => "l1", "name" => "human-action"}]}},
-                 "issueLabels" => %{"nodes" => []}
+                 "issue" => %{
+                   "id" => "issue-current",
+                   "state" => %{"name" => "In Progress"},
+                   "team" => %{"states" => %{"nodes" => [%{"id" => "state-human", "name" => "Human Review"}]}}
+                 }
                }
              }}
 
           query =~ "SymphonyAgentAddComment" ->
             {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-1"}}}}}
+
+          query =~ "SymphonyAgentUpdateIssueState" ->
+            {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
         end
       end
 
@@ -1334,7 +1348,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert response["success"] == true
-      assert %{"requested" => true, "commentId" => "comment-1"} = Jason.decode!(response["output"])
+      assert %{"requested" => true, "commentId" => "comment-1", "state" => "Human Review"} = Jason.decode!(response["output"])
 
       response = DynamicTool.execute("linear_request_human_action", Map.put(@request, "steps", []), opts)
       assert %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: `steps`" <> _rest}} = Jason.decode!(response["output"])
@@ -1384,7 +1398,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                "data" => %{
                  "issue" => %{
                    "id" => "issue-current",
-                   "labels" => %{"nodes" => [%{"id" => "l1", "name" => "human-action"}]},
+                   "state" => %{"name" => "In Progress"},
                    "comments" => %{"nodes" => [request]}
                  }
                }
@@ -1392,9 +1406,6 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
           query =~ "SymphonyAgentAddReply" ->
             {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply-1"}}}}}
-
-          query =~ "SymphonyAgentRemoveLabel" ->
-            {:ok, %{"data" => %{"issueRemoveLabel" => %{"success" => true}}}}
         end
       end
 
@@ -1402,7 +1413,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => "The run had just started."}, opts)
       assert response["success"] == true
-      assert %{"withdrawn" => true, "replyCommentIds" => ["reply-1"], "labelRemoved" => true} = Jason.decode!(response["output"])
+      assert %{"withdrawn" => true, "replyCommentIds" => ["reply-1"], "remaining" => 0, "state" => "In Progress"} = Jason.decode!(response["output"])
 
       response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => " "}, opts)
 

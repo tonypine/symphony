@@ -604,17 +604,26 @@ defmodule SymphonyElixir.AutoReviewGateTest do
 
     test "an escalate moves the issue to In Review, and the comment opens with the reasons", %{root: root} do
       settings = settings("enforce", root)
-      job = gate_job(judged(%{qa_fix_attempts: 1}), settings, %{issue: issue(%{labels: ["needs-human"]})})
+      job = gate_job(judged(%{qa_fix_attempts: 1}), settings, %{issue: issue(%{description: "Adds a check command. Must not auto-approve."})})
 
       assert {:auto_review_gate, "issue-gate-flow", "escalate", "In Review"} = AutoReview.run_gate(job, gate_opts(root))
 
       assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
       assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
-      assert String.starts_with?(body, "## Symphony Acceptance Gate\n\n### Escalation reasons\n\n- `label`: the issue is labelled `needs-human`\n")
+      assert String.starts_with?(body, "## Symphony Acceptance Gate\n\n### Escalation reasons\n\n- `ticket_pattern`: the ticket matches")
       assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue moves to In Review for a person to decide."
       assert %{qa_fix_attempts: 0, gate_applied: true} = stored_record()
       assert [run] = RunStore.list_runs(@repo_key, :all)
       refute Map.has_key?(run, :moved_by_gate)
+    end
+
+    test "an escalate only a person can clear moves the issue to Human Review", %{root: root} do
+      settings = settings("enforce", root)
+      job = gate_job(judged(), settings, %{issue: issue(%{labels: ["needs-human"]})})
+
+      assert {:auto_review_gate, "issue-gate-flow", "escalate", "Human Review"} = AutoReview.run_gate(job, gate_opts(root))
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "Human Review"}
+      assert %{gate_target_state: "Human Review", gate_applied: true} = stored_record()
     end
 
     test "an issue back in Auto Review after an infrastructure block gets a fresh QA pass before the gate", %{root: root} do

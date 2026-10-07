@@ -47,8 +47,9 @@ defmodule SymphonyElixir.AutoReview do
   mode the verdict moves the issue (`SymphonyElixir.AcceptanceGate.enforced_target/4`): `approve` to
   `Merging`, where GitHub auto-merge lands the PR; `rework` back to `In Progress` with the unmet
   criteria as continuation context, sharing `auto_review.max_fix_attempts` with QA fails (the
-  rework past it goes to `In Review`); `escalate` to `In Review`. The mode is read again on every
-  poll and when a gate pass ends, so switching it off stops the moves without a restart.
+  rework past it goes to `In Review`); `escalate` to `In Review`, or to the Human Review state
+  when only a person can clear it. The mode is read again on every poll and when a gate pass
+  ends, so switching it off stops the moves without a restart.
 
   At startup Symphony checks that the Linear team has the Auto Review state and
   that the CI poller is on. When either is missing, Auto Review is turned off for
@@ -356,6 +357,7 @@ defmodule SymphonyElixir.AutoReview do
           Map.merge(record, %{
             gate_sha: sha,
             gate_verdict: decision.verdict,
+            gate_reasons: Map.get(decision, :reasons, []),
             gate_run_id: Map.get(decision, :run_id),
             gate_findings: Map.get(decision, :findings, []),
             gate_target_state: nil,
@@ -859,8 +861,13 @@ defmodule SymphonyElixir.AutoReview do
 
   def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, cause}}}),
     do:
-      "the dev server did not start: Seatbelt on this Mac could not keep it listening on loopback only, " <>
+      "the dev server did not start: Seatbelt on this Mac could not keep it from opening a TCP listener, " <>
         "so Symphony did not run it unconfined (#{inspect(cause)})"
+
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, socket}}}),
+    do:
+      "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (#{socket}): on macOS its sandbox allows " <>
+        "no TCP listener, so it must listen on that unix socket, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT"
 
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
 

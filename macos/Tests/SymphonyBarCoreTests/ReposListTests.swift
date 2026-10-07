@@ -182,7 +182,8 @@ final class ReposListTests: XCTestCase {
                     lastFetch: RepoField("Last fetch", "5m ago"),
                     agents: [.init(issueIdentifier: "TP-260", worktreePath: "/Projects/symphony-workspaces/symphony/TP-260")],
                     agentsProblem: nil
-                )
+                ),
+                health: RepoHealth(status: .healthy)
             )
         )
     }
@@ -219,6 +220,30 @@ final class ReposListTests: XCTestCase {
                     ),
                     agents: [],
                     agentsProblem: nil
+                ),
+                health: RepoHealth(
+                    status: .notWorking,
+                    problems: [
+                        .init(
+                            id: "workflow",
+                            severity: .error,
+                            title: "WORKFLOW.md is invalid",
+                            detail: "Failed to parse WORKFLOW.md: malformed yaml",
+                            fixes: [.openWorkflow(URL(string: "https://github.com/acme/api/blob/HEAD/WORKFLOW.md")!)]
+                        ),
+                        .init(
+                            id: "fetch",
+                            severity: .error,
+                            title: "The last fetch failed 2h 10m ago",
+                            detail: "git fetch exited with status 128: fatal: Could not read from remote repository.",
+                            note: "Symphony tries again before the next dispatch.",
+                            fixes: [
+                                .copyError("git fetch exited with status 128: fatal: Could not read from remote repository."),
+                                .openOnGitHub(URL(string: "https://github.com/acme/api")!),
+                            ]
+                        ),
+                        .init(id: "clone", severity: .info, title: "Not cloned yet: Symphony clones it on the next dispatch"),
+                    ]
                 )
             )
         )
@@ -241,12 +266,12 @@ final class ReposListTests: XCTestCase {
             )
         )
         XCTAssertEqual(detail.agentCount, 2)
-        XCTAssertEqual(detail.accessibilityLabel, "docs, 2 agents running")
+        XCTAssertEqual(detail.accessibilityLabel, "docs, needs attention, 2 agents running")
         XCTAssertEqual(
             ReposList.detail(symphony, warning: nil, now: now).accessibilityLabel,
-            "symphony, default, 1 agent running"
+            "symphony, healthy, default, 1 agent running"
         )
-        XCTAssertEqual(ReposList.detail(api, warning: nil, now: now).accessibilityLabel, "api")
+        XCTAssertEqual(ReposList.detail(api, warning: nil, now: now).accessibilityLabel, "api, not working")
         XCTAssertEqual(
             ReposList.detail(symphony, warning: nil, now: now).gitHubURL,
             URL(string: "https://github.com/tonypine/symphony")
@@ -382,7 +407,7 @@ final class ReposListTests: XCTestCase {
             ]
         )
         XCTAssertEqual(details[1].agentCount, 0)
-        XCTAssertEqual(details[0].accessibilityLabel, "symphony, default")
+        XCTAssertEqual(details[0].accessibilityLabel, "symphony, not checked, default")
 
         var asked: [String] = []
         let cloned = ReposList.detail(configured[1], live: stopped, config: config) { path in
@@ -510,7 +535,34 @@ final class ReposListTests: XCTestCase {
             )
         )
         XCTAssertEqual(window(running, .repos([docs], warning: nil)).repos[0].gate, nil)
+        XCTAssertEqual(shown.repos.map(\.health.status), [.healthy, .notWorking])
         XCTAssertEqual(window(running, .repos([], warning: nil)).content, .empty(.noRepos))
+    }
+
+    func testJoinsTheRunningAgentsOfTheStateAndThePendingWorkflow() {
+        let run = StateSnapshot.Run(
+            issueIdentifier: "TP-260",
+            url: URL(string: "https://linear.app/t/issue/TP-260"),
+            startedAt: date("2026-10-04T13:40:00Z"),
+            lastEventAt: date("2026-10-04T13:55:00Z")
+        )
+        let status = SymphonyStatus.running(StateSnapshot(running: 1, runs: [run]), external: false)
+        let pr = URL(string: "https://github.com/acme/api/pull/9")!
+        let shown = ReposList.window(
+            status: status,
+            poll: .repos([symphony, api], warning: nil),
+            config: config,
+            now: now,
+            pending: { $0 == "api" ? .pullRequest(pr) : nil },
+            isDirectory: { _ in false },
+            cloneRemoval: { _ in .blocked("checking") }
+        )
+
+        guard case let .status(_, _, agents, _) = shown.repos[0].live else { return XCTFail("expected live status") }
+        XCTAssertEqual(agents.map(\.activity), ["Running for 30m · last activity 15m ago"])
+        XCTAssertEqual(shown.repos[0].health.status, .needsAttention)
+        XCTAssertEqual(shown.repos[0].health.problems.map(\.id), ["stuck-TP-260"])
+        XCTAssertEqual(shown.repos[1].health.problems.first { $0.id == "workflow" }?.fixes, [.viewPullRequest(pr)])
     }
 
     func testShowsSymphonyYmlWhileSymphonyIsStopped() {
@@ -518,6 +570,8 @@ final class ReposListTests: XCTestCase {
 
         XCTAssertEqual(shown.chip, .stopped)
         XCTAssertEqual(shown.repos.map(\.key), ["symphony", "api"])
+        XCTAssertEqual(shown.repos.map(\.health), Array(repeating: .notChecked("Symphony is stopped"), count: 2))
+        XCTAssertEqual(shown.repos[0].health.summary, "Not checked: Symphony is stopped")
         XCTAssertEqual(shown.repos[1].source.notCloned, true)
         XCTAssertEqual(shown.repos[1].live, .folded(line: "Live status shows while Symphony runs.", canStart: true))
         XCTAssertEqual(shown.repos[1].routing.sentence, "Issues in team ENG go to api.")
@@ -540,6 +594,7 @@ final class ReposListTests: XCTestCase {
             let shown = window(status, poll)
             XCTAssertEqual(shown.repos.map(\.key), ["symphony", "api"])
             XCTAssertEqual(shown.repos.map(\.live), Array(repeating: .folded(line: line, canStart: canStart), count: 2))
+            XCTAssertEqual(shown.repos.map(\.health.status), [.notChecked, .notChecked])
         }
     }
 
@@ -603,6 +658,29 @@ final class ReposListTests: XCTestCase {
         XCTAssertEqual(ReposList.selection(saved: "gone", in: shown), "symphony")
         XCTAssertEqual(ReposList.selection(saved: nil, in: shown), "symphony")
         XCTAssertNil(ReposList.selection(saved: "api", in: ReposWindow(content: .empty(.noRepos))))
+    }
+
+    func testSelectsTheBannersRepoOnceTheWindowListsIt() {
+        let banner = ReposBanner(key: "docs", text: "Added docs.")
+        // Add Repo shows its banner before the running Symphony's next poll lists the new repo.
+        let before = window(running, .repos([symphony, api], warning: nil))
+        let shown = ReposList.selection(current: "api", pending: banner.key, saved: "api", in: before)
+        XCTAssertEqual(shown.selection, "api")
+        XCTAssertEqual(shown.pending, "docs")
+        XCTAssertTrue(banner.isShown(on: shown.selection, listed: before.repos.map(\.key)))
+
+        let after = window(running, .repos([symphony, api, docs], warning: nil))
+        let listed = ReposList.selection(current: shown.selection, pending: shown.pending, saved: "api", in: after)
+        XCTAssertEqual(listed.selection, "docs")
+        XCTAssertNil(listed.pending)
+        XCTAssertTrue(banner.isShown(on: listed.selection, listed: after.repos.map(\.key)))
+
+        let next = ReposList.selection(current: "api", pending: listed.pending, saved: "api", in: after)
+        XCTAssertEqual(next.selection, "api", "the user's next pick stays")
+        // A selection the window no longer lists falls back to the saved one while the banner's repo waits.
+        let gone = ReposList.selection(current: "gone", pending: "new", saved: "api", in: after)
+        XCTAssertEqual(gone.selection, "api")
+        XCTAssertEqual(gone.pending, "new")
     }
 
     // MARK: Actions

@@ -89,7 +89,7 @@ defmodule SymphonyElixir.QaDriver do
 
   Host ports: the driver picks three free ports on this host's loopback for the
   pass (`host_ports/1`, `QA_HOST_PORTS` in the QA agent's prompt and
-  environment). The agent serves the app's stubs and proxies on `127.0.0.1` at
+  environment, and in the environment of the playbook's `build`). The agent serves the app's stubs and proxies on `127.0.0.1` at
   those ports, and the app reaches them at `http://localhost:<port>`.
 
   When the driver stops (the QA pass ends or crashes) it quits every app it
@@ -314,7 +314,7 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_build", driver, config, _args) do
     with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          :ok <- ship(config),
-         {:ok, {output, status}} <- run_build(config) |> rebaseline_on_timeout(driver, config),
+         {:ok, {output, status}} <- run_build(config, build_env(driver)) |> rebaseline_on_timeout(driver, config),
          {:ok, ignored, _dirty} <- worktree_status(config) do
       record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
     end
@@ -530,8 +530,24 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
-  defp run_build(config) do
-    opts = [cd: config.build_dir, env: AgentEnv.build(), timeout_ms: config.build_timeout_ms, output_limit: @output_limit]
+  # The build gets `QA_HOST_PORTS` as the QA agent does, so a QA build can name
+  # the port of a stub the agent serves; without a tunnel it gets none.
+  defp build_env(driver) do
+    case host_ports(driver) do
+      {:ok, ports} -> %{"QA_HOST_PORTS" => Enum.join(ports, ",")}
+      {:error, _reason} -> %{}
+    end
+  end
+
+  # `:env` is this host's environment; on a QA host the build gets only `:remote_env`.
+  defp run_build(config, extra_env) do
+    opts = [
+      cd: config.build_dir,
+      env: AgentEnv.build_with(extra_env),
+      remote_env: Enum.to_list(extra_env),
+      timeout_ms: config.build_timeout_ms,
+      output_limit: @output_limit
+    ]
 
     case config.host.cmd.("/bin/sh", ["-c", config.build], opts) do
       {:ok, {output, status}} ->

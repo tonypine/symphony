@@ -421,6 +421,10 @@ Loader behavior:
   file is read from disk. With `ref`, the file is also read from disk, with a warning, until the
   ref has been read once (for example a checkout with no `origin` remote or no resolvable base
   branch ref).
+- The instruction files a workflow's `{% render "playbook" %}` line pulls in (Section 5.5) are read
+  from the same place as the workflow: from the same ref with `ref`, and from disk next to the
+  workflow file otherwise. With `ref`, the snapshot of the workflow holds the expanded text, so a
+  change to an instruction file applies once it is on the ref, like a change to `WORKFLOW.md`.
 - For a repo with `workspace.source`, `workflow` is a path inside the repository and is always read
   from the fetched ref of Symphony's own clone, which has no working tree.
 - The application selects a primary repo as the one marked `default: true`, otherwise the first
@@ -486,6 +490,8 @@ Allowed repo-local front matter keys:
 - `validation`
 - `auto_review`, with only its `playbooks` key
 - `human_actions`, with only its `enabled` key
+- `playbook`, with `instructions`, `lockfile` and `partials` (Section 5.5). It shapes the prompt
+  only and is not part of the returned `config`.
 
 Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
 error that directs the operator to move operator-owned configuration to `symphony.yml`.
@@ -723,6 +729,16 @@ Fields:
   - The range is global to the Symphony process across all worker hosts. Operators using SSH worker
     pools should size the range for total verification-enabled concurrency, not per-host
     concurrency.
+- `dev_server.build_cmd` (string, OPTIONAL)
+  - Shell command run to completion in the same checkout before every `start_cmd`, to build what
+    the dev server serves (for example an Elixir escript, since Mix can't run in the dev server's
+    macOS sandbox). It receives the dev server's environment, without
+    `SYMPHONY_VERIFICATION_SOCKET`.
+  - It runs the checkout's build config, which the agent can change, so the implementation MUST
+    run it in a sandbox no weaker than the agent's, never on the host: the dev server's sandbox,
+    which MAY additionally allow TCP listeners on loopback as the agent's sandbox does.
+  - A build that exits non-zero, or outlasts the implementation's build timeout, keeps the dev
+    server from starting; the run fails with `verification_failed` and the port is released.
 - `dev_server.start_cmd` (string, OPTIONAL)
   - Long-lived shell command run in the issue workspace after `hooks.before_run` and before the
     first agent turn.
@@ -739,6 +755,11 @@ Fields:
     secrets, network limited to loopback plus an egress proxy that only reaches allowlisted
     dependency hosts, and no way to have the OS start a process outside the sandbox. Where no such sandbox is available, the run fails with `verification_failed`
     instead of starting the command unsandboxed.
+  - The sandbox MUST keep the command from accepting connections from other hosts. Where it can't
+    limit a TCP listener to loopback (macOS Seatbelt), it allows the command no TCP listener; the
+    command then also receives `SYMPHONY_VERIFICATION_SOCKET`, a unix socket path it listens on
+    instead, and the implementation serves that socket on `127.0.0.1:$SYMPHONY_VERIFICATION_PORT`
+    from outside the sandbox.
 - `dev_server.health_check_url` (string, REQUIRED when `start_cmd` is set)
   - Supports `$SYMPHONY_VERIFICATION_PORT` and `${SYMPHONY_VERIFICATION_PORT}` substitution.
   - The dev server is considered healthy only on HTTP `200`.
@@ -823,12 +844,12 @@ affect CI escalation. A head whose only failed check is `protected paths` gets n
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
-with the `human_actions.label` label, `needs-human` or another
-`auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, gets the
-same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
-resumes once a person removes the label, moves the issue to an active state, or the head turns
-green.
+the agent's to fix. A red head on an issue parked for a person, in the
+`issues.states.human_review` state, or outside `tracker.active_states` with `needs-human`, a
+deprecated request label (`human_actions.label`, or `human-action` in the escalate labels) or
+another `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or,
+while that state is off, in `In Review` with an open `## Action needed:` request, gets the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
+resumes once a person moves the issue on or removes the label, or the head turns green.
 
 #### 5.4.7 `github` (object)
 
@@ -1124,6 +1145,10 @@ Fields:
   - Default: `10`
   - CPU time a process under a workspace or Symphony temp folder may use with no run attached
     before the dashboard warns about it (Section 8.5, Part D). `null` turns the check off.
+- `pending_tool_report_after_ms` (positive integer)
+  - Default: `60000` (1 minute)
+  - How long one of Symphony's own MCP tool calls must run before the runtime snapshot reports
+    the run's oldest pending call (`pending_tool`).
 
 #### 5.4.11 `workers` (object)
 
@@ -1149,6 +1174,9 @@ Fields:
   - Default: `500`.
 - `transcript_buffer_size` (non-negative integer)
   - Default: `200`.
+  - Bounds a live run's in-memory transcript buffer. A run's persisted record keeps only its newest
+    20 events, and records stored with more are trimmed when the run store starts.
+    The run store waits up to 120 s for its tables to load at startup, logging progress every 10 s.
 
 Listener fields also live under `dashboard`:
 
@@ -1336,8 +1364,8 @@ When enabled:
 - `linear_update_state` MUST refuse `In Review`, and the `issues.states.human_review` state, from
   agent sessions with a clear error telling the agent that Symphony moves the issue once the PR is
   open, rather than redirecting the target state. The refusal applies before the human review
-  redirect, so a run that posted a `linear_request_human_action` request cannot skip QA; its blocked
-  PR reaches the human review state through the QA verdict. A plan parent and a ticket whose
+  redirect. A `linear_request_human_action` request moves its issue to the human review state
+  itself, since only a person can move it on; the acceptance gate never approves an issue there. A plan parent and a ticket whose
   title starts with `Final verification:` open no PR, so they MAY move to either state.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
@@ -1456,7 +1484,9 @@ When enabled:
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
 - A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
-  and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. With
+  and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. The
+  playbook's `build` MUST get the same `QA_HOST_PORTS` in its environment, unless the forwards
+  could not open. With
   `worker_host` set, Symphony MUST forward each of them from the QA host's loopback to the same
   port on the Symphony host's `127.0.0.1` for the whole pass (one `ssh -R` session per pass, with
   `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
@@ -1504,7 +1534,9 @@ When enabled:
   scope, and judgment calls for a human, not code style or bugs, and answers with JSON: `verdict`
   (`approve`, `rework` or `escalate`), `criteria`, `overlaps`, `scope`, `escalation_reasons` and
   `follow_ups`. An unreadable answer SHOULD get one follow-up turn. Any escalation rule that
-  triggers, and a QA `blocked` (reason `qa_blocked`), MUST make the final verdict `escalate`, with
+  triggers, a QA `blocked` (reason `qa_blocked`), and an issue that waits on a person (reason
+  `human_action`: in the `issues.states.human_review` state, with an open `## Action needed:`
+  request, or with a deprecated request label) MUST make the final verdict `escalate`, with
   the agent's verdict kept as `agent_verdict`; a PR that conflicts with current main is `rework`
   without an agent run; an inconclusive pass records no verdict until the
   `escalate.inconclusive_limit`-th on the same SHA, which escalates with reason `inconclusive`. The
@@ -1518,7 +1550,10 @@ When enabled:
   the issue: `approve` to `Merging` (where auto-merge lands the PR), `rework` back to `In Progress`
   with the unmet criteria as continuation context, counted against `auto_review.max_fix_attempts`
   with QA fails (the `rework` past it goes to `In Review`), and `escalate` to `In Review`, with the
-  comment opening on the escalation reasons; up to 3 follow-ups per verdict are filed as Backlog
+  comment opening on the escalation reasons. An `escalate` with a reason only a person can clear
+  (`human_action`, or an `escalate.labels` label) MUST go to the `issues.states.human_review` state
+  instead; the reasons the supervisor can judge (`path`, `diff_pattern`, `ticket_pattern` and the
+  others) stay in `In Review`; up to 3 follow-ups per verdict are filed as Backlog
   sub-issues, never twice with the same title, never for a gap an existing ticket of the issue's
   family covers (named in the comment instead), and only with an acceptance criterion that does
   not restate the title. The mode is read on every poll, so a switch back to
@@ -1585,6 +1620,42 @@ Rendering requirements:
   launching an app or window on the host (UI screenshots come from offscreen rendering or the QA
   pass), and final response expectations. Repo `WORKFLOW.md` templates SHOULD NOT be required to restate these
   Symphony-owned rules.
+
+Playbook line:
+
+- A body line that is exactly `{% render "playbook" %}`, apart from surrounding whitespace, MUST be
+  expanded when the workflow is loaded, before the template is parsed. It becomes Symphony's
+  playbook partials, each as a `{% render %}` line on its slot (continuation_context 10,
+  issue_context 20, default_posture 30, scoped_tools 40, status_map 50, ticket_types 52,
+  pr_feedback_sweep 60, ci_triage 70, escape_hatches 80, parent_tickets 90, review_brief 95,
+  completion_bar 100, guardrails 110, out_of_scope_backlog 120, dependency_guardrail 130,
+  workpad_template 140), merged with the repo's instruction files, ordered by number. Sections are
+  joined with a blank line. `ticket_types` renders with a left-trimming tag (`{%- render %}`), so it
+  adds nothing, not even a blank line, for an untyped ticket.
+- Instruction files are the files named `<digits>-<name>.md` in the directory
+  `playbook.instructions` names, relative to the workflow file (default `.symphony/instructions`).
+  A file's number is its slot; on a tie the partial comes first, and files with the same number
+  sort by name. Other files are ignored, and only regular files count: a symlink or directory with
+  such a name is skipped, on a git ref as on disk. Each file's trimmed text goes in as written, so
+  it renders with the same variables as the rest of the body. A file holding the playbook line is
+  an error, as is a directory or file that cannot be read; a missing directory has no files.
+- A partial's render line passes each variable its header's `vars` list names under the same name,
+  except `lockfile`, which takes the string `playbook.lockfile`. Without `playbook.lockfile`, a
+  partial taking `lockfile` (`dependency_guardrail`) is left out.
+- `playbook.partials` maps a partial name to a slot number, to move a listed partial or add another
+  shipped one, or to `false`, to drop it. An unknown partial name, a slot that is not a
+  non-negative integer or `false`, an absolute `instructions` path or one with `..`, and a
+  `lockfile` with quotes or braces are configuration errors.
+- A body without the line MUST render unchanged, and the front matter is never changed by the
+  expansion.
+- The config MUST come from the workflow file's own front matter, split off before the expansion;
+  no instruction file text may reach it. Expanded text kept for a later load (the `ref` snapshot)
+  MUST start with that front matter, or an empty `---`/`---` block when the file has none, so that
+  instruction text opening with `---` stays in the body.
+- Instruction files are not agent-protected (Section 9.6). They reach a run only from the
+  workflow's source (`workflow_source`, Section 5.1): with `ref`, the fetched base branch, so a
+  run's own branch or checkout never changes its prompt. `symphony workflow preview` renders the
+  expansion with the files next to the workflow it previews.
 
 Template input variables:
 
@@ -1688,7 +1759,8 @@ Value coercion semantics:
 Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
-  last known good workflow when reload fails.
+  last known good workflow when reload fails. A workflow read from disk with a playbook line
+  (Section 5.5) also reloads when one of its instruction files is added, removed or changed.
 - For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup,
   on every dispatch after the pre-dispatch fetch, and before every Auto Review QA pass, so a change
   pushed to the base branch applies to the next dispatch or QA pass without restart. A missing or invalid workflow on the ref is logged and the
@@ -1811,6 +1883,7 @@ not require recognizing or validating extension fields unless that extension is 
   `workspaces.fetch_before_dispatch` or `true`
 - `verification.enabled`: boolean, default `false`
 - `verification.port_allocation.range`: two-integer inclusive range, default `[4000, 4099]`
+- `verification.dev_server.build_cmd`: shell command or null
 - `verification.dev_server.start_cmd`: shell command or null
 - `verification.dev_server.health_check_url`: URL template or null
 - `verification.dev_server.health_timeout_ms`: integer, default `30000`
@@ -1896,6 +1969,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
+- `watchdog.pending_tool_report_after_ms`: positive integer, default `60000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
@@ -2165,11 +2239,11 @@ The poller:
 - detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
   and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
-  issue parked for a person (outside `tracker.active_states` with the `human_actions.label` label,
-  `needs-human` or another `auto_review.acceptance_gate.escalate.labels` label other than `plan`
-  and `breakdown`, as for a red head in the CI poller) is recorded as
-  `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation and no retry
-  used, until a person removes the label or moves the issue to an active state;
+  issue parked for a person (in the `issues.states.human_review` state, or outside
+  `tracker.active_states` with a label that asks for one, or with that state off in `In Review`
+  with an open request, as for a red head in the CI poller) is
+  recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
+  and no retry used, until a person moves the issue on or removes the label;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle
@@ -2413,14 +2487,20 @@ An issue is dispatch-eligible only if all are true:
     person's move out of `In Review` means something (a plan approval or rejection, a plan comment),
     a move out of the human review state means the same. Merging, Rework and Done read only the
     state moved to, so they behave the same from either.
-  - The service puts an issue there instead of `In Review` when only a person can move it on: an
-    Auto Review QA verdict `blocked` whose answer sets `needs_person`; a `Final verification:`
-    parent walkthrough that passes, or is blocked with no failing step, with `needs_person` set;
-    `linear_update_state` to `In Review` for a plan parent whose ticket has an
-    `auto_review.acceptance_gate.escalate` label other than `plan` and `breakdown` or matches one of its
-    ticket patterns; and `linear_update_state` to `Backlog` or `In Review` from a run that posted
-    (or found open) a `linear_request_human_action` request (with Auto Review on, only `Backlog`
-    or a PR-less issue: the Auto Review rule refuses the rest). The tool's answer names the state.
+  - It is the one way to say a person needs to act; Symphony adds no label for it. The service puts
+    an issue there instead of `In Review` when only a person can move it on: an Auto Review QA
+    verdict `blocked` whose answer sets `needs_person`; an enforced acceptance gate `escalate` with
+    a reason only a person can clear; a `Final verification:` parent walkthrough that passes, or is
+    blocked with no failing step, with `needs_person` set; `linear_update_state` to `In Review` for
+    a plan parent whose ticket has an `auto_review.acceptance_gate.escalate` label other than
+    `plan` and `breakdown`, matches one of its ticket patterns, or whose author says they review it
+    ("I only want to review and validate the artifacts"); `linear_request_human_action`, which
+    moves its issue there; and `linear_update_state` to `Backlog` or `In Review` from a run that
+    posted (or found open) such a request (with Auto Review on, only `Backlog` or a PR-less issue:
+    the Auto Review rule refuses the rest). The tool's answer names the state.
+  - A config that still sets the deprecated `human_actions.label`, or lists `human-action` in
+    `auto_review.acceptance_gate.escalate.labels`, MUST load with a deprecation warning, and an
+    issue carrying that label counts as one with an open request.
   - When the state is null, or the startup check finds a configured team without it (the state is
     then off until restart, with a warning), those issues go to `In Review` as before.
   - The human-action update lists issues in the state first, the state API reports
@@ -2431,9 +2511,10 @@ An issue is dispatch-eligible only if all are true:
     (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),
     or to the human review state when the ticket asks for a human review (human review rule).
   - Comments: a person's comment on a plan parent's plan is read on the poll that follows
-    it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
-    QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
-    replies, and every comment its last run on the parent posted), nor a supervisor's note (one
+    it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, the
+    review brief, a QA report, an `Action needed` request, a promote or cancel record, a
+    run-failure note, its own replies, and every comment its last run on the parent posted), nor a
+    supervisor's note (one
     starting `Supervisor review:` or `Supervisor note:`). The service and the reviewer
     can share one Linear user, so the run's comments are told apart by id, which the run reports as
     it ends, and the others by how they start. The service reads the parent's history and comments
@@ -2753,8 +2834,13 @@ sessions:
 When the Claude CLI cannot reach the model API at all (a DNS failure, a refused or dropped
 connection), it still ends the turn with a `result` event: its text starts `API Error:` and names
 the failure (`Can't reach the API server … (ENOTFOUND)`, `Connection error`, `ECONNREFUSED`, …),
-and it is marked `is_error` or used nothing. An error the API returned (a 400, a 429, a 5xx) is not
-an outage and keeps its normal path.
+and it is marked `is_error` or used nothing. The Codex app-server reports the same outage, once it
+stops retrying (`willRetry` not `true`), on an `error` or `codex/event/error` notification or a
+failed `turn/completed` or `turn/failed`: its `codexErrorInfo` is `httpConnectionFailed` or
+`responseStreamConnectionFailed`, or its message names the transport error (`error sending
+request`, a DNS lookup, a refused or reset connection, a connect timeout), and it carries no HTTP
+status; the hold is on the `openai` provider. An error the API returned (a 400, a 429, a 5xx) is
+not an outage and keeps its normal path.
 
 - The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
   it named); it is never a completed turn, so it never counts toward the idle-turn park limit.
@@ -3035,6 +3121,11 @@ Current Elixir sandbox behavior:
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
   `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
   macOS launch agent roots.
+- The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
+  default, Section 5.5) are not write-protected: they are read only from the workflow's source,
+  so an agent's edit reaches a run only through a merged pull request. Their placement and the
+  playbook partials (`playbook` in the front matter) stay in the protected `WORKFLOW.md`, with the
+  hooks and the push check.
 - Rendered Claude, SRT, and Codex native sandbox settings include both tilde and expanded absolute
   forms for home-relative deny paths as defense in depth.
 - Codex native `workspace_write` config renders command-sandbox read denies for
@@ -3439,20 +3530,23 @@ Scoped Linear tool extension contract:
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
   `why`, a non-empty `steps` list, an optional `unblocks` and an optional `est_minutes`. Every
-  field MUST pass the same secret scan as comments before any Linear call. It adds the configured
-  human-action label to the current issue (creating the team label when the workspace has none)
-  and posts an `## Action needed: <title>` comment that Symphony's human-action project updates
-  list. A request with the same title still open on the issue MUST NOT be posted again. Requests
+  field MUST pass the same secret scan as comments before any Linear call. It posts an
+  `## Action needed: <title>` comment that Symphony's human-action project updates list, moves the
+  current issue to the `issues.states.human_review` state (`In Review` when that state is off), and
+  MUST NOT add a label. The request stays open until a person moves the issue out of that state, or
+  it is withdrawn. A request with the same title still open on the issue MUST NOT be posted again;
+  the issue still moves. Requests
   MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
   against, or when the issue's repository turned human actions off. The read-only reviewer scope
   MUST NOT advertise or execute it.
 - `linear_withdraw_human_action` MUST only act on the current issue and MUST accept only a
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
   before any Linear call. It replies `## Action withdrawn` with the reason under each open request
-  on the issue (only the one whose title matches, when `title` is given), and removes the
-  human-action label once no open request is left. Once no open request is left, the run's later
-  moves to `Backlog` or `In Review` MUST NOT go to the Human Review state on account of its
-  requests. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
+  on the issue (only the one whose title matches, when `title` is given). Once no open request is
+  left, an issue in the Human Review state goes back to the active state it came from
+  (`In Progress` when its history doesn't say), a deprecated request label comes off, and the
+  run's later moves to `Backlog` or `In Review` MUST NOT go to the Human Review state on account of
+  its requests. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
   open request to withdraw it MUST change nothing. The read-only reviewer scope MUST NOT advertise
   or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
@@ -4819,6 +4913,11 @@ function run_agent_attempt(issue, attempt, orchestrator_channel, verification, r
 
   dev_server = null
   if verification and config.verification.dev_server.start_cmd:
+    if config.verification.dev_server.build_cmd and
+       sandboxed_build(config.verification.dev_server.build_cmd, cwd=workspace.path, env=hook_env) failed:
+      run_hook_best_effort("after_run", workspace.path, env=hook_env)
+      verification_port_pool.release(verification)
+      fail_worker("verification_failed")
     dev_server = dev_server.start(
       command=config.verification.dev_server.start_cmd,
       cwd=workspace.path,

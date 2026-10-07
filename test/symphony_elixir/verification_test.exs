@@ -4,7 +4,11 @@ defmodule SymphonyElixir.VerificationTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Verification
-  alias SymphonyElixir.Verification.{DevServer, DevServerSandbox, PortPool}
+  alias SymphonyElixir.Verification.{DevServer, PortPool}
+
+  # Serves its folder on `$SYMPHONY_VERIFICATION_SOCKET` where it has one (macOS, and the tests'
+  # stand-in for `sandbox-exec`), else on `127.0.0.1:$SYMPHONY_VERIFICATION_PORT`.
+  @dev_server Path.expand("../support/dev_server.py", __DIR__)
 
   setup do
     stop_verification_port_pool()
@@ -119,6 +123,7 @@ defmodule SymphonyElixir.VerificationTest do
     assert [] = PortPool.active_allocations()
   end
 
+  @tag :unix_socket
   test "dev server starts in workspace cwd, becomes healthy, and stops" do
     port = free_tcp_port()
     workspace = System.tmp_dir!()
@@ -135,7 +140,7 @@ defmodule SymphonyElixir.VerificationTest do
              })
 
     config = %DevServerConfig{
-      start_cmd: "python3 -m http.server $SYMPHONY_VERIFICATION_PORT --bind 127.0.0.1",
+      start_cmd: "exec python3 #{@dev_server}",
       health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
       health_timeout_ms: 5_000,
       stop_signal: "TERM",
@@ -167,10 +172,11 @@ defmodule SymphonyElixir.VerificationTest do
   test "dev server returns verification_failed when health check times out" do
     port = free_tcp_port()
 
+    # Something is at the socket, so the server did try to listen there.
     config = %DevServerConfig{
-      start_cmd: "sleep 1",
+      start_cmd: ~s{touch "$SYMPHONY_VERIFICATION_SOCKET"; sleep 5},
       health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
-      health_timeout_ms: 50,
+      health_timeout_ms: 1_000,
       stop_signal: "TERM",
       stop_timeout_ms: 100
     }
@@ -184,6 +190,113 @@ defmodule SymphonyElixir.VerificationTest do
                env: Verification.env(%{port: port}),
                owner: self()
              )
+  end
+
+  test "dev server logs its own output when its health check times out" do
+    port = free_tcp_port()
+
+    config = %DevServerConfig{
+      start_cmd: ~s{touch "$SYMPHONY_VERIFICATION_SOCKET"; echo dev-server-said-hello; sleep 5},
+      health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+      health_timeout_ms: 1_000,
+      stop_signal: "TERM",
+      stop_timeout_ms: 100
+    }
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:verification_failed, :health_timeout}} =
+                 DevServer.start(
+                   run_id: "output-run",
+                   port: port,
+                   workspace: System.tmp_dir!(),
+                   config: config,
+                   env: Verification.env(%{port: port}),
+                   owner: self()
+                 )
+      end)
+
+    assert log =~ "Verification dev server output run_id=output-run"
+    assert log =~ "dev-server-said-hello"
+  end
+
+  test "dev server reports an exit during startup with its output, without waiting out the health check" do
+    port = free_tcp_port()
+
+    config = %DevServerConfig{
+      start_cmd: "echo dev-server-crashed; exit 3",
+      health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+      health_timeout_ms: 60_000,
+      stop_signal: "TERM",
+      stop_timeout_ms: 100
+    }
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:verification_failed, {:dev_server_exit, 3}}} =
+                 DevServer.start(
+                   run_id: "exit-run",
+                   port: port,
+                   workspace: System.tmp_dir!(),
+                   config: config,
+                   env: Verification.env(%{port: port}),
+                   owner: self()
+                 )
+      end)
+
+    assert log =~ "Verification dev server output run_id=exit-run"
+    assert log =~ "dev-server-crashed"
+  end
+
+  test "dev server that never listens on its unix socket says so when its health check times out" do
+    port = free_tcp_port()
+
+    config = %DevServerConfig{
+      start_cmd: "sleep 1",
+      health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+      health_timeout_ms: 50,
+      stop_signal: "TERM",
+      stop_timeout_ms: 100
+    }
+
+    assert {:error, {:verification_failed, {:dev_server_not_on_socket, socket}}} =
+             DevServer.start(
+               run_id: "no-socket-run",
+               port: port,
+               workspace: System.tmp_dir!(),
+               config: config,
+               env: Verification.env(%{port: port}),
+               owner: self()
+             )
+
+    assert Path.basename(socket) == "serve.sock"
+    refute File.exists?(Path.dirname(socket))
+  end
+
+  test "dev server does not start when its port is taken, as its bridge can't listen there" do
+    {:ok, holder} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(holder)
+
+    config = %DevServerConfig{
+      start_cmd: "env > #{System.tmp_dir!()}/never-started.txt",
+      health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+      health_timeout_ms: 50,
+      stop_signal: "TERM",
+      stop_timeout_ms: 100
+    }
+
+    assert {:error, {:verification_failed, {:loopback_bridge_unavailable, :eaddrinuse}}} =
+             DevServer.start(
+               run_id: "taken-port-run",
+               port: port,
+               workspace: System.tmp_dir!(),
+               config: config,
+               env: Verification.env(%{port: port}),
+               owner: self()
+             )
+
+    refute File.exists?(Path.join(System.tmp_dir!(), "never-started.txt"))
+    :gen_tcp.close(holder)
   end
 
   test "dev server fails fast when process-group isolation is unavailable" do
@@ -248,7 +361,7 @@ defmodule SymphonyElixir.VerificationTest do
       end)
 
       config = %DevServerConfig{
-        start_cmd: "env > dev-server-env.txt; exec python3 -m http.server $SYMPHONY_VERIFICATION_PORT --bind 127.0.0.1",
+        start_cmd: "env > dev-server-env.txt; exec python3 #{@dev_server}",
         health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
         health_timeout_ms: 5_000,
         stop_signal: "TERM",
@@ -258,7 +371,8 @@ defmodule SymphonyElixir.VerificationTest do
       %{root: root, workspace: workspace, config: config, port: free_tcp_port()}
     end
 
-    test "spawns the start command through sandbox-exec, with the agent's env and the egress proxy", %{root: root, workspace: workspace, config: config, port: port} do
+    @tag :unix_socket
+    test "spawns the start command through sandbox-exec, with the agent's env and the egress proxy, served on its port by the bridge", %{root: root, workspace: workspace, config: config, port: port} do
       record = Path.join(root, "sandbox-exec-argv")
       sandbox_exec = Path.join(root, "sandbox-exec")
       File.write!(sandbox_exec, "#!/bin/sh\nprintf '%s\\0' \"$@\" > '#{record}'\nshift 2\nexec \"$@\"\n")
@@ -287,14 +401,105 @@ defmodule SymphonyElixir.VerificationTest do
       assert env =~ "NO_PROXY=localhost,127.0.0.1,::1\n"
       assert [_line, tmp_dir] = Regex.run(~r/^TMPDIR=(.+)$/m, env)
       assert File.dir?(tmp_dir)
+      assert env =~ "SYMPHONY_VERIFICATION_SOCKET=#{Path.join(real_path(tmp_dir), "serve.sock")}\n"
       refute env =~ "lin-dev-server-test-secret"
       refute env =~ "SYMPHONY_DEV_SERVER_ARGV"
 
+      # The server listens on its unix socket; the bridge serves it on its port.
+      assert http_ok?("http://127.0.0.1:#{port}/dev-server-env.txt")
+
       assert :ok = DevServer.stop(pid)
       refute File.exists?(tmp_dir)
+      refute http_ok?("http://127.0.0.1:#{port}/")
       assert {:error, :econnrefused} = :gen_tcp.connect(~c"127.0.0.1", String.to_integer(proxy_port), [])
     end
 
+    test "runs the build command through sandbox-exec under the build profile, with the agent's env and the egress proxy", %{root: root, workspace: workspace, config: config, port: port} do
+      record = Path.join(root, "sandbox-exec-argv")
+      sandbox_exec = Path.join(root, "sandbox-exec")
+      File.write!(sandbox_exec, "#!/bin/sh\nprintf '%s\\0' \"$@\" > '#{record}'\nshift 2\nexec \"$@\"\n")
+      File.chmod!(sandbox_exec, 0o755)
+      config = %{config | build_cmd: "env > build-env.txt"}
+
+      assert :ok =
+               DevServer.build(
+                 run_id: "build-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:unix, :darwin}, executable: sandbox_exec]
+               )
+
+      assert ["-p", profile, "/bin/sh", "-lc", "env > build-env.txt", ""] = record |> File.read!() |> String.split("\0")
+      assert profile =~ ~s{(allow network-bind (local ip "localhost:*"))}
+      assert profile =~ ~s{(subpath "#{Path.join(System.user_home!(), ".ssh")}")}
+
+      env = File.read!(Path.join(workspace, "build-env.txt"))
+      assert env =~ "SYMPHONY_VERIFICATION_PORT=#{port}\n"
+      assert env =~ ~r/^HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+$/m
+      assert [_line, tmp_dir] = Regex.run(~r/^TMPDIR=(.+)$/m, env)
+      refute env =~ "SYMPHONY_VERIFICATION_SOCKET"
+      refute env =~ "lin-dev-server-test-secret"
+      refute File.exists?(tmp_dir)
+    end
+
+    test "reports a build command that fails, with its output", %{workspace: workspace, config: config, port: port} do
+      log =
+        capture_log(fn ->
+          assert {:error, {:verification_failed, {:dev_server_build_failed, 3}}} =
+                   DevServer.build(
+                     run_id: "build-failed-run",
+                     port: port,
+                     workspace: workspace,
+                     config: %{config | build_cmd: "echo deps broke; exit 3"},
+                     env: Verification.env(%{port: port}),
+                     owner: self()
+                   )
+        end)
+
+      assert log =~ "Verification dev server build failed run_id=build-failed-run status=3"
+      assert log =~ "deps broke"
+    end
+
+    test "stops a build command that outlasts its timeout", %{workspace: workspace, config: config, port: port} do
+      log =
+        capture_log(fn ->
+          assert {:error, {:verification_failed, :dev_server_build_timeout}} =
+                   DevServer.build(
+                     run_id: "build-timeout-run",
+                     port: port,
+                     workspace: workspace,
+                     config: %{config | build_cmd: "echo $$ > build.pid; exec sleep 30", stop_timeout_ms: 1_000},
+                     env: Verification.env(%{port: port}),
+                     owner: self(),
+                     build_timeout_ms: 500
+                   )
+        end)
+
+      assert log =~ "Verification dev server build timed out run_id=build-timeout-run"
+      pid = workspace |> Path.join("build.pid") |> File.read!() |> String.trim()
+      assert {_output, status} = System.cmd("kill", ["-0", pid], stderr_to_stdout: true)
+      assert status != 0
+    end
+
+    test "does not run the build command when there is no sandbox", %{workspace: workspace, config: config, port: port} do
+      assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:win32, :nt}}}} =
+               DevServer.build(
+                 run_id: "build-no-sandbox-run",
+                 port: port,
+                 workspace: workspace,
+                 config: %{config | build_cmd: "touch built"},
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:win32, :nt}]
+               )
+
+      refute File.exists?(Path.join(workspace, "built"))
+    end
+
+    @tag :unix_socket
     test "stops when its egress proxy goes down", %{workspace: workspace, config: config, port: port} do
       assert {:ok, pid} =
                DevServer.start(
@@ -320,6 +525,31 @@ defmodule SymphonyElixir.VerificationTest do
       refute http_ok?("http://127.0.0.1:#{port}/")
     end
 
+    @tag :unix_socket
+    test "stops when its loopback bridge goes down", %{workspace: workspace, config: config, port: port} do
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "bridge-down-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self()
+               )
+
+      ref = Process.monitor(pid)
+      %DevServer{bridge: bridge, tmp_dir: tmp_dir} = :sys.get_state(pid)
+
+      log =
+        capture_log(fn ->
+          Process.exit(bridge, :kill)
+          assert_receive {:DOWN, ^ref, :process, ^pid, {:loopback_bridge_down, :killed}}, 5_000
+        end)
+
+      assert log =~ "Verification dev server loopback bridge exited run_id=bridge-down-run reason=:killed"
+      refute File.exists?(tmp_dir)
+    end
+
     test "does not start the command when there is no sandbox", %{root: root, workspace: workspace, config: config, port: port} do
       bwrap = Path.join(root, "missing-bwrap")
 
@@ -337,24 +567,6 @@ defmodule SymphonyElixir.VerificationTest do
     end
 
     test "removes the folders bwrap made in the checkout once it stops", %{root: root, workspace: workspace, config: config, port: port} do
-      bwrap = Path.join(root, "bwrap")
-      socat = Path.join(root, "socat")
-
-      # Passes the probe, makes the placeholders as bwrap does, then runs the command unsandboxed.
-      File.write!(bwrap, """
-      #!/bin/sh
-      for arg; do last=$arg; done
-      [ "$last" = ":" ] && exit 0
-      while [ "$1" != /bin/sh ]; do
-        [ "$1" = --remount-ro ] && mkdir -p "$2"
-        shift
-      done
-      exec "$@"
-      """)
-
-      File.write!(socat, "#!/bin/sh\nexit 0\n")
-      Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
-
       assert {:ok, pid} =
                DevServer.start(
                  run_id: "placeholder-run",
@@ -363,7 +575,7 @@ defmodule SymphonyElixir.VerificationTest do
                  config: config,
                  env: Verification.env(%{port: port}),
                  owner: self(),
-                 sandbox: [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat],
+                 sandbox: fake_bwrap(root),
                  # Short enough for socat's unix sockets in a nested `TMPDIR`.
                  tmp_bases: [System.tmp_dir!()]
                )
@@ -372,6 +584,23 @@ defmodule SymphonyElixir.VerificationTest do
       assert :ok = DevServer.stop(pid)
       refute File.exists?(Path.join(workspace, ".claude"))
       refute File.exists?(Path.join(workspace, ".ai"))
+    end
+
+    # On Linux the server listens on its port, inside its own network namespace: it has no socket.
+    test "a server under bwrap that fails its health check times out", %{root: root, workspace: workspace, config: config, port: port} do
+      assert {:error, {:verification_failed, :health_timeout}} =
+               DevServer.start(
+                 run_id: "bwrap-timeout-run",
+                 port: port,
+                 workspace: workspace,
+                 config: %{config | start_cmd: "env > dev-server-env.txt; sleep 5", health_timeout_ms: 1_000},
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: fake_bwrap(root),
+                 tmp_bases: [System.tmp_dir!()]
+               )
+
+      refute File.read!(Path.join(workspace, "dev-server-env.txt")) =~ "SYMPHONY_VERIFICATION_SOCKET"
     end
 
     @tag :bwrap
@@ -434,62 +663,89 @@ defmodule SymphonyElixir.VerificationTest do
       refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
     end
 
-    # Where Seatbelt can't keep a listener on loopback, the dev server doesn't start instead.
+    # The server first tries to listen on its port on every address, as a server reachable from
+    # the network would, then serves on its unix socket.
     @tag :seatbelt
-    test "serves from inside the real sandbox", %{workspace: workspace, config: config, port: port} do
-      start =
-        DevServer.start(
-          run_id: "seatbelt-run",
-          port: port,
-          workspace: workspace,
-          config: config,
-          env: Verification.env(%{port: port}),
-          owner: self(),
-          sandbox: []
-        )
+    test "serves from inside the real sandbox on 127.0.0.1 only", %{workspace: workspace, config: config, port: port} do
+      listen_anywhere = ~s{import os, socket; socket.socket().bind(("0.0.0.0", int(os.environ["SYMPHONY_VERIFICATION_PORT"])))}
 
-      if loopback_confined?(workspace) do
-        assert {:ok, pid} = start
-        assert http_ok?("http://127.0.0.1:#{port}/")
-        assert :ok = DevServer.stop(pid)
-      else
-        assert {:error, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}} = start
-        refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "seatbelt-run",
+                 port: port,
+                 workspace: workspace,
+                 config: %{config | start_cmd: "python3 -c '#{listen_anywhere}' > tcp-listen.txt 2>&1; exec python3 #{@dev_server}"},
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: []
+               )
+
+      assert http_ok?("http://127.0.0.1:#{port}/")
+      assert File.read!(Path.join(workspace, "tcp-listen.txt")) =~ "Operation not permitted"
+
+      # Another host on the network connects to this one's own address: nothing listens there.
+      assert [_address | _more] = addresses = host_addresses()
+
+      for address <- addresses do
+        assert {:error, :econnrefused} = :gen_tcp.connect(address, port, [], 5_000), "#{:inet.ntoa(address)}:#{port} accepted"
       end
+
+      assert :ok = DevServer.stop(pid)
     end
 
-    # Builds this checkout with `mix build` (in `_build/dev` and `bin/`), fetching its deps, before
-    # it serves, as an Auto Review `web` pass does, so it can take minutes. A plain `mix test`
+    # An Auto Review `web` pass on Symphony's own repo: the dev server starts from a fresh worktree
+    # at the PR head, with no `deps/`, `_build/` or `bin/symphony`. `build_cmd`
+    # (scripts/qa-dashboard-build.sh) fetches deps and builds the escript in the build sandbox, which
+    # lets Mix listen on loopback and can take minutes; `start_cmd` then runs in the dev server's
+    # sandbox, which allows no TCP listener and so no Mix (see the guard in
+    # `scripts/qa-dashboard-server.sh`), and the bridge serves the dashboard. A plain `mix test`
     # skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
     @tag :seatbelt
     @tag :qa_dashboard_e2e
-    @tag timeout: 900_000
-    test "serves the dashboard with scripts/qa-dashboard-server.sh from inside the real sandbox", %{port: port} do
-      config = %DevServerConfig{
-        start_cmd: "scripts/qa-dashboard-server.sh",
-        health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
-        health_timeout_ms: 600_000,
-        stop_signal: "TERM",
-        stop_timeout_ms: 5_000
-      }
+    @tag timeout: 1_800_000
+    test "serves the dashboard from a fresh worktree, built by build_cmd, from inside the real sandboxes", %{root: root, port: port} do
+      worktree = Path.join(root, "pr-head")
+      {output, 0} = System.cmd("git", ["worktree", "add", "--detach", worktree, "HEAD"], stderr_to_stdout: true)
+      on_exit(fn -> System.cmd("git", ["worktree", "remove", "--force", worktree], stderr_to_stdout: true) end)
+      refute File.exists?(Path.join(worktree, "bin/symphony")), output
 
-      start =
-        DevServer.start(
-          run_id: "qa-dashboard-seatbelt-run",
-          port: port,
-          workspace: File.cwd!(),
-          config: config,
-          env: Verification.env(%{port: port}),
-          owner: self(),
-          sandbox: []
-        )
+      previous_sandbox = Application.get_env(:symphony_elixir, :verification_dev_server_sandbox)
+      Application.put_env(:symphony_elixir, :verification_dev_server_sandbox, [])
+      on_exit(fn -> Application.put_env(:symphony_elixir, :verification_dev_server_sandbox, previous_sandbox) end)
 
-      if loopback_confined?(File.cwd!()) do
-        assert {:ok, pid} = start
-        assert http_ok?("http://127.0.0.1:#{port}/")
-        assert :ok = DevServer.stop(pid)
-      else
-        assert {:error, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}} = start
+      write_workflow_file!(Workflow.workflow_file_path(),
+        verification: %{
+          enabled: true,
+          port_allocation: %{range: [port, port]},
+          dev_server: %{
+            build_cmd: "scripts/qa-dashboard-build.sh",
+            start_cmd: "scripts/qa-dashboard-server.sh",
+            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
+            health_timeout_ms: 600_000,
+            stop_timeout_ms: 5_000
+          }
+        }
+      )
+
+      issue = %Issue{id: "issue-qa-dashboard", identifier: "SYM-WEB", title: "Dashboard tweak", state: "Auto Review"}
+
+      # The app logs to the rotating disk file (`SymphonyElixir.LogFile` drops the console
+      # handler), so on CI a dev server that fails to start leaves no output in the job log.
+      # Capture it here and print it on failure, where the diagnosis would otherwise be lost.
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          Verification.start_qa_dev_server(issue, "qa-dashboard-seatbelt-run", worktree, settings: Config.settings!())
+        end)
+
+      case result do
+        {:ok, dev_server} ->
+          assert File.exists?(Path.join(worktree, "bin/symphony"))
+          assert http_ok?("http://127.0.0.1:#{port}/")
+          assert :ok = Verification.stop_qa_dev_server(dev_server)
+
+        {:error, reason} ->
+          IO.puts(:stderr, "qa dashboard dev server failed to start: #{inspect(reason)}\n#{log}")
+          flunk("qa dashboard dev server failed to start: #{inspect(reason)}")
       end
     end
   end
@@ -623,10 +879,11 @@ defmodule SymphonyElixir.VerificationTest do
       Config.settings!()
     end
 
+    @tag :unix_socket
     test "starts the dev server in the worktree, reports its URL, then stops it and releases the port", %{issue: issue, port: port} do
       settings =
         qa_settings(port, %{
-          start_cmd: "python3 -m http.server $SYMPHONY_VERIFICATION_PORT --bind 127.0.0.1",
+          start_cmd: "exec python3 #{@dev_server}",
           health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
           health_timeout_ms: 5_000,
           stop_timeout_ms: 1_000
@@ -644,6 +901,56 @@ defmodule SymphonyElixir.VerificationTest do
       assert [%{run_id: "qa-web-run", status: "released", release_reason: "qa pass ended"}] = RunStore.list_verification_allocations()
     end
 
+    # A fresh worktree at the PR head has no build output, and on macOS the dev server's sandbox
+    # can't run a build tool that opens a TCP listener (Mix): `build_cmd` builds first, in a
+    # sandbox that allows one.
+    @tag :unix_socket
+    test "runs build_cmd in the worktree, with the port, before the start command", %{issue: issue, port: port} do
+      worktree = Path.join(System.tmp_dir!(), "qa-web-build-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(worktree)
+      on_exit(fn -> File.rm_rf(worktree) end)
+
+      settings =
+        qa_settings(port, %{
+          build_cmd: ~S|echo "$SYMPHONY_VERIFICATION_PORT" > built|,
+          start_cmd: "test -f built && exec python3 #{@dev_server}",
+          health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/built",
+          health_timeout_ms: 5_000,
+          stop_timeout_ms: 1_000
+        })
+
+      assert {:ok, dev_server} = Verification.start_qa_dev_server(issue, "qa-web-build", worktree, settings: settings)
+      assert File.read!(Path.join(worktree, "built")) == "#{port}\n"
+      assert http_ok?("http://127.0.0.1:#{port}/built")
+      assert :ok = Verification.stop_qa_dev_server(dev_server)
+    end
+
+    test "does not start the dev server when build_cmd fails, and releases the port", %{issue: issue, port: port} do
+      worktree = Path.join(System.tmp_dir!(), "qa-web-build-failed-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(worktree)
+      on_exit(fn -> File.rm_rf(worktree) end)
+
+      settings =
+        qa_settings(port, %{
+          build_cmd: "echo build broke; exit 3",
+          start_cmd: "touch started; sleep 5",
+          health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
+          health_timeout_ms: 1_000
+        })
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:verification_failed, {:dev_server_build_failed, 3}}} =
+                   Verification.start_qa_dev_server(issue, "qa-web-build-failed", worktree, settings: settings)
+        end)
+
+      assert log =~ "build broke"
+      refute File.exists?(Path.join(worktree, "started"))
+
+      assert [%{run_id: "qa-web-build-failed", status: "released", release_reason: "qa dev server did not start"}] =
+               RunStore.list_verification_allocations()
+    end
+
     test "a dev server that fails its health check returns verification_failed and releases the port", %{issue: issue, port: port} do
       settings =
         qa_settings(port, %{
@@ -653,7 +960,7 @@ defmodule SymphonyElixir.VerificationTest do
           stop_timeout_ms: 100
         })
 
-      assert {:error, {:verification_failed, :health_timeout}} =
+      assert {:error, {:verification_failed, {:dev_server_not_on_socket, _socket}}} =
                Verification.start_qa_dev_server(issue, "qa-web-unhealthy", System.tmp_dir!(), settings: settings)
 
       assert [%{run_id: "qa-web-unhealthy", status: "released", release_reason: "qa dev server did not start"}] =
@@ -694,6 +1001,32 @@ defmodule SymphonyElixir.VerificationTest do
     end
   end
 
+  # Passes the probe, makes the placeholders as bwrap does, then runs the command unsandboxed.
+  defp fake_bwrap(root) do
+    bwrap = Path.join(root, "bwrap")
+    socat = Path.join(root, "socat")
+
+    File.write!(bwrap, """
+    #!/bin/sh
+    for arg; do last=$arg; done
+    [ "$last" = ":" ] && exit 0
+    while [ "$1" != /bin/sh ]; do
+      [ "$1" = --remount-ro ] && mkdir -p "$2"
+      shift
+    done
+    exec "$@"
+    """)
+
+    File.write!(socat, "#!/bin/sh\nexit 0\n")
+    Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
+    [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat]
+  end
+
+  defp real_path(path) do
+    {:ok, real_path} = SymphonyElixir.PathSafety.canonicalize(path)
+    real_path
+  end
+
   defp free_tcp_port do
     {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
     {:ok, port} = :inet.port(socket)
@@ -713,13 +1046,13 @@ defmodule SymphonyElixir.VerificationTest do
     end
   end
 
-  # Whether Seatbelt refuses a non-loopback bind under the dev server's profile on this Mac,
-  # checked here without `DevServerSandbox.command/4`'s own check.
-  defp loopback_confined?(workspace) do
-    profile = DevServerSandbox.profile(workspace, [workspace], [])
-    bind = ~s{import socket; socket.socket().bind(("0.0.0.0", 0))}
-    {_output, status} = System.cmd("/usr/bin/sandbox-exec", ["-p", profile, "/usr/bin/python3", "-c", bind], stderr_to_stdout: true)
-    status != 0
+  # This host's own IPv4 addresses but loopback, such as its LAN address.
+  defp host_addresses do
+    {:ok, interfaces} = :inet.getifaddrs()
+
+    for {_name, options} <- interfaces, {:addr, {first, _, _, _} = address} <- options, first != 127, uniq: true do
+      address
+    end
   end
 
   defp http_ok?(url) do

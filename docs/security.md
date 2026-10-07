@@ -59,9 +59,11 @@ either, so `SWIFTPM_MODULECACHE_OVERRIDE` points SwiftPM's module cache at the r
 The per-user temp dir stays read-only: Symphony keeps each session's Claude settings and the MCP
 shim there.
 
-Both runtimes also deny writes to the workspace's own instructions and workflow files:
-`WORKFLOW.md`, `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, and the
-skill directories `.ai/skills`, `.claude/skills` and `.codex/skills`. In a local workspace the deny
+Both runtimes also deny writes to the workspace's workflow and guardrail files: `WORKFLOW.md`,
+`symphony.yml`, the project `.claude/` settings, agents, commands and hooks, the skill directories
+`.ai/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions` and
+`config/settings_ui_exempt.yml`. The agent instruction files in `.symphony/instructions/` are left
+writable on purpose; see [Workflow and instruction files](#workflow-and-instruction-files). In a local workspace the deny
 also covers the files a symlink in one of those points at: Symphony's own `.ai/skills/pull` links
 to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
 gets the plain list.
@@ -117,6 +119,38 @@ so one run can change what a later run reads: Hex checks each package tarball ag
 in `mix.lock`, and `elixir_make` checks each precompiled archive against the package's checksum
 file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
 folder never holds `hex.config`, which can hold Hex API and repo keys.
+
+### Workflow and instruction files
+
+A repo's prompt is assembled from three parts, each from a place the run can't change:
+
+- **`WORKFLOW.md`**, write-protected. Its front matter holds what runs or is decided outside the
+  agent's reach: the workspace hooks, which run on the host outside the sandbox, the push check,
+  the verification dev server, the `prompts.pr` template, and the `playbook` settings that place
+  and drop the playbook partials. Its body can be just `{% render "playbook" %}`.
+- **Symphony's playbook partials**, built into Symphony.
+- **The repo's instruction files**, `.symphony/instructions/NNN-name.md` by default: the repo's own
+  prose (command hygiene, the numbered steps and so on), placed between the partials by number.
+  See [playbook](playbook.md#the-whole-playbook-in-one-line).
+
+The instruction files are not write-protected, so changing how agents work is an ordinary pull
+request. That is safe because Symphony never reads them from a run's workspace: with
+`workflow_source: ref` (the default) it reads them, like `WORKFLOW.md`, from the fetched base
+branch, `origin/<base_branch>`, and runs from a snapshot of the expanded text. An agent can propose
+an instruction change on its branch, but the change reaches a prompt only after its pull request
+passes CI, the acceptance gate and review and is merged, and it never changes the prompt of the run
+that made it. The files hold prompt text only: nothing in them runs on the host. The config (hooks,
+push check, `playbook` settings) is read from `WORKFLOW.md`'s own front matter before the playbook
+line expands, never from the expanded text, and the snapshot keeps that front matter first, an empty
+`---`/`---` block when there is none, so a file that opens with a YAML block stays prompt text when
+the snapshot is loaded again. Only regular
+files count (a symlink or a directory with an instruction file's name is skipped, on the ref and on
+disk alike, so a link cannot pull a host file into the prompt), and moving or dropping a Symphony
+partial still takes a `WORKFLOW.md` edit.
+
+With `workflow_source: local`, Symphony reads `WORKFLOW.md` and the instruction files from the
+operator's checkout on disk, never from an agent's workspace, and reloads the workflow when either
+changes.
 
 ### Git metadata
 
@@ -181,7 +215,7 @@ Host-side steps of Symphony's own `WORKFLOW.md` hooks:
 | `after_create` | `mise trust` | Trusts the base branch's mise config for the workspace path, so `mise exec` reads it. |
 | `after_create` | `mise exec -- mix deps.get` | Fetches the base branch's Hex dependencies, on the base branch's tree. |
 | `after_create` | `MIX_ENV=test mise exec -- mix deps.compile` | `lazy_html` downloads its precompiled NIF, which the sandbox's proxy refuses. Runs on the base branch's tree. |
-| `before_remove` | `mise exec -- mix workspace.before_remove` | Closes the branch's open pull requests with the operator's `gh` login. It still evaluates the agent's checkout (`mix.exs`, `deps/`, `_build/`, the mise config trusted above); TP-523 replaces it with plain `gh` calls. |
+| `before_remove` | `cd /`, then `gh pr list` and `gh pr close` on `SYMPHONY_REPO` and `SYMPHONY_BRANCH` | Closes the branch's open pull requests with the operator's `gh` login. It runs nothing from the agent's checkout: Symphony sets both variables itself, and the step leaves the checkout before calling `gh`. |
 
 ### No windows on the host desktop
 
@@ -243,9 +277,12 @@ the command runs on. Every host-side git call:
   files as git does when no driver is set, conflict markers included;
 - doesn't run, and returns an error, when that config can't be read or names a driver with `=` in
   its name, which `-c` can't address;
-- runs `diff`, `log` and `show` with `--no-ext-diff --no-textconv`, so the diffs of reviews, the
-  acceptance gate and the auto-merge fingerprint run no `diff.external`, `diff.<name>.command` or
-  `diff.<name>.textconv`, and show the files as the repo stores them;
+- runs `diff`, `log`, `show`, `whatchanged`, `blame` and `format-patch` with
+  `--no-ext-diff --no-textconv`, so the diffs of reviews, the acceptance gate and the auto-merge
+  fingerprint run no `diff.external`, `diff.<name>.command` or `diff.<name>.textconv`, and show
+  the files as the repo stores them. `diff-tree`, `diff-index` and `diff-files` run a diff driver
+  only when asked to. It refuses `range-diff`, which runs the textconv drivers whatever options it
+  gets. A test fails when code under `lib/` starts git without these options;
 - runs `fetch`, `ls-remote` and `pull` with `--upload-pack=git-upload-pack` and `push` with
   `--receive-pack=git-receive-pack`: the config's `remote.<name>.uploadpack` and `.receivepack`
   would run as the operator for a remote on the same machine, and a `-c` can't override them.
@@ -273,7 +310,8 @@ worktree, to put a worktree on the base branch for `after_create`, and to read t
 diff of a workspace, run git as the worker's operator account with the same protections. They
 define a `symphony_git` shell function that sets the same environment and `-c` overrides, and
 lists and blanks the filter drivers in the worker repo's `config`, its `config.worktree` and
-every file they include before each command that can read or write work-tree files. It also
+every file they include before each command that can read or write work-tree files, and refuses
+`range-diff`. It also
 refuses to run git when an include path holds a newline, since the shell reads the list line by
 line. Their `fetch origin` gets `--upload-pack=git-upload-pack` as on the host, and the review
 agent's `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. They replace no merge driver: they never merge.
@@ -283,8 +321,8 @@ Limits:
 - The drivers are listed just before the command runs, so one written to the config in between
   still runs. Every local runtime denies agent writes to the repo's config files (see the Git
   write model above), but native Codex may drop those entries.
-- Only `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. Symphony runs no other command
-  that prints a diff, such as `blame`, `format-patch` or `range-diff`, on the host or a worker.
+- A command that prints a diff through another git command, such as `stash show -p` or
+  `add -p`, gets neither option. Symphony runs none of them on the host or a worker.
 
 ### Network access controls
 
@@ -334,8 +372,10 @@ Symphony starts `verification.dev_server.start_cmd` itself, from the checkout un
 - in an Auto Review `web` pass, from a second worktree at the PR head.
 
 The command usually runs files from that checkout: a script such as Symphony's own
-`scripts/qa-dashboard-server.sh`, and the repo's build tool (`mix`, `npm`, `pnpm`), which runs the
-project's code and build config. The agent can change all of these, so Symphony runs the command
+`scripts/qa-dashboard-server.sh`, and the repo's build or runtime tool (`npm`, `pnpm`, or an
+Elixir escript or release that `build_cmd` built; Mix itself can't run under the macOS profile,
+see [below](#macos-the-dev-server-listens-on-a-unix-socket)), which runs the project's code and
+build config. The agent can change all of these, so Symphony runs the command
 under macOS Seatbelt (`sandbox-exec`), or bubblewrap (`bwrap`) on Linux, with limits like the
 agent's sandbox:
 
@@ -349,8 +389,9 @@ agent's sandbox:
   stops), the agent cache folder, the per-user `TemporaryItems` dir (macOS) and the `/dev` sinks
   are writable. Inside the checkout, the paths the agent may not write stay read-only: `.git`,
   `WORKFLOW.md`, the skills and the other agent-protected paths.
-- **Network.** The server may listen and connect on loopback only, so it can't serve on another
-  interface. It reaches the dependency hosts through a proxy on loopback that Symphony runs for
+- **Network.** The server may connect only to loopback, and can't serve on any interface the
+  network reaches (see [below](#macos-the-dev-server-listens-on-a-unix-socket) for how macOS does
+  it). It reaches the dependency hosts through a proxy on loopback that Symphony runs for
   it (`HTTPS_PROXY` and `HTTP_PROXY`): the proxy only tunnels HTTPS (`CONNECT`) to the agent's
   built-in dependency hosts plus `agent.permissions.network.allowed_domains`, less
   `denied_domains`, and to none with `mode: block`. The model provider hosts are left out. Any
@@ -377,8 +418,51 @@ agent's sandbox:
   `LINEAR_API_KEY`, provider keys, GitHub tokens or `SSH_AUTH_SOCK`. Hex and `elixir_make` use
   the agent cache folder.
 
-On macOS loopback stays open, so the server can still reach other services on the host's
-loopback, such as Symphony's own dashboard and API, which have no authentication (see
+#### The build command runs in the agent's confinement
+
+`verification.dev_server.build_cmd` runs the checkout's build config too (`mix.exs`, `config/`,
+dependency build scripts, the mise config), so it never runs on the host. Symphony runs it in the
+same checkout, before `start_cmd`, under the profile above with one change: it may listen on
+loopback, as the agent's own sandbox may (`allowLocalBinding`), because Mix's build lock and
+pub/sub need a TCP listener. Its reads, writes, environment, egress proxy, mach services and
+process limits are the dev server's. On macOS that loopback rule also lets it bind `0.0.0.0` (see
+below), the exposure every agent command already has; the build serves nothing and runs only
+until it exits. On Linux it gets the same `bwrap` sandbox, whose loopback is its own, with only the
+egress proxy bridged. A build that fails, or runs past 15 minutes, keeps the dev server from
+starting. So an Elixir dev server builds under the agent's confinement and serves under the dev
+server's.
+
+#### macOS: the dev server listens on a unix socket
+
+Seatbelt can't keep a TCP listener on loopback. A rule on the listener's local address
+(`(local ip "localhost:*")`) also lets it bind `0.0.0.0` and the LAN address, where any other host
+on the network connects to it and reads what it serves (measured on macOS 15 and macOS 27, and on
+GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote address makes even
+`listen()` fail, since that is checked against the local address. So on macOS:
+
+- The profile allows the server no TCP or UDP listener at all, on any address: `bind` fails with
+  `Operation not permitted`. It may bind, listen on and connect to unix sockets in its own
+  `$TMPDIR` only.
+- No Mix task runs inside the sandbox. Loading deps starts `Mix.PubSub`, which listens on an
+  ephemeral `127.0.0.1` port, and Mix's build lock takes one too; both are refused here. An Elixir
+  dev server runs a prebuilt artifact (an escript or a release), built by `build_cmd` in the build
+  sandbox (see [above](#the-build-command-runs-in-the-agents-confinement)), never `mix run` or
+  `mix phx.server`.
+- The server listens on the unix socket `$SYMPHONY_VERIFICATION_SOCKET` (`serve.sock` in its
+  `$TMPDIR`) instead of `$SYMPHONY_VERIFICATION_PORT`. A unix socket can't be reached from
+  another host.
+- Symphony, outside the sandbox, listens on `127.0.0.1:$SYMPHONY_VERIFICATION_PORT` and copies
+  each connection to and from that socket (`SymphonyElixir.Verification.LoopbackBridge`), as the
+  `socat` bridges do on Linux. The page is at `http://127.0.0.1:<port>`; nothing listens on the
+  port on any other address. The bridge goes with the server: when it stops, the server stops,
+  and the other way round.
+- A server that can only listen on a TCP port can't start under the profile. When its health
+  check times out and nothing is at the socket, the error says so
+  (`dev_server_not_on_socket`), and an Auto Review `web` pass is `blocked` with that reason. It
+  never runs without the sandbox.
+
+Connections out stay open to the host's loopback, so the server can still reach other services
+there, such as Symphony's own dashboard and API, which have no authentication (see
 [Local-only dashboard bind](#local-only-dashboard-bind)).
 
 On Linux, `bwrap` builds the same limits from mounts and namespaces:
@@ -413,11 +497,12 @@ unprivileged user namespaces, or Docker's default seccomp profile, see
 [docker/README.md](../docker/README.md#verification-dev-server)). An agent run then fails with
 `verification_failed` before its first turn, and an Auto Review `web` pass is `blocked`.
 
-Not every macOS version keeps the listener on loopback: on macOS 15 the rule that lets the server
-accept connections on loopback also lets it bind `0.0.0.0` and the LAN address. So before the
-first dev server starts, Symphony binds `0.0.0.0` under the profile with `/usr/bin/perl`, and
-unless Seatbelt refuses it the dev server does not start either
-(`dev_server_sandbox_unconfined`), the same way. The result holds until Symphony restarts.
+Before the first dev server starts on macOS, Symphony checks the profile on this Mac with
+`/usr/bin/perl`: a process under it must be refused a TCP bind on `0.0.0.0` and on `127.0.0.1`,
+and must be able to listen on a unix socket in its `$TMPDIR`. Unless all three hold, the dev
+server does not start either (`dev_server_sandbox_unconfined`), the same way. A refused or allowed
+bind holds until Symphony restarts; a check that couldn't run is tried again next time. The
+health check that follows, on `127.0.0.1:<port>` through the bridge, shows the page is served.
 
 The dev server is off by default. It starts only when `verification.enabled` is `true` and
 `verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values

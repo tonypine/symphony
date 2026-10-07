@@ -102,6 +102,28 @@ defmodule SymphonyElixir.PlanCommentsTest do
       assert ids(PlanComments.pending(:revise, %{feedback | state_changes: []}, "In Review", run, nil)) == ["during", "after-move"]
     end
 
+    test "a review brief on a plan under review is Symphony's own, so it never starts a revision" do
+      backlog = [%{id: "c1", identifier: "MT-2", state: "Backlog"}]
+      parent = %Issue{id: "p", identifier: "MT-1", state: "In Review", labels: ["breakdown"], sub_issues: backlog}
+      assert PlanComments.action(parent, @terminal, Config.settings!()) == :revise
+
+      brief = "## Review brief\n\n**What to review:** the plan for MT-1\n\n**What changed since the last brief:**\n\n- Split MT-2"
+
+      feedback = %{
+        state_changes: [change(~U[2026-10-04 10:00:00Z], "In Progress", "In Review")],
+        comments: [
+          comment("brief", brief, ~U[2026-10-04 10:05:00Z]),
+          comment("indented-brief", "\n  " <> brief, ~U[2026-10-04 10:06:00Z])
+        ]
+      }
+
+      assert PlanComments.pending(:revise, feedback, "In Review", nil, nil) == []
+
+      person = comment("person", "Quote from the ## Review brief: split MT-2 again", ~U[2026-10-04 10:07:00Z])
+      with_person = %{feedback | comments: [person | feedback.comments]}
+      assert ids(PlanComments.pending(:revise, with_person, "In Review", nil, nil)) == ["person"]
+    end
+
     test "answers each top-level comment on an approved plan once, and nothing from before Symphony started" do
       feedback = %{
         state_changes: [change(~U[2026-10-04 10:00:00Z], "In Review", @waiting)],
@@ -136,6 +158,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
 
       for body <- [
             "## Symphony Workpad\n\n...",
+            "## Review brief\n\n**What to review:** the plan",
             "## Codex Workpad\n\n...",
             Report.heading() <> "\n\nPASS",
             Request.heading() <> " add a secret",

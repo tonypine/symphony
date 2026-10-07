@@ -2,9 +2,9 @@ defmodule SymphonyElixir.HumanActions.Request do
   @moduledoc """
   The `## Action needed:` comment that records a request for a human on an issue.
 
-  `linear_request_human_action` posts it, and a supervisor or a person can write the same comment
-  by hand. Together with the `human_actions.label` label on the issue, it is how Symphony finds
-  the request again on every poll and after a restart:
+  `linear_request_human_action` posts it and moves the issue to the Human Review state
+  (`SymphonyElixir.HumanReview`), and a supervisor or a person can write the same comment by hand.
+  It is how Symphony finds the request again on every poll and after a restart:
 
       ## Action needed: Add the release signing secrets
 
@@ -18,8 +18,9 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   Only the heading is required; `parse/1` reads whatever else is there. A request stays open until
   its issue moves on: after the request, the issue leaves a state outside `issues.states.active`
-  (`Backlog` back to `Todo`, `In Review` to `Merging`). The requesting agent's own move to
-  `Backlog` comes from an active state, so it keeps the request open.
+  (`Human Review` to `Merging`, `Rework` or `Done`, `Backlog` back to `Todo`). The tool moves the issue to
+  Human Review before it posts the comment, so that move keeps the request open whatever state the
+  issue came from.
 
   A request is also closed once it is withdrawn: a reply under it that starts with
   `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.
@@ -47,11 +48,11 @@ defmodule SymphonyElixir.HumanActions.Request do
   def heading, do: @heading
 
   @doc """
-  Renders a request comment. `label` is the label that keeps the request listed, named in the
+  Renders a request comment. `state` is the state the request moves the issue to, named in the
   closing line so whoever reads the comment knows how to mark it done.
   """
   @spec render(map(), String.t()) :: String.t()
-  def render(%{title: title, why: why, steps: steps} = request, label) do
+  def render(%{title: title, why: why, steps: steps} = request, state) do
     fields =
       [
         {"Why", why},
@@ -72,7 +73,7 @@ defmodule SymphonyElixir.HumanActions.Request do
         "**Steps:**",
         Enum.join(step_lines, "\n"),
         "",
-        "_Symphony lists this in the project update until this issue moves on. Remove the `#{label}` label once it is done._"
+        "_Symphony lists this in the project update until this issue moves on. Once it is done, move the issue out of #{state}._"
       ],
       "\n"
     )

@@ -18,7 +18,12 @@ auth/permissions that cannot be resolved in-session.
   permission, an account to set up, a product decision, a check on a device),
   post it with `linear_request_human_action` (title, why, exact steps, what it
   unblocks; secret names only, never values) instead of `linear_add_comment`:
-  Symphony then lists it in the project's update for that person.
+  Symphony then lists it in the project's update for that person. The tool moves
+  the ticket to `Human Review` (`In Review` when the team has no such state) and
+  adds no label, and the move ends the run shortly after: first push your
+  committed work (open or update the PR if the rest of the ticket is done) and
+  record the blocker in the workpad, then call it, so the person finds the PR
+  waiting with the ticket. Never add a label to say a person must act.
 - Before requesting a human action for slow or stuck CI, compute the job's age
   from the API's UTC timestamps (`startedAt`, `createdAt`) against the current
   UTC time (`date -u`), never against local time. When the job is under 30
@@ -27,10 +32,15 @@ auth/permissions that cannot be resolved in-session.
   `linear_withdraw_human_action` (the reason, plus the request's `title` when the
   issue has more than one). A comment saying it is no longer needed leaves it
   listed.
+- After a `linear_request_human_action` request, leave the review brief (see
+  `Review brief`) pointing to the request, or edit the existing one in place.
 - Record the blocker comment URL in the workpad, move the ticket to `Backlog` (so
   it does not look like a validated PR review), and stop. After a
-  `linear_request_human_action` request, that move lands in `Human Review` when the
-  team has that state, so the person finds the ticket waiting on them.
+  `linear_request_human_action` request the ticket is already in `Human Review`,
+  and a move to `Backlog` lands there too, so the person finds the ticket waiting
+  on them. The request stays open until a person moves the ticket out of
+  `Human Review`, or you withdraw it; a withdrawal moves the ticket back to the
+  active state it came from.
 
 ## In-execution clarification escape hatch (required behavior)
 
