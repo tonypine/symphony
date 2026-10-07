@@ -1384,7 +1384,7 @@ defmodule SymphonyElixir.AutoMergeTest do
       on_exit(fn -> SubIssueWait.reset_for_test(@waiting) end)
     end
 
-    test "with one still open moves the issue to the waiting state instead of Done and its Backlog sub-tickets to Todo" do
+    test "with one in Todo still open moves the issue to the waiting state instead of Done and leaves its Backlog sub-tickets" do
       now = ~U[2026-10-03 12:00:00Z]
       put_run!(now)
 
@@ -1401,15 +1401,14 @@ defmodule SymphonyElixir.AutoMergeTest do
       log = capture_log([level: :info], fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now) end)
 
       assert_received {:issue_state_update, @issue_id, @waiting}
-      assert_received {:issue_state_update, "child-1", "Todo"}
       refute_received {:issue_state_update, _issue_id, _state}
       assert_received {:issue_comment, @issue_id, body}
 
       assert body ==
-               "Waiting on sub-tickets: the PR merged with sub-tickets still open (ACME-1781, ACME-1782), so this ticket " <>
-                 "moves to Done once every sub-ticket is finished. Canceling one counts as finishing it.\n\nPromoted to Todo: ACME-1781"
+               "Waiting on sub-tickets: the PR merged with sub-tickets still open (ACME-1782), so this ticket " <>
+                 "moves to Done once every sub-ticket is finished. Canceling one counts as finishing it, and one in Backlog does not hold it."
 
-      assert log =~ "Moved issue to Waiting on sub-tickets after its PR merged with sub-issues open; promoted to Todo: ACME-1781"
+      assert log =~ "Moved issue to Waiting on sub-tickets after its PR merged with sub-issues open: issue_id=#{@issue_id}"
       assert log =~ "Auto-merge ACME-1780: merged"
       assert RunStore.list_pr_reviews(@repo_key) == []
       # The merge put it there, so it moves to Done once its sub-tickets finish.
@@ -1434,45 +1433,28 @@ defmodule SymphonyElixir.AutoMergeTest do
       capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60)) end)
       assert_received {:issue_state_update, @issue_id, @waiting}
       refute_received {:issue_state_update, _issue_id, _state}
-      assert_received {:issue_comment, @issue_id, body}
-      refute body =~ "Promoted"
+      assert_received {:issue_comment, @issue_id, _body}
     end
 
-    test "keeps the record when a sub-ticket can't be promoted, and promotes only what is left next poll" do
+    test "with only Backlog sub-tickets open moves the issue to Done and leaves them in Backlog" do
       now = ~U[2026-10-03 12:00:00Z]
       put_run!(now)
-      sub_issues = [{"child-1", "ACME-1781", "Backlog"}, {"child-2", "ACME-1782", "Backlog"}]
+      sub_issues = [{"child-1", "ACME-1781", "Backlog"}, {"child-2", "ACME-1782", "Done"}]
       track([with_sub_issues(issue("Merging"), sub_issues)])
       activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
-      Application.put_env(:symphony_elixir, :auto_merge_test_state_result, %{"child-2" => {:error, :linear_down}})
 
-      log =
-        capture_log(fn ->
-          assert {:ok, %{actions: [{:state_transition_error, @issue_id, :wait, reason}]}} = poll(now)
-          assert reason == {:sub_issue_promotion_failed, ["ACME-1782"]}
-        end)
-
-      assert log =~ "Failed to move sub-issue ACME-1782 to Todo after its parent's PR merged"
-      assert_received {:issue_state_update, @issue_id, @waiting}
-      assert_received {:issue_state_update, "child-1", "Todo"}
-      assert_received {:issue_state_update, "child-2", "Todo"}
-      assert_received {:issue_comment, @issue_id, _first}
-
-      # Linear now shows it waiting with one sub-ticket left in Backlog: only that one moves.
-      Application.delete_env(:symphony_elixir, :auto_merge_test_state_result)
-      track([with_sub_issues(issue(@waiting), [{"child-1", "ACME-1781", "Todo"}, {"child-2", "ACME-1782", "Backlog"}])])
-
-      capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60)) end)
-      assert_received {:issue_state_update, "child-2", "Todo"}
+      capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now) end)
+      assert_received {:issue_state_update, @issue_id, "Done"}
       refute_received {:issue_state_update, _issue_id, _state}
-      assert_received {:issue_comment, @issue_id, "Promoted to Todo: ACME-1782"}
+      refute_received {:issue_comment, _issue_id, _body}
+      refute RunStore.merged_wait?(@issue_id)
     end
 
-    test "an issue already waiting with nothing left in Backlog is neither moved nor commented on again" do
+    test "an issue already waiting is neither moved nor commented on again" do
       now = ~U[2026-10-03 12:00:00Z]
       put_run!(now)
       discover_review!(now)
-      track([with_sub_issues(issue(@waiting), [{"child-1", "ACME-1781", "In Progress"}])])
+      track([with_sub_issues(issue(@waiting), [{"child-1", "ACME-1781", "In Progress"}, {"child-2", "ACME-1782", "Backlog"}])])
       activity(head: "head-1", state: "MERGED")
 
       assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now)
@@ -1484,7 +1466,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     test "a failed move to the waiting state keeps the record for the next poll" do
       now = ~U[2026-10-03 12:00:00Z]
       put_run!(now)
-      track([with_sub_issues(issue("Merging"), [{"child-1", "ACME-1781", "Backlog"}])])
+      track([with_sub_issues(issue("Merging"), [{"child-1", "ACME-1781", "In Progress"}])])
       activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
       Application.put_env(:symphony_elixir, :auto_merge_test_state_result, {:error, :linear_down})
 
@@ -1497,7 +1479,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     test "all finished, a breakdown parent, or the waiting state off: Done on merge as before" do
       now = ~U[2026-10-03 12:00:00Z]
       finished = [{"child-1", "ACME-1781", "Done"}, {"child-2", "ACME-1782", "Canceled"}, {"child-3", "ACME-1783", "Duplicate"}]
-      open = [{"child-1", "ACME-1781", "Backlog"}]
+      open = [{"child-1", "ACME-1781", "Todo"}]
 
       for {merging, disabled?} <- [
             {with_sub_issues(issue("Merging"), finished), false},

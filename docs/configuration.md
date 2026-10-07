@@ -140,9 +140,11 @@ issues:
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
   a plan ticket whose sub-tickets are all terminal. Any other ticket whose PR merges with a
-  sub-ticket still open moves here instead of `Done`, and its `Backlog` sub-tickets move to `Todo`;
-  Symphony moves it to `Done` itself, with no run and a comment listing how each sub-ticket ended,
-  once every sub-ticket is terminal; one a person moves here waits for them. With the state off it
+  sub-ticket still open outside `Backlog` moves here instead of `Done`; Symphony moves it to `Done`
+  itself, with no run and a comment listing how each sub-ticket ended, once every sub-ticket outside
+  `Backlog` is terminal; one a person moves here waits for them. `Backlog` sub-tickets (the
+  acceptance gate's follow-ups) stay there for a person to promote and hold nothing: with only those
+  open the ticket goes to `Done` on merge. With the state off it
   goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
   parent in a terminal state with sub-tickets still open, without changing anything. When it cannot

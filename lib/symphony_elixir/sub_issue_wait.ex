@@ -12,10 +12,12 @@ defmodule SymphonyElixir.SubIssueWait do
   held: an issue in it is dispatched only for the close-out run, once it is a
   `breakdown` parent whose sub-issues are all terminal.
 
-  Any other issue whose pull request merges with a sub-issue still open waits there too, instead of
-  closing (`wait_on_merge?/3`): its `Backlog` sub-issues move to `Todo`, and Symphony moves it to
-  `Done` itself, with no run, once every sub-issue is terminal (`close?/3`). A sub-issue filed or
-  canceled meanwhile just counts in that check. The RunStore records each issue the merge put there,
+  Any other issue whose pull request merges with a sub-issue still open outside `Backlog` waits there
+  too, instead of closing (`wait_on_merge?/3`), and Symphony moves it to `Done` itself, with no run,
+  once every sub-issue outside `Backlog` is terminal (`close?/3`). Its `Backlog` sub-issues, such as
+  the acceptance gate's follow-ups, wait for a person to promote them and never hold it: with only
+  those open, the merge closes it as if it had none. A sub-issue filed or canceled meanwhile just
+  counts in that check. The RunStore records each issue the merge put there,
   so one a person moved there, with its pull request still open, waits for a human as before.
 
   At startup Symphony checks that the Linear team has the state. When it is
@@ -31,7 +33,6 @@ defmodule SymphonyElixir.SubIssueWait do
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
-  @todo_state "Todo"
   @done_state "Done"
 
   @doc "The configured waiting state name, or nil when it is turned off in config."
@@ -128,55 +129,50 @@ defmodule SymphonyElixir.SubIssueWait do
   @doc """
   True when `issue`, whose pull request merged, waits in the waiting state instead of closing: the
   state is on, the issue is not a `breakdown` parent (those wait from their plan's approval) and it
-  has a sub-issue outside `terminal_states`.
+  has a sub-issue outside `terminal_states` and outside `Backlog`. A `Backlog` sub-issue waits for a
+  person to promote it, so it does not hold the issue open.
   """
   @spec wait_on_merge?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def wait_on_merge?(%Issue{} = issue, terminal_states, settings) do
-    enabled?(settings) and not Issue.breakdown?(issue) and Issue.open_sub_issues(issue, terminal_states) != []
+    enabled?(settings) and not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) != []
   end
 
   def wait_on_merge?(_issue, _terminal_states, _settings), do: false
 
   @doc """
-  Moves `issue`, whose pull request merged with sub-issues open, to the waiting state and its
-  sub-issues in `Backlog` to `Todo`, and comments on it. Only states change, so blocked-by links and
-  labels stay. It first records the merge in the RunStore, which `close?/3` requires. It can run
-  again: an issue already waiting is not moved or commented on again unless a sub-issue is left in
-  `Backlog`, such as one whose promotion failed (returned as an error).
+  Moves `issue`, whose pull request merged with sub-issues open outside `Backlog`, to the waiting
+  state and comments on it. Its sub-issues are left as they are: promoting `Backlog` ones is a
+  person's call (or a plan's approval). It first records the merge in the RunStore, which `close?/3`
+  requires. It can run again: an issue already waiting is not moved or commented on again.
   """
   @spec wait_on_merge(Issue.t(), Schema.t(), module()) :: :ok | {:error, term()}
   def wait_on_merge(%Issue{} = issue, %Schema{} = settings, tracker) do
     waiting_state = state(settings)
-    already_waiting? = in_state?(issue, settings)
 
-    with :ok <- RunStore.put_merged_wait(issue.id),
-         :ok <- move_to_waiting(issue, waiting_state, already_waiting?, tracker) do
-      {promoted, failed} = promote_backlog_sub_issues(issue, tracker)
-      log_wait(issue, waiting_state, already_waiting?, promoted)
-
-      if not already_waiting? or promoted != [] do
-        body = wait_comment(issue, waiting_state, already_waiting?, promoted, settings.tracker.terminal_states)
-        comment(issue, body, tracker)
+    with :ok <- RunStore.put_merged_wait(issue.id) do
+      if in_state?(issue, settings) do
+        :ok
+      else
+        move_to_waiting(issue, waiting_state, settings.tracker.terminal_states, tracker)
       end
-
-      if failed == [], do: :ok, else: {:error, {:sub_issue_promotion_failed, failed}}
     end
   end
 
   @doc """
   True when Symphony closes `issue` itself: it sits in the waiting state, is not a `breakdown` parent
-  (its close-out run closes it), has sub-issues, every one of them in `terminal_states`, and its
-  pull request's merge put it there (`wait_on_merge/3`). One a person moved there waits for them.
+  (its close-out run closes it), has sub-issues, every one of them in `terminal_states` or `Backlog`,
+  and its pull request's merge put it there (`wait_on_merge/3`). One a person moved there waits for
+  them.
   """
   @spec close?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close?(%Issue{sub_issues: [_ | _]} = issue, terminal_states, settings) do
     in_state?(issue, settings) and not Issue.breakdown?(issue) and
-      Issue.open_sub_issues(issue, terminal_states) == [] and RunStore.merged_wait?(issue.id) == true
+      started_sub_issues(issue, terminal_states) == [] and RunStore.merged_wait?(issue.id) == true
   end
 
   def close?(_issue, _terminal_states, _settings), do: false
 
-  @doc "Moves `issue` to `Done` and comments how each of its sub-issues ended."
+  @doc "Moves `issue` to `Done` and comments how each of its sub-issues ended or waits."
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
   def close(%Issue{id: issue_id} = issue, tracker) do
     with :ok <- tracker.update_issue_state(issue_id, @done_state) do
@@ -193,56 +189,36 @@ defmodule SymphonyElixir.SubIssueWait do
     :ok
   end
 
-  defp move_to_waiting(_issue, _waiting_state, true, _tracker), do: :ok
-  defp move_to_waiting(%Issue{id: issue_id}, waiting_state, false, tracker), do: tracker.update_issue_state(issue_id, waiting_state)
-
-  # Every `Backlog` sub-issue moves to `Todo`; returns the identifiers moved and those that failed.
-  defp promote_backlog_sub_issues(%Issue{sub_issues: sub_issues} = issue, tracker) do
-    sub_issues
-    |> Enum.filter(&backlog_sub_issue?/1)
-    |> Enum.reduce({[], []}, fn %{id: id} = sub_issue, {promoted, failed} ->
-      label = sub_issue_label(sub_issue)
-
-      case tracker.update_issue_state(id, @todo_state) do
-        :ok ->
-          {promoted ++ [label], failed}
-
-        {:error, reason} ->
-          Logger.warning("Failed to move sub-issue #{label} to #{@todo_state} after its parent's PR merged: #{issue_fields(issue)} reason=#{inspect(reason)}")
-          {promoted, failed ++ [label]}
-      end
-    end)
+  defp move_to_waiting(%Issue{id: issue_id} = issue, waiting_state, terminal_states, tracker) do
+    with :ok <- tracker.update_issue_state(issue_id, waiting_state) do
+      Logger.info("Moved issue to #{waiting_state} after its PR merged with sub-issues open: #{issue_fields(issue)}")
+      comment(issue, wait_comment(issue, waiting_state, terminal_states), tracker)
+    end
   end
 
-  defp backlog_sub_issue?(%{id: id, state: state}) when is_binary(id) and is_binary(state), do: normalize(state) == normalize(@backlog_state)
+  # Open sub-issues a person or a plan's approval started: outside `terminal_states` and `Backlog`.
+  defp started_sub_issues(issue, terminal_states), do: issue |> Issue.open_sub_issues(terminal_states) |> Enum.reject(&backlog_sub_issue?/1)
+
+  defp backlog_sub_issue?(%{state: state}) when is_binary(state), do: normalize(state) == normalize(@backlog_state)
   defp backlog_sub_issue?(_sub_issue), do: false
 
-  defp log_wait(issue, waiting_state, false, promoted),
-    do: Logger.info("Moved issue to #{waiting_state} after its PR merged with sub-issues open#{promoted_suffix(promoted)}: #{issue_fields(issue)}")
+  defp wait_comment(issue, waiting_state, terminal_states) do
+    open = issue |> started_sub_issues(terminal_states) |> Enum.map_join(", ", &sub_issue_label/1)
 
-  defp log_wait(_issue, _waiting_state, true, []), do: :ok
-  defp log_wait(issue, _waiting_state, true, promoted), do: Logger.info("Promoted sub-issues of a waiting issue#{promoted_suffix(promoted)}: #{issue_fields(issue)}")
-
-  defp promoted_suffix([]), do: ""
-  defp promoted_suffix(promoted), do: "; promoted to #{@todo_state}: #{Enum.join(promoted, ", ")}"
-
-  defp wait_comment(_issue, _waiting_state, true, promoted, _terminal_states), do: promoted_line(promoted)
-
-  defp wait_comment(issue, waiting_state, false, promoted, terminal_states) do
-    open = issue |> Issue.open_sub_issues(terminal_states) |> Enum.map_join(", ", &sub_issue_label/1)
-
-    wait =
-      "#{waiting_state}: the PR merged with sub-tickets still open (#{open}), so this ticket moves to " <>
-        "#{@done_state} once every sub-ticket is finished. Canceling one counts as finishing it."
-
-    Enum.join([wait | if(promoted == [], do: [], else: [promoted_line(promoted)])], "\n\n")
+    "#{waiting_state}: the PR merged with sub-tickets still open (#{open}), so this ticket moves to " <>
+      "#{@done_state} once every sub-ticket is finished. Canceling one counts as finishing it, and one " <>
+      "in #{@backlog_state} does not hold it."
   end
-
-  defp promoted_line(promoted), do: "Promoted to #{@todo_state}: #{Enum.join(promoted, ", ")}"
 
   defp close_comment(%Issue{sub_issues: sub_issues}) do
     outcomes = Enum.map_join(sub_issues, "\n", &"- #{sub_issue_label(&1)}: #{Map.get(&1, :state) || "unknown"}")
-    "Every sub-ticket is finished, so this ticket is #{@done_state}:\n\n" <> outcomes
+    "Every sub-ticket is finished, so this ticket is #{@done_state}:\n\n" <> outcomes <> backlog_note(sub_issues)
+  end
+
+  defp backlog_note(sub_issues) do
+    if Enum.any?(sub_issues, &backlog_sub_issue?/1),
+      do: "\n\nSub-tickets in #{@backlog_state} stay there until a person promotes them.",
+      else: ""
   end
 
   defp comment(%Issue{id: issue_id} = issue, body, tracker) do
