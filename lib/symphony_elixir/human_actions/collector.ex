@@ -24,6 +24,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Neither lists a `blocked` verdict whose QA agent was stopped by the provider's usage limit: that
   pass runs again once the limit resets.
 
+  An issue's comments and history are read in full, past the first page the issue query returns,
+  up to ten more pages of 100 each.
+
   Issues outside a project are skipped: there is no project to post the update to.
 
   `collect_all/2` also returns, from the same read, the issues waiting on a person
@@ -39,6 +42,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @issue_first 50
   @comment_last 30
   @history_first 50
+  # An issue's comments and history past the first read come in pages of this size, up to this
+  # many pages each.
+  @more_page_size 100
+  @more_pages_max 10
   @max_task_steps 12
   @plan_review_minutes 10
   @human_review_minutes 10
@@ -68,12 +75,36 @@ defmodule SymphonyElixir.HumanActions.Collector do
         labels { nodes { name } }
         comments(last: $commentLast, orderBy: createdAt) {
           nodes { id body createdAt parent { id } }
+          pageInfo { hasPreviousPage startCursor }
         }
         history(first: $historyFirst) {
           nodes { createdAt fromState { name } toState { name } }
+          pageInfo { hasNextPage endCursor }
         }
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+  """
+
+  @comments_query """
+  query SymphonyHumanActionsComments($id: String!, $size: Int!, $cursor: String!) {
+    issue(id: $id) {
+      comments(last: $size, before: $cursor, orderBy: createdAt) {
+        nodes { id body createdAt parent { id } }
+        pageInfo { hasPreviousPage startCursor }
+      }
+    }
+  }
+  """
+
+  @history_query """
+  query SymphonyHumanActionsHistory($id: String!, $size: Int!, $cursor: String!) {
+    issue(id: $id) {
+      history(first: $size, after: $cursor) {
+        nodes { createdAt fromState { name } toState { name } }
+        pageInfo { hasNextPage endCursor }
+      }
     }
   }
   """
@@ -133,7 +164,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   # as if they had closed.
   defp read_pages(filter, after_cursor, acc, linear_client) do
     with {:ok, body} <- linear_client.(@query, variables(filter, after_cursor), []),
-         {:ok, nodes, next} <- issue_page(body) do
+         {:ok, nodes, next} <- issue_page(body),
+         {:ok, nodes} <- read_more(nodes, linear_client) do
       case next do
         {:next, cursor} -> read_pages(filter, cursor, [nodes | acc], linear_client)
         :done -> {:ok, [nodes | acc] |> Enum.reverse() |> Enum.concat()}
@@ -160,6 +192,78 @@ defmodule SymphonyElixir.HumanActions.Collector do
   end
 
   defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
+
+  # A long-lived issue's review brief, requests and move into its state can sit past the comments
+  # and history the issue query reads: read the rest of them, so it keeps its waited time and
+  # headline.
+  defp read_more(nodes, linear_client) do
+    nodes
+    |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
+      with {:ok, node} <- read_more(node, "comments", linear_client),
+           {:ok, node} <- read_more(node, "history", linear_client) do
+        {:cont, {:ok, [node | acc]}}
+      else
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
+      error -> error
+    end
+  end
+
+  defp read_more(node, field, linear_client) do
+    case more_pages(node["id"], field, get_in(node, [field, "pageInfo"]), @more_pages_max, linear_client) do
+      {:ok, []} -> {:ok, node}
+      {:ok, pages} -> {:ok, update_in(node, [field, "nodes"], &merge_pages(field, List.wrap(&1), pages))}
+      error -> error
+    end
+  end
+
+  # Past the cap, the issue keeps what was read rather than failing the whole update.
+  defp more_pages(_issue_id, _field, _page_info, 0, _linear_client), do: {:ok, []}
+
+  defp more_pages(issue_id, field, page_info, pages_left, linear_client) do
+    case more_cursor(field, page_info) do
+      :done ->
+        {:ok, []}
+
+      {:next, cursor} ->
+        variables = %{id: issue_id, size: @more_page_size, cursor: cursor}
+
+        with {:ok, body} <- linear_client.(more_query(field), variables, []),
+             {:ok, nodes, page_info} <- connection_page(body, field),
+             {:ok, pages} <- more_pages(issue_id, field, page_info, pages_left - 1, linear_client) do
+          {:ok, [nodes | pages]}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp more_query("comments"), do: @comments_query
+  defp more_query("history"), do: @history_query
+
+  # Comments are read newest last, so their further pages are older; history reads on forward.
+  defp more_cursor("comments", %{"hasPreviousPage" => true} = page_info), do: cursor(page_info["startCursor"])
+  defp more_cursor("history", %{"hasNextPage" => true} = page_info), do: cursor(page_info["endCursor"])
+  defp more_cursor(_field, _page_info), do: :done
+
+  defp cursor(cursor) when is_binary(cursor) and cursor != "", do: {:next, cursor}
+  defp cursor(_cursor), do: {:error, :linear_missing_end_cursor}
+
+  defp connection_page(%{"data" => %{"issue" => %{} = issue}}, field) do
+    case issue[field] do
+      %{"nodes" => nodes} = connection when is_list(nodes) -> {:ok, nodes, connection["pageInfo"]}
+      _connection -> {:error, {:human_actions_query_failed, field}}
+    end
+  end
+
+  defp connection_page(body, _field), do: {:error, {:human_actions_query_failed, body}}
+
+  defp merge_pages("comments", nodes, pages), do: pages |> Enum.reverse() |> Enum.concat() |> Enum.concat(nodes)
+  defp merge_pages("history", nodes, pages), do: Enum.concat([nodes | pages])
 
   defp filter(scope, settings) do
     labelled = Enum.map(HumanReview.legacy_request_labels(settings), &%{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => &1}}}})
