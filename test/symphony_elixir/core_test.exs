@@ -2031,6 +2031,12 @@ defmodule SymphonyElixir.CoreTest do
     refute_received {:memory_tracker_state_update, ^issue_id, _state}
     assert MapSet.member?(state.claimed, issue_id)
     refute Map.has_key?(state.watching, issue_id)
+
+    # The re-dispatched run fails against this test's workspace, and its Task is supervised
+    # outside this orchestrator, so it outlives the test. Wait for the run to finish before
+    # returning: its "Agent run failed" log would otherwise land in the next test's
+    # `capture_log` window and break an unrelated assertion.
+    wait_for_orchestrator_state(pid, fn state -> not Map.has_key?(state.running, issue_id) end, 5_000)
   end
 
   test "a landing run that ends on pending checks is held in Merging instead of continued" do
@@ -3060,6 +3066,20 @@ defmodule SymphonyElixir.CoreTest do
 
     assert String.starts_with?(workpad_body, "## Claude Workpad\n")
     assert enriched_issue.description == "Polled body"
+  end
+
+  test "linear client leaves Symphony's summary block out of normalized and enriched descriptions" do
+    block = "<!-- symphony:summary:start -->\n### Symphony summary\n\n- [ ] not a requirement\n<!-- symphony:summary:end -->"
+
+    assert %Issue{description: "## Goal\n\nShip it."} =
+             Client.normalize_issue_for_test(%{"id" => "issue-1", "identifier" => "MT-1", "title" => "T", "description" => "## Goal\n\nShip it.\n\n" <> block})
+
+    graphql_fun = fn _query, _variables ->
+      {:ok, %{"data" => %{"issue" => %{"description" => "Edited\n\n" <> block, "comments" => %{"nodes" => []}, "relations" => %{"nodes" => []}}}}}
+    end
+
+    issue = %Issue{id: "issue-1", identifier: "MT-1"}
+    assert {:ok, %Issue{description: "Edited"}} = Client.fetch_issue_enrichment_for_test(issue, graphql_fun)
   end
 
   test "linear client reports enrichment errors without changing issue fetchers" do

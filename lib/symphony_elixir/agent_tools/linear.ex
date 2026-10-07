@@ -19,6 +19,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.HumanReview
+  alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
@@ -40,7 +41,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @backlog_state "Backlog"
   # Where a withdrawn request's issue goes back to when its history doesn't say.
   @in_progress_state "In Progress"
-  @subissue_cap_per_run 10
   @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
   # A project update notifies everyone following the project, so a run may post only one.
   @project_update_cap_per_run 1
@@ -548,6 +548,24 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  @issue_description_query """
+  query SymphonyAgentIssueDescription($id: String!) {
+    issue(id: $id) {
+      id
+      description
+    }
+  }
+  """
+
+  @update_issue_description_mutation """
+  mutation SymphonyAgentUpdateIssueDescription($id: String!, $description: String!) {
+    issueUpdate(id: $id, input: { description: $description }) {
+      success
+      issue { id url }
+    }
+  }
+  """
+
   @type context :: %{
           optional(:issue) => Issue.t() | map(),
           optional(:issue_id) => String.t(),
@@ -838,8 +856,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Creates a Backlog child of the current issue in the same team and project, assigned to the same
   assignee. Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
-  everything that scopes the new issue is read from the current issue. At most
-  #{@subissue_cap_per_run} per run.
+  everything that scopes the new issue is read from the current issue. A title this run already
+  filed under the current issue is refused with the earlier sub-issue's identifier, so a looping run
+  can't file the same sub-issue again and again.
 
   `blocked_by` lists identifiers of sibling sub-issues (the current issue's existing children, or
   sub-issues this run created) that block the new one. Unknown identifiers are refused before
@@ -858,19 +877,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
              "linear_create_subissue",
              opts
            ),
-         :ok <- CommentRegistry.reserve_subissue(registry, @subissue_cap_per_run) do
-      case create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
-        {:ok, response} ->
-          {:ok, response}
-
-        # The issue exists by then, so its slot stays used.
-        {:error, {:blocked_by_relation_failed, _identifier, _blocker, _reason}} = error ->
-          error
-
-        {:error, _reason} = error ->
-          CommentRegistry.release_subissue(registry)
-          error
-      end
+         :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
+      create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts)
     end
   end
 
@@ -1642,6 +1650,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> wrap_string_field("title", &PromptSafety.linear_document_title/1)
   end
 
+  @doc """
+  Writes the Symphony summary block at the end of the current issue's description: the status, the
+  review brief and artifact links, and one new changelog entry dated today (UTC) on top of the
+  ones the block holds, capped. The description is read right before the write, and every byte
+  outside the block stays as it is, so a person's edit between runs survives. Fields holding a
+  secret pattern are refused before any Linear call.
+  """
+  @spec update_issue_summary(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def update_issue_summary(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, summary} <- IssueSummary.new(attrs),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts),
+         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0)),
+         variables = %{id: issue_id, description: description},
+         {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
+         {:ok, response} <- check_mutation_success(response, "issueUpdate") do
+      {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "descriptionLength" => String.length(description)}}
+    end
+  end
+
+  defp summary_secret_fields(summary) do
+    links = Enum.flat_map(summary.artifacts, &[artifact_label: &1.label, artifact_url: &1.url])
+    [status: summary.status, changelog_entry: summary.entry, review_brief: summary.review_brief || ""] ++ links
+  end
+
   defp validate_subissue_fields(attrs) do
     title = Map.get(attrs, "title")
     description = Map.get(attrs, "description")
@@ -1675,7 +1710,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts),
          {:ok, response} <- check_mutation_success(response, "issueCreate"),
          {:ok, identifier, new_id} <- created_subissue(response) do
-      CommentRegistry.record_subissue(registry, identifier, new_id)
+      CommentRegistry.record_subissue(registry, issue_id, title, identifier, new_id)
       link_blockers(response, {identifier, new_id}, blockers, opts)
     end
   end
@@ -1813,9 +1848,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
+  # The Symphony summary block is agent-written, so it cannot say a person reviews the plan.
   defp human_reviewed_plan?(issue, settings) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
-    plan = %Issue{title: issue["title"], description: issue["description"], labels: labels}
+    plan = %Issue{title: issue["title"], description: IssueSummary.strip(issue["description"]), labels: labels}
     Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
   end
 

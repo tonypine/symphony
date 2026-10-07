@@ -421,6 +421,17 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert move("In Review", plain_plan) == "state-review"
       assert move("In Review", not_a_plan) == "state-review"
 
+      # Only the agent-written summary block says a person reviews the plan, which doesn't count.
+      summary_says_review = %{
+        plain_plan
+        | "description" =>
+            "Plan it.\n\n" <>
+              SymphonyElixir.IssueSummary.start_marker() <>
+              "\nI only want to review and validate the artifacts.\n" <> SymphonyElixir.IssueSummary.end_marker()
+      }
+
+      assert move("In Review", summary_says_review) == "state-review"
+
       # Without the state in the team, or with it turned off, the plan goes to In Review as before.
       assert move("In Review", needs_human, states: Enum.drop(@review_states, -1)) == "state-review"
       settings = Config.settings!()
@@ -880,6 +891,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("qa_check_app", %{"pid" => 1, "page" => "Decide"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+      launch = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_launch_app"))
+      assert %{"api_fixtures" => %{"type" => "string"}} = launch["inputSchema"]["properties"]
+
+      response = DynamicTool.execute("qa_launch_app", %{"api_fixtures" => "macos/Tests/Fixtures/director-app/running"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_launch_app", %{"env" => %{"FOO" => "1"}}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
     end
 
     test "only the QA scope lists and runs the qa_android tools, routed to the Android driver" do
@@ -948,7 +968,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       end
     end
 
-    test "creates the sub-issue through the legacy alias and reports the cap past it" do
+    test "creates the sub-issue through the legacy alias and refuses a duplicate title" do
       {:ok, registry} = CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -969,13 +989,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
 
-      for _ <- 1..10 do
-        response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
-        assert response["success"] == true
-      end
+      response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
+      assert response["success"] == true
 
       response = DynamicTool.execute("linear_create_subissue", %{"title" => "Slice", "description" => "body"}, opts)
-      assert %{"error" => %{"code" => "subissue_cap_reached", "cap" => 10}} = Jason.decode!(response["output"])
+      assert %{"error" => %{"code" => "duplicate_subissue", "identifier" => "TP-1", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "already filed TP-1"
     end
 
     test "returns explicit error payloads for invalid input, no registry and no Backlog state" do
@@ -1045,21 +1064,22 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert response["success"] == true
       assert %{"data" => %{"issueCreate" => %{"issue" => %{"blockedBy" => ["TP-2"]}}}} = Jason.decode!(response["output"])
 
-      response = DynamicTool.execute("linear_create_subissue", %{args | "blocked_by" => ["TP-2", "OPS-9"]}, opts)
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2", "blocked_by" => ["TP-2", "OPS-9"]}, opts)
 
       assert %{"error" => %{"code" => "blocked_by_not_sibling", "unknown" => ["OPS-9"], "sub_issues" => ["TP-2", "TP-3"], "message" => message}} =
                Jason.decode!(response["output"])
 
       assert message =~ "Not a sub-issue: OPS-9. Nothing was created."
 
-      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
+      response =
+        DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2"}, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
 
       assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-2", "message" => message}} =
                Jason.decode!(response["output"])
 
       assert message =~ "Created TP-3, but could not mark it blocked by TP-2"
 
-      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 3"}, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
       assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
     end
   end
@@ -1226,6 +1246,75 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         )
 
       assert %{"error" => %{"code" => "issue_has_no_project"}} = Jason.decode!(response["output"])
+    end
+  end
+
+  describe "linear_update_issue_summary" do
+    test "is advertised to both runners with its fields, and not to the read-only or QA scopes" do
+      specs = Map.new(DynamicTool.tool_specs(), &{&1["name"], &1["inputSchema"]})
+
+      assert %{"required" => ["status", "changelog_entry"], "properties" => properties} = specs["linear_update_issue_summary"]
+      assert properties |> Map.keys() |> Enum.sort() == ["changelog_entry", "links", "status"]
+      assert "linear_update_issue_summary" in Enum.map(SymphonyElixir.McpServer.tool_specs(), & &1["name"])
+
+      for scope <- [:read_only, :qa] do
+        refute "linear_update_issue_summary" in Enum.map(DynamicTool.tool_specs(scope), & &1["name"])
+      end
+
+      response =
+        DynamicTool.execute("linear_update_issue_summary", %{"status" => "x", "changelog_entry" => "y", "description" => "replace it all"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("a smuggled description must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["description"]}} = Jason.decode!(response["output"])
+    end
+
+    test "writes the block through AgentTools.Linear" do
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription" do
+          {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "Goal"}}}}
+        else
+          send(self(), {:description, variables.description})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => "issue-current", "url" => "https://linear.app/acme/issue/TP-7"}}}}}
+        end
+      end
+
+      args = %{
+        "status" => "PR open",
+        "links" => %{"review_brief" => "https://linear.app/acme/issue/TP-7#comment-1", "artifacts" => [%{"label" => "PR", "url" => "https://github.com/a/b/pull/1"}]},
+        "changelog_entry" => "Opened the PR"
+      }
+
+      response = DynamicTool.execute("linear_update_issue_summary", args, issue: %Issue{id: "issue-current"}, linear_client: client)
+
+      assert %{"issue" => %{"id" => "issue-current"}} = Jason.decode!(response["output"])
+      assert_received {:description, "Goal\n\n<!-- symphony:summary:start -->" <> _block}
+    end
+
+    test "returns explicit error payloads for refusals" do
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = [issue: %Issue{id: "issue-current"}, linear_client: no_linear]
+      base = %{"status" => "x", "changelog_entry" => "y"}
+
+      for {args, code} <- [
+            {%{base | "status" => " "}, "invalid_summary_status"},
+            {%{base | "changelog_entry" => " "}, "invalid_summary_changelog_entry"},
+            {Map.put(base, "links", []), "invalid_summary_links"},
+            {Map.put(base, "links", %{"artifacts" => [%{"label" => "PR"}]}), "invalid_summary_artifacts"},
+            {Map.put(base, "links", %{"review_brief" => "ftp://x"}), "invalid_summary_url"}
+          ] do
+        response = DynamicTool.execute("linear_update_issue_summary", args, opts)
+        assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
+        assert is_binary(message)
+      end
+
+      unterminated = fn _query, _variables, _opts ->
+        {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "Goal <!-- symphony:summary:start -->"}}}}
+      end
+
+      response = DynamicTool.execute("linear_update_issue_summary", base, Keyword.put(opts, :linear_client, unterminated))
+      assert %{"error" => %{"code" => "summary_block_unterminated"}} = Jason.decode!(response["output"])
     end
   end
 

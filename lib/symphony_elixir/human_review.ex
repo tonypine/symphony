@@ -37,6 +37,7 @@ defmodule SymphonyElixir.HumanReview do
   alias SymphonyElixir.Tracker
 
   @review_state "In Review"
+  @merging_state "Merging"
   # Asks for a person whatever the acceptance gate's `escalate.labels` say (see `parked_for_person?/2`).
   @needs_human_label "needs-human"
   # The retired label that marked an open human-action request (see `legacy_request_labels/1`).
@@ -168,6 +169,27 @@ defmodule SymphonyElixir.HumanReview do
         {:ok, false}
     end
   end
+
+  @doc """
+  `parked_for_person/3` for the CI and PR review pollers, which also leave an issue where it is
+  when it sits outside every state they move issues on from: `tracker.active_states`,
+  `review_states/1`, the Auto Review state and `Merging`. Such an issue (`Backlog`, a terminal
+  state) waits for a person to promote it, so a red head or a merge conflict starts no fix run and
+  spends no retry.
+  """
+  @spec held_for_person(Issue.t(), Schema.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
+  def held_for_person(%Issue{state: issue_state} = issue, %Schema{} = settings, opts) do
+    if poller_state?(issue_state, settings),
+      do: parked_for_person(issue, settings, opts),
+      else: {:ok, true}
+  end
+
+  defp poller_state?(issue_state, settings) when is_binary(issue_state) do
+    states = settings.tracker.active_states ++ review_states(settings) ++ [settings.auto_review.state, @merging_state]
+    Enum.any?(states, &(is_binary(&1) and normalize(&1) == normalize(issue_state)))
+  end
+
+  defp poller_state?(_issue_state, _settings), do: false
 
   defp request_parks_in_review?(%Issue{state: issue_state}, settings) do
     settings.human_actions.enabled and not enabled?(settings) and is_binary(issue_state) and

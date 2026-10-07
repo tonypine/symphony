@@ -148,7 +148,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. Capped per run.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -267,6 +267,44 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "additionalProperties" => false,
         "properties" => %{
           "document_id" => %{"type" => "string", "description" => "Id of the document to read in full."}
+        }
+      }
+    },
+    %{
+      "name" => "linear_update_issue_summary",
+      "description" =>
+        "Write the Symphony summary block at the end of the current issue's description, the only part of the description an agent may change: " <>
+          "a one-line status, a link to the review brief, the artifacts and a changelog. Each call replaces the status and links and adds one dated changelog entry on top; " <>
+          "older entries are trimmed. Everything else in the description is left as it is. Call it at each handoff, next to the review brief.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["status", "changelog_entry"],
+        "properties" => %{
+          "status" => %{
+            "type" => "string",
+            "maxLength" => 300,
+            "description" => "One line: where the ticket stands and what waits on whom, e.g. `PR open, waiting on Auto Review`."
+          },
+          "links" => %{
+            "type" => "object",
+            "additionalProperties" => false,
+            "properties" => %{
+              "review_brief" => %{"type" => "string", "description" => "URL of the current `## Review brief` comment."},
+              "artifacts" => %{
+                "type" => "array",
+                "maxItems" => 20,
+                "description" => "Documents, HTML screens, the PR, sub-tickets.",
+                "items" => %{
+                  "type" => "object",
+                  "additionalProperties" => false,
+                  "required" => ["label", "url"],
+                  "properties" => %{"label" => %{"type" => "string"}, "url" => %{"type" => "string"}}
+                }
+              }
+            }
+          },
+          "changelog_entry" => %{"type" => "string", "maxLength" => 300, "description" => "One line on what this run changed; Symphony dates it."}
         }
       }
     },
@@ -446,8 +484,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "qa_launch_app",
-      "description" => "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+      "description" =>
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "api_fixtures" => %{
+            "type" => "string",
+            "description" =>
+              "A directory relative to the PR checkout, e.g. macos/Tests/Fixtures/director-app/running. Symphony copies it to the QA host and launches the app with SYMPHONY_BAR_QA_API_FIXTURES pointing at the copy. Regular files only, at most 5 MB; no symlinks."
+          }
+        }
+      }
     },
     %{
       "name" => "qa_quit_app",
@@ -747,6 +796,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_create_document" => ["title", "content"],
     "linear_update_document" => ["document_id", "content", "title"],
     "linear_get_document" => ["document_id"],
+    "linear_update_issue_summary" => ["status", "links", "changelog_entry"],
     "linear_request_human_action" => ["title", "why", "decision", "unblocks", "est_minutes"],
     "linear_withdraw_human_action" => ["reason", "title"],
     "github_get_pull_request" => [],
@@ -764,7 +814,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => [],
+    "qa_launch_app" => ["api_fixtures"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
@@ -988,6 +1038,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_get_document", context, args, opts) do
     Linear.get_document(context, Map.get(args, "document_id"), opts)
+  end
+
+  defp execute_linear_tool("linear_update_issue_summary", context, args, opts) do
+    Linear.update_issue_summary(context, args, opts)
   end
 
   defp execute_linear_tool("linear_request_human_action", context, args, opts) do
@@ -1347,12 +1401,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:subissue_cap_reached, cap}) do
+  defp tool_error_payload({:duplicate_subissue, identifier}) do
     %{
       "error" => %{
-        "code" => "subissue_cap_reached",
-        "message" => "This run already created #{cap} sub-issues, the per-run limit. List the remaining work in the workpad for a human to file instead.",
-        "cap" => cap
+        "code" => "duplicate_subissue",
+        "message" => "This run already filed #{identifier} with this title under the current issue. Nothing was created. Change #{identifier} with linear_update_subissue instead of filing it again.",
+        "identifier" => identifier
       }
     }
   end
@@ -1361,7 +1415,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "subissue_registry_unavailable",
-        "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the sub-issue cap and refused to create the issue."
+        "message" => "Symphony has no per-run tool state for this session, so it cannot check for a duplicate sub-issue and refused to create the issue."
       }
     }
   end
@@ -1518,6 +1572,47 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp tool_error_payload(:document_not_returned) do
     %{"error" => %{"code" => "document_not_returned", "message" => "Linear did not return the created document."}}
+  end
+
+  defp tool_error_payload(:invalid_summary_status) do
+    %{"error" => %{"code" => "invalid_summary_status", "message" => "linear_update_issue_summary requires a non-blank one-line `status` of at most 300 characters."}}
+  end
+
+  defp tool_error_payload(:invalid_summary_changelog_entry) do
+    %{
+      "error" => %{
+        "code" => "invalid_summary_changelog_entry",
+        "message" => "linear_update_issue_summary requires a non-blank one-line `changelog_entry` of at most 300 characters."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_summary_links) do
+    %{"error" => %{"code" => "invalid_summary_links", "message" => "`links` must be an object with an optional `review_brief` URL and an optional `artifacts` list."}}
+  end
+
+  defp tool_error_payload(:invalid_summary_artifacts) do
+    %{
+      "error" => %{
+        "code" => "invalid_summary_artifacts",
+        "message" => "`links.artifacts` must be a list of at most 20 objects, each with a non-blank `label` and a `url`."
+      }
+    }
+  end
+
+  defp tool_error_payload({:invalid_summary_url, url}) do
+    %{"error" => %{"code" => "invalid_summary_url", "message" => "Every summary link must be an http(s) URL without spaces or parentheses.", "url" => url}}
+  end
+
+  defp tool_error_payload(:summary_block_unterminated) do
+    %{
+      "error" => %{
+        "code" => "summary_block_unterminated",
+        "message" =>
+          "The description has the summary's start marker but not its end marker, so Symphony can't tell its block from a person's text and changed nothing. " <>
+            "Note it in the workpad for a person to fix the description."
+      }
+    }
   end
 
   defp tool_error_payload(:document_not_found) do

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{AgentLabels, AuditLog, Config, Linear.Issue, Secret}
+  alias SymphonyElixir.{AgentLabels, AuditLog, Config, IssueSummary, Linear.Issue, Secret}
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
 
@@ -969,7 +969,7 @@ defmodule SymphonyElixir.Linear.Client do
           {:ok,
            %{
              issue
-             | description: Map.get(enrichment, "description", issue.description),
+             | description: IssueSummary.strip(Map.get(enrichment, "description", issue.description)),
                comments: extract_comments(enrichment),
                linked_issues: extract_linked_issues(enrichment)
            }}
@@ -1271,7 +1271,8 @@ defmodule SymphonyElixir.Linear.Client do
       id: issue["id"],
       identifier: issue["identifier"],
       title: issue["title"],
-      description: issue["description"],
+      # Symphony's own summary block is not part of the ticket's requirements.
+      description: IssueSummary.strip(issue["description"]),
       priority: parse_priority(issue["priority"]),
       state: get_in(issue, ["state", "name"]),
       team: extract_team(issue),

@@ -592,6 +592,150 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  describe "qa_launch_app api_fixtures" do
+    @fixtures "macos/Tests/Fixtures/director-app/running"
+
+    defp write_fixtures(worktree, files \\ %{"api/v1/overview.json" => ~s({"running":2}), "api/v1/issues.json" => "[]"}) do
+      for {relative, contents} <- files do
+        path = Path.join([worktree, @fixtures, relative])
+        File.mkdir_p!(Path.dirname(path))
+        File.write!(path, contents)
+      end
+
+      Path.join(worktree, @fixtures)
+    end
+
+    defp fixtures_env(launch_opts) do
+      case Enum.find(launch_opts[:env], fn {name, _value} -> to_string(name) == "SYMPHONY_BAR_QA_API_FIXTURES" end) do
+        {_name, dir} -> to_string(dir)
+        nil -> nil
+      end
+    end
+
+    test "launches the app on a private copy of the directory", %{worktree: worktree} do
+      write_fixtures(worktree)
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures}) end)
+      assert {:ok, %{"pid" => _pid, "api_fixtures" => copy}} = result
+      assert_received {:launched, _executable, launch_opts, _port, _pid}
+      assert fixtures_env(launch_opts) == copy
+      assert String.starts_with?(copy, scratch_dir <> "/api-fixtures-")
+      assert File.read!(Path.join(copy, "api/v1/overview.json")) == ~s({"running":2})
+      assert File.read!(Path.join(copy, "api/v1/issues.json")) == "[]"
+
+      # Each launch gets its own copy; one without the argument gets none.
+      {{:ok, %{"api_fixtures" => second}}, _log} =
+        with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures <> "/"}) end)
+
+      assert second != copy
+      {{:ok, payload}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => nil}) end)
+      refute Map.has_key?(payload, "api_fixtures")
+      assert_received {:launched, _executable, _opts, _port, _pid}
+      assert_received {:launched, _executable, no_fixtures, _port, _pid}
+      assert fixtures_env(no_fixtures) == nil
+    end
+
+    test "copies an empty directory", %{worktree: worktree} do
+      File.mkdir_p!(Path.join(worktree, @fixtures))
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"api_fixtures" => copy}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures}) end)
+      assert File.ls!(copy) == []
+    end
+
+    test "refuses bad arguments and directories outside the checkout", %{root: root, worktree: worktree} do
+      driver = start_driver(worktree)
+      outside = Path.join(root, "outside")
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.json"), "{}")
+
+      for value <- [7, "", "a\0b", outside, String.duplicate("a", 4_097)] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => value})
+        assert message =~ "`api_fixtures`"
+      end
+
+      File.mkdir_p!(Path.join(worktree, "fixtures"))
+      File.ln_s!(outside, Path.join(worktree, "fixtures/escape"))
+
+      for value <- ["../outside", "fixtures/escape", "fixtures/../../outside", "."] do
+        assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => value})
+        assert message =~ "resolves outside the PR checkout"
+      end
+
+      File.write!(Path.join(worktree, "fixtures/file.json"), "{}")
+      assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => "fixtures/file.json"})
+      assert message =~ "fixtures/file.json is not a directory"
+
+      File.mkdir_p!(Path.join(worktree, ".git/refs"))
+
+      for value <- [".git", ".git/refs"] do
+        assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => value})
+        assert message =~ "is in the checkout's .git directory"
+      end
+
+      assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => "fixtures/missing"})
+      assert message =~ "fixtures/missing could not be read: :enoent"
+      refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+
+    test "refuses symlinks, special files, hard links and unreadable entries inside the directory", %{root: root, worktree: worktree} do
+      driver = start_driver(worktree)
+      outside = Path.join(root, "outside.json")
+      File.write!(outside, "{}")
+
+      refusal = fn prepare ->
+        File.rm_rf!(Path.join(worktree, @fixtures))
+        dir = write_fixtures(worktree)
+        prepare.(dir)
+        assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures})
+        message
+      end
+
+      assert refusal.(&File.ln_s!(outside, Path.join(&1, "api/v1/linked.json"))) =~ "#{@fixtures}/api/v1/linked.json is a symlink"
+      assert refusal.(&File.ln_s!("issues.json", Path.join(&1, "api/v1/inner.json"))) =~ "api/v1/inner.json is a symlink"
+
+      fifo = fn dir -> {_output, 0} = System.cmd("mkfifo", [Path.join(dir, "api/pipe")]) end
+      assert refusal.(fifo) =~ "#{@fixtures}/api/pipe is not a regular file"
+
+      hard_link = fn dir -> File.ln!(Path.join(dir, "api/v1/issues.json"), Path.join(root, "elsewhere.json")) end
+      assert refusal.(hard_link) =~ "api/v1/issues.json has other hard links"
+
+      unreadable = fn dir -> File.chmod!(Path.join(dir, "api/v1/issues.json"), 0o000) end
+      assert refusal.(unreadable) =~ "api/v1/issues.json could not be read: :eacces"
+
+      # Listable but not searchable: its entries cannot be stat'ed.
+      unsearchable = fn dir -> File.chmod!(Path.join(dir, "api/v1"), 0o600) end
+      assert refusal.(unsearchable) =~ "api/v1/issues.json could not be read: :eacces"
+      File.chmod!(Path.join(worktree, @fixtures <> "/api/v1"), 0o700)
+
+      unlistable = fn dir -> File.chmod!(Path.join(dir, "api/v1"), 0o000) end
+      assert refusal.(unlistable) =~ "#{@fixtures}/api/v1 could not be listed: :eacces"
+      File.chmod!(Path.join(worktree, @fixtures <> "/api/v1"), 0o700)
+      refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+
+    test "refuses a directory over 5 MB or 1000 files", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      chunk = :binary.copy("x", 2_500_000)
+      write_fixtures(worktree, %{"a.json" => chunk, "b.json" => chunk})
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"api_fixtures" => copy}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures}) end)
+      assert File.stat!(Path.join(copy, "b.json")).size == 2_500_000
+
+      write_fixtures(worktree, %{"c.json" => "1"})
+      assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures})
+      assert message =~ "#{@fixtures} holds over 5000000 bytes"
+
+      File.rm_rf!(Path.join(worktree, @fixtures))
+      write_fixtures(worktree, Map.new(1..1_001, &{"f#{&1}.json", ""}))
+      assert {:error, {:qa_tool, "qa_launch_app_refused", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => @fixtures})
+      assert message =~ "#{@fixtures} holds more than 1000 files"
+    end
+  end
+
   describe "launched PIDs" do
     test "every PID tool rejects a PID QA did not launch", %{worktree: worktree} do
       {driver, _pid} = launched_app(worktree)
@@ -1163,6 +1307,48 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a forwarded SSH agent"}}}))
       assert error_code(QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => fixture})) == "qa_worker_unsafe"
       refute_received {:put, _local, _bytes, _dir, _name}
+    end
+
+    test "copies the API fixtures into the run directory and points the app at them", %{worktree: worktree} do
+      test = self()
+
+      ship = fn tar, dest ->
+        if String.contains?(dest, "/api-fixtures-") do
+          send(test, {:shipped_fixtures, tar, dest, :erl_tar.extract(String.to_charlist(tar), [:memory])})
+        end
+
+        :ok
+      end
+
+      dir = Path.join(worktree, "macos/Tests/Fixtures/director-app/running/api/v1")
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "overview.json"), ~s({"running":2}))
+
+      driver = remote_driver(worktree, Map.put(remote_host(), :ship, ship))
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => "macos/Tests/Fixtures/director-app/running"}) end)
+      assert {:ok, %{"pid" => pid, "api_fixtures" => copy}} = result
+      assert_received {:shipped_fixtures, tar, ^copy, {:ok, [{~c"api/v1/overview.json", ~s({"running":2})}]}}
+      assert String.starts_with?(copy, @run_dir <> "/api-fixtures-")
+      assert String.starts_with?(tar, scratch_dir <> "/")
+      refute File.exists?(tar)
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url}, {"SYMPHONY_BAR_QA_API_FIXTURES", ^copy}] = launch_opts[:env]
+
+      failing =
+        remote_driver(
+          worktree,
+          Map.put(remote_host(), :ship, fn tar, dest -> if String.contains?(dest, "/api-fixtures-"), do: send(test, {:failed_tar, tar}) && {:error, "exit 1: disk full"}, else: :ok end)
+        )
+
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(failing, "qa_build", %{})
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(failing, "qa_launch_app", %{"api_fixtures" => "macos/Tests/Fixtures/director-app/running"})
+      assert message =~ "api_fixtures directory could not be copied to the QA host: exit 1: disk full"
+      assert_received {:failed_tar, failed_tar}
+      refute File.exists?(failed_tar)
+      refute_received {:launched, _executable, _opts, _port, _pid}
     end
 
     test "reports a capture it cannot copy back", %{worktree: worktree} do

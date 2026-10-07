@@ -381,6 +381,17 @@ defmodule SymphonyElixir.PlaybookTest do
     IO.iodata_to_binary(rendered)
   end
 
+  test "the description is edited only through linear_update_issue_summary, updated at each handoff" do
+    flat = fn name ->
+      assert {:ok, body} = Playbook.fetch(name)
+      String.replace(body, ~r/\s+/, " ")
+    end
+
+    assert flat.("guardrails") =~ "Do not edit the issue body/description except through `linear_update_issue_summary`"
+    assert flat.("review_brief") =~ "Next to the brief, update the summary block at the end of the issue description with `linear_update_issue_summary`"
+    assert flat.("scoped_tools") =~ "`linear_update_issue_summary(status, links, changelog_entry)`"
+  end
+
   test "fetch/1 returns :error for an unknown partial" do
     assert Playbook.fetch("does_not_exist") == :error
   end
