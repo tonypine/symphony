@@ -1,8 +1,8 @@
 name: release-smoke
 
-# Builds the Burrito `symphony` binary as the `release` workflow does and runs the
-# release smoke test on it, on pull requests that change how the release is built
-# or started. `make-all`'s `build` job smoke-tests only the escript, which skips the
+# Builds the Burrito `symphony` binary and Symphony.app around it as the `release`
+# workflow does, and runs the release smoke test on the binary, on pull requests
+# that change how the release is built or started. `make-all`'s `build` job smoke-tests only the escript, which skips the
 # service-instance step (the binary running as the service under the node name
 # symphony@127.0.0.1, registered with epmd), so without this a break there would
 # show up only in `release` after the merge.
@@ -25,6 +25,10 @@ on:
       - "lib/symphony_elixir/release_cookie.ex"
       - "scripts/release/**"
       - "scripts/zig-sdk-shim/**"
+      - "scripts/ci/xcode26-developer-dir.sh"
+      - "macos/Package.swift"
+      - "macos/Info.plist"
+      - "macos/Makefile"
       - "symphony.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/release-smoke.yml"
@@ -40,7 +44,7 @@ jobs:
   burrito-smoke:
     name: burrito smoke
     # The same runner as `release`: Zig 0.15.2 (pinned by Burrito) cannot link
-    # against the macOS 26 SDK.
+    # against the macOS 26 SDK, so only the app's build uses Xcode 26.
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -70,3 +74,17 @@ jobs:
 
       - name: Smoke-test the Burrito binary
         run: time scripts/release/smoke_test.sh burrito_out/symphony-macos-arm64 "$GITHUB_WORKSPACE/symphony.yml"
+
+      - name: Find Xcode 26
+        id: xcode
+        run: echo "developer_dir=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_OUTPUT"
+
+      # As `release` builds it, signed ad hoc: the signing certificate is a release secret.
+      - name: Build Symphony.app
+        working-directory: macos
+        env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer_dir }}
+        run: |
+          time make bundle SYMPHONY_BIN="$GITHUB_WORKSPACE/burrito_out/symphony-macos-arm64" SIGNING_IDENTITY=-
+          codesign --verify --strict build/Symphony.app
+          test "$(plutil -extract LSMinimumSystemVersion raw build/Symphony.app/Contents/Info.plist)" = 26.0

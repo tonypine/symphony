@@ -143,7 +143,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         guard ReposList.isAnswering(status), !inFlight else { return }
         inFlight = true
         Task {
-            let result = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
+            let result = await AppStores.current.fetchRepos(stateRoot: stateRoot())
             inFlight = false
             // The window may have closed, or Symphony stopped, while the request was out.
             guard model != nil, ReposList.isAnswering(self.status) else { return }
@@ -338,7 +338,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         Task {
             // An agent may have started on the clone while the alert was open.
             if ReposList.isAnswering(status) {
-                poll = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
+                poll = await AppStores.current.fetchRepos(stateRoot: stateRoot())
             }
             let root = ReposConfig.read(path: configPath).clonesRoot
             let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
@@ -399,11 +399,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         let key = model.selection
         let stateRoot = stateRoot()
         Task {
-            let result = await ControlAPI.send(
-                .stop(identifier),
-                stateRoot: stateRoot,
-                fallback: AppStores.current.controlURLFallback
-            )
+            let result = await AppStores.current.sendControl(.stop(identifier), stateRoot: stateRoot)
             guard let model = self.model else { return }
             model.stopping.remove(identifier)
             switch result {

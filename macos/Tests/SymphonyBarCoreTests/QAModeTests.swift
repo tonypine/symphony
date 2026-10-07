@@ -45,6 +45,24 @@ final class QAModeTests: XCTestCase {
         )
     }
 
+    func testAPIFixturesAreReadOnlyInQAMode() {
+        let outside = AppStores(environment: [QAMode.apiFixturesKey: "/tmp/fixtures"], home: home)
+        XCTAssertNil(outside.apiFixtures)
+        XCTAssertNil(outside.apiToken)
+        XCTAssertEqual(outside.apiFallback, SymphonyState.defaultBaseURL)
+
+        XCTAssertNil(qaStores().apiFixtures)
+        XCTAssertNil(qaStores([QAMode.apiFixturesKey: " "]).apiFixtures)
+
+        let stores = qaStores([QAMode.apiFixturesKey: " /tmp/fixtures/../director-app \n"])
+        XCTAssertEqual(stores.apiFixtures?.directory.path, "/tmp/director-app")
+        XCTAssertEqual(stores.apiFixtures?.requestLog, root.appendingPathComponent("api-requests.jsonl"))
+        XCTAssertEqual(stores.apiFallback, APIFixtures.baseURL)
+        XCTAssertEqual(stores.apiToken, APIFixtures.token)
+        // The control URL Open Web Dashboard uses stays unset in QA mode.
+        XCTAssertNil(stores.controlURLFallback)
+    }
+
     func testQAModeReadsScriptedAndTheUpdateURL() {
         let plain = QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"])
         XCTAssertEqual(plain?.scripted, false)

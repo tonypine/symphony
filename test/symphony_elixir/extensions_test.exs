@@ -559,6 +559,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     conn = get(build_conn(), "/api/v1/state")
     state_payload = json_response(conn, 200)
+    assert is_integer(state_payload["uptime_seconds"]) and state_payload["uptime_seconds"] >= 0
 
     gate_verdict = %{
       "repo_key" => "default",
@@ -580,6 +581,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
              "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
+             "uptime_seconds" => state_payload["uptime_seconds"],
              "repos" => ["default"],
              "counts" => %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2},
              "running" => [

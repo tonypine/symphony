@@ -74,17 +74,19 @@ public enum ControlAPI {
     public typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
 
     /// Sends `action` to the control URL in `stateRoot`, with the bearer token from the same directory.
-    /// `fallback` is the control URL used while Symphony hasn't written one.
+    /// `fallback` is the control URL used while Symphony hasn't written one, and `token`, when given, is sent instead
+    /// of the state directory's (the API fixtures' in QA mode).
     public static func send(
         _ action: ControlAction,
         stateRoot: URL,
         fallback: URL? = SymphonyState.defaultBaseURL,
+        token: String? = nil,
         transport: Transport = { try await URLSession.shared.data(for: $0) }
     ) async -> ControlResult {
         guard let base = StateRoot.controlURL(in: stateRoot, fallback: fallback) else {
             return missingControlURL(action, file: stateRoot.appendingPathComponent(StateRoot.controlURLFileName))
         }
-        guard let token = StateRoot.controlToken(in: stateRoot) else {
+        guard let token = token ?? StateRoot.controlToken(in: stateRoot) else {
             return missingToken(action, tokenFile: StateRoot.controlTokenFile(in: stateRoot))
         }
         guard let (data, response) = try? await transport(request(action, base: base, token: token)) else {
