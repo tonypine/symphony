@@ -64,7 +64,8 @@ defmodule SymphonyElixir.HumanActionsTest do
     defaults = [
       settings_fun: fn -> %Schema{} end,
       repos: fn -> {:ok, [:repo]} end,
-      collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1))} end,
+      name: {:test, make_ref()},
+      collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1)), []} end,
       linear_client: linear(test_pid, Keyword.get(opts, :previous, no_updates())),
       now_ms: fn -> Agent.get(clock, & &1) end,
       notify: fn event, attrs -> send(test_pid, {:notified, event, attrs}) end
@@ -188,7 +189,7 @@ defmodule SymphonyElixir.HumanActionsTest do
     refute_received {:posted, _input}
 
     # A project read with no actions and no earlier update from Symphony stays quiet too.
-    collect = fn _repos, _opts -> {:ok, %{"project-1" => %{project: @project, actions: []}}} end
+    collect = fn _repos, _opts -> {:ok, %{"project-1" => %{project: @project, actions: []}}, []} end
     state(actions: start_actions([]), collect: collect) |> HumanActions.run_once()
     assert_received {:recovered, "project-1"}
     refute_received {:posted, _input}
@@ -296,6 +297,24 @@ defmodule SymphonyElixir.HumanActionsTest do
     assert Process.alive?(pid)
 
     assert :ok = HumanActions.refresh(:"not_running_#{System.unique_integer([:positive])}")
+  end
+
+  test "keeps the tickets waiting on a person from its last read" do
+    name = {:test, make_ref()}
+    waiting = [%{issue_id: "issue-1", identifier: "TP-1", kind: :pr}]
+    assert HumanActions.waiting_on_you(name) == []
+
+    state = state(actions: start_actions([]), name: name, collect: fn _repos, _opts -> {:ok, %{}, waiting} end)
+    HumanActions.run_once(state)
+    assert HumanActions.waiting_on_you(name) == waiting
+
+    # The same list again, then a failed read, keep it.
+    HumanActions.run_once(state)
+    capture_log(fn -> HumanActions.run_once(%{state | opts: Keyword.put(state.opts, :collect, fn _repos, _opts -> {:error, :linear_down} end)}) end)
+    assert HumanActions.waiting_on_you(name) == waiting
+
+    HumanActions.run_once(%{state | opts: Keyword.put(state.opts, :collect, fn _repos, _opts -> {:ok, %{}, []} end)})
+    assert HumanActions.waiting_on_you(name) == []
   end
 
   test "is on for a Linear tracker with human_actions.enabled" do

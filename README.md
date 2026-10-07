@@ -422,6 +422,21 @@ mise exec -- mix symphony.pr 123 --intent "fix failing CI"
 `Pause` stops new dispatches while in-flight agents continue; `Stop` ends one issue's session and
 records it as `stopped` without changing the Linear issue state.
 
+**Waiting on you.** The dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you`
+list and the menu bar app list every ticket only you can move on, oldest first: a plan or a PR in
+`In Review` or `Human Review`, a `Final verification:` ticket to sign off, and a ticket with an open
+`linear_request_human_action` decision. Each entry shows its kind, the headline of its
+`## Review brief` (the `**What to review:**` line) and how long it has waited; the menu bar icon
+shows a badge while the list is not empty. The list comes from the human-action read
+(`human_actions.interval_ms`, every 5 minutes by default), so a new ticket shows after the next read,
+and a ticket you move on leaves it on the next orchestrator poll. With `human_actions.enabled` off
+everywhere the list stays empty.
+
+Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
+**Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is
+`Me`, order it by **Updated**, and save it as `Waiting on me`. It shows on the phone app
+too. It does not show the brief headline; open the ticket and read its `## Review brief` comment.
+
 When a run hits the Claude or Codex usage limit, Symphony holds new runs of that agent on its own
 and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts

@@ -101,7 +101,7 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
 
     collect = fn repos, opts ->
       send(test_pid, {:repos, repos, opts[:settings].human_actions.enabled})
-      {:ok, %{}}
+      {:ok, %{}, []}
     end
 
     HumanActions.run_once(%{opts: [collect: collect], projects: %{}, timer: make_ref()})

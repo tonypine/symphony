@@ -2504,6 +2504,11 @@ An issue is dispatch-eligible only if all are true:
   - The human-action update lists issues in the state first, the state API reports
     `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
     moves an issue out of it on the operator's behalf.
+  - The state API reports `waiting_on_you`: one entry per issue in a review state or with an open
+    request, from the latest human-action read, oldest first, with its identifier, title, URL, kind
+    (`action`, `final_verification`, `plan` or `pr`), the headline of its review brief (null
+    without one) and how long it has waited. It MUST drop an issue the orchestrator sees running or
+    watches outside the review states.
 - Plan review rule:
   - The plan run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
     (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),
