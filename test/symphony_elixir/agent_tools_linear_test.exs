@@ -1719,7 +1719,13 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     @human_action %{
       "title" => "Add the release signing secrets",
       "why" => "Every Release run on main fails without them.",
-      "steps" => ["Open Settings → Secrets and variables → Actions.", "Add `MACOS_CERTIFICATE`."],
+      "decision" => %{
+        "question" => "Add the signing secrets, or ship unsigned builds?",
+        "options" => [
+          %{"label" => "Add the secrets", "effect" => "Releases are signed again.", "recommended" => true},
+          %{"label" => "Ship unsigned", "effect" => "The agent drops the signing step."}
+        ]
+      },
       "unblocks" => "the Release workflow on main",
       "est_minutes" => 10
     }
@@ -1768,6 +1774,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
+    defp decision_request(title) do
+      options = [%{label: "a", effect: "b", recommended: true}, %{label: "c", effect: "d"}]
+      %{title: title, why: "x", question: "q", options: options}
+    end
+
     defp human_action_opts(client, extra \\ []) do
       test_pid = self()
 
@@ -1799,15 +1810,20 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
       refute_received {:linear_called, "SymphonyAgentCreateLabel", _variables}
       assert_received :refreshed
-      assert body =~ "Once it is done, move the issue out of Human Review."
+      assert body =~ "## Decision needed: Add the release signing secrets"
+      assert body =~ "1. **Add the secrets** (recommended): Releases are signed again.\n2. **Ship unsigned**: The agent drops the signing step."
+      assert body =~ "then move the issue out of Human Review."
+      refute body =~ "Steps:"
       refute body =~ "label"
 
       assert %{
                title: "Add the release signing secrets",
+               question: "Add the signing secrets, or ship unsigned builds?",
                why: "Every Release run on main fails without them.",
                unblocks: "the Release workflow on main",
                est_minutes: 10,
-               steps: ["Open Settings → Secrets and variables → Actions.", "Add `MACOS_CERTIFICATE`."]
+               options: ["**Add the secrets** (recommended): Releases are signed again.", "**Ship unsigned**: The agent drops the signing step."],
+               steps: []
              } = Request.parse(body)
 
       assert Agent.get(registry, & &1.human_actions) == 1
@@ -1817,7 +1833,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     test "does not post the same open request twice" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       refute Linear.CommentRegistry.human_action_requested?(registry)
-      body = Request.render(%{title: "add the release  signing secrets", why: "x", steps: ["y"]}, "Human Review")
+      body = Request.render(decision_request("add the release  signing secrets"), "Human Review")
 
       scope =
         human_action_scope(%{
@@ -1891,7 +1907,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       context = %{issue_id: "issue-24", comment_registry: registry}
       off = put_in(Config.settings!().tracker.human_review_state, nil)
       client = human_action_client(self(), human_action_scope())
-      minimal = Map.take(@human_action, ["title", "why", "steps"])
+      minimal = Map.take(@human_action, ["title", "why", "decision"])
 
       assert {:ok, %{"requested" => true, "state" => "In Review"}} =
                Linear.request_human_action(context, minimal, human_action_opts(client, settings: off))
@@ -1946,7 +1962,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
           {"title", "Add " <> openai_fixture()},
           {"why", openai_fixture()},
           {"unblocks", openai_fixture()},
-          {"steps", ["Paste " <> openai_fixture()]}
+          {"decision", put_in(@human_action["decision"], ["question"], "Paste " <> openai_fixture() <> "?")},
+          {"decision", put_in(@human_action["decision"], ["options", Access.at(1), "effect"], "Paste " <> openai_fixture())}
         ]
 
         for {field, value} <- secret_fields do
@@ -1956,14 +1973,31 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         assert [%{"tool" => "linear_request_human_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
         refute inspect(audit_events(audit_dir)) =~ openai_fixture()
 
+        decision = &%{"decision" => Map.merge(@human_action["decision"], &1)}
+        option = &Map.merge(%{"label" => "Keep it", "effect" => "Nothing changes."}, &1)
+
+        decision_required =
+          "`decision` is required: one `question` and 2 to 4 `options`. A person only makes decisions; a check an agent can't run goes to " <>
+            "the supervisor as a `## Supervisor check` in In Review, and a manual check that could be a test becomes a test."
+
+        options_count =
+          "`decision.options` must list 2 to 4 options, each with a `label` and an `effect`; with no real choice to make, there is nothing to ask a person."
+
         for {attrs, message} <- [
               {%{"title" => " "}, "`title` must be a non-blank string."},
               {%{"title" => String.duplicate("a", 121)}, "`title` must be at most 120 characters."},
               {%{"why" => nil}, "`why` must be a non-blank string."},
-              {%{"steps" => []}, "`steps` must list 1 to 15 non-blank strings."},
-              {%{"steps" => List.duplicate("x", 16)}, "`steps` must list 1 to 15 non-blank strings."},
-              {%{"steps" => ["ok", " "]}, "`steps` must list 1 to 15 non-blank strings."},
-              {%{"steps" => "one"}, "`steps` must list 1 to 15 non-blank strings."},
+              {%{"decision" => nil}, decision_required},
+              {%{"decision" => "Ship it?"}, decision_required},
+              {decision.(%{"question" => " "}), "`decision.question` must be a non-blank string."},
+              {decision.(%{"options" => nil}), options_count},
+              {decision.(%{"options" => []}), options_count},
+              {decision.(%{"options" => [option.(%{"recommended" => true})]}), options_count},
+              {decision.(%{"options" => List.duplicate(option.(%{}), 5)}), options_count},
+              {decision.(%{"options" => [option.(%{"recommended" => true}), option.(%{"effect" => " "})]}), "Each of `decision.options` needs a non-blank `label` and `effect`."},
+              {decision.(%{"options" => [option.(%{"recommended" => true}), "Keep it"]}), "Each of `decision.options` needs a non-blank `label` and `effect`."},
+              {decision.(%{"options" => [option.(%{}), option.(%{})]}), "Exactly one of `decision.options` must be `recommended`."},
+              {decision.(%{"options" => [option.(%{"recommended" => true}), option.(%{"recommended" => true})]}), "Exactly one of `decision.options` must be `recommended`."},
               {%{"unblocks" => 3}, "`unblocks` must be a string."},
               {%{"est_minutes" => 0}, "`est_minutes` must be an integer from 1 to 480."},
               {%{"est_minutes" => 1.5}, "`est_minutes` must be an integer from 1 to 480."}
@@ -2001,7 +2035,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     @withdrawal %{"reason" => "The dialyzer run had started minutes earlier, not 11 hours ago."}
 
     defp request_node(id, title, created_at) do
-      %{"id" => id, "body" => Request.render(%{title: title, why: "x", steps: ["y"]}, "Human Review"), "createdAt" => created_at}
+      %{"id" => id, "body" => Request.render(decision_request(title), "Human Review"), "createdAt" => created_at}
     end
 
     defp withdrawal_scope(comments, issue \\ %{}) do
@@ -2049,7 +2083,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                request_human_action(%{issue_id: "issue-24", comment_registry: registry}, again, %{}, %{
                  "title" => "Re-run the stuck dialyzer job",
                  "why" => "x",
-                 "steps" => ["y"]
+                 "decision" => @human_action["decision"]
                })
     end
 

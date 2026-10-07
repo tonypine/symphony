@@ -15,13 +15,12 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         why: "Every Release run on `main` fails at the signing step without them.",
         unblocks: "the Release workflow on `main`",
         est_minutes: 10,
-        steps: [
-          "Open github.com/acme/cycle → Settings → Secrets and variables → Actions.",
-          "Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).",
-          "Add `MACOS_CERTIFICATE_PASSWORD` with its password.",
-          "Move MOT-24 to Todo."
+        question: "Add the signing secrets, or ship unsigned builds?",
+        options: [
+          "**Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.",
+          "**Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch."
         ],
-        done_when: "you move MOT-24 out of Human Review once it is unblocked, or the agent withdraws the request.",
+        done_when: "you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.",
         issue: issue("MOT-24", "Make the Release workflow green"),
         project: @project
       },
@@ -79,12 +78,12 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Why:** Every Release run on `main` fails at the signing step without them.
 
-           1. Open github.com/acme/cycle → Settings → Secrets and variables → Actions.
-           2. Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).
-           3. Add `MACOS_CERTIFICATE_PASSWORD` with its password.
-           4. Move MOT-24 to Todo.
+           **Decide:** Add the signing secrets, or ship unsigned builds?
 
-           **Done when:** you move MOT-24 out of Human Review once it is unblocked, or the agent withdraws the request.
+           1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
+           2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
+
+           **Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
 
            ### 2. Approve the plan for MOT-40
 
@@ -153,7 +152,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
   test "renders a single action and the empty list" do
     [request | _rest] = example_actions()
-    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, steps: [], done_when: nil}], ["In Review", "Human Review"])
+    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, question: nil, options: [], done_when: nil}], ["In Review", "Human Review"])
 
     assert single =~ "**1 action needs you.**\n\n### 1. Add the release signing secrets\n\nUnblocks [MOT-24](https://linear.app/acme/issue/MOT-24) Make the Release workflow green\n\n---"
 

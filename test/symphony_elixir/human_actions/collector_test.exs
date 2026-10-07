@@ -52,7 +52,14 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   defp history(entries), do: %{"nodes" => entries}
 
   defp request_comment(id, title, created_at) do
-    body = Request.render(%{title: title, why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, steps: ["Add the secret."]}, "Human Review")
+    options = [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Releases ship unsigned."}]
+
+    body =
+      Request.render(
+        %{title: title, question: "Add the signing secret?", why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, options: options},
+        "Human Review"
+      )
+
     %{"id" => id, "body" => body, "createdAt" => created_at}
   end
 
@@ -88,7 +95,11 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     issue =
       node("MOT-25", %{
         "state" => %{"name" => "Human Review"},
-        "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")]),
+        # A request a supervisor wrote by hand, in the older format, still lists.
+        "comments" =>
+          comments([
+            %{"id" => "comment-1", "body" => "## Action needed: Add the release signing secrets\n\n**Steps:**\n1. Add them.", "createdAt" => "2026-10-03T10:00:00.000Z"}
+          ]),
         "history" => history([%{"createdAt" => "2026-10-03T10:00:05.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Human Review"}}])
       })
 
@@ -102,6 +113,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                key: "request:comment-1",
                kind: :request,
                human_review: true,
+               steps: ["Add them."],
+               options: [],
                done_when: "you move MOT-25 out of Human Review once it is unblocked, or the agent withdraws the request."
              }
            ] = actions(collected)
@@ -149,9 +162,11 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                why: "Release fails.",
                unblocks: "the Release workflow",
                est_minutes: 10,
-               steps: ["Add the secret."],
+               question: "Add the signing secret?",
+               options: ["**Add it** (recommended): Releases sign again.", "**Drop signing**: Releases ship unsigned."],
+               steps: [],
                issue: %{id: "id-MOT-24", identifier: "MOT-24", url: "https://linear.app/acme/issue/MOT-24", state: "Backlog"},
-               done_when: "you move MOT-24 out of Backlog once it is unblocked, or the agent withdraws the request."
+               done_when: "you reply with your pick and move MOT-24 out of Backlog, or the agent withdraws the request."
              }
            ] = actions(collected)
   end

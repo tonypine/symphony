@@ -7,7 +7,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   `Final verification:` ticket, or carries a deprecated request label
   (`SymphonyElixir.HumanReview.legacy_request_labels/1`). From those:
 
-  - each open `## Action needed:` comment is a `:request`
+  - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
   - an issue with a deprecated request label and no request comment is itself a `:task`;
   - a plan parent in a review state is a `:plan_review`;
@@ -236,10 +236,18 @@ defmodule SymphonyElixir.HumanActions.Collector do
       why: request.why,
       unblocks: request.unblocks,
       est_minutes: request.est_minutes,
+      question: request.question,
+      options: request.options,
       steps: request.steps,
-      done_when: "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
+      done_when: request_done_when(context, request)
     })
   end
+
+  defp request_done_when(context, %{options: [_ | _]}),
+    do: "you reply with your pick and move #{context.issue.identifier} out of #{context.issue.state}, or the agent withdraws the request."
+
+  defp request_done_when(context, _request),
+    do: "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
 
   defp task_action(context) do
     action(context, %{

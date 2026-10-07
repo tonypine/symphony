@@ -818,7 +818,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
     test "an issue with an open action request is escalated to Human Review, never approved, without the label", %{settings: settings} do
       request = %{
         "id" => "request-1",
-        "body" => Request.render(%{title: "Add the signing secrets", why: "x", steps: ["y"]}, "Human Review"),
+        "body" => Request.render(%{title: "Add the signing secrets", why: "x", question: "q", options: [%{label: "a", effect: "b", recommended: true}, %{label: "c", effect: "d"}]}, "Human Review"),
         "createdAt" => "2026-10-06T10:00:00.000Z"
       }
 

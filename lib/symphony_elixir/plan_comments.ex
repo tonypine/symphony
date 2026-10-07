@@ -169,7 +169,7 @@ defmodule SymphonyElixir.PlanComments do
       Enum.any?(openers(), &String.starts_with?(trimmed, &1))
   end
 
-  defp openers, do: [Report.heading(), Request.heading() | BreakdownReview.comment_openers()] ++ @symphony_openers ++ @supervisor_openers
+  defp openers, do: [Report.heading() | Request.headings()] ++ BreakdownReview.comment_openers() ++ @symphony_openers ++ @supervisor_openers
 
   defp entered_at(changes, state) do
     changes

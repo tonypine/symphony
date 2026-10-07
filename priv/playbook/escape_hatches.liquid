@@ -1,8 +1,41 @@
 {% comment %}
 name: escape_hatches
-description: Blocked-access and in-execution clarification escape hatches; both move the issue to Backlog and stop.
+description: What goes to a person (decisions with options) and what goes to the supervisor (checks an agent can't run), then the blocked-access and in-execution clarification escape hatches.
 vars: []
-{% endcomment %}## Blocked-access escape hatch (required behavior)
+{% endcomment %}## Decisions for a person, checks for the supervisor (required behavior)
+
+A person only ever makes decisions. Never hand them a check to run or a runbook of
+steps.
+
+- When a manual check could be an automated test, write the test instead of asking
+  anyone to check by hand.
+- When all that is left is verification an agent can't run (launching the app, a
+  host crash check, a check on a device), hand it to the supervisor, never to a
+  person and never to `Human Review`: leave a `## Supervisor check` block, in the
+  review brief or in its own comment, then move the ticket to `In Review`. The
+  supervisor runs the check per its policy. With a PR open and Auto Review on,
+  leave the state to Symphony as usual; with no PR (the work is already on the
+  default branch), the move to `In Review` is allowed once the block is posted.
+  Use this format:
+
+  ```md
+  ## Supervisor check
+
+  **Verify:** <what must hold, and on which commit or build>
+  **How:** <the exact check: the command, the app path, the device>
+  **Pass when:** <the result that clears it>
+  ```
+
+- When the work turns out to be done already (another ticket shipped it), say so
+  in the workpad with the commits, and hand over the call to close it as a
+  decision, or the check that is left as a supervisor check; never as steps.
+- When only a person can decide (a product call, a missing secret or permission:
+  add it or drop what needs it, an account to set up), ask with
+  `linear_request_human_action`: one question in `decision`, 2 to 4 options, each
+  with what it does, one of them recommended. A request without options is
+  refused.
+
+## Blocked-access escape hatch (required behavior)
 
 Use this only when completion is blocked by missing required tools or
 auth/permissions that cannot be resolved in-session.
@@ -15,10 +48,12 @@ auth/permissions that cannot be resolved in-session.
   blocker comment (an exception to the single-workpad rule) stating what is
   missing, why it blocks required acceptance/validation, and the exact human
   action needed to unblock. When a person can unblock it (a missing secret or
-  permission, an account to set up, a product decision, a check on a device),
-  post it with `linear_request_human_action` (title, why, exact steps, what it
-  unblocks; secret names only, never values) instead of `linear_add_comment`:
-  Symphony then lists it in the project's update for that person. The tool moves
+  permission, an account to set up, a product decision), post it with
+  `linear_request_human_action` as a decision (title, why, the question and its
+  options, what it unblocks; secret names only, never values) instead of
+  `linear_add_comment`: Symphony then lists it in the project's update for that
+  person. A check on a device is not a blocker for a person: it is a
+  `## Supervisor check` (see above). The tool moves
   the ticket to `Human Review` (`In Review` when the team has no such state) and
   adds no label, and the move ends the run shortly after: first push your
   committed work (open or update the PR if the rest of the ticket is done) and
