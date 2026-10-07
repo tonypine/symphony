@@ -1323,7 +1323,8 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   # An issue that waits on a person sits in the Human Review state, outside the active states
   # with a label that asks for one, or, with that state off, in `In Review` with an open request
-  # (see `HumanReview.parked_for_person/3`). A conflict-fix run
+  # (see `HumanReview.parked_for_person/3`). One outside the states the pollers watch (`Backlog`)
+  # waits for a person to promote it (`HumanReview.held_for_person/3`). A conflict-fix run
   # can't do what the person must: it would merge the base branch, push and park the issue again.
   # The issue stays where it is, with no fix run or escalation and no retry spent, until a person
   # moves it on or removes the label; the next conflicting poll then takes the conflict path.
@@ -1346,7 +1347,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     with {:ok, issues} <- watched_or_fetched_issue(issue_id, Keyword.get(opts, :tracker, Tracker), opts) do
       case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
-        %Issue{} = issue -> parked_result(issue, HumanReview.parked_for_person(issue, settings, opts))
+        %Issue{} = issue -> parked_result(issue, HumanReview.held_for_person(issue, settings, opts))
         nil -> :not_parked
       end
     end
