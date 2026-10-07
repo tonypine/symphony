@@ -61,6 +61,7 @@ final class TicketPageTests: XCTestCase {
 
         XCTAssertEqual(page.phase, .done(pullRequest: pullRequest, mergedAt: merged))
         XCTAssertEqual(page.phaseSentence, "Done")
+        XCTAssertEqual(page.mergedText, "13:40")
         XCTAssertEqual(page.badges, [TicketPage.Badge(status: .done, word: "Done")])
         XCTAssertNil(page.now)
         XCTAssertFalse(page.isRunning)

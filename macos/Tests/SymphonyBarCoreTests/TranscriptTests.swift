@@ -25,6 +25,7 @@ final class TranscriptTests: XCTestCase {
         let first = transcript.turns[0].items
         XCTAssertEqual(first.map(\.kind), [.event, .message, .toolCall])
         XCTAssertEqual(first[0].title, "Session started")
+        XCTAssertEqual(first[0].summary, #"{"session_id":"session-SHOP-305"}"#)
         XCTAssertEqual(first[1].title, "Agent")
         XCTAssertEqual(first[1].timeText, "13:58:20")
         XCTAssertEqual(first[2].title, "Command")

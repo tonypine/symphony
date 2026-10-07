@@ -223,11 +223,11 @@ public struct Transcript: Equatable {
                     id: sequence, turn: turns[current].number, kind: .error, time: time,
                     timeText: time.map(formatter.string), title: "Error", summary: oneLine(text), detail: text
                 ))
-            case let .other(name, text):
+            case let .other(name, text, summary):
                 sequence += 1
                 turns[current].items.append(Item(
                     id: sequence, turn: turns[current].number, kind: .event, time: time,
-                    timeText: time.map(formatter.string), title: name, summary: oneLine(text), detail: text
+                    timeText: time.map(formatter.string), title: name, summary: oneLine(summary), detail: text
                 ))
             case .skip, .turnEnd:
                 break
@@ -261,7 +261,8 @@ public struct Transcript: Equatable {
             case error(String)
             /// `failure` when the turn failed.
             case turnEnd(failure: String?)
-            case other(name: String, text: String)
+            /// `summary` is the value on one line; `text` is it in full.
+            case other(name: String, text: String, summary: String)
             /// Token counts and heartbeats: not rows.
             case skip
         }
@@ -274,7 +275,7 @@ public struct Transcript: Equatable {
 
         init(_ raw: Any) {
             guard let event = raw as? [String: Any] else {
-                kind = .other(name: "Event", text: String(describing: raw))
+                kind = .other(name: "Event", text: String(describing: raw), summary: String(describing: raw))
                 timestamp = nil
                 itemID = nil
                 agentName = "Agent"
@@ -323,7 +324,8 @@ public struct Transcript: Equatable {
                 // Codex's other item and thread notifications carry nothing a person reads.
                 kind = .skip
             } else {
-                kind = .other(name: Self.eventTitle(name), text: Self.text(event["payload"] ?? event["message"] ?? event))
+                let value = event["payload"] ?? event["message"] ?? event
+                kind = .other(name: Self.eventTitle(name), text: Self.text(value), summary: Self.text(value, pretty: false))
             }
         }
 
@@ -354,7 +356,7 @@ public struct Transcript: Equatable {
             if let command = commandText(msg?["command"] ?? params?["command"]) { return ("Command", command) }
             let name = (params?["tool"] ?? params?["name"]) as? String ?? "Tool call"
             let arguments = params?["arguments"] ?? params?["input"]
-            return (name, arguments.map(text))
+            return (name, arguments.map { text($0) })
         }
 
         static func commandText(_ value: Any?) -> String? {
@@ -385,11 +387,11 @@ public struct Transcript: Equatable {
             return nil
         }
 
-        /// A value as text: a string as it is, anything else as sorted JSON.
-        static func text(_ value: Any) -> String {
+        /// A value as text: a string as it is, anything else as sorted JSON, on one line unless `pretty`.
+        static func text(_ value: Any, pretty: Bool = true) -> String {
             if let text = value as? String { return text }
-            if JSONSerialization.isValidJSONObject(value),
-                let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+            let options: JSONSerialization.WritingOptions = pretty ? [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes] : [.sortedKeys, .withoutEscapingSlashes]
+            if JSONSerialization.isValidJSONObject(value), let data = try? JSONSerialization.data(withJSONObject: value, options: options) {
                 return String(decoding: data, as: UTF8.self)
             }
             return String(describing: value)

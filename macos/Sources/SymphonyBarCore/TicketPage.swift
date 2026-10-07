@@ -148,6 +148,8 @@ public struct TicketPage: Equatable {
     public var timeline: [Step]
     public var facts: [Fact]
     public var lastMessage: String?
+    /// "13:40", or "Oct 6, 13:40" before today: when a done ticket merged.
+    public var mergedText: String?
     /// The run's session, for Copy Session ID; nil without a run.
     public var sessionID: String?
     public var workspacePath: String?
@@ -395,7 +397,10 @@ public struct TicketPage: Equatable {
         if let pullRequest { facts.append(Fact(label: "Pull request", value: Self.pullRequestName(pullRequest), url: pullRequest)) }
         if let gate { facts.append(Fact(label: "Gate verdict", value: gate)) }
         if case let .done(_, mergedAt?) = phase {
+            mergedText = clock(mergedAt)
             facts.append(Fact(label: "Merged", value: clock(mergedAt)))
+        } else {
+            mergedText = nil
         }
         facts.append(Fact(label: "Forced", value: badges.contains { $0.status == .forced } ? "Yes" : "No"))
         self.facts = facts

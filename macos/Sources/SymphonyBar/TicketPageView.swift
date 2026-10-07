@@ -293,8 +293,8 @@ private struct TicketHeader: View {
             Text(page.phaseSentence)
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
-            if case let .done(pullRequest, mergedAt) = page.phase, pullRequest != nil || mergedAt != nil {
-                DoneLine(pullRequest: pullRequest, mergedAt: mergedAt, openURL: actions.openURL)
+            if case let .done(pullRequest, _) = page.phase, pullRequest != nil || page.mergedText != nil {
+                DoneLine(pullRequest: pullRequest, merged: page.mergedText, openURL: actions.openURL)
             }
         }
     }
@@ -321,7 +321,7 @@ private struct TicketHeader: View {
 /// Done: the pull request and when it merged.
 private struct DoneLine: View {
     let pullRequest: URL?
-    let mergedAt: Date?
+    let merged: String?
     let openURL: (URL) -> Void
 
     var body: some View {
@@ -329,9 +329,8 @@ private struct DoneLine: View {
             Image(systemName: DesignTokens.Status.done.symbol)
                 .foregroundStyle(DesignTokens.Status.done.tint)
                 .accessibilityHidden(true)
-            if let mergedAt {
-                Text("Merged \(mergedAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(DesignTokens.TypeStyle.body.font)
+            if let merged {
+                Text("Merged \(merged)").font(DesignTokens.TypeStyle.body.font)
             }
             if let pullRequest {
                 Button(TicketPage.pullRequestName(pullRequest)) { openURL(pullRequest) }
@@ -502,6 +501,7 @@ private struct TimelineRow: View {
                     .padding(.top, DesignTokens.Space.s1 + 2)
             }
             .frame(width: 20)
+            .frame(maxHeight: .infinity, alignment: .top)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(step.title).font(DesignTokens.TypeStyle.rowTitle.font)
@@ -532,6 +532,8 @@ private struct TimelineRow: View {
             }
             .padding(.vertical, DesignTokens.Space.s2)
         }
+        // The line column takes the row's full height, so the line runs unbroken from step to step.
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(step.accessibilityLabel + (step.detail.map { ". \($0)" } ?? ""))
     }
