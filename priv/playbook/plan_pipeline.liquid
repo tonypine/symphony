@@ -1,0 +1,140 @@
+{% comment %}
+name: plan_pipeline
+description: The stages a plan ticket with an Artifacts wanted section produces before its split (domain brief, journeys, Kano map, screens, decisions, implementation plan), one Linear document each, checked against a rubric per stage and handed over in one review; renders nothing for any other ticket.
+vars: [issue]
+
+Render it with a left-trimming render tag (a dash after its opening brace), right
+after `parent_tickets`: the branch starts with its own blank line, so a ticket
+that is not a plan, or a plan written before the templates (no `Artifacts wanted`
+section), gets a prompt byte-identical to one without the render: today's plain
+split. The house standards it loads live in `docs/standards/house-standards.md`;
+the worked example is `docs/ticket-templates/examples/plan.md`.
+{% endcomment %}
+{%- if issue.labels contains "plan" or issue.labels contains "breakdown" %}
+{%- if issue.description contains "Artifacts wanted" %}
+
+## Plan pipeline
+
+This plan ticket has an `Artifacts wanted` section, so its plan run builds the
+artifacts it checks before the split, in the order real product work follows:
+understand the domain, map the journeys, class the features, show them as
+screens, record the decisions, then split the work. Every plan run on it (a new
+plan, a resume, a revision or a re-plan) follows this section together with
+`Parent tickets`; step 1 of the plan run there, writing the planned split, comes
+after the stages below.
+
+### Which stages to produce
+
+- Produce a stage only when its box is checked under `Artifacts wanted`
+  (`[x]`). Skip every unchecked stage: no document, no placeholder.
+- The implementation plan (stage 6) is always produced, whatever is checked.
+  With no box checked, the run is today's plain split into sub-tickets.
+- A stage builds on the stages before it that were produced. When an earlier
+  stage it needs is unchecked, take what it needs from the description and say
+  so at the top of its document.
+
+### The stages, in order
+
+Each stage produces one Linear document, created with
+`linear_create_document(title, content)` under the title given here (Symphony
+prefixes the identifier). On a later run, find the existing one with
+`linear_get_document` and edit it with `linear_update_document`; never create a
+second document for a stage.
+
+1. **Domain brief** (document `Domain brief`): the domain, the people in it, its
+   vocabulary (a glossary), its constraints (rules, regulation, physical or
+   social facts the product must respect) and the sources you drew on.
+2. **User journeys** (document `User journeys`): the personas and the jobs each
+   one hires the product for, then every journey end to end, step by step. Cover
+   the routine journeys every product has, not only the niche ones: first launch,
+   everyday use, fixing a mistake, finding something again, changing a setting,
+   and moving to a new phone.
+3. **Kano feature map** (document `Kano feature map`): every feature the journeys
+   need, in a table with its Kano class (Must-be, Performance, Attractive or
+   Indifferent), the journeys it serves and why it has that class. Always add the
+   platform baseline from the house standards as Must-be, whatever the niche.
+4. **Screens** (document `Screens`, plus one HTML file):
+   - The document lays out each journey screen by screen. For each screen: what
+     it shows, its states (empty, loading, filled, error, and any other the
+     journey reaches), the actions on it and where each leads, and the platform
+     conventions it follows: Material 3 on Android, the Human Interface
+     Guidelines on Apple platforms. Add an image per screen where one can be
+     rendered offscreen.
+   - **One self-contained HTML file** shows every screen in the document, each
+     labelled with its journey and screen name, styled for the platform, with no
+     external assets (inline CSS and SVG only: no web fonts, CDNs, scripts from
+     elsewhere or remote images), so it opens in a desktop browser offline.
+     Write it under `$TMPDIR`, attach it to the ticket with
+     `linear_attach_file`, and link it at the top of the Screens document. On a
+     later run, attach the revised file and replace the link; this file is the
+     one attachment a plan run makes.
+5. **Decisions** (document `Decisions`): one ADR-style section per real choice:
+   the context, the options, the one you recommend and why, and what it costs.
+   Only real choices: a question with one sensible answer is not a decision.
+6. **Implementation plan**: the sub-tickets, filed as in the plan run of
+   `Parent tickets` (one PR each, `blocked_by` links, the `Final verification:`
+   sub-ticket last). Every sub-ticket names the feature it builds, the journey
+   and the screens it serves and the feature's Kano class (feature → journey →
+   screen → ticket), and carries a `## User walkthrough`: numbered steps a user
+   takes, each with the result they should see. File the Must-be tickets first,
+   then Performance, then Attractive; Indifferent features get no ticket unless
+   the description asks for them. With no Kano map, name the part of the
+   description each sub-ticket serves instead.
+
+### House standards
+
+Load the house standards on every run that produces a Kano map or screens: read
+`docs/standards/house-standards.md` in this workspace. A project overrides it
+with a Linear document named `House standards`: when the description or a
+comment links or quotes one, follow it instead and say so in the Kano map. With
+neither, use this baseline, every item Must-be: edit, delete, undo, search,
+backup/export/restore, settings, accessibility, offline use, notification
+control and privacy controls. The design quality bar in the standards binds the
+screens and the HTML file.
+
+### Rubric per stage
+
+Before handing over, check every artifact you produced against its rubric, fix
+what fails, and record the check in the workpad `Notes`, one line per rubric.
+
+- **Domain brief:** names the people, has a glossary, lists the constraints and
+  cites at least one source; nothing in it is a feature or a screen yet.
+- **User journeys:** every persona has at least one journey; every journey runs
+  end to end; first launch, fixing a mistake and moving to a new phone are
+  covered.
+- **Kano feature map:** every feature from the journeys is in it with one class;
+  every platform baseline item from the house standards is in it as Must-be;
+  every feature names a journey it serves.
+- **Screens:** every Must-be feature has a screen; every journey step that shows
+  something has a screen; every screen lists its states and its platform
+  conventions; the HTML file shows every screen in the document and no other,
+  loads nothing from outside the file, and is linked at the top of the document.
+- **Decisions:** every decision has at least two options and one recommendation
+  with its reason; every open question of the run is here.
+- **Implementation plan:** every sub-ticket traces to a feature, a journey and a
+  Kano class; every Must-be feature is covered by a sub-ticket; Must-be tickets
+  come first; every sub-ticket has acceptance criteria and a
+  `## User walkthrough`; the `Final verification:` sub-ticket is blocked by every
+  other one and lists their criteria.
+
+### One review, at the end
+
+- Produce every wanted stage, then the sub-tickets, then hand over once. Never
+  stop between stages for review, never move the ticket after one stage, and
+  never wait for a stage to be approved: a later stage builds on the earlier one
+  as written.
+- An open question never stops the run: write it as a decision with the options
+  and a recommended default, go on with the default, and list it under
+  `Decisions needed` in the review brief.
+- The review brief (see `Review brief`) links every document, the HTML screens
+  and the `Decisions` document, lists every sub-ticket and every decision needed.
+  The summary block's `artifacts` link every document and the HTML screens next
+  to the sub-tickets.
+- A comment on any part brings a plan revision run (see `Parent tickets`): it
+  edits the documents with `linear_update_document`, attaches a revised HTML file
+  and relinks it, and brings the `Backlog` sub-tickets in line, all in place. A
+  change to an early stage flows through the later ones: dropping a journey
+  drops its features, screens and sub-tickets. Then it reruns the rubrics and
+  updates the brief.
+{%- endif %}
+{%- endif -%}

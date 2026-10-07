@@ -10,6 +10,20 @@ defmodule SymphonyElixir.PlaybookTest do
   @workflow_path Path.expand(Path.join([__DIR__, "..", "..", "WORKFLOW.md"]))
   @ticket_types_tag ~s({%- render "ticket_types", issue: issue %})
   @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply."
+  @plan_pipeline_tag ~s({%- render "plan_pipeline", issue: issue %})
+  @plan_description """
+  ## Vision
+
+  A plant care app.
+
+  ## Artifacts wanted
+
+  - [x] Domain brief
+  - [ ] User journeys
+  - [x] Kano feature map
+  - [x] Screens
+  - [ ] Decisions
+  """
   @render_opts [strict_variables: true, file_system: {FileSystem, nil}]
 
   @expected_names ~w(
@@ -23,6 +37,7 @@ defmodule SymphonyElixir.PlaybookTest do
     issue_context
     out_of_scope_backlog
     parent_tickets
+    plan_pipeline
     pr_feedback_sweep
     reproduce_and_blast_radius
     review_brief
@@ -74,12 +89,12 @@ defmodule SymphonyElixir.PlaybookTest do
     flat = String.replace(body, ~r/\s+/, " ")
 
     assert flat =~ "**Resume:** the parent is in `Todo` or `In Progress`, has sub-tickets in `Backlog` only"
-    assert flat =~ "keep every artifact comment and sub-ticket already made"
+    assert flat =~ "keep every artifact document, comment and sub-ticket already made"
     assert flat =~ "never file a sub-ticket a second time"
     assert flat =~ "### Plan revision run (a person commented on the plan under review)"
     assert flat =~ "State: only `In Review`. A comment on a parent in `Human Review` starts nothing"
     assert flat =~ "a comment starting with `Supervisor review:` or `Supervisor note:` never triggers a run, in any state"
-    assert flat =~ "Edit the existing artifact comments (use cases, features, journeys and so on) with `linear_update_comment`"
+    assert flat =~ "documents with `linear_update_document`, the HTML screens as the `Plan pipeline` says, and artifact comments (use cases, features, journeys and so on) with `linear_update_comment`"
     assert flat =~ "Leave every sub-ticket outside `Backlog` as it is."
     assert flat =~ "Reply under each comment with `linear_add_comment` and its `parent_id`"
     assert flat =~ "Never move it to `Waiting on sub-tickets` and never promote a sub-ticket"
@@ -295,7 +310,7 @@ defmodule SymphonyElixir.PlaybookTest do
         prompt = render_ticket_types([label])
 
         assert prompt =~ "## Ticket type: plan"
-        assert prompt =~ "Every run on it follows the plan pipeline in `Parent tickets`."
+        assert prompt =~ "Every run on it follows `Parent tickets`, and the `Plan pipeline` when it has an `Artifacts wanted` section."
         assert prompt =~ "A plan ticket is never sent back for missing input and has no readiness check."
         assert prompt =~ "Do not use the clarification escape hatch for a thin or unclear description, even one with only a `Vision`."
         assert prompt =~ "Turn each open question into a decision: the options, the default you recommend and why."
@@ -314,6 +329,141 @@ defmodule SymphonyElixir.PlaybookTest do
       bug = render_ticket_types(["type:feature", "type:bug"])
       assert bug =~ "## Ticket type: bug"
       refute bug =~ "## Ticket type: feature"
+    end
+  end
+
+  describe "plan_pipeline" do
+    test "the playbook aggregate renders plan_pipeline after the repo's Step 4, right before review_brief, left-trimmed" do
+      assert {"plan_pipeline", 94} in Playbook.aggregate()
+
+      slots = Map.new(Playbook.aggregate())
+      assert slots["parent_tickets"] < slots["plan_pipeline"] and slots["plan_pipeline"] < slots["review_brief"]
+
+      {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+      assert body =~ "then execute end-to-end.\n\n" <> @plan_pipeline_tag <> ~s(\n\n{% render "review_brief" %})
+    end
+
+    # A plan written before the templates (no `Artifacts wanted`) keeps today's plain split.
+    test "only a plan ticket with an Artifacts wanted section gets it; every other prompt is unchanged" do
+      {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+      without_tag = String.replace(body, "\n\n" <> @plan_pipeline_tag, "")
+      refute without_tag =~ "plan_pipeline"
+
+      for {labels, description} <- [
+            {[], @plan_description},
+            {["type:feature", "planning"], @plan_description},
+            {["plan"], "Split this into sub-tickets."},
+            {["breakdown"], nil}
+          ] do
+        prompt = render(body, labels, description)
+        assert prompt == render(without_tag, labels, description)
+        refute prompt =~ "## Plan pipeline"
+      end
+
+      for label <- ["plan", "breakdown"] do
+        prompt = render(body, [label], @plan_description)
+        assert prompt =~ ~r/then execute end-to-end\.\n\n## Plan pipeline\n/
+        assert prompt =~ ~r/updates the brief\.\n\n## Review brief\n/
+      end
+    end
+
+    test "it names the six stages in order, a document each, and the screens as a document plus one HTML file" do
+      prompt = render_plan_pipeline(["plan"])
+
+      stages = [
+        "1. **Domain brief** (document `Domain brief`)",
+        "2. **User journeys** (document `User journeys`)",
+        "3. **Kano feature map** (document `Kano feature map`)",
+        "4. **Screens** (document `Screens`, plus one HTML file)",
+        "5. **Decisions** (document `Decisions`)",
+        "6. **Implementation plan**"
+      ]
+
+      positions = Enum.map(stages, fn stage -> prompt |> :binary.match(stage) |> elem(0) end)
+      assert positions == Enum.sort(positions)
+
+      assert prompt =~ "Each stage produces one Linear document, created with `linear_create_document(title, content)`"
+      assert prompt =~ "never create a second document for a stage."
+      assert prompt =~ "first launch, everyday use, fixing a mistake, finding something again, changing a setting, and moving to a new phone"
+      assert prompt =~ "Always add the platform baseline from the house standards as Must-be, whatever the niche."
+      assert prompt =~ "Material 3 on Android, the Human Interface Guidelines on Apple platforms"
+      assert prompt =~ "**One self-contained HTML file** shows every screen in the document"
+      assert prompt =~ "with no external assets"
+      assert prompt =~ "attach it to the ticket with `linear_attach_file`, and link it at the top of the Screens document."
+      assert prompt =~ "one ADR-style section per real choice"
+    end
+
+    test "every implementation sub-ticket traces to a feature, a journey and a Kano class, Must-be first" do
+      prompt = render_plan_pipeline(["plan"])
+
+      assert prompt =~
+               "Every sub-ticket names the feature it builds, the journey and the screens it serves and the feature's Kano class " <>
+                 "(feature → journey → screen → ticket), and carries a `## User walkthrough`"
+
+      assert prompt =~ "File the Must-be tickets first, then Performance, then Attractive"
+    end
+
+    test "it loads the house standards, with a project override and the baseline as fallback" do
+      prompt = render_plan_pipeline(["plan"])
+
+      assert prompt =~ "Load the house standards on every run that produces a Kano map or screens: read `docs/standards/house-standards.md`"
+      assert prompt =~ "A project overrides it with a Linear document named `House standards`"
+
+      assert prompt =~
+               "edit, delete, undo, search, backup/export/restore, settings, accessibility, offline use, notification control and privacy controls"
+    end
+
+    test "it checks every artifact against its stage's rubric before handing over" do
+      prompt = render_plan_pipeline(["plan"])
+
+      assert prompt =~ "Before handing over, check every artifact you produced against its rubric, fix what fails"
+
+      for rubric <- ["Domain brief:", "User journeys:", "Kano feature map:", "Screens:", "Decisions:", "Implementation plan:"] do
+        assert prompt =~ "- **#{rubric}**"
+      end
+
+      assert prompt =~ "every platform baseline item from the house standards is in it as Must-be"
+      assert prompt =~ "every Must-be feature has a screen"
+      assert prompt =~ "the HTML file shows every screen in the document and no other"
+      assert prompt =~ "every sub-ticket traces to a feature, a journey and a Kano class"
+    end
+
+    test "it hands over once, after every wanted stage, with no stop between stages" do
+      prompt = render_plan_pipeline(["plan"])
+
+      assert prompt =~ "Produce every wanted stage, then the sub-tickets, then hand over once."
+      assert prompt =~ "Never stop between stages for review, never move the ticket after one stage, and never wait for a stage to be approved"
+      assert prompt =~ "An open question never stops the run: write it as a decision with the options and a recommended default, go on with the default"
+      assert prompt =~ "The review brief (see `Review brief`) links every document, the HTML screens and the `Decisions` document"
+      assert prompt =~ "The summary block's `artifacts` link every document and the HTML screens"
+      assert prompt =~ "edits the documents with `linear_update_document`, attaches a revised HTML file and relinks it"
+    end
+
+    test "unchecked stages are skipped and the implementation plan is always produced" do
+      prompt = render_plan_pipeline(["breakdown"])
+
+      assert prompt =~ "Produce a stage only when its box is checked under `Artifacts wanted` (`[x]`). Skip every unchecked stage"
+      assert prompt =~ "The implementation plan (stage 6) is always produced, whatever is checked."
+      assert prompt =~ "With no box checked, the run is today's plain split into sub-tickets."
+    end
+
+    test "the house standards and the worked example exist" do
+      docs = Path.expand(Path.join([__DIR__, "..", "..", "docs"]))
+      standards = File.read!(Path.join([docs, "standards", "house-standards.md"]))
+
+      for item <- ["Edit", "Delete", "Undo", "Search", "Backup, export and restore", "Settings", "Accessibility", "Offline use", "Notification control", "Privacy controls"] do
+        assert standards =~ "\n| #{item} |"
+      end
+
+      assert standards =~ "## Design quality bar"
+
+      example = File.read!(Path.join([docs, "ticket-templates", "examples", "plan.md"]))
+
+      for section <- ["Vision", "Context", "Constraints", "Quality bar", "Artifacts wanted", "Done when"],
+          do: assert(example =~ "\n## #{section}\n")
+
+      for stage <- ["1. Domain brief", "2. User journeys", "3. Kano feature map", "4. Screens", "5. Decisions", "6. Implementation plan"],
+          do: assert(example =~ "\n### #{stage}\n")
     end
   end
 
@@ -363,14 +513,20 @@ defmodule SymphonyElixir.PlaybookTest do
     {without_tag, body}
   end
 
-  defp render(source, labels) do
+  defp render_plan_pipeline(labels) do
+    @plan_pipeline_tag
+    |> render(labels, @plan_description)
+    |> String.replace(~r/\s+/, " ")
+  end
+
+  defp render(source, labels, description \\ "Description") do
     issue = %{
       "identifier" => "TP-1",
       "title" => "Title",
       "state" => "Todo",
       "labels" => labels,
       "url" => "https://linear.app/x/issue/TP-1",
-      "description" => "Description",
+      "description" => description,
       "comments" => [],
       "linked_issues" => [],
       "sub_issues" => []

@@ -61,6 +61,7 @@ between them by number:
 | 70 | `ci_triage` |
 | 80 | `escape_hatches` |
 | 90 | `parent_tickets` |
+| 94 | `plan_pipeline` (left-trimmed; only for a plan ticket with an `Artifacts wanted` section) |
 | 95 | `review_brief` |
 | 100 | `completion_bar` |
 | 110 | `guardrails` |
@@ -121,6 +122,7 @@ read from the disk next to the `WORKFLOW.md` it renders.
 | `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on. |
 | `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
 | `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
+| `plan_pipeline` | `issue` | The stages a plan ticket with an Artifacts wanted section produces before its split (domain brief, journeys, Kano map, screens, decisions, implementation plan), one Linear document each, checked against a rubric per stage and handed over in one review; renders nothing for any other ticket. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
 | `review_brief` | — | One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
@@ -139,6 +141,20 @@ and where a plan's artifacts live.
 review brief at their handoffs, so render `review_brief` in any workflow that renders
 them; `{% render "playbook" %}` already does. The brief is the one comment written for
 the person reviewing; the workpad stays the agent's log.
+
+`plan_pipeline` adds the plan stages to `parent_tickets` for a plan ticket written from the
+Plan template: a domain brief, user journeys, a Kano feature map, screens (a Linear document plus
+one self-contained HTML file) and decisions, each produced only when the ticket checks it under
+`Artifacts wanted`, then the implementation plan. It loads the
+[house standards](standards/house-standards.md), checks each artifact against a rubric and hands
+everything over in one review. [`ticket-templates/examples/plan.md`](ticket-templates/examples/plan.md)
+shows a filled plan ticket and what the run produces. It renders nothing for any other ticket,
+including a plan ticket with no `Artifacts wanted` section, which keeps today's plain split; render
+it with a left-trimming tag right after `parent_tickets`:
+
+```liquid
+{%- render "plan_pipeline", issue: issue %}
+```
 
 `ticket_types` routes a ticket by its type label (`type:bug`, `type:feature` or `plan`) and runs
 the readiness check on bugs and features. The templates the operator writes those tickets from,
@@ -185,6 +201,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 <!-- repo-authored: extra guardrails, e.g. lock-file rule -->
 
 {% render "parent_tickets" %}
+{%- render "plan_pipeline", issue: issue %}
 {% render "review_brief" %}
 {% render "out_of_scope_backlog" %}
 {% render "dependency_guardrail", lockfile: "<your-lock-file>" %}
