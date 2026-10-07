@@ -1049,7 +1049,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), human_actions())
+    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox())
   end
 
   defp queue_dashboard_reload(socket) do
@@ -1223,8 +1223,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
   end
 
-  defp human_actions do
-    Endpoint.config(:human_actions) || SymphonyElixir.HumanActions
+  defp inbox do
+    Endpoint.config(:inbox) || SymphonyElixir.Inbox
   end
 
   defp snapshot_timeout_ms do
@@ -1290,6 +1290,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp waiting_kind_label("pr"), do: "PR"
   defp waiting_kind_label("final_verification"), do: "Final verification"
   defp waiting_kind_label("action"), do: "Decision"
+  defp waiting_kind_label("clarify"), do: "Clarify"
 
   defp github_webhooks(%{pollers: %{ci: %{webhooks: %{} = webhooks}}}), do: webhooks
   defp github_webhooks(_payload), do: nil

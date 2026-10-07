@@ -516,6 +516,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
                  agent_verdict: "approve",
                  reasons: [],
                  criteria: %{met: 1, unmet: 0, unclear: 1},
+                 change: %{files: 1, additions: 1, deletions: 0, largest: [%{path: "lib/app.ex", additions: 1, deletions: 0}]},
                  judged_at: %DateTime{}
                }
              ] = RunStore.list_runs("default", :all)
@@ -539,6 +540,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
                  verdict: nil,
                  agent_verdict: "inconclusive",
                  criteria: %{met: 0, unmet: 0, unclear: 0},
+                 change: %{files: 1},
                  judged_at: nil
                }
              ] = RunStore.list_runs("default", :all)

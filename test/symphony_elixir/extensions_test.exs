@@ -591,7 +591,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                "retrying" => 1,
                "claimed" => 2,
                "forced" => 2,
-               "shipped_today" => 1
+               "shipped_today" => 1,
+               "waiting_on_you" => 0
              },
              "running" => [
                %{
@@ -1400,6 +1401,136 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
+  test "the inbox api lists what waits on you from Symphony's cache, without a Linear request" do
+    test_pid = self()
+    inbox = {:test, make_ref()}
+
+    pr = %{
+      "id" => "issue-MT-PR",
+      "identifier" => "MT-PR",
+      "title" => "Retry fix",
+      "url" => "https://linear.app/example/issue/MT-PR",
+      "state" => %{"name" => "In Review"},
+      "attachments" => %{"nodes" => [%{"url" => "https://github.com/example/repo/pull/9"}]},
+      "comments" => %{"nodes" => []},
+      "history" => %{"nodes" => [%{"createdAt" => "2026-10-01T10:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "In Review"}}]}
+    }
+
+    linear_client = fn query, _variables, _opts ->
+      send(test_pid, {:linear, query})
+
+      if query =~ "SymphonyInboxList",
+        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-MT-PR", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [pr]}}}}
+    end
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client,
+        ci: fn _issue_id, _repo_key -> "FAILURE" end,
+        gate: fn _repo_key, _issue_id -> nil end
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    assert_received {:linear, _list_query}
+    assert_received {:linear, _detail_query}
+
+    held = %{
+      kind: :clarification,
+      issue_id: "issue-MT-HELD",
+      repo_key: "default",
+      identifier: "MT-HELD",
+      title: "Vague",
+      state: "Todo",
+      url: "https://linear.app/example/issue/MT-HELD",
+      score: 3,
+      reason: "No acceptance criteria.",
+      rounds_asked: 1,
+      max_rounds: 2,
+      pass_threshold: 6,
+      questions: ["What should it do?"],
+      scored_at: ~U[2026-10-01 09:00:00Z]
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :awaiting_clarification, [held]))
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    payload = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+    state = json_response(get(build_conn(), "/api/v1/state"), 200)
+    refute_received {:linear, _query}
+
+    assert %{
+             "counts" => %{"total" => 2, "pr" => 1, "clarify" => 1, "plan" => 0, "action" => 0, "final_verification" => 0},
+             "items" => [
+               %{
+                 "identifier" => "MT-HELD",
+                 "kind" => "clarify",
+                 "ask" => "Answer the quality gate's questions",
+                 "waiting_since" => "2026-10-01T09:00:00Z",
+                 "review" => %{"held" => true, "score" => 3, "round" => 1, "max_rounds" => 2, "questions" => ["What should it do?"]}
+               },
+               %{
+                 "issue_id" => "issue-MT-PR",
+                 "identifier" => "MT-PR",
+                 "title" => "Retry fix",
+                 "repo_key" => "default",
+                 "kind" => "pr",
+                 "state" => "In Review",
+                 "ask" => "Review the pull request",
+                 "waiting_since" => "2026-10-01T10:00:00Z",
+                 "waiting_seconds" => waiting_seconds,
+                 "url" => "https://linear.app/example/issue/MT-PR",
+                 "review" => %{"brief" => nil, "pull_request" => %{"url" => "https://github.com/example/repo/pull/9", "ci" => "failed"}}
+               }
+             ]
+           } = payload
+
+    assert waiting_seconds > 0
+    assert state["counts"]["waiting_on_you"] == 2
+    assert Enum.map(state["waiting_on_you"], & &1["kind"]) == ["clarify", "pr"]
+
+    assert json_response(post(build_conn(), "/api/v1/inbox", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+  end
+
+  test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do
+    inbox = {:test, make_ref()}
+
+    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
+      %{
+        issue_id: "issue-MT-ACT",
+        identifier: "MT-ACT",
+        title: "Signing",
+        repo_key: "default",
+        kind: :action,
+        state: "Human Review",
+        ask: "Add the signing secret",
+        waiting_since: nil,
+        url: nil,
+        review: %{title: "Add the signing secret", steps: ["Add it"], requested_at: ~U[2026-10-01 08:00:00.123Z]}
+      }
+    ])
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxActionOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+
+    assert %{items: [%{waiting_seconds: nil, review: %{requested_at: "2026-10-01T08:00:00Z"}}]} =
+             SymphonyElixirWeb.Presenter.inbox_payload(orchestrator_name, 50, inbox)
+
+    assert %{error: %{code: "snapshot_unavailable"}} = SymphonyElixirWeb.Presenter.inbox_payload(Module.concat(__MODULE__, :NoInbox), 50, inbox)
+
+    timeout_orchestrator = Module.concat(__MODULE__, :InboxTimeoutOrchestrator)
+    {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
+    assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.inbox_payload(timeout_orchestrator, 1, inbox)
+  end
+
   test "phoenix observability api preserves snapshot timeout behavior" do
     timeout_orchestrator = Module.concat(__MODULE__, :TimeoutOrchestrator)
     {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
@@ -1522,22 +1653,24 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "the state api and the dashboard list what waits on you, oldest first, without tickets that left review" do
     now = DateTime.utc_now()
 
-    entry = fn identifier, kind, hours_ago, headline ->
+    entry = fn identifier, kind, hours_ago, ask ->
       %{
         issue_id: "issue-" <> identifier,
         identifier: identifier,
         title: "Title of " <> identifier,
+        repo_key: "default",
         url: "https://linear.app/example/issue/" <> identifier,
         state: "In Review",
         kind: kind,
         waiting_since: hours_ago && DateTime.add(now, -hours_ago * 3_600, :second),
-        headline: headline
+        ask: ask,
+        review: %{}
       }
     end
 
-    human_actions = {:test, make_ref()}
+    inbox = {:test, make_ref()}
 
-    :persistent_term.put({SymphonyElixir.HumanActions, :waiting_on_you, human_actions}, [
+    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
       entry.("MT-PR", :pr, 1, "The retry fix"),
       entry.("MT-UNKNOWN", :final_verification, nil, nil),
       entry.("MT-PLAN", :plan, 3, "The split into four sub-tickets"),
@@ -1568,7 +1701,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         refresh: %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}
       )
 
-    start_test_endpoint(orchestrator: orchestrator_name, human_actions: human_actions, snapshot_timeout_ms: 50)
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
 
     waiting = json_response(get(build_conn(), "/api/v1/state"), 200)["waiting_on_you"]
     assert Enum.map(waiting, & &1["issue_identifier"]) == ["MT-PLAN", "MT-ACTION", "MT-PR", "MT-UNKNOWN"]
@@ -3680,7 +3813,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "retrying" => 1,
              "claimed" => 2,
              "forced" => 2,
-             "shipped_today" => 1
+             "shipped_today" => 1,
+             "waiting_on_you" => 0
            }
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")

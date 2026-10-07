@@ -216,8 +216,8 @@ issues:
 
   The dashboard, `/api/v1/state` (`counts.human_review` and a `human_review` list of the watched
   tickets in it) show how many tickets wait there, and the human-action update lists them first.
-  The dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you` list and the menu
-  bar list them with the plans and PRs in `In Review` (see `human_actions`). A supervisor moves a ticket there when it needs the operator, and never moves
+  The Mac app's Inbox, the dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you`
+  list and the menu bar list them with the plans and PRs in `In Review` (see `human_actions`). A supervisor moves a ticket there when it needs the operator, and never moves
   one out of it on the operator's behalf.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
@@ -2186,15 +2186,17 @@ human_actions:
 - `min_update_interval_ms` (default `900000`): the least time between two updates to one project. A
   change inside that window is posted once the window has passed, with whatever is open by then.
 
-**Waiting on you.** The same read builds the list `/api/v1/state` returns as `waiting_on_you`, which
-the dashboard and the menu bar app show: one entry per ticket in `In Review` or the
-`issues.states.human_review` state, or with an open request, oldest first. Each entry has
-`issue_identifier`, `title`, `url`, `state`, `kind` (`action` for an open request, else
-`final_verification`, `plan` for a `plan` or `breakdown` parent, or `pr`), `headline` (the text
-after `**What to review:**` in the latest `## Review brief` comment, null without one),
-`waiting_since` (the latest move into its state, else its newest request) and `waiting_seconds`. A
-ticket the orchestrator sees running, or watches outside those states, is dropped before the next
-read. The list is empty while `enabled` is off for every repository.
+**Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
+the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
+its own poll, not on this read: every `polling.interval_ms` it lists the tickets in `In Review` or
+the `issues.states.human_review` state in each route's scope, reads a ticket's comments again only
+when the ticket changed, and adds the quality gate's holds and skips. Each entry has
+`issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request, else
+`final_verification`, `plan` for a `plan` or `breakdown` parent, or `pr`; `clarify` for a quality
+gate hold or skip), `headline` (its one-line ask: the text after `**What to review:**` in the latest
+`## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
+`waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
+or watches outside those states, is dropped. It doesn't depend on `human_actions.enabled`.
 
 **Where actions come from.** On each read, in the scope each repository route polls, Symphony
 lists:

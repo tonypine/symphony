@@ -205,6 +205,14 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
 
+  @doc """
+  Reads the rest of each node's comments and history past the first page, as the issue query
+  here does: for a caller (`SymphonyElixir.Inbox`) whose own query reads them with the same fields.
+  """
+  @spec read_more_pages([map()], (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()})) ::
+          {:ok, [map()]} | {:error, term()}
+  def read_more_pages(nodes, linear_client), do: read_more(nodes, linear_client)
+
   # A long-lived issue's review brief, requests and move into its state can sit past the comments
   # and history the issue query reads: read the rest of them, so it keeps its waited time and
   # headline.

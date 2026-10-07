@@ -26,7 +26,12 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   def state(conn, _params) do
-    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), human_actions()))
+    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox()))
+  end
+
+  @spec inbox(Conn.t(), map()) :: Conn.t()
+  def inbox(conn, _params) do
+    json(conn, Presenter.inbox_payload(orchestrator(), snapshot_timeout_ms(), inbox()))
   end
 
   @spec repos(Conn.t(), map()) :: Conn.t()
@@ -157,8 +162,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
   end
 
-  defp human_actions do
-    Endpoint.config(:human_actions) || SymphonyElixir.HumanActions
+  defp inbox do
+    Endpoint.config(:inbox) || SymphonyElixir.Inbox
   end
 
   defp snapshot_timeout_ms do

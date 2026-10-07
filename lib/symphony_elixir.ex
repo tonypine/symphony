@@ -104,6 +104,7 @@ defmodule SymphonyElixir.Application do
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
+             inbox_child_spec(system_config),
              SymphonyElixir.HttpServer,
              SymphonyElixir.StatusDashboard
            ])
@@ -183,6 +184,12 @@ defmodule SymphonyElixir.Application do
   defp ci_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &ci_enabled_for_repo?/1) do
       SymphonyElixir.CiPoller
+    end
+  end
+
+  defp inbox_child_spec(%SystemSchema{repos: repos}) do
+    if Enum.any?(repos, &SymphonyElixir.Inbox.enabled?(Config.settings_for_repo!(&1.name))) do
+      SymphonyElixir.Inbox
     end
   end
 
