@@ -250,26 +250,18 @@ private struct ReviewHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            HStack(spacing: DesignTokens.Space.s2) {
-                StatusBadge(status: .you, word: item.kind.word)
-                if let age = item.age {
-                    Label("Waiting \(age)", systemImage: "clock")
-                        .font(DesignTokens.TypeStyle.label.font)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+            // The actions share the badges' row while it fits, and take a row of their own below them when it
+            // doesn't, so a narrow pane never squeezes the badges or widens the window.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DesignTokens.Space.s2) {
+                    badges
+                    Spacer(minLength: DesignTokens.Space.s2)
+                    ActionButtons(toolbar: toolbar, perform: perform)
                 }
-                if let state = item.state {
-                    Text(state)
-                        .font(DesignTokens.TypeStyle.label.font)
-                        .padding(.horizontal, DesignTokens.Space.s2)
-                        .padding(.vertical, DesignTokens.Space.s1 / 2)
-                        .overlay(Capsule().strokeBorder(DesignTokens.Surface.separator.color))
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                    HStack(spacing: DesignTokens.Space.s2) { badges }
+                    ActionButtons(toolbar: toolbar, perform: perform)
                 }
-                if let repo = item.repoKey {
-                    Text(repo).font(DesignTokens.TypeStyle.label.font).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: DesignTokens.Space.s2)
-                ActionButtons(toolbar: toolbar, perform: perform)
             }
             Text([item.identifier, item.title].compactMap { $0 }.joined(separator: " "))
                 .font(DesignTokens.TypeStyle.sentence.font)
@@ -279,6 +271,34 @@ private struct ReviewHeader: View {
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+        }
+    }
+
+    /// The kind pill, waiting time, state and repo, each kept on one line.
+    @ViewBuilder private var badges: some View {
+        StatusBadge(status: .you, word: item.kind.word)
+            .fixedSize()
+        if let age = item.age {
+            Label("Waiting \(age)", systemImage: "clock")
+                .font(DesignTokens.TypeStyle.label.font)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+        }
+        if let state = item.state {
+            Text(state)
+                .font(DesignTokens.TypeStyle.label.font)
+                .padding(.horizontal, DesignTokens.Space.s2)
+                .padding(.vertical, DesignTokens.Space.s1 / 2)
+                .overlay(Capsule().strokeBorder(DesignTokens.Surface.separator.color))
+                .fixedSize()
+        }
+        if let repo = item.repoKey {
+            Text(repo)
+                .font(DesignTokens.TypeStyle.label.font)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }
