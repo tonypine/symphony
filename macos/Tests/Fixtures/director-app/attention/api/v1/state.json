@@ -214,7 +214,92 @@
     "web-shop"
   ],
   "retrying": [],
-  "run_history": [],
+  "run_history": [
+    {
+      "attempt": 1,
+      "effort": "high",
+      "ended_at": "2026-10-07T10:31:00Z",
+      "error": null,
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "kind": "agent",
+      "model": "claude-opus-5-5",
+      "profile_label": "implementation",
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_id": "run-288-1",
+      "run_kind": "implementation",
+      "runtime_seconds": 1740,
+      "session_id": "session-run-288-1",
+      "started_at": "2026-10-07T10:02:00Z",
+      "state": "In Review",
+      "status": "success",
+      "title": "Coupon stacking",
+      "tokens": {
+        "total_tokens": 980000
+      },
+      "transcript_path": null,
+      "turn_count": 9,
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-288"
+    },
+    {
+      "attempt": 1,
+      "effort": "high",
+      "ended_at": "2026-10-07T12:24:00Z",
+      "error": null,
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "kind": "agent",
+      "model": "claude-opus-5-5",
+      "profile_label": "rework",
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_id": "run-288-2",
+      "run_kind": "rework",
+      "runtime_seconds": 840,
+      "session_id": "session-run-288-2",
+      "started_at": "2026-10-07T12:10:00Z",
+      "state": "In Review",
+      "status": "success",
+      "title": "Coupon stacking",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "transcript_path": null,
+      "turn_count": 9,
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-288"
+    },
+    {
+      "attempt": 1,
+      "effort": "high",
+      "ended_at": "2026-10-07T13:25:00Z",
+      "error": "mix test timed out after 20 min: CheckoutTotalTest hangs on the rounding test",
+      "issue_id": "i-305",
+      "issue_identifier": "SHOP-305",
+      "kind": "agent",
+      "model": "claude-opus-5-5",
+      "profile_label": "implementation",
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_id": "run-305-1",
+      "run_kind": "implementation",
+      "runtime_seconds": 1320,
+      "session_id": "session-run-305-1",
+      "started_at": "2026-10-07T13:03:00Z",
+      "state": "In Progress",
+      "status": "failed",
+      "title": "Checkout total rounding",
+      "tokens": {
+        "total_tokens": 860000
+      },
+      "transcript_path": null,
+      "turn_count": 9,
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
+    }
+  ],
   "running": [
     {
       "forced": true,
@@ -229,7 +314,12 @@
       "repo_key": "web-shop",
       "reviewer_profile": null,
       "run_kind": "implementation",
-      "run_profile": null,
+      "run_profile": {
+        "effort": "high",
+        "kind": "implementation",
+        "label": "implementation \u00b7 claude-opus-5-5 \u00b7 high",
+        "model": "claude-opus-5-5"
+      },
       "session_id": "session-SHOP-305",
       "started_at": "2026-10-07T13:58:00Z",
       "state": "In Progress",

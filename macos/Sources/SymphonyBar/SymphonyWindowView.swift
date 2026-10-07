@@ -49,6 +49,18 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxMoveError: String?
     /// The banner after a move, with Undo for 10 s (C18).
     @Published private(set) var inboxBanner: InboxBanner?
+    /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
+    @Published var history: NavigationHistory
+    /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
+    @Published var ticketSources = TicketPage.Sources()
+    /// The Stop Run sheet shown (D12c); nothing stops until its button is pressed.
+    @Published var stopSheet: StopRunSheet?
+    /// True while the sheet's requests are on their way to Symphony.
+    @Published var stopInFlight = false
+    /// What went wrong with them, shown in the sheet.
+    @Published var stopError: String?
+    /// Stops made from the app, shown on the timeline until their audit record arrives.
+    @Published var localStops: [TicketPage.LocalStop] = []
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -64,12 +76,19 @@ final class SymphonyWindowModel: ObservableObject {
     /// Sends a control request to Symphony, or to the API fixtures in QA mode, and says how it went.
     var onControl: (ControlAction) async -> ControlResult = { _ in .done }
     var onOpenURL: (URL) -> Void = { _ in }
+    /// Opens the transcript window of (identifier, repo key); `newWindow` (⌘-click) opens another beside it.
+    var onOpenTranscript: (_ identifier: String, _ repoKey: String?, _ newWindow: Bool) -> Void = { _, _, _ in }
 
     /// The repos are read again at most this often: Symphony reads each checkout's remote to answer.
     static let reposInterval: TimeInterval = 30
     private var reposReadAt: Date?
     private var readingRepos = false
     private var readingInbox = false
+    var readingTicket = false
+    /// When the ticket page last read its runs and audit records, which change slowly.
+    var ticketSlowReadAt: Date?
+    /// The runs and audit records are read again at most this often.
+    static let ticketSlowInterval: TimeInterval = 10
     private var bannerTask: Task<Void, Never>?
     /// A sheet to open once the Inbox lists its item: Approve and Merge… chosen on a notification.
     private var pendingSheet: (id: String, move: InboxMove)?
@@ -78,12 +97,14 @@ final class SymphonyWindowModel: ObservableObject {
     init(client: LiveAPIClient, selection: SymphonyView) {
         self.client = client
         self.selection = selection
+        history = NavigationHistory(current: .view(selection))
         client.$stateJSON
             .sink { [weak self] data in
                 guard let self else { return }
                 overviewState = data.flatMap(OverviewState.decode)
                 readReposIfDue()
                 readInbox()
+                readTicket()
             }
             .store(in: &cancellables)
     }
@@ -105,7 +126,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// Opens the Inbox on the item with issue id `id`, or on its first item.
     func showInbox(selecting id: String? = nil) {
         if let id { inboxSelection = id }
-        selection = .inbox
+        show(.inbox)
         readInbox()
     }
 
@@ -262,8 +283,12 @@ final class SymphonyWindowModel: ObservableObject {
     /// Acts on a Needs attention row's button.
     func perform(_ fix: Overview.Fix) {
         switch fix {
-        case let .open(url), let .openInLinear(url):
+        case let .open(identifier):
+            openTicket(identifier)
+        case let .openInLinear(url):
             onOpenURL(url)
+        case let .stopRun(identifier):
+            openStopRun(identifier, origin: .needsAttention)
         case .openDiagnostics:
             show(.diagnostics)
         case let .stopForcing(identifier):
@@ -288,7 +313,17 @@ final class SymphonyWindowModel: ObservableObject {
             onOpenRepos()
         } else {
             selection = view
+            history.visit(.view(view))
         }
+    }
+
+    /// The toolbar's title: the view's, or the ticket's identifier on its page.
+    var toolbarTitle: String { shownTicket ?? selection.title }
+
+    /// The toolbar's line under the title: the view's, or the ticket's title on its page.
+    var toolbarSubtitle: String {
+        guard shownTicket != nil else { return selection.subtitle }
+        return ticketPage?.title ?? "Ticket"
     }
 
     /// The sidebar footer's first line: Symphony's state, on its own so the sidebar never cuts it off.
@@ -331,11 +366,21 @@ struct SymphonyWindowView: View {
             SymphonyDetail(model: model, client: client)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DesignTokens.Surface.window.color)
+                .modifier(StopRunSheetPresenter(model: model))
                 .toolbar {
-                    ToolbarItem(placement: .navigation) {
+                    ToolbarItemGroup(placement: .navigation) {
+                        // P10: ⌘[ and ⌘] between the views and the ticket pages shown.
+                        ControlGroup {
+                            Button(action: model.goBack) { Label(NavigationHistory.backTitle, systemImage: "chevron.left") }
+                                .disabled(!model.history.canGoBack)
+                                .help("Back (⌘[)")
+                            Button(action: model.goForward) { Label(NavigationHistory.forwardTitle, systemImage: "chevron.right") }
+                                .disabled(!model.history.canGoForward)
+                                .help("Forward (⌘])")
+                        }
                         VStack(alignment: .leading, spacing: 0) {
-                            Text(model.selection.title).font(.headline)
-                            Text(model.selection.subtitle).font(.subheadline).foregroundStyle(.secondary)
+                            Text(model.toolbarTitle).font(.headline)
+                            Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -433,7 +478,8 @@ struct SymphonySidebar: View {
     /// The list's selection, which opens the Repos window instead of selecting it.
     private var selection: Binding<SymphonyView?> {
         Binding(
-            get: { model.selection },
+            // On a ticket page no view is selected, so choosing the view the page came from goes back to it.
+            get: { model.shownTicket == nil ? model.selection : nil },
             set: { view in
                 guard let view else { return }
                 model.show(view)
@@ -493,6 +539,8 @@ struct SymphonyDetail: View {
                 actions: placeholder.actions.map { action in (action.title, { model.onAction(action) }) },
                 showsSpinner: placeholder.showsSpinner
             )
+        } else if model.shownTicket != nil {
+            TicketPageContent(model: model, client: client)
         } else {
             switch model.selection {
             case .inbox:
@@ -521,7 +569,8 @@ struct OverviewContent: View {
                     resume: { model.send(.resume) },
                     perform: model.perform,
                     controlInFlight: model.controlInFlight,
-                    openInbox: { model.showInbox() }
+                    openInbox: { model.showInbox() },
+                    openTicket: model.openTicket
                 )
             )
         } else if client.stateResult == .unsupported {

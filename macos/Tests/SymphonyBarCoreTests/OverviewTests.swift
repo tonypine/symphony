@@ -66,9 +66,9 @@ final class OverviewTests: XCTestCase {
             "SHOP-305 shows no agent activity for 14 min. It has been forced for 3 days and is still not done."
         )
         XCTAssertEqual(stuck.age, "3 days")
-        let url = try XCTUnwrap(URL(string: "https://linear.app/acme/issue/SHOP-305"))
-        XCTAssertEqual(stuck.fixes, [.open(url), .stopForcing("SHOP-305")])
-        XCTAssertEqual(stuck.fixes.map(\.title), ["Open", "Stop Forcing"])
+        // J3: the stuck row's first fix is Stop Run…, then Open (the ticket page).
+        XCTAssertEqual(stuck.fixes, [.stopRun("SHOP-305"), .open("SHOP-305"), .stopForcing("SHOP-305")])
+        XCTAssertEqual(stuck.fixes.map(\.title), ["Stop Run…", "Open", "Stop Forcing"])
 
         let hold = overview.problems[1]
         XCTAssertEqual(hold.kinds, [.usageLimit])
@@ -177,8 +177,8 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(overview.problems.map(\.id), ["API-7", "SHOP-4", "stray-processes"])
         XCTAssertEqual(overview.problems[0].sentence, "API-7 failed 3 times: agent exited: turn timeout.")
         XCTAssertEqual(overview.problems[0].severity, .problem)
-        // Built from the workspace's issue path, as Symphony serves no URL with a retry.
-        XCTAssertEqual(overview.problems[0].fixes, [.open(try XCTUnwrap(URL(string: "https://linear.app/acme/issue/API-7")))])
+        XCTAssertEqual(overview.problems[0].fixes, [.open("API-7"), .stopRun("API-7")])
+        XCTAssertEqual(overview.problems[0].fixes.map(\.title), ["Open", "Stop Run…"])
         XCTAssertEqual(overview.problems[1].sentence, "SHOP-4 matches more than one repo (web-shop, api), so Symphony runs it in none.")
         XCTAssertEqual(overview.problems[1].fixes.map(\.title), ["Open in Linear"])
         XCTAssertEqual(overview.problems[2].sentence, "2 processes are still running from finished runs.")

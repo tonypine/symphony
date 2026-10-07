@@ -9,6 +9,8 @@ struct OverviewActions {
     var controlInFlight: ControlAction?
     /// The Waiting on you tile opens the Inbox.
     var openInbox: () -> Void = {}
+    /// Return or a double-click on a ticket row opens its page (D3).
+    var openTicket: (String) -> Void = { _ in }
 }
 
 /// The Overview in a scroll view, laid out for the width it gets.
@@ -75,12 +77,16 @@ struct OverviewBody: View {
             }
             if !overview.working.isEmpty {
                 Card(title: Overview.nowWorkingTitle) {
-                    RowList(items: overview.working) { WorkingRowView(row: $0) }
+                    RowList(items: overview.working) { row in
+                        WorkingRowView(row: row).opensTicket(row.identifier, open: actions.openTicket)
+                    }
                 }
             }
             if !overview.nextUp.isEmpty {
                 Card(title: Overview.nextUpTitle) {
-                    RowList(items: overview.nextUp) { QueuedRowView(row: $0) }
+                    RowList(items: overview.nextUp) { row in
+                        QueuedRowView(row: row).opensTicket(row.identifier, open: actions.openTicket)
+                    }
                 }
             }
         }
@@ -239,7 +245,10 @@ private struct NeedsAttention: View {
 
     var body: some View {
         Card(title: Overview.needsAttentionTitle) {
-            RowList(items: shown) { AttentionRow(problem: $0, actions: actions) }
+            RowList(items: shown) { problem in
+                AttentionRow(problem: problem, actions: actions)
+                    .opensTicket(problem.ticketIdentifier, open: actions.openTicket)
+            }
         }
         .onHover { hover in
             hovering = hover
@@ -328,6 +337,25 @@ private struct FixButton: View {
 }
 
 // MARK: - C8: Now working and Next up
+
+extension View {
+    /// A ticket row: a double-click, or Return once it has focus, opens the ticket's page (D3, P10); VoiceOver gets
+    /// Open as an action. Nothing changes for a row that is not about a ticket.
+    @ViewBuilder func opensTicket(_ identifier: String?, open: @escaping (String) -> Void) -> some View {
+        if let identifier {
+            contentShape(Rectangle())
+                .onTapGesture(count: 2) { open(identifier) }
+                .focusable()
+                .onKeyPress(.return) {
+                    open(identifier)
+                    return .handled
+                }
+                .accessibilityAction(named: "Open") { open(identifier) }
+        } else {
+            self
+        }
+    }
+}
 
 /// Rows split by hairlines.
 private struct RowList<Item: Identifiable, Row: View>: View {
@@ -474,7 +502,7 @@ private struct AllCaughtUp: View {
 
 // MARK: - C11: meters
 
-private struct MeterView: View {
+struct MeterView: View {
     let meter: Overview.Meter
 
     var body: some View {
@@ -512,7 +540,7 @@ private struct MeterView: View {
 
 /// A meter's bar: the fill carries the level, on a track that is a light step of the same hue (design system §3.3).
 /// Drawn rather than a `Gauge`, whose AppKit control doesn't render offscreen.
-private struct MeterBar: View {
+struct MeterBar: View {
     let fraction: Double
     let tint: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

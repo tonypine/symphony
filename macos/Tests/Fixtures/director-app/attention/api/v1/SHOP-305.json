@@ -1,0 +1,51 @@
+{
+  "acceptance_gate": null,
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 1
+  },
+  "issue_id": "i-305",
+  "issue_identifier": "SHOP-305",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [
+    {
+      "at": "2026-10-07T14:06:00Z",
+      "event": "notification",
+      "message": "Waiting on npm test"
+    }
+  ],
+  "repo_key": "web-shop",
+  "retry": null,
+  "running": {
+    "last_event": "notification",
+    "last_event_at": "2026-10-07T14:06:00Z",
+    "last_message": "Waiting on npm test",
+    "linear_wait_until": null,
+    "pending_tool": null,
+    "repo_key": "web-shop",
+    "session_id": "session-SHOP-305",
+    "started_at": "2026-10-07T13:58:00Z",
+    "state": "In Progress",
+    "tokens": {
+      "cache_creation_input_tokens": 0,
+      "cached_input_tokens": 1214000,
+      "input_tokens": 1215200,
+      "output_tokens": 24800,
+      "total_tokens": 1240000,
+      "uncached_input_tokens": 1200
+    },
+    "transcript_path": null,
+    "turn_count": 7,
+    "worker_host": null,
+    "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
+  },
+  "status": "running",
+  "tracked": {},
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
+  }
+}

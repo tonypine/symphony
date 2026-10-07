@@ -1,0 +1,83 @@
+{
+  "count": 3,
+  "filters": {
+    "agent_kind": null,
+    "date_from": null,
+    "date_to": null,
+    "issue_label": null,
+    "limit": 50,
+    "outcome": null
+  },
+  "generated_at": "2026-10-07T14:20:00Z",
+  "runs": [
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 1740,
+      "ended_at": "2026-10-07T10:31:00Z",
+      "error": null,
+      "error_kind": null,
+      "eval_id": "run-288-1",
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "issue_labels": [],
+      "logged_at": "2026-10-07T10:31:00Z",
+      "outcome": "success",
+      "pull_request_url": "https://github.com/acme/web-shop/pull/406",
+      "run_id": "run-288-1",
+      "session_id": "session-run-288-1",
+      "started_at": "2026-10-07T10:02:00Z",
+      "status": "success",
+      "tests_run": null,
+      "tokens": {
+        "total_tokens": 980000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 840,
+      "ended_at": "2026-10-07T12:24:00Z",
+      "error": null,
+      "error_kind": null,
+      "eval_id": "run-288-2",
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "issue_labels": [],
+      "logged_at": "2026-10-07T12:24:00Z",
+      "outcome": "success",
+      "pull_request_url": "https://github.com/acme/web-shop/pull/406",
+      "run_id": "run-288-2",
+      "session_id": "session-run-288-2",
+      "started_at": "2026-10-07T12:10:00Z",
+      "status": "success",
+      "tests_run": null,
+      "tokens": {
+        "total_tokens": 410000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 1320,
+      "ended_at": "2026-10-07T13:25:00Z",
+      "error": "mix test timed out after 20 min: CheckoutTotalTest hangs on the rounding test",
+      "error_kind": null,
+      "eval_id": "run-305-1",
+      "issue_id": "i-305",
+      "issue_identifier": "SHOP-305",
+      "issue_labels": [],
+      "logged_at": "2026-10-07T13:25:00Z",
+      "outcome": "failure",
+      "pull_request_url": null,
+      "run_id": "run-305-1",
+      "session_id": "session-run-305-1",
+      "started_at": "2026-10-07T13:03:00Z",
+      "status": "failed",
+      "tests_run": null,
+      "tokens": {
+        "total_tokens": 860000
+      }
+    }
+  ]
+}
