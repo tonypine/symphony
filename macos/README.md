@@ -923,7 +923,7 @@ In QA mode, under that directory:
 
 | Path | Holds | Instead of |
 | --- | --- | --- |
-| `settings.plist` | the Settings values, Launch at Login, and the pending update across a relaunch | UserDefaults; Launch at Login registers nothing with macOS |
+| `settings.plist` | the Settings values, Launch at Login, the pending update across a relaunch, and the Symphony and Repos windows' frames and selections | UserDefaults; Launch at Login registers nothing with macOS |
 | `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | `~/Library/Application Support/symphony/release/secrets.json` |
 | `logs/` | Symphony's output log | `~/Library/Logs/symphony` |
 | `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |

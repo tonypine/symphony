@@ -8,7 +8,8 @@ import SymphonyBarCore
 @MainActor
 final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     static let windowTitle = "Symphony"
-    private static let frameName = "SymphonyMainWindow"
+    /// The window's frame, in the app's defaults so QA mode keeps it under the QA root.
+    private let frame = WindowFrameStore(name: "SymphonyMainWindow", defaults: AppStores.current.defaults)
     /// The app's defaults key for the view shown last.
     private static let viewKey = "SymphonyWindowView"
 
@@ -67,8 +68,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             )
             window.isReleasedWhenClosed = false
             window.delegate = self
-            if !window.setFrameUsingName(Self.frameName) { window.center() }
-            window.setFrameAutosaveName(Self.frameName)
+            window.restoreFrame(from: frame)
             self.window = window
         }
 
@@ -131,10 +131,20 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         client.isVisible = window.occlusionState.contains(.visible)
     }
 
+    func windowDidMove(_ notification: Notification) {
+        window?.saveFrame(to: frame, after: notification)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        window?.saveFrame(to: frame, after: notification)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        window?.saveFrame(to: frame, after: notification)
+    }
+
     func windowWillClose(_ notification: Notification) {
-        // Saves the frame now and frees its name, which the next window takes even if this one isn't freed yet.
-        window?.saveFrame(usingName: Self.frameName)
-        window?.setFrameAutosaveName("")
+        window?.saveFrame(to: frame, after: notification)
         window = nil
         model = nil
         client.isVisible = false
