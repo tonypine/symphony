@@ -421,6 +421,17 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert move("In Review", plain_plan) == "state-review"
       assert move("In Review", not_a_plan) == "state-review"
 
+      # Only the agent-written summary block says a person reviews the plan, which doesn't count.
+      summary_says_review = %{
+        plain_plan
+        | "description" =>
+            "Plan it.\n\n" <>
+              SymphonyElixir.IssueSummary.start_marker() <>
+              "\nI only want to review and validate the artifacts.\n" <> SymphonyElixir.IssueSummary.end_marker()
+      }
+
+      assert move("In Review", summary_says_review) == "state-review"
+
       # Without the state in the team, or with it turned off, the plan goes to In Review as before.
       assert move("In Review", needs_human, states: Enum.drop(@review_states, -1)) == "state-review"
       settings = Config.settings!()

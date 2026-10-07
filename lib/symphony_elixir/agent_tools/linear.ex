@@ -1848,9 +1848,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
+  # The Symphony summary block is agent-written, so it cannot say a person reviews the plan.
   defp human_reviewed_plan?(issue, settings) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
-    plan = %Issue{title: issue["title"], description: issue["description"], labels: labels}
+    plan = %Issue{title: issue["title"], description: IssueSummary.strip(issue["description"]), labels: labels}
     Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
   end
 
