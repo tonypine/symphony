@@ -1355,7 +1355,7 @@ defmodule SymphonyElixir.CiPollerTest do
     refute Map.get(record, :log_excerpt)
   end
 
-  test "a red head on an issue parked in Backlog for a person's action starts no CI-fix run until the label is gone" do
+  test "a red head on an issue in Backlog, label or not, starts no CI-fix run until a person promotes it" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = in_review_issue()
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
@@ -1386,8 +1386,16 @@ defmodule SymphonyElixir.CiPollerTest do
     refute Map.get(record, :ci_failure)
     assert CiPoller.pending_ci_failure("issue-2401") == nil
 
-    # A person removes the label: the next red poll dispatches a CI-fix run as before.
+    # A person removes the label: Backlog still means nobody promoted the ticket, so it stays put.
     Application.put_env(:symphony_elixir, :ci_test_issues, [%{parked | labels: []}])
+
+    assert {:ok, %{actions: [{:awaiting_human_action, "issue-2401", "abc123"}]}} = poll.(18)
+    assert_receive {:fetch_issue_states_by_ids, ["issue-2401"]}
+    refute_receive {:issue_state_update, _issue_id, _state}
+    assert [%{status: "awaiting_human_action", ci_retry_count: 0, dispatched_shas: []}] = RunStore.list_ci_checks()
+
+    # A person promotes it to Todo: the next red poll dispatches a CI-fix run as before.
+    Application.put_env(:symphony_elixir, :ci_test_issues, [%{parked | labels: [], state: "Todo"}])
 
     assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} = poll.(20)
     assert_receive {:fetch_issue_states_by_ids, ["issue-2401"]}

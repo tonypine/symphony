@@ -1604,7 +1604,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     refute Map.has_key?(record, :conflict_retry_count)
   end
 
-  test "leaves a merge conflict alone while the issue is parked for a person, until the label goes" do
+  test "leaves a merge conflict alone while the issue is in Backlog, label or not, until a person promotes it" do
     now = ~U[2026-05-01 09:00:00Z]
     parked = %{in_review_issue(updated_at: now) | state: "Backlog", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [parked])
@@ -1634,10 +1634,18 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert Map.get(record, :conflict_retry_count, 0) == 0
     assert Map.get(record, :dispatched_conflict_keys, []) == []
 
-    # A person removes the label: the next conflicting poll takes the conflict path as before.
+    # A person removes the label: Backlog still means nobody promoted the ticket, so it stays put.
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{parked | labels: []}])
 
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} = poll.(4)
+    assert {:ok, %{actions: [{:conflict_awaiting_human_action, "issue-1780"}]}} = poll.(4)
+    refute_receive {:issue_state_update, _issue_id, _state}, 50
+    assert [%{status: "conflict_awaiting_human_action"} = record] = RunStore.list_pr_reviews()
+    assert Map.get(record, :conflict_retry_count, 0) == 0
+
+    # A person promotes it to Todo: the next conflicting poll takes the conflict path as before.
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{parked | labels: [], state: "Todo"}])
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} = poll.(5)
     assert_receive {:issue_state_update, "issue-1780", "In Progress"}
 
     assert [%{status: "conflict_requested", conflict_retry_count: 1, dispatched_conflict_keys: ["head-sha|base-sha"]}] =
