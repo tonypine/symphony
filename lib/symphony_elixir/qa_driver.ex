@@ -22,7 +22,13 @@ defmodule SymphonyElixir.QaDriver do
     gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
     touches real settings or secrets, and `SYMPHONY_QA_OPENROUTER_URL` pointing
     at this pass's `SymphonyElixir.OpenRouter.Stub`, so its OpenRouter flows
-    never need a real key (see "OpenRouter stub" below);
+    never need a real key (see "OpenRouter stub" below). With `api_fixtures`,
+    a directory in the PR checkout (see
+    `SymphonyElixir.QaDriver.Checks.read_fixture_dir/4`: regular files only, at
+    most 5 MB), the launch copies its checked files into a fresh
+    `api-fixtures-<n>/` in the run directory and sets
+    `SYMPHONY_BAR_QA_API_FIXTURES` to that copy, so the app reads Symphony's
+    local API from those JSON files;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
     `qa_ax_set_value` and `qa_resize_window` accept only a PID this driver
     launched and that is still running; `qa_check_app` also reports on one that
@@ -81,8 +87,9 @@ defmodule SymphonyElixir.QaDriver do
   build directory on the QA host, copies the bundle into Symphony's run
   directory there and launches it from that copy. The agent cannot write on the
   QA host, so the copy is not checked again before launch. Screenshots are
-  captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
-  fixtures there, because the app cannot read the Symphony host's files. Each
+  captured there and copied back into `qa-evidence/`, and `qa_put_file` and
+  `api_fixtures` copy fixtures there (`api_fixtures` as a tar of the checked
+  files), because the app cannot read the Symphony host's files. Each
   app's SSH session forwards a random loopback port on the QA host back to the
   stub (`ssh -R`), and the app gets that port's URL. At start the driver also
   opens one SSH session that forwards each host port from the QA host's
@@ -107,6 +114,7 @@ defmodule SymphonyElixir.QaDriver do
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
+  @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
   # The QA host's loopback ports an app's SSH session may forward to the stub.
   @stub_remote_ports 20_000..59_999
   @host_port_count 3
@@ -254,13 +262,15 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp run_tool("qa_launch_app", driver, config, _args) do
-    with {:ok, built} <- fetch_build(driver),
+  defp run_tool("qa_launch_app", driver, config, args) do
+    with {:ok, fixtures} <- api_fixtures(config, args),
+         {:ok, built} <- fetch_build(driver),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          :ok <- unchanged_build(config, built),
          name = Path.basename(built.executable),
-         {:ok, reports} <- crash_reports(config, name) do
-      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports}})
+         {:ok, reports} <- crash_reports(config, name),
+         {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
+      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports, api_fixtures: fixtures_dir}})
     end
   end
 
@@ -685,6 +695,51 @@ defmodule SymphonyElixir.QaDriver do
       end
 
     File.rm(local)
+    result
+  end
+
+  # -- API fixtures ------------------------------------------------------------
+
+  defp api_fixtures(_config, %{"api_fixtures" => nil}), do: {:ok, nil}
+
+  defp api_fixtures(config, %{"api_fixtures" => path}) do
+    with {:ok, _dir, files} <- Checks.read_fixture_dir(config.worktree, path, "api_fixtures", "qa_launch_app") do
+      {:ok, files}
+    end
+  end
+
+  defp api_fixtures(_config, _args), do: {:ok, nil}
+
+  # Each launch gets its own copy of the checked bytes, so an app still running
+  # on an earlier copy keeps it, and later edits in the worktree change nothing.
+  defp copy_api_fixtures(_config, nil), do: {:ok, nil}
+
+  defp copy_api_fixtures(%{remote?: false} = config, files) do
+    dest = Path.join(config.scratch_dir, "api-fixtures-#{System.unique_integer([:positive])}")
+    File.mkdir!(dest)
+
+    for {relative, bytes} <- files do
+      path = Path.join(dest, relative)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, bytes, [:exclusive])
+    end
+
+    {:ok, dest}
+  end
+
+  defp copy_api_fixtures(config, files) do
+    name = "api-fixtures-#{System.unique_integer([:positive])}"
+    tar = Path.join(config.scratch_dir, name <> ".tar")
+    :ok = :erl_tar.create(String.to_charlist(tar), for({relative, bytes} <- files, do: {String.to_charlist(relative), bytes}))
+    dest = Path.join(config.host_dir, name)
+
+    result =
+      case config.host.ship.(tar, dest) do
+        :ok -> {:ok, dest}
+        {:error, reason} -> tool_error("qa_launch_failed", "The api_fixtures directory could not be copied to the QA host: #{reason}")
+      end
+
+    File.rm(tar)
     result
   end
 
@@ -1191,11 +1246,12 @@ defmodule SymphonyElixir.QaDriver do
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
          {stub_url, forwards} = stub_route(state.config, state.stub.port),
-         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, info.api_fixtures), reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
       payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
+      payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
       {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
     else
       {:error, {:qa_tool, _code, _message}} = error ->
@@ -1240,12 +1296,16 @@ defmodule SymphonyElixir.QaDriver do
     {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
-  # The QA host has its own login environment; only the QA root and the stub's URL cross over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url),
-    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url}]
+  # The QA host has its own login environment; only the QA root, the stub's URL
+  # and the API fixtures' copy cross over.
+  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, fixtures_dir),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | fixtures_env(fixtures_dir)]
 
-  defp launch_env(config, stub_url),
-    do: AgentEnv.build_with(%{@qa_root_env => config.qa_root, OpenRouter.qa_url_env() => stub_url})
+  defp launch_env(config, stub_url, fixtures_dir),
+    do: AgentEnv.build_with(Map.new([{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | fixtures_env(fixtures_dir)]))
+
+  defp fixtures_env(nil), do: []
+  defp fixtures_env(dir), do: [{@api_fixtures_env, dir}]
 
   defp update_app(state, port, fun) do
     case Enum.find(state.apps, fn {_pid, app} -> app.port == port end) do
