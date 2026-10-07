@@ -66,11 +66,7 @@ final class RestartController {
             case let .send(action):
                 let stateRoot = runner.stateRoot
                 Task {
-                    let result = await ControlAPI.send(
-                        action,
-                        stateRoot: stateRoot,
-                        fallback: AppStores.current.controlURLFallback
-                    )
+                    let result = await AppStores.current.sendControl(action, stateRoot: stateRoot)
                     handle(.controlFinished(action, result))
                     poller.pollNow()
                 }

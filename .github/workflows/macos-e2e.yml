@@ -18,6 +18,7 @@ on:
       - "mix.lock"
       - "scripts/release/**"
       - "scripts/zig-sdk-shim/**"
+      - "scripts/ci/xcode26-developer-dir.sh"
       - "lib/symphony_elixir/tracker/memory.ex"
       - ".github/workflows/macos-e2e.yml"
 
@@ -31,8 +32,9 @@ concurrency:
 jobs:
   e2e:
     name: update, restart and rollback
-    # The macOS 15 SDK, like the release build, so Zig links the Burrito wrapper directly.
-    runs-on: macos-15
+    # The app targets macOS 26 (DD3), so it runs only on 26 or later. Zig links the
+    # Burrito wrapper against the macOS 26 SDK through scripts/zig-sdk-shim.
+    runs-on: macos-26
     timeout-minutes: 60
 
     steps:
@@ -49,6 +51,9 @@ jobs:
 
       - name: Install minisign
         run: brew install minisign
+
+      - name: Select Xcode 26
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_ENV"
 
       - name: Show toolchain
         run: |
