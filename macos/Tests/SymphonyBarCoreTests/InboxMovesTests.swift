@@ -165,12 +165,8 @@ final class InboxMovesTests: XCTestCase {
 
     // MARK: - The list after a move
 
-    func testAMovedItemLeavesTheListAtOnce() throws {
-        let items = try payload().items
-        let list = InboxList(items: items, answered: ["i-330"])
-        XCTAssertEqual(list.ordered.first?.identifier, "BIL-206")
-        XCTAssertEqual(list.totalCount, 4)
-        XCTAssertEqual(InboxList(items: items).neighbor(of: "i-330")?.identifier, "BIL-206")
+    func testAfterApprovingThePlanTheSelectionMovesToThePullRequest() throws {
+        XCTAssertEqual(InboxList(items: try payload().items).neighbor(of: "i-330")?.identifier, "BIL-206")
     }
 
     // MARK: - Requests

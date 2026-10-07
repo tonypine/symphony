@@ -271,6 +271,20 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40 moved on to Done since; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
     end
 
+    test "refuses an approved plan once Symphony promoted its sub-tickets", %{opts: opts} do
+      backlog = [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}]
+      put_issues([%{plan("In Review") | sub_issues: backlog}])
+      assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+
+      put_issues([%{plan(@waiting) | sub_issues: [%{hd(backlog) | state: "Todo"}]}])
+
+      assert {:error, {:conflict, "Symphony already promoted the sub-tickets of MOT-30; move them in Linear instead"}} =
+               DirectorMoves.undo("MOT-30", opts)
+
+      put_issues([%{plan(@waiting) | sub_issues: backlog}])
+      assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-30", opts)
+    end
+
     test "fails when Linear refuses the move back, and keeps the move to undo", %{opts: opts} do
       put_issues([pr("In Review")])
       assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)

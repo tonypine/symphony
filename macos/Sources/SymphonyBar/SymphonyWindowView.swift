@@ -49,8 +49,6 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxMoveError: String?
     /// The banner after a move, with Undo for 10 s (C18).
     @Published private(set) var inboxBanner: InboxBanner?
-    /// The items moved from the Inbox that Symphony still lists, by issue id: they leave the list at once.
-    @Published private(set) var inboxAnswered: Set<String> = []
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -111,9 +109,9 @@ final class SymphonyWindowModel: ObservableObject {
         readInbox()
     }
 
-    /// The Inbox under the window's scope, without the items just moved.
+    /// The Inbox under the window's scope.
     var inboxList: InboxList? {
-        inbox.map { InboxList(items: $0.items, scope: scope, answered: inboxAnswered) }
+        inbox.map { InboxList(items: $0.items, scope: scope) }
     }
 
     /// Opens the Inbox on the item with issue id `id` and its `move` sheet, once the Inbox lists it.
@@ -160,8 +158,9 @@ final class SymphonyWindowModel: ObservableObject {
         inboxMoveError = nil
     }
 
-    /// The sheet's button: sends the move; on success the sheet closes, the item leaves the list, the selection
-    /// moves to the next item and the banner shows; on failure the sheet says why.
+    /// The sheet's button: sends the move; on success the sheet closes, the selection moves to the next item after
+    /// a move (the item leaves the list once Symphony's poll sees it moved) and the banner shows; on failure the
+    /// sheet says why.
     func confirm(_ sheet: ConsequenceSheet, reason: String) {
         guard !inboxMoveInFlight, let action = sheet.action(reason: reason) else { return }
         inboxMoveInFlight = true
@@ -171,11 +170,10 @@ final class SymphonyWindowModel: ObservableObject {
             inboxMoveInFlight = false
             switch result {
             case .done:
-                let next = inboxList?.neighbor(of: sheet.itemID)
                 inboxSheet = nil
-                inboxAnswered.insert(sheet.itemID)
+                // The picks were sent: Send Decisions turns off again.
                 inboxPicks[sheet.itemID] = nil
-                inboxSelection = next?.id
+                if sheet.targetState != nil { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
                 showBanner(sheet.banner)
             case let .failed(message):
                 inboxMoveError = message
@@ -184,14 +182,13 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Undo on the banner: takes the move back, and the item comes back to the list, selected.
+    /// Undo on the banner: takes the move back, and selects the item again.
     func undo(_ banner: InboxBanner) {
         guard banner.undo else { return }
         dismissBanner()
         Task {
             switch await onControl(.undo(banner.identifier)) {
             case .done:
-                inboxAnswered.remove(banner.itemID)
                 inboxSelection = banner.itemID
                 showBanner(.undone(itemID: banner.itemID, identifier: banner.identifier))
             case let .failed(message):
@@ -241,8 +238,6 @@ final class SymphonyWindowModel: ObservableObject {
             if case let .loaded(data) = result, let payload = InboxPayload.decode(data) {
                 inbox = payload
                 inboxResult = nil
-                // An item moved away leaves the list for good once Symphony stops listing it.
-                inboxAnswered = inboxAnswered.filter { id in payload.items.contains { $0.id == id } }
                 openPendingSheet()
             } else {
                 inboxResult = result

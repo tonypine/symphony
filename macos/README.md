@@ -859,9 +859,9 @@ state. The window opens on the Inbox the first time.
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
   (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`), and what went wrong
-  shows in the sheet. After a move the item leaves the list, the selection moves to the next item, and a banner
-  at the foot says "Moved to Merging" with **Undo** for 10 seconds, which moves the ticket back
-  (`POST /api/v1/control/undo`).
+  shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
+  Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
+  seconds, which moves the ticket back (`POST /api/v1/control/undo`).
 
 - **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
   are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy

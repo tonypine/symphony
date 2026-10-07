@@ -4656,8 +4656,9 @@ Minimum endpoints:
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
     itself, so the plan revision trigger counts a `decisions` comment as a person's and revises the
     plan.
-  - `undo` takes back the last move on the ticket within 10 seconds of it, and only while the ticket
-    is still where the move put it; otherwise it answers `409`. A comment the move posted stays.
+  - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
+    still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
+    otherwise it answers `409`. A comment the move posted stays.
   - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
     Linear error `502`.
   - Suggested response shape:

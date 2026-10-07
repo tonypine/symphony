@@ -22,7 +22,8 @@ defmodule SymphonyElixir.DirectorMoves do
   trigger counts them as a person's comment.
 
   `undo/2` takes back the last move on a ticket within 10 s of it, and only while
-  the ticket is still in the state the move put it in. The last move per ticket is kept in this
+  the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
+  promoted its sub-tickets. The last move per ticket is kept in this
   module's Agent, so a restart forgets it.
   """
 
@@ -30,7 +31,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Config, HumanReview, Orchestrator, RunKind, SubIssueWait, Tracker}
+  alias SymphonyElixir.{AuditLog, BreakdownReview, Config, HumanReview, Orchestrator, RunKind, SubIssueWait, Tracker}
   alias SymphonyElixir.Linear.Issue
 
   @undo_window_ms 10_000
@@ -287,7 +288,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Logger.info("Director move #{name} issue_id=#{issue.id} issue_identifier=#{issue.identifier} from=#{issue.state} to=#{to_state || issue.state}")
 
     if to_state do
-      entry = %{move: move, from_state: issue.state, to_state: to_state, at_ms: now_ms(opts)}
+      entry = %{move: move, from_state: issue.state, to_state: to_state, at_ms: now_ms(opts), backlog: BreakdownReview.backlog_sub_issue_ids(issue)}
       Agent.update(server(opts), &Map.put(&1, issue.id, entry))
     end
 
@@ -318,6 +319,10 @@ defmodule SymphonyElixir.DirectorMoves do
 
           not same_state?(issue.state, last.to_state) ->
             conflict("#{issue.identifier} moved on to #{issue.state} since; move it in Linear instead")
+
+          # An approved plan whose sub-tickets Symphony promoted would come back to review approved.
+          BreakdownReview.backlog_sub_issue_ids(issue) != last.backlog ->
+            conflict("Symphony already promoted the sub-tickets of #{issue.identifier}; move them in Linear instead")
 
           true ->
             {:ok, last}
