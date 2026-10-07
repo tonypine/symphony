@@ -50,17 +50,17 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         project: @project
       },
       %Action{
-        key: "qa:id-MOT-52",
+        key: "qa:app_update:id-MOT-52,id-MOT-53",
         kind: :qa_blocked,
-        title: "Unblock QA for MOT-52",
-        why: "Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.",
-        unblocks: "the review of its PR",
-        steps: [
-          "Fix the cause above, on the machine QA runs on.",
-          "Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back."
-        ],
-        done_when: "MOT-52 leaves In Review, or its next QA report is not blocked.",
-        issue: issue("MOT-52", "Widget refresh"),
+        title: "Update the Symphony app",
+        why:
+          "MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. " <>
+            "MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.",
+        unblocks: "the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)",
+        est_minutes: 5,
+        steps: ["Update the Symphony app to its latest release."],
+        done_when: "MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.",
+        issue: nil,
         project: @project
       }
     ]
@@ -72,7 +72,17 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert body == """
            **4 actions need you.** Quickest first.
 
-           ### 1. Add the release signing secrets
+           ### 1. Update the Symphony app
+
+           **~5 min** · Unblocks the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)
+
+           **Why:** MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.
+
+           1. Update the Symphony app to its latest release.
+
+           **Done when:** MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.
+
+           ### 2. Add the release signing secrets
 
            **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
 
@@ -85,7 +95,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
 
-           ### 2. Approve the plan for MOT-40
+           ### 3. Approve the plan for MOT-40
 
            **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
 
@@ -97,24 +107,13 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Done when:** MOT-40 leaves In Review.
 
-           ### 3. Turn on the pre-push hook on your laptop
+           ### 4. Turn on the pre-push hook on your laptop
 
            Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
            1. Run `git config core.hooksPath .githooks` in your cycle checkout.
 
            **Done when:** you close MOT-31, or move it on.
-
-           ### 4. Unblock QA for MOT-52
-
-           Unblocks [MOT-52](https://linear.app/acme/issue/MOT-52): the review of its PR
-
-           **Why:** Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.
-
-           1. Fix the cause above, on the machine QA runs on.
-           2. Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back.
-
-           **Done when:** MOT-52 leaves In Review, or its next QA report is not blocked.
 
            ---
            _Symphony posts a new update when this list changes · list `#{Update.list_id(example_actions())}`_\
@@ -138,7 +137,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     {body, []} = Update.render(example_actions() ++ [review], ["In Review", "Human Review"])
 
     assert body =~ "**5 actions need you.** Human Review tickets first, then quickest first.\n\n### 1. Review MOT-63\n\n**Human Review** · **~30 min** · Unblocks"
-    assert body =~ "### 2. Add the release signing secrets"
+    assert body =~ "### 2. Update the Symphony app"
     assert [%Action{key: "review:id-MOT-63"} | _rest] = Update.sort(example_actions() ++ [review])
   end
 
@@ -188,7 +187,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Done when:** the next run of `Release` on `main` is green.
 
-           ### 2. Add the release signing secrets
+           ### 2. Update the Symphony app
            """
   end
 
