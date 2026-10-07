@@ -19,10 +19,11 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
       a person anyway (see `SymphonyElixir.SettingsUICoverage`). Other repositories don't have
       these files, so the rule never triggers there.
 
-  Before `:ticket_pattern` matches, the `:human_review_state` option (`issues.states.human_review`,
-  e.g. `Human Review`) is blanked where the text names the state: backticked, bolded, after
-  `to`, `in`, `into` or `from`, or before `state`. The name matches case-sensitively, so a ticket
-  about the state doesn't match `human review`, and "needs a human review" still does.
+  Before `:ticket_pattern` matches, each name in the `:review_states` option (`In Review` and
+  `issues.states.human_review`, e.g. `Human Review`) is blanked wherever the text names the
+  state: bare, backticked, bolded or quoted. The name matches case-sensitively, so a ticket about
+  the state doesn't match `human review`, while "needs a human review" still does. A name right
+  after a request ("Needs Human Review", "requires a Human Review") stays, since that asks for one.
 
   Docs and tests are the globs QA selection skips (`QaAgent.Selection.docs_or_test?/1`).
   A version's major is its first number, or its first two when the first is `0`, so `0.4` to
@@ -66,13 +67,14 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   @doc """
   The reasons `issue` and its PR's diff must go to a human, one per triggered rule. `busy_files`
   are the paths changed most often on the default branch lately; `rules` is the effective
-  `auto_review.acceptance_gate.escalate` block. Options: `:human_review_state`.
+  `auto_review.acceptance_gate.escalate` block. Options: `:review_states`, the state names the
+  `:ticket_pattern` rule skips.
   """
   @spec check(Issue.t(), diff_summary(), [String.t()], Escalate.t(), keyword()) :: [reason()]
   def check(%Issue{} = issue, %{files: files}, busy_files, %Escalate{} = rules, opts \\ []) when is_list(files) and is_list(busy_files) do
     [
       {:label, label_detail(issue, rules.labels)},
-      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, opts[:human_review_state])},
+      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, Keyword.get(opts, :review_states, []))},
       {:path, path_detail(files, rules.paths)},
       {:diff_pattern, diff_pattern_detail(files, rules.diff_patterns)},
       {:dependency, dependency_detail(files, rules.dependencies)},
@@ -92,7 +94,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   def ticket_reasons(%Issue{} = issue, %Escalate{} = rules, opts \\ []) do
     [
       {:label, label_detail(issue, rules.labels)},
-      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, opts[:human_review_state])}
+      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, Keyword.get(opts, :review_states, []))}
     ]
     |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
@@ -106,21 +108,26 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     |> join_or_nil(&"the issue is labelled `#{&1}`")
   end
 
-  defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns, human_review_state) do
-    text = [title || "", description || ""] |> Enum.join("\n") |> blank_state_name(human_review_state)
+  defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns, review_states) do
+    text = [title || "", description || ""] |> Enum.join("\n") |> blank_state_names(review_states)
 
     patterns
     |> Enum.filter(&Regex.match?(Regex.compile!(&1), text))
     |> join_or_nil(&"the ticket matches `#{&1}`")
   end
 
-  # The ticket naming the Human Review state isn't a request for a human review.
-  defp blank_state_name(text, state) when is_binary(state) and state != "" do
-    name = Regex.escape(state)
-    Regex.replace(~r/`#{name}`|\*\*#{name}\*\*|\b(?i:to|in|into|from)\s+#{name}\b|\b#{name}\s+(?i:state)\b/u, text, " ")
+  # The ticket naming a review state (`Human Review`) isn't a request for a human review, unless
+  # the name follows a request word: "Needs Human Review".
+  defp blank_state_names(text, states) do
+    states
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.reduce(text, fn state, acc ->
+      Regex.replace(~r/(\b(?i:needs?|requires?|wants?)\s+(?:(?i:an?)\s+)?)?\b#{Regex.escape(state)}\b/u, acc, fn
+        whole, "" -> String.duplicate(" ", String.length(whole))
+        whole, _request -> whole
+      end)
+    end)
   end
-
-  defp blank_state_name(text, _state), do: text
 
   defp path_detail(files, globs) do
     files

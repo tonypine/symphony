@@ -119,7 +119,7 @@ defmodule SymphonyElixir.HumanReview do
     rules = settings.auto_review.acceptance_gate.escalate
     rules = %{rules | labels: Enum.reject(rules.labels, &Issue.breakdown_label?/1)}
 
-    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, human_review_state: state(settings)) != [] or
+    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, review_states: review_states(settings)) != [] or
       author_reviews?(issue)
   end
 

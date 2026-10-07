@@ -57,7 +57,7 @@ defmodule SymphonyElixir.AcceptanceGate.Settings do
     @built_in %{
       labels: ["needs-human", "plan", "breakdown"],
       ticket_patterns: [
-        "(?i)\\b(human|manual(ly)?)\\s+review",
+        "(?im)\\b(needs?|requires?|wants?|for)\\s+(an?\\s+)?(human|manual)\\s+review\\b|\\bmanual(ly)?\\s+review|\\bhuman\\s+review\\s+(is\\s+)?(required|needed)\\b|^\\W*human\\s+review\\s*:",
         "(?i)must not (auto-?approve|auto-?merge)",
         "(?i)\\bneeds?[- ]human\\b"
       ],
