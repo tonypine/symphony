@@ -83,6 +83,8 @@ public struct StateSnapshot: Equatable {
         public var headline: String?
         /// How long it has waited, nil when Symphony couldn't tell.
         public var waitingSeconds: Int?
+        /// A pull request whose checks are green: its notification offers Approve and Merge….
+        public var checksGreen: Bool
 
         public init(
             issueID: String? = nil,
@@ -92,7 +94,8 @@ public struct StateSnapshot: Equatable {
             url: URL? = nil,
             kind: Kind = .pr,
             headline: String? = nil,
-            waitingSeconds: Int? = nil
+            waitingSeconds: Int? = nil,
+            checksGreen: Bool = false
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -102,6 +105,7 @@ public struct StateSnapshot: Equatable {
             self.kind = kind
             self.headline = headline
             self.waitingSeconds = waitingSeconds
+            self.checksGreen = checksGreen
         }
     }
 
@@ -422,7 +426,8 @@ public enum SymphonyState {
                 url: ticket.url.flatMap(URL.init(string:)),
                 kind: .init(ticket.kind),
                 headline: ticket.headline,
-                waitingSeconds: ticket.waitingSeconds
+                waitingSeconds: ticket.waitingSeconds,
+                checksGreen: ticket.checksGreen ?? false
             )
         }
         snapshot.inboxRead = payload.inboxRead ?? true
@@ -578,6 +583,7 @@ public enum SymphonyState {
             let kind: String?
             let headline: String?
             let waitingSeconds: Int?
+            let checksGreen: Bool?
         }
 
         let counts: Counts?

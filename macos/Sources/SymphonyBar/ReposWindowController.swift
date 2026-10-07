@@ -403,7 +403,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             guard let model = self.model else { return }
             model.stopping.remove(identifier)
             switch result {
-            case .done:
+            case .done, .moved:
                 show(ReposBanner(key: key, text: RepoHealth.stoppedMessage(issueIdentifier: identifier)))
             case let .failed(message):
                 model.stopFailures[identifier] = message

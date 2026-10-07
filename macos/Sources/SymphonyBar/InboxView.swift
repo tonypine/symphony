@@ -7,13 +7,32 @@ struct InboxContent: View {
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
-        if let inbox = model.inbox {
+        if let list = model.inboxList {
             InboxView(
-                list: InboxList(items: inbox.items, scope: model.scope),
+                list: list,
                 selection: $model.inboxSelection,
-                perform: model.perform,
+                picks: model.picks(for:),
+                pick: model.pick,
+                perform: { model.perform($0, on: $1) },
                 openOverview: { model.show(.overview) }
             )
+            .safeAreaInset(edge: .bottom) {
+                if let banner = model.inboxBanner {
+                    InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
+                        .padding(DesignTokens.Space.s3)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.default, value: model.inboxBanner)
+            .sheet(item: $model.inboxSheet) { sheet in
+                ConsequenceSheetView(
+                    sheet: sheet,
+                    working: model.inboxMoveInFlight,
+                    error: model.inboxMoveError,
+                    cancel: model.cancelSheet,
+                    confirm: { reason in model.confirm(sheet, reason: reason) }
+                )
+            }
         } else if model.inboxResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
         } else {
@@ -26,7 +45,11 @@ struct InboxContent: View {
 struct InboxView: View {
     let list: InboxList
     @Binding var selection: String?
-    let perform: (InboxAction) -> Void
+    /// A plan's picks, by issue id.
+    let picks: (String) -> DecisionPicks
+    /// Picks an option: (option, decision, issue id).
+    let pick: (Int, Int, String) -> Void
+    let perform: (InboxCommand, InboxItem) -> Void
     let openOverview: () -> Void
 
     var body: some View {
@@ -34,13 +57,18 @@ struct InboxView: View {
             InboxEmpty(hiddenLine: list.hiddenLine, openOverview: openOverview)
         } else {
             HStack(spacing: 0) {
-                InboxListColumn(list: list, selection: $selection, perform: perform)
+                InboxListColumn(list: list, selection: $selection, picks: picks, perform: perform)
                     .frame(width: DesignTokens.Layout.listColumnWidth)
                     .background(DesignTokens.Surface.content.color)
                 Divider()
                 if let item = list.selection(selection) {
                     ScrollView {
-                        InboxReviewBody(item: item, perform: perform)
+                        InboxReviewBody(
+                            item: item,
+                            picks: picks(item.id),
+                            pick: { option, decision in pick(option, decision, item.id) },
+                            perform: { perform($0, item) }
+                        )
                     }
                     // A new item starts with its own picks (the recommended options).
                     .id(item.id)
@@ -67,11 +95,12 @@ struct InboxEmpty: View {
     }
 }
 
-/// The list column: ↑↓ move the selection, Return takes the review's first action.
+/// The list column: ↑↓ move the selection, Return takes the review's default action (a move opens its sheet).
 private struct InboxListColumn: View {
     let list: InboxList
     @Binding var selection: String?
-    let perform: (InboxAction) -> Void
+    let picks: (String) -> DecisionPicks
+    let perform: (InboxCommand, InboxItem) -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -86,8 +115,11 @@ private struct InboxListColumn: View {
             .onKeyPress(.downArrow) { move(by: 1, proxy: proxy) }
             .onKeyPress(.upArrow) { move(by: -1, proxy: proxy) }
             .onKeyPress(.return) {
-                guard let item = list.selection(selection), let action = InboxAction.actions(for: item).first else { return .ignored }
-                perform(action)
+                guard let item = list.selection(selection),
+                    let command = InboxToolbar.toolbar(for: item, picks: picks(item.id)).defaultCommand
+                else { return .ignored }
+                // A move only opens its sheet.
+                perform(command, item)
                 return .handled
             }
         }
@@ -184,17 +216,19 @@ private struct InboxRow: View {
 /// The review of one item: its header, its actions, and its sections by kind.
 struct InboxReviewBody: View {
     let item: InboxItem
-    let perform: (InboxAction) -> Void
+    var picks = DecisionPicks()
+    var pick: (Int, Int) -> Void = { _, _ in }
+    let perform: (InboxCommand) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            ReviewHeader(item: item, perform: perform)
+            ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform)
             switch item.kind {
             case .plan:
-                BriefSections(brief: item.review.brief)
+                BriefSections(brief: item.review.brief, picks: picks, pick: pick)
                 if !item.review.subTickets.isEmpty { SubTicketsCard(tickets: item.review.subTickets) }
             case .pr:
-                if let pullRequest = item.review.pullRequest { ChecksCard(pullRequest: pullRequest, perform: perform) }
+                if let pullRequest = item.review.pullRequest { ChecksCard(pullRequest: pullRequest) }
                 BriefSections(brief: item.review.brief)
             case .finalVerification:
                 BriefSections(brief: item.review.brief)
@@ -211,30 +245,23 @@ struct InboxReviewBody: View {
 
 private struct ReviewHeader: View {
     let item: InboxItem
-    let perform: (InboxAction) -> Void
+    let toolbar: InboxToolbar
+    let perform: (InboxCommand) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            HStack(spacing: DesignTokens.Space.s2) {
-                StatusBadge(status: .you, word: item.kind.word)
-                if let age = item.age {
-                    Label("Waiting \(age)", systemImage: "clock")
-                        .font(DesignTokens.TypeStyle.label.font)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+            // The actions share the badges' row while it fits, and take a row of their own below them when it
+            // doesn't, so a narrow pane never squeezes the badges or widens the window.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DesignTokens.Space.s2) {
+                    badges
+                    Spacer(minLength: DesignTokens.Space.s2)
+                    ActionButtons(toolbar: toolbar, perform: perform)
                 }
-                if let state = item.state {
-                    Text(state)
-                        .font(DesignTokens.TypeStyle.label.font)
-                        .padding(.horizontal, DesignTokens.Space.s2)
-                        .padding(.vertical, DesignTokens.Space.s1 / 2)
-                        .overlay(Capsule().strokeBorder(DesignTokens.Surface.separator.color))
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                    HStack(spacing: DesignTokens.Space.s2) { badges }
+                    ActionButtons(toolbar: toolbar, perform: perform)
                 }
-                if let repo = item.repoKey {
-                    Text(repo).font(DesignTokens.TypeStyle.label.font).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: DesignTokens.Space.s2)
-                ActionButtons(item: item, perform: perform)
             }
             Text([item.identifier, item.title].compactMap { $0 }.joined(separator: " "))
                 .font(DesignTokens.TypeStyle.sentence.font)
@@ -246,21 +273,66 @@ private struct ReviewHeader: View {
                 .textSelection(.enabled)
         }
     }
+
+    /// The kind pill, waiting time, state and repo, each kept on one line.
+    @ViewBuilder private var badges: some View {
+        StatusBadge(status: .you, word: item.kind.word)
+            .fixedSize()
+        if let age = item.age {
+            Label("Waiting \(age)", systemImage: "clock")
+                .font(DesignTokens.TypeStyle.label.font)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+        }
+        if let state = item.state {
+            Text(state)
+                .font(DesignTokens.TypeStyle.label.font)
+                .padding(.horizontal, DesignTokens.Space.s2)
+                .padding(.vertical, DesignTokens.Space.s1 / 2)
+                .overlay(Capsule().strokeBorder(DesignTokens.Surface.separator.color))
+                .fixedSize()
+        }
+        if let repo = item.repoKey {
+            Text(repo)
+                .font(DesignTokens.TypeStyle.label.font)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
 }
 
-/// The review's actions; the first is the default, except that a red check makes Open PR the default (D2b).
+/// The review's actions (P4): the first is the prominent default (Open PR while a check is red, D2b), and the ⋯
+/// menu holds the rest. A move only opens its sheet.
 private struct ActionButtons: View {
-    let item: InboxItem
-    let perform: (InboxAction) -> Void
+    let toolbar: InboxToolbar
+    let perform: (InboxCommand) -> Void
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
-            ForEach(Array(InboxAction.actions(for: item).enumerated()), id: \.offset) { index, action in
+            ForEach(Array(toolbar.buttons.enumerated()), id: \.offset) { index, button in
                 if index == 0 {
-                    Button(action.title) { perform(action) }.buttonStyle(.borderedProminent)
+                    Button(button.command.title) { perform(button.command) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!button.enabled)
                 } else {
-                    Button(action.title) { perform(action) }
+                    Button(button.command.title) { perform(button.command) }
+                        .disabled(!button.enabled)
                 }
+            }
+            if !toolbar.overflow.isEmpty {
+                Menu {
+                    ForEach(Array(toolbar.overflow.enumerated()), id: \.offset) { _, command in
+                        Button(command.title) { perform(command) }
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions")
             }
         }
         .fixedSize()
@@ -270,6 +342,8 @@ private struct ActionButtons: View {
 /// A brief in its parts, or as text when it didn't parse.
 private struct BriefSections: View {
     let brief: InboxReview.Brief?
+    var picks = DecisionPicks()
+    var pick: (Int, Int) -> Void = { _, _ in }
 
     var body: some View {
         switch brief {
@@ -287,7 +361,9 @@ private struct BriefSections: View {
                 Card(title: "Decisions needed") {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                         ForEach(Array(parsed.decisions.enumerated()), id: \.offset) { index, decision in
-                            DecisionCard(number: index + 1, decision: decision)
+                            DecisionCard(number: index + 1, decision: decision, pick: picks.pick(index, in: decision)) { option in
+                                pick(option, index)
+                            }
                         }
                     }
                 }
@@ -366,16 +442,18 @@ private struct ReviewLineView: View {
     }
 }
 
-/// C16: a decision with its options as a radio group, the recommended one marked and picked to start with.
+/// C16: a decision with its options as a radio group, the recommended one marked and picked to start with. A pick
+/// that differs from the recommendation turns Send Decisions on.
 private struct DecisionCard: View {
     let number: Int
     let decision: InboxReview.Decision
-    @State private var pick: Int?
+    let pick: Int?
+    let choose: (Int) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             Text("\(number). \(decision.question)").font(DesignTokens.TypeStyle.rowTitle.font)
-            Picker(decision.question, selection: Binding(get: { pick ?? decision.initialPick ?? -1 }, set: { pick = $0 })) {
+            Picker(decision.question, selection: Binding(get: { pick ?? -1 }, set: choose)) {
                 ForEach(Array(decision.options.enumerated()), id: \.offset) { index, option in
                     HStack(spacing: DesignTokens.Space.s2) {
                         Text(option)
@@ -432,7 +510,6 @@ private struct SubTicketsCard: View {
 /// D2b: CI, Auto Review QA with its report, the gate's verdict and mode, and the change's size.
 private struct ChecksCard: View {
     let pullRequest: InboxReview.PullRequest
-    let perform: (InboxAction) -> Void
 
     var body: some View {
         Card(title: "Checks") {

@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "In Review",
+  "issue_id": "i-330",
+  "issue_identifier": "SHOP-330",
+  "move": "decisions",
+  "moved": false,
+  "to_state": "In Review",
+  "undo_window_ms": null
+}

@@ -677,7 +677,8 @@ defmodule SymphonyElixirWeb.Presenter do
       kind: Atom.to_string(item.kind),
       headline: item.ask,
       waiting_since: iso8601(item.waiting_since),
-      waiting_seconds: waiting_seconds(item.waiting_since, now)
+      waiting_seconds: waiting_seconds(item.waiting_since, now),
+      checks_green: Inbox.Item.checks_green?(item)
     }
   end
 

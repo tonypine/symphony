@@ -1,0 +1,10 @@
+{
+  "commented": false,
+  "from_state": "In Review",
+  "issue_id": "i-200",
+  "issue_identifier": "BIL-213",
+  "move": "sign_off",
+  "moved": true,
+  "to_state": "Done",
+  "undo_window_ms": 10000
+}

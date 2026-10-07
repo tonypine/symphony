@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "In Review",
+  "issue_id": "i-206",
+  "issue_identifier": "BIL-206",
+  "move": "rework",
+  "moved": true,
+  "to_state": "Rework",
+  "undo_window_ms": 10000
+}

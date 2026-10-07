@@ -10,6 +10,26 @@ public enum ControlAction: Equatable {
     case stopForcing(String)
     /// Stops the agent running on the ticket.
     case stop(String)
+    /// The Director's moves from the Inbox (DD4): each names the ticket; Symphony checks its state.
+    case approvePlan(String)
+    case approvePR(String)
+    case rework(String, reason: String)
+    case decisions(String, picks: [DecisionPick])
+    case signOff(String)
+    case backlog(String, note: String?)
+    /// Takes back the last move on the ticket, within 10 s of it.
+    case undo(String)
+
+    /// A decision's question and the option the Director picked, as `decisions` posts them.
+    public struct DecisionPick: Equatable {
+        public var question: String
+        public var answer: String
+
+        public init(question: String, answer: String) {
+            self.question = question
+            self.answer = answer
+        }
+    }
 
     /// Reason Symphony records for a pause from the menu; the dashboard and the menu show it.
     public static let pauseReason = "paused from menu bar"
@@ -24,10 +44,35 @@ public enum ControlAction: Equatable {
             return "api/v1/control/force"
         case .stop:
             return "api/v1/control/stop"
+        case .approvePlan:
+            return "api/v1/control/approve_plan"
+        case .approvePR:
+            return "api/v1/control/approve_pr"
+        case .rework:
+            return "api/v1/control/rework"
+        case .decisions:
+            return "api/v1/control/decisions"
+        case .signOff:
+            return "api/v1/control/sign_off"
+        case .backlog:
+            return "api/v1/control/backlog"
+        case .undo:
+            return "api/v1/control/undo"
         }
     }
 
-    var body: [String: String] {
+    /// The ticket a Director's move names, nil for the other controls.
+    public var moveIdentifier: String? {
+        switch self {
+        case let .approvePlan(identifier), let .approvePR(identifier), let .rework(identifier, _),
+             let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _), let .undo(identifier):
+            return identifier
+        case .pause, .resume, .force, .stopForcing, .stop:
+            return nil
+        }
+    }
+
+    var body: [String: Any] {
         switch self {
         case .pause:
             return ["reason": Self.pauseReason]
@@ -37,8 +82,15 @@ public enum ControlAction: Equatable {
             return ["identifier": identifier]
         case let .stopForcing(identifier):
             return ["identifier": identifier, "clear": "true"]
-        case let .stop(identifier):
+        case let .stop(identifier), let .approvePlan(identifier), let .approvePR(identifier), let .signOff(identifier),
+             let .undo(identifier):
             return ["issue_identifier": identifier]
+        case let .rework(identifier, reason):
+            return ["issue_identifier": identifier, "reason": reason]
+        case let .decisions(identifier, picks):
+            return ["issue_identifier": identifier, "picks": picks.map { ["question": $0.question, "answer": $0.answer] }]
+        case let .backlog(identifier, note):
+            return note.map { ["issue_identifier": identifier, "note": $0] } ?? ["issue_identifier": identifier]
         }
     }
 
@@ -55,15 +107,47 @@ public enum ControlAction: Equatable {
             return "Couldn't stop forcing \(identifier)"
         case let .stop(identifier):
             return "Couldn't stop \(identifier)"
+        case let .approvePlan(identifier):
+            return "Couldn't approve the plan of \(identifier)"
+        case let .approvePR(identifier):
+            return "Couldn't move \(identifier) to Merging"
+        case let .rework(identifier, _):
+            return "Couldn't send \(identifier) to Rework"
+        case let .decisions(identifier, _):
+            return "Couldn't send the decisions on \(identifier)"
+        case let .signOff(identifier):
+            return "Couldn't sign off \(identifier)"
+        case let .backlog(identifier, _):
+            return "Couldn't move \(identifier) to Backlog"
+        case let .undo(identifier):
+            return "Couldn't undo the move on \(identifier)"
         }
+    }
+}
+
+/// What Symphony answered to a Director's move: whether the ticket moved, and the state it is in now.
+public struct MoveOutcome: Equatable {
+    public var moved: Bool
+    public var toState: String?
+
+    public init(moved: Bool, toState: String?) {
+        self.moved = moved
+        self.toState = toState
     }
 }
 
 /// The outcome of sending a control action.
 public enum ControlResult: Equatable {
     case done
+    /// A Director's move was made; Symphony's answer says whether the ticket moved, and where.
+    case moved(MoveOutcome)
     /// The message says what went wrong, for the menu.
     case failed(String)
+
+    public var moveOutcome: MoveOutcome? {
+        if case let .moved(outcome) = self { return outcome }
+        return nil
+    }
 }
 
 /// Sends control actions to Symphony's control plane.
@@ -106,7 +190,7 @@ public enum ControlAPI {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Encoding a [String: String] can't fail.
+        // Encoding strings, and arrays of string dictionaries, can't fail.
         request.httpBody = try? JSONSerialization.data(withJSONObject: action.body, options: [.sortedKeys])
         return request
     }
@@ -137,7 +221,7 @@ public enum ControlAPI {
             if case let .stop(identifier) = action, !stopped(data) {
                 return .failed("\(prefix): no agent runs on \(identifier) anymore")
             }
-            return .done
+            return moveOutcome(action, data).map(ControlResult.moved) ?? .done
         case 401:
             return .failed("\(prefix): it rejected the control token (HTTP 401)")
         case 503:
@@ -146,6 +230,18 @@ public enum ControlAPI {
             if let message = errorMessage(data) { return .failed("\(prefix): \(message) (HTTP \(statusCode))") }
             return .failed("\(prefix): HTTP \(statusCode)")
         }
+    }
+
+    /// Symphony's answer to a Director's move (not Undo), nil when it doesn't read.
+    private static func moveOutcome(_ action: ControlAction, _ data: Data) -> MoveOutcome? {
+        struct Payload: Decodable {
+            let moved: Bool?
+            let to_state: String?
+        }
+        if case .undo = action { return nil }
+        guard action.moveIdentifier != nil, let payload = try? JSONDecoder().decode(Payload.self, from: data), let moved = payload.moved
+        else { return nil }
+        return MoveOutcome(moved: moved, toState: payload.to_state)
     }
 
     private static func stopped(_ data: Data) -> Bool {

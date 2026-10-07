@@ -59,6 +59,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.showInbox(selecting: id)
     }
 
+    /// Opens the window on the Inbox item of issue id `id` with its `move` sheet: nothing changes until the sheet's
+    /// button is pressed.
+    func showInbox(selecting id: String, opening move: InboxMove) {
+        show()
+        model?.showInbox(selecting: id, opening: move)
+    }
+
     /// Opens the window, or brings it to the front.
     func show() {
         if window == nil {

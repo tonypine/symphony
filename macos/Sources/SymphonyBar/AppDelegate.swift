@@ -205,6 +205,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             guard let self else { return }
             if let issueID { symphonyWindow.showInbox(selecting: issueID) } else { symphonyWindow.show(view: .overview) }
         }
+        inboxNotifications.onApproveAndMerge = { [weak self] issueID in
+            self?.symphonyWindow.showInbox(selecting: issueID, opening: .approveAndMerge)
+        }
         inboxNotifications.start()
         stateSubscription = apiClient.$stateJSON
             .compactMap { $0.flatMap(OverviewState.decode) }

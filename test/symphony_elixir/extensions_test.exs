@@ -1497,6 +1497,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert state["counts"]["waiting_on_you"] == 2
     assert state["inbox_read"]
     assert Enum.map(state["waiting_on_you"], & &1["kind"]) == ["clarify", "pr"]
+    # The PR's CI failed, so its notification offers no Approve and Merge.
+    assert Enum.map(state["waiting_on_you"], & &1["checks_green"]) == [false, false]
 
     assert json_response(post(build_conn(), "/api/v1/inbox", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}

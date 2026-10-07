@@ -434,6 +434,15 @@ menu bar icon shows a dot while the list is not empty, and the app notifies each
 Symphony reads the list on its poll and serves it from that read, re-reading a ticket's comments only
 when the ticket changed, so a new ticket shows after the next poll.
 
+You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick
+differs from the brief's recommendation), a PR **Approve and Merge…**, a final verification
+**Sign Off…**, and each **Send to Rework…** with a required reason. Every action opens a sheet that
+says what happens in Linear before anything changes; the move goes through Symphony's control API
+(`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `backlog`,
+`undo`), which checks the ticket's state, makes the Linear move and writes a `director_move` audit
+record. A banner offers **Undo** for 10 seconds after a move. The decisions comment counts as yours,
+so it starts the plan revision run like any comment of yours.
+
 Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
 **Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is
 `Me`, order it by **Updated**, and save it as `Waiting on me`. It shows on the phone app

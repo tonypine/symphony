@@ -77,6 +77,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.WorkspaceCleanup,
           SymphonyElixir.Config.Cache,
           SymphonyElixir.AuditLog.Writer,
+          SymphonyElixir.DirectorMoves,
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Repo.Fetcher,

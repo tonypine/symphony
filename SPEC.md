@@ -4162,7 +4162,9 @@ Minimum endpoints:
   - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
   - `waiting_on_you` lists what waits on the operator, as `GET /api/v1/inbox` does, in short, and
     `counts.waiting_on_you` is its length: the Mac app's menu bar badge, its Waiting on you menu
-    items and the Overview's Waiting on you stage read them.
+    items and the Overview's Waiting on you stage read them. `checks_green` is true for a pull
+    request whose CI passed and that neither Auto Review QA nor the acceptance gate objects to: its
+    notification offers Approve and Merge.
   - Suggested response shape:
 
     ```json
@@ -4629,6 +4631,54 @@ Minimum endpoints:
       "coalesced": false,
       "requested_at": "2026-02-24T20:15:30Z",
       "operations": ["poll", "reconcile"]
+    }
+    ```
+
+- `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
+  - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear
+    key and the audit log. Like the other control endpoints they require the control bearer token.
+  - Each takes `issue_identifier` (the identifier or the Linear id), reads the ticket, refuses a move
+    its current state doesn't allow with `409` (`move_not_allowed` and a message that says why),
+    posts its comment when it has one, makes the Linear move, writes a `director_move` audit record
+    (`move`, `from_state`, `to_state`, the comment; `GET /api/v1/audit?type=director_move` lists
+    them) and answers `200` with the states it moved between:
+
+    | Move | From | To | Comment |
+    | --- | --- | --- | --- |
+    | `approve_plan` | a plan in `In Review` or the Human Review state | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
+    | `approve_pr` | a pull request in a review state | `Merging` | none |
+    | `rework` | any ticket in a review state | `Rework` | `reason` (required), posted before the move |
+    | `decisions` | a plan in a review state | `In Review` from the Human Review state, else no move | one comment with `picks` (required, `[{"question", "answer"}]`), posted after the move |
+    | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
+    | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
+    | `undo` | the state the ticket's last move put it in | the state it came from | none |
+
+  - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
+    itself, so the plan revision trigger counts a `decisions` comment as a person's and revises the
+    plan.
+  - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
+    still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
+    otherwise it answers `409`. A comment the move posted stays.
+  - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
+    Linear error `502`.
+  - When Linear takes the first of a move's two writes and refuses the second, the move answers
+    `502` `move_incomplete` with a message that says what was already done, and still writes the
+    audit record of what changed, with `failed` naming the write that didn't happen (`comment` or
+    `move`). Decisions moved to `In Review` without their comment keep their undo; sending them
+    again posts the comment. A `rework` or `backlog` comment posted without its move is not posted
+    again when the same move is sent again while the ticket is still in the same state.
+  - Suggested response shape:
+
+    ```json
+    {
+      "move": "approve_pr",
+      "issue_id": "def456",
+      "issue_identifier": "BIL-206",
+      "from_state": "In Review",
+      "to_state": "Merging",
+      "moved": true,
+      "commented": false,
+      "undo_window_ms": 10000
     }
     ```
 

@@ -63,6 +63,11 @@ public struct InboxNotice: Equatable {
     public var body: String
     /// The Inbox item Open selects; nil for a problem, which Open shows on the Overview.
     public var issueID: String?
+    /// A pull request whose checks are green also offers Approve and Merge…, which opens the app on its sheet;
+    /// nothing is approved from the notification.
+    public var offersApproveAndMerge: Bool = false
+
+    public static let approveAndMergeTitle = InboxMove.approveAndMerge.buttonTitle
 }
 
 /// Decides what to notify from each state poll: an item or problem notifies once, the first time it is seen, and
@@ -118,7 +123,8 @@ public struct InboxNotifier: Equatable {
             kind: kind,
             title: "\(ticket.identifier) waits on you",
             body: [ticket.kind.inboxKind?.word, what].compactMap { $0 }.joined(separator: ": "),
-            issueID: ticket.issueID ?? ticket.identifier
+            issueID: ticket.issueID ?? ticket.identifier,
+            offersApproveAndMerge: kind == .pr && ticket.checksGreen
         )
     }
 
