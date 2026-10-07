@@ -205,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             guard let self else { return }
             if let issueID { symphonyWindow.showInbox(selecting: issueID) } else { symphonyWindow.show(view: .overview) }
         }
+        inboxNotifications.start()
         stateSubscription = apiClient.$stateJSON
             .compactMap { $0.flatMap(OverviewState.decode) }
             .sink { [weak self] state in self?.inboxNotifications.update(state) }

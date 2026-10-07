@@ -16,11 +16,22 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
 
     private let defaults: KeyValueStore
     private var notifier: InboxNotifier
-    private var registered = false
 
     init(defaults: KeyValueStore) {
         self.defaults = defaults
         notifier = InboxNotifier.load(from: defaults)
+    }
+
+    /// Takes Open on notifications, from earlier runs too, so call it before launch finishes. A scripted QA run and
+    /// `swift run` post none.
+    func start() {
+        if AppStores.current.qaMode?.scripted == true { return }
+        // UNUserNotificationCenter needs an app bundle; `swift run` has none.
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        let open = UNNotificationAction(identifier: Self.openActionID, title: Self.openTitle, options: [.foreground])
+        center.setNotificationCategories([UNNotificationCategory(identifier: Self.categoryID, actions: [open], intentIdentifiers: [])])
     }
 
     /// Notifies what is new in `state` since the last poll.
@@ -44,7 +55,6 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
         // UNUserNotificationCenter needs an app bundle; `swift run` has none.
         guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
-        registerIfNeeded(center)
         let content = UNMutableNotificationContent()
         content.title = notice.title
         content.body = notice.body
@@ -58,14 +68,6 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
             guard (try? await center.requestAuthorization(options: [.alert])) == true else { return }
             try? await center.add(request)
         }
-    }
-
-    private func registerIfNeeded(_ center: UNUserNotificationCenter) {
-        guard !registered else { return }
-        registered = true
-        center.delegate = self
-        let open = UNNotificationAction(identifier: Self.openActionID, title: Self.openTitle, options: [.foreground])
-        center.setNotificationCategories([UNNotificationCategory(identifier: Self.categoryID, actions: [open], intentIdentifiers: [])])
     }
 
     nonisolated func userNotificationCenter(
