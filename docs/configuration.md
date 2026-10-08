@@ -1228,7 +1228,7 @@ says, so a stray variable cannot send a key to another host. Checks against the 
 real key (a real model list, a real run) are manual: a person runs them by hand, with a cheap
 model, outside QA.
 
-An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
+An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.agents/skills`, the
 project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
 `config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands

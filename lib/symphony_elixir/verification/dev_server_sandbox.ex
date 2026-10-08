@@ -439,7 +439,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   A protected path that doesn't exist yet can't be mounted over, so its nearest folder inside
   the checkout is made read-only instead (`.claude` for a missing `.claude/settings.json`). When
-  that folder is the checkout itself, a missing top-level folder (`.claude`, `.ai`) gets an empty
+  that folder is the checkout itself, a missing top-level folder (`.claude`, `.agents`) gets an empty
   read-only placeholder, which `bwrap` creates in the checkout and the caller removes after. A
   missing top-level file (`WORKFLOW.md`, `mise.toml`) is left out: its placeholder would be an
   empty file in the agent's `git status` for the whole run.
