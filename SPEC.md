@@ -1504,7 +1504,7 @@ When enabled:
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and a
   parent walkthrough marks a criterion that only asks for tests or CI to pass `skipped` as covered
   by CI on the base branch. QA exercises the change the way a user would.
-- The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.ai/skills`, the project
+- The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
   a sub-issue or the workpad hands it to a person. A criterion a change elsewhere could meet, such as
@@ -3640,7 +3640,7 @@ Scoped GitHub tool extension contract:
   write-protected workspace path itself, except files identical to the
   branch's `origin` copy.
 - For both, a write-protected path includes the files a symlink inside one
-  points at (`.ai/skills/pull -> ../../priv/skills/pull` protects
+  points at (`.agents/skills/pull -> ../../priv/skills/pull` protects
   `priv/skills/pull`). Both MUST read the base and branch heads from the remote
   (`git ls-remote`), not from local remote-tracking refs, which the agent can
   rewrite.

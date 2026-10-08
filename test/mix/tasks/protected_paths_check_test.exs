@@ -15,9 +15,9 @@ defmodule Mix.Tasks.ProtectedPaths.CheckTest do
     git!(repo, ["config", "user.name", "Test User"])
     git!(repo, ["config", "user.email", "test@example.com"])
 
-    # As in Symphony's own repo: `.ai/skills/pull` links to the shipped `priv/skills/pull`.
-    commit_files!(repo, %{".ai/skills/push/SKILL.md" => "push v1\n", "priv/skills/pull/SKILL.md" => "pull v1\n", "lib/app.ex" => "app v1\n"}, "initial")
-    File.ln_s!("../../priv/skills/pull", Path.join(repo, ".ai/skills/pull"))
+    # As in Symphony's own repo: `.agents/skills/pull` links to the shipped `priv/skills/pull`.
+    commit_files!(repo, %{".agents/skills/push/SKILL.md" => "push v1\n", "priv/skills/pull/SKILL.md" => "pull v1\n", "lib/app.ex" => "app v1\n"}, "initial")
+    File.ln_s!("../../priv/skills/pull", Path.join(repo, ".agents/skills/pull"))
     commit_files!(repo, %{}, "link the pull skill")
     git!(repo, ["checkout", "-b", "auto/ACME-495"])
 
@@ -42,7 +42,7 @@ defmodule Mix.Tasks.ProtectedPaths.CheckTest do
   end
 
   test "fails a branch whose own commits change a skill or WORKFLOW.md", %{repo: repo} do
-    commit_files!(repo, %{".ai/skills/push/SKILL.md" => "agent rewrite\n", "WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
+    commit_files!(repo, %{".agents/skills/push/SKILL.md" => "agent rewrite\n", "WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
 
     stderr =
       capture_io(:stderr, fn ->
@@ -51,7 +51,7 @@ defmodule Mix.Tasks.ProtectedPaths.CheckTest do
         end
       end)
 
-    assert stderr =~ "Changed: .ai/skills/push/SKILL.md"
+    assert stderr =~ "Changed: .agents/skills/push/SKILL.md"
     assert stderr =~ "Changed: WORKFLOW.md"
   end
 
@@ -80,7 +80,7 @@ defmodule Mix.Tasks.ProtectedPaths.CheckTest do
   test "passes protected changes merged from the base branch", %{repo: repo} do
     commit_files!(repo, %{"lib/app.ex" => "app v2\n"}, "agent work")
     git!(repo, ["checkout", "main"])
-    commit_files!(repo, %{".ai/skills/push/SKILL.md" => "push v2\n", "priv/skills/pull/SKILL.md" => "pull v2\n", "WORKFLOW.md" => "v2\n"}, "main work")
+    commit_files!(repo, %{".agents/skills/push/SKILL.md" => "push v2\n", "priv/skills/pull/SKILL.md" => "pull v2\n", "WORKFLOW.md" => "v2\n"}, "main work")
     git!(repo, ["checkout", "auto/ACME-495"])
     git!(repo, ["merge", "--no-edit", "main"])
 

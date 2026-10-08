@@ -4,7 +4,7 @@ defmodule Mix.Tasks.ProtectedPaths.Check do
   @shortdoc "Fail when a branch's own commits change an agent-protected path"
 
   @moduledoc """
-  Fails when `--head` changes a path the agent sandbox write-protects (`.ai/skills`,
+  Fails when `--head` changes a path the agent sandbox write-protects (`.agents/skills`,
   `WORKFLOW.md`, ...), or a file a symlink in one points at, since it forked from `--base`.
   Changes merged from `--base` don't count: the diff starts at the merge-base with it.
 

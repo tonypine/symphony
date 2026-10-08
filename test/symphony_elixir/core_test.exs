@@ -3750,7 +3750,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Only stop early for a true blocker"
     assert prompt =~ "Do not include next steps for the user"
     assert prompt =~ "## Symphony Workpad"
-    assert prompt =~ "open and follow `.ai/skills/land/SKILL.md`"
+    assert prompt =~ "open and follow `.agents/skills/land/SKILL.md`"
     assert prompt =~ "Do not call `gh pr merge` directly"
     assert prompt =~ "Continuation context:"
     assert prompt =~ "retry attempt #2"

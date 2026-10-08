@@ -58,7 +58,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   @doc """
   Fetches `origin` and merges the base branch into the checked-out branch, outside the agent sandbox.
 
-  The sandbox write-protects paths such as `.ai/skills`, so the agent's own `git merge` fails when
+  The sandbox write-protects paths such as `.agents/skills`, so the agent's own `git merge` fails when
   the base branch changed one. Symphony first fast-forwards to the branch's remote copy when that
   is ahead, then merges with `--no-commit` and repo hooks off: the agent commits the merge (or
   resolves the conflicts) in its sandbox. It refuses a branch that changes a protected path itself.

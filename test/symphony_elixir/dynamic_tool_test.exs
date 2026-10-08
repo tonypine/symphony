@@ -2558,10 +2558,10 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert {false, %{"error" => %{"code" => "merge_in_progress", "message" => message}}} = sync.(:merging)
       assert message =~ "git commit --no-edit"
 
-      assert {false, %{"error" => %{"code" => "protected_paths_changed", "files" => [".ai/skills/push/SKILL.md"], "message" => message}}} =
+      assert {false, %{"error" => %{"code" => "protected_paths_changed", "files" => [".agents/skills/push/SKILL.md"], "message" => message}}} =
                sync.(:protected)
 
-      assert message =~ "changes write-protected files itself: .ai/skills/push/SKILL.md"
+      assert message =~ "changes write-protected files itself: .agents/skills/push/SKILL.md"
       assert message =~ "linear_create_subissue"
 
       assert {false, %{"error" => %{"code" => "git_merge_failed", "status" => 2, "output" => "local changes would be overwritten", "message" => message}}} =
@@ -3174,7 +3174,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   defp merge_head_status(:merging), do: {"fed789\n", 0}
   defp merge_head_status(_scenario), do: {"", 1}
 
-  defp protected_diff(:protected), do: {".ai/skills/push/SKILL.md\n", 0}
+  defp protected_diff(:protected), do: {".agents/skills/push/SKILL.md\n", 0}
   defp protected_diff(_scenario), do: {"", 0}
 
   defp merge_status(:refused), do: {"local changes would be overwritten", 2}

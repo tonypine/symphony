@@ -979,7 +979,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     |> Kernel.++(Enum.map(workspace_link_targets(workspace, []), &Path.join(workspace, &1)))
   end
 
-  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`). A remote
+  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`). A remote
   # workspace isn't on this host, so it keeps the plain deny list.
   defp workspace_link_targets(workspace, opts) do
     if Keyword.get(opts, :remote, false), do: [], else: AgentSandboxConfig.workspace_link_targets(workspace)

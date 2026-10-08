@@ -11,7 +11,7 @@
    - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, stop and wait.
    - `In Review` -> wait and poll for decision/review updates.
    - `Human Review` -> waiting on the operator only; do not change the issue or PR, stop and wait.
-   - `Merging` -> Symphony normally lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.ai/skills/land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Merging` -> Symphony normally lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow (for a plan ticket, the re-plan run in `Parent tickets` below).
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.

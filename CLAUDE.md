@@ -7,11 +7,11 @@ and Codex. The canonical project rules are imported below.
 
 ## Shared skills
 
-Reusable playbooks live under [`.ai/skills/`](.ai/skills) and are shared between
+Reusable playbooks live under [`.agents/skills/`](.agents/skills) and are shared between
 agents:
 
-- `.codex/skills/` → symlink to `.ai/skills/` (so Codex finds them)
-- `.claude/skills/` → symlink to `.ai/skills/` (so Claude Code finds them)
+- `.codex/skills/` → symlink to `.agents/skills/` (so Codex finds them)
+- `.claude/skills/` → symlink to `.agents/skills/` (so Claude Code finds them)
 
-Add new shared skills under `.ai/skills/<name>/SKILL.md` (front matter:
+Add new shared skills under `.agents/skills/<name>/SKILL.md` (front matter:
 `name`, `description`). Update both agents at once by editing one file.

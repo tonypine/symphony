@@ -135,7 +135,7 @@ Preferred: use the asyncio watcher to monitor review comments, CI, and head
 updates in parallel:
 
 ```
-python3 .ai/skills/land/land_watch.py
+python3 .agents/skills/land/land_watch.py
 ```
 
 Exit codes:
