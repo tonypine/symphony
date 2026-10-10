@@ -443,6 +443,12 @@ says what happens in Linear before anything changes; the move goes through Symph
 record. A banner offers **Undo** for 10 seconds after a move. The decisions comment counts as yours,
 so it starts the plan revision run like any comment of yours.
 
+Every ticket row opens the ticket's page: what runs now, a timeline of its runs and of your moves, its
+facts and the agent's last message, with **View Transcript** (the run's events, grouped by turn, in their
+own window) and **Stop Run…**. Stop Run says what a stop does before it does it, and can also move the
+ticket to Backlog with a note; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
+you".
+
 Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
 **Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is
 `Me`, order it by **Updated**, and save it as `Waiting on me`. It shows on the phone app

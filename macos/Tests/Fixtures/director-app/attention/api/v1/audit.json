@@ -1,0 +1,1 @@
+{"comment": null, "date": "2026-10-07", "event_type": "director_move", "from_state": "In Review", "issue_id": "i-288", "issue_identifier": "SHOP-288", "move": "approve_pr", "previous_hash": null, "record_hash": "a1f3", "repo_key": "web-shop", "timestamp": "2026-10-07T13:12:44.512301Z", "to_state": "Merging"}

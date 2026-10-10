@@ -1,0 +1,49 @@
+{
+  "acceptance_gate": {
+    "agent_verdict": "approve",
+    "criteria": {
+      "met": 4,
+      "unclear": 0,
+      "unmet": 1
+    },
+    "head_sha": "9c1e2f0",
+    "human_decided_at": null,
+    "human_decision": null,
+    "issue_id": "i-40",
+    "issue_identifier": "DOCS-40",
+    "judged_at": "2026-10-07T11:06:00Z",
+    "mode": "shadow",
+    "pr_url": "https://github.com/acme/docs/pull/88",
+    "reasons": [
+      "The quick start skips the install step the ticket asks for."
+    ],
+    "repo_key": "docs",
+    "run_id": "gate-40",
+    "verdict": "escalate"
+  },
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "issue_id": "i-40",
+  "issue_identifier": "DOCS-40",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "docs",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "watching": {
+    "last_ran_at": "2026-10-07T11:08:00Z",
+    "pull_request_url": "https://github.com/acme/docs/pull/88",
+    "repo_key": "docs",
+    "seconds_since_last_run": 11520,
+    "state": "Human Review",
+    "url": "https://linear.app/acme/issue/DOCS-40"
+  },
+  "workspace": null
+}

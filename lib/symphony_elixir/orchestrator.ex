@@ -7159,6 +7159,7 @@ defmodule SymphonyElixir.Orchestrator do
     case find_running_issue(state.running, issue_id_or_identifier) do
       {issue_id, running_entry} ->
         session_id = running_entry_session_id(running_entry)
+        repo_key = running_repo_key(state, running_entry)
         Logger.warning("Operator stopping running agent issue_id=#{issue_id} issue_identifier=#{running_entry.identifier} session_id=#{session_id}")
 
         state =
@@ -7176,6 +7177,7 @@ defmodule SymphonyElixir.Orchestrator do
             stopped: true,
             issue_id: issue_id,
             issue_identifier: running_entry.identifier,
+            repo_key: repo_key,
             session_id: session_id
           }}, state}
 

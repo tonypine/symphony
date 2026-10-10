@@ -185,6 +185,16 @@ public final class LiveAPIClient: ObservableObject {
         return String(decoding: stateJSON, as: UTF8.self)
     }
 
+    /// `path` under `base`, with the query after its `?` kept as a query (`api/v1/audit?issue=SHOP-305`).
+    nonisolated public static func url(_ path: String, base: URL) -> URL? {
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let url = base.appendingPathComponent(String(parts[0]))
+        guard parts.count == 2 else { return url }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.percentEncodedQuery = String(parts[1])
+        return components?.url
+    }
+
     /// A fetch through `transport` to the control URL `base()` gives, or unreachable while there is none.
     public static func fetch(
         base: @escaping () -> URL?,
@@ -192,12 +202,8 @@ public final class LiveAPIClient: ObservableObject {
         timeout: TimeInterval = StatusMachine.pollTimeout
     ) -> Fetch {
         { path in
-            guard let base = base() else { return .unreachable }
-            let request = URLRequest(
-                url: base.appendingPathComponent(path),
-                cachePolicy: .reloadIgnoringLocalCacheData,
-                timeoutInterval: timeout
-            )
+            guard let base = base(), let url = url(path, base: base) else { return .unreachable }
+            let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
             guard let (data, response) = try? await transport(request) else { return .unreachable }
             return .answered(data, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }

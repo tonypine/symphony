@@ -113,12 +113,14 @@ public struct Overview: Equatable {
 
     /// A button at the end of a Needs attention row.
     public enum Fix: Equatable, Hashable {
-        /// Opens the ticket; in Linear until the ticket page exists.
-        case open(URL)
+        /// Opens the ticket's page (D3).
+        case open(String)
         case openInLinear(URL)
         case openDiagnostics
         /// `POST /api/v1/control/force` with `clear`.
         case stopForcing(String)
+        /// Opens the Stop Run sheet (D12c); nothing stops until its button is pressed.
+        case stopRun(String)
 
         public var title: String {
             switch self {
@@ -126,6 +128,7 @@ public struct Overview: Equatable {
             case .openInLinear: "Open in Linear"
             case .openDiagnostics: "Open Diagnostics"
             case .stopForcing: "Stop Forcing"
+            case .stopRun: StopRunSheet.buttonTitle
             }
         }
     }
@@ -170,6 +173,11 @@ public struct Overview: Equatable {
         public var fixes: [Fix]
 
         public var age: String? { ageSeconds.map(Overview.duration) }
+
+        /// The ticket the row is about, which Return and a double-click open; nil for a hold or stray processes.
+        public var ticketIdentifier: String? {
+            kinds.contains { [.stuck, .failing, .staleForced, .conflict].contains($0) } ? id : nil
+        }
     }
 
     /// A row of Now working (C8): an agent run, a QA pass or a landing.
@@ -448,7 +456,7 @@ public struct Overview: Equatable {
             findings.append(Finding(
                 subject: run.identifier, kind: .stuck, severity: .problem,
                 sentence: "\(run.identifier) shows no agent activity for \(duration(idle)).",
-                ageSeconds: idle, fixes: index.url(identifier: run.identifier).map { [.open($0)] } ?? []
+                ageSeconds: idle, fixes: [.stopRun(run.identifier), .open(run.identifier)]
             ))
         }
 
@@ -457,7 +465,7 @@ public struct Overview: Equatable {
             findings.append(Finding(
                 subject: retry.identifier, kind: .failing, severity: .problem,
                 sentence: "\(retry.identifier) failed \(retry.attempt) times" + (error.isEmpty ? "." : ": \(error)."),
-                fixes: index.url(identifier: retry.identifier).map { [.open($0)] } ?? []
+                fixes: [.open(retry.identifier), .stopRun(retry.identifier)]
             ))
         }
 
@@ -485,8 +493,7 @@ public struct Overview: Equatable {
         // A forced ticket no list names (a Todo held by blockers) has no known repo: it shows under every scope.
         for ticket in state.snapshot.forced where ticket.stale && index.repoKey(identifier: ticket.identifier).map(scope.includes) ?? true {
             let forFor = ticket.forcedForSeconds.map { " for \(duration($0))" } ?? ""
-            var fixes: [Fix] = index.url(identifier: ticket.identifier).map { [.open($0)] } ?? []
-            fixes.append(.stopForcing(ticket.identifier))
+            let fixes: [Fix] = [.open(ticket.identifier), .stopForcing(ticket.identifier)]
             findings.append(Finding(
                 subject: ticket.identifier, kind: .staleForced, severity: .warning,
                 sentence: "\(ticket.identifier) has been forced\(forFor) and is still not done.",
