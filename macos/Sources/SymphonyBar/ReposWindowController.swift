@@ -81,6 +81,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var cancelRestart: () -> Void = {}
 
     private let secrets: SecretsReader
+    /// The `WORKFLOW.md` files Add Repo added that Symphony can't read yet.
+    private let pendingWorkflows = PendingWorkflowStore(defaults: AppStores.current.defaults)
 
     /// `secrets` is shared with Start, so the Add Repo sheet and Start can't each put up a Keychain prompt.
     init(secrets: SecretsReader) {
@@ -167,7 +169,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         let shown = ReposList.window(status: status, poll: poll, config: config) { [status, poll] gitHub in
             ManagedClones.removal(gitHub: gitHub, root: config.clonesRoot, status: status, poll: poll)
         }
-        model.window = shown
+        ReposList.validWorkflows(poll).forEach(pendingWorkflows.clear)
+        model.window = ReposList.withPendingWorkflows(shown, pending: pendingWorkflows.all)
         model.restartChip = ReposRestartChip(machine: restartMachine(), window: shown)
         select(in: model)
     }
@@ -253,10 +256,11 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     /// runs, but makes a repo's workflow store and its own clone only when it starts.
     private func saved(_ saved: AddRepoViewModel.Saved) {
         switch saved {
-        case let .added(key, madeDefault):
+        case let .added(key, madeDefault, workflow):
+            if let workflow { pendingWorkflows.record(workflow, for: key) }
             let apply = AddRepo.apply(status: status)
             finish(
-                .added(key: key, apply: apply, madeDefault: madeDefault),
+                .added(key: key, apply: apply, madeDefault: madeDefault, workflow: workflow),
                 apply: apply,
                 question: { AddRepo.restartQuestion(key: key, runs: $0) }
             )
@@ -313,6 +317,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             show(ReposChange.failed(key: key, message: "Couldn't disconnect \(key): \(error.localizedDescription)").banner)
             return
         }
+        pendingWorkflows.clear(key)
         let apply = AddRepo.apply(status: status)
         finish(
             .disconnected(key: key, apply: apply, newDefault: newDefault, next: next),

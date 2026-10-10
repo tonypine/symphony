@@ -653,6 +653,10 @@ public enum ReposList {
     public static let openOnGitHubTitle = "Open on GitHub"
     public static let openSettingsTitle = "Open Settings…"
     public static let tryAgainTitle = "Try Again"
+    /// Value of the WORKFLOW.md status when the file loads.
+    public static let validWorkflow = "Valid"
+    /// Label of the WORKFLOW.md status field.
+    public static let workflowStatusLabel = "Status"
 
     /// The window for Symphony's `status`, the last repos poll (nil before the first) and `symphony.yml`. The repos
     /// come from Symphony while it answers with them, otherwise from `symphony.yml` with what only Symphony knows
@@ -926,13 +930,13 @@ public enum ReposList {
         let path = workflow.path.map(abbreviated)
         switch workflow.state {
         case .valid:
-            return RepoField("Status", "Valid", detail: path)
+            return RepoField(workflowStatusLabel, validWorkflow, detail: path)
         case .invalid:
-            return RepoField("Status", "Invalid", detail: workflow.error ?? path, tone: .problem)
+            return RepoField(workflowStatusLabel, "Invalid", detail: workflow.error ?? path, tone: .problem)
         case .missing:
-            return RepoField("Status", "Missing", detail: workflow.error ?? path, tone: .problem)
+            return RepoField(workflowStatusLabel, "Missing", detail: workflow.error ?? path, tone: .problem)
         case let .other(status):
-            return RepoField("Status", status, detail: workflow.error ?? path)
+            return RepoField(workflowStatusLabel, status, detail: workflow.error ?? path)
         }
     }
 

@@ -472,7 +472,9 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
 - **WORKFLOW.md**: **Valid**, **Invalid** or **Missing**, in red when it doesn't load, with Symphony's
   error under it. Symphony keeps using the last good workflow until the file is fixed. With the default
   `workflow_source: ref`, this is the file committed on the base branch, so a broken `WORKFLOW.md` pushed
-  there shows as invalid even though the last good one still runs.
+  there shows as invalid even though the last good one still runs. For a repo whose `WORKFLOW.md` Add Repo
+  added, it shows **Pending: pull request open** with the pull request's URL, or **Pending: written, not
+  pushed** with the file's path, until Symphony reports the file valid.
 - **Activity**: how long ago Symphony last ran `git fetch origin` before a dispatch, or **Failed** (in
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
   it runs on, how long it has run and its last activity, and **Reveal Worktree** for a worktree on this
@@ -508,26 +510,64 @@ a sheet that adds an entry to `repositories:` in the
   Symphony keeps its own clone under `workspaces.clones_root` (`~/.local/share/symphony/repos` by
   default), made when Symphony starts, and never touches a checkout of yours. Its `WORKFLOW.md` comes
   from the repo.
-- **Local folder:** choose a folder in a git checkout. The checkout must have a GitHub `origin` remote
-  and a `WORKFLOW.md` at its top. The entry gets `workspace.strategy: worktree`, `workspace.repo` and
-  `workflow` set to the checkout's top folder and its `WORKFLOW.md`, and agents work in worktrees of it.
+- **Local folder:** choose a folder in a git checkout. The checkout must have a GitHub `origin` remote.
+  The entry gets `workspace.strategy: worktree`, `workspace.repo` and `workflow` set to the checkout's
+  top folder and its `WORKFLOW.md`, and agents work in worktrees of it.
 
 Then:
 
 - **Repo key** is filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
   type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key.
-- **Base branch** is `main` until you change it.
+- **Base branch** is the repo's default branch (GitHub's, or the checkout's `origin/HEAD`), else `main`,
+  until you change it.
 - **Linear routing:** the sheet lists the projects of the Linear workspace of the `LINEAR_API_KEY` in
   Settings. Pick the project whose issues go to the repo, and optionally labels an issue must all carry.
   The labels load once a project is picked: the workspace's and those of the project's teams. A missing
   key or a failed request shows the reason in plain words with **Retry**. Each request reads one list in
   pages of 50, so it stays well under Linear's query complexity limit.
 
+#### WORKFLOW.md
+
+Symphony runs no agent on a repo without a `WORKFLOW.md`, so the sheet checks for one: a local folder at
+the checkout's top, a GitHub URL on the base branch through the GitHub CLI (`gh`, logged in with
+`gh auth login`). A repo that has one shows **The repo has a WORKFLOW.md.** under the source and no other
+step. For a repo that has none, a **WORKFLOW.md** section says so and offers a draft in the shape
+Symphony's own repos use: the setup hook and QA playbooks in the front matter, then the agent prompt
+built from Symphony's playbook partials around the repo's commands. The draft is filled in from the files
+at the repo's top:
+
+| Files | Stack | Setup hook | Tests |
+| --- | --- | --- | --- |
+| `mix.exs` | Elixir, Mix | `mix deps.get` (through `mise` with a `mise.toml` or `.tool-versions`) | `mix test` |
+| `build.gradle(.kts)` or `settings.gradle(.kts)` | Kotlin or Java, Gradle | none | `./gradlew test`; an Android app (`com.android.application` in `app/build.gradle(.kts)`) gets `testDebugUnitTest` and the `android_app` QA playbook with its `applicationId` |
+| `package.json` | TypeScript or JavaScript; npm, pnpm, yarn or bun from the lock file | the manager's install | the `test` script; `lint` and `typecheck` scripts as pre-push checks, and a commented `verification` block for a `dev` script |
+| `Cargo.toml`, `go.mod`, `Package.swift` | Rust, Go, Swift | `cargo fetch`, `go mod download`, `swift package resolve` | `cargo test`, `go test ./...`, `swift test` |
+
+A `test:` target in the `Makefile` makes the tests `make test`. The line **Found** sums up what was found.
+Edit the draft in the sheet, then pick how it lands under **Add it by**:
+
+- **Open a pull request** (the default): Save makes a `symphony/add-workflow` branch (`-2`, `-3`… when
+  taken) from the base branch through GitHub's API, commits the file there and opens a pull request
+  against the base branch with `gh pr create`, so the file goes through review like any change. No
+  checkout of yours is touched. Agents start on the repo once it merges. When the commit or the pull
+  request fails, Save deletes the branch again, so trying again doesn't leave branches behind.
+- **Write it into the checkout** (local folder only): Save writes `WORKFLOW.md` at the checkout's top and
+  leaves it uncommitted. Commit and push it: Symphony reads the file from the base branch.
+- **Don't create one now**: Save connects the repo as before.
+
+Save adds the file first, then writes `symphony.yml`, and the message at the top of the Repos window
+names the pull request or the file. When `gh` is missing or can't read the repo, the section says why and
+Save connects the repo without the step. Symphony never writes `WORKFLOW.md` without this pick, and
+agents still can't change the file afterwards: it stays a write-protected path in their workspaces.
+`SYMPHONY_BAR_GH` names the `gh` to run instead of the one on `PATH` or in the Homebrew folders, as QA
+passes do with a fake.
+
 Save stays disabled, with the reason under the form, while the input can't be saved: no folder chosen,
-a folder that isn't a GitHub checkout with a `WORKFLOW.md`, a URL that isn't a GitHub repo, a key that is
-empty, malformed or taken, an empty base branch, no project, or the same project and labels as another
-repo. It also waits while the picked project's labels load. Save changes only `repositories:`: comments and the other entries stay as they are. When the file
-has a single repo with no route, Save also marks it `default: true`, so it keeps the issues no route
+a folder that isn't a GitHub checkout, a URL that isn't a GitHub repo, a key that is
+empty, malformed or taken, an empty base branch, no project, the same project and labels as another
+repo, a `WORKFLOW.md` check still running, or an empty draft. It also waits while the picked project's
+labels load. Save changes only `repositories:`: comments and the other entries stay as they are. When the
+file has a single repo with no route, Save also marks it `default: true`, so it keeps the issues no route
 matches (Symphony refuses a second repo next to a repo with no route that isn't the default).
 
 Symphony reads a new route from `symphony.yml` while it runs, but sets up a repo's workflow and its own
@@ -560,7 +600,7 @@ or no longer has the repo.
   choose another. Save rewrites only that entry: comments, the other entries, the route's team and
   assignee, `default` and `fetch_before_dispatch` stay. Switching to a GitHub URL drops `repo`,
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
-  them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
+  them as Add Repo does, and needs a `WORKFLOW.md` at the checkout's top (only Add Repo drafts one). A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
   The **Acceptance gate** picker sets `repositories[<key>].acceptance_gate.mode`: **Inherit** (the mode in
   Settings, named in brackets) removes the key, and an `acceptance_gate:` block it leaves empty; **Off**,

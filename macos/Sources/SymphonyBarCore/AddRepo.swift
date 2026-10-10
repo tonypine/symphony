@@ -56,10 +56,16 @@ public struct LocalCheckout: Equatable {
     public var path: String
     /// `owner/repo` of its `origin` remote.
     public var gitHub: String
+    /// Whether it has a `WORKFLOW.md` at its top.
+    public var hasWorkflow: Bool
+    /// The branch `origin/HEAD` points at, nil when the checkout doesn't record it.
+    public var defaultBranch: String?
 
-    public init(path: String, gitHub: String) {
+    public init(path: String, gitHub: String, hasWorkflow: Bool = true, defaultBranch: String? = nil) {
         self.path = path
         self.gitHub = gitHub
+        self.hasWorkflow = hasWorkflow
+        self.defaultBranch = defaultBranch
     }
 
     /// The `WORKFLOW.md` Symphony reads for the repo. Symphony resolves a relative `workflow` against the
@@ -71,7 +77,7 @@ public struct LocalCheckout: Equatable {
     /// Runs git with arguments in a folder; returns its exit status and standard output.
     public typealias Git = (_ arguments: [String], _ folder: String) -> (status: Int32, output: String)
 
-    /// Checks that `folder` is in a git checkout whose `origin` is on GitHub and which has a `WORKFLOW.md`.
+    /// Checks that `folder` is in a git checkout whose `origin` is on GitHub, and whether it has a `WORKFLOW.md`.
     public static func inspect(
         _ folder: String,
         git: Git = runGit,
@@ -91,11 +97,19 @@ public struct LocalCheckout: Equatable {
         guard let gitHub = GitHubRepoInput.normalize(url) else {
             return .failure(AddRepoProblem("The origin of \(shownTop) isn't a GitHub repo: \(url)"))
         }
-        let checkout = LocalCheckout(path: path, gitHub: gitHub)
-        guard fileExists(checkout.workflowPath) else {
-            return .failure(AddRepoProblem("\(shownTop) has no WORKFLOW.md. Add one before connecting the repo."))
+        var checkout = LocalCheckout(path: path, gitHub: gitHub)
+        checkout.hasWorkflow = fileExists(checkout.workflowPath)
+        let head = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], path)
+        let branch = head.output.trimmingWhitespace()
+        if head.status == 0, branch.hasPrefix("origin/"), branch.count > "origin/".count {
+            checkout.defaultBranch = String(branch.dropFirst("origin/".count))
         }
         return .success(checkout)
+    }
+
+    /// Why the Edit sheet can't move a repo to this checkout: it has no `WORKFLOW.md`.
+    public var missingWorkflowProblem: AddRepoProblem {
+        AddRepoProblem("\((path as NSString).abbreviatingWithTildeInPath) has no WORKFLOW.md. Add one before connecting the repo.")
     }
 
     /// Runs `/usr/bin/git -C folder arguments…`, waiting for it to exit.
@@ -315,7 +329,7 @@ public enum AddRepo {
     }
 
     /// What the sheet says after saving, for how the repo reaches Symphony.
-    public static func savedMessage(key: String, apply: AddRepoApply, madeDefault: String?) -> String {
+    public static func savedMessage(key: String, apply: AddRepoApply, madeDefault: String?, workflow: PendingWorkflow? = nil) -> String {
         var message: String
         switch apply {
         case .restart, .askToRestart:
@@ -326,6 +340,7 @@ public enum AddRepo {
             message = "Added \(key). Restart Symphony to connect it."
         }
         if let madeDefault { message += " \(madeDefault) is now the default repo, so it keeps the issues no route matches." }
+        if let workflow { message += " " + workflow.savedSentence }
         return message
     }
 

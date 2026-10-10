@@ -22,6 +22,14 @@ final class ReposChangeTests: XCTestCase {
                 )
             ),
             (
+                .added(key: "web", apply: .onNextStart, madeDefault: nil, workflow: .pullRequest(url: "https://github.com/acme/web/pull/7")),
+                ReposBanner(
+                    key: "web",
+                    text: "Added web. Symphony connects it when it starts. Opened https://github.com/acme/web/pull/7 to add its "
+                        + "WORKFLOW.md."
+                )
+            ),
+            (
                 .edited(key: "api", apply: nil),
                 ReposBanner(key: "api", text: "Saved api. Symphony reads the change from symphony.yml, so its next poll uses it.")
             ),

@@ -553,7 +553,7 @@ final class ReposListTests: XCTestCase {
             poll: .repos([symphony, api], warning: nil),
             config: config,
             now: now,
-            pending: { $0 == "api" ? .pullRequest(pr) : nil },
+            pending: { $0 == "api" ? .pullRequest(url: pr.absoluteString) : nil },
             isDirectory: { _ in false },
             cloneRemoval: { _ in .blocked("checking") }
         )

@@ -161,8 +161,11 @@ Symphony, so you need no checkout, `mise` or Elixir.
 2. **Scaffold operator config.** From your operator repo, run
    `~/Applications/Symphony.app/Contents/Resources/symphony init` to create `symphony.yml`, then edit the
    issue scope, agent command, workspace root, and `repositories:`.
-3. **Write a workflow per repo.** Invoke the `symphony-init-workflow` skill from Codex or Claude in
-   each target repo; the agent inspects the repo and writes a tailored `WORKFLOW.md`.
+3. **Write a workflow per repo.** Connect each repo with **Add Repo…** in the app's Repos window: for a
+   repo without a `WORKFLOW.md`, it drafts one from the repo's files for you to edit, then opens a pull
+   request that adds it (or writes it into a local checkout). For a more tailored file, invoke the
+   `symphony-init-workflow` skill from Codex or Claude in the target repo; the agent inspects the repo and
+   writes one.
 4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
    personal API key (Settings → Security & access → Personal API keys); the app keeps it in a file
    only you can read. Click Save, then choose **Start Symphony** from the menu.

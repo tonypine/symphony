@@ -1,13 +1,5 @@
 import Foundation
 
-/// A `WORKFLOW.md` the app wrote for a repo that hasn't reached its base branch yet (TP-694's pending store).
-public enum PendingWorkflow: Equatable {
-    /// A pull request adds the file.
-    case pullRequest(URL)
-    /// The file is written in the local folder at `path` but not pushed.
-    case written(path: String)
-}
-
 /// A repo's health in the Repos window: the sidebar glyph, the header line and the Needs attention box.
 public struct RepoHealth: Equatable {
     public enum Status: Equatable {
@@ -219,9 +211,9 @@ public struct RepoHealth: Equatable {
                     severity: .warning,
                     title: "WORKFLOW.md is waiting on its pull request",
                     note: "Symphony uses it once the pull request merges into \(branchName(repo)).",
-                    fixes: [.viewPullRequest(url)]
+                    fixes: URL(string: url).map { [.viewPullRequest($0)] } ?? []
                 )
-            case let .written(path):
+            case let .localFile(path):
                 return Problem(
                     id: "workflow",
                     severity: .warning,

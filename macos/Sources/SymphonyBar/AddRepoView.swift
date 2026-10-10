@@ -15,7 +15,8 @@ final class AddRepoViewModel: ObservableObject {
 
     /// What Save wrote.
     enum Saved {
-        case added(key: String, madeDefault: String?)
+        /// `workflow` is the `WORKFLOW.md` the sheet added for the repo.
+        case added(key: String, madeDefault: String?, workflow: PendingWorkflow?)
         case edited(from: RepositoryEntry, to: RepositoryEntry)
     }
 
@@ -39,6 +40,15 @@ final class AddRepoViewModel: ObservableObject {
     @Published private(set) var isSaving = false
     /// Enforce, while its confirmation is open.
     @Published var pendingAcceptanceGate: AcceptanceGateChoice?
+    /// Whether the repo picked has a `WORKFLOW.md`; never checked while editing a repo.
+    @Published private(set) var workflowCheck = WorkflowCheck.idle
+    /// The `WORKFLOW.md` drafted for a repo that has none, as the engineer edited it.
+    @Published private(set) var workflowText = ""
+    @Published var landing = WorkflowLanding.pullRequest
+    /// The `WORKFLOW.md` Save added, kept so a Save that failed on `symphony.yml` doesn't add it twice.
+    @Published private(set) var landedWorkflow: PendingWorkflow?
+    /// What Save is doing while `isSaving`.
+    @Published private(set) var savingMessage: String?
 
     /// Why the sheet can't add a repo at all: no `symphony.yml` is set, or its repos can't be read.
     let configProblem: String?
@@ -54,6 +64,14 @@ final class AddRepoViewModel: ObservableObject {
     private let secrets: SecretsReader
     /// True once the key was typed, so picking another source no longer replaces it.
     private var keyEdited = false
+    /// True once the base branch was typed, so the source's default branch no longer replaces it.
+    private var baseBranchEdited = false
+    /// True once the draft was typed in, so it is no longer redrafted.
+    private var workflowEdited = false
+    /// The stack of the local folder picked, when it has no `WORKFLOW.md`.
+    private var folderStack: WorkflowStack?
+    private var workflowProbe: Task<Void, Never>?
+    private let gitHubCLI: () -> GitHubCLI?
     private let linearClient: (_ apiKey: String) -> LinearClient
     /// The client the projects loaded with, which then loads the labels.
     private var client: LinearClient?
@@ -67,10 +85,14 @@ final class AddRepoViewModel: ObservableObject {
         state: StateSnapshot? = nil,
         linearClient: @escaping (_ apiKey: String) -> LinearClient = { LinearClient(apiKey: $0) },
         configCheck: @escaping SettingsConfigCheck = SettingsViewModel.runConfigCheck,
+        gitHubCLI: @escaping () -> GitHubCLI? = {
+            GitHubCLI.locate(environment: AppStores.current.environment).map(GitHubCLI.process)
+        },
         onSaved: @escaping (Saved) -> Void
     ) {
         self.configPath = configPath.trimmingCharacters(in: .whitespacesAndNewlines)
         self.secrets = secrets
+        self.gitHubCLI = gitHubCLI
         self.linearClient = linearClient
         self.configCheck = configCheck
         self.onSaved = onSaved
@@ -110,7 +132,35 @@ final class AddRepoViewModel: ObservableObject {
     var validation: Result<RepositoryEntry, AddRepoProblem> {
         if let configProblem { return .failure(AddRepoProblem(configProblem)) }
         if let editing { return EditRepo.entry(for: draft, editing: editing, existing: existing) }
-        return AddRepo.entry(for: draft, existing: existing)
+        return AddRepo.entry(for: draft, existing: existing).flatMap { entry in
+            switch workflowCheck {
+            case .checking:
+                return .failure(AddRepoProblem("Checking the repo for a WORKFLOW.md…"))
+            case .missing where landing != .skip && landedWorkflow == nil
+                && workflowText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+                return .failure(AddRepoProblem("The WORKFLOW.md draft is empty. Write one, or pick \"\(WorkflowLanding.skip.rawValue)\"."))
+            default:
+                return .success(entry)
+            }
+        }
+    }
+
+    /// Whether the sheet shows its WORKFLOW.md step: while it checks the repo, and when the repo has none.
+    var showsWorkflowStep: Bool {
+        switch workflowCheck {
+        case .checking, .missing, .failed:
+            return true
+        case .idle, .present:
+            return false
+        }
+    }
+
+    /// `owner/repo`, or the local folder, the WORKFLOW.md step talks about.
+    var workflowSource: String {
+        if draft.mode == .localFolder, case let .success(checkout)? = draft.folder {
+            return (checkout.path as NSString).abbreviatingWithTildeInPath
+        }
+        return draft.gitHub ?? ""
     }
 
     var canSave: Bool {
@@ -134,11 +184,32 @@ final class AddRepoViewModel: ObservableObject {
     // MARK: Bindings
 
     var mode: Binding<AddRepoDraft.Mode> {
-        Binding(get: { self.draft.mode }, set: { self.draft.mode = $0; self.suggestKey() })
+        Binding(get: { self.draft.mode }, set: { mode in
+            self.draft.mode = mode
+            if !WorkflowLanding.choices(for: mode).contains(self.landing) { self.landing = .pullRequest }
+            self.sourceChanged()
+        })
     }
 
     var gitHubInput: Binding<String> {
-        Binding(get: { self.draft.gitHubInput }, set: { self.draft.gitHubInput = $0; self.suggestKey() })
+        Binding(get: { self.draft.gitHubInput }, set: { input in
+            let before = self.draft.gitHub
+            self.draft.gitHubInput = input
+            if self.draft.gitHub != before { self.sourceChanged() }
+        })
+    }
+
+    var baseBranch: Binding<String> {
+        Binding(get: { self.draft.baseBranch }, set: { branch in
+            self.draft.baseBranch = branch
+            self.baseBranchEdited = true
+            // A GitHub repo is checked on the branch typed; a folder's draft only names it.
+            if self.draft.mode == .gitHub { self.checkWorkflow() } else { self.redraftWorkflow() }
+        })
+    }
+
+    var workflowDraft: Binding<String> {
+        Binding(get: { self.workflowText }, set: { self.workflowText = $0; self.workflowEdited = true })
     }
 
     var key: Binding<String> {
@@ -232,10 +303,18 @@ final class AddRepoViewModel: ObservableObject {
     func pickFolder(_ path: String) {
         isInspectingFolder = true
         Task {
-            let result = await Task.detached { LocalCheckout.inspect(path) }.value
+            let (result, stack) = await Task.detached { () -> (Result<LocalCheckout, AddRepoProblem>, WorkflowStack?) in
+                let result = LocalCheckout.inspect(path)
+                guard case let .success(checkout) = result, !checkout.hasWorkflow else { return (result, nil) }
+                return (result, WorkflowTemplate.detect(RepoFiles.checkout(checkout.path)))
+            }.value
             draft.folder = result
+            folderStack = stack
+            if editing == nil, !baseBranchEdited, case let .success(checkout) = result, let branch = checkout.defaultBranch {
+                draft.baseBranch = branch
+            }
             isInspectingFolder = false
-            suggestKey()
+            sourceChanged()
         }
     }
 
@@ -243,6 +322,10 @@ final class AddRepoViewModel: ObservableObject {
         guard canSave, case let .success(entry) = validation else { return }
         if let editing, EditRepo.changesAcceptanceGate(from: editing, to: entry) {
             saveChecked(editing, to: entry)
+            return
+        }
+        if editing == nil, landedWorkflow == nil, case let .missing(stack, _) = workflowCheck, landing != .skip {
+            addWorkflow(stack, then: entry)
             return
         }
         do {
@@ -254,11 +337,96 @@ final class AddRepoViewModel: ObservableObject {
             } else {
                 let madeDefault = try file.connectRepository(entry)
                 saveError = nil
-                onSaved(.added(key: entry.key, madeDefault: madeDefault))
+                onSaved(.added(key: entry.key, madeDefault: madeDefault, workflow: landedWorkflow))
             }
         } catch {
             saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
         }
+    }
+
+    /// Adds the drafted `WORKFLOW.md` the way `landing` says, off the main thread, then saves the entry.
+    private func addWorkflow(_ stack: WorkflowStack, then entry: RepositoryEntry) {
+        let landing = landing
+        let cli = landing == .pullRequest ? gitHubCLI() : nil
+        var checkout: LocalCheckout?
+        if draft.mode == .localFolder, case let .success(picked)? = draft.folder { checkout = picked }
+        let text = workflowText.hasSuffix("\n") ? workflowText : workflowText + "\n"
+        let gitHub = draft.gitHub ?? ""
+        let baseBranch = entry.baseBranch ?? AddRepo.defaultBaseBranch
+        isSaving = true
+        saveError = nil
+        savingMessage = landing == .pullRequest ? "Opening a pull request…" : "Writing WORKFLOW.md…"
+        Task {
+            let result = await Task.detached {
+                landing.land(text, gitHub: gitHub, baseBranch: baseBranch, summary: stack.summary, checkout: checkout, cli: cli)
+            }.value
+            isSaving = false
+            savingMessage = nil
+            switch result {
+            case let .success(pending)?:
+                landedWorkflow = pending
+                save()
+            case let .failure(problem)?:
+                saveError = problem.message
+            case nil:
+                break
+            }
+        }
+    }
+
+    /// After another repo is picked: suggests its key and checks it for a `WORKFLOW.md`, forgetting the old draft.
+    private func sourceChanged() {
+        suggestKey()
+        workflowEdited = false
+        landedWorkflow = nil
+        checkWorkflow()
+    }
+
+    /// Checks whether the repo picked has a `WORKFLOW.md`: a folder from its files, a GitHub repo through `gh`, once
+    /// the typing pauses. A GitHub repo's default branch becomes the base branch until one is typed.
+    private func checkWorkflow() {
+        workflowProbe?.cancel()
+        guard editing == nil else { return }
+        switch draft.mode {
+        case .localFolder:
+            guard case let .success(checkout)? = draft.folder else {
+                workflowCheck = .idle
+                return
+            }
+            workflowCheck = checkout.hasWorkflow ? .present : .missing(folderStack ?? WorkflowStack(), branch: nil)
+            redraftWorkflow()
+        case .gitHub:
+            guard let gitHub = draft.gitHub else {
+                workflowCheck = .idle
+                return
+            }
+            guard let cli = gitHubCLI() else {
+                workflowCheck = .failed(GitHubCLI.missingMessage)
+                return
+            }
+            workflowCheck = .checking
+            let branch = baseBranchEdited ? draft.baseBranch : nil
+            workflowProbe = Task {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard !Task.isCancelled else { return }
+                let result = await Task.detached { cli.probe(gitHub, branch: branch) }.value
+                guard !Task.isCancelled else { return }
+                switch result {
+                case let .success(probe):
+                    if !baseBranchEdited { draft.baseBranch = probe.defaultBranch }
+                    workflowCheck = probe.hasWorkflow ? .present : .missing(probe.stack, branch: probe.branch)
+                    redraftWorkflow()
+                case let .failure(problem):
+                    workflowCheck = .failed(problem.message)
+                }
+            }
+        }
+    }
+
+    /// Drafts the `WORKFLOW.md` again for the stack found and the base branch, until the draft is typed in.
+    private func redraftWorkflow() {
+        guard !workflowEdited, case let .missing(stack, _) = workflowCheck, let gitHub = draft.gitHub else { return }
+        workflowText = WorkflowTemplate.render(stack, gitHub: gitHub, baseBranch: draft.baseBranch)
     }
 
     /// Writes the edit once `symphony check` passes on the result, as Settings does, since it changes the
@@ -326,9 +494,14 @@ struct AddRepoView: View {
                         .disabled(model.editing != nil)
                     TextField(
                         "Base branch",
-                        text: $model.draft.baseBranch,
+                        text: model.baseBranch,
                         prompt: Text(model.editing == nil ? AddRepo.defaultBaseBranch : "origin's default branch")
                     )
+                }
+                if model.showsWorkflowStep {
+                    Section(WorkflowTemplate.fileName) {
+                        workflowStep
+                    }
                 }
                 Section("Linear routing") {
                     linear
@@ -353,7 +526,7 @@ struct AddRepoView: View {
                 Spacer()
                 if model.isSaving {
                     ProgressView().controlSize(.small)
-                    Text("Checking symphony.yml…").foregroundStyle(.secondary)
+                    Text(model.savingMessage ?? "Checking symphony.yml…").foregroundStyle(.secondary)
                 }
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
@@ -363,7 +536,10 @@ struct AddRepoView: View {
             }
             .padding(12)
         }
-        .frame(width: 520, height: model.editing == nil ? 600 : 760)
+        .frame(
+            width: model.showsWorkflowStep ? 640 : 520,
+            height: model.editing != nil || model.showsWorkflowStep ? 760 : 600
+        )
     }
 
     @ViewBuilder private var source: some View {
@@ -373,6 +549,7 @@ struct AddRepoView: View {
             Text("Symphony keeps its own clone, made when it starts. Your own checkouts aren't touched.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            workflowFound
         case .localFolder:
             LabeledContent("Folder") {
                 HStack {
@@ -386,9 +563,61 @@ struct AddRepoView: View {
                     Button("Choose…", action: model.chooseFolder)
                 }
             }
-            Text("Agents work in worktrees of this checkout. It needs a GitHub origin and a WORKFLOW.md.")
+            Text("Agents work in worktrees of this checkout. It needs a GitHub origin.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            workflowFound
+        }
+    }
+
+    @ViewBuilder private var workflowFound: some View {
+        if model.workflowCheck == .present {
+            Label("The repo has a WORKFLOW.md.", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Says the repo has no `WORKFLOW.md`, and offers the draft and how to add it.
+    @ViewBuilder private var workflowStep: some View {
+        switch model.workflowCheck {
+        case .checking:
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Checking the repo for a WORKFLOW.md…").foregroundStyle(.secondary)
+            }
+        case let .failed(message):
+            Text(message)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Save connects the repo as it is; it shows WORKFLOW.md as missing until the repo has one.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case let .missing(stack, _):
+            Text(model.workflowCheck.missingMessage(source: model.workflowSource) ?? "")
+                .fixedSize(horizontal: false, vertical: true)
+            LabeledContent("Found", value: stack.summary)
+            if let landed = model.landedWorkflow {
+                Text(landed.savedSentence)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                TextEditor(text: model.workflowDraft)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 240)
+                    .disabled(model.isSaving)
+                Picker("Add it by", selection: $model.landing) {
+                    ForEach(WorkflowLanding.choices(for: model.draft.mode), id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .disabled(model.isSaving)
+                Text(model.landing.help(baseBranch: model.draft.baseBranch.trimmingCharacters(in: .whitespaces)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .idle, .present:
+            EmptyView()
         }
     }
 
