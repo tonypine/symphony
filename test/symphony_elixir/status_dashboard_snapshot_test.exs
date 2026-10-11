@@ -227,6 +227,22 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     Snapshot.assert_dashboard_snapshot!("forced_tickets", render_snapshot(snapshot_data, 3.0))
   end
 
+  test "dashboard lists QA passes in the running section" do
+    snapshot_data =
+      {:ok,
+       %{
+         running: [],
+         retrying: [],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         qa: %{running: [%{identifier: "TP-811", issue_id: "issue-1"}], queued: []}
+       }}
+
+    rendered = render_snapshot(snapshot_data, 0.0)
+
+    assert rendered =~ "TP-811"
+    assert rendered =~ "QA pass"
+  end
+
   test "dashboard renders continuation retries as follow-up checks" do
     snapshot_data =
       {:ok,

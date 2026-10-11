@@ -80,8 +80,9 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
         forced = Map.get(snapshot, :forced, [])
         forced_rows = format_forced_section(forced)
         running_event_width = running_event_width(terminal_columns_override)
-        running_rows = format_running_rows(running, running_event_width)
-        running_to_watching_spacer = if(running == [], do: [], else: ["│"])
+        qa_rows = format_qa_rows(Map.get(snapshot, :qa), running_event_width)
+        running_rows = format_running_rows(running, running_event_width) ++ qa_rows
+        running_to_watching_spacer = if(running == [] and qa_rows == [], do: [], else: ["│"])
         watching_url_width = watching_url_width(terminal_columns_override)
         watching_rows = format_watching_rows(watching, watching_url_width)
         {follow_up_checks, backoff_retries} = split_retry_rows_by_delay_type(retrying)
@@ -237,6 +238,36 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
       colorize(session, @ansi_cyan),
       " ",
       colorize(event_label, status_color)
+    ]
+    |> Enum.join("")
+  end
+
+  # A QA pass runs no codex session of its own, so its row carries the pass and nothing else.
+  defp format_qa_rows(%{running: passes}, running_event_width) when is_list(passes) do
+    Enum.map(passes, &format_qa_row(&1, running_event_width))
+  end
+
+  defp format_qa_rows(_qa, _running_event_width), do: []
+
+  defp format_qa_row(pass, running_event_width) do
+    identifier = Map.get(pass, :identifier) || Map.get(pass, :issue_identifier) || "unknown"
+
+    [
+      "│ ",
+      colorize("● ", @ansi_green),
+      colorize(format_cell(identifier, @running_id_width), @ansi_cyan),
+      " ",
+      colorize(format_cell("QA pass", @running_stage_width), @ansi_green),
+      " ",
+      colorize(format_cell("n/a", @running_pid_width), @ansi_yellow),
+      " ",
+      colorize(format_cell("", @running_age_width), @ansi_magenta),
+      " ",
+      colorize(format_cell("", @running_tokens_width, :right), @ansi_yellow),
+      " ",
+      colorize(format_cell("", @running_session_width), @ansi_cyan),
+      " ",
+      colorize(format_cell("QA pass running", running_event_width), @ansi_green)
     ]
     |> Enum.join("")
   end

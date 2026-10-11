@@ -592,7 +592,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
             </div>
           </div>
 
-          <%= if @visible_payload.running == [] do %>
+          <%= if @visible_payload.running == [] and @payload.qa.running == [] do %>
             <p class="empty-state">No active sessions.</p>
           <% else %>
             <div class="table-wrap">
@@ -713,6 +713,23 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         </button>
                       <% end %>
                     </td>
+                  </tr>
+                  <tr :for={pass <- @payload.qa.running}>
+                    <td>
+                      <div class="issue-stack">
+                        <span class="issue-id"><%= pass.identifier %></span>
+                        <span class="muted run-profile">QA pass</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="state-badge state-badge-active">QA</span>
+                    </td>
+                    <td><span class="muted">—</span></td>
+                    <td><span class="muted">—</span></td>
+                    <td><span class="muted">QA pass running</span></td>
+                    <td><span class="muted">—</span></td>
+                    <td class="links-cell"></td>
+                    <td class="links-cell"></td>
                   </tr>
                 </tbody>
               </table>

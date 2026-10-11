@@ -200,9 +200,53 @@ public enum StatusMenu {
         return String(line.prefix(waitingHeadlineLimit - 1)) + "…"
     }
 
-    /// For example "2 running · 1 retrying".
+    /// The running sessions, counted by kind, then what retries — for example
+    /// "1 implementation, 1 QA pass running · 2 retrying", or "Nothing is running · 2 retrying".
     public static func countsLine(_ snapshot: StateSnapshot) -> String {
-        "\(snapshot.running) running · \(snapshot.retrying) retrying"
+        sessionsLine(snapshot.sessions, retrying: snapshot.retrying)
+    }
+
+    /// Everything running now, counted by kind, then what retries. Anything running a session,
+    /// of any kind, is named here by its kind; with none, "Nothing is running".
+    public static func sessionsLine(_ sessions: [StateSnapshot.Session], retrying: Int) -> String {
+        let counts = sessionKindCounts(sessions)
+        let running =
+            counts.isEmpty
+            ? "Nothing is running"
+            : counts.map { "\($0.count) \(sessionKindName($0.kind, count: $0.count))" }.joined(separator: ", ") + " running"
+        return "\(running) · \(retrying) retrying"
+    }
+
+    /// The kinds in the order the counts line names them.
+    static let sessionKindOrder = [
+        "implementation", "breakdown", "close_out", "final_verification", "rework", "landing",
+        "ci_fix", "review_feedback", "pre_push_review", "qa", "acceptance_gate", "agent",
+    ]
+
+    private static func sessionKindCounts(_ sessions: [StateSnapshot.Session]) -> [(kind: String, count: Int)] {
+        let grouped = Dictionary(grouping: sessions, by: \.kind).mapValues(\.count)
+        let ordered = sessionKindOrder.filter { grouped[$0] != nil }
+        let extra = grouped.keys.filter { !sessionKindOrder.contains($0) }.sorted()
+        return (ordered + extra).map { ($0, grouped[$0] ?? 0) }
+    }
+
+    /// "QA pass" / "QA passes", "implementation" / "implementations".
+    private static func sessionKindName(_ kind: String, count: Int) -> String {
+        let names: (String, String)
+        switch kind {
+        case "qa": names = ("QA pass", "QA passes")
+        case "ci_fix": names = ("ci fix", "ci fixes")
+        case "close_out": names = ("close out", "close outs")
+        case "final_verification": names = ("final verification", "final verifications")
+        case "review_feedback": names = ("review feedback", "review feedbacks")
+        case "pre_push_review": names = ("pre-push review", "pre-push reviews")
+        case "acceptance_gate": names = ("acceptance gate", "acceptance gates")
+        case "agent": names = ("agent", "agents")
+        default:
+            let name = kind.replacingOccurrences(of: "_", with: " ")
+            names = (name, name + "s")
+        }
+        return count == 1 ? names.0 : names.1
     }
 
     /// For example "Paused since 14:03: deploy freeze". Shows the date too when the pause began on another day.

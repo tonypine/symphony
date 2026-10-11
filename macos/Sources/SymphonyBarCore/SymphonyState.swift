@@ -20,6 +20,10 @@ public struct StateSnapshot: Equatable {
     public var gateAgreement: [String: GateAgreement]?
     /// The running agents, in Symphony's order; empty when none runs.
     public var runs: [Run]
+
+    /// Every session running now, of any kind: agent runs (each labeled by its run kind), QA
+    /// passes and acceptance gate runs, as `/api/v1/state`'s `sessions` lists them.
+    public var sessions: [Session]
     /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
     public var waitingOnYou: [WaitingTicket]
     /// False while Symphony hasn't read Linear for `waitingOnYou` yet, so an empty list may be incomplete; true
@@ -130,6 +134,22 @@ public struct StateSnapshot: Equatable {
             self.url = url
             self.startedAt = startedAt
             self.lastEventAt = lastEventAt
+        }
+    }
+
+    /// A session running now, of any kind, as `/api/v1/state`'s `sessions` lists it.
+    public struct Session: Equatable {
+        /// Its run kind: "implementation", "qa", "landing", "acceptance_gate", ...
+        public var kind: String
+        /// The issue it runs for, nil when Symphony didn't say.
+        public var issueIdentifier: String?
+        /// The repo it runs on, nil when Symphony didn't say.
+        public var repoKey: String?
+
+        public init(kind: String, issueIdentifier: String? = nil, repoKey: String? = nil) {
+            self.kind = kind
+            self.issueIdentifier = issueIdentifier
+            self.repoKey = repoKey
         }
     }
 
@@ -297,6 +317,7 @@ public struct StateSnapshot: Equatable {
         humanReview: Int = 0,
         gateAgreement: [String: GateAgreement]? = nil,
         runs: [Run] = [],
+        sessions: [Session] = [],
         waitingOnYou: [WaitingTicket] = [],
         inboxRead: Bool = true
     ) {
@@ -310,6 +331,7 @@ public struct StateSnapshot: Equatable {
         self.humanReview = humanReview
         self.gateAgreement = gateAgreement
         self.runs = runs
+        self.sessions = sessions
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
     }
@@ -419,6 +441,10 @@ public enum SymphonyState {
                 startedAt: run.startedAt.flatMap(parseDate),
                 lastEventAt: run.lastEventAt.flatMap(parseDate)
             )
+        }
+        snapshot.sessions = (payload.sessions ?? []).compactMap { session in
+            guard let kind = session.kind else { return nil }
+            return StateSnapshot.Session(kind: kind, issueIdentifier: session.issueIdentifier, repoKey: session.repoKey)
         }
         snapshot.waitingOnYou = (payload.waitingOnYou ?? []).compactMap { ticket in
             guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
@@ -590,7 +616,15 @@ public enum SymphonyState {
             let checksGreen: Bool?
         }
 
+        struct Session: Decodable {
+            let kind: String?
+            let issueIdentifier: String?
+            let repoKey: String?
+        }
+
         let counts: Counts?
+        /// Every running session, of any kind, each labeled by its kind; missing before Symphony listed them.
+        let sessions: [Session]?
         /// Every field is optional, so an entry missing one never fails the whole state.
         let running: [Running]?
         let pause: Pause?
