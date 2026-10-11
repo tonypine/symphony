@@ -62,7 +62,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issues.memory" => ~w(issues_file),
     "issues.linear" => ~w(endpoint api_key assignee scope),
     "issues.linear.scope" => ~w(project_slug team labels),
-    "issues.states" => ~w(active terminal waiting_on_sub_issues human_review),
+    "issues.states" => ~w(active terminal waiting_on_sub_issues human_review code_review qa plan_review epic_review ci_fix),
     "tickets" => ~w(priorities),
     "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate),
     "repositories[].route" => ~w(team projects labels assignee),
@@ -708,6 +708,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("terminal_states", Map.get(states, "terminal"))
         |> maybe_put_configured("waiting_on_sub_issues_state", Map.get(states, "waiting_on_sub_issues"), Map.has_key?(states, "waiting_on_sub_issues"))
         |> maybe_put_configured("human_review_state", Map.get(states, "human_review"), Map.has_key?(states, "human_review"))
+        |> maybe_put_configured("code_review_state", Map.get(states, "code_review"), Map.has_key?(states, "code_review"))
+        |> maybe_put_configured("qa_state", Map.get(states, "qa"), Map.has_key?(states, "qa"))
+        |> maybe_put_configured("plan_review_state", Map.get(states, "plan_review"), Map.has_key?(states, "plan_review"))
+        |> maybe_put_configured("epic_review_state", Map.get(states, "epic_review"), Map.has_key?(states, "epic_review"))
+        |> maybe_put_configured("ci_fix_state", Map.get(states, "ci_fix"), Map.has_key?(states, "ci_fix"))
 
       polling = %{} |> maybe_put("interval_ms", Map.get(config, "poll_interval_ms"))
 
@@ -1417,6 +1422,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
   defp preserve_explicit_nil_path?(["tracker", "human_review_state"]), do: true
+
+  defp preserve_explicit_nil_path?(["tracker", field])
+       when field in ["code_review_state", "qa_state", "plan_review_state", "epic_review_state", "ci_fix_state"],
+       do: true
+
   defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 

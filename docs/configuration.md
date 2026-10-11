@@ -119,6 +119,11 @@ issues:
     terminal: [Closed, Cancelled, Canceled, Duplicate, Done]
     waiting_on_sub_issues: Waiting on sub-tickets
     human_review: Human Review
+    code_review: Code Review
+    qa: QA
+    plan_review: Plan Review
+    epic_review: Epic Review
+    ci_fix: CI Fix
 ```
 
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
@@ -220,6 +225,17 @@ issues:
   The Mac app's Inbox, the dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you`
   list and the menu bar list them with the plans and PRs in `In Review` (see `human_actions`). A supervisor moves a ticket there when it needs the operator, and never moves
   one out of it on the operator's behalf.
+
+- `states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review` and `states.ci_fix`:
+  the machine-owned phase states — the board columns — defaulting to `Code Review`, `QA`,
+  `Plan Review`, `Epic Review` and `CI Fix`; `null` turns one off. At startup Symphony finds each
+  one in the configured teams and creates it as a started state when it is missing, logging what
+  it created; a second start finds them all and creates nothing. A state renamed or deleted in
+  Linear is reported at startup with its exact name and the `issues.states.*` key to point at the
+  new name, and is then recreated, so a name is never silently duplicated. These states land
+  inert: nothing dispatches on, enters or reads them yet. They sit in Linear's `started` group,
+  beside `In Progress`, so they read as active columns; do not add them to `states.active` until a
+  feature moves tickets into them.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
