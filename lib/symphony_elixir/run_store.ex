@@ -732,6 +732,26 @@ defmodule SymphonyElixir.RunStore do
 
   def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome), do: {:error, :invalid_issue_id}
 
+  @doc """
+  Writes the CI state (`running` / `green` / `red`) of one PR head into the ticket's record, with
+  last-write-wins ordering by `at`. The read-modify-write runs in one durable transaction.
+  Returns `{:ok, :changed}` when the head's state changed (`:unchanged` when it repeated,
+  `:stale` when an older write arrived after a newer one), so the caller projects the CI label only
+  on `:changed`.
+  """
+  @spec record_ci_state(String.t(), String.t(), String.t() | nil, String.t(), DateTime.t()) ::
+          {:ok, :changed | :unchanged | :stale} | {:error, term()}
+  def record_ci_state(repo_key, issue_id, head_sha, status, at)
+      when is_binary(issue_id) and is_binary(status) and is_struct(at, DateTime) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ci_state(repo_key, issue_id, head_sha, status, at) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ci_state(_repo_key, _issue_id, _head_sha, _status, _at), do: {:error, :invalid_ci_state}
+
   @spec put_verification_allocation(map()) :: :ok | {:error, term()}
   def put_verification_allocation(%{repo_key: repo_key, run_id: run_id, port: port} = record)
       when is_binary(run_id) and is_integer(port) do
@@ -1445,6 +1465,25 @@ defmodule SymphonyElixir.RunStore do
     updated = TicketState.record_verdict(record, kind, head_sha, outcome)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
+  end
+
+  defp write_ci_state(repo_key, issue_id, head_sha, status, at) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    case TicketState.put_ci_state(record, head_sha, status, at) do
+      {_record, :stale} ->
+        {:ok, :stale}
+
+      {updated, outcome} ->
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        {:ok, outcome}
+    end
   end
 
   defp durable_transaction(fun) when is_function(fun, 0) do

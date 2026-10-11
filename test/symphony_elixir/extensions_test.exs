@@ -536,7 +536,13 @@ defmodule SymphonyElixir.ExtensionsTest do
         }
       )
 
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    # A named inbox this test never starts, so the payload's inbox state is the same on every
+    # run: an unstarted inbox reads as read (`Inbox.read?/1`), independent of the app's Inbox poller.
+    start_test_endpoint(
+      orchestrator: orchestrator_name,
+      snapshot_timeout_ms: 50,
+      inbox: Module.concat(__MODULE__, :ObservabilityApiInbox)
+    )
 
     :ok =
       RunStore.put_run(%{
