@@ -112,9 +112,18 @@ defmodule SymphonyElixir.Config.Schema do
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
       field(:waiting_on_sub_issues_state, :string, default: "Waiting on sub-tickets")
       field(:human_review_state, :string, default: "Human Review")
+      field(:code_review_state, :string, default: "Code Review")
+      field(:qa_state, :string, default: "QA")
+      field(:plan_review_state, :string, default: "Plan Review")
+      field(:epic_review_state, :string, default: "Epic Review")
+      field(:ci_fix_state, :string, default: "CI Fix")
     end
 
-    @fields [
+    # The machine-owned phase states `SymphonyElixir.StateProvisioning` creates at startup. They are
+    # inert here: nothing dispatches on, enters or reads them yet.
+    @machine_state_fields [:code_review_state, :qa_state, :plan_review_state, :epic_review_state, :ci_fix_state]
+
+    @lifecycle_fields [
       :kind,
       :endpoint,
       :api_key,
@@ -129,6 +138,8 @@ defmodule SymphonyElixir.Config.Schema do
       :human_review_state
     ]
 
+    @fields @lifecycle_fields ++ @machine_state_fields
+
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
@@ -140,6 +151,30 @@ defmodule SymphonyElixir.Config.Schema do
       |> put_waiting_on_sub_issues_state_active()
       |> normalize_optional_string(:human_review_state)
       |> validate_human_review_state_inactive()
+      |> normalize_machine_states()
+      |> validate_machine_states_distinct()
+    end
+
+    defp normalize_machine_states(changeset) do
+      Enum.reduce(@machine_state_fields, changeset, &normalize_optional_string(&2, &1))
+    end
+
+    # The phase states are the board's columns: two names for one phase would make provisioning create
+    # the same column twice, so a repeated name is rejected before startup can act on it.
+    defp validate_machine_states_distinct(changeset) do
+      @machine_state_fields
+      |> Enum.map(&get_field(changeset, &1))
+      |> Enum.filter(&is_binary/1)
+      |> Enum.reduce({MapSet.new(), changeset}, fn name, {seen, changeset} ->
+        key = String.downcase(name)
+
+        if MapSet.member?(seen, key) do
+          {seen, add_error(changeset, :code_review_state, "machine-owned state names must be distinct, but #{name} is used twice")}
+        else
+          {MapSet.put(seen, key), changeset}
+        end
+      end)
+      |> elem(1)
     end
 
     # Symphony never dispatches an issue waiting on a person's review.
@@ -2955,6 +2990,11 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
   defp preserve_explicit_nil_path?(["tracker", "human_review_state"]), do: true
+
+  defp preserve_explicit_nil_path?(["tracker", field])
+       when field in ["code_review_state", "qa_state", "plan_review_state", "epic_review_state", "ci_fix_state"],
+       do: true
+
   defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 

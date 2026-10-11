@@ -25,6 +25,28 @@ defmodule SymphonyElixir.Tracker do
           ]
         }
 
+  @typedoc """
+  A workflow state as `SymphonyElixir.StateProvisioning` reads it: its name and the team it belongs
+  to (`team_key` is the team's short key, `team_id` its id).
+  """
+  @type workflow_state :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          team_id: String.t() | nil,
+          team_key: String.t() | nil
+        }
+
+  @typedoc """
+  A label as provisioning reads it: its name and the team that defines it (`team_key` is the team's
+  short key, `team_id` its id; both are nil for a workspace label).
+  """
+  @type label :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          team_id: String.t() | nil,
+          team_key: String.t() | nil
+        }
+
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
@@ -41,6 +63,10 @@ defmodule SymphonyElixir.Tracker do
   @callback fetch_plan_comments(String.t()) :: {:ok, PlanComments.feedback()} | {:error, term()}
   @callback create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
+  @callback workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
+  @callback create_workflow_state(String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  @callback labels() :: {:ok, [label()]} | {:error, term()}
+  @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -128,6 +154,32 @@ defmodule SymphonyElixir.Tracker do
   @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   def workflow_state_exists?(state_name, teams) when is_binary(state_name) and is_list(teams) do
     adapter().workflow_state_exists?(state_name, teams)
+  end
+
+  @doc "Every workflow state the tracker defines, across all teams."
+  @spec workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
+  def workflow_states, do: adapter().workflow_states()
+
+  @doc """
+  Creates a workflow state named `state_name` in `team` (a team key or id), and returns it. Used
+  only by `SymphonyElixir.StateProvisioning` to create a state that is missing.
+  """
+  @spec create_workflow_state(String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
+    adapter().create_workflow_state(state_name, team)
+  end
+
+  @doc "Every label the tracker defines, workspace-wide and per team."
+  @spec labels() :: {:ok, [label()]} | {:error, term()}
+  def labels, do: adapter().labels()
+
+  @doc """
+  Creates a label named `label_name` in `team` (a team key or id), and returns it. Used only by
+  `SymphonyElixir.StateProvisioning` to create a label that is missing.
+  """
+  @spec create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
+  def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
+    adapter().create_label(label_name, team)
   end
 
   @spec adapter() :: module()

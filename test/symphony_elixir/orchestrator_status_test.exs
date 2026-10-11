@@ -2595,6 +2595,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         }
       end)
 
+      Cache.clear()
+      assert {:ok, repos} = Config.repos()
+      assert Enum.sort(Enum.map(repos, & &1.name)) == ["api", "bad"]
+
       log =
         capture_log(fn ->
           # A startup cycle still in flight would skip this one, and with it the age GC.
@@ -2609,7 +2613,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
             1_000
           )
 
-          wait_for_orchestrator_state(pid, &(&1.dispatch_readiness_tasks == %{}), 500)
+          # Hold the window open until the age GC's result is applied (`last_check` was just
+          # cleared), not merely until the readiness map drains — it is empty both before a
+          # task starts and after it ends.
+          wait_for_orchestrator_state(
+            pid,
+            &(not is_nil(&1.workspace_lifecycle_last_check_at_ms) and &1.dispatch_readiness_tasks == %{}),
+            1_000
+          )
         end)
 
       assert log =~ "Skipping workspace age GC for repo_key=bad"

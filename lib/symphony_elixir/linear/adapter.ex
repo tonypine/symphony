@@ -101,6 +101,81 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # Provisioning reads every state and label once at startup, then creates only what is missing.
+  @teams_query """
+  query SymphonyTeams {
+    teams(first: 250) {
+      nodes {
+        id
+        key
+      }
+    }
+  }
+  """
+
+  @all_workflow_states_query """
+  query SymphonyAllWorkflowStates {
+    workflowStates(first: 250) {
+      nodes {
+        id
+        name
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
+  @all_labels_query """
+  query SymphonyAllLabels {
+    issueLabels(first: 250) {
+      nodes {
+        id
+        name
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
+  # A new phase state is a started state: it sits beside In Progress on the board.
+  @create_workflow_state_mutation """
+  mutation SymphonyCreateWorkflowState($name: String!, $teamId: String!) {
+    workflowStateCreate(input: {name: $name, teamId: $teamId, type: "started"}) {
+      success
+      workflowState {
+        id
+        name
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
+  @create_label_mutation """
+  mutation SymphonyCreateLabel($name: String!, $teamId: String) {
+    issueLabelCreate(input: {name: $name, teamId: $teamId}) {
+      success
+      issueLabel {
+        id
+        name
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
   # Bounded so the nested connection stays cheap; a breakdown parent is read only while it has
   # Backlog sub-issues, and the transition that matters is a recent one.
   @breakdown_history_query """
@@ -308,6 +383,88 @@ defmodule SymphonyElixir.Linear.Adapter do
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :workflow_states_unavailable}
+    end
+  end
+
+  @doc "Every workflow state in the workspace, with the team it belongs to."
+  @spec workflow_states() :: {:ok, [Tracker.workflow_state()]} | {:error, term()}
+  def workflow_states do
+    with {:ok, response} <- client_module().graphql(@all_workflow_states_query, %{}),
+         nodes when is_list(nodes) <- get_in(response, ["data", "workflowStates", "nodes"]) do
+      {:ok, Enum.map(nodes, &workflow_state/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :workflow_states_unavailable}
+    end
+  end
+
+  @doc "Creates the started state `state_name` in the team `team` (a key or an id), and returns it."
+  @spec create_workflow_state(String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
+    with {:ok, team_id} <- resolve_team_id(team),
+         {:ok, response} <- create_state(state_name, team_id),
+         true <- get_in(response, ["data", "workflowStateCreate", "success"]) == true,
+         %{} = created <- get_in(response, ["data", "workflowStateCreate", "workflowState"]) do
+      {:ok, workflow_state(created)}
+    else
+      false -> {:error, :workflow_state_create_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :workflow_state_create_failed}
+    end
+  end
+
+  defp create_state(state_name, team_id) do
+    client_module().graphql(@create_workflow_state_mutation, %{name: state_name, teamId: team_id})
+  end
+
+  @doc "Every label in the workspace, workspace-wide and per team."
+  @spec labels() :: {:ok, [Tracker.label()]} | {:error, term()}
+  def labels do
+    with {:ok, response} <- client_module().graphql(@all_labels_query, %{}),
+         nodes when is_list(nodes) <- get_in(response, ["data", "issueLabels", "nodes"]) do
+      {:ok, Enum.map(nodes, &label/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :labels_unavailable}
+    end
+  end
+
+  @doc "Creates the label `label_name` in the team `team` (a key or an id), and returns it."
+  @spec create_label(String.t(), String.t()) :: {:ok, Tracker.label()} | {:error, term()}
+  def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
+    with {:ok, team_id} <- resolve_team_id(team),
+         {:ok, response} <- client_module().graphql(@create_label_mutation, %{name: label_name, teamId: team_id}),
+         true <- get_in(response, ["data", "issueLabelCreate", "success"]) == true,
+         %{} = created <- get_in(response, ["data", "issueLabelCreate", "issueLabel"]) do
+      {:ok, label(created)}
+    else
+      false -> {:error, :label_create_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :label_create_failed}
+    end
+  end
+
+  defp workflow_state(node) do
+    %{id: node["id"], name: node["name"], team_id: get_in(node, ["team", "id"]), team_key: get_in(node, ["team", "key"])}
+  end
+
+  defp label(node) do
+    %{id: node["id"], name: node["name"], team_id: get_in(node, ["team", "id"]), team_key: get_in(node, ["team", "key"])}
+  end
+
+  # A team key (`TP`) or an id both resolve to the id a create needs.
+  defp resolve_team_id(team) do
+    with {:ok, response} <- client_module().graphql(@teams_query, %{}),
+         nodes when is_list(nodes) <- get_in(response, ["data", "teams", "nodes"]) do
+      wanted = String.downcase(team)
+
+      case Enum.find(nodes, &(wanted in [String.downcase(to_string(&1["key"])), String.downcase(to_string(&1["id"]))])) do
+        %{"id" => id} -> {:ok, id}
+        nil -> {:error, {:team_not_found, team}}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :teams_unavailable}
     end
   end
 
