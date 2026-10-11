@@ -204,7 +204,8 @@ defmodule SymphonyElixir.TicketStateTest do
     test "bounds the CI states to the newest" do
       record =
         Enum.reduce(1..30, TicketState.new("repo-a", "issue-1"), fn n, record ->
-          TicketState.record_ci_state(record, "sha-#{n}", "green", @at)        end)
+          TicketState.record_ci_state(record, "sha-#{n}", "green", @at)
+        end)
 
       assert length(record.ci_states) == 20
       assert hd(record.ci_states).head_sha == "sha-30"

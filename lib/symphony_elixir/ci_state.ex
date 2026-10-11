@@ -39,10 +39,10 @@ defmodule SymphonyElixir.CiState do
   write is skipped when the writer carries none (a test store), and the label is projected only
   when the store accepted the write.
   """
-  @spec record(String.t() | nil, String.t() | nil, String.t() | nil, String.t() | nil, DateTime.t(), keyword()) ::
-          :ok
   def record(repo_key, issue_id, head_sha, status, at, opts \\ [])
 
+  @spec record(String.t() | nil, String.t() | nil, String.t() | nil, String.t() | nil, DateTime.t(), keyword()) ::
+          :ok
   def record(repo_key, issue_id, head_sha, status, %DateTime{} = at, opts)
       when is_binary(repo_key) and is_binary(issue_id) do
     run_store = Keyword.get(opts, :run_store, RunStore)
@@ -91,7 +91,11 @@ defmodule SymphonyElixir.CiState do
     wanted = label(status)
 
     Enum.each(MachineLabels.ci_labels(), fn name ->
-      if name == wanted, do: set_machine_label(tracker, issue_id, name), else: clear_machine_label(tracker, issue_id, name)
+      if name == wanted do
+        set_machine_label(tracker, issue_id, name)
+      else
+        clear_machine_label(tracker, issue_id, name)
+      end
     end)
   end
 

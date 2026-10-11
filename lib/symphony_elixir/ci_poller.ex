@@ -12,11 +12,12 @@ defmodule SymphonyElixir.CiPoller do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.Agreement
-  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiState, Config, Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiState, Config}
   alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
+  alias SymphonyElixir.{Notifications, Orchestrator, RunStore, Tracker}
   alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.TransitionGuard
 
