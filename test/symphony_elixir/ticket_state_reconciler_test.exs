@@ -132,7 +132,12 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
     test "logs and skips when the store cannot be read" do
       log =
         capture_log(fn ->
-          assert TicketStateReconciler.reconcile_all(store: SymphonyElixir.TicketStateReconcilerTest.ReadFailingStore, fetcher: fn _ids -> {:ok, []} end) ==
+          opts = [
+            store: SymphonyElixir.TicketStateReconcilerTest.ReadFailingStore,
+            fetcher: fn _ids -> {:ok, []} end
+          ]
+
+          assert TicketStateReconciler.reconcile_all(opts) ==
                    %{checked: 0, drifted: 0, missing: 0}
         end)
 
