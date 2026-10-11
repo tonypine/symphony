@@ -3028,7 +3028,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp close_finished_parent(%Issue{} = issue) do
     case SubIssueWait.close(issue, Tracker.adapter()) do
       :ok ->
-        record_ticket_signal(issue, "merge settled", %{sub_issues: length(issue.sub_issues || [])})
+        record_ticket_signal(issue, "merge settled", %{sub_issues: length(issue.sub_issues)})
 
       {:error, reason} ->
         Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
@@ -3116,7 +3116,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A promoted sub-issue carries the plan's approval; a replaced one is the plan's changes, which
   # cancel the sub-issues it judged.
-  defp record_breakdown_sub_issue_signal(%Issue{} = issue, action, sub_issue_id, identifier) do
+  defp record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier) do
     case issue_repo_key(issue) do
       repo_key when is_binary(repo_key) ->
         details = %{outcome: breakdown_sub_issue_outcome(action), sub_issue: identifier, to: BreakdownReview.target(action)}
@@ -3126,8 +3126,6 @@ defmodule SymphonyElixir.Orchestrator do
         :ok
     end
   end
-
-  defp record_breakdown_sub_issue_signal(_issue, _action, _sub_issue_id, _identifier), do: :ok
 
   defp breakdown_sub_issue_signal(:promote), do: "plan verdict"
   defp breakdown_sub_issue_signal(_action), do: "deprioritized"
