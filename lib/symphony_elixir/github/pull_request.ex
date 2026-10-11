@@ -51,6 +51,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:details_url) => String.t() | nil,
           optional(:workflow_name) => String.t() | nil,
           optional(:run_id) => String.t() | nil,
+          optional(:completed_at) => DateTime.t() | nil,
           optional(:stale) => boolean()
         }
 
@@ -981,7 +982,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       conclusion: normalize_id(conclusion),
       details_url: normalize_id(details_url),
       workflow_name: normalize_id(Map.get(check, "workflowName")),
-      run_id: run_id_from_details_url(details_url)
+      run_id: run_id_from_details_url(details_url),
+      completed_at: parse_datetime(Map.get(check, "completedAt") || Map.get(check, "updatedAt"))
     }
   end
 

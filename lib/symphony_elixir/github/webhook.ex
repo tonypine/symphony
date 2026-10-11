@@ -12,10 +12,14 @@ defmodule SymphonyElixir.GitHub.Webhook do
 
   @signature_prefix "sha256="
 
+  @failure_conclusions ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]
+
   @type ci_event :: %{
           event: String.t(),
           action: String.t() | nil,
           head_sha: String.t() | nil,
+          conclusion: String.t() | nil,
+          completed_at: DateTime.t() | nil,
           pr_urls: [String.t()]
         }
 
@@ -83,24 +87,83 @@ defmodule SymphonyElixir.GitHub.Webhook do
 
   defp parse_event(event, %{"action" => "completed"} = payload) when event in ["check_suite", "check_run", "workflow_run"] do
     case Map.get(payload, event) do
-      %{} = subject -> ci_event(event, "completed", Map.get(subject, "head_sha"), pr_urls(payload, Map.get(subject, "pull_requests")))
-      _other -> :ignored
+      %{} = subject ->
+        ci_event(
+          event,
+          "completed",
+          Map.get(subject, "head_sha"),
+          Map.get(subject, "conclusion"),
+          completed_at(subject),
+          pr_urls(payload, Map.get(subject, "pull_requests"))
+        )
+
+      _other ->
+        :ignored
     end
   end
 
   defp parse_event("pull_request", %{"action" => action, "pull_request" => %{} = pull_request})
        when action in ["synchronize", "closed", "reopened"] do
     head_sha = get_in(pull_request, ["head", "sha"])
-    ci_event("pull_request", action, head_sha, string_list([Map.get(pull_request, "html_url")]))
+    ci_event("pull_request", action, head_sha, nil, nil, string_list([Map.get(pull_request, "html_url")]))
   end
 
   defp parse_event(_event, _payload), do: :ignored
 
-  defp ci_event(_event, _action, head_sha, []) when not is_binary(head_sha), do: :ignored
+  defp ci_event(_event, _action, head_sha, _conclusion, _completed_at, []) when not is_binary(head_sha), do: :ignored
 
-  defp ci_event(event, action, head_sha, pr_urls) do
-    {:ci, %{event: event, action: action, head_sha: if(is_binary(head_sha), do: head_sha), pr_urls: pr_urls}}
+  defp ci_event(event, action, head_sha, conclusion, completed_at, pr_urls) do
+    {:ci,
+     %{
+       event: event,
+       action: action,
+       head_sha: if(is_binary(head_sha), do: head_sha),
+       conclusion: normalize_id(conclusion),
+       completed_at: completed_at,
+       pr_urls: pr_urls
+     }}
   end
+
+  defp completed_at(subject) do
+    parse_datetime(Map.get(subject, "completed_at") || Map.get(subject, "updated_at"))
+  end
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp parse_datetime(_value), do: nil
+
+  defp normalize_id(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_id(_value), do: nil
+
+  @doc """
+  The coarse CI state a delivery carries of its own, for the machine to write without waiting for
+  the poll: `"running"` for a head that moved (a push or a reopen), `"red"` for a check that
+  failed, and nil when the delivery names no state by itself.
+
+  A check that passed only says *this* check passed, not that the head is green — that is the
+  poll's authoritative rollup read — so it carries nothing here and can never contradict a
+  `"green"` the poll already recorded. A closed PR also carries nothing: clearing its labels is
+  the poller's decision, not a state.
+  """
+  @spec ci_status(ci_event()) :: String.t() | nil
+  def ci_status(%{action: action}) when action in ["synchronize", "reopened"], do: "running"
+
+  def ci_status(%{conclusion: conclusion}) do
+    if String.upcase(normalize_id(conclusion) || "") in @failure_conclusions, do: "red", else: nil
+  end
+
+  def ci_status(_event), do: nil
 
   defp pr_urls(%{"repository" => %{"html_url" => repo_url}}, pull_requests) when is_binary(repo_url) and is_list(pull_requests) do
     pull_requests

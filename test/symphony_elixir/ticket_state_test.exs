@@ -204,11 +204,45 @@ defmodule SymphonyElixir.TicketStateTest do
     test "bounds the CI states to the newest" do
       record =
         Enum.reduce(1..30, TicketState.new("repo-a", "issue-1"), fn n, record ->
-          TicketState.record_ci_state(record, "sha-#{n}", "green", @at)
-        end)
+          TicketState.record_ci_state(record, "sha-#{n}", "green", @at)        end)
 
       assert length(record.ci_states) == 20
       assert hd(record.ci_states).head_sha == "sha-30"
+    end
+
+    test "put_ci_state/4 accepts a newer write, reports an unchanged repeat and drops a stale one" do
+      record = TicketState.new("repo-a", "issue-1")
+      later = DateTime.add(@at, 60, :second)
+
+      assert {record, :changed} = TicketState.put_ci_state(record, "abc", "running", @at)
+      assert %{head_sha: "abc", status: "running", updated_at: @at} = TicketState.current_ci_state(record)
+
+      assert {^record, :unchanged} = TicketState.put_ci_state(record, "abc", "running", @at)
+      assert {^record, :unchanged} = TicketState.put_ci_state(record, "abc", "running", later)
+
+      assert {record, :changed} = TicketState.put_ci_state(record, "abc", "green", later)
+      assert %{status: "green", updated_at: ^later} = TicketState.current_ci_state(record)
+
+      assert {updated, :stale} = TicketState.put_ci_state(record, "abc", "red", @at)
+      assert updated == record
+      assert %{status: "green"} = TicketState.current_ci_state(record)
+    end
+
+    test "put_ci_state/4 keeps each head's own ordering, and current_ci_state/1 is nil before any write" do
+      assert TicketState.current_ci_state(TicketState.new("repo-a", "issue-1")) == nil
+
+      record = TicketState.new("repo-a", "issue-1")
+      {record, :changed} = TicketState.put_ci_state(record, "abc", "green", @at)
+
+      later = DateTime.add(@at, 60, :second)
+      {record, :changed} = TicketState.put_ci_state(record, "def", "running", later)
+
+      assert %{head_sha: "def"} = TicketState.current_ci_state(record)
+      assert [%{head_sha: "def"}, %{head_sha: "abc", status: "green"}] = record.ci_states
+
+      # A stale write for the older head is dropped, leaving the newer head current.
+      {record, :stale} = TicketState.put_ci_state(record, "abc", "red", DateTime.add(@at, -60, :second))
+      assert %{head_sha: "def"} = TicketState.current_ci_state(record)
     end
   end
 

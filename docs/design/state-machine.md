@@ -83,7 +83,7 @@ Holds pause a ticket in its current phase. They are attributes persisted at the 
 
 ## Attributes (not states)
 
-- **CI state** — `running` / `green` / `red` per PR head. Owned by the machinery, derived from GitHub (webhooks primary, slow poll as reconciliation). Gates agent dispatch: Code Review and QA agents run only on a green head; red routes to CI Fix. Interim visualization: machine-owned `CI green` / `CI red` / `CI running` labels on the ticket.
+- **CI state** — `running` / `green` / `red` per PR head. Owned by the machinery, derived from GitHub (webhooks primary, slow poll as reconciliation; a delivery writes the coarse state it carries — a moved head, a failed check, a closed PR — at once, while only the poll's rollup read calls a head green). Gates agent dispatch: Code Review and QA agents run only on a green head; red routes to CI Fix. Interim visualization: machine-owned `CI green` / `CI red` / `CI running` labels on the ticket.
 - **Manual review** — per repo, `on` / `off`; default `off`. Controls decision authority on the ticket path, not verification: the machine verifies the same way either way — same agents, same evidence. The epic path is unaffected: plan review is always a person, epic review always automatic.
   - `off` (default): verdicts move the ticket — Code Review approve → QA; QA pass → Merging. The machine stops for a person only on escalations and holds.
   - `on`: the final step into Merging pauses with a Needs Decision hold carrying the summary — recommendation, Code Review reasons, QA result, PR link. Confirming continues into Merging exactly as when off; a redirect directs a move (e.g., → Rework). Everything else runs unchanged: rework verdicts never wait on a person, and CI Fix and holds behave the same.

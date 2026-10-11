@@ -12,7 +12,7 @@ defmodule SymphonyElixir.CiPoller do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.Agreement
-  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiState, Config, Notifications, Orchestrator, RunStore, Tracker}
   alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
@@ -131,7 +131,7 @@ defmodule SymphonyElixir.CiPoller do
       # GitHub pings a hook when it is created, which `gh webhook forward` does on every start:
       # poll everything now to catch up on events missed while the relay was away.
       :ping -> {:noreply, schedule_poll(state, 0)}
-      {:ci, event} -> {:noreply, queue_webhook_poll(state, event)}
+      {:ci, event} -> {:noreply, apply_webhook_ci_state(event, state) |> queue_webhook_poll(event)}
       _ignored -> {:noreply, state}
     end
   end
@@ -183,15 +183,64 @@ defmodule SymphonyElixir.CiPoller do
   # Only deliveries about a PR the poller already watches run a poll; the timed poll discovers
   # new ones.
   defp webhook_repo_keys(event, opts) do
+    event |> matching_ci_records(opts) |> Enum.map(fn {repo_key, _record} -> repo_key end) |> Enum.uniq()
+  end
+
+  # The watched CI records a delivery names, with the repo each belongs to.
+  defp matching_ci_records(event, opts) do
     run_store = Keyword.get(opts, :run_store, RunStore)
 
-    Enum.filter(repo_keys_from_opts(opts), fn repo_key ->
-      case list_ci_checks(run_store, repo_key) do
-        {:ok, checks} -> Enum.any?(checks, &Webhook.matches_record?(event, &1))
-        {:error, _reason} -> false
+    for repo_key <- repo_keys_from_opts(opts),
+        {:ok, checks} <- [list_ci_checks(run_store, repo_key)],
+        record <- checks,
+        Webhook.matches_record?(event, record) do
+      {repo_key, record}
+    end
+  end
+
+  # A delivery writes the coarse CI state it carries into the store ahead of the poll it queues, so
+  # a red head or a new head moves the board without waiting for the poll (`SymphonyElixir.CiState`).
+  # A passing check names no state of its own — only the poll's rollup read calls a head green — and
+  # a delivery for a head the record has already moved past is left to the poll.
+  defp apply_webhook_ci_state(event, %State{} = state) do
+    status = Webhook.ci_status(event)
+    at = webhook_at(event)
+
+    Enum.each(matching_ci_records(event, state.opts), fn {repo_key, record} ->
+      issue_id = Map.get(record, :issue_id)
+
+      case {webhook_target(event, record), status} do
+        {:clear, _status} -> CiState.record(repo_key, issue_id, nil, nil, at, state.opts)
+        {{:write, head_sha}, status} when is_binary(status) -> CiState.record(repo_key, issue_id, head_sha, status, at, state.opts)
+        _no_state -> :ok
       end
     end)
+
+    state
   end
+
+  # Which head of a record a delivery speaks for: a head-moving event names the new head, a closed
+  # PR clears the labels, and a check event applies only while it ran on the head the record holds.
+  defp webhook_target(%{action: action, head_sha: head_sha}, _record)
+       when action in ["synchronize", "reopened"] and is_binary(head_sha),
+       do: {:write, head_sha}
+
+  defp webhook_target(%{action: action}, _record) when action in ["synchronize", "reopened"], do: :skip
+  defp webhook_target(%{action: "closed"}, _record), do: :clear
+
+  defp webhook_target(%{head_sha: head_sha}, record) when is_binary(head_sha) do
+    case Map.get(record, :last_observed_sha) do
+      observed when observed in [nil, head_sha] -> {:write, head_sha}
+      _other -> :skip
+    end
+  end
+
+  defp webhook_target(_event, _record), do: :skip
+
+  # The check's own completion time when it carries one, so a slow delivery can't outrank a newer
+  # poll; otherwise the delivery time.
+  defp webhook_at(%{completed_at: %DateTime{} = at}), do: at
+  defp webhook_at(_event), do: DateTime.utc_now()
 
   defp webhook_poll_repo(repo_key, %State{} = state) do
     case poll_cycle_result(Keyword.put(state.opts, :repo_key, repo_key)) do
@@ -662,8 +711,10 @@ defmodule SymphonyElixir.CiPoller do
   defp handle_ci_status(record, ci_status, settings, opts, now) do
     ci_status = if rerun_pending?(record, ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
     ci_status = track_landing_wait(record, ci_status, opts, now)
+    action = ci_action(ci_status)
+    record_ci_attribute(record, ci_status, action, opts, now)
 
-    case ci_action(ci_status) do
+    case action do
       :closed ->
         cleanup_ci(record, settings, opts, now, "closed")
 
@@ -683,6 +734,28 @@ defmodule SymphonyElixir.CiPoller do
       {:failure, failed_checks} ->
         handle_ci_failure(record, ci_status, failed_checks, settings, opts, now)
     end
+  end
+
+  # The poll's authoritative read of the PR's head, written into the ticket state (`SymphonyElixir.CiState`)
+  # so dispatch gates can consult the store and the board wears the matching label. The write is
+  # keyed on the check's completion time, so a stale webhook delivery can't outrank it.
+  defp record_ci_attribute(record, ci_status, action, opts, now) do
+    CiState.record(
+      Map.get(record, :repo_key) || repo_key_from_opts(opts),
+      Map.get(record, :issue_id),
+      Map.get(ci_status, :commit_sha),
+      CiState.status_for_action(action),
+      ci_completed_at(ci_status) || now,
+      opts
+    )
+  end
+
+  defp ci_completed_at(ci_status) do
+    ci_status
+    |> Map.get(:checks, [])
+    |> Enum.map(&Map.get(&1, :completed_at))
+    |> Enum.filter(&match?(%DateTime{}, &1))
+    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
   end
 
   defp handle_ci_failure(record, ci_status, failed_checks, settings, opts, now) do

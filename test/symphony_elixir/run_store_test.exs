@@ -393,6 +393,30 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  test "records CI state per head, newest write wins, and refuses bad arguments" do
+    at = ~U[2026-10-04 00:23:15Z]
+    later = DateTime.add(at, 60, :second)
+
+    assert {:ok, :changed} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", at)
+    assert %{ci_states: [%{head_sha: "abc", status: "running"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert {:ok, :unchanged} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", later)
+    assert {:ok, :changed} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "green", later)
+    assert {:ok, :stale} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "red", at)
+    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert {:ok, :changed} = RunStore.record_ci_state(@other_repo_key, "issue-1", nil, "red", at)
+    assert %{ci_states: [%{head_sha: nil, status: "red"}]} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
+
+    assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, nil, "abc", "running", at)
+    assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", nil, at)
+    assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", nil)
+    assert {:error, :invalid_repo_key} = RunStore.record_ci_state(nil, "issue-1", "abc", "running", at)
+  end
+
   test "rejects ticket state writes without a repo_key or issue_id" do
     assert {:error, :missing_repo_key} = RunStore.put_ticket_state(%{issue_id: "issue-1"})
     assert {:error, :invalid_ticket_state_record} = RunStore.put_ticket_state(%{})

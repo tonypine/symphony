@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Tracker do
   Adapter boundary for issue tracker reads and writes.
   """
 
-  alias SymphonyElixir.{Config, Linear.Issue, PlanComments}
+  alias SymphonyElixir.{Config, Linear.Issue, MachineLabels, PlanComments}
 
   @typedoc "A state change in an issue's history: when it happened and the states it moved between."
   @type state_change :: %{at: DateTime.t(), from: String.t() | nil, to: String.t()}
@@ -118,16 +118,55 @@ defmodule SymphonyElixir.Tracker do
     adapter().update_issue_state(issue_id, state_name)
   end
 
-  @doc "Adds the label named `label_name` (matched ignoring case) to the issue."
+  @doc """
+  Adds the label named `label_name` (matched ignoring case) to the issue. Refuses the
+  machine-owned labels (see `SymphonyElixir.MachineLabels`): only the machinery writes those,
+  through `set_machine_label/2`.
+  """
   @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   def add_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
-    adapter().add_issue_label(issue_id, label_name)
+    if MachineLabels.owned?(label_name) do
+      {:error, :machine_owned_label}
+    else
+      adapter().add_issue_label(issue_id, label_name)
+    end
   end
 
-  @doc "Removes every label named `label_name` (matched ignoring case) from the issue."
+  @doc """
+  Removes every label named `label_name` (matched ignoring case) from the issue. Refuses the
+  machine-owned labels: only the machinery clears those, through `clear_machine_label/2`.
+  """
   @spec remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   def remove_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
-    adapter().remove_issue_label(issue_id, label_name)
+    if MachineLabels.owned?(label_name) do
+      {:error, :machine_owned_label}
+    else
+      adapter().remove_issue_label(issue_id, label_name)
+    end
+  end
+
+  @doc """
+  Sets a machine-owned label (see `SymphonyElixir.MachineLabels`). This is the only path that may
+  write one; a name the machine does not own is refused, so the machinery can't be used to add an
+  arbitrary board label.
+  """
+  @spec set_machine_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def set_machine_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    if MachineLabels.owned?(label_name) do
+      adapter().add_issue_label(issue_id, label_name)
+    else
+      {:error, :not_machine_owned_label}
+    end
+  end
+
+  @doc "Clears a machine-owned label (see `SymphonyElixir.MachineLabels`); a name it does not own is refused."
+  @spec clear_machine_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def clear_machine_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    if MachineLabels.owned?(label_name) do
+      adapter().remove_issue_label(issue_id, label_name)
+    else
+      {:error, :not_machine_owned_label}
+    end
   end
 
   @spec fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}

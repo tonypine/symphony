@@ -188,6 +188,42 @@ defmodule SymphonyElixir.TicketState do
     |> Map.put(:updated_at, at)
   end
 
+  @doc """
+  Upserts the CI state of one PR head with last-write-wins ordering: a write whose `at` is older
+  than the entry the record already holds for that head is dropped (`:stale`), so a slow webhook
+  delivery can't overwrite a newer poll. A write that repeats the held status is `:unchanged`; any
+  other accepted write is `:changed`, which is what projects the ticket's CI label. `at` is the
+  check's completion time (or the observation time when the read carries none).
+  """
+  @spec put_ci_state(t(), String.t() | nil, String.t(), DateTime.t()) ::
+          {t(), :changed | :unchanged | :stale}
+  def put_ci_state(record, head_sha, status, at) when is_struct(at, DateTime) do
+    record = normalize(record)
+    head_sha = normalize_string(head_sha)
+    status = normalize_string(status) || ""
+
+    case ci_state(record, head_sha) do
+      %{updated_at: %DateTime{} = existing_at} = existing ->
+        cond do
+          DateTime.compare(at, existing_at) == :lt -> {record, :stale}
+          existing.status == status -> {record, :unchanged}
+          true -> {record_ci_state(record, head_sha, status, at), :changed}
+        end
+
+      _none ->
+        {record_ci_state(record, head_sha, status, at), :changed}
+    end
+  end
+
+  @doc """
+  The ticket's current (newest) CI state, or nil before any was recorded. Entries are kept
+  newest-first, so this is the state of the head the ticket is on now.
+  """
+  @spec current_ci_state(t()) :: ci_state() | nil
+  def current_ci_state(record) do
+    record |> normalize() |> Map.fetch!(:ci_states) |> List.first()
+  end
+
   @doc "The record's CI state for `head_sha`, or nil."
   @spec ci_state(t(), String.t() | nil) :: ci_state() | nil
   def ci_state(record, head_sha) do
