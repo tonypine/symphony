@@ -21,6 +21,7 @@ defmodule SymphonyElixir.TicketState do
   # The transition vocabulary of `docs/design/state-machine.md`, kept here as the one list the
   # machinery validates a signal name against.
   @signal_names [
+    "claim",
     "handoff",
     "blocked",
     "unblocked",

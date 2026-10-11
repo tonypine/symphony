@@ -47,7 +47,19 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTools, AutoReview, Config, HumanReview, QaAgent, RunKind, Tracker, Verification, Workspace}
+  alias SymphonyElixir.{
+    AgentTools,
+    AutoReview,
+    Config,
+    HumanReview,
+    QaAgent,
+    RunKind,
+    TicketSignals,
+    Tracker,
+    Verification,
+    Workspace
+  }
+
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
@@ -231,6 +243,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
     case with_linear_retry(move, move_label, verdict_move_opts(opts)) do
       :ok ->
+        TicketSignals.record(issue.repo_key, issue.id, "QA verdict", %{outcome: Atom.to_string(outcome.verdict), to: target_state})
         Logger.info("Parent walkthrough for #{parent.identifier} ended #{outcome.verdict}; moved #{issue.identifier} to #{target_state}")
         :ok
 

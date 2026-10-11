@@ -190,12 +190,15 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute SubIssueWait.wait_on_merge?(nil, terminal, settings)
 
       # Sub-issues are never promoted on merge, whatever their state.
-      with_backlog = %{issue | sub_issues: [%{id: "c1", identifier: "MT-2"}, %{id: "c2", identifier: "MT-3", state: "Backlog"}]}
+      sub_issues = [%{id: "c1", identifier: "MT-2"}, %{id: "c2", identifier: "MT-3", state: "Backlog"}]
+      with_backlog = %{issue | sub_issues: sub_issues, repo_key: "repo-sub-wait"}
+      RunStore.delete_ticket_state("repo-sub-wait", "p")
       assert :ok = SubIssueWait.wait_on_merge(with_backlog, settings, SymphonyElixir.Tracker.Memory)
       assert_received {:memory_tracker_state_update, "p", @waiting}
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert_received {:memory_tracker_comment, "p", _wait_comment}
       assert RunStore.merged_wait?("p")
+      assert [%{name: "merge settled", details: %{to: @waiting}}] = RunStore.get_ticket_state("repo-sub-wait", "p").signals
       :ok = RunStore.delete_merged_wait("p")
 
       waiting = %{issue | state: @waiting}

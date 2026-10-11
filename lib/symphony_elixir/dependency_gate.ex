@@ -11,7 +11,7 @@ defmodule SymphonyElixir.DependencyGate do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DependencyAudit, Notifications, Tracker}
+  alias SymphonyElixir.{Config, DependencyAudit, Notifications, TicketSignals, Tracker}
 
   @hold_state "In Review"
 
@@ -202,21 +202,31 @@ defmodule SymphonyElixir.DependencyGate do
     if issue_terminal?(issue) do
       Logger.info("Skipping dependency hold state move for terminal issue issue_id=#{issue_id}")
     else
-      update_issue_to_hold(issue_id)
+      update_issue_to_hold(issue)
     end
   end
 
   defp move_issue_to_hold(_gate), do: :ok
 
-  defp update_issue_to_hold(issue_id) do
+  defp update_issue_to_hold(%{id: issue_id} = issue) do
     case Tracker.update_issue_state(issue_id, @hold_state) do
       :ok ->
+        record_hold_signal(issue, issue_id)
         :ok
 
       {:error, reason} ->
         Logger.warning("Failed to move dependency hold issue to #{@hold_state}: #{inspect(reason)}")
         :ok
     end
+  end
+
+  # Best-effort recording of the dependency hold move into the ticket's signals ledger (inert; a
+  # store failure never changes the move). Runs only after the move has succeeded.
+  defp record_hold_signal(issue, issue_id) do
+    TicketSignals.record(Map.get(issue, :repo_key), issue_id, "decision requested", %{
+      to: @hold_state,
+      reason: "dependency_source_requires_approval"
+    })
   end
 
   defp terminal_state?(state) do

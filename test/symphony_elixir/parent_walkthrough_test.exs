@@ -6,6 +6,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
   alias SymphonyElixir.AutoReview
   alias SymphonyElixir.AutoReview.ParentWalkthrough
   alias SymphonyElixir.QaAgent
+  alias SymphonyElixir.RunStore
 
   @sha "c0ffee00112233445566778899aabbccddeeff00"
   @now_ms 1_791_000_000_000
@@ -293,7 +294,8 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       })
 
       on_message = fn _message -> :ok end
-      assert :ok = run(verification(), on_message: on_message)
+      RunStore.delete_ticket_state("repo-walkthrough", "issue-fv")
+      assert :ok = run(verification(%{repo_key: "repo-walkthrough"}), on_message: on_message)
 
       assert_received {:git, ["fetch", "--quiet", "origin", "main"], @workspace}
       assert_received {:git, ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"], @workspace}
@@ -312,6 +314,9 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert agent_opts[:on_message] == on_message
       assert is_function(agent_opts[:git], 2)
       assert_received {:state_update, "issue-fv", "In Review"}
+
+      assert [%{name: "QA verdict", details: %{outcome: "pass", to: "In Review"}}] =
+               RunStore.get_ticket_state("repo-walkthrough", "issue-fv").signals
 
       assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted()
       assert report =~ "**Verdict:** pass → TP-910 In Review"

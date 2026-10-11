@@ -5304,8 +5304,11 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "MT-DEP-HOLD",
         title: "Dependency hold",
         description: "Hold risky dependency",
-        state: "In Progress"
+        state: "In Progress",
+        repo_key: Config.repo_key!()
       }
+
+      RunStore.delete_ticket_state(Config.repo_key!(), "issue-dep-hold")
 
       test_pid = self()
 
@@ -5324,6 +5327,9 @@ defmodule SymphonyElixir.CoreTest do
       assert_receive {:issue_state_fetch, ["issue-dep-hold"]}
       refute_receive {:issue_state_fetch, _ids}, 50
       assert_receive {:memory_tracker_state_update, "issue-dep-hold", "In Review"}, 500
+
+      assert [%{name: "decision requested", details: %{to: "In Review", reason: "dependency_source_requires_approval"}}] =
+               RunStore.get_ticket_state(Config.repo_key!(), "issue-dep-hold").signals
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

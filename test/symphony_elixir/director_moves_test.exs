@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, DirectorMoves, PlanComments, PrReviewPoller, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, DirectorMoves, PlanComments, PrReviewPoller, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -73,6 +73,16 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert [%{"move" => "approve_plan", "issue_identifier" => "MOT-30", "from_state" => "In Review", "to_state" => @waiting}, %{"from_state" => "Human Review"}] =
                audit_records()
+    end
+
+    test "records the move's signal in the ticket's signals ledger", %{opts: opts} do
+      RunStore.delete_ticket_state("repo-director", "plan")
+      put_issues([%{plan("In Review") | repo_key: "repo-director"}])
+
+      assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+
+      assert [%{name: "decision returned", details: %{move: "approve_plan", from: "In Review", to: @waiting}}] =
+               RunStore.get_ticket_state("repo-director", "plan").signals
     end
 
     test "refuses a plan outside the review states, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
