@@ -19,9 +19,15 @@ defmodule SymphonyElixir.TransitionGuard do
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
   `:waiting_on_sub_issues` and `:ci_escalation_state`.
+
+  The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`,
+  read from `ctx.settings`): `edges/1` returns the `legacy` table or the `designed` one. The
+  `designed` table is in parity with `legacy` today — this module adds the switch, not the
+  redesigned flow; flow tickets replace rows in the `designed` table, never the legacy one, so a
+  repo left on `legacy` keeps today's behavior exactly.
   """
 
-  alias SymphonyElixir.{AutoReview, HumanReview, SubIssueWait, Tracker}
+  alias SymphonyElixir.{AutoReview, HumanReview, StateMachine, SubIssueWait, Tracker}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -87,28 +93,43 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :parent_walkthrough, from: :any, to: :requested}
   ]
 
+  # The designed machine's edge table. It is in parity with the legacy table today: this ticket adds
+  # the version switch, not the redesigned flow. Flow tickets replace rows here — never in `@edges`
+  # — so a repo left on `legacy` keeps today's behavior exactly.
+  @designed_edges @edges
+
   # States an agent's request may never set, with the refusal it gets. Moving to `Merging` is how a
   # person approves a merge, so an agent may not do it.
   @human_only_states [
     %{name: @merging_state, error: :merging_requires_human_approval}
   ]
 
-  @doc "The legal-edge table: one row per signal, naming its origins and target."
+  @doc "The legal-edge table for the default version."
   @spec edges() :: [edge()]
-  def edges, do: @edges
+  def edges, do: edges(StateMachine.default_version())
 
-  @doc "Every signal the table defines."
+  @doc "The legal-edge table for `version`."
+  @spec edges(StateMachine.version()) :: [edge()]
+  def edges(version) do
+    if version == "designed", do: @designed_edges, else: @edges
+  end
+
+  @doc "Every signal the default table defines."
   @spec signals() :: [signal()]
-  def signals, do: Enum.map(@edges, & &1.signal)
+  def signals, do: signals(StateMachine.default_version())
+
+  @doc "Every signal the table for `version` defines."
+  @spec signals(StateMachine.version()) :: [signal()]
+  def signals(version), do: Enum.map(edges(version), & &1.signal)
 
   @doc """
   True when `signal` is a known edge and `from` is one of its origins (`:any` accepts any state).
   With `to` given, it must also match the edge's literal target; a config-derived or requested
-  target accepts any `to`.
+  target accepts any `to`. The edge table comes from `version`.
   """
-  @spec legal?(signal(), String.t() | nil, String.t() | nil) :: boolean()
-  def legal?(signal, from, to \\ nil) do
-    case edge(signal) do
+  @spec legal?(signal(), String.t() | nil, String.t() | nil, StateMachine.version()) :: boolean()
+  def legal?(signal, from, to \\ nil, version \\ StateMachine.default_version()) do
+    case edge(signal, version) do
       nil -> false
       %{from: froms, to: target} -> origin_allowed?(froms, from) and target_allowed?(target, to)
     end
@@ -116,12 +137,12 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @doc """
   The state `signal` moves to, resolved from `ctx`. `ctx.settings` is required for the
-  config-derived targets and `ctx.target` for a requested one.
+  config-derived targets and `ctx.target` for a requested one; it also resolves the repo's
+  state-machine version and so selects the edge table.
   """
   @spec target(signal(), context()) :: String.t()
   def target(signal, ctx) do
-    @edges
-    |> Enum.find(&(&1.signal == signal))
+    edge(signal, version(ctx))
     |> case do
       nil -> raise ArgumentError, "unknown transition signal: #{inspect(signal)}"
       %{to: to} -> resolve(to, ctx)
@@ -205,7 +226,9 @@ defmodule SymphonyElixir.TransitionGuard do
     end
   end
 
-  defp edge(signal), do: Enum.find(@edges, &(&1.signal == signal))
+  defp edge(signal, version), do: Enum.find(edges(version), &(&1.signal == signal))
+
+  defp version(ctx), do: StateMachine.version(Map.get(ctx, :settings))
 
   defp origin_allowed?(:any, _from), do: true
   defp origin_allowed?(froms, from) when is_binary(from), do: Enum.any?(froms, &state_name_matches?(from, &1))

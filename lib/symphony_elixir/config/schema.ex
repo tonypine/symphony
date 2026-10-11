@@ -2427,6 +2427,9 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   embedded_schema do
+    # The repo's state-machine version (`legacy` or `designed`); the per-repo override merges in
+    # from `repositories[].state_machine`. Resolved by `SymphonyElixir.StateMachine.version/1`.
+    field(:state_machine, :string, default: "legacy")
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:tickets, Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
@@ -2643,7 +2646,8 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [])
+    |> cast(attrs, [:state_machine], empty_values: [])
+    |> validate_inclusion(:state_machine, ["legacy", "designed"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:tickets, with: &Tickets.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)

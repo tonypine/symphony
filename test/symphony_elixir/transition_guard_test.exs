@@ -46,6 +46,31 @@ defmodule SymphonyElixir.TransitionGuardTest do
     end
   end
 
+  describe "version selection" do
+    test "edges/1 returns the legacy table by default and an unknown version falls back to it" do
+      assert TransitionGuard.edges() == TransitionGuard.edges("legacy")
+      assert TransitionGuard.edges("sideways") == TransitionGuard.edges("legacy")
+      assert TransitionGuard.signals("sideways") == TransitionGuard.signals()
+    end
+
+    test "the designed table is in parity with the legacy table" do
+      assert TransitionGuard.edges("designed") == TransitionGuard.edges("legacy")
+      assert TransitionGuard.signals("designed") == TransitionGuard.signals()
+    end
+
+    test "legal?/4 reads the table for the given version" do
+      assert TransitionGuard.legal?(:claim, "Todo", "In Progress", "designed")
+      refute TransitionGuard.legal?(:claim, "In Progress", nil, "designed")
+    end
+
+    test "target/2 selects the table from ctx.settings' version" do
+      designed = settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+
+      assert TransitionGuard.target(:claim, %{settings: designed}) == "In Progress"
+      assert TransitionGuard.target(:claim, %{}) == "In Progress"
+    end
+  end
+
   describe "legal?/3" do
     test "is false for an unknown signal" do
       refute TransitionGuard.legal?(:not_a_signal, "Todo")

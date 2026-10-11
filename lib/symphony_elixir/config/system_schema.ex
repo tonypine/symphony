@@ -64,7 +64,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issues.linear.scope" => ~w(project_slug team labels),
     "issues.states" => ~w(active terminal waiting_on_sub_issues human_review code_review qa plan_review epic_review ci_fix),
     "tickets" => ~w(priorities),
-    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate),
+    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate state_machine),
     "repositories[].route" => ~w(team projects labels assignee),
     "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
     "repositories[].agent" => ~w(provider model effort run_profiles),
@@ -298,7 +298,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       :assignee,
       :default,
       :agent,
-      :acceptance_gate
+      :acceptance_gate,
+      :state_machine
     ]
 
     defmodule Workspace do
@@ -344,6 +345,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       # The raw `acceptance_gate` override until `SystemSchema.parse/1` replaces it with the
       # repository's effective `auto_review.acceptance_gate` block, as a string-keyed map.
       field(:acceptance_gate, :map)
+      # The repo's state-machine version: `legacy` (the default) or `designed`.
+      field(:state_machine, :string, default: "legacy")
       embeds_one(:workspace, Workspace, on_replace: :update)
     end
 
@@ -360,6 +363,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       |> validate_string(:workflow)
       |> validate_inclusion(:workflow_source, ["ref", "local"])
       |> validate_optional_string(:base_branch)
+      |> validate_inclusion(:state_machine, ["legacy", "designed"])
       |> validate_string(:team)
       |> normalize_string_list(:labels)
       |> normalize_string_list(:projects)
@@ -783,6 +787,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("workspace", workspace)
         |> maybe_put("agent", agent)
         |> maybe_put("acceptance_gate", acceptance_gate)
+        |> maybe_put("state_machine", Map.get(repo, "state_machine"))
 
       {:ok, normalized}
     end

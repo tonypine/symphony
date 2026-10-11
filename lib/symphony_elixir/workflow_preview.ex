@@ -13,22 +13,24 @@ defmodule SymphonyElixir.WorkflowPreview do
   @default_file "WORKFLOW.md"
   @default_agent_kind "codex"
 
-  @type render_opts :: [file: String.t(), agent_kind: String.t()]
+  @type render_opts :: [file: String.t(), agent_kind: String.t(), repo_key: String.t()]
 
   @doc """
   Renders the base-issue prompt for the workflow at `:file` (default `WORKFLOW.md`).
 
-  Pass `[]` to render the default file. Returns `{:ok, prompt}` or
-  `{:error, human_readable_message}`.
+  Pass `[]` to render the default file. `:repo_key` names the configured repo the preview is for,
+  so its resolved state-machine version selects the status map the prompt renders; omitted, the
+  preview renders the default version. Returns `{:ok, prompt}` or `{:error, human_readable_message}`.
   """
   @spec render(render_opts()) :: {:ok, String.t()} | {:error, String.t()}
   def render(opts) when is_list(opts) do
     file = Keyword.get(opts, :file, @default_file)
     agent_kind = Keyword.get(opts, :agent_kind, @default_agent_kind)
+    repo_key = Keyword.get(opts, :repo_key)
 
     case Workflow.load(file) do
       {:ok, workflow} ->
-        render_workflow(workflow, agent_kind)
+        render_workflow(workflow, agent_kind, repo_key)
 
       {:error, reason} ->
         {:error, load_error_message(file, reason)}
@@ -68,12 +70,13 @@ defmodule SymphonyElixir.WorkflowPreview do
     }
   end
 
-  defp render_workflow(workflow, agent_kind) do
+  defp render_workflow(workflow, agent_kind, repo_key) do
     prompt =
       PromptBuilder.build_prompt(sample_issue(),
         workflow: workflow,
         prompt_mode: :issue,
-        agent_kind: agent_kind
+        agent_kind: agent_kind,
+        repo_key: repo_key
       )
 
     {:ok, prompt}

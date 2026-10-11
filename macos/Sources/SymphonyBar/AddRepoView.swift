@@ -344,6 +344,11 @@ struct AddRepoView: View {
                         GateAgreementLine(agreement: gateAgreement)
                     }
                 }
+                if model.editing != nil {
+                    Section(StateMachine.pickerTitle) {
+                        StateMachinePicker(choice: $model.draft.stateMachine)
+                    }
+                }
             }
             .formStyle(.grouped)
 
