@@ -18,6 +18,7 @@ Required sections:
 
 Common optional sections:
 
+- `tickets`
 - `workspaces`
 - `pull_requests`
 - `pre_push_review`
@@ -222,6 +223,25 @@ issues:
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
+
+### `tickets`
+
+Which tickets may start new work, by Linear priority. Empty (the default) lets every priority
+start.
+
+```yaml
+tickets:
+  priorities: [urgent, high]
+```
+
+- `priorities`: the Linear priorities allowed to start new work: `urgent` (1), `high` (2),
+  `medium` (3), `low` (4) and `none` (0, Linear's "No priority"). The numbers `0`–`4` and
+  `no priority` are accepted too, and an issue Linear reports with no priority reads as `none`.
+  An issue whose priority is not listed is not dispatched: Symphony waits with free lanes even
+  when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
+  example on `[urgent, high]` only. It never stops a forced ticket (`agent.concurrency.force_label`)
+  or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
+  `null` turns the filter off.
 
 ### `repositories`
 

@@ -32,6 +32,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.QualityGate
   require Schema.ReviewAgent
   require Schema.Server
+  require Schema.Tickets
   require Schema.Tracker
   require Schema.Verification
   require Schema.Watchdog
@@ -43,7 +44,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @allowed_keys ~w(
     agent auto_review dashboard dependency_audit github human_actions issue_gate issues notifications poller pre_push_review
     pull_requests
-    repositories verification watchdog workers workspaces
+    repositories tickets verification watchdog workers workspaces
   )
 
   # `repositories[].acceptance_gate` sets the kill switch, the numbers and extra escalation
@@ -62,6 +63,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issues.linear" => ~w(endpoint api_key assignee scope),
     "issues.linear.scope" => ~w(project_slug team labels),
     "issues.states" => ~w(active terminal waiting_on_sub_issues human_review),
+    "tickets" => ~w(priorities),
     "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate),
     "repositories[].route" => ~w(team projects labels assignee),
     "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
@@ -404,6 +406,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   embedded_schema do
     embeds_one(:tracker, Schema.Tracker, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:tickets, Schema.Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Schema.Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:poller, Schema.Poller, on_replace: :update, defaults_to_struct: true)
     embeds_one(:watchdog, Schema.Watchdog, on_replace: :update, defaults_to_struct: true)
@@ -528,6 +531,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   def to_config_map(%__MODULE__{} = system_config) do
     %{
       "tracker" => struct_to_map(system_config.tracker),
+      "tickets" => struct_to_map(system_config.tickets),
       "polling" => struct_to_map(system_config.polling),
       "poller" => struct_to_map(system_config.poller),
       "watchdog" => struct_to_map(system_config.watchdog),
@@ -591,6 +595,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     %__MODULE__{}
     |> cast(attrs, [])
     |> cast_embed(:tracker, with: &Schema.Tracker.changeset/2)
+    |> cast_embed(:tickets, with: &Schema.Tickets.changeset/2)
     |> cast_embed(:polling, with: &Schema.Polling.changeset/2)
     |> cast_embed(:poller, with: &Schema.Poller.changeset/2)
     |> cast_embed(:watchdog, with: &Schema.Watchdog.changeset/2)
@@ -639,6 +644,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_operator_config(config) do
     with {:ok, issue_config} <- normalize_issues(Map.get(config, "issues", %{})),
+         {:ok, tickets} <- normalize_tickets(Map.get(config, "tickets", %{})),
          {:ok, repos} <- normalize_repositories(Map.get(config, "repositories")),
          {:ok, workspace} <- normalize_workspaces(Map.get(config, "workspaces", %{})),
          {:ok, agent_config} <- normalize_agent(Map.get(config, "agent", %{})),
@@ -657,6 +663,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       {:ok,
        %{}
        |> merge_sections(issue_config)
+       |> maybe_put("tickets", tickets)
        |> maybe_put("repos", repos)
        |> maybe_put("workspace", workspace)
        |> maybe_put("worker", worker)
@@ -707,6 +714,18 @@ defmodule SymphonyElixir.Config.SystemSchema do
       {:ok, %{} |> maybe_put("tracker", tracker) |> maybe_put("polling", polling)}
     end
   end
+
+  defp normalize_tickets(config) do
+    with {:ok, config} <- section_map(config, "tickets"),
+         :ok <- reject_unknown_section_keys(config, section_keys("tickets"), "tickets") do
+      {:ok, %{} |> maybe_put("priorities", stringify_priorities(Map.get(config, "priorities")))}
+    end
+  end
+
+  # Ecto's `{:array, :string}` rejects Linear's numeric priorities, so numbers become strings here,
+  # before `Schema.Tickets.changeset/2` maps every form to a canonical name.
+  defp stringify_priorities(values) when is_list(values), do: Enum.map(values, &to_string/1)
+  defp stringify_priorities(values), do: values
 
   # Relative to the folder holding symphony.yml, like a repository's workflow.
   defp memory_issues_file(path) when is_binary(path), do: workflow_path_from_symphony_file(path)

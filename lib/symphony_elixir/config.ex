@@ -225,6 +225,22 @@ defmodule SymphonyElixir.Config do
   def max_concurrent_agents_for_state(_state_name), do: settings!().agent.max_concurrent_agents
 
   @doc """
+  The Linear priority numbers `tickets.priorities` allows to start new work, or nil when the key is
+  empty and every priority may. An issue outside the set is not dispatched as new work: Symphony
+  waits with free lanes even when such an issue sits in an active state. A forced ticket and a retry
+  waiting for a slot are exempt, so the filter only gates fresh picks.
+  """
+  @spec ticket_priority_filter() :: MapSet.t(0..4) | nil
+  def ticket_priority_filter, do: ticket_priority_filter(settings!())
+
+  @spec ticket_priority_filter(Schema.t()) :: MapSet.t(0..4) | nil
+  def ticket_priority_filter(%Schema{tickets: %{priorities: priorities}}) when priorities in [nil, []], do: nil
+
+  def ticket_priority_filter(%Schema{tickets: %{priorities: names}}) do
+    MapSet.new(names, &Schema.Tickets.priority_number/1)
+  end
+
+  @doc """
   The model, effort and provider for a run of `kind`, field by field: the routed repository's
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent`, then
   `agent.run_profiles.<kind>`, then `agent`. `settings` from `settings_for_repo/1` carry the
