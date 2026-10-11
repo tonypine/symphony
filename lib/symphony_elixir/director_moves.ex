@@ -38,7 +38,18 @@ defmodule SymphonyElixir.DirectorMoves do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, BreakdownReview, Config, HumanReview, Orchestrator, RunKind, SubIssueWait, Tracker}
+  alias SymphonyElixir.{
+    AuditLog,
+    BreakdownReview,
+    Config,
+    HumanReview,
+    Orchestrator,
+    RunKind,
+    SubIssueWait,
+    TicketSignals,
+    Tracker
+  }
+
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrReviewPoller
@@ -118,7 +129,7 @@ defmodule SymphonyElixir.DirectorMoves do
     with {:ok, issue} <- fetch_issue(identifier),
          {:ok, last} <- undoable(issue, opts),
          :ok <- release_pr(last.move, issue, opts),
-         :ok <- update_state(issue, last.from_state) do
+         :ok <- update_state(issue, last.from_state, :undo) do
       Agent.update(server(opts), &Map.delete(&1, issue.id))
       record_audit("undo", issue, issue.state, last.from_state, nil)
       Logger.info("Director undid #{last.move} issue_id=#{issue.id} issue_identifier=#{issue.identifier} state=#{last.from_state}")
@@ -268,7 +279,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp apply_move(:decisions, issue, to_state, %{picks: picks}, opts) do
     comment = picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decisions_comment()
 
-    with :ok <- maybe_update_state(issue, to_state) do
+    with :ok <- maybe_update_state(issue, to_state, :decisions) do
       case post_comment(issue, comment) do
         :ok -> {:ok, comment}
         {:error, {:linear, reason}} when is_binary(to_state) -> moved_without_comment(issue, to_state, reason, opts)
@@ -281,7 +292,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp comment_then_move(move, issue, comment, to_state, opts) do
     with :ok <- maybe_post_comment(issue, comment, opts) do
-      case update_state(issue, to_state) do
+      case update_state(issue, to_state, move) do
         :ok ->
           Agent.update(server(opts), &Map.delete(&1, {:posted, issue.id}))
           {:ok, comment}
@@ -336,14 +347,28 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp maybe_update_state(_issue, nil), do: :ok
-  defp maybe_update_state(issue, to_state), do: update_state(issue, to_state)
+  defp maybe_update_state(_issue, nil, _move), do: :ok
+  defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
 
-  defp update_state(issue, to_state) do
+  defp update_state(issue, to_state, move) do
     case Tracker.update_issue_state(issue.id, to_state) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:linear, reason}}
+      :ok ->
+        record_move_signal(issue, move, to_state)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:linear, reason}}
     end
+  end
+
+  # Best-effort recording of a Director move into the ticket's signals ledger (inert; a store
+  # failure never changes the move). Runs only after the move has succeeded.
+  defp record_move_signal(issue, move, to_state) do
+    TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{
+      move: Atom.to_string(move),
+      from: issue.state,
+      to: to_state
+    })
   end
 
   defp finish(move, issue, to_state, comment, opts) do

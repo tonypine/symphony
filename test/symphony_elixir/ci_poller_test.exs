@@ -917,6 +917,9 @@ defmodule SymphonyElixir.CiPollerTest do
       assert_receive {:issue_comment, "issue-2401", body}
       assert body =~ "PR conflicts with `develop`; merge it and push."
       refute_receive {:qa_request, _job}
+
+      assert [%{name: "review verdict", details: %{outcome: "rework", to: "Rework", reason: "pr_conflict"}} | _] =
+               RunStore.get_ticket_state(@repo_key, "issue-2401").signals
     end
 
     test "a conflicting PR without a base branch names the repository's base branch" do
@@ -1244,6 +1247,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:fetch_failed_log, "987"}
     assert_receive {:notification_event, %{event: "ci_failed", state: "In Progress", metadata: %{retry_count: 1}}}
     assert transition_log_excerpt =~ "ERROR: specs failed"
+
+    assert [%{name: "fix verdict", details: %{outcome: "mechanical", to: "In Progress", reason: "ci_failure"}} | _] =
+             RunStore.get_ticket_state(@repo_key, "issue-2401").signals
 
     assert %{
              commit_sha: "abc123",
@@ -1802,6 +1808,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:notification_event, %{event: "ci_escalated", state: "In Review", metadata: %{max_retries: 1, escalation_state: "In Review"}}}
 
     assert [%{status: "escalated", ci_retry_count: 1}] = RunStore.list_ci_checks()
+
+    assert [%{name: "decision requested", details: %{to: "In Review", reason: "ci_failure"}} | _] =
+             RunStore.get_ticket_state(@repo_key, "issue-2401").signals
   end
 
   test "escalation persists pending transition before final ci update" do

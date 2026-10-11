@@ -7,7 +7,17 @@ defmodule SymphonyElixir.Workpad do
   instead of failing the run.
   """
 
-  alias SymphonyElixir.{AgentLabels, AgentTools, Config, Linear.Issue, Linear.TransientRetry, PromptSafety, Tracker}
+  alias SymphonyElixir.{
+    AgentLabels,
+    AgentTools,
+    Config,
+    Linear.Issue,
+    Linear.TransientRetry,
+    PromptSafety,
+    TicketSignals,
+    Tracker
+  }
+
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
 
   @in_progress_state "In Progress"
@@ -81,6 +91,7 @@ defmodule SymphonyElixir.Workpad do
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{@in_progress_state}", opts) do
         :ok ->
+          record_claim_signal(issue, opts)
           {:ok, %{issue | state: @in_progress_state}}
 
         {:error, reason} ->
@@ -92,6 +103,15 @@ defmodule SymphonyElixir.Workpad do
   end
 
   defp ensure_in_progress(%Issue{} = issue, _opts), do: {:ok, issue}
+
+  # Best-effort recording of the Todo -> In Progress claim into the ticket's signals ledger (inert;
+  # a store failure never changes the move). Runs only after the move has succeeded.
+  defp record_claim_signal(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    repo_key = issue.repo_key
+    repo_key = if is_binary(repo_key) and repo_key != "", do: repo_key, else: Keyword.get(opts, :repo_key)
+
+    TicketSignals.record(repo_key, issue_id, "claim", %{from: issue.state, to: @in_progress_state})
+  end
 
   defp ensure_workpad(%Issue{} = issue, workspace, opts) do
     settings = Keyword.get(opts, :settings) || Config.settings!()

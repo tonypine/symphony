@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.TicketState
+
   test "prompt builder uses PR prompt branch for PR runs" do
     write_workflow_file!(
       Workflow.workflow_file_path(),
@@ -817,6 +819,72 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert_raise RuntimeError, ~r/template_render_error:.*unknown playbook partial `not_a_real_partial`/s, fn ->
       PromptBuilder.build_prompt(issue)
+    end
+  end
+
+  describe "ticket state context" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      %{issue: %Issue{identifier: "MT-TS", title: "Ticket state", state: "In Progress"}}
+    end
+
+    test "adds nothing when no record is passed", %{issue: issue} do
+      refute PromptBuilder.build_prompt(issue) =~ "Ticket state:"
+      refute PromptBuilder.build_prompt(issue, ticket_state: nil) =~ "Ticket state:"
+      refute PromptBuilder.build_prompt(issue, ticket_state: :nonsense) =~ "Ticket state:"
+    end
+
+    test "adds nothing for a record with no phase, holds, CI or signals", %{issue: issue} do
+      refute PromptBuilder.build_prompt(issue, ticket_state: %{repo_key: "r", issue_id: "i"}) =~ "Ticket state:"
+    end
+
+    test "adds nothing for a record holding only verdicts", %{issue: issue} do
+      record = TicketState.new("r", "i") |> TicketState.record_verdict("review verdict", "sha", "approve")
+
+      refute PromptBuilder.build_prompt(issue, ticket_state: record) =~ "Ticket state:"
+    end
+
+    test "renders the phase, holds, CI and recent signals", %{issue: issue} do
+      at = ~U[2026-10-04 00:23:15Z]
+
+      record =
+        TicketState.new("r", "i", %{phase: "In Progress"})
+        |> TicketState.set_hold(:blocked, %{reason: "tooling", clearing_condition: "the fix lands"}, at)
+        |> TicketState.record_ci_state("abc123", "green", at)
+        |> TicketState.record_signal("handoff", %{to: "Code Review"}, at)
+
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record)
+
+      assert prompt =~ "Ticket state:"
+      assert prompt =~ "- Phase: In Progress"
+      assert prompt =~ "- Holds: blocked (tooling; clears when the fix lands)"
+      assert prompt =~ "- CI: green at abc123"
+      assert prompt =~ "Recent signals:"
+      assert prompt =~ "- handoff at #{at} to=Code Review"
+    end
+
+    test "renders the fallbacks for a bare hold, no CI and no signals", %{issue: issue} do
+      record = TicketState.new("r", "i", %{phase: "Merging", holds: [%{kind: :needs_decision}]})
+
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record)
+
+      assert prompt =~ "- Holds: needs_decision (no reason recorded; clears when no clearing condition recorded)"
+      assert prompt =~ "- CI: unknown"
+      assert prompt =~ "Recent signals:\n"
+    end
+
+    test "renders a signal with no details without a trailing gap", %{issue: issue} do
+      at = ~U[2026-10-04 00:23:15Z]
+      record = TicketState.new("r", "i", %{phase: "Todo"}) |> TicketState.record_signal("restart", %{}, at)
+
+      assert PromptBuilder.build_prompt(issue, ticket_state: record) =~ "- restart at #{at}"
+    end
+
+    test "injects the same section into the compact prompt", %{issue: issue} do
+      record = TicketState.new("r", "i", %{phase: "In Progress"})
+
+      assert PromptBuilder.build_compact_prompt(issue, ticket_state: record) =~ "Ticket state:"
+      refute PromptBuilder.build_compact_prompt(issue) =~ "Ticket state:"
     end
   end
 end

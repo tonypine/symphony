@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{RunStore, Tracker}
+  alias SymphonyElixir.{RunStore, TicketSignals, Tracker}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
@@ -191,6 +191,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   defp move_to_waiting(%Issue{id: issue_id} = issue, waiting_state, terminal_states, tracker) do
     with :ok <- tracker.update_issue_state(issue_id, waiting_state) do
+      TicketSignals.record(issue.repo_key, issue_id, "merge settled", %{to: waiting_state})
       Logger.info("Moved issue to #{waiting_state} after its PR merged with sub-issues open: #{issue_fields(issue)}")
       comment(issue, wait_comment(issue, waiting_state, terminal_states), tracker)
     end

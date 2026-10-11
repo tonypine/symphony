@@ -70,6 +70,7 @@ defmodule SymphonyElixir.AutoReview do
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
+  alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.Verification
   alias SymphonyElixir.{WorkflowSource, Workspace}
 
@@ -462,6 +463,7 @@ defmodule SymphonyElixir.AutoReview do
     with :ok <- mark_moved_by_gate(run_store, record, target_state),
          :ok <- tracker.update_issue_state(issue.id, target_state) do
       update_ci_check(run_store, record, %{qa_applied: true, gate_applied: true})
+      record_gate_signal(record, verdict, target_state)
       Logger.info("Acceptance gate moved #{issue.identifier} to #{target_state} issue_id=#{issue.id} verdict=#{verdict} sha=#{Map.get(record, :gate_sha)}")
       {:auto_review_gate, issue.id, verdict, target_state}
     else
@@ -506,6 +508,12 @@ defmodule SymphonyElixir.AutoReview do
 
     case tracker.update_issue_state(issue.id, @rework_state) do
       :ok ->
+        TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
+          outcome: "rework",
+          to: @rework_state,
+          reason: "pr_conflict"
+        })
+
         body =
           "PR conflicts with `#{base}`; merge it and push. GitHub runs no CI on a conflicting PR, " <>
             "so Auto Review moved this issue to #{@rework_state} instead of waiting for checks. " <>
@@ -997,6 +1005,7 @@ defmodule SymphonyElixir.AutoReview do
     case tracker.update_issue_state(issue.id, target_state) do
       :ok ->
         update_ci_check(Keyword.get(opts, :run_store, RunStore), record, %{qa_applied: true})
+        record_qa_signal(record, verdict, target_state)
         {:auto_review_qa, issue.id, verdict, target_state}
 
       {:error, reason} ->
@@ -1010,6 +1019,27 @@ defmodule SymphonyElixir.AutoReview do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to store the QA result issue_id=#{Map.get(record, :issue_id)}: #{inspect(reason)}")
     end
+  end
+
+  # The machine's verdict moves record their signal (and the verdict, bound to the head it judged)
+  # in the ticket's ledger, best effort: a store failure never changes the move.
+  defp record_gate_signal(record, verdict, target_state) do
+    outcome = to_string(verdict)
+
+    TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
+      outcome: outcome,
+      to: target_state,
+      source: "acceptance_gate"
+    })
+
+    TicketSignals.record_verdict(Map.get(record, :repo_key), Map.get(record, :issue_id), "review", Map.get(record, :gate_sha), outcome)
+  end
+
+  defp record_qa_signal(record, verdict, target_state) do
+    outcome = to_string(verdict)
+
+    TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "QA verdict", %{outcome: outcome, to: target_state})
+    TicketSignals.record_verdict(Map.get(record, :repo_key), Map.get(record, :issue_id), "qa", Map.get(record, :qa_sha), outcome)
   end
 
   defp put_run(run_store, record) do

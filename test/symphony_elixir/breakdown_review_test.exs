@@ -382,6 +382,30 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       refute Orchestrator.should_dispatch_issue_for_test(replanned, orchestrator_state())
     end
 
+    test "records a plan verdict signal for each promoted sub-ticket" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "c1")
+      parent = %{parent(@waiting, [sub("c1", "Backlog")]) | repo_key: repo_key}
+      put_history("parent", [approval()], [history_sub("c1", "Backlog")])
+
+      review([parent], orchestrator_state())
+
+      assert [%{name: "plan verdict", details: %{outcome: "approve", sub_issue: "MT-c1", to: "Todo"}}] =
+               RunStore.get_ticket_state(repo_key, "c1").signals
+    end
+
+    test "records a deprioritized signal for each replaced sub-ticket" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "c1")
+      parent = %{parent("Rework", [sub("c1", "Backlog")]) | repo_key: repo_key}
+      put_history("parent", rejection(), [history_sub("c1", "Backlog")])
+
+      review([parent], orchestrator_state())
+
+      assert [%{name: "deprioritized", details: %{outcome: "changes", sub_issue: "MT-c1", to: "Canceled"}}] =
+               RunStore.get_ticket_state(repo_key, "c1").signals
+    end
+
     test "a poll cycle promotes an approved parent's sub-tickets" do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [
         %{parent(@waiting, [sub("c1", "Backlog"), sub("c2", "Done")]) | id: "parent-poll", team: %{key: "Test"}}

@@ -165,6 +165,9 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:issue_state_update, @issue_id, "Done"}
     assert log =~ "Auto-merge ACME-1780: merged"
     assert RunStore.list_pr_reviews(@repo_key) == []
+
+    assert [%{name: "merge settled", details: %{to: "Done"}} | _] =
+             RunStore.get_ticket_state(@repo_key, @issue_id).signals
   end
 
   test "an issue the acceptance gate approved in enforce mode gets auto-merge on the next poll" do
@@ -829,6 +832,9 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     assert [%{"old_head_sha" => "head-1", "new_head_sha" => "head-2", "auto_merge_disabled" => true, "pr_url" => @pr_url, "issue_identifier" => "ACME-1780"}] =
              audit_events("acceptance_gate_rereview")
+
+    assert [%{name: "review verdict", details: %{outcome: "rereview", to: "Auto Review", source: "acceptance_gate_rereview"}} | _] =
+             RunStore.get_ticket_state(@repo_key, @issue_id).signals
 
     # In Auto Review nothing turns auto-merge on, and the approval of the last stay is dropped.
     track([issue("Auto Review")])

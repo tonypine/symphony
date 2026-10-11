@@ -10,7 +10,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{SubIssueWait, Tracker, Workspace}
+  alias SymphonyElixir.{SubIssueWait, TicketSignals, Tracker, Workspace}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -1135,6 +1135,12 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp move_for_rereview(record, auto_merge, target_state, opts) do
     case Keyword.get(opts, :tracker, Tracker).update_issue_state(Map.get(record, :issue_id), target_state) do
       :ok ->
+        TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
+          outcome: "rereview",
+          to: target_state,
+          source: "acceptance_gate_rereview"
+        })
+
         :ok
 
       {:error, reason} ->
@@ -1216,11 +1222,19 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     case merged_issue_waiting_on_sub_issues(record, settings, opts) do
       {:ok, %Issue{} = issue} -> issue |> SubIssueWait.wait_on_merge(settings, tracker) |> transition_result("wait")
-      {:ok, nil} when landing? -> tracker.update_issue_state(Map.get(record, :issue_id), @done_state) |> transition_result("done")
+      {:ok, nil} when landing? -> record_done_move(record, tracker.update_issue_state(Map.get(record, :issue_id), @done_state)) |> transition_result("done")
       {:ok, nil} -> :ok
       {:error, reason} -> {:error, "wait", reason}
     end
   end
+
+  # A merged landing moves the issue to Done; the move's signal goes in the ledger, best effort.
+  defp record_done_move(record, :ok) do
+    TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "merge settled", %{to: @done_state})
+    :ok
+  end
+
+  defp record_done_move(_record, result), do: result
 
   defp transition_result(:ok, _action), do: :ok
   defp transition_result({:error, reason}, action), do: {:error, action, reason}
@@ -1677,11 +1691,21 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     case tracker.update_issue_state(issue_id, @active_state) do
       :ok ->
+        record_review_action_signal(record, action)
         complete_transition_action(record, pending_attrs, opts, now, action)
 
       {:error, reason} ->
         record_transition_error(record, pending_attrs, opts, now, action, reason)
     end
+  end
+
+  # The review activity moved the ticket back to the active state; its signal goes in the ledger,
+  # best effort. `action` is the review action that caused the move (`rework`, `conflict`, `merge`).
+  defp record_review_action_signal(record, action) do
+    TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
+      outcome: action,
+      to: @active_state
+    })
   end
 
   defp defer_transition_action(record, attrs, opts, now, action) do

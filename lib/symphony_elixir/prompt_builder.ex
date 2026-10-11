@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, TicketState, Workflow}
 
   @render_opts [
     strict_variables: true,
@@ -16,6 +16,7 @@ defmodule SymphonyElixir.PromptBuilder do
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
   @qa_findings_limit 10_000
+  @ticket_state_limit 4_000
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -99,6 +100,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ci_failure(ci_failure)
     |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
+    |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -161,6 +163,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ci_failure(ci_failure)
     |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
+    |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -550,6 +553,76 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp append_pr_conflict(prompt, pr_conflict) when is_map(pr_conflict) do
     prompt <> "\n\n" <> pr_conflict_section(pr_conflict)
+  end
+
+  # The per-ticket machine record is injected as continuation context (D9), never read through a
+  # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
+  defp append_ticket_state(prompt, ticket_state) do
+    case ticket_state_section(ticket_state) do
+      nil -> prompt
+      section -> prompt <> "\n\n" <> section
+    end
+  end
+
+  defp ticket_state_section(ticket_state) when is_map(ticket_state) do
+    state = TicketState.normalize(ticket_state)
+
+    if ticket_state_empty?(state) do
+      nil
+    else
+      render_ticket_state(state)
+    end
+  end
+
+  defp ticket_state_section(_ticket_state), do: nil
+
+  # Verdicts are deliberately not part of the section (only phase, holds, CI and signals are
+  # rendered), so they do not count as content here: a verdict-only record adds nothing.
+  defp ticket_state_empty?(state) do
+    state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == []
+  end
+
+  defp render_ticket_state(state) do
+    [
+      "Ticket state:",
+      "",
+      "- Phase: #{blank_fallback(state.phase, "unknown")}",
+      "- Holds: #{ticket_state_holds(state.holds)}",
+      "- CI: #{ticket_state_ci(state.ci_states)}",
+      "Recent signals:",
+      PromptSafety.linear_block(ticket_state_signal_lines(state.signals), "ticket_state", @ticket_state_limit)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp ticket_state_holds([]), do: "none"
+
+  defp ticket_state_holds(holds) do
+    Enum.map_join(holds, "; ", fn hold ->
+      reason = blank_fallback(hold.reason, "no reason recorded")
+      clearing = blank_fallback(hold.clearing_condition, "no clearing condition recorded")
+      "#{hold.kind} (#{reason}; clears when #{clearing})"
+    end)
+  end
+
+  defp ticket_state_ci([]), do: "unknown"
+
+  defp ticket_state_ci([state | _rest]) do
+    "#{blank_fallback(state.status, "unknown")} at #{blank_fallback(state.head_sha, "unknown head")}"
+  end
+
+  defp ticket_state_signal_lines([]), do: "none"
+
+  defp ticket_state_signal_lines(signals) do
+    Enum.map_join(signals, "\n", fn signal ->
+      details = Enum.map_join(signal.details, " ", fn {key, value} -> "#{key}=#{value}" end)
+      line = "- #{signal.name} at #{signal.at}"
+
+      case details do
+        "" -> line
+        details -> line <> " " <> details
+      end
+    end)
   end
 
   defp append_review_agent_instructions(prompt, %{review_agent: %{enabled: true} = config}, opts) do

@@ -3,6 +3,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixir.Tracker.Memory, as: MemoryTracker
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -6756,8 +6757,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       id: "issue-review-agent-blocked",
       identifier: "MT-REVIEW-BLOCKED",
       title: "Review agent blocked",
-      state: "In Progress"
+      state: "In Progress",
+      repo_key: Config.repo_key!()
     }
+
+    RunStore.delete_ticket_state(Config.repo_key!(), issue.id)
 
     orchestrator_name = Module.concat(__MODULE__, :ReviewAgentBlockedOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -6805,6 +6809,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "Target human-review state: Needs Human."
 
     assert_received {:memory_tracker_state_update, "issue-review-agent-blocked", "Needs Human"}
+
+    assert [%{name: "blocked", details: %{to: "Needs Human"}}] =
+             RunStore.get_ticket_state(Config.repo_key!(), issue.id).signals
 
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
