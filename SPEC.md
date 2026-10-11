@@ -2794,6 +2794,10 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   and any Linear rate-limit pause.
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
+- A limit for a provider other than the run's own records or refreshes the hold for that provider,
+  so its runs pause, but does not hold the run itself: an OpenRouter run through the Claude runtime
+  can see the Claude subscription's window, and it retries with the normal backoff instead of
+  waiting for the Claude reset. That run is recorded as `failure` and emits the usual `run_failed`.
 - An Auto Review QA pass whose agent hits the limit creates or refreshes the hold the same way. It
   records no verdict, writes no QA report and leaves the issue's state alone; a PR-head pass is
   requested again by the first green CI poll after the hold clears, and a `Final verification:`

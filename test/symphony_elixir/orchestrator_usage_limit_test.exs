@@ -298,6 +298,29 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert RunStore.get_usage_limits() == %{}
   end
 
+  test "an OpenRouter run that sees the Claude limit holds Claude runs but retries itself with backoff", ctx do
+    write_usage_workflow!(ctx, agent_run_profiles: %{"implementation" => %{"provider" => "openrouter", "model" => "openai/gpt-5"}})
+    pid = start_orchestrator(ctx, :OpenRouterLimitOrchestrator)
+    issue = issue("issue-or-limit", "MT-OR")
+    {worker_pid, worker_ref, run_id} = start_run!(pid, issue)
+
+    log =
+      capture_log(fn ->
+        send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
+        state = :sys.get_state(pid)
+        send(self(), {:state, state})
+      end)
+
+    assert_received {:state, state}
+
+    assert log =~ "does not hold this run's provider=openrouter"
+    # The Claude limit is still recorded, so Claude runs pause.
+    assert %{provider: "anthropic", reason: "claude_usage_limit"} = state.usage_limits[@anthropic]
+    # The OpenRouter run is not held until the Claude reset: it backs off and retries.
+    assert %{attempt: 4, delay_type: nil} = state.retry_attempts[issue.id]
+    assert %{status: "failure"} = run_record(run_id)
+  end
+
   test "runs that find the same outage share one hold, logged once, and a PR run is not retried", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :SharedOutageOrchestrator)

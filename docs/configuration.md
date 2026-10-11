@@ -803,7 +803,10 @@ agent:
   holds new runs of that provider until the limit resets instead of failing the run. The retry
   keeps its attempt, gets no backoff and no `run_failed` notification, and the run is recorded as
   `usage_limited`. Runs on another provider (for example an `openrouter` run profile) keep
-  dispatching, and a weekly Opus limit holds only Opus runs. Codex runs (`agent.kind: codex`) are
+  dispatching, and a weekly Opus limit holds only Opus runs. A limit for another provider that a
+  run itself sees also leaves that run alone: an OpenRouter run through the Claude runtime can see
+  the Claude subscription's window, which records the Claude hold but lets the OpenRouter run retry
+  with the normal backoff instead of waiting for the Claude reset. Codex runs (`agent.kind: codex`) are
   their own provider (`openai`): a Codex limit holds only Codex runs, and a Claude limit never
   holds them. `false` keeps the old behaviour: the
   run fails and retries with the normal backoff.
