@@ -37,10 +37,15 @@ defmodule SymphonyElixir.Tracker do
         }
 
   @typedoc """
-  A label as provisioning reads it: its name and the team that defines it (`team_id` is nil for a
-  workspace label).
+  A label as provisioning reads it: its name and the team that defines it (`team_key` is the team's
+  short key, `team_id` its id; both are nil for a workspace label).
   """
-  @type label :: %{id: String.t() | nil, name: String.t() | nil, team_id: String.t() | nil}
+  @type label :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          team_id: String.t() | nil,
+          team_key: String.t() | nil
+        }
 
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
