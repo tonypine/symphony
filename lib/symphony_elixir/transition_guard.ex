@@ -20,14 +20,16 @@ defmodule SymphonyElixir.TransitionGuard do
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
   `:waiting_on_sub_issues` and `:ci_escalation_state`.
 
-  The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`,
-  read from `ctx.settings`): `edges/1` returns the `legacy` table or the `designed` one. The
-  `designed` table is in parity with `legacy` today — this module adds the switch, not the
-  redesigned flow; flow tickets replace rows in the `designed` table, never the legacy one, so a
-  repo left on `legacy` keeps today's behavior exactly.
+  The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`),
+  taken from `ctx`: the repo's `:settings` when the caller has them, else resolved from
+  `ctx[:repo_key]`, so a designed repo never runs the legacy table just because a caller omitted the
+  settings. `edges/1` returns the `legacy` table or the `designed` one. The `designed` table is in
+  parity with `legacy` today — this module adds the switch, not the redesigned flow; flow tickets
+  replace rows in the `designed` table, never the legacy one, so a repo left on `legacy` keeps
+  today's behavior exactly.
   """
 
-  alias SymphonyElixir.{AutoReview, HumanReview, StateMachine, SubIssueWait, Tracker}
+  alias SymphonyElixir.{AutoReview, Config, HumanReview, StateMachine, SubIssueWait, Tracker}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -137,8 +139,8 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @doc """
   The state `signal` moves to, resolved from `ctx`. `ctx.settings` is required for the
-  config-derived targets and `ctx.target` for a requested one; it also resolves the repo's
-  state-machine version and so selects the edge table.
+  config-derived targets and `ctx.target` for a requested one; `ctx.settings` or `ctx.repo_key`
+  resolves the repo's state-machine version and so selects the edge table.
   """
   @spec target(signal(), context()) :: String.t()
   def target(signal, ctx) do
@@ -228,7 +230,24 @@ defmodule SymphonyElixir.TransitionGuard do
 
   defp edge(signal, version), do: Enum.find(edges(version), &(&1.signal == signal))
 
-  defp version(ctx), do: StateMachine.version(Map.get(ctx, :settings))
+  # The repo's version: the caller's resolved settings when it passed them, else resolved from the
+  # repo key it passed, else the default. Resolving here keeps a designed repo off the legacy table
+  # even when a caller only knows its `repo_key`.
+  defp version(ctx) do
+    case Map.get(ctx, :settings) do
+      nil -> ctx |> Map.get(:repo_key) |> version_for_repo()
+      settings -> StateMachine.version(settings)
+    end
+  end
+
+  defp version_for_repo(nil), do: StateMachine.default_version()
+
+  defp version_for_repo(repo_key) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> StateMachine.version(settings)
+      {:error, _reason} -> StateMachine.default_version()
+    end
+  end
 
   defp origin_allowed?(:any, _from), do: true
   defp origin_allowed?(froms, from) when is_binary(from), do: Enum.any?(froms, &state_name_matches?(from, &1))

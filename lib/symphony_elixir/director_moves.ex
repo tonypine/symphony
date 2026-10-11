@@ -352,7 +352,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
 
   defp update_state(issue, to_state, move) do
-    case TransitionGuard.perform(issue.id, :director_move, %{target: to_state}) do
+    case TransitionGuard.perform(issue.id, :director_move, %{target: to_state, repo_key: Map.get(issue, :repo_key)}) do
       :ok ->
         record_move_signal(issue, move, to_state)
         :ok

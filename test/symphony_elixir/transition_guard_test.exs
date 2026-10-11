@@ -69,6 +69,20 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.target(:claim, %{settings: designed}) == "In Progress"
       assert TransitionGuard.target(:claim, %{}) == "In Progress"
     end
+
+    test "target/2 resolves the version from ctx.repo_key when no settings are given" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [
+          [key: "designed-repo", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+        ]
+      )
+
+      # The repo's version is resolved from its key rather than falling back to the default.
+      assert TransitionGuard.target(:claim, %{repo_key: "designed-repo"}) == "In Progress"
+      # An unknown repo key falls back to the default version.
+      assert TransitionGuard.target(:claim, %{repo_key: "missing-repo"}) == "In Progress"
+    end
   end
 
   describe "legal?/3" do

@@ -1098,7 +1098,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     target_state = AutoReview.state(settings)
 
     with {:ok, auto_merge, disabled?} <- disable_auto_merge_for_rereview(record, activity, auto_merge, opts, now),
-         :ok <- move_for_rereview(record, auto_merge, target_state, opts) do
+         :ok <- move_for_rereview(record, auto_merge, target_state, settings, opts) do
       Logger.info(
         "Acceptance gate re-review for #{Map.get(record, :issue_identifier)}: #{auto_merge.reason}; moved to #{target_state} issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha} approved_sha=#{auto_merge.approved_head_sha}"
       )
@@ -1132,8 +1132,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp move_for_rereview(record, auto_merge, target_state, opts) do
-    case TransitionGuard.perform(Map.get(record, :issue_id), :pr_review_target, %{target: target_state}, Keyword.take(opts, [:tracker])) do
+  defp move_for_rereview(record, auto_merge, target_state, settings, opts) do
+    case TransitionGuard.perform(Map.get(record, :issue_id), :pr_review_target, %{target: target_state, settings: settings}, Keyword.take(opts, [:tracker])) do
       :ok ->
         TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
           outcome: "rereview",
@@ -1222,7 +1222,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     case merged_issue_waiting_on_sub_issues(record, settings, opts) do
       {:ok, %Issue{} = issue} -> issue |> SubIssueWait.wait_on_merge(settings, tracker) |> transition_result("wait")
-      {:ok, nil} when landing? -> record_done_move(record, TransitionGuard.perform(Map.get(record, :issue_id), :landing_done, %{}, tracker: tracker)) |> transition_result("done")
+      {:ok, nil} when landing? -> record_done_move(record, TransitionGuard.perform(Map.get(record, :issue_id), :landing_done, %{settings: settings}, tracker: tracker)) |> transition_result("done")
       {:ok, nil} -> :ok
       {:error, reason} -> {:error, "wait", reason}
     end
@@ -1689,7 +1689,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case TransitionGuard.perform(issue_id, :review_rework, %{}, tracker: tracker) do
+    case TransitionGuard.perform(issue_id, :review_rework, %{repo_key: Map.get(record, :repo_key)}, tracker: tracker) do
       :ok ->
         record_review_action_signal(record, action)
         complete_transition_action(record, pending_attrs, opts, now, action)
