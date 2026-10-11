@@ -33,6 +33,11 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
       assert reconciled.phase == "Done"
     end
 
+    test "leaves the record untouched when Linear returns no state" do
+      record = TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"})
+      assert {:ok, ^record} = TicketStateReconciler.reconcile(record, nil, @at)
+    end
+
     test "normalizes a non-map record" do
       assert {:stamped, reconciled} = TicketStateReconciler.reconcile(:junk, "Todo", @at)
       assert reconciled.phase == "Todo"
@@ -93,6 +98,15 @@ defmodule SymphonyElixir.TicketStateReconcilerTest do
 
       assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> {:ok, []} end) ==
                %{checked: 0, drifted: 0, missing: 1}
+    end
+
+    test "keeps the stored phase when Linear returns the ticket without a state" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"}))
+
+      fetcher = fn _ids -> {:ok, [%{id: "issue-1", state: nil}]} end
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fetcher) == %{checked: 1, drifted: 0, missing: 0}
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(@repo_key, "issue-1")
     end
 
     test "stamps the phase on a record that had none" do

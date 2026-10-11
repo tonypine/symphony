@@ -576,8 +576,10 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp ticket_state_section(_ticket_state), do: nil
 
+  # Verdicts are deliberately not part of the section (only phase, holds, CI and signals are
+  # rendered), so they do not count as content here: a verdict-only record adds nothing.
   defp ticket_state_empty?(state) do
-    state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == [] and state.verdicts == []
+    state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == []
   end
 
   defp render_ticket_state(state) do

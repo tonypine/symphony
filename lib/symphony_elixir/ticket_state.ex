@@ -18,24 +18,6 @@ defmodule SymphonyElixir.TicketState do
   @max_ci_states 20
 
   @hold_kinds [:blocked, :needs_decision]
-  # The transition vocabulary of `docs/design/state-machine.md`, kept here as the one list the
-  # machinery validates a signal name against.
-  @signal_names [
-    "claim",
-    "handoff",
-    "blocked",
-    "unblocked",
-    "review verdict",
-    "QA verdict",
-    "fix verdict",
-    "plan verdict",
-    "epic verdict",
-    "decision requested",
-    "decision returned",
-    "merge settled",
-    "restart",
-    "deprioritized"
-  ]
 
   @typedoc "A hold pauses the ticket in its phase; the label is only its projection."
   @type hold :: %{
@@ -71,10 +53,6 @@ defmodule SymphonyElixir.TicketState do
           signals: [signal()],
           updated_at: DateTime.t() | nil
         }
-
-  @doc "The signal names of the transition vocabulary."
-  @spec signal_names() :: [String.t()]
-  def signal_names, do: @signal_names
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,

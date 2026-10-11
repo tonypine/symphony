@@ -236,9 +236,4 @@ defmodule SymphonyElixir.TicketStateTest do
     assert %DateTime{} = TicketState.set_hold(record, :blocked).updated_at
     assert %DateTime{} = TicketState.record_signal(record, "handoff").updated_at
   end
-
-  test "signal_names/0 lists the transition vocabulary" do
-    assert "handoff" in TicketState.signal_names()
-    assert "plan verdict" in TicketState.signal_names()
-  end
 end

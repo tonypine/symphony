@@ -834,8 +834,14 @@ defmodule SymphonyElixir.PromptBuilderTest do
       refute PromptBuilder.build_prompt(issue, ticket_state: :nonsense) =~ "Ticket state:"
     end
 
-    test "adds nothing for a record with no phase, holds, CI, verdicts or signals", %{issue: issue} do
+    test "adds nothing for a record with no phase, holds, CI or signals", %{issue: issue} do
       refute PromptBuilder.build_prompt(issue, ticket_state: %{repo_key: "r", issue_id: "i"}) =~ "Ticket state:"
+    end
+
+    test "adds nothing for a record holding only verdicts", %{issue: issue} do
+      record = TicketState.new("r", "i") |> TicketState.record_verdict("review verdict", "sha", "approve")
+
+      refute PromptBuilder.build_prompt(issue, ticket_state: record) =~ "Ticket state:"
     end
 
     test "renders the phase, holds, CI and recent signals", %{issue: issue} do

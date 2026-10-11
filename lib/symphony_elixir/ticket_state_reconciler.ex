@@ -6,7 +6,9 @@ defmodule SymphonyElixir.TicketStateReconciler do
   ticket's board state. When a record's stored phase disagrees with the ticket's Linear state, the
   record adopts the Linear state (deterministically: the board wins while the migration is in
   flight) and the drift is logged. When they agree, the ticket is logged as reconciled with no
-  drift. A record whose ticket Linear no longer returns is left alone and counted as missing.
+  drift. A record whose ticket Linear no longer returns is left alone and counted as missing, and a
+  ticket Linear returns without a state leaves the record untouched: a missing state is missing
+  information, not a disagreement.
   """
 
   require Logger
@@ -17,7 +19,8 @@ defmodule SymphonyElixir.TicketStateReconciler do
 
   @doc """
   Reconciles one record against the Linear `state` it now has. Returns `{:ok, record}` when they
-  agree, `{:stamped, record}` when the record had no phase yet (it adopts the board's), and
+  agree or when the Linear state is nil (missing information leaves the record untouched),
+  `{:stamped, record}` when the record had no phase yet (it adopts the board's), and
   `{:drift, record, %{from:, to:}}` when the board state differs.
   """
   @spec reconcile(TicketState.t(), String.t() | nil, DateTime.t()) ::
@@ -29,6 +32,9 @@ defmodule SymphonyElixir.TicketStateReconciler do
 
     cond do
       state == record.phase ->
+        {:ok, record}
+
+      is_nil(state) ->
         {:ok, record}
 
       is_nil(record.phase) ->
