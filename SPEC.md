@@ -1873,6 +1873,13 @@ not require recognizing or validating extension fields unless that extension is 
   the active states when set
 - `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
   NOT be one of the active states (see the human review rule)
+- `issues.states.code_review`, `issues.states.qa`, `issues.states.plan_review`,
+  `issues.states.epic_review`, `issues.states.ci_fix`: the machine-owned phase states, string or
+  null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
+  MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
+  and create it when it is missing, logging what it created; a missing one MUST be reported with its
+  exact name and the `issues.states.*` key to point at the new name before it is created. They land
+  inert: no dispatch, transition or read uses them yet.
 - `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
   the numbers `0`..`4`, or `no priority`, default `[]`; empty means every priority is
   dispatch-eligible. See 8.2 Candidate Selection Rules.

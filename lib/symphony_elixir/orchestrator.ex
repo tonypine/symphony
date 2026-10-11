@@ -33,6 +33,7 @@ defmodule SymphonyElixir.Orchestrator do
     RunStore,
     Secret,
     ShippedToday,
+    StateProvisioning,
     StatusDashboard,
     SubIssueWait,
     Tracker,
@@ -4958,6 +4959,9 @@ defmodule SymphonyElixir.Orchestrator do
     case Config.repos() do
       {:ok, repos} ->
         teams = AutoReview.configured_teams(settings, repos)
+        # The machine-owned states and labels are created before the checks that read them, so a
+        # state a later feature needs exists by the time that feature looks for it.
+        StateProvisioning.provision(settings, teams)
         AutoReview.check_tracker_state(settings, teams)
         SubIssueWait.check_tracker_state(settings, teams)
         HumanReview.check_tracker_state(settings, teams)

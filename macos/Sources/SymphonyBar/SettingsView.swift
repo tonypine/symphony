@@ -175,6 +175,30 @@ struct SettingsView: View {
                 .disabled(!model.canEditTicketPriorities)
 
                 Section {
+                    Text("The Linear workflow states Symphony creates for the board's phases. Nothing moves tickets into them yet.")
+                        .foregroundStyle(.secondary)
+                    WorkflowStateRow(title: "Code review", name: $model.workflowStates.codeReview)
+                    WorkflowStateRow(title: "QA", name: $model.workflowStates.qa)
+                    WorkflowStateRow(title: "Plan review", name: $model.workflowStates.planReview)
+                    WorkflowStateRow(title: "Epic review", name: $model.workflowStates.epicReview)
+                    WorkflowStateRow(title: "CI fix", name: $model.workflowStates.ciFix)
+                    if model.workflowStatesError != nil {
+                        CheckErrorPointer(subject: "these board states")
+                    }
+                } header: {
+                    Text("Board states (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "issues.states.code_review, .qa, .plan_review, .epic_review and .ci_fix. At startup Symphony "
+                            + "creates a Linear state with each name in your team, and reports the exact name loudly "
+                            + "when one is missing or renamed instead of creating a duplicate. Renamed a state in "
+                            + "Linear? Point its field here at the new name. Save checks symphony.yml with symphony "
+                            + "check first; Symphony reads it when it next starts."
+                    )
+                }
+                .disabled(!model.canEditWorkflowStates)
+
+                Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
                     Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
                         .foregroundStyle(.secondary)
@@ -743,6 +767,19 @@ private struct TokenLimitRow: View {
                         .foregroundStyle(field.limit == nil ? .red : .secondary)
                 }
             }
+        }
+    }
+}
+
+/// One `issues.states.*` phase state: the Linear state name the board creates for that phase.
+private struct WorkflowStateRow: View {
+    let title: String
+    @Binding var name: String
+
+    var body: some View {
+        LabeledContent(title) {
+            TextField(title, text: $name, prompt: Text("State name"))
+                .labelsHidden()
         }
     }
 }

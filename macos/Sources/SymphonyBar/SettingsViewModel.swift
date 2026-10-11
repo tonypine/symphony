@@ -76,6 +76,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var ticketPriorities = TicketPriorities()
     /// Why `symphony check` rejected the changed ticket priorities, shown in their section.
     @Published private(set) var ticketPrioritiesError: String?
+    /// `issues.states.*` in the configured symphony.yml: the machine-owned phase states the board
+    /// creates at startup. Nothing dispatches on them yet.
+    @Published var workflowStates = WorkflowStates()
+    /// Why `symphony check` rejected the changed board states, shown in their section.
+    @Published private(set) var workflowStatesError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
     /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
@@ -118,6 +123,10 @@ final class SettingsViewModel: ObservableObject {
     /// The allowed ticket priorities read from symphony.yml, or nil when they couldn't be read. Only
     /// a change from these is written.
     private var loadedTicketPriorities: TicketPriorities?
+
+    /// The board states read from symphony.yml, or nil when they couldn't be read. Only a name changed
+    /// from these is written.
+    private var loadedWorkflowStates: WorkflowStates?
 
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
@@ -162,6 +171,7 @@ final class SettingsViewModel: ObservableObject {
         loadMaxConcurrentAgents()
         loadTokenLimits()
         loadTicketPriorities()
+        loadWorkflowStates()
         loadTimeouts()
         loadRunProfiles()
         loadAcceptanceGateMode()
@@ -266,6 +276,21 @@ final class SettingsViewModel: ObservableObject {
             loadedTicketPriorities = priorities
         } catch {
             configFileError = "Could not read the allowed ticket priorities from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The board state fields are off until a symphony.yml has been read, and while Save checks it.
+    var canEditWorkflowStates: Bool { loadedWorkflowStates != nil && !isSaving }
+
+    private func loadWorkflowStates() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let states = try SymphonyConfigFile(path: path).readWorkflowStates()
+            workflowStates = states
+            loadedWorkflowStates = states
+        } catch {
+            configFileError = "Could not read the board states from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -433,8 +458,12 @@ final class SettingsViewModel: ObservableObject {
         ticketPrioritiesError = nil
         let priorities = ticketPriorities
         let loadedPriorities = loadedTicketPriorities.flatMap { $0 != priorities ? $0 : nil }
+        workflowStatesError = nil
+        let states = workflowStates
+        let loadedStates = loadedWorkflowStates.flatMap { $0 != states ? $0 : nil }
 
-        guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil || loadedPriorities != nil else {
+        guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil
+            || loadedPriorities != nil || loadedStates != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -455,6 +484,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let loadedPriorities {
                 saved = await saveTicketPriorities(priorities, from: loadedPriorities, settings: settings, secrets: secrets)
+            }
+            if saved, let loadedStates {
+                saved = await saveWorkflowStates(states, from: loadedStates, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -597,6 +629,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTicketPriorities = priorities
+        return true
+    }
+
+    /// Writes `issues.states.*` to symphony.yml once `symphony check` passes on the result.
+    private func saveWorkflowStates(
+        _ states: WorkflowStates,
+        from loaded: WorkflowStates,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeWorkflowStates(states, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the board states to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            workflowStatesError = "symphony check rejected these board states, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedWorkflowStates = states
         return true
     }
 
