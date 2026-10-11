@@ -547,6 +547,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          tickets: nil,
           poll_interval_ms: 30_000,
           poller: nil,
           watchdog: nil,
@@ -634,6 +635,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
+    tickets = Keyword.get(config, :tickets)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     poller = Keyword.get(config, :poller)
     watchdog = Keyword.get(config, :watchdog)
@@ -717,6 +719,7 @@ defmodule SymphonyElixir.TestSupport do
           interval_ms: poll_interval_ms
         }),
         poller && "poller: #{yaml_value(poller)}",
+        tickets && "tickets: #{yaml_value(tickets)}",
         watchdog_yaml(watchdog),
         workspaces_yaml(
           workspace_root,

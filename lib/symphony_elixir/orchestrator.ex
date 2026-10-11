@@ -3520,7 +3520,23 @@ defmodule SymphonyElixir.Orchestrator do
       !post_pr_quiet_active_issue?(issue, state) and
       !landing_held?(issue, state) and
       !issue_taken?(issue, state) and
-      !setup_failed_suppressed?(state.setup_failed, issue)
+      !setup_failed_suppressed?(state.setup_failed, issue) and
+      priority_allowed?(issue, state)
+  end
+
+  # `tickets.priorities` narrows which priorities may start new work. A forced ticket, and a retry
+  # that is waiting for a slot (its claim is released while it waits), bypass it, so the filter only
+  # gates fresh picks and never stalls work already under way.
+  defp priority_allowed?(%Issue{id: issue_id, priority: priority} = issue, %State{} = state) do
+    case Config.ticket_priority_filter() do
+      nil ->
+        true
+
+      allowed ->
+        forced_issue?(issue, state) or
+          Map.has_key?(state.slot_waiting, issue_id) or
+          MapSet.member?(allowed, priority || 0)
+    end
   end
 
   defp issue_taken?(%Issue{id: issue_id}, %State{} = state) do

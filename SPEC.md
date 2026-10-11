@@ -445,6 +445,7 @@ but startup validation will fail unless required fields such as `repositories:` 
 Top-level keys accepted by the Elixir implementation:
 
 - `issues`
+- `tickets`
 - `repositories`
 - `workspaces`
 - `workers`
@@ -1872,6 +1873,9 @@ not require recognizing or validating extension fields unless that extension is 
   the active states when set
 - `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
   NOT be one of the active states (see the human review rule)
+- `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
+  the numbers `0`..`4`, or `no priority`, default `[]`; empty means every priority is
+  dispatch-eligible. See 8.2 Candidate Selection Rules.
 - `issues.poll_interval_ms`: integer, default `30000`
 - `poller.backoff_base_ms`: positive integer or null; null uses the effective poll interval
 - `poller.max_backoff_ms`: positive integer, default `300000`
@@ -2430,6 +2434,8 @@ An issue is dispatch-eligible only if all are true:
 - Its state is in `active_states` and not in `terminal_states`.
 - It is not already in `running`.
 - It is not already in `claimed`.
+- Its priority is among `tickets.priorities` when that key is set, unless it is a forced ticket or
+  a retry waiting for a slot (see 5.4).
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
 - Blocker rule for `Todo` state passes:

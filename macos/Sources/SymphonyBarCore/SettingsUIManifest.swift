@@ -44,6 +44,7 @@ public enum SettingsUIManifest {
         "repositories[].workspace.repo",
         "repositories[].workspace.source",
         "repositories[].workspace.strategy",
+        "tickets.priorities",
         "watchdog.pending_tool_report_after_ms",
         "workspaces.git_network_timeout_ms",
     ]

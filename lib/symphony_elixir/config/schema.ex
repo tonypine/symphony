@@ -193,6 +193,72 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Tickets do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+
+    # Linear's priority names, in its own order, and the number each maps to. `none` is Linear's
+    # "No priority" (0), which an issue with no priority set reads as too.
+    @priorities ~w(none urgent high medium low)
+    @priority_numbers %{"none" => 0, "urgent" => 1, "high" => 2, "medium" => 3, "low" => 4}
+    @priority_aliases %{
+      "no priority" => "none",
+      "no_priority" => "none",
+      "0" => "none",
+      "1" => "urgent",
+      "2" => "high",
+      "3" => "medium",
+      "4" => "low"
+    }
+
+    embedded_schema do
+      # The Linear priorities allowed to start new work; empty means every priority may.
+      field(:priorities, {:array, :string}, default: [])
+    end
+
+    @doc "The Linear priority number for a canonical priority name."
+    @spec priority_number(String.t()) :: 0..4
+    def priority_number(name), do: Map.fetch!(@priority_numbers, name)
+
+    @doc "The canonical priority names Symphony accepts."
+    @spec priority_names() :: [String.t()]
+    def priority_names, do: @priorities
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:priorities], empty_values: [])
+      |> normalize_priorities()
+      |> validate_priorities()
+    end
+
+    # Names, aliases ("no priority") and Linear's numbers all become the canonical name, so
+    # `[1, 2]` and `[urgent, high]` are the same filter. `SystemSchema` stringifies the numbers
+    # before this changeset, since Ecto's `{:array, :string}` would reject them.
+    defp normalize_priorities(changeset) do
+      update_change(changeset, :priorities, fn values when is_list(values) ->
+        values |> Enum.map(&canonical_priority/1) |> Enum.uniq()
+      end)
+    end
+
+    defp canonical_priority(value) do
+      key = value |> to_string() |> String.trim() |> String.downcase()
+      Map.get(@priority_aliases, key, key)
+    end
+
+    defp validate_priorities(changeset) do
+      validate_change(changeset, :priorities, fn :priorities, values ->
+        case Enum.reject(values, &(&1 in @priorities)) do
+          [] -> []
+          unknown -> [priorities: "must be Linear priority names or numbers; got: #{Enum.join(unknown, ", ")}"]
+        end
+      end)
+    end
+  end
+
   defmodule Polling do
     @moduledoc false
     use Ecto.Schema
@@ -2327,6 +2393,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   embedded_schema do
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:tickets, Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:poller, Poller, on_replace: :update, defaults_to_struct: true)
     embeds_one(:watchdog, Watchdog, on_replace: :update, defaults_to_struct: true)
@@ -2543,6 +2610,7 @@ defmodule SymphonyElixir.Config.Schema do
     %__MODULE__{}
     |> cast(attrs, [])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
+    |> cast_embed(:tickets, with: &Tickets.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
     |> cast_embed(:poller, with: &Poller.changeset/2)
     |> cast_embed(:watchdog, with: &Watchdog.changeset/2)

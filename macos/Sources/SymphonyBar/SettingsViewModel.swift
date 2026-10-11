@@ -71,6 +71,11 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var tokenLimitsError: String?
     /// True while `symphony check` runs on the changed token limits.
     @Published private(set) var isCheckingTokenLimits = false
+    /// `tickets.priorities` in the configured symphony.yml: the Linear priorities allowed to start
+    /// new work. Empty means every priority may.
+    @Published var ticketPriorities = TicketPriorities()
+    /// Why `symphony check` rejected the changed ticket priorities, shown in their section.
+    @Published private(set) var ticketPrioritiesError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
     /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
@@ -109,6 +114,10 @@ final class SettingsViewModel: ObservableObject {
 
     /// The gate mode read from symphony.yml, or nil when it couldn't be read. Written only when it changed.
     private var loadedAcceptanceGateMode: AcceptanceGateMode?
+
+    /// The allowed ticket priorities read from symphony.yml, or nil when they couldn't be read. Only
+    /// a change from these is written.
+    private var loadedTicketPriorities: TicketPriorities?
 
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
@@ -152,6 +161,7 @@ final class SettingsViewModel: ObservableObject {
 
         loadMaxConcurrentAgents()
         loadTokenLimits()
+        loadTicketPriorities()
         loadTimeouts()
         loadRunProfiles()
         loadAcceptanceGateMode()
@@ -241,6 +251,21 @@ final class SettingsViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             isCheckingTokenLimits = false
             if case .failed(let message) = result { tokenLimitsError = "symphony check rejects this: \(ConfigCheck.reasonFirst(message))" }
+        }
+    }
+
+    /// The ticket priority toggles are off until a symphony.yml has been read, and while Save checks it.
+    var canEditTicketPriorities: Bool { loadedTicketPriorities != nil && !isSaving }
+
+    private func loadTicketPriorities() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let priorities = try SymphonyConfigFile(path: path).readTicketPriorities()
+            ticketPriorities = priorities
+            loadedTicketPriorities = priorities
+        } catch {
+            configFileError = "Could not read the allowed ticket priorities from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -405,7 +430,11 @@ final class SettingsViewModel: ObservableObject {
             pendingToolReport: pendingToolReportMinutes
         )
         let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
-        guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil else {
+        ticketPrioritiesError = nil
+        let priorities = ticketPriorities
+        let loadedPriorities = loadedTicketPriorities.flatMap { $0 != priorities ? $0 : nil }
+
+        guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil || loadedPriorities != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -423,6 +452,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let timeouts, let oldTimeouts {
                 saved = await saveTimeouts(timeouts, from: oldTimeouts, settings: settings, secrets: secrets)
+            }
+            if saved, let loadedPriorities {
+                saved = await saveTicketPriorities(priorities, from: loadedPriorities, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -539,6 +571,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTimeouts = timeouts
+        return true
+    }
+
+    /// Writes `tickets.priorities` to symphony.yml once `symphony check` passes on the result.
+    private func saveTicketPriorities(
+        _ priorities: TicketPriorities,
+        from loaded: TicketPriorities,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeTicketPriorities(priorities, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the allowed ticket priorities to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            ticketPrioritiesError = "symphony check rejected these ticket priorities, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedTicketPriorities = priorities
         return true
     }
 
