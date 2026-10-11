@@ -373,7 +373,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
         assert CiPoller.ci_action(status) == :pending
       end)
 
-    assert log =~ "Ignoring the checks of cancelled run(s) 37483418928 superseded by another run of the same workflow pr_url=#{pr_url} commit_sha=460a3f6"
+    assert log =~ "Ignoring the checks of superseded run(s) 37483418928: only the newest run of their workflow counts pr_url=#{pr_url} commit_sha=460a3f6"
 
     # Once the other run is green, so is the head.
     green = passed ++ [check.("macos", 37_483_170_247, "COMPLETED", "SUCCESS")]
@@ -397,6 +397,55 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, []))
       assert {:failure, [%{conclusion: "CANCELLED"} | _]} = CiPoller.ci_action(status)
     end
+  end
+
+  test "fetch_ci_status leaves out a completed run that a newer run of the same workflow superseded" do
+    pr_url = "https://github.com/org/repo/pull/379"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=b21d68d&per_page=100"
+
+    runner = fn rollup ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "b21d68d", "statusCheckRollup" => rollup}), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+    end
+
+    check = fn workflow, name, run_id, conclusion ->
+      %{
+        "name" => name,
+        "status" => "COMPLETED",
+        "conclusion" => conclusion,
+        "workflowName" => workflow,
+        "detailsUrl" => "https://github.com/org/repo/actions/runs/#{run_id}/job/#{name}"
+      }
+    end
+
+    # An edited PR body re-ran the workflow on the same head: the old FAILURE (38158828206) sits
+    # beside the new SUCCESS (38159202288), and only the newest run counts.
+    failed = check.("pr-description-lint", "validate-pr-description", 38_158_828_206, "FAILURE")
+    passed = check.("pr-description-lint", "validate-pr-description", 38_159_202_288, "SUCCESS")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([failed, passed]))
+        assert Enum.map(status.checks, & &1.run_id) == ["38159202288"]
+        assert CiPoller.ci_action(status) == :success
+      end)
+
+    assert log =~ "Ignoring the checks of superseded run(s) 38158828206: only the newest run of their workflow counts pr_url=#{pr_url} commit_sha=b21d68d"
+
+    # The newest run is authoritative even when it is the one that failed.
+    new_failed = check.("pr-description-lint", "validate-pr-description", 38_159_202_288, "FAILURE")
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([failed, new_failed]))
+    assert {:failure, [%{run_id: "38159202288"}]} = CiPoller.ci_action(status)
+
+    # Another workflow's failure is untouched by the supersession.
+    other = check.("release", "smoke", 38_159_999_999, "FAILURE")
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([failed, passed, other]))
+    assert {:failure, [%{name: "smoke"}]} = CiPoller.ci_action(status)
   end
 
   test "fetch_ci_status reads the base branch's required checks for a landing still waiting on a check" do
