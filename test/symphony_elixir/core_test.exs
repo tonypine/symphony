@@ -1725,6 +1725,9 @@ defmodule SymphonyElixir.CoreTest do
     )
 
     assert %{state: "Auto Review"} = retry_post_pr_issue("issue-post-pr-auto-review", :PostPrAutoReviewOrchestrator, "Auto Review")
+
+    assert [%{name: "handoff", details: %{to: "Auto Review"}}] =
+             RunStore.get_ticket_state(Config.repo_key!(), "issue-post-pr-auto-review").signals
   end
 
   test "retry for active completed PR moves issue to in review when the Auto Review state is missing" do
@@ -7163,6 +7166,8 @@ defmodule SymphonyElixir.CoreTest do
     retry_token = make_ref()
     last_ran_at = DateTime.utc_now()
     pr_url = "https://github.com/example/repo/pull/#{issue_id}"
+    repo_key = Config.repo_key!()
+    RunStore.delete_ticket_state(repo_key, issue_id)
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -7172,6 +7177,7 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "MT-#{issue_id}",
         title: "Post PR",
         state: "In Progress",
+        repo_key: repo_key,
         pull_request_url: pr_url,
         updated_at: DateTime.add(last_ran_at, -10, :second)
       }

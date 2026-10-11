@@ -1,0 +1,182 @@
+defmodule SymphonyElixir.TicketStateReconcilerTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.{RunStore, TicketState, TicketStateReconciler}
+
+  @repo_key "repo-a"
+  @at ~U[2026-01-02 03:04:05Z]
+
+  setup do
+    :ok = RunStore.clear()
+  end
+
+  describe "reconcile/3" do
+    test "agrees when the stored phase is the Linear state" do
+      record = TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"})
+      assert {:ok, ^record} = TicketStateReconciler.reconcile(record, "In Progress", @at)
+    end
+
+    test "stamps the phase on a record that had none" do
+      record = TicketState.new(@repo_key, "issue-1")
+
+      assert {:stamped, reconciled} = TicketStateReconciler.reconcile(record, "Todo", @at)
+      assert reconciled.phase == "Todo"
+      assert reconciled.updated_at == @at
+    end
+
+    test "reports drift when the board state differs" do
+      record = TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"})
+
+      assert {:drift, reconciled, %{from: "In Progress", to: "Done"}} =
+               TicketStateReconciler.reconcile(record, "Done", @at)
+
+      assert reconciled.phase == "Done"
+    end
+
+    test "normalizes a non-map record" do
+      assert {:stamped, reconciled} = TicketStateReconciler.reconcile(:junk, "Todo", @at)
+      assert reconciled.phase == "Todo"
+    end
+
+    test "defaults the timestamp to now" do
+      record = TicketState.new(@repo_key, "issue-1")
+      assert {:stamped, reconciled} = TicketStateReconciler.reconcile(record, "Todo")
+      assert %DateTime{} = reconciled.updated_at
+    end
+  end
+
+  describe "reconcile_all/1" do
+    test "does nothing when the store is empty" do
+      assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> {:ok, []} end) ==
+               %{checked: 0, drifted: 0, missing: 0}
+    end
+
+    test "counts records Linear still returns and leaves their phase alone" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"}))
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-2", %{phase: "Todo"}))
+
+      fetcher = fn ids ->
+        assert Enum.sort(ids) == ["issue-1", "issue-2"]
+
+        {:ok, [%{id: "issue-1", state: "In Progress"}, %{id: "issue-2", state: "Todo"}]}
+      end
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fetcher) == %{checked: 2, drifted: 0, missing: 0}
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "adopts the board state and persists it when the record has drifted" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"}))
+
+      fetcher = fn _ids -> {:ok, [%{id: "issue-1", state: "Done"}]} end
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(fetcher: fetcher) == %{checked: 1, drifted: 1, missing: 0}
+        end)
+
+      assert log =~ "Ticket state drift reconciled issue_id=issue-1"
+      assert log =~ "checked=1 drifted=1 missing=0"
+      assert %{phase: "Done"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "reads the Linear state from string-keyed issues and skips those without an id" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Todo"}))
+
+      fetcher = fn _ids -> {:ok, [%{"id" => "issue-1", "state" => "Todo"}, %{state: "Todo"}, :junk]} end
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fetcher) == %{checked: 1, drifted: 0, missing: 0}
+    end
+
+    test "counts a record Linear no longer returns as missing" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-gone", %{phase: "Todo"}))
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> {:ok, []} end) ==
+               %{checked: 0, drifted: 0, missing: 1}
+    end
+
+    test "stamps the phase on a record that had none" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1"))
+
+      assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> {:ok, [%{id: "issue-1", state: "Todo"}]} end, now: @at) ==
+               %{checked: 1, drifted: 0, missing: 0}
+
+      assert %{phase: "Todo", updated_at: @at} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "logs and leaves records alone when the Linear fetch fails" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Todo"}))
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> {:error, :boom} end) ==
+                   %{checked: 0, drifted: 0, missing: 0}
+        end)
+
+      assert log =~ "failed to read Linear states"
+      assert %{phase: "Todo"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "logs and leaves records alone when the fetcher raises" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "Todo"}))
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(fetcher: fn _ids -> raise "nope" end) ==
+                   %{checked: 0, drifted: 0, missing: 0}
+        end)
+
+      assert log =~ "failed to read Linear states"
+    end
+
+    test "logs and skips when the store cannot be read" do
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(store: SymphonyElixir.TicketStateReconcilerTest.ReadFailingStore, fetcher: fn _ids -> {:ok, []} end) ==
+                   %{checked: 0, drifted: 0, missing: 0}
+        end)
+
+      assert log =~ "Ticket state reconciliation skipped: failed to read the store"
+    end
+
+    test "logs a drift it could not persist" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1", %{phase: "In Progress"}))
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(
+                   store: SymphonyElixir.TicketStateReconcilerTest.WriteFailingStore,
+                   fetcher: fn _ids -> {:ok, [%{id: "issue-1", state: "Done"}]} end
+                 ) == %{checked: 1, drifted: 1, missing: 0}
+        end)
+
+      assert log =~ "Failed to record ticket state drift for issue-1"
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    end
+
+    test "logs a stamped phase it could not persist" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1"))
+
+      log =
+        capture_log(fn ->
+          assert TicketStateReconciler.reconcile_all(
+                   store: SymphonyElixir.TicketStateReconcilerTest.WriteFailingStore,
+                   fetcher: fn _ids -> {:ok, [%{id: "issue-1", state: "Todo"}]} end
+                 ) == %{checked: 1, drifted: 0, missing: 0}
+        end)
+
+      assert log =~ "Failed to record ticket state phase for issue-1"
+    end
+  end
+end
+
+defmodule SymphonyElixir.TicketStateReconcilerTest.ReadFailingStore do
+  @moduledoc false
+  def list_all_ticket_states, do: {:error, :store_down}
+end
+
+defmodule SymphonyElixir.TicketStateReconcilerTest.WriteFailingStore do
+  @moduledoc false
+  def list_all_ticket_states, do: SymphonyElixir.RunStore.list_all_ticket_states()
+  def update_ticket_state(_repo_key, _issue_id, _attrs), do: {:error, :store_down}
+end

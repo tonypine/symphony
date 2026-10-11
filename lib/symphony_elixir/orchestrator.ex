@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Orchestrator do
     ShippedToday,
     StatusDashboard,
     SubIssueWait,
+    TicketStateReconciler,
     Tracker,
     UpdateHold,
     URLUtils,
@@ -219,6 +220,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = state |> seed_watching_from_completed_run_metadata() |> arm_usage_limit_timers()
 
     mark_interrupted_runs_for_configured_repos(repo_key)
+    TicketStateReconciler.reconcile_all()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -1017,6 +1019,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_transition_review_agent_blocked_issue(%State{} = state, _issue_id, _running_entry, _blocked_state, _comment), do: state
 
   defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], issue: issue, blocked_state: blocked_state}, :ok) do
+    record_ticket_signal(issue, "blocked", %{to: blocked_state})
+
     state =
       case issue do
         %Issue{} = issue -> put_watching_issue(state, %{issue | state: blocked_state, updated_at: DateTime.utc_now()})
@@ -3022,8 +3026,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp close_finished_parent(%Issue{} = issue) do
-    with {:error, reason} <- SubIssueWait.close(issue, Tracker.adapter()) do
-      Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
+    case SubIssueWait.close(issue, Tracker.adapter()) do
+      :ok ->
+        record_ticket_signal(issue, "merge settled", %{sub_issues: length(issue.sub_issues || [])})
+
+      {:error, reason} ->
+        Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
     end
   end
 
@@ -3097,6 +3105,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp move_breakdown_sub_issue(issue, action, %{id: sub_issue_id, identifier: identifier}) do
     case BreakdownReview.move(action, sub_issue_id, Tracker.adapter()) do
       :ok ->
+        record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier)
         {:ok, identifier}
 
       {:error, reason} ->
@@ -3104,6 +3113,27 @@ defmodule SymphonyElixir.Orchestrator do
         :error
     end
   end
+
+  # A promoted sub-issue carries the plan's approval; a replaced one is the plan's changes, which
+  # cancel the sub-issues it judged.
+  defp record_breakdown_sub_issue_signal(%Issue{} = issue, action, sub_issue_id, identifier) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) ->
+        details = %{outcome: breakdown_sub_issue_outcome(action), sub_issue: identifier, to: BreakdownReview.target(action)}
+        record_ticket_signal(repo_key, sub_issue_id, breakdown_sub_issue_signal(action), details)
+
+      _repo_key ->
+        :ok
+    end
+  end
+
+  defp record_breakdown_sub_issue_signal(_issue, _action, _sub_issue_id, _identifier), do: :ok
+
+  defp breakdown_sub_issue_signal(:promote), do: "plan verdict"
+  defp breakdown_sub_issue_signal(_action), do: "deprioritized"
+
+  defp breakdown_sub_issue_outcome(:promote), do: "approve"
+  defp breakdown_sub_issue_outcome(_action), do: "changes"
 
   defp log_breakdown_review([], _issue, _action), do: true
 
@@ -3177,6 +3207,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
     case Tracker.update_issue_state(issue_id, @plan_revision_state) do
       :ok ->
+        record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: @plan_revision_state})
         Logger.info("Moved breakdown parent to #{@plan_revision_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
         true
 
@@ -3285,6 +3316,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case Tracker.update_issue_state(issue_id, waiting_state) do
       :ok ->
+        record_ticket_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")
         true
 
@@ -4890,6 +4922,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case result do
       :ok ->
+        record_ticket_signal(issue, "handoff", %{to: post_pr_state})
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
         state
@@ -6827,6 +6860,25 @@ defmodule SymphonyElixir.Orchestrator do
     Logger.warning("Failed to #{action}: #{inspect(reason)}")
     :ok
   end
+
+  # Every move the orchestrator makes is recorded in the ticket's signals ledger, best effort: a
+  # store failure must never change a transition, the board or a label.
+  defp record_ticket_signal(%Issue{id: issue_id} = issue, name, details) when is_binary(issue_id) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) -> record_ticket_signal(repo_key, issue_id, name, details)
+      _repo_key -> :ok
+    end
+  end
+
+  defp record_ticket_signal(_issue, _name, _details), do: :ok
+
+  defp record_ticket_signal(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
+    repo_key
+    |> RunStore.record_ticket_signal(issue_id, name, details)
+    |> log_run_store_error("record #{name} signal")
+  end
+
+  defp record_ticket_signal(_repo_key, _issue_id, _name, _details), do: :ok
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do

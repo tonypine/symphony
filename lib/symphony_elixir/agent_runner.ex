@@ -609,6 +609,7 @@ defmodule SymphonyElixir.AgentRunner do
         |> put_ci_failure(issue)
         |> put_qa_failure(issue)
         |> put_pr_conflict(issue)
+        |> put_ticket_state(issue)
 
       run_context = %{
         workspace: workspace,
@@ -1224,6 +1225,7 @@ defmodule SymphonyElixir.AgentRunner do
       |> put_ci_failure(issue)
       |> put_qa_failure(issue)
       |> put_pr_conflict(issue)
+      |> put_ticket_state(issue)
 
     prompt = PromptBuilder.build_prompt(issue, prompt_opts)
     maybe_compact_codex_initial_prompt(prompt, issue, prompt_opts)
@@ -1416,6 +1418,23 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp pending_pr_conflict(_issue, _opts), do: nil
+
+  defp put_ticket_state(opts, issue) when is_list(opts) do
+    if Keyword.has_key?(opts, :ticket_state) do
+      opts
+    else
+      Keyword.put(opts, :ticket_state, pending_ticket_state(issue, opts))
+    end
+  end
+
+  defp pending_ticket_state(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) and repo_key != "" -> RunStore.get_ticket_state(repo_key, issue_id)
+      _repo_key -> nil
+    end
+  end
+
+  defp pending_ticket_state(_issue, _opts), do: nil
 
   defp pending_lookup_opts(%Issue{} = issue, opts) do
     case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
