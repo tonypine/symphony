@@ -47,7 +47,8 @@ defmodule SymphonyElixir.DirectorMoves do
     RunKind,
     SubIssueWait,
     TicketSignals,
-    Tracker
+    Tracker,
+    TransitionGuard
   }
 
   alias SymphonyElixir.GitHub.PullRequest
@@ -351,7 +352,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
 
   defp update_state(issue, to_state, move) do
-    case Tracker.update_issue_state(issue.id, to_state) do
+    case TransitionGuard.perform(issue.id, :director_move, %{target: to_state}) do
       :ok ->
         record_move_signal(issue, move, to_state)
         :ok

@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{RunStore, TicketSignals, Tracker}
+  alias SymphonyElixir.{RunStore, TicketSignals, Tracker, TransitionGuard}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
@@ -153,7 +153,7 @@ defmodule SymphonyElixir.SubIssueWait do
       if in_state?(issue, settings) do
         :ok
       else
-        move_to_waiting(issue, waiting_state, settings.tracker.terminal_states, tracker)
+        move_to_waiting(issue, waiting_state, settings.tracker.terminal_states, settings, tracker)
       end
     end
   end
@@ -175,7 +175,7 @@ defmodule SymphonyElixir.SubIssueWait do
   @doc "Moves `issue` to `Done` and comments how each of its sub-issues ended or waits."
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
   def close(%Issue{id: issue_id} = issue, tracker) do
-    with :ok <- tracker.update_issue_state(issue_id, @done_state) do
+    with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, %{}, tracker: tracker) do
       Logger.info("Moved issue to #{@done_state}: every sub-issue is finished #{issue_fields(issue)}")
       _ = RunStore.delete_merged_wait(issue_id)
       comment(issue, close_comment(issue), tracker)
@@ -189,8 +189,8 @@ defmodule SymphonyElixir.SubIssueWait do
     :ok
   end
 
-  defp move_to_waiting(%Issue{id: issue_id} = issue, waiting_state, terminal_states, tracker) do
-    with :ok <- tracker.update_issue_state(issue_id, waiting_state) do
+  defp move_to_waiting(%Issue{id: issue_id} = issue, waiting_state, terminal_states, settings, tracker) do
+    with :ok <- TransitionGuard.perform(issue_id, :wait_on_merge, %{settings: settings}, tracker: tracker) do
       TicketSignals.record(issue.repo_key, issue_id, "merge settled", %{to: waiting_state})
       Logger.info("Moved issue to #{waiting_state} after its PR merged with sub-issues open: #{issue_fields(issue)}")
       comment(issue, wait_comment(issue, waiting_state, terminal_states), tracker)

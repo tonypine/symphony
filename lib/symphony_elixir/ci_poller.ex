@@ -18,6 +18,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.TicketSignals
+  alias SymphonyElixir.TransitionGuard
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -1085,7 +1086,7 @@ defmodule SymphonyElixir.CiPoller do
 
     case complete_ci_update(opts, record, attrs, :ok) do
       :ok ->
-        case tracker.update_issue_state(issue_id, @active_state) do
+        case TransitionGuard.perform(issue_id, :ci_fix_dispatch, %{}, tracker: tracker) do
           :ok ->
             TicketSignals.record(Map.get(record, :repo_key), issue_id, "fix verdict", %{
               outcome: "mechanical",
@@ -1168,10 +1169,11 @@ defmodule SymphonyElixir.CiPoller do
       issue_id: issue_id,
       now: now,
       opts: opts,
+      settings: settings,
       tracker: tracker
     } = context
 
-    case tracker.update_issue_state(issue_id, escalation_state) do
+    case TransitionGuard.perform(issue_id, :ci_escalate, %{settings: settings}, tracker: tracker) do
       :ok ->
         TicketSignals.record(Map.get(record, :repo_key), issue_id, "decision requested", %{
           to: escalation_state,
