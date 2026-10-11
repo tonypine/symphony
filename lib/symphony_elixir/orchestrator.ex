@@ -738,11 +738,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:usage_limited, %{} = info} = reason) do
-    if Config.settings!().agent.usage_limit.auto_pause do
-      persist_run_completion(running_entry, "usage_limited", "agent exited: #{agent_exit_reason_summary(reason)}")
-      pause_for_usage_limit(state, issue_id, running_entry, session_id, info)
-    else
-      handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+    cond do
+      not Config.settings!().agent.usage_limit.auto_pause ->
+        handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+
+      usage_limit_holds_run?(state, running_entry, info) ->
+        persist_run_completion(running_entry, "usage_limited", "agent exited: #{agent_exit_reason_summary(reason)}")
+        pause_for_usage_limit(state, issue_id, running_entry, session_id, info)
+
+      true ->
+        hold_other_provider_and_retry(state, issue_id, running_entry, session_id, reason, info)
     end
   end
 
@@ -864,6 +869,32 @@ defmodule SymphonyElixir.Orchestrator do
       })
     end
   end
+
+  # A usage limit for another provider seen by a run on this one: recording the hold still pauses
+  # that provider's runs, but this run is not held until the other provider resets. It backs off and
+  # retries like any other failure. This is the OpenRouter case: an OpenRouter run through the Claude
+  # runtime can see the Claude subscription's limit, which must not stop OpenRouter work.
+  defp hold_other_provider_and_retry(%State{} = state, issue_id, running_entry, session_id, reason, info) do
+    {state, entry} = put_usage_limit(state, info, running_entry.identifier)
+
+    Logger.info(
+      "Usage limit provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} does not hold " <>
+        "this run's provider=#{run_profile_for_issue(state, running_entry.issue).provider}; retrying with backoff " <>
+        "issue_id=#{issue_id} session_id=#{session_id}"
+    )
+
+    handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+  end
+
+  # Whether a usage limit for `info`'s provider holds a run for `running_entry`: only when the run's
+  # own provider matches. An OpenRouter run (Claude runtime) never matches a Claude subscription
+  # limit. An entry without an issue follows the old behavior and is held.
+  defp usage_limit_holds_run?(%State{} = state, %{issue: %Issue{} = issue}, info) do
+    {provider, _scope} = UsageLimit.key(info)
+    run_profile_for_issue(state, issue).provider == provider
+  end
+
+  defp usage_limit_holds_run?(_state, _running_entry, _info), do: true
 
   defp agent_exit_reason_summary({%RuntimeError{message: message}, _stacktrace}) when is_binary(message) do
     strip_ansi(message)
@@ -8515,9 +8546,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_hold(%State{usage_limits: usage_limits}, _issue, _continuation?) when map_size(usage_limits) == 0, do: nil
 
   defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue, continuation?) do
-    repo_key = dispatch_repo_key(state, issue)
-    profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
+    profile = run_profile_for_issue(state, issue)
     UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue, state)}), issue.id)
+  end
+
+  # The run's provider and model, resolved as at dispatch.
+  defp run_profile_for_issue(%State{} = state, %Issue{} = issue) do
+    repo_key = dispatch_repo_key(state, issue)
+    AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
   end
 
   defp remember_usage_windows(%State{} = state, %{usage_windows: %{} = windows}) do
