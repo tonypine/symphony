@@ -369,9 +369,11 @@ defmodule SymphonyElixir.RunStoreTest do
 
     assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
     assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-2", "blocked", %{reason: "tooling"})
+    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "abc123", "pass")
 
     assert [%{name: "handoff", details: %{to: "Code Review"}}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
     assert [%{name: "blocked"}] = RunStore.get_ticket_state(@repo_key, "issue-2").signals
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
 
     assert :ok = RunStore.put_ticket_state(TicketState.new(@other_repo_key, "issue-1", %{phase: "Done"}))
 
@@ -379,6 +381,7 @@ defmodule SymphonyElixir.RunStoreTest do
 
     assert %{phase: "Merging"} = RunStore.get_ticket_state(@repo_key, "issue-1")
     assert [%{name: "handoff"}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
     assert %{phase: "Done"} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
 
     assert Enum.sort(Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id)) == ["issue-1", "issue-2"]
@@ -399,6 +402,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_issue_id} = RunStore.delete_ticket_state(@repo_key, nil)
     assert {:error, :invalid_issue_id} = RunStore.get_ticket_state(@repo_key, nil)
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_signal(@repo_key, nil, "handoff", %{})
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_verdict(@repo_key, nil, "qa", nil, "pass")
   end
 
   test "interrupt_running_runs marks stale running records as failures" do

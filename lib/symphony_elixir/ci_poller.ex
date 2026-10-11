@@ -17,6 +17,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
+  alias SymphonyElixir.TicketSignals
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -1086,6 +1087,12 @@ defmodule SymphonyElixir.CiPoller do
       :ok ->
         case tracker.update_issue_state(issue_id, @active_state) do
           :ok ->
+            TicketSignals.record(Map.get(record, :repo_key), issue_id, "fix verdict", %{
+              outcome: "mechanical",
+              to: @active_state,
+              reason: "ci_failure"
+            })
+
             emit_ci_failed(record, ci_status, failed_checks, retry_count, @active_state)
             {:state_transitioned, issue_id, :ci_failure, @active_state}
 
@@ -1166,6 +1173,11 @@ defmodule SymphonyElixir.CiPoller do
 
     case tracker.update_issue_state(issue_id, escalation_state) do
       :ok ->
+        TicketSignals.record(Map.get(record, :repo_key), issue_id, "decision requested", %{
+          to: escalation_state,
+          reason: "ci_failure"
+        })
+
         complete_escalated_ci_failure(record, ci_status, failed_checks, context, log_excerpt, ci_failure)
 
       {:error, reason} ->

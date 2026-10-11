@@ -716,6 +716,22 @@ defmodule SymphonyElixir.RunStore do
 
   def record_ticket_signal(_repo_key, _issue_id, _name, _details), do: {:error, :invalid_issue_id}
 
+  @doc """
+  Appends a verdict, bound to the head SHA it judged, to the ticket's record, creating the record
+  when none exists. The read-modify-write runs in one durable transaction.
+  """
+  @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t()) ::
+          :ok | {:error, term()}
+  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome), do: {:error, :invalid_issue_id}
+
   @spec put_verification_allocation(map()) :: :ok | {:error, term()}
   def put_verification_allocation(%{repo_key: repo_key, run_id: run_id, port: port} = record)
       when is_binary(run_id) and is_integer(port) do
@@ -1413,6 +1429,20 @@ defmodule SymphonyElixir.RunStore do
       end
 
     updated = TicketState.record_signal(record, name, details)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.record_verdict(record, kind, head_sha, outcome)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
   end

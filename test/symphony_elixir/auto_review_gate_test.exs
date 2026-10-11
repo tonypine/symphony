@@ -516,6 +516,12 @@ defmodule SymphonyElixir.AutoReviewGateTest do
       assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = green_poll(stored_record(), settings)
       assert_receive {:memory_tracker_state_update, "issue-gate-flow", "Merging"}
       assert [%{moved_by_gate: "Merging"}] = RunStore.list_runs(@repo_key, :all)
+
+      assert [%{name: "review verdict", details: %{outcome: "approve", to: "Merging", source: "acceptance_gate"}} | _] =
+               RunStore.get_ticket_state(@repo_key, "issue-gate-flow").signals
+
+      assert [%{kind: "review", outcome: "approve"} | _] = RunStore.get_ticket_state(@repo_key, "issue-gate-flow").verdicts
+
       flush_comments()
 
       assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root))
