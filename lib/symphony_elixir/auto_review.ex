@@ -71,6 +71,7 @@ defmodule SymphonyElixir.AutoReview do
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.TicketSignals
+  alias SymphonyElixir.TransitionGuard
   alias SymphonyElixir.Verification
   alias SymphonyElixir.{WorkflowSource, Workspace}
 
@@ -461,7 +462,7 @@ defmodule SymphonyElixir.AutoReview do
     verdict = Map.get(record, :gate_verdict)
 
     with :ok <- mark_moved_by_gate(run_store, record, target_state),
-         :ok <- tracker.update_issue_state(issue.id, target_state) do
+         :ok <- TransitionGuard.perform(issue.id, :auto_review_gate, %{target: target_state}, tracker: tracker) do
       update_ci_check(run_store, record, %{qa_applied: true, gate_applied: true})
       record_gate_signal(record, verdict, target_state)
       Logger.info("Acceptance gate moved #{issue.identifier} to #{target_state} issue_id=#{issue.id} verdict=#{verdict} sha=#{Map.get(record, :gate_sha)}")
@@ -506,7 +507,7 @@ defmodule SymphonyElixir.AutoReview do
     tracker = Keyword.get(opts, :tracker, Tracker)
     base = Map.get(ci_status, :base_ref_name) || base_branch(Map.get(record, :repo_key))
 
-    case tracker.update_issue_state(issue.id, @rework_state) do
+    case TransitionGuard.perform(issue.id, :auto_review_rework, %{}, tracker: tracker) do
       :ok ->
         TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
           outcome: "rework",
@@ -1002,7 +1003,7 @@ defmodule SymphonyElixir.AutoReview do
   defp transition(issue, record, verdict, target_state, opts) do
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    case tracker.update_issue_state(issue.id, target_state) do
+    case TransitionGuard.perform(issue.id, :auto_review_verdict, %{target: target_state}, tracker: tracker) do
       :ok ->
         update_ci_check(Keyword.get(opts, :run_store, RunStore), record, %{qa_applied: true})
         record_qa_signal(record, verdict, target_state)
