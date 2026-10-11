@@ -38,6 +38,7 @@ defmodule SymphonyElixir.Orchestrator do
     SubIssueWait,
     TicketStateReconciler,
     Tracker,
+    TransitionGuard,
     UpdateHold,
     URLUtils,
     UsageLimit,
@@ -1013,7 +1014,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     start_tracker_task(state, context, fn ->
       comment.()
-      Tracker.update_issue_state(issue_id, blocked_state)
+      TransitionGuard.perform(issue_id, :review_agent_blocked, %{target: blocked_state})
     end)
   end
 
@@ -2975,7 +2976,7 @@ defmodule SymphonyElixir.Orchestrator do
         waiting_state = SubIssueWait.state(settings)
 
         start_tracker_task(state, %{kind: :park_parents, issue_ids: Enum.map(candidates, & &1.id)}, fn ->
-          {:ok, candidates |> still_parkable() |> Enum.filter(&park_breakdown_parent(&1, waiting_state)) |> Enum.map(& &1.id)}
+          {:ok, candidates |> still_parkable() |> Enum.filter(&park_breakdown_parent(&1, waiting_state, settings)) |> Enum.map(& &1.id)}
         end)
     end
   end
@@ -3204,7 +3205,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp act_on_pending_plan_comments(_issue, _action, []), do: true
 
   defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
-    case Tracker.update_issue_state(issue_id, @plan_revision_state) do
+    case TransitionGuard.perform(issue_id, :plan_revise) do
       :ok ->
         record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: @plan_revision_state})
         Logger.info("Moved breakdown parent to #{@plan_revision_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
@@ -3310,10 +3311,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The move is recorded before it is made, so a review reading the parent's history never sees
   # it without the record that marks it as Symphony's.
-  defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state) do
+  defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state, settings) do
     issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
 
-    case Tracker.update_issue_state(issue_id, waiting_state) do
+    case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings}) do
       :ok ->
         record_ticket_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")
@@ -4913,8 +4914,11 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state) end)}
   end
 
-  defp move_post_pr_issue(issue_id, post_pr_state),
-    do: Usage.with_caller(:post_pr_transition, fn -> Tracker.update_issue_state(issue_id, post_pr_state) end)
+  defp move_post_pr_issue(issue_id, post_pr_state) do
+    Usage.with_caller(:post_pr_transition, fn ->
+      TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state})
+    end)
+  end
 
   defp finish_post_pr_transition(%State{} = state, %{issue: %Issue{} = issue, attempt: attempt, metadata: metadata, post_pr_state: post_pr_state}, result) do
     issue_id = issue.id

@@ -15,7 +15,8 @@ defmodule SymphonyElixir.Workpad do
     Linear.TransientRetry,
     PromptSafety,
     TicketSignals,
-    Tracker
+    Tracker,
+    TransitionGuard
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
@@ -87,7 +88,7 @@ defmodule SymphonyElixir.Workpad do
 
   defp ensure_in_progress(%Issue{id: issue_id, state: state} = issue, opts) when is_binary(issue_id) do
     if todo_state?(state) do
-      move = fn -> Tracker.update_issue_state(issue_id, @in_progress_state) end
+      move = fn -> TransitionGuard.perform(issue_id, :claim) end
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{@in_progress_state}", opts) do
         :ok ->

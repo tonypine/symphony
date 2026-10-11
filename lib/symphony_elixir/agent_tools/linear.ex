@@ -25,8 +25,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
-  alias SymphonyElixir.SubIssueWait
   alias SymphonyElixir.SupervisorCheck
+  alias SymphonyElixir.TransitionGuard
 
   @comment_limit_default 50
   @comment_limit_max 100
@@ -36,7 +36,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @private_file_upload_max_bytes 50 * 1024 * 1024
   @default_attachment_allowed_hosts ["github.com"]
   # Moving an issue to `Merging` is how a human approves a merge, so agents may not do it.
-  @merging_state "Merging"
   # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
   @backlog_state "Backlog"
   # Where a withdrawn request's issue goes back to when its history doesn't say.
@@ -1793,10 +1792,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
       with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
            pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff),
-           :ok <- refuse_auto_review_handoff_state(state, pr_less?, settings),
-           state = human_review_redirect(state, issue, states, handoff.human_action_requested?, settings),
-           {:ok, state_id} <- refuse_human_only_state(state) do
-        refuse_waiting_on_sub_issues_state(state, state_id, settings)
+           {:ok, state} <-
+             TransitionGuard.resolve_request(state, %{
+               settings: settings,
+               states: states,
+               pr_less?: pr_less?,
+               needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
+             }) do
+        {:ok, state["id"]}
       end
     end
   end
@@ -1822,19 +1825,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  # An issue only a person can move on goes to the Human Review state instead of `In Review`, apart
-  # from the supervisor's queue: a `breakdown` plan whose ticket says a person reviews it, and the
-  # issue of a run that asked a person for something (which also goes there instead of `Backlog`).
-  defp human_review_redirect(state, issue, states, human_action_requested?, settings) do
-    with true <- HumanReview.enabled?(settings),
-         true <- needs_person?(state, issue, human_action_requested?, settings),
-         %{"id" => _} = human_review <- Enum.find(states, &state_name_matches?(&1, HumanReview.state(settings))) do
-      human_review
-    else
-      _keep -> state
-    end
-  end
-
   defp needs_person?(state, issue, human_action_requested?, settings) do
     cond do
       state_name_matches?(state, @backlog_state) ->
@@ -1853,39 +1843,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
     plan = %Issue{title: issue["title"], description: IssueSummary.strip(issue["description"]), labels: labels}
     Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
-  end
-
-  defp refuse_human_only_state(%{"id" => state_id} = state) do
-    if state_name_matches?(state, @merging_state),
-      do: {:error, {:merging_requires_human_approval, state["name"]}},
-      else: {:ok, state_id}
-  end
-
-  # With Auto Review on, Symphony moves the issue on from the PR being open, so an
-  # agent asking for `In Review` or the Human Review state is refused rather than silently
-  # redirected. It runs before the Human Review redirect, so a run that asked a person for
-  # something cannot skip QA that way: a blocked PR reaches Human Review through Auto Review.
-  # A `breakdown` parent and a `Final verification:` ticket open no PR: their result goes to
-  # a person whatever Auto Review says.
-  defp refuse_auto_review_handoff_state(state, pr_less?, settings) do
-    if AutoReview.enabled?(settings) and not pr_less? and
-         (state_name_matches?(state, AutoReview.review_state()) or HumanReview.in_state?(state["name"], settings)),
-       do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
-       else: :ok
-  end
-
-  # Moving a `breakdown` parent from `In Review` to the waiting state approves its plan and
-  # promotes its sub-tickets, so only a human does it.
-  defp refuse_waiting_on_sub_issues_state(state, state_id, settings) do
-    case SubIssueWait.state(settings) do
-      waiting_state when is_binary(waiting_state) ->
-        if state_name_matches?(state, waiting_state),
-          do: {:error, {:waiting_on_sub_issues_state_requires_human_approval, state["name"]}},
-          else: {:ok, state_id}
-
-      nil ->
-        {:ok, state_id}
-    end
   end
 
   # A ticket with no pull request whose run left a `## Supervisor check` (its work is already on

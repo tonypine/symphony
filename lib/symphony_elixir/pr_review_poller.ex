@@ -10,7 +10,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{SubIssueWait, TicketSignals, Tracker, Workspace}
+  alias SymphonyElixir.{SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -1133,7 +1133,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp move_for_rereview(record, auto_merge, target_state, opts) do
-    case Keyword.get(opts, :tracker, Tracker).update_issue_state(Map.get(record, :issue_id), target_state) do
+    case TransitionGuard.perform(Map.get(record, :issue_id), :pr_review_target, %{target: target_state}, Keyword.take(opts, [:tracker])) do
       :ok ->
         TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
           outcome: "rereview",
@@ -1222,7 +1222,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     case merged_issue_waiting_on_sub_issues(record, settings, opts) do
       {:ok, %Issue{} = issue} -> issue |> SubIssueWait.wait_on_merge(settings, tracker) |> transition_result("wait")
-      {:ok, nil} when landing? -> record_done_move(record, tracker.update_issue_state(Map.get(record, :issue_id), @done_state)) |> transition_result("done")
+      {:ok, nil} when landing? -> record_done_move(record, TransitionGuard.perform(Map.get(record, :issue_id), :landing_done, %{}, tracker: tracker)) |> transition_result("done")
       {:ok, nil} -> :ok
       {:error, reason} -> {:error, "wait", reason}
     end
@@ -1689,7 +1689,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case tracker.update_issue_state(issue_id, @active_state) do
+    case TransitionGuard.perform(issue_id, :review_rework, %{}, tracker: tracker) do
       :ok ->
         record_review_action_signal(record, action)
         complete_transition_action(record, pending_attrs, opts, now, action)

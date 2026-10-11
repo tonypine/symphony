@@ -11,7 +11,7 @@ defmodule SymphonyElixir.DependencyGate do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DependencyAudit, Notifications, TicketSignals, Tracker}
+  alias SymphonyElixir.{Config, DependencyAudit, Notifications, TicketSignals, Tracker, TransitionGuard}
 
   @hold_state "In Review"
 
@@ -209,7 +209,7 @@ defmodule SymphonyElixir.DependencyGate do
   defp move_issue_to_hold(_gate), do: :ok
 
   defp update_issue_to_hold(%{id: issue_id} = issue) do
-    case Tracker.update_issue_state(issue_id, @hold_state) do
+    case TransitionGuard.perform(issue_id, :dependency_hold) do
       :ok ->
         record_hold_signal(issue, issue_id)
         :ok
