@@ -634,6 +634,22 @@ defmodule SymphonyElixir.ExtensionsTest do
                  }
                }
              ],
+             "sessions" => [
+               %{
+                 "kind" => "agent",
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "repo_key" => "default",
+                 "started_at" => state_payload["sessions"] |> List.first() |> Map.fetch!("started_at")
+               },
+               %{
+                 "kind" => "qa",
+                 "issue_id" => "qa-forced-http",
+                 "issue_identifier" => "MT-QA-F",
+                 "repo_key" => nil,
+                 "started_at" => nil
+               }
+             ],
              "watching" => [
                %{
                  "issue_id" => "issue-watch",
