@@ -30,6 +30,10 @@ defmodule SymphonyElixir.QaAgent.Report do
   A parent walkthrough also passes `:ref` (the branch the commit heads, in place of a PR),
   `:target_issue` (the identifier of the verification ticket `:target_state` applies to) and
   `:filed` (the tickets filed for failing steps, as `%{identifier, title}`).
+
+  The epic review (`SymphonyElixir.EpicReview`) also passes `:checks`, its deterministic
+  pre-checks as `%{name: atom, status: :ok | :attention, detail: String.t()}`; they render as a
+  `### Pre-checks` section so the epic's history says what the review ran before the agent did.
   """
   @spec render(map()) :: String.t()
   def render(outcome) when is_map(outcome) do
@@ -39,6 +43,7 @@ defmodule SymphonyElixir.QaAgent.Report do
       "**Verdict:** #{verdict_label(outcome)} → #{target_label(outcome)}",
       "#{head_label(outcome)}#{meta_suffix(outcome)}",
       summary_block(outcome),
+      checks_block(Map.get(outcome, :checks, [])),
       steps_block(Map.get(outcome, :steps, [])),
       findings_block(Map.get(outcome, :findings, [])),
       filed_block(Map.get(outcome, :filed, [])),
@@ -98,6 +103,16 @@ defmodule SymphonyElixir.QaAgent.Report do
       end
 
     if is_binary(text) and String.trim(text) != "", do: "\n" <> String.trim(text) <> "\n", else: ""
+  end
+
+  defp checks_block([]), do: nil
+
+  defp checks_block(checks) do
+    Enum.join(["### Pre-checks", "" | Enum.map(checks, &check_line/1)], "\n") <> "\n"
+  end
+
+  defp check_line(%{status: status, name: name, detail: detail}) do
+    "- **#{status}** #{name}: #{detail}"
   end
 
   defp steps_block([]), do: nil

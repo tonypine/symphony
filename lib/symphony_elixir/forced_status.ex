@@ -7,8 +7,8 @@ defmodule SymphonyElixir.ForcedStatus do
   `describe/1` turns them into a `phase` and a `waiting_on`:
 
     * a running agent gives the run's kind as the phase (`implementation`, `rework`,
-      `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `final_verification`) and
-      waits on nothing; a running Auto Review QA pass gives `auto_review`;
+      `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `final_verification`,
+      `epic_review`) and waits on nothing; a running Auto Review QA pass gives `auto_review`;
     * a `Merging` ticket held while CI runs on its head is `waiting_on_ci` (`ci`);
     * a ticket in `In Review` or the Human Review state is `waiting_for_human` (`human`);
     * a ticket in `Backlog` or `Triage` keeps the phase its next run would have and waits on
@@ -32,6 +32,7 @@ defmodule SymphonyElixir.ForcedStatus do
           | :breakdown
           | :close_out
           | :final_verification
+          | :epic_review
 
   @type waiting_on :: :slot | :human | :ci | :blocker | :usage_limit | :paused | :backlog | nil
 
@@ -60,7 +61,8 @@ defmodule SymphonyElixir.ForcedStatus do
     :landing,
     :breakdown,
     :close_out,
-    :final_verification
+    :final_verification,
+    :epic_review
   ]
   @backlog_states ["backlog", "triage"]
 
@@ -75,7 +77,8 @@ defmodule SymphonyElixir.ForcedStatus do
     "landing" => "landing",
     "breakdown" => "plan",
     "close_out" => "close-out",
-    "final_verification" => "final verification"
+    "final_verification" => "final verification",
+    "epic_review" => "epic review"
   }
 
   @waiting_labels %{

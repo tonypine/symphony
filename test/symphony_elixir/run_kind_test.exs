@@ -21,6 +21,7 @@ defmodule SymphonyElixir.RunKindTest do
              :rework,
              :landing,
              :code_review,
+             :epic_review,
              :ci_fix,
              :review_feedback,
              :pre_push_review,
@@ -51,6 +52,7 @@ defmodule SymphonyElixir.RunKindTest do
       {:rework, issue(state: "Rework"), []},
       {:landing, issue(state: "Merging"), []},
       {:code_review, issue(state: "Code Review"), [settings: designed]},
+      {:epic_review, breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Done"}]), [settings: designed]},
       {:ci_fix, issue(), [ci_failure: %{check: "test"}]},
       {:review_feedback, issue(), [reviewer_comments: [%{body: "Rename this"}]]},
       {:qa, issue(state: "QA"), [settings: designed]}

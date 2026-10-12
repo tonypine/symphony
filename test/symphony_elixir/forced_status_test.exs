@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
 
   describe "describe/1" do
     test "a running agent gives its run kind as the phase and waits on nothing" do
-      kinds = [:implementation, :rework, :review_feedback, :ci_fix, :landing, :breakdown, :close_out]
+      kinds = [:implementation, :rework, :review_feedback, :ci_fix, :landing, :breakdown, :close_out, :epic_review]
 
       for kind <- [:final_verification | kinds] do
         assert %{phase: ^kind, running: true, waiting_on: nil, blockers: []} =

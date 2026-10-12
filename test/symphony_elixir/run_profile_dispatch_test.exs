@@ -21,6 +21,14 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
     end
   end
 
+  defmodule FakeEpicReview do
+    def run(issue, workspace, opts) do
+      recipient = Application.fetch_env!(:symphony_elixir, :epic_review_recipient)
+      send(recipient, {:epic_review, issue, workspace, opts})
+      Application.fetch_env!(:symphony_elixir, :epic_review_result)
+    end
+  end
+
   setup do
     test_root = Path.join(System.tmp_dir!(), "symphony-run-profile-#{System.unique_integer([:positive])}")
     fake_claude = Path.join(test_root, "fake-claude")
@@ -353,6 +361,78 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       on_message = Keyword.fetch!(opts, :on_message)
       on_message.(%{event: :notification})
       assert_received {:codex_worker_update, "issue-qa", %{event: :notification}}
+      assert argv_lines(ctx.argv_trace) == []
+    end
+
+    test "a designed epic parent the epic review handles starts no agent, and no walkthrough", ctx do
+      write_profile_workflow!(ctx, state_machine: "designed")
+      workspace = Path.join([ctx.test_root, "workspaces", "MT-EPIC"])
+      File.mkdir_p!(workspace)
+
+      run_issue =
+        %Issue{
+          id: "issue-epic",
+          identifier: "MT-EPIC",
+          title: "Land the epic path",
+          state: "Epic Review",
+          labels: ["plan"],
+          sub_issues: [%{id: "c1", identifier: "MT-EPIC-1", state: "Done"}]
+        }
+
+      Application.put_env(:symphony_elixir, :epic_review_recipient, self())
+      Application.put_env(:symphony_elixir, :epic_review_result, :ok)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :epic_review_recipient)
+        Application.delete_env(:symphony_elixir, :epic_review_result)
+      end)
+
+      assert :ok =
+               AgentRunner.run(run_issue, self(),
+                 workspace_path: workspace,
+                 epic_review: FakeEpicReview,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+
+      assert_received {:epic_review, %Issue{identifier: "MT-EPIC"}, ^workspace, opts}
+      assert opts[:worker_host] == nil
+      assert %Config.Schema{} = opts[:settings]
+      on_message = Keyword.fetch!(opts, :on_message)
+      on_message.(%{event: :notification})
+      assert_received {:codex_worker_update, "issue-epic", %{event: :notification}}
+      # The designed epic never reaches the legacy parent walkthrough or an executor turn.
+      refute_received {:parent_walkthrough, _issue, _workspace, _opts}
+      assert argv_lines(ctx.argv_trace) == []
+    end
+
+    test "a legacy Final verification ticket still skips the epic review for the parent walkthrough", ctx do
+      write_profile_workflow!(ctx)
+      workspace = Path.join([ctx.test_root, "workspaces", "MT-FV-EPIC"])
+      File.mkdir_p!(workspace)
+      run_issue = issue("issue-fv-epic", "MT-FV-EPIC", %{state: "In Progress", title: "Final verification: Parent"})
+
+      Application.put_env(:symphony_elixir, :epic_review_recipient, self())
+      Application.put_env(:symphony_elixir, :epic_review_result, :skip)
+      Application.put_env(:symphony_elixir, :parent_walkthrough_recipient, self())
+      Application.put_env(:symphony_elixir, :parent_walkthrough_result, :ok)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :epic_review_recipient)
+        Application.delete_env(:symphony_elixir, :epic_review_result)
+        Application.delete_env(:symphony_elixir, :parent_walkthrough_recipient)
+        Application.delete_env(:symphony_elixir, :parent_walkthrough_result)
+      end)
+
+      assert :ok =
+               AgentRunner.run(run_issue, self(),
+                 workspace_path: workspace,
+                 epic_review: FakeEpicReview,
+                 parent_walkthrough: FakeParentWalkthrough,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+
+      assert_received {:epic_review, %Issue{identifier: "MT-FV-EPIC"}, ^workspace, _opts}
+      assert_received {:parent_walkthrough, %Issue{identifier: "MT-FV-EPIC"}, ^workspace, _opts}
       assert argv_lines(ctx.argv_trace) == []
     end
 

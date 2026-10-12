@@ -274,6 +274,20 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       refute_received {:qa_agent_run, _job, _settings, _opts}
     end
 
+    test "a designed repo's parent retires the walkthrough: the epic review closes the epic" do
+      write_settings!(repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]])
+
+      settings = Config.settings!()
+
+      # The title no longer makes it a final verification ticket, so the walkthrough never applies.
+      assert SymphonyElixir.StateMachine.designed?(settings)
+      assert SymphonyElixir.RunKind.classify(verification(), settings: settings) == :implementation
+      assert :skip = run(verification(), settings: settings)
+
+      refute_received {:linear, _query, _variables}
+      refute_received {:qa_agent_run, _job, _settings, _opts}
+    end
+
     test "a failed parent lookup is an error, so the run is retried" do
       down = linear_client(parent_result: {:error, :linear_down})
       assert {:error, {:parent_walkthrough_failed, :linear_down}} = run(verification(), linear_client: down)

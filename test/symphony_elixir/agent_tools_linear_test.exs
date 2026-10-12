@@ -1119,6 +1119,49 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "create_subissue_in_state/4" do
+    test "files the child in the named state, not Backlog, and records it like any sub-issue" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      states = [
+        %{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"},
+        %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}
+      ]
+
+      assert {:ok, response} =
+               Linear.create_subissue_in_state(
+                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 "Todo",
+                 %{"title" => "Epic review fails: the export button is missing", "description" => "What the review found."},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert get_in(response, ["data", "issueCreate", "issue", "identifier"]) == "TP-999"
+      assert_received {:linear_called, mutation, %{input: input}}
+      assert mutation =~ "SymphonyAgentCreateSubissue"
+      assert input["stateId"] == "state-todo"
+      assert input["parentId"] == "issue-parent-uuid"
+      assert input["title"] == "Epic review fails: the export button is missing"
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "a state the team does not have names the state it asked for, and does not fall back to Backlog" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      states = [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]
+
+      assert {:error, {:child_state_not_found, "Todo", ["Backlog"]}} =
+               Linear.create_subissue_in_state(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 "Todo",
+                 %{"title" => "Epic review finding: no export button", "description" => "body"},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
+    end
+  end
+
   describe "create_subissue/3" do
     test "creates a Backlog child of the current issue in its team, project and assignee" do
       {:ok, registry} = Linear.CommentRegistry.start_link()

@@ -73,7 +73,8 @@ defmodule SymphonyElixir.Playbook do
   @variant_files %{
     "status_map" => %{"designed" => "status_map.designed.liquid"},
     "escape_hatches" => %{"designed" => "escape_hatches.designed.liquid"},
-    "parent_tickets" => %{"designed" => "parent_tickets.designed.liquid"}
+    "parent_tickets" => %{"designed" => "parent_tickets.designed.liquid"},
+    "plan_pipeline" => %{"designed" => "plan_pipeline.designed.liquid"}
   }
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "priv", "playbook"]))

@@ -101,25 +101,31 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   @doc """
-  The journey context for `issue`: the ticket's `## User walkthrough` when it has one, else its
-  acceptance criteria, else nothing but the instruction to derive them. The QA prompt renders this,
-  so the run knows what to verify from the user's point of view.
+  The journey context for `issue`: its `## User walkthrough` when it has one, else its acceptance
+  criteria, else nothing but the instruction to derive them. The QA prompt renders this, so the run
+  knows what to verify from the user's point of view.
+
+  `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
+  state's own run (the default), and the epic for the epic review of a designed repo's plan parent
+  (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
-  @spec journey(Issue.t()) :: %{source: String.t(), text: String.t() | nil}
-  def journey(%Issue{description: description}) when is_binary(description) do
+  @spec journey(Issue.t(), String.t()) :: %{source: String.t(), text: String.t() | nil}
+  def journey(issue, label \\ "the ticket"), do: journey_for(issue, label)
+
+  defp journey_for(%Issue{description: description}, label) when is_binary(description) do
     cond do
       text = section(description, @walkthrough_heading) ->
-        %{source: "the ticket's `## User walkthrough`", text: text}
+        %{source: "#{label}'s `## User walkthrough`", text: text}
 
       text = section(description, @acceptance_heading) ->
-        %{source: "the ticket's acceptance criteria", text: text}
+        %{source: "#{label}'s acceptance criteria", text: text}
 
       true ->
-        %{source: "the ticket's walkthrough and acceptance criteria", text: nil}
+        %{source: "#{label}'s walkthrough and acceptance criteria", text: nil}
     end
   end
 
-  def journey(_issue), do: %{source: "the ticket's walkthrough and acceptance criteria", text: nil}
+  defp journey_for(_issue, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil}
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do
