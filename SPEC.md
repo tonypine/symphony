@@ -4109,8 +4109,14 @@ SHOULD return:
   or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
   one-line `summary`; for a forced plan parent with a current part, the phase and what it
   waits on are the part's
+- `sessions`: every live session, of any kind, in one list: the agent runs (`kind` is the run's
+  profile kind, such as `implementation` or `code_review`), then the Auto Review QA passes
+  (`qa_pass`), then the acceptance gate passes (`acceptance_gate`); each row has `kind`,
+  `issue_id`, `issue_identifier`, `repo_key` and `started_at`. Landing runs are agent runs. Every
+  surface that says what runs (the web dashboard, the terminal dashboard, the macOS menu bar)
+  SHOULD read it from this list, so a session that isn't an agent run is never missed
 - `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
-  the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
+  the pass runs on the forced allowance, `repo_key`, `started_at`) and `queued` rows (`issue_id`, `identifier`, `forced`:
   whether the request is a forced ticket's, at the front of the queue)
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)

@@ -634,6 +634,22 @@ defmodule SymphonyElixir.ExtensionsTest do
                  }
                }
              ],
+             "sessions" => [
+               %{
+                 "kind" => "agent",
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "repo_key" => "default",
+                 "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at")
+               },
+               %{
+                 "kind" => "qa_pass",
+                 "issue_id" => "qa-forced-http",
+                 "issue_identifier" => "MT-QA-F",
+                 "repo_key" => nil,
+                 "started_at" => nil
+               }
+             ],
              "watching" => [
                %{
                  "issue_id" => "issue-watch",
@@ -2440,6 +2456,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Waiting for a lane: MT-E4"
     refute html =~ "No active epics"
 
+    assert html =~ "Auto Review passes"
+    assert html =~ "Running: MT-QA-F (QA pass)"
+    refute html =~ "No QA or acceptance gate pass is running."
     assert html =~ "Finishing runs"
     assert html =~ "Landing: MT-LAND"
     assert html =~ "MT-MERGE: auto-merge on, waiting for CI on `abc1234`"

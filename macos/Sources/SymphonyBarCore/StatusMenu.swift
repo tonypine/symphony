@@ -200,9 +200,36 @@ public enum StatusMenu {
         return String(line.prefix(waitingHeadlineLimit - 1)) + "…"
     }
 
-    /// For example "2 running · 1 retrying".
+    /// For example "1 implementation run, 1 QA pass running · 2 retrying", or "Nothing is running"
+    /// when no session of any kind runs. A Symphony that predates `sessions` reads "2 running · 1 retrying".
     public static func countsLine(_ snapshot: StateSnapshot) -> String {
-        "\(snapshot.running) running · \(snapshot.retrying) retrying"
+        guard let kinds = snapshot.sessionKinds else {
+            return "\(snapshot.running) running · \(snapshot.retrying) retrying"
+        }
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for kind in kinds {
+            if counts[kind] == nil { order.append(kind) }
+            counts[kind, default: 0] += 1
+        }
+        let running = order.isEmpty
+            ? "Nothing is running"
+            : order.map { sessionCount(counts[$0]!, kind: $0) }.joined(separator: ", ") + " running"
+        return snapshot.retrying > 0 ? "\(running) · \(snapshot.retrying) retrying" : running
+    }
+
+    /// For example "1 QA pass", "2 acceptance gate passes" or "3 code review runs".
+    static func sessionCount(_ count: Int, kind: String) -> String {
+        let (singular, plural): (String, String)
+        switch kind {
+        case "qa_pass": (singular, plural) = ("QA pass", "QA passes")
+        case "acceptance_gate": (singular, plural) = ("acceptance gate pass", "acceptance gate passes")
+        case "qa": (singular, plural) = ("QA run", "QA runs")
+        default:
+            let name = kind.replacingOccurrences(of: "_", with: " ")
+            (singular, plural) = ("\(name) run", "\(name) runs")
+        }
+        return "\(count) \(count == 1 ? singular : plural)"
     }
 
     /// For example "Paused since 14:03: deploy freeze". Shows the date too when the pause began on another day.
