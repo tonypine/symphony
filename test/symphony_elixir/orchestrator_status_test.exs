@@ -3580,6 +3580,28 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert MapSet.member?(active_states, "ci fix")
   end
 
+  test "a legacy repo keeps Plan Review active while a designed repo's Plan Review issue stays out" do
+    workflow = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow,
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "Plan Review"],
+      repos: [
+        [key: "legacy-repo", workflow: workflow, team: "Legacy"],
+        [key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]
+      ]
+    )
+
+    assert MapSet.member?(Orchestrator.active_state_set_for_test(), "plan review")
+    assert MapSet.member?(Orchestrator.active_state_set_for_test(), "code review")
+
+    state = %Orchestrator.State{poll_interval_ms: 5_000, max_concurrent_agents: 5}
+    issue = %Issue{id: "issue-plan-review", identifier: "MT-PR", title: "Plan", state: "Plan Review"}
+
+    assert Orchestrator.should_dispatch_issue_for_test(%{issue | repo_key: "legacy-repo"}, state)
+    refute Orchestrator.should_dispatch_issue_for_test(%{issue | repo_key: "designed-repo"}, state)
+  end
+
   test "active state set is the configured active states when every repo runs the legacy machine" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
