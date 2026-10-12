@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentRunner do
     Config,
     DependencyAudit,
     DependencyGate,
+    EpicReview,
     GitHub.PullRequest,
     Handoff,
     LeftoverProcesses,
@@ -578,9 +579,10 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A designed repo's `Code Review` ticket is reviewed rather than executed
-  # (`SymphonyElixir.CodeReview`), and its `QA` ticket verified rather than executed
-  # (`SymphonyElixir.QaVerification`); a `Final verification:` ticket gets the Auto Review parent
-  # walkthrough in place of executor turns when it applies
+  # (`SymphonyElixir.CodeReview`), its `QA` ticket verified rather than executed
+  # (`SymphonyElixir.QaVerification`), and its epic parent reviewed once its sub-tickets are
+  # terminal (`SymphonyElixir.EpicReview`); a legacy repo's `Final verification:` ticket gets the
+  # Auto Review parent walkthrough in place of executor turns when it applies
   # (see `SymphonyElixir.AutoReview.ParentWalkthrough`). Anything else is an ordinary run.
   defp run_issue(workspace, issue, codex_update_recipient, opts, worker_host) do
     walkthrough_opts =
@@ -596,6 +598,17 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host) do
     case Keyword.get(opts, :qa_verification, QaVerification).run(issue, workspace, walkthrough_opts) do
+      :skip -> run_epic_or_parent_run(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host)
+      result -> result
+    end
+  end
+
+  # The epic review is machine-owned and only ever applies to a designed repo's epic parent
+  # (`SymphonyElixir.EpicReview.epic_review_run?/2`); the parent walkthrough skips the same parent on
+  # the designed path (`SymphonyElixir.AutoReview.ParentWalkthrough`), so a designed epic is never
+  # executed turn by turn and a legacy `Final verification:` ticket keeps its walkthrough.
+  defp run_epic_or_parent_run(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host) do
+    case Keyword.get(opts, :epic_review, EpicReview).run(issue, workspace, walkthrough_opts) do
       :skip ->
         case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
           :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
