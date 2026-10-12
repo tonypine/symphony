@@ -4259,7 +4259,8 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
     issue_routable_to_worker?(issue) and
       active_issue_state?(state_name, active_states) and
-      !terminal_issue_state?(state_name, terminal_states)
+      !terminal_issue_state?(state_name, terminal_states) and
+      !designed_plan_review_issue?(issue)
   end
 
   defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
@@ -4339,17 +4340,30 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
-  # A repo on the designed machine dispatches from its designed phase states too, so the global
-  # active set (the dispatch gate and the reconciliation filter) is the union across repos. With
-  # every repo on `legacy` this is exactly the configured active states.
+  # Each repo dispatches from the active states of its own machine, so the global active set (the
+  # dispatch gate and the reconciliation filter) is the union across repos. With every repo on
+  # `legacy` this is exactly the configured active states.
   defp active_states_with_designed(tracker) do
-    if any_repo_designed?(), do: StateMachine.tracker_active_states("designed", tracker), else: tracker.active_states
+    case Config.repos() do
+      {:ok, [_ | _] = repos} ->
+        repos
+        |> Enum.flat_map(&StateMachine.tracker_active_states(StateMachine.version(&1), tracker))
+        |> Enum.uniq()
+
+      _no_repos ->
+        tracker.active_states
+    end
   end
 
-  defp any_repo_designed? do
-    case Config.repos() do
-      {:ok, repos} -> Enum.any?(repos, &StateMachine.designed?/1)
-      _error -> false
+  # A designed repo never dispatches from `Plan Review`, even when a legacy repo keeps it in the
+  # union of active states.
+  defp designed_plan_review_issue?(%Issue{state: state_name} = issue) do
+    with plan_review when is_binary(plan_review) <- Config.settings!().tracker.plan_review_state,
+         true <- normalize_issue_state(state_name) == normalize_issue_state(plan_review),
+         {:ok, repo} <- Config.repo(issue_repo_key(issue)) do
+      StateMachine.designed?(repo)
+    else
+      _not_designed_plan_review -> false
     end
   end
 
