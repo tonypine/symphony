@@ -6333,9 +6333,9 @@ defmodule SymphonyElixir.CoreTest do
                  )
       end)
 
-      assert_receive {:review_agent_call, 1, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 2, _session, _prompt, _issue, _opts}
-      refute_receive {:review_agent_call, 3, _session, _prompt, _issue, _opts}, 50
+      # Each of the two reviews ends malformed after its one JSON nudge.
+      for call <- 1..4, do: assert_receive({:review_agent_call, ^call, _session, _prompt, _issue, _opts})
+      refute_receive {:review_agent_call, 5, _session, _prompt, _issue, _opts}, 50
 
       assert_receive {:codex_worker_update, "issue-review-agent-runner",
                       %{
