@@ -78,24 +78,26 @@ public struct InboxToolbar: Equatable {
     /// both, so it takes a deliberate trip through the menu and its consequence sheet. An action carrying an
     /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
     /// and a clarify item, keep their links, but an action whose options are listed in its card drops the Copy Steps
-    /// link that would only repeat them.
+    /// link that would only repeat them. An item whose repo runs the legacy machine offers no Restart: its Rework is
+    /// already the full reset, and Symphony refuses a restart there.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
+        let restart: [InboxCommand] = item.stateMachine == .legacy ? [] : [.move(.restart)]
         switch item.kind {
         case .plan:
             let changed = picks.changed(item.review.decisions)
             let sendDecisions = item.review.decisions.isEmpty ? [] : [move(.sendDecisions, enabled: changed)]
             return InboxToolbar(
                 buttons: [move(.approvePlan)] + sendDecisions + links,
-                overflow: [.move(.sendToRework), .move(.restart)]
+                overflow: [.move(.sendToRework)] + restart
             )
         case .pr:
             let moves = [move(.approveAndMerge), move(.sendToRework)]
             if item.review.pullRequest?.hasRedCheck == true, let openPR = links.first, case .link(.openPR) = openPR.command {
-                return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: [.move(.restart)])
+                return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: restart)
             }
-            return InboxToolbar(buttons: moves + links, overflow: [.move(.restart)])
+            return InboxToolbar(buttons: moves + links, overflow: restart)
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .blocked:

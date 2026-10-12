@@ -1488,6 +1488,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "identifier" => "MT-PR",
                  "title" => "Retry fix",
                  "repo_key" => "default",
+                 "state_machine" => "legacy",
                  "kind" => "pr",
                  "state" => "In Review",
                  "ask" => "Review the pull request",

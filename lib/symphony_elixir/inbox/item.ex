@@ -20,6 +20,9 @@ defmodule SymphonyElixir.Inbox.Item do
   A plan, PR or final verification carries its `## Review brief` comment parsed
   (`SymphonyElixir.Inbox.ReviewBrief`) as `review.brief`, nil when it has none.
 
+  `state_machine` is the repo's resolved version (`SymphonyElixir.StateMachine.version/1`): the app
+  offers `Restart` only on a designed repo, since the control API refuses it on a legacy one.
+
   A hold only becomes a `:blocked` item when nothing else already waits on the ticket: `from_node/4`
   reads the store's hold after `SymphonyElixir.HumanActions.Waiting` found no entry, so an open
   request or a review keeps its own, richer item. A dependency or fix-ticket hold clears on its own
@@ -31,6 +34,7 @@ defmodule SymphonyElixir.Inbox.Item do
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.QaAgent.Report
+  alias SymphonyElixir.StateMachine
 
   @type kind :: :action | :final_verification | :plan | :pr | :clarify | :blocked
   @type t :: %{
@@ -38,6 +42,7 @@ defmodule SymphonyElixir.Inbox.Item do
           identifier: String.t() | nil,
           title: String.t() | nil,
           repo_key: String.t() | nil,
+          state_machine: StateMachine.version(),
           kind: kind(),
           state: String.t() | nil,
           ask: String.t(),
@@ -62,7 +67,7 @@ defmodule SymphonyElixir.Inbox.Item do
   def from_node(node, repo_key, settings, lookups) do
     case Waiting.entries([node], settings) do
       [entry] -> build(node, entry, repo_key, settings, lookups)
-      [] -> from_hold(node, repo_key, lookups)
+      [] -> from_hold(node, repo_key, settings, lookups)
     end
   end
 
@@ -72,6 +77,7 @@ defmodule SymphonyElixir.Inbox.Item do
       identifier: entry.identifier,
       title: entry.title,
       repo_key: repo_key,
+      state_machine: StateMachine.version(settings),
       kind: entry.kind,
       state: entry.state,
       ask: ask(entry, node, settings),
@@ -84,7 +90,7 @@ defmodule SymphonyElixir.Inbox.Item do
   # A ticket an access hold pauses in place waits on a person's Unblock, so it is listed with the
   # reason the hold recorded even though no review covers it. A dependency or fix-ticket hold
   # clears on its own, so it is not listed.
-  defp from_hold(node, repo_key, lookups) do
+  defp from_hold(node, repo_key, settings, lookups) do
     with hold when is_map(hold) <- store_hold(repo_key, node["id"], lookups),
          true <- Hold.access_wait?(hold) do
       %{
@@ -92,6 +98,7 @@ defmodule SymphonyElixir.Inbox.Item do
         identifier: node["identifier"],
         title: node["title"],
         repo_key: repo_key,
+        state_machine: StateMachine.version(settings),
         kind: :blocked,
         state: get_in(node, ["state", "name"]),
         ask: Map.get(hold, :reason) || "Unblock the ticket and it continues",
