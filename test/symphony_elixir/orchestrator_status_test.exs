@@ -2591,14 +2591,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       File.mkdir_p!(api_stale_workspace)
       File.touch!(api_stale_workspace, System.os_time(:second) - 30 * 86_400)
 
-      :sys.replace_state(pid, fn state ->
-        %{
-          state
-          | workspace_lifecycle_last_check_at_ms: nil,
-            repo_poll_due_at_ms: %{"bad" => 0}
-        }
-      end)
-
       Cache.clear()
       assert {:ok, repos} = Config.repos()
       assert Enum.sort(Enum.map(repos, & &1.name)) == ["api", "bad"]
@@ -2607,6 +2599,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         capture_log(fn ->
           # A startup cycle still in flight would skip this one, and with it the age GC.
           wait_for_poll_cycle_idle(pid)
+
+          # Make the age GC due only once the log is captured: a cycle that started in between
+          # would log the `bad` repo's skip before the capture began.
+          :sys.replace_state(pid, fn state ->
+            %{
+              state
+              | workspace_lifecycle_last_check_at_ms: nil,
+                repo_poll_due_at_ms: %{"bad" => 0}
+            }
+          end)
+
           send(pid, :run_poll_cycle)
 
           wait_for_snapshot(
