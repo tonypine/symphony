@@ -141,6 +141,7 @@ defmodule SymphonyElixir.InboxTest do
                issue_id: "id-SHOP-7",
                identifier: "SHOP-7",
                repo_key: "shop",
+               state_machine: "legacy",
                kind: :pr,
                state: "In Review",
                ask: "The retry fix for the importer.",
@@ -267,6 +268,7 @@ defmodule SymphonyElixir.InboxTest do
                issue_id: "id-SHOP-60",
                identifier: "SHOP-60",
                repo_key: "shop",
+               state_machine: "designed",
                kind: :blocked,
                state: "In Progress",
                ask: "The run reported a block",
@@ -276,7 +278,7 @@ defmodule SymphonyElixir.InboxTest do
                  reason: "The run reported a block",
                  clearing_condition: "when the block is resolved; a person clears an access hold"
                }
-             } = Item.from_node(held, "shop", %Schema{}, lookups(nil, nil, hold))
+             } = Item.from_node(held, "shop", %Schema{state_machine: "designed"}, lookups(nil, nil, hold))
 
       # A hold that clears on its own waits on nobody, and neither does a ticket with no hold at all
       # or a run whose lookups name no hold source.
