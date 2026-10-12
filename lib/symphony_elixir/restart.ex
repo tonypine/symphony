@@ -90,11 +90,12 @@ defmodule SymphonyElixir.Restart do
   defp open?(_state), do: false
 
   # Removal deletes the worktree and its branch, so the next dispatch of this ticket creates the
-  # branch again from the repo's configured base branch: the fresh branch the reset promises.
+  # branch again from the repo's configured base branch: the fresh branch the reset promises. The
+  # checked removal reports a worktree or branch it couldn't delete, so the move is not made then.
   defp remove_workspaces(issue, opts) do
     workspace = Keyword.get(opts, :workspace, Workspace)
 
-    case workspace.remove_issue_workspaces(issue) do
+    case workspace.remove_issue_workspaces_checked(issue) do
       :ok -> :ok
       other -> failed("couldn't remove the workspace of #{issue.identifier} (#{inspect(other)})")
     end
