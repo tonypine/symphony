@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{DirectorMoves, PlanComments, RunKind, RunStore, SubIssueWait}
+  alias SymphonyElixir.{BreakdownReview, DirectorMoves, PlanComments, RunKind, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -56,6 +56,61 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
     assert [%{name: "plan verdict", details: %{outcome: "changes", to: "In Progress"}}] =
              RunStore.get_ticket_state(repo_key, "parent").signals
+  end
+
+  test "a designed repo's comment sends the parent through Rework and records the move as Symphony's own" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
+    )
+
+    parent =
+      %{parent("Plan Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:00Z]]) | repo_key: "designed"}
+
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "Plan Review")], [
+      comment("c1", "Split MOT-31 in two", ~U[2026-10-04 12:10:00Z])
+    ])
+
+    log = capture_log([level: :info], fn -> send(self(), {:state, act(state(), parent)}) end)
+
+    assert_received {:state, state}
+    assert_received {:memory_tracker_state_update, "parent", "Rework"}
+    assert log =~ "Moved breakdown parent to Rework to revise its plan from 1 new comment(s)"
+    assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:10:00Z]}
+
+    # Symphony's record of the move is what keeps the poll's reading of it from cancelling the plan's
+    # sub-tickets: the record is at the move, so `BreakdownReview` reads a revision, not a rejection.
+    assert %DateTime{} = moved_at = RunStore.get_own_state_move("parent")
+
+    assert BreakdownReview.sub_issues_to_move(
+             :replace,
+             %{
+               state_changes: [
+                 change(DateTime.add(moved_at, -3600), "In Progress", "Plan Review"),
+                 change(moved_at, "Plan Review", "Rework")
+               ],
+               sub_issues: [
+                 %{
+                   id: "child-1",
+                   identifier: "MOT-31",
+                   state: "Backlog",
+                   created_at: DateTime.add(moved_at, -1800),
+                   state_changed_at: DateTime.add(moved_at, -1800)
+                 }
+               ]
+             },
+             Config.settings_for_repo!("designed"),
+             moved_at
+           ) == []
+
+    # Back in Rework the parent's never-approved plan is held until the same poll's cancel pass has
+    # read it; the own-move record leaves that pass with nothing to cancel, and the revision run —
+    # a breakdown run — then dispatches.
+    revising = %{parent | state: "Rework"}
+    refute Orchestrator.should_dispatch_issue_for_test(revising, state)
+    assert Orchestrator.should_dispatch_issue_for_test(revising, %{state | breakdown_reviews: %{"parent" => []}})
+    assert RunKind.classify(revising) == :breakdown
   end
 
   test "the Director's decisions from the app, sent on a plan in Human Review, start the plan revision run" do

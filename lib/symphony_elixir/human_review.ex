@@ -11,7 +11,9 @@ defmodule SymphonyElixir.HumanReview do
   - an Auto Review QA verdict `blocked` that the QA agent says needs a person (a missing secret or
     key, a check on a real device), as opposed to a tooling gap the factory can fix;
   - a parent walkthrough (`Final verification:`) whose remaining steps are manual;
-  - a plan whose ticket says a human reviews it (`requested_by_ticket?/2`);
+  - a plan whose ticket says a human reviews it (`requested_by_ticket?/2`) — a legacy repo only: a
+    designed repo's plan handoff waits in the epic path's own `Plan Review` state, not here
+    (`plan_review_states/1`);
   - an issue whose run posted a `linear_request_human_action` request: the tool moves it there,
     and the request stays open until a person moves the issue out or the agent withdraws it;
   - an acceptance gate escalation only a person can clear (see
@@ -94,6 +96,48 @@ defmodule SymphonyElixir.HumanReview do
       {:error, _reason} -> review_state?(state_name, nil)
     end
   end
+
+  @doc """
+  The states a plan parent's handoff leaves it waiting for a person in: the repo's configured
+  `Plan Review` state on a repo running the designed machine, and `review_states/1` (`In Review`
+  and the human review state) on a legacy one.
+
+  `Plan Review` is the epic path's own review state: a designed repo's plan always waits there, so
+  no rule about the ticket's text (`requested_by_ticket?/2`) has to decide where it waits.
+  """
+  @spec plan_review_states(Schema.t() | term()) :: [String.t()]
+  def plan_review_states(settings) do
+    case plan_review_state(settings) do
+      nil -> review_states(settings)
+      state -> [state]
+    end
+  end
+
+  @doc "True when `state_name` is one of `plan_review_states/1`."
+  @spec plan_review_state?(String.t() | nil, Schema.t() | term()) :: boolean()
+  def plan_review_state?(state_name, settings) when is_binary(state_name),
+    do: Enum.any?(plan_review_states(settings), &(normalize(&1) == normalize(state_name)))
+
+  def plan_review_state?(_state_name, _settings), do: false
+
+  @doc "`plan_review_state?/2` against the current settings, with the legacy review states when they can't be read."
+  @spec plan_review_state?(String.t() | nil) :: boolean()
+  def plan_review_state?(state_name) do
+    case Config.settings() do
+      {:ok, settings} -> plan_review_state?(state_name, settings)
+      {:error, _reason} -> plan_review_state?(state_name, nil)
+    end
+  end
+
+  @doc """
+  The configured `Plan Review` state, on a repo running the designed machine; nil on a legacy repo
+  and nil when the state is turned off in config.
+  """
+  @spec plan_review_state(Schema.t() | term()) :: String.t() | nil
+  def plan_review_state(%Schema{tracker: %{plan_review_state: state}} = settings) when is_binary(state),
+    do: if(StateMachine.designed?(settings), do: state)
+
+  def plan_review_state(_settings), do: nil
 
   @doc "True when `issue` (or a state name) sits in the configured state."
   @spec in_state?(Issue.t() | String.t() | term(), Schema.t() | term()) :: boolean()

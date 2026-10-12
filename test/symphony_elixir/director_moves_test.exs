@@ -119,6 +119,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_state_update, _id, _state}
       assert audit_records() == []
     end
+
+    test "answers a designed repo's plan in Plan Review, and names Plan Review when it is elsewhere", %{opts: opts} do
+      designed_workflow!()
+
+      put_issues([plan("Plan Review")])
+      assert {:ok, %{from_state: "Plan Review", to_state: @waiting}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+      assert_received {:memory_tracker_state_update, "plan", @waiting}
+
+      put_issues([plan("In Progress")])
+      assert {:error, {:conflict, message}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+      assert message == "MOT-30 is In Progress; the Director answers it only from In Review or Human Review or Plan Review"
+    end
   end
 
   describe "approve_pr" do
@@ -147,6 +159,15 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_comment, "pr", "Sent to Rework by the Director:\n\nThe totals are wrong"}
       assert_received {:memory_tracker_state_update, "pr", "Rework"}
       assert [%{"move" => "rework", "comment" => "Sent to Rework by the Director:\n\nThe totals are wrong"}] = audit_records()
+    end
+
+    test "rejects a designed repo's plan from Plan Review", %{opts: opts} do
+      designed_workflow!()
+      put_issues([plan("Plan Review")])
+
+      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "  Split MOT-31 differently  "}, opts)
+      assert_received {:memory_tracker_comment, "plan", "Sent to Rework by the Director:\n\nSplit MOT-31 differently"}
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
     end
 
     test "needs a reason and a ticket in review", %{opts: opts} do

@@ -114,7 +114,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert BreakdownReview.sub_issues_to_move(:replace, rejected, off) == []
     end
 
-    test "a move Symphony made itself is never an approval" do
+    test "a move Symphony made itself is never an approval or a rejection" do
       settings = Config.settings!()
       subs = [history_sub("c1", "Backlog")]
       approved = history([approval()], subs)
@@ -129,9 +129,40 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings, nil)) == ["c1"]
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
 
-      # A rejection is never Symphony's move; its own record does not affect it.
-      rejected = history(rejection(), [history_sub("c1", "Backlog")])
-      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved)) == ["c1"]
+      # A rejection at Symphony's own recorded move is a designed repo's own revise of the plan, not
+      # a person's: it cancels nothing. A person's rejection at another time still cancels the plan.
+      rejected = history(rejection(), subs)
+      assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved) == []
+      assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, DateTime.add(@approved, 60)) == []
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, DateTime.add(@approved, -61))) == ["c1"]
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, nil)) == ["c1"]
+    end
+
+    test "a designed repo reads its plan review state for the approval and the rejection" do
+      settings = designed_settings!()
+      subs = [history_sub("c1", "Backlog")]
+
+      # The plan is reviewed in `Plan Review`: the approval promotes from there.
+      approved = history([change("In Progress", "Plan Review", @reviewed), change("Plan Review", @waiting, @approved)], subs)
+      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
+      assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), settings) == []
+
+      # A person's move from `Plan Review` to `Rework` rejects the plan.
+      rejected =
+        history(
+          [change("Todo", "In Progress", @started), change("In Progress", "Plan Review", @reviewed), change("Plan Review", "Rework", @approved)],
+          subs
+        )
+
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings)) == ["c1"]
+
+      # The same move at Symphony's own record of it is the machine revising the plan in place.
+      assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved) == []
+
+      # With the state turned off the designed repo falls back to the legacy review states.
+      off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
+      assert ids(BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), off)) == ["c1"]
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, history(rejection(), subs), off)) == ["c1"]
     end
 
     test "a rejection replaces the rejected plan's sub-issues in Backlog since before the move to Rework" do
@@ -494,6 +525,19 @@ defmodule SymphonyElixir.BreakdownReviewTest do
   end
 
   defp review(issues, state, opts \\ []), do: Orchestrator.review_breakdown_parents_for_test(issues, state, opts)
+
+  # A repo on the designed machine: plan review happens in `Plan Review`.
+  defp designed_settings! do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      repos: [
+        [key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "Test"],
+        [key: "designed", workflow: Workflow.workflow_file_path(), team: "DesignedTeam", state_machine: "designed"]
+      ]
+    )
+
+    Config.settings_for_repo!("designed")
+  end
 
   defp parent(state, sub_issues) do
     %Issue{id: "parent", identifier: "MT-1", title: "Groom into sub-tickets", state: state, labels: ["breakdown"], sub_issues: sub_issues}

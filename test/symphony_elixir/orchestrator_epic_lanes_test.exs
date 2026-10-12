@@ -2,6 +2,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.EpicLanes
 
   @waiting "Waiting on sub-tickets"
 
@@ -170,6 +171,19 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
 
     assert %{lanes: [%{identifier: "MT-10", status: "running", sub_issue: %{identifier: "MT-11", state: "In Progress"}}], shared: %{used: 0}} =
              snapshot.epic_lanes
+  end
+
+  test "a designed repo's Plan Review is a human-gated state, where a legacy repo's is not" do
+    refute EpicLanes.human_gated_state?("Plan Review")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
+    )
+
+    assert EpicLanes.human_gated_state?(" plan review ")
+    assert EpicLanes.human_gated_state?("In Review")
+    refute EpicLanes.human_gated_state?("Todo")
   end
 
   defp epic(id, identifier, sub_issues) do

@@ -1943,6 +1943,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
            states: states,
            from_state: from_state,
            pr_less?: pr_less?,
+           plan_parent?: plan_parent?(issue),
            needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
          }) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
@@ -2012,8 +2013,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp supervisor_handoff?(_state, _issue, _handoff), do: false
 
   defp pr_less_issue?(issue) do
+    plan_parent?(issue) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
+  end
+
+  # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
+  # request, and on a designed repo it is the ticket whose handoff enters `Plan Review`.
+  defp plan_parent?(issue) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
-    Enum.any?(labels, &Issue.breakdown_label?/1) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
+    Enum.any?(labels, &Issue.breakdown_label?/1)
   end
 
   defp label_name(%{"name" => name}), do: name

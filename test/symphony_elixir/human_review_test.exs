@@ -104,6 +104,56 @@ defmodule SymphonyElixir.HumanReviewTest do
     end
   end
 
+  describe "plan_review_states/1" do
+    test "a legacy repo reads the review states, a designed repo its Plan Review state" do
+      legacy = Config.settings!()
+
+      assert HumanReview.plan_review_state(legacy) == nil
+      assert HumanReview.plan_review_states(legacy) == ["In Review", @human_review]
+      assert HumanReview.plan_review_state?("In Review", legacy)
+      assert HumanReview.plan_review_state?(@human_review, legacy)
+      refute HumanReview.plan_review_state?("Plan Review", legacy)
+
+      designed = designed_settings!()
+
+      assert HumanReview.plan_review_state(designed) == "Plan Review"
+      assert HumanReview.plan_review_states(designed) == ["Plan Review"]
+      assert HumanReview.plan_review_state?(" plan review ", designed)
+      # The legacy review states are not this repo's plan review state.
+      refute HumanReview.plan_review_state?("In Review", designed)
+      refute HumanReview.plan_review_state?(@human_review, designed)
+    end
+
+    test "a renamed, turned-off or unreadable state falls back to the review states" do
+      designed = designed_settings!()
+      renamed = %{designed | tracker: %{designed.tracker | plan_review_state: "Plan Check"}}
+      assert HumanReview.plan_review_state(renamed) == "Plan Check"
+      assert HumanReview.plan_review_states(renamed) == ["Plan Check"]
+
+      off = %{designed | tracker: %{designed.tracker | plan_review_state: nil}}
+      assert HumanReview.plan_review_state(off) == nil
+      assert HumanReview.plan_review_states(off) == ["In Review", @human_review]
+
+      # Anything that is not a parsed settings struct reads as a legacy repo.
+      assert HumanReview.plan_review_state(nil) == nil
+      assert HumanReview.plan_review_states(%{}) == ["In Review"]
+    end
+
+    test "the settings-free predicates read the current settings, falling back when they can't" do
+      designed_settings!()
+
+      assert HumanReview.plan_review_state?("Plan Review")
+      refute HumanReview.plan_review_state?("In Review")
+      refute HumanReview.plan_review_state?(nil)
+      assert HumanReview.plan_review_states(nil) == ["In Review"]
+
+      File.write!(Workflow.symphony_file_path(), "issues: [")
+      Cache.clear()
+      assert HumanReview.plan_review_state?("In Review")
+      refute HumanReview.plan_review_state?("Plan Review")
+    end
+  end
+
   describe "requested_by_ticket?/2" do
     test "is true for an escalation label other than plan or breakdown, or a ticket pattern" do
       settings = Config.settings!()
@@ -312,4 +362,15 @@ defmodule SymphonyElixir.HumanReviewTest do
   end
 
   defp check(settings, teams), do: HumanReview.check_tracker_state(settings, teams, tracker: StateTracker)
+
+  # A repo on the designed machine, as the current (primary) repo, so `Config.settings!()` resolves
+  # it: its plans are reviewed in `Plan Review`.
+  defp designed_settings! do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
+    )
+
+    Config.settings!()
+  end
 end

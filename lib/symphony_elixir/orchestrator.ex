@@ -81,8 +81,6 @@ defmodule SymphonyElixir.Orchestrator do
   # The ledger signal recorded when a designed repo's Code Review ticket has no reviewer to run;
   # `SymphonyElixir.CodeReview` records the same name when it refuses to review.
   @code_review_reviewer_disabled_signal "code_review_reviewer_disabled"
-  # A breakdown parent goes back here for its run to revise the plan from people's comments.
-  @plan_revision_state "In Progress"
   @merging_terminal_grace_ms 300_000
   @snapshot_table :symphony_orchestrator_snapshot
   @snapshot_key :current
@@ -3199,8 +3197,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A person's new comment on a `breakdown` parent's plan (see `PlanComments`): a plan under review
-  # goes back to `In Progress`, where the breakdown run revises it, and an approved plan gets a reply.
-  # Parents waiting for review come from the watching refresh, approved ones from the candidates.
+  # goes back to be re-planned — `In Progress` on a legacy repo, `Rework` on a designed one, where
+  # the plan is revised in place — and an approved plan gets a reply. Parents waiting for review come
+  # from the watching refresh (which watches the review state, `Plan Review` included, like any
+  # non-active state), approved ones from the candidates.
   # `plan_comment_checks` keeps the newest comment each parent's poll showed once it was acted on,
   # so Linear is read again only when a newer comment shows up. `plan_comments_since` is when this
   # orchestrator started: comments on an approved plan from before it get no reply.
@@ -3247,14 +3247,23 @@ defmodule SymphonyElixir.Orchestrator do
   defp act_on_pending_plan_comments(_issue, _action, []), do: true
 
   defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
-    case TransitionGuard.perform(issue_id, :plan_revise, %{repo_key: issue_repo_key(issue)}) do
+    # The move is recorded before it is made, so a review reading the parent's history never sees it
+    # without the record that marks it as Symphony's own. On a designed repo the parent goes to
+    # `Rework` to be revised in place, and that record is what keeps `BreakdownReview` from reading
+    # the move as the person's rejection of the plan — which is what cancels its sub-issues.
+    _ = issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
+
+    ctx = %{repo_key: issue_repo_key(issue)}
+    to_state = TransitionGuard.target(:plan_revise, ctx)
+
+    case TransitionGuard.perform(issue_id, :plan_revise, ctx) do
       :ok ->
-        record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: @plan_revision_state})
-        Logger.info("Moved breakdown parent to #{@plan_revision_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
+        record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: to_state})
+        Logger.info("Moved breakdown parent to #{to_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
         true
 
       {:error, reason} ->
-        Logger.warning("Failed to move breakdown parent to #{@plan_revision_state} for its plan's comments: #{issue_context(issue)} reason=#{inspect(reason)}")
+        Logger.warning("Failed to move breakdown parent to #{to_state} for its plan's comments: #{issue_context(issue)} reason=#{inspect(reason)}")
         false
     end
   end

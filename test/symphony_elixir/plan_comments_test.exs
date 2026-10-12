@@ -13,6 +13,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
   end
 
   @waiting "Waiting on sub-tickets"
+  @human_review "Human Review"
   @terminal ["Done", "Canceled"]
 
   setup do
@@ -20,6 +21,16 @@ defmodule SymphonyElixir.PlanCommentsTest do
     SubIssueWait.reset_for_test(@waiting)
     on_exit(fn -> SubIssueWait.reset_for_test(@waiting) end)
     :ok
+  end
+
+  # A repo on the designed machine: its plans are reviewed in `Plan Review`.
+  defp designed_settings! do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
+    )
+
+    Config.settings!()
   end
 
   describe "action/3" do
@@ -44,6 +55,20 @@ defmodule SymphonyElixir.PlanCommentsTest do
       refute PlanComments.action(%{parent | labels: ["feature"]}, @terminal, settings)
       refute PlanComments.action(%{parent | state: nil}, @terminal, settings)
       refute PlanComments.action(nil, @terminal, settings)
+    end
+
+    test "a designed repo reviews its plans in Plan Review, so that is where a comment starts a revision" do
+      settings = designed_settings!()
+      backlog = [%{id: "c1", identifier: "MT-2", state: "Backlog"}]
+      parent = %Issue{id: "p", identifier: "MT-1", state: "Plan Review", labels: ["breakdown"], sub_issues: backlog}
+
+      assert PlanComments.action(parent, @terminal, settings) == :revise
+      assert PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Todo"}]}, @terminal, settings) == :answer
+      assert PlanComments.action(%{parent | state: @waiting}, @terminal, settings) == :answer
+
+      # `In Review` and the human review state are not this repo's plan review state.
+      refute PlanComments.action(%{parent | state: "In Review"}, @terminal, settings)
+      refute PlanComments.action(%{parent | state: @human_review}, @terminal, settings)
     end
   end
 
