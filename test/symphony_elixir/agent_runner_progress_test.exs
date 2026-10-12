@@ -118,7 +118,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 1
     assert_received {:pr_head_fetched, @pr_url}
     assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
-    assert_signal("handoff", %{to: "Auto Review", reason: "after rework"})
+    assert_signal("handoff", %{to: "Auto Review", reason: "after rework", head: "sha-rework"})
   end
 
   test "with Auto Review off a finished Rework run moves to In Review" do
@@ -148,7 +148,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-      assert_signal("handoff", %{to: "Code Review", reason: "after rework"})
+      assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework"})
     end
 
     test "a signal for another head does not advance this run" do
@@ -156,6 +156,27 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
         run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+      end
+
+      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    end
+
+    test "an earlier run's own move record does not advance a later head" do
+      # First cycle: a real handoff signal advances the ticket to Code Review, and the run records
+      # its own move in the ledger.
+      assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+
+      # Second cycle: a later Rework run pushes a new head to the PR and emits no signal of its own.
+      # The earlier run's move record is bound to the earlier head, so it must not stand in for this
+      # run's signal.
+      Application.delete_env(:symphony_elixir, :progress_agent_turns)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-new", checks: []}})
+
+      assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
+        run_issue!("Rework", heads: ["sha-rework", "sha-new"], repos: designed_repos())
       end
 
       refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
@@ -376,7 +397,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
       refute log =~ "Parking"
-      assert_signal("handoff", %{to: "Auto Review", reason: "with CI running on its pushed head"})
+      assert_signal("handoff", %{to: "Auto Review", reason: "with CI running on its pushed head", head: "sha-fixed"})
     end
 
     test "finds its PR past the first page of attachments, so CI running on the head it pushed moves it to Auto Review" do
@@ -585,7 +606,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert log =~
                "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a CI fix run with no new commit; moving to Auto Review"
 
-      assert_signal("handoff", %{to: "Auto Review", reason: "with CI green on its PR head"})
+      assert_signal("handoff", %{to: "Auto Review", reason: "with CI green on its PR head", head: "sha-same"})
     end
 
     test "waits while CI on its head runs, then goes back to Merging once it is green" do

@@ -1753,7 +1753,15 @@ defmodule SymphonyElixir.AgentRunner do
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
         :ok ->
-          record_move_signal(issue, "handoff", %{to: post_pr_state, reason: reason}, run_context.opts)
+          # Bound to the head it moved, so this record of a completed move never stands in for the
+          # explicit signal a later run's own head must still emit (`Handoff.emitted?/3`).
+          record_move_signal(
+            issue,
+            "handoff",
+            %{to: post_pr_state, reason: reason, head: run_context.progress.head},
+            run_context.opts
+          )
+
           :ok
 
         error ->
