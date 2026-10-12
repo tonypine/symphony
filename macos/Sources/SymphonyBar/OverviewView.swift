@@ -11,6 +11,8 @@ struct OverviewActions {
     var openInbox: () -> Void = {}
     /// Return or a double-click on a ticket row opens its page (D3).
     var openTicket: (String) -> Void = { _ in }
+    /// The other tiles open Tickets filtered to their stage (D6).
+    var openTickets: (TicketList.Filter) -> Void = { _ in }
 }
 
 /// The Overview in a scroll view, laid out for the width it gets.
@@ -173,14 +175,18 @@ private struct FlowStrip: View {
                                 .foregroundStyle(.tertiary)
                                 .accessibilityHidden(true)
                         }
-                        if stage.kind == .waitingOnYou {
-                            // The tile is a button that opens the Inbox (J2 step 5), with a focus ring.
+                        // Each tile is a button with a focus ring (J2 step 5): Waiting on you opens the Inbox, the
+                        // others open Tickets filtered to their stage.
+                        if let filter = TicketList.Filter(stage: stage.kind) {
+                            Button { actions.openTickets(filter) } label: { StatTile(stage: stage) }
+                                .buttonStyle(.plain)
+                                .help("Show \(filter.title) in Tickets")
+                                .accessibilityAddTraits(.isButton)
+                        } else {
                             Button(action: actions.openInbox) { StatTile(stage: stage) }
                                 .buttonStyle(.plain)
                                 .help("Open the Inbox")
                                 .accessibilityAddTraits(.isButton)
-                        } else {
-                            StatTile(stage: stage)
                         }
                     }
                 }

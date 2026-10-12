@@ -1,7 +1,7 @@
 # Symphony menu bar app
 
 Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Open
-Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a ticket…,
+Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a Ticket…,
 Check for Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs, Open Web
 Dashboard) and Quit. Open Symphony opens the [Symphony window](#the-symphony-window).
 
@@ -126,13 +126,15 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Restart Symphony** checks `symphony.yml`, waits for agent runs to finish, then stops and starts Symphony
   and resumes dispatch. See [Restart](#restart). While it waits, **Restart Now Anyway** (after the restart
   timeout) and **Cancel Restart** also show.
-- **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
-  continue. The pause is kept across restarts.
+- **Pause Dispatch…** opens the Symphony window's Pause Dispatch sheet, with an optional reason. A pause holds
+  new dispatch: Symphony picks up no new issues, but agent runs already under way continue. The pause is kept
+  across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
 - **Acceptance gate: Enforce (repo)** (one row per repo whose acceptance gate runs, in Shadow or Enforce) is
   the gate's kill switch: its submenu switches that repo to **Shadow** or **Off** at once. See
   [Settings](#settings).
-- **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
+- **Force a Ticket…** opens the Symphony window's Force a Ticket sheet (also ⇧⌘F in the window), which finds
+  the ticket as you type its identifier and shows its title and state, and forces that ticket past the dispatch limits, like
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
 - **Open Symphony** (⌘O) opens the [Symphony window](#the-symphony-window), or brings it to the front.
@@ -407,7 +409,7 @@ The state root is found as Symphony finds it:
 
 ## Forced tickets
 
-Force a ticket… asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
+Force a Ticket… opens a sheet that asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
 with `{"identifier":"TP-123"}`, like `symphony force TP-123`. Symphony adds its force label
 (`agent.concurrency.force_label`, `expedite` by default) to the ticket, which then skips the slot limits but
 still waits for its blockers, a pause, usage limits and its reviews. It is offered while Symphony answers,
@@ -1054,7 +1056,9 @@ Four more variables, read only in QA mode:
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
-  `paused` and `idle`, and of the Inbox: `inbox` (one item of each kind) and `inbox-empty`. Ages in them count from the payload's `generated_at`, so they read the same
+  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind) and
+  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one and a
+  conflict), and of the dispatch control's limit hold: `holding` (a Claude 5-hour limit). Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash
@@ -1068,9 +1072,11 @@ Four more variables, read only in QA mode:
   It keeps `status.json` current: its pid, version, build and bundle path, the pid of the Symphony it runs,
   every visible menu item (submenu items right after the item they open from) with whether it is enabled,
   the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
-  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt, such as Force a
-  ticket…, is answered with the rest of the command file (`Force a ticket…` on the first line, `TP-123` on
-  the second), and cancelled when there is none.
+  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt is answered with
+  the rest of the command file and cancelled when there is none. Pause Dispatch… and Force a Ticket…, which
+  open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the first line
+  and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that reason, and
+  without one pauses with the menu's.
 
 The [end-to-end test](Tests/e2e/README.md) uses all of this to test Update, Restart and rollback without
 touching the installed app.

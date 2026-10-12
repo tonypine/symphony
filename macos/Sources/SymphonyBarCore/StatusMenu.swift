@@ -359,10 +359,17 @@ public enum StatusMenu {
     public static let stopTitle = "Stop Symphony"
     public static let stoppingTitle = "Stopping Symphony…"
 
-    /// Title of the menu item that pauses dispatch. A pause only holds new dispatch, so the title says
-    /// active runs carry on.
-    public static let pauseTitle = "Pause Dispatch (active runs continue)"
+    /// Title of the menu item that opens the Pause Dispatch sheet, which says active runs carry on.
+    public static let pauseTitle = DispatchControl.pauseTitle
     public static let pausingTitle = "Pausing Dispatch…"
+
+    /// Whether `action` pauses dispatch, with or without a reason.
+    public static func isPause(_ action: ControlAction) -> Bool {
+        switch action {
+        case .pause, .pauseWithReason: true
+        default: false
+        }
+    }
 
     /// Title of the menu item that resumes dispatch.
     public static let resumeTitle = "Resume Dispatch"
@@ -383,18 +390,9 @@ public enum StatusMenu {
     /// Heading of the forced tickets, shown only while there are some.
     public static let forcedTitle = "Forced"
 
-    /// Title of the menu item that asks for a ticket to force, and its title while the request is under way.
-    public static let forceTitle = "Force a ticket…"
+    /// Title of the menu item that opens the Force a Ticket sheet, and its title while the request is under way.
+    public static let forceTitle = DispatchControl.forceTitle
     public static func forcingTitle(_ identifier: String) -> String { "Forcing \(identifier)…" }
-
-    /// Text of the prompt Force a ticket… shows, and its buttons.
-    public static let forcePromptTitle = "Force a ticket"
-    public static let forcePromptMessage = """
-        Enter a Linear identifier, for example TP-123. Symphony adds its force label, so the ticket skips the \
-        dispatch limits. It still waits for its blockers, a pause and usage limits, and its reviews still apply.
-        """
-    public static let forcePromptButton = "Force"
-    public static let forcePromptPlaceholder = "TP-123"
 
     /// Force is offered while Symphony answers, whether or not dispatch is paused: a forced ticket waits out a pause.
     public static func canForce(_ status: SymphonyStatus) -> Bool {

@@ -84,9 +84,9 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testSidebarListsOnlyBuiltViewsInTheDesignsOrder() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.views, [.inbox, .overview, .repos, .diagnostics])
+        XCTAssertEqual(sidebar.views, [.inbox, .overview, .tickets, .repos, .diagnostics])
         XCTAssertEqual(sidebar.sections.map(\.section), [.main, .factory])
-        XCTAssertEqual(sidebar.sections.first?.views, [.inbox, .overview])
+        XCTAssertEqual(sidebar.sections.first?.views, [.inbox, .overview, .tickets])
         XCTAssertEqual(sidebar.sections.last?.views, [.repos, .diagnostics])
         XCTAssertEqual(SidebarSection.factory.title, "Factory")
     }
@@ -102,11 +102,12 @@ final class SymphonyWindowTests: XCTestCase {
         let sidebar = Sidebar()
         XCTAssertEqual(sidebar.shortcut(for: .inbox), 1)
         XCTAssertEqual(sidebar.shortcut(for: .overview), 2)
-        XCTAssertEqual(sidebar.shortcut(for: .repos), 3)
-        XCTAssertEqual(sidebar.shortcut(for: .diagnostics), 4)
-        XCTAssertNil(sidebar.shortcut(for: .tickets))
-        XCTAssertEqual(sidebar.view(forShortcut: 4), .diagnostics)
-        XCTAssertNil(sidebar.view(forShortcut: 5))
+        XCTAssertEqual(sidebar.shortcut(for: .tickets), 3)
+        XCTAssertEqual(sidebar.shortcut(for: .repos), 4)
+        XCTAssertEqual(sidebar.shortcut(for: .diagnostics), 5)
+        XCTAssertNil(sidebar.shortcut(for: .usage))
+        XCTAssertEqual(sidebar.view(forShortcut: 5), .diagnostics)
+        XCTAssertNil(sidebar.view(forShortcut: 6))
         XCTAssertNil(sidebar.view(forShortcut: 0))
 
         let all = Sidebar(built: SymphonyView.allCases)
@@ -121,7 +122,8 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(sidebar.restoredView(saved: "overview"), .overview)
         // The first time, the window opens on the Inbox: decisions first.
         XCTAssertEqual(sidebar.restoredView(saved: nil), .inbox)
-        XCTAssertEqual(sidebar.restoredView(saved: "tickets"), .inbox)
+        XCTAssertEqual(sidebar.restoredView(saved: "tickets"), .tickets)
+        XCTAssertEqual(sidebar.restoredView(saved: "usage"), .inbox)
         XCTAssertEqual(sidebar.restoredView(saved: "repos"), .inbox)
         XCTAssertEqual(Sidebar(built: [.overview, .diagnostics]).restoredView(saved: "nonsense"), .overview)
     }

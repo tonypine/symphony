@@ -176,6 +176,9 @@ struct TicketPageActions {
     var copyAPIURL: () -> Void = {}
     var showAuditRecords: () -> Void = {}
     var revealWorktree: (String) -> Void = { _ in }
+    /// The ⋯ menu's Force… (the Force a Ticket sheet) and Stop Forcing.
+    var force: () -> Void = {}
+    var stopForcing: () -> Void = {}
 }
 
 /// D3 for the window: the page with its Stop Run sheet, or a placeholder while it reads.
@@ -193,7 +196,9 @@ struct TicketPageContent: View {
                     stopRun: { model.openStopRun(page.identifier, origin: .ticketPage) },
                     copyAPIURL: { model.copyAPIURL(page) },
                     showAuditRecords: { model.showAuditRecords(page) },
-                    revealWorktree: model.revealWorktree
+                    revealWorktree: model.revealWorktree,
+                    force: { model.openForceSheet(page.identifier) },
+                    stopForcing: { model.stopForcing(page.identifier) }
                 )
             )
         } else {
@@ -365,6 +370,12 @@ private struct TicketActions: View {
                 Button(TicketPage.showAuditRecordsTitle, action: actions.showAuditRecords)
                 Button(TicketPage.revealWorktreeTitle) { page.workspacePath.map(actions.revealWorktree) }
                     .disabled(page.workspacePath == nil)
+                Divider()
+                if page.isForced {
+                    Button(TicketList.stopForcingTitle, action: actions.stopForcing)
+                } else {
+                    Button(TicketList.forceTitle, action: actions.force)
+                }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }

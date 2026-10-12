@@ -157,6 +157,8 @@ public struct TicketPage: Equatable {
     public var isRunning: Bool
     /// Whether Symphony tracks the ticket now, so its transcript endpoint answers.
     public var isTracked: Bool
+    /// Whether the ticket is forced past the dispatch limits, so its ⋯ menu offers Stop Forcing instead of Force.
+    public var isForced: Bool { badges.contains { $0.status == .forced } }
 
     /// The line under the header: "Working", "Waiting on a retry at 14:32", "Done, merged 13:40".
     public var phaseSentence: String {

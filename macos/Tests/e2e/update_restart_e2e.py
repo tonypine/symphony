@@ -51,7 +51,7 @@ BUILD_N = int(os.environ.get("SYMPHONY_E2E_BUILD_N", "90001"))
 BUILD_N1 = BUILD_N + 1
 STUB_SECONDS = int(os.environ.get("SYMPHONY_E2E_STUB_SECONDS", "15"))
 ISSUE = "E2E-1"
-PAUSE_TITLE = "Pause Dispatch (active runs continue)"
+PAUSE_TITLE = "Pause Dispatch…"
 
 
 class Failure(Exception):

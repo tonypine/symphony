@@ -3,6 +3,8 @@ import Foundation
 /// An operator control the app sends to Symphony's `POST /api/v1/control/*`.
 public enum ControlAction: Equatable {
     case pause
+    /// Pause Dispatch from the window's sheet, with the reason typed there; the menu's reason when none was.
+    case pauseWithReason(String)
     case resume
     /// Adds the force label to the ticket, so it skips the dispatch limits.
     case force(String)
@@ -44,7 +46,7 @@ public enum ControlAction: Equatable {
 
     var path: String {
         switch self {
-        case .pause:
+        case .pause, .pauseWithReason:
             return "api/v1/control/pause"
         case .resume:
             return "api/v1/control/resume"
@@ -83,7 +85,7 @@ public enum ControlAction: Equatable {
              let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .resume, .force, .stopForcing, .stop:
+        case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop:
             return nil
         }
     }
@@ -92,6 +94,8 @@ public enum ControlAction: Equatable {
         switch self {
         case .pause:
             return ["reason": Self.pauseReason]
+        case let .pauseWithReason(reason):
+            return ["reason": reason.isEmpty ? Self.pauseReason : reason]
         case .resume:
             return [:]
         case let .force(identifier):
@@ -123,7 +127,7 @@ public enum ControlAction: Equatable {
     /// Start of error messages, for example "Couldn't pause Symphony" or "Couldn't force TP-123".
     var failurePrefix: String {
         switch self {
-        case .pause:
+        case .pause, .pauseWithReason:
             return "Couldn't pause Symphony"
         case .resume:
             return "Couldn't resume Symphony"

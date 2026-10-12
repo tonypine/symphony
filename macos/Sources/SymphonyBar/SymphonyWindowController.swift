@@ -74,6 +74,18 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.showInbox(selecting: id, opening: move)
     }
 
+    /// Opens the window with the Pause Dispatch sheet: nothing pauses until its button is pressed.
+    func showPauseSheet() {
+        show()
+        model?.openPauseSheet()
+    }
+
+    /// Opens the window with the Force a Ticket sheet.
+    func showForceSheet() {
+        show()
+        model?.openForceSheet()
+    }
+
     /// Opens the window, or brings it to the front.
     func show() {
         if window == nil {
@@ -164,6 +176,18 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         forward.target = self
         menu.addItem(forward)
         menu.addItem(.separator())
+        let find = NSMenuItem(title: "Search Tickets", action: #selector(searchTickets(_:)), keyEquivalent: "f")
+        find.target = self
+        menu.addItem(find)
+        let inspector = NSMenuItem(title: "Show Inspector", action: #selector(toggleInspector(_:)), keyEquivalent: "i")
+        inspector.keyEquivalentModifierMask = [.command, .option]
+        inspector.target = self
+        menu.addItem(inspector)
+        let force = NSMenuItem(title: DispatchControl.forceTitle, action: #selector(forceTicket(_:)), keyEquivalent: "F")
+        force.keyEquivalentModifierMask = [.command, .shift]
+        force.target = self
+        menu.addItem(force)
+        menu.addItem(.separator())
         let refresh = NSMenuItem(title: "Refresh", action: #selector(refresh(_:)), keyEquivalent: "r")
         refresh.target = self
         menu.addItem(refresh)
@@ -179,6 +203,18 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         client.refresh()
     }
 
+    @objc private func searchTickets(_ sender: Any?) {
+        model?.searchTickets()
+    }
+
+    @objc private func toggleInspector(_ sender: Any?) {
+        model?.toggleInspector()
+    }
+
+    @objc private func forceTicket(_ sender: Any?) {
+        model?.openForceSheet()
+    }
+
     @objc private func goBack(_ sender: Any?) {
         model?.goBack()
     }
@@ -192,6 +228,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         switch menuItem.action {
         case #selector(goBack(_:)): return model?.history.canGoBack ?? false
         case #selector(goForward(_:)): return model?.history.canGoForward ?? false
+        case #selector(toggleInspector(_:)):
+            menuItem.title = model?.inspectorShown == true ? "Hide Inspector" : "Show Inspector"
+            return model?.selection == .tickets && model?.shownTicket == nil
+        case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
         default: return true
         }
     }
