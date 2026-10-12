@@ -586,7 +586,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   # conflicts with its base while the ticket sits there is polled and routed into the CI Fix lane
   # (`SymphonyElixir.CiFix`); without them a conflicting PR in those phases has no detection path.
   # Their review activity is not this poller's to act on — each phase's own machinery decides its
-  # verdicts and review comments — so `maybe_limit_designed_phase_action/3` keeps those records on
+  # verdicts and review comments — so `limited_to_conflicts?/3` keeps those records on
   # `:watching`, and only a conflict, a merged PR or a closed one is acted on.
   defp watched_states(settings) do
     review_states = HumanReview.review_states(settings)
@@ -802,12 +802,10 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp act_on_review(action, record, attrs, activity, settings, opts, now) do
-    case maybe_limit_designed_phase_action(action, record, opts) do
-      :watching ->
-        complete_review_update(opts, record, attrs, {:watching, Map.get(record, :issue_id)})
-
-      action ->
-        do_act_on_review(action, record, attrs, activity, settings, opts, now)
+    if limited_to_conflicts?(action, record, opts) do
+      complete_review_update(opts, record, attrs, {:watching, Map.get(record, :issue_id)})
+    else
+      do_act_on_review(action, record, attrs, activity, settings, opts, now)
     end
   end
 
@@ -816,13 +814,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   # closed one is acted on. Treating the rest as `:watching` also keeps the record — and the conflict
   # detection it carries — from being aged out as stale. Legacy repos and review-state tickets are
   # untouched.
-  defp maybe_limit_designed_phase_action(action, record, opts) do
-    if designed_phase_issue?(record, opts) and action not in [:conflict, :merged, :closed] do
-      :watching
-    else
-      action
-    end
-  end
+  defp limited_to_conflicts?(action, record, opts),
+    do: designed_phase_issue?(record, opts) and action not in [:conflict, :merged, :closed]
 
   defp designed_phase_issue?(record, opts) do
     MapSet.member?(Keyword.get(opts, :designed_phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
