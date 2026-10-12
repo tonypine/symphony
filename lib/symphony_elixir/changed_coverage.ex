@@ -6,7 +6,8 @@ defmodule SymphonyElixir.ChangedCoverage do
   Finds the files changed since the merge-base with the base branch (committed, uncommitted and
   untracked), the modules compiled from the changed `lib/` files, and the test files for them: the
   changed test files, `test/<path>_test.exs` for `lib/<path>.ex`, and every test file that names
-  the module. It runs those tests once with `--cover` and fails when a changed module, outside
+  the module. A test file the branch deletes may have been the only coverage of a module the branch
+  doesn't touch, so every app module the deleted file named at the merge-base is checked too. It runs those tests once with `--cover` and fails when a changed module, outside
   `mix.exs`'s `test_coverage` `ignore_modules`, has a line they don't run.
 
   `mix cover.changed` runs it. The git, test and `:cover` calls go through `deps`, so tests can
@@ -37,8 +38,17 @@ defmodule SymphonyElixir.ChangedCoverage do
     base = Keyword.get(opts, :base, "origin/main")
     ignores = Keyword.get(opts, :ignore_modules, [])
 
-    with {:ok, files} <- changed_files(base, deps.git) do
-      {ignored, checked} = files |> changed_modules(deps.modules.()) |> Enum.split_with(&ignored?(elem(&1, 0), ignores))
+    with {:ok, files} <- changed_files(base, deps.git),
+         {:ok, deleted} <- deleted_tests(base, deps.git) do
+      app_modules = deps.modules.()
+      changed = changed_modules(files, app_modules)
+      named = named_modules(deleted, app_modules, changed)
+
+      Enum.each(named, fn {{module, _file}, test} -> deps.info.("checking #{inspect(module)}: named by deleted #{test}") end)
+
+      {ignored, checked} =
+        (changed ++ Enum.map(named, &elem(&1, 0))) |> Enum.sort_by(fn {module, file} -> {file, inspect(module)} end) |> Enum.split_with(&ignored?(elem(&1, 0), ignores))
+
       Enum.each(ignored, fn {module, _file} -> deps.info.("skipped #{inspect(module)}: in mix.exs test_coverage ignore_modules") end)
       check(checked, files, Keyword.get(opts, :extra_tests, []), deps)
     end
@@ -76,6 +86,42 @@ defmodule SymphonyElixir.ChangedCoverage do
          {:ok, untracked} <- git_step(git, ["ls-files", "--others", "--exclude-standard"], "list untracked files") do
       {:ok, (lines(tracked) ++ lines(untracked)) |> Enum.uniq() |> Enum.sort()}
     end
+  end
+
+  @doc """
+  The test files (`test/**/*_test.exs`) deleted since `base` forked, committed or not, each with its
+  source at the merge-base, sorted by path.
+  """
+  @spec deleted_tests(String.t(), git_runner()) :: {:ok, [{Path.t(), String.t()}]} | {:error, String.t()}
+  def deleted_tests(base, git) do
+    with {:ok, merge_base} <- git_step(git, ["merge-base", "HEAD", base], "find the merge-base with #{base}; fetch it first"),
+         merge_base = String.trim(merge_base),
+         {:ok, deleted} <- git_step(git, ["diff", "--name-only", "--diff-filter=D", merge_base], "list deleted files") do
+      deleted
+      |> lines()
+      |> Enum.filter(&(String.starts_with?(&1, "test/") and String.ends_with?(&1, "_test.exs")))
+      |> Enum.sort()
+      |> read_deleted(merge_base, git, [])
+    end
+  end
+
+  defp read_deleted([], _merge_base, _git, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp read_deleted([path | rest], merge_base, git, acc) do
+    with {:ok, source} <- git_step(git, ["show", "#{merge_base}:#{path}"], "read deleted #{path}") do
+      read_deleted(rest, merge_base, git, [{path, source} | acc])
+    end
+  end
+
+  # The app modules outside `changed` that a deleted test names, each with the first test naming it.
+  defp named_modules(deleted, app_modules, changed) do
+    changed_set = MapSet.new(changed, &elem(&1, 0))
+
+    for {module, source} <- app_modules,
+        not MapSet.member?(changed_set, module),
+        {test, _test_source} <- [Enum.find(deleted, {nil, nil}, fn {_test, test_source} -> names?(test_source, inspect(module)) end)],
+        test != nil,
+        do: {{module, Path.relative_to_cwd(source)}, test}
   end
 
   defp git_step(git, args, action) do
