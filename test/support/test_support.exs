@@ -37,6 +37,7 @@ defmodule SymphonyElixir.TestSupport do
           stop_default_orchestrator: 0,
           stop_default_http_server: 0,
           stop_process: 1,
+          stop_orchestrator_agent_tasks: 0,
           stop_verification_port_pool: 0,
           clear_run_store!: 0,
           unix_socket_bind_probe: 0,
@@ -479,6 +480,42 @@ defmodule SymphonyElixir.TestSupport do
     end
   catch
     :exit, _reason -> :ok
+  end
+
+  # Agent tasks run under the shared TaskSupervisor and outlive the orchestrator that dispatched
+  # them. Stop them before a test removes their workspaces, or one goes on to spawn a command there
+  # and the port prints `spawn: Could not cd to ...`.
+  def stop_orchestrator_agent_tasks do
+    case Process.whereis(SymphonyElixir.TaskSupervisor) do
+      nil ->
+        :ok
+
+      _pid ->
+        SymphonyElixir.TaskSupervisor
+        |> Task.Supervisor.children()
+        |> Enum.filter(&orchestrator_task?/1)
+        |> Enum.each(&await_or_stop_task/1)
+    end
+  end
+
+  # Killing a task in the middle of `System.cmd` breaks the port's pipe, so let it finish first.
+  defp await_or_stop_task(pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      5_000 ->
+        Process.demonitor(ref, [:flush])
+        stop_process(pid)
+    end
+  end
+
+  defp orchestrator_task?(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} -> match?({SymphonyElixir.Orchestrator, _fun, _arity}, Keyword.get(dictionary, :"$initial_call"))
+      nil -> false
+    end
   end
 
   def stop_process(pid) when is_pid(pid) do
