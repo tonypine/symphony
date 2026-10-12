@@ -11,6 +11,11 @@ defmodule SymphonyElixir.TransitionGuard do
   `{:error, reason}` tuples as before, so the existing `refused_agent_action` audit path is
   unchanged.
 
+  One state write sits outside this module by design: sub-issue creation's initial state. The
+  Linear tool's `issueCreate` sets the state a brand-new issue starts in, which is not a move of an
+  existing issue — there is no from-state to guard — so `subissue_input/5` builds it directly. The
+  Linear tool's state-scanning test keeps it the only such site.
+
   `edges/0` is the legal-edge table: one row per named signal, naming the origin states the signal
   may fire from and the target state it moves to. It is initialised in parity with the machine as
   it behaves today — the same targets, the same refusals, the same redirects — so this module

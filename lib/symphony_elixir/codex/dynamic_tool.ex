@@ -2057,6 +2057,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:code_review_requires_handoff_signal, state_name}) do
+    %{
+      "error" => %{
+        "code" => "code_review_requires_handoff_signal",
+        "message" =>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Entering #{inspect(state_name)} is the " <>
+            "handoff signal's job: push the branch or open the pull request, and Symphony moves the issue there; do not name the state."
+      }
+    }
+  end
+
   defp tool_error_payload({:pull_request_not_open, state}) do
     %{
       "error" => %{

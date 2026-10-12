@@ -1,0 +1,340 @@
+{
+  "events": [
+    {
+      "event": "session_started",
+      "payload": {
+        "session_id": "session-SHOP-305"
+      },
+      "session_id": "session-SHOP-305",
+      "timestamp": "2026-10-07T13:58:05Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "id": "msg_1",
+            "text": "Run 1 timed out in CheckoutTotalTest. I'll read the rounding code and the test before running anything.",
+            "type": "agentMessage"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:58:20Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "command": "rg -n \"round\" lib/shop/checkout",
+            "id": "call_1",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:58:31Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "aggregatedOutput": "lib/shop/checkout/total.ex:41:    |> Decimal.round(2, :half_even)\nlib/shop/checkout/total.ex:58:    round_line(line)",
+            "exitCode": 0,
+            "id": "call_1",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:58:32Z"
+    },
+    {
+      "event": "turn_completed",
+      "payload": {
+        "method": "turn/completed",
+        "params": {
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:58:40Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "id": "msg_2",
+            "text": "The total rounds each line and then the sum, so two half-cent lines can drift by a cent.",
+            "type": "agentMessage"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:59:02Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "command": "sed -n 30,80p lib/shop/checkout/total.ex",
+            "id": "call_2",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:59:10Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "aggregatedOutput": "  def total(lines) do\n    lines\n    |> Enum.map(&round_line/1)\n    |> Enum.reduce(Decimal.new(0), &Decimal.add/2)\n  end",
+            "exitCode": 0,
+            "id": "call_2",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:59:10Z"
+    },
+    {
+      "event": "turn_completed",
+      "payload": {
+        "method": "turn/completed",
+        "params": {
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200
+          }
+        }
+      },
+      "timestamp": "2026-10-07T13:59:30Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/fileChange/requestApproval",
+        "params": {
+          "item": {
+            "changes": [
+              {
+                "path": "lib/shop/checkout/total.ex"
+              }
+            ],
+            "id": "call_3",
+            "type": "fileChange"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:00:12Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "aggregatedOutput": "Updated lib/shop/checkout/total.ex",
+            "id": "call_3",
+            "type": "fileChange"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:00:13Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "id": "msg_3",
+            "text": "Rounding now happens once, on the sum.",
+            "type": "agentMessage"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:00:20Z"
+    },
+    {
+      "event": "turn_completed",
+      "payload": {
+        "method": "turn/completed",
+        "params": {
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:00:30Z"
+    },
+    {
+      "event": "tool_call_failed",
+      "message": "linear_graphql: Linear rate-limited the request; retrying in 30 s",
+      "payload": {
+        "method": "item/tool/call",
+        "params": {
+          "arguments": {
+            "query": "comment on SHOP-305"
+          },
+          "tool": "linear_graphql"
+        }
+      },
+      "timestamp": "2026-10-07T14:01:05Z"
+    },
+    {
+      "event": "turn_completed",
+      "payload": {
+        "method": "turn/completed",
+        "params": {
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:01:40Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "command": "mix test test/checkout/total_test.exs:12",
+            "id": "call_5",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:02:00Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "aggregatedOutput": "1 test, 0 failures",
+            "exitCode": 0,
+            "id": "call_5",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:02:09Z"
+    },
+    {
+      "event": "turn_completed",
+      "payload": {
+        "method": "turn/completed",
+        "params": {
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:02:20Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "id": "msg_6",
+            "text": "The single test passes. Running the whole checkout suite, which hung in run 1.",
+            "type": "agentMessage"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:05:10Z"
+    },
+    {
+      "event": "turn_completed",
+      "payload": {
+        "method": "turn/completed",
+        "params": {
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:05:20Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "id": "msg_7",
+            "text": "Running the checkout tests again.",
+            "type": "agentMessage"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:05:40Z"
+    },
+    {
+      "event": "notification",
+      "payload": {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "command": "mix test test/checkout/total_test.exs",
+            "id": "call_7",
+            "type": "commandExecution"
+          }
+        }
+      },
+      "timestamp": "2026-10-07T14:06:00Z"
+    }
+  ],
+  "executor_tokens": {
+    "cache_creation_input_tokens": 0,
+    "cached_input_tokens": 1214000,
+    "input_tokens": 1215200,
+    "output_tokens": 24800,
+    "total_tokens": 1240000,
+    "uncached_input_tokens": 1200
+  },
+  "issue_id": "i-305",
+  "issue_identifier": "SHOP-305",
+  "last_event_at": "2026-10-07T14:06:00Z",
+  "repo_key": "web-shop",
+  "review_agent_enabled": false,
+  "reviewer_tokens": {
+    "cache_creation_input_tokens": 0,
+    "cached_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0,
+    "uncached_input_tokens": 0
+  },
+  "session_id": "session-SHOP-305",
+  "started_at": "2026-10-07T13:58:00Z",
+  "state": "In Progress",
+  "tokens": {
+    "cache_creation_input_tokens": 0,
+    "cached_input_tokens": 1214000,
+    "input_tokens": 1215200,
+    "output_tokens": 24800,
+    "total_tokens": 1240000,
+    "uncached_input_tokens": 1200
+  },
+  "turn_count": 7
+}

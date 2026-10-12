@@ -32,6 +32,7 @@ defmodule SymphonyElixirWeb.Presenter do
     pr_opened
     prompt_sent
     refused_agent_action
+    run_stopped
     token_usage_delta
     tool_call
   )
