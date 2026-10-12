@@ -5,10 +5,11 @@ defmodule SymphonyElixir.AgentProcessesTest do
 
   alias SymphonyElixir.AgentProcesses
 
-  # A fake agent that ignores stdin EOF and SIGHUP, with a child in its group.
-  @eof_ignoring_agent "trap '' HUP; sleep 600 & echo ready; while :; do sleep 1; done"
+  # A fake agent that ignores stdin EOF and SIGHUP, with a child in its group. It ends by
+  # itself after about two minutes, so one leaked by a crashed test VM doesn't run for good.
+  @eof_ignoring_agent "trap '' HUP; sleep 120 & echo ready; i=0; while [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done"
   # The same, also ignoring SIGTERM, so only SIGKILL stops it.
-  @term_ignoring_agent "trap '' HUP TERM; sleep 600 & echo ready; while :; do sleep 1; done"
+  @term_ignoring_agent "trap '' HUP TERM; sleep 120 & echo ready; i=0; while [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done"
 
   test "the application supervises it with a shutdown longer than the grace period" do
     assert is_pid(Process.whereis(AgentProcesses))
@@ -47,13 +48,14 @@ defmodule SymphonyElixir.AgentProcessesTest do
 
     owner =
       spawn(fn ->
-        port = open_agent(@eof_ignoring_agent)
+        port = start_agent(@eof_ignoring_agent)
         :ok = AgentProcesses.track(port, server: server)
         send(test_pid, {:os_pid, os_pid(port)})
         Process.sleep(:infinity)
       end)
 
     assert_receive {:os_pid, os_pid}
+    on_exit(fn -> kill_group(os_pid) end)
     sync(server)
     assert group_alive?(os_pid)
 
@@ -316,8 +318,21 @@ defmodule SymphonyElixir.AgentProcessesTest do
   # Casts are asynchronous; a call makes sure the server has handled them.
   defp sync(server), do: :sys.get_state(server)
 
-  # Waits for the agent's "ready", so its traps are set before any signal.
+  # Starts the agent and kills its group when the test ends, even when an assertion failed.
   defp open_agent(script) do
+    port = start_agent(script)
+
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} -> on_exit(fn -> kill_group(os_pid) end)
+      nil -> :ok
+    end
+
+    port
+  end
+
+  # Waits for the agent's "ready", so its traps are set before any signal. Call it from a
+  # process other than the test's, which `on_exit/1` refuses, and register the cleanup there.
+  defp start_agent(script) do
     port =
       Port.open({:spawn_executable, String.to_charlist(System.find_executable("sh"))}, [
         :binary,
