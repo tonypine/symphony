@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Inbox.Item do
   - `:plan`: a plan parent (label `plan` or `breakdown`) whose plan waits for approval, with its
     sub-tickets in landing order;
   - `:pr`: any other ticket in `In Review` or `Human Review`, a pull request to review, with its
-    PR, CI result, Auto Review QA verdict, acceptance gate verdict and change size;
+    PR, CI result and QA verdict;
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
     round and what the gate found;
   - `:blocked`: a ticket an access hold pauses in place (`SymphonyElixir.Hold`), with the reason the
@@ -60,8 +60,7 @@ defmodule SymphonyElixir.Inbox.Item do
   @doc """
   The item of an issue node read from Linear (the fields of `SymphonyElixir.Inbox`'s detail query),
   or nil when nothing about it waits on a person. `lookups` reads what Symphony knows locally:
-  `:ci` (`(issue_id, repo_key) -> conclusion | nil`), `:gate` (`(repo_key, issue_id) -> run | nil`)
-  and `:hold` (`(repo_key, issue_id) -> hold | nil`).
+  `:ci` (`(issue_id, repo_key) -> conclusion | nil`) and `:hold` (`(repo_key, issue_id) -> hold | nil`).
   """
   @spec from_node(map(), String.t() | nil, Schema.t(), map()) :: t() | nil
   def from_node(node, repo_key, settings, lookups) do
@@ -179,15 +178,10 @@ defmodule SymphonyElixir.Inbox.Item do
   end
 
   defp pull_request(node, repo_key, lookups) do
-    url = pull_request_url(node)
-    gate = lookups.gate.(repo_key, node["id"])
-
     %{
-      url: url,
+      url: pull_request_url(node),
       ci: ci_result(lookups.ci.(node["id"], repo_key)),
-      qa: qa(node),
-      gate: gate && %{verdict: gate[:verdict], mode: gate[:mode], agent_verdict: gate[:agent_verdict]},
-      change: gate && gate[:change]
+      qa: qa(node)
     }
   end
 
@@ -200,12 +194,12 @@ defmodule SymphonyElixir.Inbox.Item do
   end
 
   @doc """
-  True for a pull request whose checks are green: CI passed, and neither Auto Review QA nor the
-  acceptance gate says otherwise. Its notification offers Approve and Merge.
+  True for a pull request whose checks are green: CI passed, and QA does not say otherwise. Its
+  notification offers Approve and Merge.
   """
   @spec checks_green?(t()) :: boolean()
   def checks_green?(%{kind: :pr, review: %{pull_request: %{ci: "passed"} = pull_request}}) do
-    get_in(pull_request, [:qa, :verdict]) not in ["fail", "blocked"] and get_in(pull_request, [:gate, :verdict]) != "rework"
+    get_in(pull_request, [:qa, :verdict]) not in ["fail", "blocked"]
   end
 
   def checks_green?(_item), do: false

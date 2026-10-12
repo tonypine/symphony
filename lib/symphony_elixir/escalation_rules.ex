@@ -1,7 +1,10 @@
-defmodule SymphonyElixir.AcceptanceGate.Escalation do
+defmodule SymphonyElixir.EscalationRules do
   @moduledoc """
-  The acceptance gate's escalation rules: checks, without an agent, whether a PR must go to a
-  human whatever the gate agent would say.
+  The escalation rules Code Review applies (`SymphonyElixir.CodeReview`), checked without an agent.
+  They are the retired acceptance gate's deterministic rules, migrated per the design
+  (`docs/design/state-machine.md`, "Escalation rules route or deepen — they never queue"): the
+  person rules (`person_rules/0`) need a person and pause the ticket on a Needs Decision hold, and
+  the risk rules (`risk_rules/0`) deepen the Code Review run with a second reviewer pass.
 
   `check/5` returns one reason per rule that triggers, in this order, or `[]`:
 
@@ -12,12 +15,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     * `:dependency` - `mix.lock` or `package.json` adds a dependency or bumps a major version
       (`escalate.dependencies: major`), changes any dependency (`any`), or can't be parsed;
     * `:size` - more than `escalate.max_changed_lines` lines change outside docs and tests;
-    * `:busy_file` - more than `escalate.busy_files.max_lines` lines change in one busy file;
-    * `:settings_ui` - Symphony's own config schema gains a line declaring a setting (`field(`,
-      `embeds_one(`, `embeds_many(` or a `~w(` key list) and the macOS app's settings manifest
-      doesn't change. A new `symphony.yml` setting needs a control in the app; an exemption needs
-      a person anyway (see `SymphonyElixir.SettingsUICoverage`). Other repositories don't have
-      these files, so the rule never triggers there.
+    * `:busy_file` - more than `escalate.busy_files.max_lines` lines change in one busy file.
 
   Before `:ticket_pattern` matches, each name in the `:review_states` option (`In Review` and
   `issues.states.human_review`, e.g. `Human Review`) is blanked wherever the text names the
@@ -33,13 +31,14 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   a major bump whenever it changes.
   """
 
-  alias SymphonyElixir.AcceptanceGate.Settings.Escalate
+  alias SymphonyElixir.Config.Escalate
   alias SymphonyElixir.DependencyAudit.{MixParser, NpmParser}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
-  alias SymphonyElixir.SettingsUICoverage
 
   @manifests ["mix.lock", "package.json"]
+  @person_rules [:label, :ticket_pattern]
+  @risk_rules [:path, :diff_pattern, :dependency, :size, :busy_file]
 
   @typedoc """
   A file the PR changes. `added_lines` are the diff's added lines, without the leading `+`.
@@ -57,19 +56,26 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   @type diff_summary :: %{files: [changed_file()]}
 
-  @type rule :: :label | :ticket_pattern | :path | :diff_pattern | :dependency | :size | :busy_file | :settings_ui
+  @type rule :: :label | :ticket_pattern | :path | :diff_pattern | :dependency | :size | :busy_file
 
   @type reason :: %{rule: rule(), detail: String.t()}
+
+  @doc "The rules that need a person: a match pauses the ticket on a Needs Decision hold."
+  @spec person_rules() :: [rule()]
+  def person_rules, do: @person_rules
+
+  @doc "The risk rules: a match deepens the Code Review run instead of routing anywhere."
+  @spec risk_rules() :: [rule()]
+  def risk_rules, do: @risk_rules
 
   @doc "Whether `path` is a dependency manifest the `:dependency` rule reads (`mix.lock`, `package.json`)."
   @spec manifest?(String.t()) :: boolean()
   def manifest?(path) when is_binary(path), do: Path.basename(path) in @manifests
 
   @doc """
-  The reasons `issue` and its PR's diff must go to a human, one per triggered rule. `busy_files`
-  are the paths changed most often on the default branch lately; `rules` is the effective
-  `auto_review.acceptance_gate.escalate` block. Options: `:review_states`, the state names the
-  `:ticket_pattern` rule skips.
+  The reasons `issue` and its PR's diff escalate, one per triggered rule. `busy_files` are the
+  paths changed most often on the default branch lately; `rules` is the repo's effective `escalate`
+  block. Options: `:review_states`, the state names the `:ticket_pattern` rule skips.
   """
   @spec check(Issue.t(), diff_summary(), [String.t()], Escalate.t(), keyword()) :: [reason()]
   def check(%Issue{} = issue, %{files: files}, busy_files, %Escalate{} = rules, opts \\ []) when is_list(files) and is_list(busy_files) do
@@ -80,15 +86,14 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
       {:diff_pattern, diff_pattern_detail(files, rules.diff_patterns)},
       {:dependency, dependency_detail(files, rules.dependencies)},
       {:size, size_detail(files, rules.max_changed_lines)},
-      {:busy_file, busy_file_detail(files, busy_files, rules.busy_files.max_lines)},
-      {:settings_ui, settings_ui_detail(files)}
+      {:busy_file, busy_file_detail(files, busy_files, rules.busy_files.max_lines)}
     ]
     |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
   end
 
   @doc """
-  The reasons the ticket alone (its labels, title and description) must go to a human: the
+  The reasons the ticket alone (its labels, title and description) needs a person: the
   `:label` and `:ticket_pattern` rules of `check/5`, which need no diff. Options as `check/5`.
   """
   @spec ticket_reasons(Issue.t(), Escalate.t(), keyword()) :: [reason()]
@@ -231,26 +236,6 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     files
     |> Enum.filter(&(MapSet.member?(busy, &1.path) and changed_lines(&1) > limit))
     |> join_or_nil(&"#{&1.path} is a busy file and #{changed_lines(&1)} of its lines change (limit #{limit})")
-  end
-
-  defp settings_ui_detail(files) do
-    manifest = SettingsUICoverage.manifest_path()
-
-    if Enum.any?(files, &(&1.path == manifest)) do
-      nil
-    else
-      files
-      |> Enum.filter(&(&1.path in SettingsUICoverage.schema_paths()))
-      |> Enum.flat_map(&setting_lines/1)
-      |> join_or_nil(&"#{&1.path} declares a setting without a change to #{manifest}: #{excerpt(&1.line)}")
-    end
-  end
-
-  defp setting_lines(file) do
-    case Enum.find(Map.get(file, :added_lines, []), &Regex.match?(~r/^\s*(field|embeds_one|embeds_many)\(|~w\(/, &1)) do
-      nil -> []
-      line -> [%{path: file.path, line: line}]
-    end
   end
 
   defp changed_lines(%{additions: additions, deletions: deletions}), do: additions + deletions

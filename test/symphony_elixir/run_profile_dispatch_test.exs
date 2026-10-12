@@ -13,14 +13,6 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
     end
   end
 
-  defmodule FakeParentWalkthrough do
-    def run(issue, workspace, opts) do
-      recipient = Application.fetch_env!(:symphony_elixir, :parent_walkthrough_recipient)
-      send(recipient, {:parent_walkthrough, issue, workspace, opts})
-      Application.fetch_env!(:symphony_elixir, :parent_walkthrough_result)
-    end
-  end
-
   defmodule FakeEpicReview do
     def run(issue, workspace, opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :epic_review_recipient)
@@ -307,35 +299,6 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       assert String.ends_with?(second, "--print --model claude-opus-5-5 --effort medium")
     end
 
-    test "a final verification ticket the parent walkthrough handles starts no agent", ctx do
-      write_profile_workflow!(ctx)
-      workspace = Path.join([ctx.test_root, "workspaces", "MT-FV"])
-      File.mkdir_p!(workspace)
-      run_issue = issue("issue-fv", "MT-FV", %{state: "In Progress", title: "Final verification: Parent"})
-      Application.put_env(:symphony_elixir, :parent_walkthrough_recipient, self())
-      Application.put_env(:symphony_elixir, :parent_walkthrough_result, :ok)
-
-      on_exit(fn ->
-        Application.delete_env(:symphony_elixir, :parent_walkthrough_recipient)
-        Application.delete_env(:symphony_elixir, :parent_walkthrough_result)
-      end)
-
-      assert :ok =
-               AgentRunner.run(run_issue, self(),
-                 workspace_path: workspace,
-                 parent_walkthrough: FakeParentWalkthrough,
-                 issue_enricher: fn issue -> {:ok, issue} end
-               )
-
-      assert_received {:parent_walkthrough, %Issue{identifier: "MT-FV"}, ^workspace, opts}
-      assert opts[:worker_host] == nil
-      assert %Config.Schema{} = opts[:settings]
-      on_message = Keyword.fetch!(opts, :on_message)
-      on_message.(%{event: :notification})
-      assert_received {:codex_worker_update, "issue-fv", %{event: :notification}}
-      assert argv_lines(ctx.argv_trace) == []
-    end
-
     test "a QA ticket the QA verification handles starts no agent", ctx do
       write_profile_workflow!(ctx)
       workspace = Path.join([ctx.test_root, "workspaces", "MT-QA"])
@@ -365,7 +328,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       assert argv_lines(ctx.argv_trace) == []
     end
 
-    test "a designed epic parent the epic review handles starts no agent, and no walkthrough", ctx do
+    test "a designed epic parent the epic review handles starts no agent", ctx do
       write_profile_workflow!(ctx, state_machine: "designed")
       workspace = Path.join([ctx.test_root, "workspaces", "MT-EPIC"])
       File.mkdir_p!(workspace)
@@ -401,39 +364,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       on_message = Keyword.fetch!(opts, :on_message)
       on_message.(%{event: :notification})
       assert_received {:codex_worker_update, "issue-epic", %{event: :notification}}
-      # The designed epic never reaches the legacy parent walkthrough or an executor turn.
-      refute_received {:parent_walkthrough, _issue, _workspace, _opts}
-      assert argv_lines(ctx.argv_trace) == []
-    end
-
-    test "a legacy Final verification ticket still skips the epic review for the parent walkthrough", ctx do
-      write_profile_workflow!(ctx)
-      workspace = Path.join([ctx.test_root, "workspaces", "MT-FV-EPIC"])
-      File.mkdir_p!(workspace)
-      run_issue = issue("issue-fv-epic", "MT-FV-EPIC", %{state: "In Progress", title: "Final verification: Parent"})
-
-      Application.put_env(:symphony_elixir, :epic_review_recipient, self())
-      Application.put_env(:symphony_elixir, :epic_review_result, :skip)
-      Application.put_env(:symphony_elixir, :parent_walkthrough_recipient, self())
-      Application.put_env(:symphony_elixir, :parent_walkthrough_result, :ok)
-
-      on_exit(fn ->
-        Application.delete_env(:symphony_elixir, :epic_review_recipient)
-        Application.delete_env(:symphony_elixir, :epic_review_result)
-        Application.delete_env(:symphony_elixir, :parent_walkthrough_recipient)
-        Application.delete_env(:symphony_elixir, :parent_walkthrough_result)
-      end)
-
-      assert :ok =
-               AgentRunner.run(run_issue, self(),
-                 workspace_path: workspace,
-                 epic_review: FakeEpicReview,
-                 parent_walkthrough: FakeParentWalkthrough,
-                 issue_enricher: fn issue -> {:ok, issue} end
-               )
-
-      assert_received {:epic_review, %Issue{identifier: "MT-FV-EPIC"}, ^workspace, _opts}
-      assert_received {:parent_walkthrough, %Issue{identifier: "MT-FV-EPIC"}, ^workspace, _opts}
+      # The designed epic never reaches an executor turn.
       assert argv_lines(ctx.argv_trace) == []
     end
 

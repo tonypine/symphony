@@ -198,10 +198,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              message_queue_len: queue_len,
              snapshot_age_ms: age_ms,
              snapshot_build_ms: build_ms,
-             snapshot_parts_ms: %{run_history: run_history_ms, qa: qa_ms, auto_merge: auto_merge_ms}
+             snapshot_parts_ms: %{run_history: run_history_ms, auto_merge: auto_merge_ms} = parts
            } = Orchestrator.diagnostics(pid)
 
-    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, qa_ms, auto_merge_ms], &(is_integer(&1) and &1 >= 0))
+    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, auto_merge_ms], &(is_integer(&1) and &1 >= 0))
+    refute Map.has_key?(parts, :qa)
 
     assert %{orchestrator: %{snapshot_build_ms: api_build_ms}} =
              SymphonyElixirWeb.Presenter.state_payload(orchestrator_name, 1_000)
@@ -222,7 +223,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert log =~ ~r/Orchestrator slow handle_info duration_ms=\d+ message=:publish_snapshot/
     assert log =~ ~r/Orchestrator slow handle_call duration_ms=\d+ message=:pause_status/
-    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ qa_ms=\d+ run_history_ms=\d+/
+    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ run_history_ms=\d+/
   end
 
   test "a retry's Linear read runs outside the orchestrator, which answers and publishes snapshots while it is in flight" do
@@ -6781,11 +6782,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     send(worker_pid, :finish)
   end
 
-  test "review-agent blocked exit comments, moves to configured escalation state, and does not schedule retry" do
+  test "review-agent blocked exit comments, moves to In Review whatever the retired escalation state says, and does not schedule retry" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_api_token: nil,
-      ci: %{escalation_state: "Needs Human"}
+      ci: %{escalation_state: "In Review"}
     )
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -6843,16 +6844,16 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "reviewer agent returned a verified blocking verdict"
     assert body =~ "Reason: Unsafe to continue."
     assert body =~ "Breaks the retry contract. (lib/example.ex:10-12)"
-    assert body =~ "Target human-review state: Needs Human."
+    assert body =~ "Target human-review state: In Review."
 
-    assert_received {:memory_tracker_state_update, "issue-review-agent-blocked", "Needs Human"}
+    assert_received {:memory_tracker_state_update, "issue-review-agent-blocked", "In Review"}
 
-    assert [%{name: "blocked", details: %{to: "Needs Human"}}] =
+    assert [%{name: "blocked", details: %{to: "In Review"}}] =
              RunStore.get_ticket_state(Config.repo_key!(), issue.id).signals
 
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
-    assert %{state: "Needs Human"} = completed_state.watching[issue.id]
+    assert %{state: "In Review"} = completed_state.watching[issue.id]
 
     send(worker_pid, :finish)
   end
@@ -6909,7 +6910,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_api_token: nil,
-      ci: %{escalation_state: "Needs Human"}
+      ci: %{escalation_state: "In Review"}
     )
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -6955,14 +6956,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "kind=dynamic_tool name=\"github_get_pull_request\" args_hash=abc123"
     assert body =~ "Consecutive failures: 5"
     assert body =~ "Configured threshold: 5"
-    assert body =~ "Target human-review state: Needs Human."
+    assert body =~ "Target human-review state: In Review."
 
-    assert_receive {:memory_tracker_state_update, "issue-tool-failure-breaker", "Needs Human"}, 1_000
+    assert_receive {:memory_tracker_state_update, "issue-tool-failure-breaker", "In Review"}, 1_000
 
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
-    assert %{state: "Needs Human"} = completed_state.watching[issue.id]
+    assert %{state: "In Review"} = completed_state.watching[issue.id]
 
     send(worker_pid, :finish)
   end

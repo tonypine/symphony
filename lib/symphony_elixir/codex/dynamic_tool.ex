@@ -61,7 +61,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open; a ticket with no PR whose run left a `## Supervisor check` block may still move to In Review, for the supervisor to run the check. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. A retired state (Auto Review) is refused. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -284,7 +284,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "status" => %{
             "type" => "string",
             "maxLength" => 300,
-            "description" => "One line: where the ticket stands and what waits on whom, e.g. `PR open, waiting on Auto Review`."
+            "description" => "One line: where the ticket stands and what waits on whom, e.g. `PR open, waiting on Code Review`."
           },
           "links" => %{
             "type" => "object",
@@ -1329,7 +1329,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "tool_scope_rejected",
-        "message" => "#{tool} drives an Android app on Symphony's emulator for Auto Review QA and is only available to the QA agent.",
+        "message" => "#{tool} drives an Android app on Symphony's emulator for QA and is only available to the QA agent.",
         "tool" => tool
       }
     }
@@ -1339,7 +1339,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "tool_scope_rejected",
-        "message" => "#{tool} drives a macOS app for Auto Review QA and is only available to the QA agent.",
+        "message" => "#{tool} drives a macOS app for QA and is only available to the QA agent.",
         "tool" => tool
       }
     }
@@ -2035,13 +2035,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:in_review_set_by_auto_review, state_name, auto_review_state}) do
+  defp tool_error_payload({:retired_state, state_name}) do
     %{
       "error" => %{
-        "code" => "in_review_set_by_auto_review",
+        "code" => "retired_state",
         "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. " <>
-            "Symphony moves the issue to #{auto_review_state} once the PR is open; leave the state as it is."
+          "linear_update_state cannot move the issue to #{inspect(state_name)}: that state is retired. " <>
+            "A PR hands off to Code Review when it is pushed; leave the state as it is."
       }
     }
   end

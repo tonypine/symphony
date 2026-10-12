@@ -457,7 +457,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
-      prompt = reviewer_prompt(issue, source)
+      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push))
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
 
@@ -682,9 +682,10 @@ defmodule SymphonyElixir.ReviewAgent do
   defp agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
   defp agent_module(other), do: {:error, {:unsupported_review_agent_kind, other}}
 
-  # The pre-push reviewer covers code quality and bugs only. Acceptance criteria, ticket scope and
-  # overlap with other open PRs belong to the acceptance gate (`docs/acceptance_gate.md`).
-  defp reviewer_prompt(issue, source) do
+  # The pre-push reviewer covers code quality and bugs only. Code Review (`review_scope:
+  # :code_review`, `SymphonyElixir.CodeReview`) judges the same diff on the pull request, and there
+  # the ticket's acceptance criteria, scope and intent are part of the judgment.
+  defp reviewer_prompt(issue, source, scope) do
     """
     You are the reviewer agent in an executor + reviewer Symphony run.
 
@@ -701,7 +702,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - Error handling: errors are handled or returned, not swallowed, and failures leave no half-done state.
     - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
 
-    Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff does not touch: the acceptance gate checks that after CI and QA.
+    #{ticket_judgment(scope)}
 
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}
@@ -728,6 +729,16 @@ defmodule SymphonyElixir.ReviewAgent do
       "reason": "<required for block>"
     }
     """
+  end
+
+  defp ticket_judgment(:code_review) do
+    "This is the pull request's Code Review, so also judge the change against the ticket: check that the diff meets each of the ticket's acceptance criteria " <>
+      "and stays within its scope and intent. Request changes for an unmet criterion or for work outside the ticket, naming the criterion or the out-of-scope change."
+  end
+
+  defp ticket_judgment(_pre_push) do
+    "Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff " <>
+      "does not touch: Code Review checks that on the pull request."
   end
 
   defp present_issue(%Issue{} = issue) do

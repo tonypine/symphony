@@ -188,10 +188,9 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
   - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `In Review`).
 - `In Progress` -> implementation actively underway.
 - `Waiting on sub-tickets` -> a plan ticket (label `plan`, or `breakdown`, its older name) whose plan a human approved, waiting on its sub-tickets; do nothing. Symphony promotes its `Backlog` sub-tickets to `Todo` on entry, and starts the parent's close-out run from here once every sub-ticket is terminal (see `Parent tickets`). Any other ticket lands here when its PR merges with a sub-ticket still open outside `Backlog`: Symphony moves it to `Done` itself, with no run, once every sub-ticket outside `Backlog` is terminal; do nothing. Its `Backlog` sub-tickets stay there for a person to promote. One a person moved here without its PR merging waits for them.
-- `Auto Review` -> Symphony is testing the PR as a user and, with the acceptance gate on, judging it against the ticket's acceptance criteria; do not change the issue or PR, wait.
-- `In Review` -> PR is attached and validated (or, for a plan ticket, its plan is handed over in the review brief), or all that is left is a `## Supervisor check` an agent can't run; waiting on the supervisor or a human. With the acceptance gate in `enforce` mode it holds only the gate's escalations, since the gate moves its approves to `Merging` and its reworks to `In Progress` itself; with the gate off or in `shadow`, every PR waits here. A person's comment on a plan under review brings the parent back to `In Progress` for a plan revision run (see `Parent tickets`).
-- `Human Review` -> waiting on the operator only, apart from the supervisor's `In Review` queue. It is the one way to say a person needs to act; no label says it. It holds an Auto Review QA block only a person can clear, an acceptance gate escalation only a person can clear (the ticket's own request for a person), a plan whose ticket says a human reviews it, or an open `linear_request_human_action` decision (the tool moves the ticket here). It never holds a check to run: a check an agent can't run goes to `In Review` as a `## Supervisor check`. Symphony never dispatches it, and the gate never approves it; do not change the issue or PR, wait. A person's move out of it counts like one out of `In Review` (to `Merging`, `Rework`, `Waiting on sub-tickets` or `Done`). A supervisor moves a ticket here when it needs the operator, and never approves out of it on their behalf.
-- `Merging` -> approved by a human, or by the acceptance gate in `enforce` mode; follow the repo's landing flow to merge (do not call `gh pr merge` directly). With the gate in `enforce` mode, a push that changes the PR's own diff (not a merge of the base branch) sends it back to `Auto Review`, where the gate judges the new head.
+- `In Review` -> PR is attached and validated (or, for a plan ticket, its plan is handed over in the review brief), or all that is left is a `## Supervisor check` an agent can't run; waiting on the supervisor or a human. A person's comment on a plan under review brings the parent back to `In Progress` for a plan revision run (see `Parent tickets`).
+- `Human Review` -> waiting on the operator only, apart from the supervisor's `In Review` queue. It is the one way to say a person needs to act; no label says it. It holds a plan whose ticket says a human reviews it, or an open `linear_request_human_action` decision (the tool moves the ticket here). It never holds a check to run: a check an agent can't run goes to `In Review` as a `## Supervisor check`. Symphony never dispatches it; do not change the issue or PR, wait. A person's move out of it counts like one out of `In Review` (to `Merging`, `Rework`, `Waiting on sub-tickets` or `Done`). A supervisor moves a ticket here when it needs the operator, and never approves out of it on their behalf.
+- `Merging` -> approved by a human; follow the repo's landing flow to merge (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
 - `Done` -> terminal state; no further action required.
 
@@ -206,7 +205,6 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop while any sub-ticket is open. Once every sub-ticket is terminal, run the close-out in `Parent tickets` below.
-   - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, stop and wait.
    - `In Review` -> wait and poll for decision/review updates.
    - `Human Review` -> waiting on the operator only; do not change the issue or PR, stop and wait.
    - `Merging` -> Symphony normally lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
@@ -315,9 +313,7 @@ steps.
   host crash check, a check on a device), hand it to the supervisor, never to a
   person and never to `Human Review`: leave a `## Supervisor check` block, in the
   review brief or in its own comment, then move the ticket to `In Review`. The
-  supervisor runs the check per its policy. With a PR open and Auto Review on,
-  leave the state to Symphony as usual; with no PR (the work is already on the
-  default branch), the move to `In Review` is allowed once the block is posted.
+  supervisor runs the check per its policy.
   Use this format:
 
   ```md
@@ -456,8 +452,8 @@ Which plan run this is:
    requirement from the parent ticket and the acceptance criteria of each sibling
    sub-ticket as a checklist, and says it should be promoted only after every
    other sub-ticket is `Done`. When the parent has a `## User walkthrough`, copy
-   its numbered steps and expected results under an
-   `## Auto Review: parent walkthrough` heading in this description.
+   its numbered steps and expected results under a
+   `## Parent walkthrough` heading in this description.
 4. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
    review brief (see `Review brief`): one brief for the whole plan, linking every
    artifact, listing every sub-ticket and every decision needed, with the moves that
@@ -540,13 +536,6 @@ sub-issue is terminal, outside `Rework`.
 3. Move the parent to `Done`.
 
 ### Final verification run (title starts with `Final verification:`)
-
-With Auto Review on, Symphony runs this ticket as the Auto Review parent walkthrough
-instead of starting an agent: a QA agent tests the default branch against the
-parent's acceptance criteria and walkthrough, the QA report goes on the parent, and
-each failing step is filed as a sub-ticket that blocks this one, which stays in `Todo`.
-The steps below apply when it does not
-(for example with Auto Review off, a `qa:skip` label, or no parent).
 
 1. Do not open a PR. Check each requirement in the description against the default
    branch (code, tests, docs, behaviour) and record a requirement-by-requirement
@@ -635,7 +624,6 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
     - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
 12. Only then move issue to `In Review`.
     - No blocked-access exception: blocked issues must follow the blocked-access escape hatch and move to `Backlog` with a blocker comment.
-    - If `linear_update_state` refuses `In Review` or `Human Review` because Auto Review is on, leave the state as it is and end the turn; Symphony moves the issue to `Auto Review` itself.
     - After the PR is attached and the issue is moved to `In Review`, end the turn. Do not continue ordinary implementation work unless Symphony injects reviewer, CI, or operator rework context.
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
@@ -647,10 +635,9 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
 1. When the issue is in `In Review`, do not code or change ticket content.
 2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
 3. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) are handled by Symphony: it moves the issue back to `In Progress` and re-activates you with the comments. Address them on the same PR and branch with the PR feedback sweep protocol, push, and return to `In Review`. Do not close the PR or reset the branch for review comments.
-4. If approved, a human moves the issue to `Merging`. With the acceptance gate in `enforce` mode, Symphony moves an approved PR from `Auto Review` to `Merging` itself, and sends a gate `rework` back as `In Progress` on the same PR (see `PR feedback and CI delivery`).
+4. If approved, a human moves the issue to `Merging`.
 5. When the issue is in `Merging`, Symphony turns on GitHub auto-merge for the PR, updates the branch when it falls behind the base branch, and moves the issue to `Done` once GitHub merges it; no agent runs. A merge conflict comes back as `In Progress` with the conflict context and auto-merge turned off, and a red head comes back as a CI-failure run with auto-merge turned off too (a flaky rerun of the same commit keeps it on).
-   - With the acceptance gate off or in `shadow` mode, your conflict resolution or CI fix goes back through review, and a fresh move to `Merging` turns auto-merge back on.
-   - With the acceptance gate in `enforce` mode, a push that changes the PR's own diff (`git patch-id --verbatim` of `git diff <merge-base(base, head)> head`) turns GitHub auto-merge off and moves the issue back to `Auto Review`, where CI, QA and the gate judge the new head; the gate's `approve` moves it back to `Merging` and turns auto-merge back on. Symphony's update-branch merge of the base, or a clean rebase, keeps the PR's diff, so it keeps the approval and auto-merge. A conflict fix or a CI fix comes back through `Auto Review` and the gate, and the gate's `approve`, not a fresh move by a person, returns it to `Merging`.
+   - Your conflict resolution or CI fix goes back through review, and a fresh move to `Merging` turns auto-merge back on.
 
    Only when auto-merge can't be used does Symphony dispatch you in `Merging` (with a comment on the issue saying why): then open and follow `.agents/skills/land/SKILL.md`, and run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
    - When checks are still pending, and your runtime allows `gh` (Claude sessions deny it), wait for them inside the turn with one foreground `gh pr checks <pr-number> --watch` call that finishes under the 10-minute tool limit; waiting in a tool call costs no tokens. If they are still pending after that, or you cannot run `gh`, end the turn. Do not rely on `ScheduleWakeup`, `sleep` loops, or other in-session timers; they do nothing in unattended runs. Symphony keeps the issue in `Merging`, holds it until CI on the PR head settles, and then resumes the landing agent so it can merge without a second approval.
@@ -672,7 +659,7 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
 The workpad is the agent's log, and the person reviewing never needs to read it. At
 every handoff to a person, leave one comment written for them, headed `## Review brief`.
 The handoffs are: a plan moved to `In Review` or `Human Review`, a PR moved to
-`In Review` (or left for Symphony to move to `Auto Review`), a `Final verification:`
+`In Review`, a `Final verification:`
 ticket moved to `In Review` or `Human Review`, a ticket moved to `In Review` with a
 `## Supervisor check` (put the block in the brief), and a `linear_request_human_action`
 decision.
@@ -815,7 +802,7 @@ remaining issues in the workpad `Notes` for a human to file.
 - A ticket's priority means how important it is, not its place in the queue. Symphony uses it only to order tickets waiting for a normal slot.
 - Never raise a ticket's priority (this ticket, a sub-ticket or a blocker) to get it picked sooner. Set a new sub-ticket's `priority` by importance only.
 - Jumping the queue is a person's call: they add the `expedite` label or run `symphony force <ticket>`. Do not add or remove that label yourself. A forced ticket skips the slot limits (`max_total`, per-state caps, epic lanes, `finishing_max`, the daily token budget) but still waits for the operator's Pause, the Linear rate-limit and usage-limit pauses, its blocked-by links and the per-issue token cap.
-- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, `In Review` -> `Merging`, approving a plan, `Rework` and signing off a `Final verification:` stay with a person, and the review-agent verdict and Auto Review QA still apply: follow the status map as usual.
+- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, `In Review` -> `Merging`, approving a plan, `Rework` and signing off a `Final verification:` stay with a person, and the review-agent verdict still applies: follow the status map as usual.
 
 ## Dependency-change guardrail
 

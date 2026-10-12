@@ -373,4 +373,42 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert %{title: "Add the release signing secrets"} = Collector.newest_request(answered, legacy_settings())
     end
   end
+
+  describe "pause/4" do
+    defmodule CommentTracker do
+      def create_comment(issue_id, body) do
+        send(self(), {:commented, issue_id, body})
+        Process.get(:pause_comment_result, :ok)
+      end
+
+      def set_machine_label(_issue_id, _name), do: :ok
+      def clear_machine_label(_issue_id, _name), do: :ok
+    end
+
+    test "posts the request, rendered to stay in the phase, and sets the hold with its confirmation" do
+      assert :ok = NeedsDecisionHold.pause(issue(%{state: "Code Review"}), request(), [tracker: CommentTracker], "QA")
+
+      assert_received {:commented, @issue_id, body}
+      assert body =~ "the ticket stays in Code Review until the decision is recorded"
+      assert MergeConfirmation.confirm_target(Hold.get(@repo_key, @issue_id, :needs_decision)) == "QA"
+    end
+
+    test "without a confirmation the ticket continues in place once decided" do
+      assert :ok = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
+
+      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      refute Map.has_key?(decision, :confirm)
+    end
+
+    test "a request that can't be posted sets no hold, and a hold that can't be set is reported" do
+      Process.put(:pause_comment_result, {:error, :rate_limited})
+      assert {:error, {:decision_request_failed, :rate_limited}} = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+
+      Process.delete(:pause_comment_result)
+
+      assert {:error, {:decision_hold_failed, :boom}} =
+               NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker, store: FailingStore, repo_key: @repo_key)
+    end
+  end
 end

@@ -502,6 +502,54 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
+  describe "usage_limit/1 and blocked_reason/1" do
+    test "usage_limit/1 reads the hold info of a usage limit or an unreachable model API" do
+      info = %{provider: "anthropic", scope: :all}
+
+      assert QaAgent.usage_limit({:qa_agent_failed, {:usage_limited, info}}) == info
+      assert QaAgent.usage_limit({:model_api_unreachable, info}) == info
+      assert QaAgent.usage_limit({:qa_agent_failed, :timeout}) == nil
+    end
+
+    test "blocked_reason/1 says what blocked QA, one line per error" do
+      reasons =
+        Enum.map(
+          [
+            {:qa_token_limit, 9, 5},
+            {:remote_worker_unsupported, "worker-1"},
+            {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
+            {:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, :tcp_bind_allowed}}},
+            {:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, "/tmp/serve.sock"}}},
+            {:qa_dev_server_failed, :eaddrinuse},
+            {:qa_host_tunnel_failed, "ssh exited with status 255"},
+            {:qa_browser_mcp_unavailable, :no_npx},
+            {:qa_browser_mcp_unavailable, "@playwright/mcp"},
+            {:qa_browser_mcp_invalid, "command is required"},
+            {:malformed_qa_response, :no_json},
+            {:changed_files_unlisted, {:git_failed, 128, "fatal: bad object"}},
+            {:git_failed, 128}
+          ],
+          &QaAgent.blocked_reason/1
+        )
+
+      assert [
+               "the QA agent reached the per-issue token limit (9 of 5 tokens)",
+               "QA does not run on remote workers yet (worker-1)",
+               "the dev server failed its health check" <> _,
+               "the dev server did not start: Seatbelt" <> _,
+               "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (/tmp/serve.sock)" <> _,
+               "the dev server did not start: :eaddrinuse",
+               "the tunnel that forwards QA_HOST_PORTS" <> _,
+               "`npx` (Node.js) is not on Symphony's PATH" <> _,
+               "`@playwright/mcp` is not installed on the Symphony host" <> _,
+               "`auto_review.playbooks.web.browser_mcp` is invalid: command is required",
+               "the QA agent's answer could not be read: :no_json",
+               "could not list the PR's changed files: " <> _,
+               "the QA agent could not finish: {:git_failed, 128}"
+             ] = reasons
+    end
+  end
+
   describe "parse_response/1" do
     test "reads pass, fail and blocked verdicts with steps" do
       assert {:ok, %{verdict: :pass, summary: "The CLI behaves as described.", steps: [step], findings: []}} =
@@ -574,34 +622,6 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ ~r/Do not leave\s+work running in the background/
 
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
-    end
-
-    test "a parent walkthrough tests the parent at the base branch head against the verification checklist" do
-      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
-      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "## User walkthrough\n1. Run it"})
-      prompt = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
-
-      assert prompt =~ "running the parent walkthrough"
-      assert prompt =~ "TP-910 asks for a final check"
-      assert prompt =~ "checked out at `#{@sha}`,\nthe head of `origin/main`"
-      assert prompt =~ "Identifier: TP-243"
-      assert prompt =~ "Verification checklist (TP-910, the parent's final verification sub-ticket)"
-      assert prompt =~ ~r/<linear_issue_body>\s*- \[ \] child criterion\s*<\/linear_issue_body>/
-      assert prompt =~ "so a follow-up ticket can fix it"
-      flat = String.replace(prompt, ~r/\s+/, " ")
-      assert flat =~ ~s(Every row of this checklist is a required step. Report each row as its own step with `"checklist": true`)
-      assert flat =~ ~s(Expand a row that groups several IDs \(such as "UC1 to UC8", or a range of sub-tickets\) into one step per ID, named after the ID)
-      assert flat =~ "is a gap: mark it `fail` and put the gap in `findings`"
-      assert flat =~ "Mark a row `skipped` only for a reason you state in `details`"
-      assert flat =~ "Symphony does not accept `pass` when no checklist row is reported or most of them are skipped"
-      assert prompt =~ ~s("evidence": ["<linear_attach_file URL or qa-evidence/ path>"],\n      "checklist": true | false\n    })
-      refute QaAgent.prompt(job(), nil) =~ ~s("checklist")
-      refute prompt =~ "The executor agent opened a PR"
-      refute prompt =~ "Parent issue (this is a sub-ticket"
-
-      untitled = issue(%{identifier: "TP-911", title: nil, description: nil})
-      assert QaAgent.prompt(job(%{issue: parent, verification_issue: untitled, base_ref: "origin/main"}), nil) =~ "Verification checklist (TP-911"
-      assert QaAgent.prompt(job(), nil) =~ "so the executor can fix it"
     end
 
     test "an epic review judges the epic itself at the base branch head against its own checklist" do
@@ -746,13 +766,12 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     test "QA prompts and built-in playbooks leave the test suite to CI" do
-      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
-      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
+      epic = issue(%{id: "issue-epic", identifier: "TP-243", title: "Epic", description: "- [ ] epic criterion"})
 
       pr_prompt = QaAgent.prompt(job(), nil)
       assert pr_prompt =~ ~r/Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI already\s+ran them green on this PR head/
 
-      walkthrough = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
+      walkthrough = QaAgent.prompt(job(%{issue: epic, epic_review: true, base_ref: "origin/main"}), nil)
       assert walkthrough =~ ~r/Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs\s+them on every merge to `origin\/main`/
       refute walkthrough =~ "covered by CI on"
       refute walkthrough =~ "ran them green on this PR head"
@@ -769,15 +788,14 @@ defmodule SymphonyElixir.QaAgentTest do
       end
     end
 
-    test "a parent walkthrough judges test, coverage and CI criteria by CI's run on the base branch head" do
-      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] make all is green"})
-      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] CI is green"})
-      walkthrough = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
+    test "an epic review judges test, coverage and CI criteria by CI's run on the base branch head" do
+      epic = issue(%{id: "issue-epic", identifier: "TP-243", title: "Epic", description: "- [ ] make all is green"})
+      walkthrough = QaAgent.prompt(job(%{issue: epic, epic_review: true, base_ref: "origin/main"}), nil)
 
       [_intro, rule] = String.split(walkthrough, "Do not run the test suite", parts: 2)
-      [rule, _rest] = String.split(rule, "Write every artifact", parts: 2)
+      [rule, _rest] = String.split(rule, "\nYou are verifying the epic itself", parts: 2)
 
-      assert "Do not run the test suite" <> rule == """
+      assert String.trim_trailing("Do not run the test suite" <> rule) <> "\n" == """
              Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs
              them on every merge to `origin/main`. Judge a criterion that asks for tests, coverage or CI to
              pass by CI's runs on `#{@sha}`, the commit you are on:
@@ -796,7 +814,6 @@ defmodule SymphonyElixir.QaAgentTest do
                there is one.
 
              Build only what you need to use the feature, and judge it by what a user sees.
-
              """
 
       refute QaAgent.prompt(job(), nil) =~ "actions/runs"
@@ -819,8 +836,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
       for path <- AgentSandboxConfig.workspace_protected_paths(), do: assert(prompt =~ "`#{path}`")
 
-      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
-      refute QaAgent.prompt(job(%{issue: ticket, verification_issue: verification, base_ref: "origin/main"}), nil) =~ "Agents cannot change these paths"
+      refute QaAgent.prompt(job(%{issue: ticket, epic_review: true, base_ref: "origin/main"}), nil) =~ "Agents cannot change these paths"
 
       handed_off = %{"name" => "Docs: WORKFLOW.md Step 3 describes the re-review", "status" => "skipped", "details" => "Protected path; handed off to TP-521."}
       docs = %{"name" => "Docs: docs/configuration.md describes the re-review", "status" => "pass", "details" => "git diff shows the paragraph"}
@@ -837,16 +853,6 @@ defmodule SymphonyElixir.QaAgentTest do
       assert QaAgent.failure_findings(failed) == [
                "Docs: docs/configuration.md describes the re-review: git diff --quiet origin/main HEAD -- docs/ shows no change"
              ]
-    end
-
-    test "a parent walkthrough does not look up the parent of the parent" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
-      linear_client = fn query, _variables, _opts -> flunk("unexpected Linear query: #{query}") end
-      walkthrough = job(%{issue: issue(%{identifier: "TP-243"}), verification_issue: issue(%{identifier: "TP-910"}), base_ref: "origin/main"})
-
-      assert {:ok, _result} = QaAgent.run(walkthrough, Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, linear_client: linear_client)
-      assert_receive {:qa_turn, _session, prompt, %Issue{identifier: "TP-243"}, _opts}
-      assert prompt =~ "Verification checklist (TP-910"
     end
 
     test "QA settings take the auto_review runtime, turns and timeout" do
@@ -1713,6 +1719,8 @@ defmodule SymphonyElixir.QaAgentTest do
       followed_up = Report.render(%{verdict: :fail, sha: @sha, target_state: "In Progress", findings: ["x"], follow_ups: 2})
       assert followed_up =~ "`0123456789ab` · verdict after 2 follow-ups"
 
+      assert Report.render(%{verdict: :pass, sha: @sha, target_state: "Merging", follow_ups: 1}) =~ "verdict after 1 follow-up"
+
       skip = Report.render(%{verdict: :skip, sha: nil, target_state: "In Review", reason: "docs only"})
       assert skip =~ "**Verdict:** skipped → In Review"
       assert skip =~ "Reason: docs only"
@@ -1805,15 +1813,6 @@ defmodule SymphonyElixir.QaAgentTest do
       assert :ok = Report.publish(issue(), "## Symphony QA Report\n")
       assert_receive {:memory_tracker_comment, "issue-qa", "## Symphony QA Report\n"}
       assert Report.heading() == "## Symphony QA Report"
-    end
-
-    test "withdrawing a report comment that is not on the ticket is fine" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
-
-      comments = [%{"id" => "w", "body" => "## Symphony Workpad"}, %{"id" => "n", "body" => nil}]
-      client = fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => comments}}}}} end
-
-      assert :ok = Report.withdraw(issue(), heading: "## Symphony QA Report", linear_client: client)
     end
   end
 end

@@ -12,7 +12,7 @@ defmodule SymphonyElixir.RunKindTest do
     issue(Keyword.merge([labels: ["Breakdown"]], attrs))
   end
 
-  test "lists every kind, including the reserved reviewer, QA and acceptance gate kinds" do
+  test "lists every kind, including the reserved pre-push reviewer and QA kinds" do
     assert RunKind.kinds() == [
              :implementation,
              :breakdown,
@@ -25,8 +25,7 @@ defmodule SymphonyElixir.RunKindTest do
              :ci_fix,
              :review_feedback,
              :pre_push_review,
-             :qa,
-             :acceptance_gate
+             :qa
            ]
 
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
@@ -37,8 +36,8 @@ defmodule SymphonyElixir.RunKindTest do
 
     named = Enum.map_join(RunKind.reserved_kinds(), " and ", &"`#{&1}`")
 
-    assert RunKind.reserved_kinds() == [:pre_push_review, :acceptance_gate]
-    assert doc =~ "#{named} are never returned by `classify/2`"
+    assert RunKind.reserved_kinds() == [:pre_push_review]
+    assert doc =~ "#{named} is never returned by `classify/2`"
   end
 
   test "classify/2 can return every kind except the reserved ones" do

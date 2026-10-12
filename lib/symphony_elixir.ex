@@ -81,7 +81,6 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Repo.Fetcher,
-          SymphonyElixir.AcceptanceGate.OpenPrCache,
           SymphonyElixir.McpServer,
           {Registry, keys: :unique, name: SymphonyElixir.Repo.Registry},
           repo_supervisor_specs(system_config.repos),
@@ -100,7 +99,6 @@ defmodule SymphonyElixir.Application do
            [
              SymphonyElixir.Orchestrator,
              pr_review_child_spec(system_config),
-             qa_runner_child_spec(system_config),
              SymphonyElixir.QaAndroid.Emulator,
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
@@ -197,13 +195,6 @@ defmodule SymphonyElixir.Application do
   defp human_actions_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &SymphonyElixir.HumanActions.enabled?(Config.settings_for_repo!(&1.name))) do
       SymphonyElixir.HumanActions
-    end
-  end
-
-  # The acceptance gate runs after QA, so its runner starts with the QA runner.
-  defp qa_runner_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &(ci_enabled_for_repo?(&1) and Config.settings_for_repo!(&1.name).auto_review.enabled)) do
-      [SymphonyElixir.QaRunner, SymphonyElixir.AcceptanceGate.Runner]
     end
   end
 

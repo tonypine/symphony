@@ -13,7 +13,7 @@ defmodule SymphonyElixir.Inbox do
      their comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
   3. each becomes an `SymphonyElixir.Inbox.Item`, with what Symphony knows locally about its PR
-     (the CI poller's last conclusion, the acceptance gate's latest verdict) and, for a ticket no
+     (the CI poller's last conclusion) and, for a ticket no
      review covers, the access hold its store record carries.
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
@@ -33,7 +33,6 @@ defmodule SymphonyElixir.Inbox do
 
   require Logger
 
-  alias SymphonyElixir.AcceptanceGate.Agreement
   alias SymphonyElixir.{CiPoller, Config, Hold, HumanReview, NeedsDecisionHold}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
@@ -313,7 +312,6 @@ defmodule SymphonyElixir.Inbox do
   defp lookups(state) do
     %{
       ci: Keyword.get(state.opts, :ci, &ci_conclusion/2),
-      gate: Keyword.get(state.opts, :gate, &Agreement.latest/2),
       hold: Keyword.get(state.opts, :hold, &Hold.get(&1, &2, :blocked))
     }
   end

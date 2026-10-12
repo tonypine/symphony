@@ -104,8 +104,7 @@ defmodule SymphonyElixir.InboxTest do
             settings_fun: fn _repo -> %Schema{} end,
             scope_filter: fn _repo -> {:ok, %{"team" => %{"key" => %{"eq" => "SHOP"}}}} end,
             linear_client: linear_client,
-            ci: fn _issue_id, _repo_key -> nil end,
-            gate: fn _repo_key, _issue_id -> nil end
+            ci: fn _issue_id, _repo_key -> nil end
           ],
           opts
         ),
@@ -114,16 +113,15 @@ defmodule SymphonyElixir.InboxTest do
     }
   end
 
-  defp lookups(ci \\ nil, gate \\ nil, hold \\ nil) do
+  defp lookups(ci \\ nil, hold \\ nil) do
     %{
       ci: fn _issue_id, _repo_key -> ci end,
-      gate: fn _repo_key, _issue_id -> gate end,
       hold: fn _repo_key, _issue_id -> hold end
     }
   end
 
   describe "items from Linear" do
-    test "a PR with its brief, PR, CI, QA result, gate verdict and change size" do
+    test "a PR with its brief, PR, CI and QA result" do
       pr =
         issue_node("SHOP-7", %{
           "attachments" => %{"nodes" => [%{"url" => "https://example.com/doc"}, %{"url" => "https://github.com/acme/shop/pull/7"}]},
@@ -134,8 +132,6 @@ defmodule SymphonyElixir.InboxTest do
             ]
           }
         })
-
-      gate = %{verdict: "escalate", mode: "shadow", agent_verdict: "approve", change: %{files: 3, additions: 120, deletions: 4, largest: []}}
 
       assert %{
                issue_id: "id-SHOP-7",
@@ -152,17 +148,17 @@ defmodule SymphonyElixir.InboxTest do
                  pull_request: %{
                    url: "https://github.com/acme/shop/pull/7",
                    ci: "passed",
-                   qa: %{verdict: "pass", report_url: "https://linear.app/acme/issue/SHOP-7#comment-4f0a2b1c"},
-                   gate: %{verdict: "escalate", mode: "shadow", agent_verdict: "approve"},
-                   change: %{files: 3, additions: 120, deletions: 4}
+                   qa: %{verdict: "pass", report_url: "https://linear.app/acme/issue/SHOP-7#comment-4f0a2b1c"}
                  }
                }
-             } = Item.from_node(pr, "shop", %Schema{}, lookups("SUCCESS", gate))
+             } = Item.from_node(pr, "shop", %Schema{}, lookups("SUCCESS"))
     end
 
-    test "a PR without a brief, a PR link, CI, QA or a gate verdict" do
-      assert %{ask: "Review the pull request", review: %{brief: nil, pull_request: %{url: nil, ci: nil, qa: nil, gate: nil, change: nil}}} =
+    test "a PR without a brief, a PR link, CI or QA" do
+      assert %{ask: "Review the pull request", review: %{brief: nil, pull_request: %{url: nil, ci: nil, qa: nil} = pull_request}} =
                Item.from_node(issue_node("SHOP-8"), "shop", %Schema{}, lookups())
+
+      refute Map.has_key?(pull_request, :gate)
     end
 
     test "a plan with its sub-tickets in landing order, and a final verification" do
@@ -237,14 +233,13 @@ defmodule SymphonyElixir.InboxTest do
              } = Item.from_node(held, "shop", %Schema{}, lookups())
     end
 
-    test "a pull request's checks are green when CI passed and neither QA nor the gate objects" do
-      green = %{kind: :pr, review: %{pull_request: %{ci: "passed", qa: %{verdict: "pass"}, gate: %{verdict: "approve"}}}}
+    test "a pull request's checks are green when CI passed and QA does not object" do
+      green = %{kind: :pr, review: %{pull_request: %{ci: "passed", qa: %{verdict: "pass"}}}}
       assert Item.checks_green?(green)
-      assert Item.checks_green?(%{green | review: %{pull_request: %{ci: "passed", qa: nil, gate: nil}}})
+      assert Item.checks_green?(%{green | review: %{pull_request: %{ci: "passed", qa: nil}}})
 
       refute Item.checks_green?(put_in(green, [:review, :pull_request, :ci], "pending"))
       refute Item.checks_green?(put_in(green, [:review, :pull_request, :qa], %{verdict: "blocked"}))
-      refute Item.checks_green?(put_in(green, [:review, :pull_request, :gate], %{verdict: "rework"}))
       refute Item.checks_green?(%{green | kind: :plan})
     end
 
@@ -278,20 +273,20 @@ defmodule SymphonyElixir.InboxTest do
                  reason: "The run reported a block",
                  clearing_condition: "when the block is resolved; a person clears an access hold"
                }
-             } = Item.from_node(held, "shop", %Schema{state_machine: "designed"}, lookups(nil, nil, hold))
+             } = Item.from_node(held, "shop", %Schema{state_machine: "designed"}, lookups(nil, hold))
 
       # A hold that clears on its own waits on nobody, and neither does a ticket with no hold at all
       # or a run whose lookups name no hold source.
-      assert Item.from_node(held, "shop", %Schema{}, lookups(nil, nil, %{hold | waits_on: %{type: "dependency", keys: ["SHOP-1"]}})) == nil
+      assert Item.from_node(held, "shop", %Schema{}, lookups(nil, %{hold | waits_on: %{type: "dependency", keys: ["SHOP-1"]}})) == nil
       assert Item.from_node(held, "shop", %Schema{}, lookups()) == nil
-      assert Item.from_node(held, "shop", %Schema{}, %{ci: fn _, _ -> nil end, gate: fn _, _ -> nil end}) == nil
+      assert Item.from_node(held, "shop", %Schema{}, %{ci: fn _, _ -> nil end}) == nil
 
       # A hold never displaces a review the ticket already waits on.
-      assert %{kind: :pr} = Item.from_node(held |> Map.put("state", %{"name" => "In Review"}), "shop", %Schema{}, lookups(nil, nil, hold))
+      assert %{kind: :pr} = Item.from_node(held |> Map.put("state", %{"name" => "In Review"}), "shop", %Schema{}, lookups(nil, hold))
 
       # A hold that recorded no reason still says what acting on it does.
       assert %{ask: "Unblock the ticket and it continues", review: %{reason: nil}} =
-               Item.from_node(held, "shop", %Schema{}, lookups(nil, nil, %{hold | reason: nil, clearing_condition: nil}))
+               Item.from_node(held, "shop", %Schema{}, lookups(nil, %{hold | reason: nil, clearing_condition: nil}))
     end
 
     test "reads an option, a CI conclusion and a quality-gate entry" do

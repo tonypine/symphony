@@ -1714,7 +1714,7 @@ defmodule SymphonyElixir.CoreTest do
     assert %{state: "In Review", pull_request_url: "https://github.com/example/repo/pull/124"} = state.watching[issue_id]
   end
 
-  test "retry for active completed PR moves issue to Auto Review when it is on" do
+  test "retry for active completed PR moves issue to In Review, whatever the retired auto_review block says" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
@@ -1724,46 +1724,22 @@ defmodule SymphonyElixir.CoreTest do
       auto_review: %{enabled: true}
     )
 
-    assert %{state: "Auto Review"} = retry_post_pr_issue("issue-post-pr-auto-review", :PostPrAutoReviewOrchestrator, "Auto Review")
+    assert %{state: "In Review"} = retry_post_pr_issue("issue-post-pr-auto-review", :PostPrAutoReviewOrchestrator, "In Review")
 
-    assert [%{name: "handoff", details: %{to: "Auto Review", move: true}}] =
+    assert [%{name: "handoff", details: %{to: "In Review", move: true}}] =
              RunStore.get_ticket_state(Config.repo_key!(), "issue-post-pr-auto-review").signals
   end
 
-  test "retry for active completed PR moves issue to in review when the Auto Review state is missing" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_active_states: ["Todo", "In Progress", "Rework"],
-      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
-      pr_review_mode: "polling",
-      ci: %{enabled: true},
-      auto_review: %{enabled: true, state: "Auto Review Missing"}
-    )
-
-    Application.put_env(:symphony_elixir, :memory_tracker_workflow_states, ["In Progress", "In Review"])
-
-    on_exit(fn ->
-      Application.delete_env(:symphony_elixir, :memory_tracker_workflow_states)
-      SymphonyElixir.AutoReview.reset_for_test("Auto Review Missing")
-    end)
-
-    assert ExUnit.CaptureLog.capture_log(fn ->
-             assert :disabled = SymphonyElixir.AutoReview.check_tracker_state(Config.settings!(), [])
-           end) =~ "Auto Review disabled"
-
-    assert %{state: "In Review"} = retry_post_pr_issue("issue-post-pr-auto-review-missing", :PostPrAutoReviewMissingOrchestrator, "In Review")
-  end
-
-  test "a run that opened its PR moves to Auto Review without waiting for a busy slot" do
+  test "a run that opened its PR moves to In Review without waiting for a busy slot" do
     issue_id = "issue-pr-opened-busy-slots"
     pr_url = "https://github.com/example/repo/pull/385"
     pid = end_run_with_busy_slots(issue_id, :PrOpenedBusySlotsOrchestrator, pr_url)
 
-    assert_receive {:memory_tracker_state_update, ^issue_id, "Auto Review"}, 500
+    assert_receive {:memory_tracker_state_update, ^issue_id, "In Review"}, 500
 
     state =
       wait_for_orchestrator_state(pid, fn state ->
-        match?(%{state: "Auto Review", pull_request_url: ^pr_url}, state.watching[issue_id])
+        match?(%{state: "In Review", pull_request_url: ^pr_url}, state.watching[issue_id])
       end)
 
     refute Map.has_key?(state.slot_waiting, issue_id)
@@ -1813,12 +1789,12 @@ defmodule SymphonyElixir.CoreTest do
 
     state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
 
-    assert_received {:memory_tracker_state_update, ^issue_id, "Auto Review"}
+    assert_received {:memory_tracker_state_update, ^issue_id, "In Review"}
     assert state.slot_waiting == %{}
-    assert %{state: "Auto Review", pull_request_url: ^pr_url} = state.watching[issue_id]
+    assert %{state: "In Review", pull_request_url: ^pr_url} = state.watching[issue_id]
   end
 
-  test "a run that ended with commits its PR does not have stays active instead of moving to Auto Review" do
+  test "a run that ended with commits its PR does not have stays active instead of moving to In Review" do
     test_root = Path.join(System.tmp_dir!(), "symphony-elixir-unpushed-post-pr-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf(test_root) end)
     repo = review_agent_repo!(test_root)
@@ -1837,8 +1813,8 @@ defmodule SymphonyElixir.CoreTest do
         refute_received {:memory_tracker_state_update, ^issue_id, _state}
       end)
 
-    assert log =~ "Not moving issue_id=#{issue_id} issue_identifier=MT-385 to Auto Review: its workspace HEAD #{head} has commits its PR does not; keeping it in In Progress"
-    refute log =~ "moving to Auto Review"
+    assert log =~ "Not moving issue_id=#{issue_id} issue_identifier=MT-385 to In Review: its workspace HEAD #{head} has commits its PR does not; keeping it in In Progress"
+    refute log =~ "moving to In Review"
   end
 
   test "the poll keeps a slot-waiting issue with unpushed commits waiting instead of moving it" do
@@ -1876,7 +1852,7 @@ defmodule SymphonyElixir.CoreTest do
     refute_received {:memory_tracker_state_update, ^issue_id, _state}
     assert Map.has_key?(state.slot_waiting, issue_id)
     assert is_binary(state.completed_run_metadata[issue_id].unpushed_head)
-    assert log =~ "Not moving issue_id=#{issue_id} issue_identifier=MT-461 to Auto Review"
+    assert log =~ "Not moving issue_id=#{issue_id} issue_identifier=MT-461 to In Review"
   end
 
   defp write_post_pr_auto_review_workflow!(overrides \\ []) do
@@ -3766,7 +3742,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "## Prerequisite: scoped Linear and GitHub tools are available"
     assert prompt =~ "`https://uploads.linear.app/...` links that Symphony has pre-signed"
     assert prompt =~ "## Status map"
-    assert prompt =~ "`Auto Review` -> Symphony is testing the PR as a user and, with the acceptance gate on, judging it"
+    refute prompt =~ "Auto Review"
     assert prompt =~ "## PR feedback sweep protocol (required)"
     assert prompt =~ "## CI failure triage protocol (required when checks are red)"
     assert prompt =~ "## Blocked-access escape hatch (required behavior)"

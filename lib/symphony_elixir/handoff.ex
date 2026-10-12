@@ -20,6 +20,9 @@ defmodule SymphonyElixir.Handoff do
   @signal "handoff"
   @missing_signal "handoff_missing"
   @origins ["In Progress", "Rework"]
+  # A legacy repo hands a PR off to In Review: Auto Review is retired, and In Review retires with
+  # the legacy machine once its tickets drain.
+  @legacy_target "In Review"
 
   @doc "The ledger signal name a session's handoff is recorded under."
   @spec signal() :: String.t()
@@ -36,11 +39,7 @@ defmodule SymphonyElixir.Handoff do
   @doc "The state a repo hands a finished implementation off to."
   @spec target_state(map()) :: String.t()
   def target_state(settings) do
-    if designed?(settings) do
-      settings.tracker.code_review_state
-    else
-      SymphonyElixir.AutoReview.post_pr_state(settings)
-    end
+    if designed?(settings), do: settings.tracker.code_review_state, else: @legacy_target
   end
 
   @doc """

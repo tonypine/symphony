@@ -2033,8 +2033,8 @@ defmodule SymphonyElixir.RunStore do
 
   defp index_interrupted_runs(error), do: error
 
-  # Auto Review QA runs use their own `qa_running` status so executor lookups never
-  # mistake them for agent runs; a restart interrupts them all the same.
+  # The retired Auto Review QA runs used their own `qa_running` status; a restart still interrupts
+  # one left over from before the retirement.
   defp interrupt_running_record(%{status: status} = record, error, now, interrupted) when status in ["running", "qa_running"] do
     write_interrupted_run_record(record, error, now, interrupted)
   end

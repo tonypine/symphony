@@ -1337,7 +1337,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     def run(_issue, _workspace, _opts), do: {:error, {:usage_limited, %{provider: "anthropic", scope: :all, window: "five_hour"}}}
   end
 
-  test "AgentRunner exits with the usage limit a final verification's QA agent hit", ctx do
+  test "AgentRunner exits with the usage limit an epic review's QA agent hit", ctx do
     write_usage_workflow!(ctx)
     workspace = Path.join([ctx.test_root, "workspaces", "MT-FV"])
     File.mkdir_p!(workspace)
@@ -1347,7 +1347,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              catch_exit(
                AgentRunner.run(run_issue, nil,
                  workspace_path: workspace,
-                 parent_walkthrough: LimitedWalkthrough,
+                 epic_review: LimitedWalkthrough,
                  issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
                  issue_enricher: fn issue -> {:ok, issue} end
                )
@@ -1358,7 +1358,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     def run(_issue, _workspace, _opts), do: {:error, {:usage_limited, %{provider: "anthropic", scope: :all, source: :api_unreachable, error: "ENOTFOUND"}}}
   end
 
-  test "AgentRunner exits on the unreachable model API a final verification's QA agent hit", ctx do
+  test "AgentRunner exits on the unreachable model API an epic review's QA agent hit", ctx do
     write_usage_workflow!(ctx)
     workspace = Path.join([ctx.test_root, "workspaces", "MT-FV-OUTAGE"])
     File.mkdir_p!(workspace)
@@ -1368,7 +1368,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              catch_exit(
                AgentRunner.run(run_issue, nil,
                  workspace_path: workspace,
-                 parent_walkthrough: UnreachableWalkthrough,
+                 epic_review: UnreachableWalkthrough,
                  issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
                  issue_enricher: fn issue -> {:ok, issue} end
                )

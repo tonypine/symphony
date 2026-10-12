@@ -3,7 +3,7 @@ defmodule SymphonyElixir.TransitionGuard do
   The one writer for ticket state moves.
 
   Every Linear state move routes through this module. The machine's own moves — the orchestrator,
-  the CI and PR review pollers, the Auto Review machinery, the runner, the Director app, the
+  the CI and PR review pollers, the Code Review, QA and epic review runs, the runner, the Director app, the
   workpad bootstrap, the Linear tool's human-action request and withdrawal, and its sub-issue
   cancel — are performed by `perform/4`, the only caller of `Tracker.update_issue_state/2`. An
   agent's request to set a state (the Linear tool's `update_state`) is validated by
@@ -24,9 +24,12 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
-  `:code_review_state`, `:qa_state`, `:epic_review_state`, `:ci_fix_state`,
-  `:waiting_on_sub_issues` and
-  `:ci_escalation_state`.
+  `:code_review_state`, `:qa_state`, `:epic_review_state`, `:ci_fix_state` and
+  `:waiting_on_sub_issues`.
+
+  No move may enter a retired state (`retired_states/0`): `Auto Review` is gone with the acceptance
+  gate (`docs/design/state-machine.md` §Retired), so `perform/4` and `resolve_request/2` refuse it
+  whatever the signal, and no ticket can enter it again.
 
   The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`),
   taken from `ctx`: the repo's `:settings` when the caller has them, else resolved from
@@ -37,13 +40,14 @@ defmodule SymphonyElixir.TransitionGuard do
   the legacy one, so a repo left on `legacy` keeps today's behavior exactly.
   """
 
-  alias SymphonyElixir.{AutoReview, Config, HumanReview, StateMachine, SubIssueWait, Tracker}
+  alias SymphonyElixir.{Config, HumanReview, StateMachine, SubIssueWait, Tracker}
 
   @in_review_state "In Review"
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
   @backlog_state "Backlog"
+  @retired_states ["Auto Review"]
 
   @typedoc "A named transition the machine can perform."
   @type signal :: atom()
@@ -78,20 +82,15 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :review_agent_blocked, from: :any, to: :requested},
     # A red head: dispatch a CI fix run in In Progress.
     %{signal: :ci_fix_dispatch, from: :any, to: "In Progress"},
-    # CI could not be fixed: escalate to the configured escalation state.
-    %{signal: :ci_escalate, from: :any, to: :ci_escalation_state},
-    # The PR review poller's target (the Auto Review state, or Done/In Progress).
+    # CI could not be fixed: escalate to In Review. (The designed table drops this row: a designed
+    # repo pauses the ticket on a Needs Decision hold instead of moving it.)
+    %{signal: :ci_escalate, from: :any, to: @in_review_state},
+    # The PR review poller's target (Done or In Progress).
     %{signal: :pr_review_target, from: :any, to: :requested},
     # A landing run's PR merged: Done.
     %{signal: :landing_done, from: ["Merging"], to: "Done"},
     # The poller sends an issue back for changes.
     %{signal: :review_rework, from: :any, to: "In Progress"},
-    # A QA verdict moves the issue on (pass/fail/escalate); the target is verdict-derived.
-    %{signal: :auto_review_verdict, from: ["Auto Review"], to: :requested},
-    # The acceptance gate's move (approve/rework/escalate); the target is gate-derived.
-    %{signal: :auto_review_gate, from: ["Auto Review"], to: :requested},
-    # A conflicting PR with no checks goes to Rework.
-    %{signal: :auto_review_rework, from: ["Auto Review"], to: "Rework"},
     # A dependency needs approval: the run waits in In Review.
     %{signal: :dependency_review, from: ["In Progress"], to: "In Review"},
     # A Todo ticket whose dependencies need a person waits in In Review.
@@ -113,9 +112,7 @@ defmodule SymphonyElixir.TransitionGuard do
     # Plan approval promotes a Backlog sub-ticket to Todo.
     %{signal: :breakdown_promote, from: ["Backlog"], to: "Todo"},
     # Re-planning cancels a Backlog sub-ticket (the caller supplies the canceled state it finds).
-    %{signal: :breakdown_cancel, from: ["Backlog"], to: :requested},
-    # A parent walkthrough's verdict moves the verification ticket; the target is verdict-derived.
-    %{signal: :parent_walkthrough, from: :any, to: :requested}
+    %{signal: :breakdown_cancel, from: ["Backlog"], to: :requested}
   ]
 
   # The designed machine's edge table: the legacy rows plus the edges the redesigned flow adds, with
@@ -135,9 +132,10 @@ defmodule SymphonyElixir.TransitionGuard do
   # The `:code_review_*` rows are the reviewer run's verdicts. They bind to the head the reviewer
   # judged (`SymphonyElixir.CodeReview` records the verdict against it): approve carries the ticket
   # on to the QA state, or straight to `Merging` when the QA state's skip rule applies (the
-  # deterministic docs-only/internal-only diff — the caller picks the row and records the reason); a
-  # rework verdict returns it to `Rework`; and an escalation asks for a person through the request
-  # machinery.
+  # deterministic docs-only/internal-only diff — the caller picks the row and records the reason); and
+  # a rework verdict returns it to `Rework`. An escalation has no row: it is a Needs Decision hold
+  # (`SymphonyElixir.NeedsDecisionHold.pause/3`), which pauses the ticket in Code Review and never
+  # moves it, and so is CI that could not be fixed (`:ci_escalate` is a legacy-only row).
   #
   # The `:qa_*` rows are the QA run's verdicts (`SymphonyElixir.QaVerification`): pass carries the
   # ticket to `Merging`, fail returns it to `Rework`, and a skip — the same hybrid rule seen from the
@@ -177,12 +175,16 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @designed_replaced_signals Enum.map(@designed_replaced_edges, & &1.signal)
 
+  # Legacy rows the designed machine has no use for: an escalation pauses the ticket on a Needs
+  # Decision hold instead of moving it.
+  @designed_dropped_signals [:ci_escalate]
+
   # `confirm: true` marks the three rows whose move is a *verdict* carrying the ticket into `Merging`:
   # with the repo's manual review `on`, each waits for a person instead
   # (`SymphonyElixir.MergeConfirmation`). The rows that repair a red head (`:ci_fix_mechanical`, whose
   # target is the origin the caller read back) and the rework rows carry no marker, so a repair or a
   # rework never waits on a person in either mode.
-  @designed_edges Enum.reject(@edges, &(&1.signal in @designed_replaced_signals)) ++
+  @designed_edges Enum.reject(@edges, &(&1.signal in @designed_replaced_signals or &1.signal in @designed_dropped_signals)) ++
                     @designed_replaced_edges ++
                     [
                       %{signal: :restart, from: :any, to: "In Progress"},
@@ -190,7 +192,6 @@ defmodule SymphonyElixir.TransitionGuard do
                       %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
                       %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging", confirm: true},
                       %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
-                      %{signal: :code_review_escalate, from: ["Code Review"], to: :requested},
                       %{signal: :qa_pass, from: ["QA"], to: "Merging", confirm: true},
                       %{signal: :qa_skip, from: ["QA"], to: "Merging", confirm: true},
                       %{signal: :qa_fail, from: ["QA"], to: "Rework"},
@@ -209,6 +210,14 @@ defmodule SymphonyElixir.TransitionGuard do
   @human_only_states [
     %{name: @merging_state, error: :merging_requires_human_approval}
   ]
+
+  @doc "The states no move may enter: they are retired, and only drain."
+  @spec retired_states() :: [String.t()]
+  def retired_states, do: @retired_states
+
+  @doc "Whether `state` names a retired state (`retired_states/0`)."
+  @spec retired_state?(String.t() | nil) :: boolean()
+  def retired_state?(state), do: Enum.any?(@retired_states, &state_name_matches?(state, &1))
 
   @doc "The legal-edge table for the default version."
   @spec edges() :: [edge()]
@@ -279,16 +288,21 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Performs the move `signal` names for `issue_id`, resolving its target from `ctx`. This is the one
   caller of `Tracker.update_issue_state/2`; `opts[:tracker]` overrides the tracker (tests, a fake).
+  A move into a retired state is refused with `{:error, {:retired_state, target}}`.
   """
   @spec perform(String.t(), signal(), context(), keyword()) :: :ok | {:error, term()}
   def perform(issue_id, signal, ctx \\ %{}, opts \\ []) do
-    Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target(signal, ctx))
+    target = target(signal, ctx)
+
+    if retired_state?(target),
+      do: {:error, {:retired_state, target}},
+      else: Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target)
   end
 
   @doc """
   Validates an agent's request to set the state `state` (its resolved Linear state map). Applies
-  the machine's refusals and redirects in the same order as before — the Auto Review handoff
-  refusal, the Plan Review entry refusal, the plan-review and Human Review redirects, the
+  the machine's refusals and redirects in the same order as before — the retired-state refusal,
+  the Plan Review entry refusal, the plan-review and Human Review redirects, the
   human-only refusal, the restart refusal, the Code Review entry refusal, the QA entry refusal,
   the Epic Review entry refusal, then the waiting-state refusal — and returns `{:ok, state}` (the
   state to set, after any redirect) or `{:error, reason}` with the same tuple the tool returned
@@ -312,8 +326,7 @@ defmodule SymphonyElixir.TransitionGuard do
   `{:error, reason}` as before.
 
   `ctx` carries `:settings`, `:states` (the team's states, for the redirects), `:from_state` (the
-  issue's current state), `:pr_less?` (a plan parent or a `Final verification:` ticket opens no
-  PR), `:plan_parent?` (the issue carries the `plan` label, so it is a designed repo's epic
+  issue's current state), `:plan_parent?` (the issue carries the `plan` label, so it is a designed repo's epic
   parent), and `:needs_person?` (the ticket's own rule says a person reviews it, or the run asked
   for a person).
   """
@@ -327,7 +340,7 @@ defmodule SymphonyElixir.TransitionGuard do
         {:hold, kind, attrs}
 
       :not_a_hold ->
-        with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
+        with :ok <- refuse_retired_state(state_name),
              :ok <- refuse_plan_review_entry(state_name, ctx, settings),
              state = redirect_state(state, ctx, settings),
              :ok <- refuse_human_only(state),
@@ -364,15 +377,8 @@ defmodule SymphonyElixir.TransitionGuard do
 
   defp running_phase?(_from), do: false
 
-  # With Auto Review on, Symphony moves the issue on from the PR being open, so an agent asking for
-  # `In Review` or the Human Review state is refused rather than silently redirected. A `breakdown`
-  # parent and a `Final verification:` ticket open no PR: their result goes to a person whatever
-  # Auto Review says.
-  defp refuse_handoff_state(state_name, pr_less?, settings) do
-    if AutoReview.enabled?(settings) and not pr_less? and
-         (state_name_matches?(state_name, AutoReview.review_state()) or HumanReview.in_state?(state_name, settings)),
-       do: {:error, {:in_review_set_by_auto_review, state_name, AutoReview.state(settings)}},
-       else: :ok
+  defp refuse_retired_state(state_name) do
+    if retired_state?(state_name), do: {:error, {:retired_state, state_name}}, else: :ok
   end
 
   # An issue only a person can move on goes to the Human Review state instead of `In Review`, when
@@ -530,7 +536,6 @@ defmodule SymphonyElixir.TransitionGuard do
   defp resolve(:epic_review_state, ctx), do: settings!(ctx).tracker.epic_review_state
   defp resolve(:ci_fix_state, ctx), do: settings!(ctx).tracker.ci_fix_state
   defp resolve(:waiting_on_sub_issues, ctx), do: SubIssueWait.state(settings!(ctx))
-  defp resolve(:ci_escalation_state, ctx), do: settings!(ctx).ci.escalation_state || @in_review_state
   defp resolve(name, _ctx) when is_binary(name), do: name
 
   defp settings!(ctx), do: Map.fetch!(ctx, :settings)

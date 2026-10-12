@@ -11,7 +11,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.AgentLabels
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
-  alias SymphonyElixir.AutoReview
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
@@ -26,7 +25,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
-  alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.StateMachine
   alias SymphonyElixir.SupervisorCheck
@@ -43,6 +41,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # Moving an issue to `Merging` is how a human approves a merge, so agents may not do it.
   # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
   @backlog_state "Backlog"
+  @in_review_state "In Review"
   # Where a withdrawn request's issue goes back to when its history doesn't say.
   @in_progress_state "In Progress"
   @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
@@ -61,7 +60,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @document_metadata_key "symphonyDocumentId"
   @document_title_separator " · "
 
-  @pull_request_url ~r{\Ahttps?://[^/]+/[^/\s]+/[^/\s]+/pull/\d+(?:$|[/?#])}
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
   @current_issue_query """
@@ -739,9 +737,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     registry = Map.get(context, :comment_registry)
 
     %{
-      human_action_requested?: CommentRegistry.human_action_requested?(registry),
-      supervisor_check?: CommentRegistry.supervisor_check?(registry),
-      pull_request_created?: CommentRegistry.pull_request_created?(registry)
+      human_action_requested?: CommentRegistry.human_action_requested?(registry)
     }
   end
 
@@ -1966,8 +1962,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
       with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts) do
-        pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff)
-        guard_state(state, settings, states, issue, pr_less?, handoff)
+        guard_state(state, settings, states, issue, handoff)
       end
     end
   end
@@ -1976,14 +1971,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # in place, or the refusal the tool passes back. A resolved move carries what recording its signal
   # needs: the state it came from, the state it goes to, the repo key and the lane verdict the move
   # means (nil for every move but a CI Fix ticket's own request to `Rework`).
-  defp guard_state(state, settings, states, issue, pr_less?, handoff) do
+  defp guard_state(state, settings, states, issue, handoff) do
     from_state = get_in(issue, ["state", "name"])
 
     case TransitionGuard.resolve_request(state, %{
            settings: settings,
            states: states,
            from_state: from_state,
-           pr_less?: pr_less?,
            plan_parent?: plan_parent?(issue),
            needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
          }) do
@@ -2027,7 +2021,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       state_name_matches?(state, @backlog_state) ->
         human_action_requested?
 
-      state_name_matches?(state, AutoReview.review_state()) ->
+      state_name_matches?(state, @in_review_state) ->
         human_action_requested? or human_reviewed_plan?(issue, settings)
 
       true ->
@@ -2040,21 +2034,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
     plan = %Issue{title: issue["title"], description: IssueSummary.strip(issue["description"]), labels: labels}
     Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
-  end
-
-  # A ticket with no pull request whose run left a `## Supervisor check` (its work is already on
-  # the default branch, and only a check an agent can't run is left) goes to the supervisor's
-  # `In Review` queue: there is no PR for Auto Review to test. A PR the run opened counts before
-  # Linear's GitHub integration lists it among the issue's attachments.
-  defp supervisor_handoff?(state, issue, %{supervisor_check?: true, pull_request_created?: false}) do
-    urls = issue |> get_in(["attachments", "nodes"]) |> List.wrap() |> Enum.map(&(&1["url"] || ""))
-    state_name_matches?(state, AutoReview.review_state()) and not Enum.any?(urls, &Regex.match?(@pull_request_url, &1))
-  end
-
-  defp supervisor_handoff?(_state, _issue, _handoff), do: false
-
-  defp pr_less_issue?(issue) do
-    plan_parent?(issue) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
   end
 
   # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
