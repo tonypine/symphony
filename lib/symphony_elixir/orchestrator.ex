@@ -8923,8 +8923,6 @@ defmodule SymphonyElixir.Orchestrator do
     designed_issue?(issue) and code_review_issue?(issue) and not green_head?(issue)
   end
 
-  defp code_review_head_blocked?(_issue), do: false
-
   defp code_review_issue?(%Issue{state: state} = issue) when is_binary(state) do
     normalize_issue_state(state) == normalize_issue_state(code_review_state(issue))
   end
@@ -8982,7 +8980,9 @@ defmodule SymphonyElixir.Orchestrator do
           record_ticket_signal(issue, "code_review_head_not_green", %{head: head, status: status})
         end
 
-        Logger.info("Not dispatching the reviewer for #{issue_context(issue)}: its head is #{status || "unknown"}")
+        head_status = if status == "", do: "unknown", else: status
+
+        Logger.info("Not dispatching the reviewer for #{issue_context(issue)}: its head is #{head_status}")
 
       _none ->
         :ok
