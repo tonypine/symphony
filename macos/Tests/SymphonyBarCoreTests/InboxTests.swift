@@ -284,7 +284,8 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(InboxItem.Kind.blocked.word, "Blocked")
     }
 
-    func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {        var notifier = InboxNotifier(remembered: [])
+    func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {
+        var notifier = InboxNotifier(remembered: [])
         var preferences = NotificationPreferences()
         preferences.set(.clarify, on: false)
         preferences.set(.problem, on: false)
