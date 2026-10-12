@@ -27,7 +27,7 @@ defmodule SymphonyElixir.QaVerification do
 
   require Logger
 
-  alias SymphonyElixir.{Handoff, Hold, QaPolicy, StateMachine, TicketSignals, TransitionGuard, WorkspaceHead}
+  alias SymphonyElixir.{Handoff, QaPolicy, SelfHeal, StateMachine, TicketSignals, TransitionGuard, WorkspaceHead}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.Report
@@ -122,7 +122,7 @@ defmodule SymphonyElixir.QaVerification do
   # worker. There is no local head to read there either, so the run is blocked with the reason
   # (retried boundedly, then a Blocked hold) rather than parking on an unreadable head forever.
   defp remote_worker_unsupported(issue, opts, settings, host) do
-    blocked(issue, opts, settings, nil, blocked_outcome(error_reason({:remote_worker_unsupported, host}), %{}))
+    blocked(issue, opts, settings, nil, blocked_outcome({:remote_worker_unsupported, host}, %{}))
   end
 
   defp read_head(issue, workspace, opts, settings) do
@@ -222,7 +222,7 @@ defmodule SymphonyElixir.QaVerification do
 
       {:error, reason, tokens} ->
         extra = %{tokens: tokens, playbooks: playbook_kinds(playbooks)}
-        blocked(issue, opts, settings, head, blocked_outcome(error_reason(reason), extra))
+        blocked(issue, opts, settings, head, blocked_outcome(reason, extra))
     end
   end
 
@@ -259,10 +259,11 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # A blocked run is retried boundedly on the same head: a transient environment failure says
-  # nothing about the change. Once the attempts are used up — or immediately when only a person can
-  # clear the block — the ticket takes a Blocked hold with the reason recorded, so it pauses in QA
-  # rather than failing silently. The self-heal lane files the fix ticket that clears it when that
-  # lands (TP-824); until then a person clears the hold.
+  # nothing about the change. Once the attempts are used up the block goes to the self-heal lane
+  # (`SymphonyElixir.SelfHeal`), which files or reuses the fix ticket for the broken component,
+  # holds the ticket on it, and resumes it by itself when the fix lands — or, for a block only a
+  # person can clear, takes the access hold a person lifts. Either way the ticket pauses in QA
+  # rather than failing silently.
   defp blocked(issue, opts, _settings, head, outcome) do
     record_verdict(issue, opts, head, "blocked")
     attempts = blocked_attempts(issue, opts, head)
@@ -272,7 +273,16 @@ defmodule SymphonyElixir.QaVerification do
       Logger.warning("QA blocked for #{issue_label(issue)} head=#{head} (attempt #{attempts}/#{@max_blocked_attempts}); retrying")
       :ok
     else
-      hold(issue, opts, attempts, outcome)
+      self_heal(issue, opts, attempts, outcome)
+    end
+  end
+
+  defp self_heal(issue, opts, attempts, outcome) do
+    heal_opts = [outcome: outcome, attempts: attempts, repo_key: repo_key(issue, opts)] ++ Keyword.take(opts, [:store, :tracker, :fixer, :symphony_repo_key])
+
+    case SelfHeal.heal(issue, heal_opts) do
+      {:error, reason} -> {:error, {:qa_self_heal_failed, reason}}
+      _action -> :ok
     end
   end
 
@@ -290,25 +300,6 @@ defmodule SymphonyElixir.QaVerification do
 
   defp needs_person?(%{needs_person: true}), do: true
   defp needs_person?(_outcome), do: false
-
-  defp hold(issue, opts, attempts, outcome) do
-    reason = "QA blocked after #{attempts} attempt(s): #{verdict_reason(outcome)}"
-
-    attrs = %{
-      reason: reason,
-      clearing_condition: "when the QA environment is repaired; a person clears this hold until self-heal files the fix ticket",
-      waits_on: %{type: "access", keys: []}
-    }
-
-    case Hold.set(repo_key(issue, opts), issue.id, :blocked, attrs, Keyword.take(opts, [:store, :tracker])) do
-      :ok ->
-        Logger.warning("QA for #{issue_label(issue)} is blocked; a Blocked hold is set: #{reason}")
-        :ok
-
-      {:error, reason} ->
-        {:error, {:qa_blocked_hold_failed, reason}}
-    end
-  end
 
   defp agent_job(issue, workspace, opts, settings, head, playbooks) do
     %{
@@ -339,11 +330,18 @@ defmodule SymphonyElixir.QaVerification do
     }
   end
 
-  defp blocked_outcome(reason, extra) do
-    Map.merge(
-      %{verdict: :blocked, reason: reason, summary: nil, steps: [], findings: [], needs_person: false},
-      extra
-    )
+  defp blocked_outcome(cause, extra) do
+    base = %{
+      verdict: :blocked,
+      reason: error_reason(cause),
+      cause: cause,
+      summary: nil,
+      steps: [],
+      findings: [],
+      needs_person: false
+    }
+
+    Map.merge(base, extra)
   end
 
   defp playbook_kinds(playbooks), do: Enum.map(playbooks, & &1.kind)

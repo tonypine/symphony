@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.QaVerificationTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.BlockedHold
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Handoff
@@ -11,6 +12,9 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   @repo_key "repo-qa-verification"
   @issue_id "issue-qa-verification"
+  @other_issue_id "issue-qa-verification-other"
+  @symphony_repo_key "repo-symphony"
+  @fix_ticket "TP-900"
 
   @playbook %{kind: "cli", paths: ["lib/symphony_elixir/cli.ex"], prompt: "Follow the CLI playbook."}
 
@@ -25,6 +29,44 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  # Drives the real dev server, so a failing command injected through the settings is what blocks
+  # the run — the QA environment block the self-heal lane exists for, not a hand-made verdict.
+  defmodule DevServerQaAgent do
+    def run(job, settings, _opts) do
+      send(self(), {:qa_agent_run, job, settings})
+
+      start_opts = [settings: settings, repo_key: job.repo_key]
+
+      case SymphonyElixir.Verification.start_qa_dev_server(job.issue, job.run_id, job.workspace_path, start_opts) do
+        {:ok, dev_server} ->
+          SymphonyElixir.Verification.stop_qa_dev_server(dev_server)
+
+          {:ok, %{result: %{verdict: :pass, summary: "The dev server started.", steps: [], findings: []}, tokens: %{}}}
+
+        {:error, reason} ->
+          {:error, {:qa_dev_server_failed, reason}, %{}}
+      end
+    end
+  end
+
+  # The fix-ticket filer, standing in for the Linear-backed one so no test reaches the network.
+  defmodule FakeFixer do
+    def create(attrs, _opts) do
+      send(self(), {:fixer_create, attrs})
+      {:ok, %{identifier: Process.get(:fix_ticket, "TP-900"), url: "https://linear.app/acme/issue/TP-900"}}
+    end
+
+    def attach(identifier, body, _opts) do
+      send(self(), {:fixer_attach, identifier, body})
+      :ok
+    end
+
+    def block(_issue, ticket, _opts) do
+      send(self(), {:fixer_block, ticket.identifier})
+      :ok
+    end
+  end
+
   # The skip rule, driven from the test rather than from git: what the verdict says is the
   # behaviour under test here (`QaPolicy` itself is tested directly).
   defmodule RunPolicy do
@@ -35,6 +77,9 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   defmodule UnusedStore do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
+    def get_ticket_state(_repo_key, _issue_id), do: nil
+    def list_all_ticket_states, do: []
+    def record_ticket_self_heal(_repo_key, _issue_id, _attrs), do: :ok
   end
 
   defmodule FailingTracker do
@@ -49,12 +94,24 @@ defmodule SymphonyElixir.QaVerificationTest do
     def decide(_issue, _settings, _opts), do: {:run, [], "the change delivers or updates a user journey"}
   end
 
+  # The tracker the BlockedHold sweep reads the fix ticket's state from.
+  defmodule FixTicketTracker do
+    def fetch_issue_by_identifier(_identifier), do: Process.get(:fix_ticket_issue, {:error, :not_found})
+    def set_machine_label(_issue_id, _label), do: :ok
+    def clear_machine_label(_issue_id, _label), do: :ok
+  end
+
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     RunStore.delete_ticket_state(@repo_key, @issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@repo_key, @issue_id) end)
+    RunStore.delete_ticket_state(@repo_key, @other_issue_id)
+
+    on_exit(fn ->
+      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      RunStore.delete_ticket_state(@repo_key, @other_issue_id)
+    end)
 
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
@@ -103,8 +160,23 @@ defmodule SymphonyElixir.QaVerificationTest do
     QaVerification.run(
       issue(state),
       workspace,
-      opts ++ [settings: settings!(), repo_key: @repo_key, qa_policy: RunPolicy, qa_agent: FakeQaAgent]
+      opts ++
+        [
+          settings: settings!(),
+          repo_key: @repo_key,
+          qa_policy: RunPolicy,
+          qa_agent: FakeQaAgent,
+          fixer: FakeFixer,
+          symphony_repo_key: @symphony_repo_key
+        ]
     )
+  end
+
+  defp free_tcp_port do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    port
   end
 
   defp verdicts, do: Handoff.verdicts(@repo_key, @issue_id, "qa")
@@ -254,6 +326,16 @@ defmodule SymphonyElixir.QaVerificationTest do
                Handoff.signals(@repo_key, @issue_id)
     end
 
+    test "a fail with a reason of its own records that reason" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:qa_agent_result, {:ok, %{result: %{verdict: :fail, summary: "No.", steps: [], findings: [], reason: "the walkthrough regressed"}, tokens: %{}}})
+
+      assert :ok = run(workspace, [])
+
+      assert [%{name: "qa", details: %{reason: "the walkthrough regressed"}}] = Handoff.signals(@repo_key, @issue_id)
+    end
+
     test "a skip verdict lands the ticket in Merging with no agent run" do
       {workspace, head} = git_workspace!()
 
@@ -311,7 +393,7 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   describe "blocked runs" do
-    test "retry boundedly on the same head, then take a Blocked hold" do
+    test "retry boundedly on the same head, then file the fix ticket and hold the ticket on it" do
       {workspace, head} = git_workspace!()
 
       Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
@@ -321,13 +403,25 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       refute_received {:memory_tracker_state_update, _, _}
       refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute_received {:fixer_create, _}
 
-      # The second attempt has used its attempts up: the ticket pauses in QA with the reason recorded.
+      # The second attempt has used its attempts up: the self-heal lane files the fix ticket for the
+      # broken component and pauses the ticket on a Blocked hold waiting for it.
       assert :ok = run(workspace, [])
 
       assert Hold.held?(@repo_key, @issue_id, :blocked)
-      assert %{reason: reason, waits_on: %{type: "access"}} = Hold.get(@repo_key, @issue_id, :blocked)
-      assert reason == "QA blocked after 2 attempt(s): :environment_unreachable"
+
+      assert %{reason: reason, waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
+               Hold.get(@repo_key, @issue_id, :blocked)
+
+      assert reason =~ "waiting on fix ticket TP-900 for the qa_environment block"
+
+      assert_received {:fixer_create, attrs}
+      assert attrs.scope == @symphony_repo_key
+      assert attrs.component == "qa_environment"
+      assert attrs.title == "Self-heal: repair the qa_environment block"
+      assert attrs.description =~ ":environment_unreachable"
+      assert_received {:fixer_block, @fix_ticket}
 
       refute_received {:memory_tracker_state_update, _, _}
 
@@ -339,6 +433,99 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → QA (blocked)"
+    end
+
+    test "a second ticket hitting the same break reuses the one fix ticket" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
+
+      # Two attempts on the first ticket file the fix ticket and hold it.
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+      assert_received {:fixer_create, _}
+
+      # The same break on another ticket reuses it rather than filing a second one.
+      other = issue("QA", %{id: @other_issue_id, identifier: "TP-817"})
+
+      assert :ok =
+               QaVerification.run(other, workspace, settings: settings!(), repo_key: @repo_key, qa_policy: RunPolicy, qa_agent: FakeQaAgent, fixer: FakeFixer, symphony_repo_key: @symphony_repo_key)
+
+      assert :ok =
+               QaVerification.run(other, workspace, settings: settings!(), repo_key: @repo_key, qa_policy: RunPolicy, qa_agent: FakeQaAgent, fixer: FakeFixer, symphony_repo_key: @symphony_repo_key)
+
+      refute_received {:fixer_create, _}
+
+      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
+               Hold.get(@repo_key, @other_issue_id, :blocked)
+
+      assert_received {:fixer_attach, @fix_ticket, evidence}
+      assert evidence =~ ":environment_unreachable"
+    end
+
+    test "an injected failing dev-server command retries, files one fix ticket, holds the ticket, and resumes when the fix lands" do
+      {workspace, _head} = git_workspace!()
+      port = free_tcp_port()
+
+      settings =
+        settings!(%{
+          "verification" => %{
+            "enabled" => true,
+            "port_allocation" => %{"range" => [port, port]},
+            "dev_server" => %{
+              "build_cmd" => "exit 3",
+              "start_cmd" => "exec sleep 30",
+              "health_check_url" => "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
+              "health_timeout_ms" => 100
+            }
+          }
+        })
+
+      opts = [settings: settings, qa_agent: DevServerQaAgent]
+
+      # The dev server's build command fails, so the run is blocked by its environment: the first
+      # attempt retries, the second files the fix ticket and holds the ticket on it.
+      assert :ok = run(workspace, opts)
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+
+      assert :ok = run(workspace, opts)
+      assert_received {:fixer_create, attrs}
+      assert attrs.component == "dev_server"
+
+      # The dev server's own setup belongs to the repo that hit the block, not to Symphony.
+      assert attrs.scope == @repo_key
+      assert attrs.description =~ "dev_server_build_failed"
+
+      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
+               Hold.get(@repo_key, @issue_id, :blocked)
+
+      assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
+
+      # The fix lands: the fix ticket goes terminal, so the hold lifts and the ticket resumes with
+      # nothing asked of a person. Only the stale fix-ticket pointer goes; the failure signature
+      # stays, so the same break coming back is compared against it.
+      Process.put(:fix_ticket_issue, {:ok, %Issue{id: "fix-ticket-id", identifier: @fix_ticket, state: "Done"}})
+
+      assert :clear = BlockedHold.sync(issue(), ["Done", "Canceled"], settings: settings, tracker: FixTicketTracker)
+
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+
+      assert %{component: "dev_server", fix_ticket: nil, signature: signature} =
+               RunStore.get_ticket_state(@repo_key, @issue_id) |> SymphonyElixir.TicketState.self_heal()
+
+      assert signature =~ "dev_server_build_failed"
+
+      # The break comes back unchanged: no new information means no next step to try, so the machine
+      # asks a person with a Needs Decision hold instead of filing another fix ticket.
+      assert :ok = run(workspace, opts)
+
+      refute_received {:fixer_create, _}
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+
+      assert %{reason: stuck} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert stuck =~ "self-heal is stuck on the dev_server block"
+    after
+      stop_verification_port_pool()
     end
 
     test "a block only a person can clear takes the hold immediately" do
@@ -386,15 +573,19 @@ defmodule SymphonyElixir.QaVerificationTest do
       {workspace, _head} = git_workspace!()
 
       # The agent is never reached: the worker host blocks the run before the head is read, so the
-      # ticket retries boundedly and then takes the hold rather than parking on an unreadable head.
+      # ticket retries boundedly and then self-heals rather than parking on an unreadable head.
       assert :ok = run(workspace, worker_host: "worker-1")
       refute_received {:qa_agent_run, _, _}
       refute Hold.held?(@repo_key, @issue_id, :blocked)
 
       assert :ok = run(workspace, worker_host: "worker-1")
 
-      assert %{reason: reason} = Hold.get(@repo_key, @issue_id, :blocked)
-      assert reason =~ "QA cannot run on the remote worker \"worker-1\""
+      assert_received {:fixer_create, attrs}
+      assert attrs.component == "worker_host"
+      assert attrs.scope == @symphony_repo_key
+
+      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} =
+               Hold.get(@repo_key, @issue_id, :blocked)
     end
 
     test "a hold that cannot be set is reported" do
@@ -405,7 +596,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, [])
       assert :ok = run(workspace, [])
 
-      assert {:error, {:qa_blocked_hold_failed, :disk_full}} = run(workspace, store: UnusedStore)
+      assert {:error, {:qa_self_heal_failed, {:self_heal_hold_failed, :disk_full}}} = run(workspace, store: UnusedStore)
     end
   end
 

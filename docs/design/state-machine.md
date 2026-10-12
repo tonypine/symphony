@@ -125,7 +125,7 @@ Every duty the review skill performed has exactly one home. No state is added fo
 | Queue discipline ("a reviewed ticket never stays") | Machine routing: states are pass-through; holds are the only overlay; nothing rests in a queue |
 | Factory duties: error watching, config, restarts, Linear usage, runaway processes | Operator layer — outside this machine, unchanged |
 
-The active consequence: QA coverage absorbs the host and device checks the review skill used to run, driven by user journeys; each capability is either automated into CI, brought into a QA playbook, or consciously left out.
+The active consequence: QA coverage absorbs the host and device checks the review skill used to run, driven by user journeys; each capability is either automated into CI, brought into a QA playbook, or consciously left out. The capability-level inventory — every check that used to be handed over, and its home — is [`supervisor-checks.md`](supervisor-checks.md).
 
 ## Retired
 

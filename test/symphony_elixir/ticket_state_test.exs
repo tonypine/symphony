@@ -17,6 +17,7 @@ defmodule SymphonyElixir.TicketStateTest do
                verdicts: [],
                signals: [],
                ci_fix_origin: nil,
+               self_heal: nil,
                updated_at: nil
              }
     end
@@ -47,6 +48,7 @@ defmodule SymphonyElixir.TicketStateTest do
                verdicts: [],
                signals: [],
                ci_fix_origin: nil,
+               self_heal: nil,
                updated_at: nil
              }
     end
@@ -278,6 +280,63 @@ defmodule SymphonyElixir.TicketStateTest do
       # A stale write for the older head is dropped, leaving the newer head current.
       {record, :stale} = TicketState.put_ci_state(record, "abc", "red", DateTime.add(@at, -60, :second))
       assert %{head_sha: "def"} = TicketState.current_ci_state(record)
+    end
+  end
+
+  describe "self-heal bookkeeping" do
+    test "records the broken component, the owning repo, the signature, the fix ticket and the attempts" do
+      record = TicketState.new("repo-a", "issue-1")
+      assert TicketState.self_heal(record) == nil
+
+      record =
+        TicketState.put_self_heal(
+          record,
+          %{component: "dev_server", scope: "repo-a", signature: " {:dev_server_exit, 3} ", fix_ticket: "TP-900", attempts: 2},
+          @at
+        )
+
+      assert TicketState.self_heal(record) == %{
+               component: "dev_server",
+               scope: "repo-a",
+               signature: "{:dev_server_exit, 3}",
+               fix_ticket: "TP-900",
+               attempts: 2,
+               at: @at
+             }
+
+      assert record.updated_at == @at
+    end
+
+    test "defaults the optional fields and a bad attempt count" do
+      record = TicketState.put_self_heal(TicketState.new("repo-a", "issue-1"), %{component: "qa_environment", attempts: -1}, @at)
+
+      assert TicketState.self_heal(record) ==
+               %{component: "qa_environment", scope: nil, signature: "", fix_ticket: nil, attempts: 0, at: @at}
+    end
+
+    test "a blank component records nothing, and dropping the fix ticket keeps the rest" do
+      record = TicketState.put_self_heal(TicketState.new("repo-a", "issue-1"), %{component: "  "}, @at)
+      assert TicketState.self_heal(record) == nil
+      assert TicketState.clear_fix_ticket(record, @at) |> TicketState.self_heal() == nil
+
+      record =
+        TicketState.put_self_heal(
+          record,
+          %{component: "dev_server", signature: "a failure", fix_ticket: "TP-900", attempts: 2},
+          @at
+        )
+
+      dropped = TicketState.clear_fix_ticket(record, @at)
+
+      assert TicketState.self_heal(dropped) ==
+               %{component: "dev_server", scope: nil, signature: "a failure", fix_ticket: nil, attempts: 2, at: @at}
+
+      assert dropped.updated_at == @at
+    end
+
+    test "a non-map bookkeeping value normalizes to nothing" do
+      assert TicketState.normalize(%{repo_key: "repo-a", issue_id: "issue-1", self_heal: "junk"}).self_heal == nil
+      assert TicketState.normalize(%{repo_key: "repo-a", issue_id: "issue-1", self_heal: %{}}).self_heal == nil
     end
   end
 

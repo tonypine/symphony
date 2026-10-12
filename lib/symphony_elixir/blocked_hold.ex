@@ -8,18 +8,26 @@ defmodule SymphonyElixir.BlockedHold do
   — no state move, no person involved. `sync/3` reconciles one issue's store hold against its
   blockers; the poll loop runs `sweep/3` over each polled repo's issues.
 
+  The other hold that lifts on its own is the self-heal lane's: a ticket blocked on the fix ticket
+  `SymphonyElixir.SelfHeal` filed waits for that ticket, and resumes in place the moment it goes
+  terminal — the fix landed, so the flow retries with nothing asked of a person. Only the stale
+  fix-ticket pointer is dropped with the hold: the failure signature stays, so a break that comes
+  back after the repair is compared against the failure the repair was for rather than judged as a
+  fresh one that files another fix ticket.
+
   Legacy repos are untouched: `sync/3` is a no-op there, so the invisible Todo hold behaves exactly
-  as before. Only a hold a dependency lifts is cleared here — one waiting on an access grant or a
-  fix ticket (a self-heal) is lifted by its own signal.
+  as before. Only the holds that lift themselves are cleared here — one waiting on an access grant
+  is lifted by a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, StateMachine}
+  alias SymphonyElixir.{Config, Hold, RunStore, StateMachine}
   alias SymphonyElixir.Linear.Issue
 
   @todo_state "todo"
   @dependency_type "dependency"
+  @fix_ticket_type "fix_ticket"
 
   @typedoc "What the dependency state calls for: set the hold, clear it, or leave it as it is."
   @type action :: {:set, map()} | :clear | :none
@@ -46,6 +54,20 @@ defmodule SymphonyElixir.BlockedHold do
   end
 
   def desired(_issue, _terminal_states, _current_hold), do: :none
+
+  @doc """
+  The action a fix-ticket hold calls for, given the state of the fix ticket it waits on: `:clear`
+  once that ticket is terminal — the fix landed, so the affected ticket resumes in place — else
+  `:none`. A hold waiting on something else, or a fix ticket whose state could not be read, is left
+  as it is.
+  """
+  @spec fix_ticket_desired(map() | term(), String.t() | nil, Enumerable.t(String.t())) :: :clear | :none
+  def fix_ticket_desired(%{waits_on: %{type: @fix_ticket_type, keys: [identifier | _]}}, state, terminal_states)
+      when is_binary(identifier) do
+    if terminal?(state, terminal_states), do: :clear, else: :none
+  end
+
+  def fix_ticket_desired(_hold, _state, _terminal_states), do: :none
 
   @doc """
   Reconciles the Blocked hold of one issue against its blockers. `opts[:settings]` is the repo's
@@ -77,17 +99,34 @@ defmodule SymphonyElixir.BlockedHold do
     repair_drift(repo_key, issue_id, issue.labels, opts)
     current = Hold.get(repo_key, issue_id, :blocked, opts)
 
-    case desired(issue, terminal_states, current) do
+    case action(issue, terminal_states, current, opts) do
       {:set, attrs} ->
         apply_action(:set, repo_key, issue_id, attrs, opts)
 
       :clear ->
-        apply_action(:clear, repo_key, issue_id, %{}, opts)
+        apply_action(:clear, repo_key, issue_id, current, opts)
 
       :none ->
         :none
     end
   end
+
+  # A fix-ticket hold is judged by the fix ticket's own state, everything else by the issue's
+  # blockers. The fix ticket is read from the tracker by the identifier the hold records.
+  defp action(_issue, terminal_states, %{waits_on: %{type: @fix_ticket_type}} = hold, opts) do
+    fix_ticket_desired(hold, fix_ticket_state(hold, opts), terminal_states)
+  end
+
+  defp action(issue, terminal_states, current, _opts), do: desired(issue, terminal_states, current)
+
+  defp fix_ticket_state(%{waits_on: %{keys: [identifier | _]}}, opts) when is_binary(identifier) do
+    case tracker(opts).fetch_issue_by_identifier(identifier) do
+      {:ok, %Issue{state: state}} -> state
+      _unreadable -> nil
+    end
+  end
+
+  defp fix_ticket_state(_hold, _opts), do: nil
 
   defp apply_action(:set, repo_key, issue_id, attrs, opts) do
     case Hold.set(repo_key, issue_id, :blocked, attrs, opts) do
@@ -96,12 +135,31 @@ defmodule SymphonyElixir.BlockedHold do
     end
   end
 
-  defp apply_action(:clear, repo_key, issue_id, _attrs, opts) do
+  defp apply_action(:clear, repo_key, issue_id, current, opts) do
     case Hold.clear(repo_key, issue_id, :blocked, opts) do
-      :ok -> :clear
-      {:error, reason} -> log_failure("clear", issue_id, reason)
+      :ok ->
+        drop_stale_fix_ticket(repo_key, issue_id, current, opts)
+        :clear
+
+      {:error, reason} ->
+        log_failure("clear", issue_id, reason)
     end
   end
+
+  # The fix landed, so the fix-ticket pointer is stale and goes. The component, the failure
+  # signature and the retry count stay, so a break that comes back after the repair is compared
+  # against the failure the repair was for instead of being judged a fresh one.
+  defp drop_stale_fix_ticket(repo_key, issue_id, %{waits_on: %{type: @fix_ticket_type}}, opts) do
+    case store(opts).clear_ticket_fix_ticket(repo_key, issue_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to drop the stale fix ticket from the self-heal bookkeeping on issue_id=#{issue_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp drop_stale_fix_ticket(_repo_key, _issue_id, _current, _opts), do: :ok
 
   # The store is the truth for a hold, so the board is repaired to match it in both directions. A
   # `Blocked` label with no store hold is a hand-added label: report it and clear it. A store hold
@@ -132,6 +190,17 @@ defmodule SymphonyElixir.BlockedHold do
 
   defp dependency_hold?(%{waits_on: %{type: @dependency_type}}), do: true
   defp dependency_hold?(_hold), do: false
+
+  defp terminal?(state, terminal_states) when is_binary(state) do
+    normalized = normalize(state)
+    Enum.any?(terminal_states || [], &(normalize(&1) == normalized))
+  end
+
+  defp terminal?(_state, _terminal_states), do: false
+
+  defp tracker(opts), do: Keyword.get(opts, :tracker, SymphonyElixir.Tracker)
+
+  defp store(opts), do: Keyword.get(opts, :store, RunStore)
 
   defp todo_with_open_blockers?(%Issue{state: state}, open), do: open != [] and normalize(state) == @todo_state
 
