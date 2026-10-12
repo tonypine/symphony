@@ -7,6 +7,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case sendDecisions
     case approveAndMerge
     case sendToRework
+    case restart
     case signOff
 
     public var id: String { rawValue }
@@ -18,6 +19,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .sendDecisions: "Send Decisions"
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
+        case .restart: "Restart…"
         case .signOff: "Sign Off…"
         }
     }
@@ -29,6 +31,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .sendDecisions: "Send Decisions"
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
+        case .restart: "Restart"
         case .signOff: "Sign Off"
         }
     }
@@ -62,8 +65,10 @@ public struct InboxToolbar: Equatable {
     public var defaultCommand: InboxCommand? { buttons.first.flatMap { $0.enabled ? $0.command : nil } }
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
-    /// recommendation) and ⋯ Send to Rework…; a PR Approve and Merge… and Send to Rework…, with Open PR the default
-    /// while a check is red (D2b); a final verification Sign Off…. Actions and clarify items keep their links.
+    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR Approve and Merge… and Send to Rework…, with Open PR
+    /// the default while a check is red (D2b), and ⋯ Restart…; a final verification Sign Off…. Actions and clarify
+    /// items keep their links. Restart (the human-only full reset) sits under ⋯ on both, so it takes a deliberate
+    /// trip through the menu and its consequence sheet.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
@@ -71,13 +76,16 @@ public struct InboxToolbar: Equatable {
         case .plan:
             let changed = picks.changed(item.review.decisions)
             let sendDecisions = item.review.decisions.isEmpty ? [] : [move(.sendDecisions, enabled: changed)]
-            return InboxToolbar(buttons: [move(.approvePlan)] + sendDecisions + links, overflow: [.move(.sendToRework)])
+            return InboxToolbar(
+                buttons: [move(.approvePlan)] + sendDecisions + links,
+                overflow: [.move(.sendToRework), .move(.restart)]
+            )
         case .pr:
             let moves = [move(.approveAndMerge), move(.sendToRework)]
             if item.review.pullRequest?.hasRedCheck == true, let openPR = links.first, case .link(.openPR) = openPR.command {
-                return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: [])
+                return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: [.move(.restart)])
             }
-            return InboxToolbar(buttons: moves + links, overflow: [])
+            return InboxToolbar(buttons: moves + links, overflow: [.move(.restart)])
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .action, .clarify:
@@ -144,11 +152,14 @@ public struct ConsequenceSheet: Equatable, Identifiable {
 
     public var id: String { "\(itemID):\(move.rawValue)" }
     public var verb: String { move.verb }
-    /// Send to Rework uses the destructive style.
-    public var isDestructive: Bool { move == .sendToRework }
-    /// Send to Rework can't be sent without a reason.
-    public var needsReason: Bool { move == .sendToRework }
-    public var reasonPrompt: String { "Why does \(identifier) go back?" }
+    /// Send to Rework and Restart use the destructive style.
+    public var isDestructive: Bool { move == .sendToRework || move == .restart }
+    /// Send to Rework and Restart can't be sent without a reason.
+    public var needsReason: Bool { move == .sendToRework || move == .restart }
+    /// Why the ticket goes back (Rework), or starts over (Restart).
+    public var reasonPrompt: String {
+        move == .restart ? "Why does \(identifier) start over?" : "Why does \(identifier) go back?"
+    }
 
     public init(move: InboxMove, item: InboxItem, picks: DecisionPicks = DecisionPicks()) {
         self.move = move
@@ -183,8 +194,13 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = "Rework"
             happens = item.kind == .plan
                 ? "Posts your reason on \(id) and moves it to Rework: Symphony cancels the plan's sub-tickets still in Backlog and plans again."
-                : "Posts your reason on \(id) and moves it to Rework: Symphony closes the PR and starts over."
+                : "Posts your reason on \(id) and moves it to Rework: Symphony continues on the same pull request. Restart instead closes the pull request and starts over from main."
             stays = "Your reason stays on the ticket as your comment, even after Undo."
+        case .restart:
+            title = "Restart \(id) from main?"
+            targetState = "In Progress"
+            happens = "Closes \(id)'s open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
+            stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
         case .signOff:
             title = "Sign off \(id)?"
             targetState = "Done"
@@ -215,6 +231,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .sendDecisions: return .decisions(identifier, picks: picks)
         case .approveAndMerge: return .approvePR(identifier)
         case .sendToRework: return .rework(identifier, reason: reason.trimmingWhitespace())
+        case .restart: return .restart(identifier, reason: reason.trimmingWhitespace())
         case .signOff: return .signOff(identifier)
         }
     }

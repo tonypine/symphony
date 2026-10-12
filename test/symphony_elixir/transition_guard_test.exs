@@ -66,6 +66,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
       designed_only = designed -- legacy
 
       assert Enum.map(designed_only, & &1.signal) == [
+               :restart,
                :handoff,
                :code_review_approve,
                :code_review_rework,
@@ -312,6 +313,45 @@ defmodule SymphonyElixir.TransitionGuardTest do
     test "refuses an agent's hand move into Code Review on a designed repo" do
       assert {:error, {:code_review_requires_handoff_signal, "Code Review"}} =
                TransitionGuard.resolve_request(state("Code Review"), %{settings: designed_settings()})
+    end
+
+    test "refuses an agent's move to In Progress from a phase past implementation on a designed repo" do
+      # On the designed machine every one of these phases has the work on a pull request, so
+      # entering In Progress can only mean a Restart, which is a person's move.
+      for from <- ["Rework", "Code Review", "QA", "Merging"] do
+        assert {:error, {:restart_requires_human_approval, "In Progress"}} =
+                 TransitionGuard.resolve_request(state("In Progress"), %{settings: designed_settings(), from_state: from})
+      end
+
+      # A casing difference still matches, and the claim from Todo and a phase with no pull
+      # request yet are untouched.
+      assert {:error, {:restart_requires_human_approval, "in progress"}} =
+               TransitionGuard.resolve_request(state("in progress"), %{settings: designed_settings(), from_state: "rework"})
+
+      assert {:ok, %{"name" => "In Progress"}} =
+               TransitionGuard.resolve_request(state("In Progress"), %{settings: designed_settings(), from_state: "Todo"})
+
+      assert {:ok, %{"name" => "In Progress"}} =
+               TransitionGuard.resolve_request(state("In Progress"), %{settings: designed_settings(), from_state: "In Review"})
+    end
+
+    test "passes the In Progress state through from a post-implementation phase on a legacy repo" do
+      state = state("In Progress")
+
+      for from <- ["Rework", "Code Review", "QA", "Merging", nil] do
+        assert {:ok, ^state} =
+                 TransitionGuard.resolve_request(state, %{settings: memory_settings(), from_state: from})
+      end
+    end
+
+    test "the restart signal is a designed edge, and moves a ticket from any state to In Progress" do
+      refute :restart in TransitionGuard.signals("legacy")
+      assert :restart in TransitionGuard.signals("designed")
+      assert TransitionGuard.target(:restart, %{settings: designed_settings()}) == "In Progress"
+
+      assert TransitionGuard.legal?(:restart, "Merging", "In Progress", "designed")
+      refute TransitionGuard.legal?(:restart, "Merging", "Rework", "designed")
+      refute TransitionGuard.legal?(:restart, "Rework", nil, "legacy")
     end
 
     test "passes the Code Review state through on a legacy repo" do

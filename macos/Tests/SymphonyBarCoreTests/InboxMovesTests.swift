@@ -14,7 +14,7 @@ final class InboxMovesTests: XCTestCase {
         let toolbar = InboxToolbar.toolbar(for: plan)
         XCTAssertEqual(toolbar.buttons.map(\.command.title), ["Approve Plan…", "Send Decisions", "Open in Linear"])
         XCTAssertEqual(toolbar.buttons.map(\.enabled), [true, false, true])
-        XCTAssertEqual(toolbar.overflow, [.move(.sendToRework)])
+        XCTAssertEqual(toolbar.overflow, [.move(.sendToRework), .move(.restart)])
         XCTAssertEqual(toolbar.defaultCommand, .move(.approvePlan))
 
         // Picking the recommended option again changes nothing; another option turns Send Decisions on.
@@ -32,7 +32,7 @@ final class InboxMovesTests: XCTestCase {
         let toolbar = InboxToolbar.toolbar(for: pr)
         XCTAssertEqual(toolbar.buttons.map(\.command.title), ["Approve and Merge…", "Send to Rework…", "Open PR", "Open in Linear"])
         XCTAssertEqual(toolbar.defaultCommand, .move(.approveAndMerge))
-        XCTAssertEqual(toolbar.overflow, [])
+        XCTAssertEqual(toolbar.overflow, [.move(.restart)])
 
         var red = item(.pr)
         red.review.pullRequest = InboxReview.PullRequest(url: prURL, ci: .failed)
@@ -51,7 +51,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.action)).buttons.map(\.command), [.link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.clarify)).buttons.map(\.command), [.link(.editInLinear(linear))])
         XCTAssertNil(InboxToolbar(buttons: [.init(command: .move(.sendDecisions), enabled: false)], overflow: []).defaultCommand)
-        XCTAssertEqual(InboxMove.allCases.map(\.verb), ["Approve Plan", "Send Decisions", "Approve and Merge", "Send to Rework", "Sign Off"])
+        XCTAssertEqual(InboxMove.allCases.map(\.verb), ["Approve Plan", "Send Decisions", "Approve and Merge", "Send to Rework", "Restart", "Sign Off"])
         XCTAssertEqual(InboxMove.approvePlan.id, "approvePlan")
     }
 
@@ -148,7 +148,7 @@ final class InboxMovesTests: XCTestCase {
     func testSendToReworkNeedsAReasonAndIsDestructive() throws {
         let sheet = ConsequenceSheet(move: .sendToRework, item: try shipped("BIL-206"))
         XCTAssertEqual(sheet.title, "Send BIL-206 to Rework?")
-        XCTAssertEqual(sheet.happens, "Posts your reason on BIL-206 and moves it to Rework: Symphony closes the PR and starts over.")
+        XCTAssertEqual(sheet.happens, "Posts your reason on BIL-206 and moves it to Rework: Symphony continues on the same pull request. Restart instead closes the pull request and starts over from main.")
         XCTAssertTrue(sheet.isDestructive)
         XCTAssertTrue(sheet.needsReason)
         XCTAssertEqual(sheet.reasonPrompt, "Why does BIL-206 go back?")
@@ -160,6 +160,31 @@ final class InboxMovesTests: XCTestCase {
 
         let plan = ConsequenceSheet(move: .sendToRework, item: try shipped("SHOP-330"))
         XCTAssertTrue(plan.happens.contains("cancels the plan's sub-tickets still in Backlog and plans again"))
+    }
+
+    func testRestartResetsFromMainAndSaysWhatItDoes() throws {
+        let pr = try shipped("BIL-206")
+        let sheet = ConsequenceSheet(move: .restart, item: pr)
+        XCTAssertEqual(sheet.title, "Restart BIL-206 from main?")
+        XCTAssertEqual(
+            sheet.happens,
+            "Closes BIL-206's open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves BIL-206 to In Progress."
+        )
+        XCTAssertEqual(sheet.stays, "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading.")
+        XCTAssertEqual(sheet.targetState, "In Progress")
+        XCTAssertEqual(sheet.verb, "Restart")
+        XCTAssertTrue(sheet.isDestructive)
+        XCTAssertTrue(sheet.needsReason)
+        XCTAssertEqual(sheet.reasonPrompt, "Why does BIL-206 start over?")
+        XCTAssertNil(sheet.action())
+        XCTAssertEqual(sheet.action(reason: " The approach is wrong \n"), .restart("BIL-206", reason: "The approach is wrong"))
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Moved to In Progress")
+        XCTAssertEqual(sheet.id, "i-206:restart")
+
+        // Rework keeps its own prompt, and is destructive too.
+        let rework = ConsequenceSheet(move: .sendToRework, item: pr)
+        XCTAssertEqual(rework.reasonPrompt, "Why does BIL-206 go back?")
+        XCTAssertTrue(rework.isDestructive)
     }
 
     func testSignOffMovesTheFinalVerificationToDone() throws {
@@ -197,6 +222,7 @@ final class InboxMovesTests: XCTestCase {
             (.approvePlan("SHOP-330"), "approve_plan", ["issue_identifier": "SHOP-330"]),
             (.approvePR("BIL-206"), "approve_pr", ["issue_identifier": "BIL-206"]),
             (.rework("BIL-206", reason: "No"), "rework", ["issue_identifier": "BIL-206", "reason": "No"]),
+            (.restart("BIL-206", reason: "No"), "restart", ["issue_identifier": "BIL-206", "reason": "No"]),
             (.decisions("SHOP-330", picks: picks), "decisions", ["issue_identifier": "SHOP-330", "picks": [["question": "Where?", "answer": "B"]]]),
             (.signOff("BIL-213"), "sign_off", ["issue_identifier": "BIL-213"]),
             (.backlog("BIL-206", note: "Later"), "backlog", ["issue_identifier": "BIL-206", "note": "Later"]),
@@ -221,11 +247,13 @@ final class InboxMovesTests: XCTestCase {
             .failed("Couldn't move BIL-206 to Merging: BIL-206 is Merging; the Director answers it only from In Review or Human Review (HTTP 409)")
         )
         let prefixes = [
-            ControlAction.approvePlan("X"), .rework("X", reason: "r"), .decisions("X", picks: []), .signOff("X"), .backlog("X", note: nil), .undo("X"),
+            ControlAction.approvePlan("X"), .rework("X", reason: "r"), .restart("X", reason: "r"), .decisions("X", picks: []), .signOff("X"),
+            .backlog("X", note: nil), .undo("X"),
         ].map { ControlAPI.result($0, statusCode: 500, data: Data()) }
         XCTAssertEqual(prefixes, [
             .failed("Couldn't approve the plan of X: HTTP 500"),
             .failed("Couldn't send X to Rework: HTTP 500"),
+            .failed("Couldn't restart X: HTTP 500"),
             .failed("Couldn't send the decisions on X: HTTP 500"),
             .failed("Couldn't sign off X: HTTP 500"),
             .failed("Couldn't move X to Backlog: HTTP 500"),
@@ -247,6 +275,7 @@ final class InboxMovesTests: XCTestCase {
             .undo("SHOP-330"),
             try XCTUnwrap(ConsequenceSheet(move: .approveAndMerge, item: pr).action()),
             try XCTUnwrap(ConsequenceSheet(move: .sendToRework, item: pr).action(reason: "The proration rounds the wrong way")),
+            try XCTUnwrap(ConsequenceSheet(move: .restart, item: pr).action(reason: "The proration rounds the wrong way")),
             .signOff("BIL-213"),
             .backlog("BIL-206", note: nil),
         ]
@@ -261,7 +290,7 @@ final class InboxMovesTests: XCTestCase {
         let entries = try lines.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
         XCTAssertEqual(entries.map { $0["path"] as? String }, [
             "/api/v1/control/decisions", "/api/v1/control/approve_plan", "/api/v1/control/undo", "/api/v1/control/approve_pr",
-            "/api/v1/control/rework", "/api/v1/control/sign_off", "/api/v1/control/backlog",
+            "/api/v1/control/rework", "/api/v1/control/restart", "/api/v1/control/sign_off", "/api/v1/control/backlog",
         ])
         let decisions = try XCTUnwrap(entries[0]["body"] as? [String: Any])
         XCTAssertEqual(decisions["picks"] as? [[String: String]], [
@@ -269,6 +298,7 @@ final class InboxMovesTests: XCTestCase {
             ["question": "Which currency does a card hold?", "answer": "The store's currency"],
         ])
         XCTAssertEqual(entries[4]["body"] as? [String: String], ["issue_identifier": "BIL-206", "reason": "The proration rounds the wrong way"])
+        XCTAssertEqual(entries[5]["body"] as? [String: String], ["issue_identifier": "BIL-206", "reason": "The proration rounds the wrong way"])
     }
 
     // MARK: - The notification
