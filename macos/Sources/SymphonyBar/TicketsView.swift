@@ -168,6 +168,9 @@ struct TicketsView: View {
     @Binding var inspectorShown: Bool
     let actions: TicketsActions
     @State private var sortOrder = TicketList.defaultSort
+    /// The table's own selection, handed to the model after the table's delegate call returns: updating the
+    /// window's model inside it re-renders the table reentrantly.
+    @State private var tableSelection: String?
 
     var body: some View {
         let rows = list.rows(filter: filter, search: search).sorted(using: sortOrder)
@@ -177,12 +180,20 @@ struct TicketsView: View {
             if rows.isEmpty {
                 EmptyState(title: search.isEmpty ? TicketList.emptyTitle : TicketList.noMatchTitle, symbol: SymphonyView.tickets.symbol)
             } else {
-                TicketsTable(rows: rows, selection: $selection, sortOrder: $sortOrder, actions: actions)
+                TicketsTable(rows: rows, selection: $tableSelection, sortOrder: $sortOrder, actions: actions)
                     .onKeyPress(.space) {
                         inspectorShown.toggle()
                         return .handled
                     }
             }
+        }
+        .onAppear { tableSelection = selection }
+        .onChange(of: tableSelection) { _, chosen in
+            guard chosen != selection else { return }
+            Task { @MainActor in selection = chosen }
+        }
+        .onChange(of: selection) { _, chosen in
+            if chosen != tableSelection { tableSelection = chosen }
         }
         .inspector(isPresented: $inspectorShown) {
             TicketInspector(row: selection.flatMap(list.row), actions: actions)
@@ -198,6 +209,13 @@ struct TicketsScopeBar: View {
     let inspectorShown: Bool
 
     var body: some View {
+        // Scrolls rather than widening the window when the stages don't fit.
+        ScrollView(.horizontal, showsIndicators: false) {
+            bar
+        }
+    }
+
+    private var bar: some View {
         HStack(spacing: DesignTokens.Space.s2) {
             Picker("Stage", selection: barSelection) {
                 ForEach(TicketList.Filter.bar(inspectorShown: inspectorShown), id: \.self) { choice in
