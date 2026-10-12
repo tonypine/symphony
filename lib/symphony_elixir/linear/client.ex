@@ -346,11 +346,7 @@ defmodule SymphonyElixir.Linear.Client do
   defp dispatch_states_for(tracker), do: &dispatch_state_names(&1, tracker)
 
   defp dispatch_state_names(repo, tracker) do
-    StateMachine.active_states(
-      StateMachine.version(repo),
-      tracker.active_states,
-      StateMachine.designed_phase_states(tracker)
-    )
+    StateMachine.tracker_active_states(StateMachine.version(repo), tracker)
   end
 
   @spec fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}

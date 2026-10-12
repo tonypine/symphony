@@ -13,6 +13,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Orchestrator,
     Quality,
     RunKind,
+    Sessions,
     StrayProcesses,
     URLUtils,
     UsageLimit
@@ -76,6 +77,7 @@ defmodule SymphonyElixirWeb.Presenter do
             waiting_on_you: length(waiting_on_you)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
+          sessions: sessions_payload(snapshot.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
@@ -611,6 +613,12 @@ defmodule SymphonyElixirWeb.Presenter do
       retry -> "retrying"
       true -> "watching"
     end
+  end
+
+  defp sessions_payload(running) do
+    running
+    |> Sessions.list()
+    |> Enum.map(&%{&1 | started_at: iso8601(&1.started_at)})
   end
 
   defp running_entry_payload(entry) do

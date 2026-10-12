@@ -51,12 +51,36 @@ defmodule SymphonyElixir.StateMachine do
 
   @doc """
   The states dispatch picks work up from for `settings`'s version: the configured active states,
-  plus the designed phase states when the repo is on the designed machine.
+  plus the designed phase states when the repo is on the designed machine. A designed repo never
+  dispatches from `Plan Review`, even when its active states name it.
   """
   @spec active_states(map()) :: [String.t()]
   def active_states(settings) do
-    active_states(version(settings), active_state_names(settings), designed_phase_states(settings))
+    tracker_active_states(version(settings), field(settings, :tracker) || field(settings, "tracker") || %{}, settings)
   end
+
+  @doc """
+  The states dispatch picks work up from for an explicit version and tracker settings: the
+  tracker's active states, plus its designed phase states on the designed machine, never its
+  `Plan Review` state there, even when the active states name it.
+  """
+  @spec tracker_active_states(version(), map()) :: [String.t()]
+  def tracker_active_states(version, tracker) when is_map(tracker), do: tracker_active_states(version, tracker, tracker)
+
+  defp tracker_active_states(version, tracker, phase_source) do
+    base = List.wrap(field(tracker, :active_states) || field(tracker, "active_states"))
+    states = active_states(version, base, designed_phase_states(phase_source))
+
+    case phase_state(phase_source, :plan_review_state) do
+      plan_review when version == @designed and is_binary(plan_review) ->
+        Enum.reject(states, &(normalize(&1) == normalize(plan_review)))
+
+      _plan_review ->
+        states
+    end
+  end
+
+  defp normalize(state), do: state |> to_string() |> String.trim() |> String.downcase()
 
   @doc "The active states for an explicit version, base list and designed phase list."
   @spec active_states(version(), [String.t()], [String.t()]) :: [String.t()]
@@ -88,13 +112,6 @@ defmodule SymphonyElixir.StateMachine do
   end
 
   defp configured_version(_settings), do: nil
-
-  defp active_state_names(settings) do
-    case field(settings, :tracker) || field(settings, "tracker") do
-      tracker when is_map(tracker) -> List.wrap(field(tracker, :active_states) || field(tracker, "active_states"))
-      _tracker -> []
-    end
-  end
 
   defp field(map, key) when is_map(map), do: Map.get(map, key)
   defp field(_map, _key), do: nil

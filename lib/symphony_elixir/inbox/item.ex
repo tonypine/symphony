@@ -33,6 +33,7 @@ defmodule SymphonyElixir.Inbox.Item do
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
+  alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.QaAgent.Report
   alias SymphonyElixir.StateMachine
 
@@ -123,7 +124,9 @@ defmodule SymphonyElixir.Inbox.Item do
   defp ask(%{kind: :final_verification}, _node, _settings), do: "Sign off the final verification"
   defp ask(%{kind: :pr}, _node, _settings), do: "Review the pull request"
 
-  defp review(:action, node, _repo_key, settings, _lookups) do
+  # A merge confirmation's hold carries the move its confirmation performs (`Merging`), so the
+  # Inbox's Decide says the ticket moves; an ordinary decision's carries none.
+  defp review(:action, node, repo_key, settings, lookups) do
     {comment_id, request} = Collector.newest_open_request(node, settings)
 
     %{
@@ -135,7 +138,8 @@ defmodule SymphonyElixir.Inbox.Item do
       est_minutes: request.est_minutes,
       steps: request.steps,
       options: Enum.map(request.options, &option/1),
-      requested_at: request.created_at
+      requested_at: request.created_at,
+      confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))
     }
   end
 

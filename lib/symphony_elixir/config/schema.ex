@@ -2776,7 +2776,8 @@ defmodule SymphonyElixir.Config.Schema do
     with :ok <- validate_agent_approval_policy(settings.agent),
          :ok <- validate_agent_sandbox_runtime(settings.agent),
          :ok <- validate_agent_mcp(settings.agent),
-         :ok <- validate_openrouter_workers(settings) do
+         :ok <- validate_openrouter_workers(settings),
+         :ok <- validate_plan_review_state_inactive(settings) do
       validate_finalized_notification_urls(settings.notifications)
     end
   end
@@ -2791,6 +2792,17 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp validate_openrouter_workers(_settings), do: :ok
+
+  # A designed repo's plan parents wait for a person in Plan Review, so dispatching from it would
+  # take the handoff away from them, as for the human review state.
+  defp validate_plan_review_state_inactive(%__MODULE__{state_machine: "designed", tracker: %Tracker{plan_review_state: state} = tracker})
+       when is_binary(state) do
+    if Enum.any?(tracker.active_states, &(String.downcase(String.trim(&1)) == String.downcase(state))),
+      do: {:error, "tracker.plan_review_state must not be an active state on a designed repo"},
+      else: :ok
+  end
+
+  defp validate_plan_review_state_inactive(_settings), do: :ok
 
   defp openrouter_provider_keys(%Agent{provider: provider, run_profiles: profiles}) do
     Enum.flat_map(RunKind.names(), fn kind ->

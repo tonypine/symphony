@@ -156,22 +156,21 @@ defmodule SymphonyElixir.AutoMergeTest do
              RunStore.get_ticket_state(@repo_key, @issue_id).signals
   end
 
-  test "a PR GitHub can already merge is squash-merged right away" do
+  test "a clean PR with green checks is squash-merged right away, without turning auto-merge on" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
     merging = issue("Merging")
     track([merging])
     activity(head: "head-1", merge_state: "CLEAN")
     ci_status(merge_state: "CLEAN", checks: [check("SUCCESS"), check("SKIPPED"), %{name: "lint", status: "SUCCESS", conclusion: "NEUTRAL"}])
-    replies(%{enable_auto_merge: {:error, :clean_status}})
 
     log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(now) end)
-    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+    refute_received {:enable_auto_merge, _url, _request}
     assert_received {:squash_merge, @pr_url, request}
     assert request == %{pr_node_id: "PR_node", head_sha: "head-1", pr_number: 1780, pr_title: "Ship it", pr_description: "PR body"}
 
     assert log =~
-             "Auto-merge ACME-1780: GitHub refused auto-merge (the PR can already merge); squash-merging the clean PR directly pr_url=#{@pr_url} commit_sha=head-1"
+             "Auto-merge ACME-1780: the PR is clean and its checks are green; squash-merging it directly pr_url=#{@pr_url} commit_sha=head-1"
 
     refute_received {:issue_comment, _issue_id, _body}
     # Auto-merge still owns it, so no landing agent is dispatched.
@@ -193,7 +192,8 @@ defmodule SymphonyElixir.AutoMergeTest do
     put_run!(now)
     merging = issue("Merging")
     track([merging])
-    activity(head: "head-1", merge_state: "CLEAN")
+    # GitHub hadn't computed the merge state yet when the PR was read.
+    activity(head: "head-1", merge_state: "UNKNOWN")
     ci_status(merge_state: "CLEAN", checks: [])
 
     replies(%{
@@ -208,6 +208,46 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert log =~ "Auto merge is not allowed for this repository"
     assert log =~ "squash-merging the clean PR directly"
     refute log =~ "fell back to the landing agent"
+    refute_received {:issue_comment, _issue_id, _body}
+    assert AutoMerge.owns_issue?(merging)
+  end
+
+  test "a clean PR whose checks are not green yet turns auto-merge on" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "CLEAN")
+    ci_status(merge_state: "CLEAN", checks: [%{name: "test", status: "IN_PROGRESS", conclusion: nil}])
+
+    capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now) end)
+    refute_received {:squash_merge, _url, _request}
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+  end
+
+  test "a clean PR whose CI status can't be read turns auto-merge on" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "CLEAN")
+
+    capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now) end)
+    refute_received {:squash_merge, _url, _request}
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+  end
+
+  test "a clean green PR GitHub won't merge directly turns auto-merge on instead" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "CLEAN")
+    ci_status(merge_state: "CLEAN", checks: [check("SUCCESS")])
+    replies(%{squash_merge: {:error, :timeout}})
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now) end)
+    assert_received {:squash_merge, @pr_url, %{head_sha: "head-1"}}
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+    assert log =~ "squash-merging the clean PR failed; turning auto-merge on instead commit_sha=head-1"
     refute_received {:issue_comment, _issue_id, _body}
     assert AutoMerge.owns_issue?(merging)
   end

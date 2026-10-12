@@ -289,14 +289,25 @@ defmodule SymphonyElixir.TransitionGuard do
   Performs the move `signal` names for `issue_id`, resolving its target from `ctx`. This is the one
   caller of `Tracker.update_issue_state/2`; `opts[:tracker]` overrides the tracker (tests, a fake).
   A move into a retired state is refused with `{:error, {:retired_state, target}}`.
+  A move into `Merging` asks the PR poller to poll now (`opts[:on_merging]` overrides it), so a PR
+  that is already green merges at once instead of on the next timer, by when its head may be behind.
   """
   @spec perform(String.t(), signal(), context(), keyword()) :: :ok | {:error, term()}
   def perform(issue_id, signal, ctx \\ %{}, opts \\ []) do
     target = target(signal, ctx)
 
-    if retired_state?(target),
-      do: {:error, {:retired_state, target}},
-      else: Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target)
+    if retired_state?(target) do
+      {:error, {:retired_state, target}}
+    else
+      case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target) do
+        :ok when target == @merging_state ->
+          Keyword.get(opts, :on_merging, &SymphonyElixir.PrReviewPoller.poll_now/0).()
+          :ok
+
+        result ->
+          result
+      end
+    end
   end
 
   @doc """

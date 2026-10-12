@@ -3,7 +3,9 @@ defmodule SymphonyElixir.AutoMerge do
   Lands an approved (`Merging`) issue's pull request with GitHub auto-merge instead of a
   landing agent.
 
-  The PR review poller calls `step/5` for every poll of a `Merging` issue's open PR. It turns
+  The PR review poller calls `step/5` for every poll of a `Merging` issue's open PR (and polls
+  at once when Symphony moves an issue into `Merging`). A PR that is already CLEAN with green or
+  no checks is squash-merged right away, without auto-merge. Otherwise it turns
   on auto-merge once per head, and asks GitHub to merge the base branch in once per head when
   the PR is `BEHIND`. GitHub merges the PR when the required checks pass; the poller then
   moves the issue to `Done`. When GitHub refuses auto-merge (the PR can already merge, the
@@ -185,7 +187,46 @@ defmodule SymphonyElixir.AutoMerge do
       current.enabled_head_sha == head ->
         {:ok, %{current | state: enabled_state(current.state)}}
 
+      merge_state(activity) == @clean_merge_state ->
+        merge_if_ready(current, record, activity, opts)
+
       true ->
+        enable(current, record, activity, opts)
+    end
+  end
+
+  # A PR that is already CLEAN when it enters `Merging` needs no auto-merge: when its checks are
+  # green it is squash-merged now, before the base branch moves on and leaves its head behind
+  # (another update-branch and another CI run). Otherwise auto-merge waits for the checks.
+  defp merge_if_ready(current, record, activity, opts) do
+    github = Keyword.get(opts, :github, PullRequest)
+    request = squash_request(activity, current.head_sha)
+    pr_url = pr_url(record, activity)
+    gh_opts = [cwd: Map.get(record, :workspace_path)]
+    head = current.head_sha
+
+    case github.fetch_ci_status(pr_url, gh_opts) do
+      {:ok, %{commit_sha: ^head} = status} ->
+        if mergeable_now?(status),
+          do: merge_ready(current, record, activity, pr_url, request, github, gh_opts, opts),
+          else: enable(current, record, activity, opts)
+
+      _status ->
+        enable(current, record, activity, opts)
+    end
+  end
+
+  # A merge GitHub refuses here (a check that just turned, a protection rule) leaves the PR to
+  # auto-merge, as if it hadn't been clean.
+  defp merge_ready(current, record, activity, pr_url, request, github, gh_opts, opts) do
+    Logger.info("Auto-merge #{identifier(record)}: the PR is clean and its checks are green; squash-merging it directly pr_url=#{pr_url} commit_sha=#{current.head_sha}")
+
+    case github.squash_merge(pr_url, request, gh_opts) do
+      :ok ->
+        {:ok, %{current | state: "merging", enabled_head_sha: current.head_sha}}
+
+      {:error, reason} ->
+        Logger.warning("Auto-merge #{identifier(record)}: squash-merging the clean PR failed; turning auto-merge on instead commit_sha=#{current.head_sha}: #{format_reason(reason)}")
         enable(current, record, activity, opts)
     end
   end

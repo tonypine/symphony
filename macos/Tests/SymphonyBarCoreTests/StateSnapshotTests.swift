@@ -48,6 +48,23 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    func testDecodesTheSessionKinds() throws {
+        let data = try recordedState(
+            replacing: "sessions", with: [["kind": "implementation", "issue_identifier": "TP-1"], ["kind": "qa_pass"], [:]]
+        )
+        guard case .state(let snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertEqual(snapshot.sessionKinds, ["implementation", "qa_pass", "agent"])
+    }
+
+    func testASymphonyWithoutSessionsLeavesTheKindsUnknown() {
+        guard case .state(let snapshot) = SymphonyState.poll(data: Data(#"{"counts": {"running": 0}}"#.utf8), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(snapshot.sessionKinds)
+    }
+
     func testDecodesABudgetPausedOnTheDailyCap() throws {
         let data = try recordedState(replacing: "budget", with: [
             "daily_limit": 1_000_000_000, "daily_used": 1_000_000_123, "daily_remaining": 0, "daily_paused": true,

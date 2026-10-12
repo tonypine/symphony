@@ -1074,6 +1074,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp filter_payload(payload, repo_filter) when is_binary(repo_filter) do
     payload
     |> Map.update(:running, [], &filter_repo_rows(&1, repo_filter))
+    |> Map.update(:sessions, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:watching, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:human_review, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:retrying, [], &filter_repo_rows(&1, repo_filter))

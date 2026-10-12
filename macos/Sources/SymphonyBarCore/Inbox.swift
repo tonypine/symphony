@@ -277,6 +277,9 @@ public struct InboxReview: Equatable {
         /// The id of the request comment a decision answers: its reply goes under it. Nil for a request Symphony
         /// can't answer from the Inbox.
         public var commentID: String?
+        /// The state confirming the request moves the ticket to: `Merging` for a merge confirmation, nil for an
+        /// ordinary decision, which moves nothing.
+        public var confirm: String?
 
         public struct Option: Equatable {
             public var label: String
@@ -435,6 +438,8 @@ public struct InboxReview: Equatable {
         let options: [OptionPayload]?
         /// The request comment a decision answers.
         let commentId: String?
+        /// The state confirming the request moves the ticket to.
+        let confirm: String?
         // A clarify item.
         let held: Bool?
         let score: Int?
@@ -479,7 +484,8 @@ public struct InboxReview: Equatable {
                 options: (payload.options ?? []).compactMap { option in
                     option.label.map { Action.Option(label: $0, effect: option.effect, recommended: option.recommended ?? false) }
                 },
-                commentID: payload.commentId
+                commentID: payload.commentId,
+                confirm: payload.confirm
             ),
             clarify: payload.held.map { held in
                 Clarify(

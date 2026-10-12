@@ -123,7 +123,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         apply_set(repo_key, issue_id, attrs, opts)
 
       :clear ->
-        apply_clear(repo_key, issue_id, current, opts)
+        apply_clear(repo_key, issue_id, current, replies(node, current), opts)
 
       :none ->
         :none
@@ -142,11 +142,12 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   # Clearing the hold is what "the decision is recorded" does. A merge confirmation's hold carries
   # the move its confirmation performs (`SymphonyElixir.MergeConfirmation`), so answering it by a
   # reply under the request continues into `Merging` rather than leaving the ticket waiting in its
-  # phase; an ordinary decision carries none and continues in place, so the next poll dispatches it.
-  defp apply_clear(repo_key, issue_id, current, opts) do
+  # phase, or into `Rework` when the reply names that option; an ordinary decision carries none and
+  # continues in place, so the next poll dispatches it.
+  defp apply_clear(repo_key, issue_id, current, replies, opts) do
     case Hold.clear(repo_key, issue_id, :needs_decision, opts) do
       :ok ->
-        resume(repo_key, issue_id, current, opts)
+        resume(repo_key, issue_id, current, replies, opts)
         :clear
 
       {:error, reason} ->
@@ -154,8 +155,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     end
   end
 
-  defp resume(repo_key, issue_id, current, opts) do
-    case MergeConfirmation.confirm_target(current) do
+  defp resume(repo_key, issue_id, current, replies, opts) do
+    case MergeConfirmation.reply_target(current, replies) do
       nil -> :ok
       target -> continue(repo_key, issue_id, target, opts)
     end
@@ -205,6 +206,20 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   defp same_decision?(_current_hold, _request), do: false
+
+  # The bodies of the replies under the requests carrying the hold's question: the answer a person
+  # gave, which names the option they picked. A withdrawal is the run's, not an answer.
+  defp replies(node, current) do
+    title = get_in(current, [:decision, :title])
+    comments = node |> get_in(["comments", "nodes"]) |> List.wrap()
+    request_ids = for %{"id" => id, "body" => body} <- comments, match?(%{title: ^title}, Request.parse(body, nil)), into: MapSet.new(), do: id
+
+    for %{"parent" => %{"id" => parent_id}, "body" => body} <- comments,
+        MapSet.member?(request_ids, parent_id),
+        is_binary(body),
+        not Request.withdrawal?(body),
+        do: body
+  end
 
   defp labels(node), do: node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])
 

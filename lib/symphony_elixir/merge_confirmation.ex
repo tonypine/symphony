@@ -18,7 +18,8 @@ defmodule SymphonyElixir.MergeConfirmation do
   into `Merging` exactly as when the setting is `off`: both the Inbox's Decide and a reply under the
   request clear the hold and then perform that move through the guard
   (`SymphonyElixir.DirectorMoves`, `SymphonyElixir.NeedsDecisionHold`). A redirect is a directed
-  move — the Inbox's Send to Rework — and goes through the guard the same way.
+  move — the Inbox's Send to Rework, or a reply naming that option (`reply_target/2`) — and goes
+  through the guard the same way.
 
   Nothing else changes: rework verdicts never wait on a person, and CI Fix and holds behave the
   same in both modes. The gating itself lives in the guard's edge table, not here:
@@ -35,6 +36,7 @@ defmodule SymphonyElixir.MergeConfirmation do
   @merging_state "Merging"
   @rework_state "Rework"
   @confirm_target @merging_state
+  @rework_label "Send to Rework"
   @review_signal "code_review"
   @part_max 240
 
@@ -119,6 +121,21 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   def confirm_target(_hold), do: nil
 
+  @doc """
+  The move a reply under the request performs: `Rework` when a reply names the request's
+  `Send to Rework` option, else the carried confirmation (`confirm_target/1`). An ordinary
+  decision's hold carries none, so its reply moves nothing.
+  """
+  @spec reply_target(map() | nil, [String.t()]) :: String.t() | nil
+  def reply_target(hold, replies) do
+    case confirm_target(hold) do
+      nil -> nil
+      carried -> if Enum.any?(replies, &names_rework?/1), do: TransitionGuard.target(:director_move, %{target: @rework_state}), else: carried
+    end
+  end
+
+  defp names_rework?(body), do: body |> String.downcase() |> String.contains?(String.downcase(@rework_label))
+
   defp post_request(issue, opts, request) do
     case tracker(opts).create_comment(issue.id, Request.render_hold(request, issue.state)) do
       :ok -> :ok
@@ -165,7 +182,7 @@ defmodule SymphonyElixir.MergeConfirmation do
     [
       %{label: "Merge", effect: "the ticket moves to #{@merging_state} and the machinery merges it", recommended: true},
       %{
-        label: "Send to Rework",
+        label: @rework_label,
         effect: "the ticket moves to #{@rework_state} with this summary#{pr_clause(summary)}",
         recommended: false
       }
