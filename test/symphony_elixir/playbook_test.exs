@@ -73,6 +73,18 @@ defmodule SymphonyElixir.PlaybookTest do
       refute designed =~ "`Auto Review`"
     end
 
+    test "escape_hatches' designed variant parses, names itself and holds the ticket instead of moving it" do
+      assert {:ok, designed} = Playbook.fetch("escape_hatches", "designed")
+      assert {:ok, base} = Playbook.fetch("escape_hatches")
+
+      assert designed != base
+      assert {:ok, _template} = Solid.parse(designed)
+      assert designed =~ "name: escape_hatches\n"
+      assert designed =~ "The tool sets the `Needs Decision` hold and the `Needs Decision` label\n  and leaves the ticket exactly where it is"
+      assert designed =~ "Do not move the ticket"
+      refute base =~ "a decision never moves a ticket"
+    end
+
     test "a partial with no variant for a version falls back to the base body" do
       assert Playbook.fetch("status_map", "legacy") == Playbook.fetch("status_map")
       assert Playbook.fetch("guardrails", "designed") == Playbook.fetch("guardrails")

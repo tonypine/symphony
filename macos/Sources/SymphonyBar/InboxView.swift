@@ -243,7 +243,9 @@ struct InboxReviewBody: View {
             case .finalVerification:
                 BriefSections(brief: item.review.brief)
             case .action:
-                if let action = item.review.action { ActionCards(action: action) }
+                if let action = item.review.action {
+                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, answerable: action.commentID != nil && action.decision != nil)
+                }
             case .clarify:
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
             case .blocked:
@@ -592,9 +594,14 @@ private struct CheckRow: View {
     }
 }
 
-/// D2c: why, the numbered steps or the options, about how long, and what it unblocks.
+/// D2c: why, the numbered steps or the options, about how long, and what it unblocks. A request's options are
+/// selectable: the picked one is the answer the toolbar's Send Decision sends.
 private struct ActionCards: View {
     let action: InboxReview.Action
+    var picks = DecisionPicks()
+    var pick: (Int) -> Void = { _ in }
+    /// True when the item carries an answerable request.
+    var answerable = false
 
     var body: some View {
         if let why = action.why {
@@ -605,17 +612,7 @@ private struct ActionCards: View {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     Text(question).textSelection(.enabled)
                     ForEach(Array(action.options.enumerated()), id: \.offset) { index, option in
-                        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                            Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
-                            Text(option.label).bold()
-                            if option.recommended {
-                                Text("Recommended")
-                                    .font(DesignTokens.TypeStyle.label.font)
-                                    .padding(.horizontal, DesignTokens.Space.s2)
-                                    .background(Color.accentColor.opacity(0.18), in: Capsule())
-                            }
-                            if let effect = option.effect { Text(effect).foregroundStyle(.secondary) }
-                        }
+                        OptionRow(option: option, number: index + 1, selected: selected(index), selectable: answerable) { pick(index) }
                     }
                 }
             }
@@ -641,6 +638,48 @@ private struct ActionCards: View {
                 }
             }
         }
+    }
+
+    /// Whether the option at `index` is the answer the toolbar sends: the Director's pick, else the recommendation.
+    private func selected(_ index: Int) -> Bool {
+        guard answerable, let decision = action.decision else { return false }
+        return picks.pick(0, in: decision) == index
+    }
+}
+
+/// One option of a request (D2c): selectable when the item can be answered, with the picked one marked.
+private struct OptionRow: View {
+    let option: InboxReview.Action.Option
+    let number: Int
+    let selected: Bool
+    let selectable: Bool
+    let choose: () -> Void
+
+    var body: some View {
+        Button(action: choose) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                if selectable {
+                    Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                        .accessibilityHidden(true)
+                }
+                Text("\(number).").monospacedDigit().foregroundStyle(.secondary)
+                Text(option.label).bold()
+                if option.recommended {
+                    Text("Recommended")
+                        .font(DesignTokens.TypeStyle.label.font)
+                        .padding(.horizontal, DesignTokens.Space.s2)
+                        .background(Color.accentColor.opacity(0.18), in: Capsule())
+                }
+                if let effect = option.effect { Text(effect).foregroundStyle(.secondary) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!selectable)
+        .accessibilityLabel(option.label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 

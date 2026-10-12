@@ -7,10 +7,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   audit record.
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `approve_pr`, `rework`,
-  `decisions`, `sign_off`, `backlog`, `unblock` and `undo`) are made by `SymphonyElixir.DirectorMoves`:
+  `decisions`, `sign_off`, `backlog`, `unblock`, `decide` and `undo`) are made by
+  `SymphonyElixir.DirectorMoves`:
   each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
   `move_incomplete` when Linear took one of the move's two writes and refused the other, and 200 with
-  the states it moved between.
+  the states it moved between. `decide` answers a designed repo's decision request: it takes the
+  `picks`, the `request_comment_id` they answer and the optional `move` the decision directs.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -90,6 +92,15 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec unblock(Conn.t(), map()) :: Conn.t()
   def unblock(conn, params), do: director_move(conn, :unblock, params, %{})
+
+  @spec decide(Conn.t(), map()) :: Conn.t()
+  def decide(conn, params) do
+    director_move(conn, :decide, params, %{
+      picks: picks(params["picks"]),
+      request_comment_id: string_param(params["request_comment_id"]),
+      move: string_param(params["move"])
+    })
+  end
 
   @spec undo(Conn.t(), map()) :: Conn.t()
   def undo(conn, params) do

@@ -4277,16 +4277,18 @@ defmodule SymphonyElixir.Orchestrator do
   # again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
     Issue.blocked?(issue, terminal_states) or
-      blocked_hold?(issue) or
+      hold?(issue) or
       (not Issue.replanning?(issue) and
          (Issue.waiting_on_sub_issues?(issue, terminal_states) or
             SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
 
-  # A Blocked hold pauses the ticket in its phase — an agent reported a block, or the poll sweep set
-  # a dependency hold. The store is the truth; the board label is only its projection. A legacy
-  # repo never records a hold, so this is false there and dispatch is unaffected.
-  defp blocked_hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held?(repo_key, issue_id, :blocked)
+  # A hold pauses the ticket in its phase and lifts when its condition does — a `Blocked` one when
+  # what it waits on goes terminal or a person grants access, a `Needs Decision` one when the person
+  # records the decision — and the ticket then dispatches again from where it stopped. The store is
+  # the truth; the board label is only its projection. A legacy repo never records a hold, so this
+  # is false there and dispatch is unaffected.
+  defp hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held_any?(repo_key, issue_id)
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))

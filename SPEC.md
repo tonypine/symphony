@@ -4679,6 +4679,7 @@ Minimum endpoints:
     | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
     | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
+    | `decide` | any designed repo's ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
@@ -4694,7 +4695,8 @@ Minimum endpoints:
     ticket Linear then keeps in `Merging` gets auto-merge on again on the next poll. When GitHub
     can't be read or refuses to turn it off, `undo` answers `502` `github_error` and leaves the
     ticket in `Merging`.
-  - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
+  - A missing `issue_identifier`, `reason`, `picks` or `request_comment_id` answers `422`, an
+    unknown ticket `404`, and a
     Linear error `502`.
   - When Linear takes the first of a move's two writes and refuses the second, the move answers
     `502` `move_incomplete` with a message that says what was already done, and still writes the

@@ -8,6 +8,8 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case approveAndMerge
     case sendToRework
     case signOff
+    /// Answers a decision request: the ticket continues in its phase, or the answer directs a move.
+    case decide
     case unblock
 
     public var id: String { rawValue }
@@ -20,6 +22,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
         case .signOff: "Sign Off…"
+        case .decide: "Send Decision…"
         case .unblock: "Unblock…"
         }
     }
@@ -32,6 +35,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
         case .signOff: "Sign Off"
+        case .decide: "Send Decision"
         case .unblock: "Unblock"
         }
     }
@@ -66,8 +70,10 @@ public struct InboxToolbar: Equatable {
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
     /// recommendation) and ⋯ Send to Rework…; a PR Approve and Merge… and Send to Rework…, with Open PR the default
-    /// while a check is red (D2b); a final verification Sign Off…; a blocked ticket Unblock…. Actions and clarify
-    /// items keep their links.
+    /// while a check is red (D2b); a final verification Sign Off…; a blocked ticket Unblock…. An action carrying an
+    /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
+    /// and a clarify item, keep their links, but an action whose options are listed in its card drops the Copy Steps
+    /// link that would only repeat them.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
@@ -86,7 +92,19 @@ public struct InboxToolbar: Equatable {
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .blocked:
             return InboxToolbar(buttons: [move(.unblock)] + links, overflow: [])
-        case .action, .clarify:
+        case .action:
+            let action = item.review.action
+            // A request's options are shown and picked in its card, so its Copy Steps link (which would list the
+            // same options) is left out; a steps-only action keeps it.
+            let actionLinks = links.filter { button in
+                if case .link(.copySteps) = button.command, action?.options.isEmpty == false { return false }
+                return true
+            }
+            guard action?.commentID != nil, action?.decision != nil else {
+                return InboxToolbar(buttons: actionLinks, overflow: [])
+            }
+            return InboxToolbar(buttons: [move(.decide)] + actionLinks, overflow: [.move(.sendToRework)])
+        case .clarify:
             return InboxToolbar(buttons: links, overflow: [])
         }
     }
@@ -144,6 +162,12 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var stays: String
     /// The picks a decisions sheet posts, listed in it.
     public var picks: [ControlAction.DecisionPick]
+    /// True when the move answers a decision request instead of moving the ticket on its own.
+    public var isDecision: Bool
+    /// The request a decision answers, as one decision; nil for the moves that don't answer one.
+    public var request: InboxReview.Decision?
+    /// The id of the request comment the answer replies under, nil for the moves that don't answer one.
+    public var requestCommentID: String?
     /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in In Review).
     /// The banner follows Symphony's answer instead, which knows the workflow's states.
     public var targetState: String?
@@ -161,6 +185,13 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         itemID = item.id
         identifier = item.identifier
         let id = item.identifier
+        // An action carrying a request is answered through `decide`, whatever the button: the reply under the
+        // request comment is what closes it, and a plain move would leave the hold behind. Without the request
+        // comment there is nothing to reply under, so neither button answers one.
+        let answersRequest = item.kind == .action && item.review.action?.commentID != nil
+        isDecision = (move == .decide || move == .sendToRework) && answersRequest
+        request = isDecision ? item.review.action?.decision : nil
+        requestCommentID = isDecision ? item.review.action?.commentID : nil
         self.picks = []
         switch move {
         case .approvePlan:
@@ -187,15 +218,27 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .sendToRework:
             title = "Send \(id) to Rework?"
             targetState = "Rework"
-            happens = item.kind == .plan
-                ? "Posts your reason on \(id) and moves it to Rework: Symphony cancels the plan's sub-tickets still in Backlog and plans again."
-                : "Posts your reason on \(id) and moves it to Rework: Symphony closes the PR and starts over."
-            stays = "Your reason stays on the ticket as your comment, even after Undo."
+            if isDecision {
+                happens = "Records your answer on \(id) and moves it to Rework through the guard."
+                stays = "Your answer stays on the ticket as the recorded decision, even after Undo."
+            } else if item.kind == .plan {
+                happens = "Posts your reason on \(id) and moves it to Rework: Symphony cancels the plan's sub-tickets still in Backlog and plans again."
+                stays = "Your reason stays on the ticket as your comment, even after Undo."
+            } else {
+                happens = "Posts your reason on \(id) and moves it to Rework: Symphony closes the PR and starts over."
+                stays = "Your reason stays on the ticket as your comment, even after Undo."
+            }
         case .signOff:
             title = "Sign off \(id)?"
             targetState = "Done"
             happens = "Moves \(id) to Done; the parent's close-out run follows."
             stays = "Nothing else changes in Linear."
+        case .decide:
+            title = "Send your decision on \(id)?"
+            targetState = nil
+            self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
+            happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
+            stays = "The ticket doesn't move: the decision is what it was waiting on."
         case .unblock:
             title = "Unblock \(id)?"
             // The ticket keeps its phase: clearing a hold moves nothing, it resumes in place.
@@ -222,12 +265,23 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// The control request the sheet's button sends, nil while a required reason is missing.
     public func action(reason: String = "") -> ControlAction? {
         guard canSend(reason: reason) else { return nil }
+        let answer = reason.trimmingWhitespace()
         switch move {
         case .approvePlan: return .approvePlan(identifier)
         case .sendDecisions: return .decisions(identifier, picks: picks)
         case .approveAndMerge: return .approvePR(identifier)
-        case .sendToRework: return .rework(identifier, reason: reason.trimmingWhitespace())
+        case .sendToRework:
+            guard isDecision, let requestCommentID else { return .rework(identifier, reason: answer) }
+            return .decide(
+                identifier,
+                requestCommentID: requestCommentID,
+                picks: [.init(question: request?.question ?? identifier, answer: answer)],
+                move: "rework"
+            )
         case .signOff: return .signOff(identifier)
+        case .decide:
+            guard let requestCommentID else { return nil }
+            return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
         case .unblock: return .unblock(identifier)
         }
     }
@@ -244,7 +298,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         if move == .unblock {
             return InboxBanner(itemID: itemID, identifier: identifier, text: "Hold cleared", undo: false)
         }
-        return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent your decisions", undo: false)
+        return InboxBanner(itemID: itemID, identifier: identifier, text: move == .decide ? "Sent your decision" : "Sent your decisions", undo: false)
     }
 }
 
