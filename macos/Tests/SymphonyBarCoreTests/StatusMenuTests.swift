@@ -7,7 +7,10 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertFalse(StatusMenu.quitTitle.isEmpty)
     }
 
-    private let snapshot = StateSnapshot(running: 2, retrying: 1)
+    private let snapshot = StateSnapshot(
+        running: 2, retrying: 1,
+        sessions: [.init(kind: "implementation"), .init(kind: "implementation")]
+    )
     private let utc = TimeZone(identifier: "UTC")!
     private let pausedAt = Date(timeIntervalSince1970: 1_790_943_362) // 2026-10-02 12:16:02 UTC
 
@@ -66,21 +69,43 @@ final class StatusMenuTests: XCTestCase {
 
         XCTAssertEqual(StatusMenu.detailLines(.stopped), [])
         XCTAssertEqual(StatusMenu.detailLines(.starting), [])
-        XCTAssertEqual(StatusMenu.detailLines(.running(snapshot, external: true)), ["2 running · 1 retrying"])
+        XCTAssertEqual(StatusMenu.detailLines(.running(snapshot, external: true)), ["2 implementations running · 1 retrying"])
         XCTAssertEqual(
             StatusMenu.detailLines(.paused(paused, external: false), now: now, timeZone: utc),
-            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze"]
+            ["2 implementations running · 1 retrying", "Paused since 12:16: deploy freeze"]
         )
-        XCTAssertEqual(StatusMenu.detailLines(.paused(snapshot, external: false)), ["2 running · 1 retrying"])
+        XCTAssertEqual(StatusMenu.detailLines(.paused(snapshot, external: false)), ["2 implementations running · 1 retrying"])
         XCTAssertEqual(StatusMenu.detailLines(.error("Symphony exited with status 1")), ["Symphony exited with status 1"])
     }
 
+    func testSessionsLineNamesEveryRunningKind() {
+        XCTAssertEqual(StatusMenu.sessionsLine([], retrying: 2), "Nothing is running · 2 retrying")
+
+        let qa = [StateSnapshot.Session(kind: "qa")]
+        XCTAssertEqual(StatusMenu.sessionsLine(qa, retrying: 0), "1 QA pass running · 0 retrying")
+
+        let mixed = [
+            StateSnapshot.Session(kind: "qa"),
+            StateSnapshot.Session(kind: "implementation"),
+            StateSnapshot.Session(kind: "qa"),
+            StateSnapshot.Session(kind: "landing"),
+            StateSnapshot.Session(kind: "custom_kind"),
+        ]
+        XCTAssertEqual(
+            StatusMenu.sessionsLine(mixed, retrying: 1),
+            "1 implementation, 1 landing, 2 QA passes, 1 custom kind running · 1 retrying"
+        )
+    }
+
     func testDetailLinesSayHowManyTicketsAnUpdateWouldUnblock() {
-        let held = StateSnapshot(running: 2, retrying: 1, updateUnblocks: 2)
+        let held = StateSnapshot(
+            running: 2, retrying: 1, updateUnblocks: 2,
+            sessions: [.init(kind: "implementation"), .init(kind: "implementation")]
+        )
 
         XCTAssertEqual(
             StatusMenu.detailLines(.running(held, external: false)),
-            ["2 running · 1 retrying", "Update to unblock 2 tickets"]
+            ["2 implementations running · 1 retrying", "Update to unblock 2 tickets"]
         )
         XCTAssertEqual(StatusMenu.updateUnblocksLine(1), "Update to unblock 1 ticket")
         XCTAssertNil(StatusMenu.updateUnblocksLine(0))
@@ -90,13 +115,14 @@ final class StatusMenuTests: XCTestCase {
     func testDetailLinesLeaveWhatWaitsOnYouToItsItems() {
         var waiting = StateSnapshot(
             running: 2, retrying: 1, updateUnblocks: 1, humanReview: 3,
+            sessions: [.init(kind: "implementation"), .init(kind: "implementation")],
             waitingOnYou: [.init(identifier: "TP-1", kind: .pr, waitingSeconds: 60)]
         )
         waiting.pause = .init(reason: "deploy freeze", since: pausedAt)
 
         XCTAssertEqual(
             StatusMenu.detailLines(.paused(waiting, external: false), now: pausedAt.addingTimeInterval(600), timeZone: utc),
-            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze", "Update to unblock 1 ticket"]
+            ["2 implementations running · 1 retrying", "Paused since 12:16: deploy freeze", "Update to unblock 1 ticket"]
         )
     }
 
@@ -220,7 +246,7 @@ final class StatusMenuTests: XCTestCase {
     func testDetailLinesEndWithTheControlError() {
         XCTAssertEqual(
             StatusMenu.detailLines(.running(snapshot, external: false), controlError: "Couldn't pause Symphony: HTTP 500"),
-            ["2 running · 1 retrying", "Couldn't pause Symphony: HTTP 500"]
+            ["2 implementations running · 1 retrying", "Couldn't pause Symphony: HTTP 500"]
         )
         XCTAssertEqual(StatusMenu.detailLines(.stopped, controlError: "Couldn't resume Symphony"), ["Couldn't resume Symphony"])
     }
@@ -232,7 +258,7 @@ final class StatusMenuTests: XCTestCase {
                 restartLine: "Waiting for 2 agent runs…",
                 controlError: "Couldn't pause Symphony"
             ),
-            ["2 running · 1 retrying", "Waiting for 2 agent runs…", "Couldn't pause Symphony"]
+            ["2 implementations running · 1 retrying", "Waiting for 2 agent runs…", "Couldn't pause Symphony"]
         )
     }
 
@@ -245,7 +271,7 @@ final class StatusMenuTests: XCTestCase {
                 controlError: "Couldn't pause Symphony: HTTP 500"
             ),
             [
-                "2 running · 1 retrying", "Symphony is slow to answer", "Waiting for Keychain access…",
+                "2 implementations running · 1 retrying", "Symphony is slow to answer", "Waiting for Keychain access…",
                 "Couldn't pause Symphony: HTTP 500",
             ]
         )
@@ -261,7 +287,7 @@ final class StatusMenuTests: XCTestCase {
                 waitingForKeychain: true,
                 restartLine: "Restarting: starting Symphony…"
             ),
-            ["2 running · 1 retrying", "Waiting for Keychain access…", "Restarting: starting Symphony…"]
+            ["2 implementations running · 1 retrying", "Waiting for Keychain access…", "Restarting: starting Symphony…"]
         )
     }
 
@@ -400,7 +426,7 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.iconLabel(for: .running(held, external: true)), "Symphony: paused (external)")
         XCTAssertEqual(
             StatusMenu.detailLines(status, now: pausedAt, timeZone: utc),
-            ["2 running · 1 retrying", "Paused: Claude limit, resumes ~12:18"]
+            ["2 implementations running · 1 retrying", "Paused: Claude limit, resumes ~12:18"]
         )
         // Pause and Resume only control the operator pause.
         XCTAssertTrue(StatusMenu.canPause(status))
@@ -415,7 +441,7 @@ final class StatusMenuTests: XCTestCase {
 
         XCTAssertEqual(
             StatusMenu.detailLines(status, now: pausedAt, timeZone: utc),
-            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze", "Paused: Claude limit, resumes ~12:18"]
+            ["2 implementations running · 1 retrying", "Paused since 12:16: deploy freeze", "Paused: Claude limit, resumes ~12:18"]
         )
         XCTAssertFalse(StatusMenu.canPause(status))
         XCTAssertTrue(StatusMenu.canResume(status))

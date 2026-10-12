@@ -48,6 +48,29 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    func testDecodesRunningSessionsOfEveryKind() throws {
+        let data = try recordedState(replacing: "sessions", with: [
+            ["kind": "implementation", "issue_identifier": "TP-811", "repo_key": "symphony"],
+            ["kind": "qa", "issue_identifier": "TP-811", "repo_key": "symphony"],
+            ["kind": "acceptance_gate"],
+            ["issue_identifier": "TP-1"],
+        ])
+
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(
+                StateSnapshot(
+                    running: 1, retrying: 0, pause: nil, budget: recordedBudget, runs: recordedRuns,
+                    sessions: [
+                        StateSnapshot.Session(kind: "implementation", issueIdentifier: "TP-811", repoKey: "symphony"),
+                        StateSnapshot.Session(kind: "qa", issueIdentifier: "TP-811", repoKey: "symphony"),
+                        StateSnapshot.Session(kind: "acceptance_gate"),
+                    ]
+                )
+            )
+        )
+    }
+
     func testDecodesABudgetPausedOnTheDailyCap() throws {
         let data = try recordedState(replacing: "budget", with: [
             "daily_limit": 1_000_000_000, "daily_used": 1_000_000_123, "daily_remaining": 0, "daily_paused": true,

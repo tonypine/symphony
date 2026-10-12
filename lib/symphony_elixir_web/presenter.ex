@@ -76,6 +76,7 @@ defmodule SymphonyElixirWeb.Presenter do
             shipped_today: length(shipped_today),
             waiting_on_you: length(waiting_on_you)
           },
+          sessions: sessions_payload(snapshot),
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
@@ -939,6 +940,48 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_qa(%{running: running, queued: queued}), do: %{running: running, queued: queued}
   defp normalize_qa(_qa), do: %{running: [], queued: []}
+
+  # Every session running now, of any kind, as one list for every surface: the agent runs (each
+  # labeled by its run kind, landings included), the QA passes, and the acceptance gate runs. A
+  # QA pass whose issue is already in `running` is left out, so a session appears once.
+  defp sessions_payload(snapshot) do
+    running =
+      snapshot
+      |> Map.get(:running, [])
+      |> Enum.map(fn entry -> session_payload(session_kind(entry), entry) end)
+
+    qa =
+      snapshot
+      |> Map.get(:qa)
+      |> normalize_qa()
+      |> Map.fetch!(:running)
+      |> Enum.map(&session_payload("qa", &1))
+
+    gate =
+      AcceptanceGate.Agreement.snapshot()
+      |> Map.get(:running, [])
+      |> Enum.map(&session_payload("acceptance_gate", &1))
+
+    running_ids = MapSet.new(running, & &1.issue_id)
+    running ++ Enum.reject(qa, &MapSet.member?(running_ids, &1.issue_id)) ++ gate
+  end
+
+  defp session_kind(entry) do
+    case Map.get(entry, :run_kind) || get_in(entry, [:run_profile, :kind]) do
+      nil -> "agent"
+      kind -> to_string(kind)
+    end
+  end
+
+  defp session_payload(kind, entry) do
+    %{
+      kind: to_string(kind),
+      issue_id: Map.get(entry, :issue_id),
+      issue_identifier: Map.get(entry, :issue_identifier) || Map.get(entry, :identifier),
+      repo_key: Map.get(entry, :repo_key),
+      started_at: entry |> Map.get(:started_at) |> iso8601()
+    }
+  end
 
   defp acceptance_gate_payload(gate) do
     %{
