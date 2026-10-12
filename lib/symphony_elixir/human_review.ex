@@ -243,10 +243,11 @@ defmodule SymphonyElixir.HumanReview do
 
   # The states an issue is not waiting on a person in, whatever a caller adds: the machine's active
   # states — not `tracker.active_states`, so a designed repo's phase states (`Code Review`, `QA`)
-  # count even though the config lists only the base states — the human review states, the Auto
-  # Review state and `Merging`.
+  # count even though the config lists only the base states — the human review states and
+  # `Merging`. The retired Auto Review state is not one: a ticket left there needs moving by hand
+  # (`SymphonyElixir.RetiredStates`).
   defp default_poller_states(settings) do
-    StateMachine.active_states(settings) ++ review_states(settings) ++ [settings.auto_review.state, @merging_state]
+    StateMachine.active_states(settings) ++ review_states(settings) ++ [@merging_state]
   end
 
   defp request_parks_in_review?(%Issue{state: issue_state}, settings) do

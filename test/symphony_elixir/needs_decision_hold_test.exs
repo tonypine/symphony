@@ -426,9 +426,18 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
 
       Process.delete(:pause_comment_result)
+    end
 
+    test "a hold that can't be set posts nothing, so the retry posts the comment once" do
       assert {:error, {:decision_hold_failed, :boom}} =
                NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker, store: FailingStore, repo_key: @repo_key)
+
+      refute_received {:commented, _issue_id, _body}
+
+      assert :ok = NeedsDecisionHold.pause(issue(), request(), tracker: CommentTracker)
+      assert_received {:commented, @issue_id, _body}
+      refute_received {:commented, _issue_id, _body}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision)
     end
   end
 end

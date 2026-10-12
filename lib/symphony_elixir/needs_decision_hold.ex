@@ -62,7 +62,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   @doc """
   Pauses `issue` in its phase on a decision the machine needs: posts `request` as the
   `## Decision needed:` comment (rendered to say the ticket stays where it is) and sets the Needs
-  Decision hold carrying it. `confirm`, when given, is the state a confirmation continues into, as
+  Decision hold carrying it. The hold is set before the comment is posted, so a retry after a
+  failure never posts the comment twice. `confirm`, when given, is the state a confirmation continues into, as
   a merge confirmation's does (`SymphonyElixir.MergeConfirmation.confirm_target/1`); without it the
   ticket continues in place once the decision is recorded.
 
@@ -74,12 +75,20 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     tracker = Keyword.get(opts, :tracker, SymphonyElixir.Tracker)
     repo_key = Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
 
-    with {:post, :ok} <- {:post, tracker.create_comment(issue_id, Request.render_hold(request, Map.get(issue, :state)))},
-         {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, confirming(attrs(request), confirm), Keyword.take(opts, [:store]))} do
+    hold_opts = Keyword.take(opts, [:store])
+
+    # The hold first: a hold that can't be set posts nothing, so the caller's retry never posts a
+    # second `## Decision needed:` comment. A comment that can't be posted takes the hold back.
+    with {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, confirming(attrs(request), confirm), hold_opts)},
+         {:post, :ok} <- {:post, tracker.create_comment(issue_id, Request.render_hold(request, Map.get(issue, :state)))} do
       :ok
     else
-      {:post, {:error, reason}} -> {:error, {:decision_request_failed, reason}}
-      {:hold, {:error, reason}} -> {:error, {:decision_hold_failed, reason}}
+      {:hold, {:error, reason}} ->
+        {:error, {:decision_hold_failed, reason}}
+
+      {:post, {:error, reason}} ->
+        Hold.clear(repo_key, issue_id, :needs_decision, hold_opts)
+        {:error, {:decision_request_failed, reason}}
     end
   end
 
