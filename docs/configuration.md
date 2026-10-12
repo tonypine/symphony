@@ -331,7 +331,12 @@ repositories:
   the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
   a State machine picker. A `designed` repo reviews its work through the designed `Code Review`
   state, so it needs the reviewer on: with `review_agent.enabled` off, its `Code Review` tickets are
-  parked (a `code_review_reviewer_disabled` signal is recorded) instead of being dispatched.
+  parked (a `code_review_reviewer_disabled` signal is recorded) instead of being dispatched. A
+  `Code Review` run also reads the repo's `auto_review.acceptance_gate.escalate` rules: a diff
+  matching one of the risk rules (`paths`, `diff_patterns`, `max_changed_lines`) deepens the review
+  rather than routing it — the run takes a second reviewer pass on the same head, records the
+  verdict bound to it and moves nothing, and the next dispatch performs that verdict. See
+  [`docs/design/state-machine.md`](design/state-machine.md).
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
