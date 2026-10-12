@@ -4,9 +4,10 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Every Linear state move routes through this module. The machine's own moves — the orchestrator,
   the CI and PR review pollers, the Auto Review machinery, the runner, the Director app, the
-  workpad bootstrap — are performed by `perform/4`, the only caller of
-  `Tracker.update_issue_state/2`. An agent's request to set a state (the Linear tool) is validated
-  by `resolve_request/2`, which applies the machine's refusals and redirects and returns the same
+  workpad bootstrap, the Linear tool's human-action request and withdrawal, and its sub-issue
+  cancel — are performed by `perform/4`, the only caller of `Tracker.update_issue_state/2`. An
+  agent's request to set a state (the Linear tool's `update_state`) is validated by
+  `resolve_request/2`, which applies the machine's refusals and redirects and returns the same
   `{:error, reason}` tuples as before, so the existing `refused_agent_action` audit path is
   unchanged.
 
@@ -78,6 +79,10 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :dependency_review, from: ["In Progress"], to: "In Review"},
     # A Todo ticket whose dependencies need a person waits in In Review.
     %{signal: :dependency_hold, from: ["Todo"], to: "In Review"},
+    # The Linear tool records an `## Action needed:` request: the issue waits in the human review state.
+    %{signal: :human_action_request, from: :any, to: :requested},
+    # Withdrawing the last open request: the issue goes back to the active state it came from.
+    %{signal: :human_action_release, from: :any, to: :requested},
     # A green fix run with nothing to push returns the issue to Merging.
     %{signal: :merge_ready, from: ["Rework", "In Progress"], to: "Merging"},
     # An idle run is parked in Backlog.

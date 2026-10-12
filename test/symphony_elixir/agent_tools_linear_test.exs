@@ -8,6 +8,32 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
 
+  # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
+  # asked to make and answers with the result a test sets (`:ok` by default).
+  defmodule FakeTracker do
+    def update_issue_state(issue_id, state) do
+      send(self(), {:tracker_moved, issue_id, state})
+      Process.get(:linear_tool_tracker_result, :ok)
+    end
+  end
+
+  describe "state mutations" do
+    test "every state move goes through TransitionGuard, except update_state/3's guarded one" do
+      source = File.read!("lib/symphony_elixir/agent_tools/linear.ex")
+
+      # `@update_issue_state_mutation` is defined once and called once, in `update_state/3`, whose
+      # target TransitionGuard.resolve_request/2 validates. Every other move — the human-action
+      # request, the withdrawal, the sub-issue cancel — goes through TransitionGuard.perform/4.
+      assert length(Regex.scan(~r/@update_issue_state_mutation/, source)) == 2
+      assert source =~ "TransitionGuard.resolve_request"
+
+      # The sub-issue update mutation is only ever a field edit: no call sets a state id.
+      for line <- String.split(source, "\n"), line =~ "@update_subissue_mutation" do
+        refute line =~ "stateId"
+      end
+    end
+  end
+
   describe "dynamic read output prompt safety" do
     test "wraps current issue title description and nested comment bodies" do
       long_title = String.duplicate("a", 501)
@@ -1918,6 +1944,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         [
           linear_client: client,
           settings: Config.settings!(),
+          tracker: FakeTracker,
           refresh_human_actions: fn -> send(test_pid, :refreshed) end
         ],
         extra
@@ -1938,7 +1965,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Map.has_key?(result, "label")
       assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "issue-24"}}
       assert_received {:linear_called, "SymphonyAgentAddComment", %{issueId: "issue-24", body: body}}
-      assert_received {:linear_called, "SymphonyAgentUpdateIssueState", %{id: "issue-24", stateId: "state-human"}}
+      # The move goes through TransitionGuard, which writes through the tracker — not the tool's
+      # own state mutation.
+      assert_received {:tracker_moved, "issue-24", "Human Review"}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
       refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
       refute_received {:linear_called, "SymphonyAgentCreateLabel", _variables}
       assert_received :refreshed
@@ -1981,7 +2011,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
       # Already in Human Review: nothing to move.
-      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
       refute_received :refreshed
       assert Agent.get(registry, & &1.human_actions) == 0
       # The open request still waits on a person, so the issue goes to Human Review.
@@ -1999,7 +2029,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                request_human_action(%{issue_id: "issue-24", comment_registry: registry}, moved_on)
 
       assert_received {:linear_called, "SymphonyAgentAddComment", _variables}
-      assert_received {:linear_called, "SymphonyAgentUpdateIssueState", %{stateId: "state-human"}}
+      assert_received {:tracker_moved, "issue-24", "Human Review"}
     end
 
     test "moves an issue in Backlog before posting, so the request stays open" do
@@ -2010,9 +2040,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert {:ok, %{"requested" => true, "state" => "Human Review"}} = request_human_action(context, scope)
 
-      # The move comes first: a move out of Backlog after the comment would close the request.
-      assert_received {:linear_called, "SymphonyAgentHumanActionScope", _variables}
-      assert [{"SymphonyAgentUpdateIssueState", %{stateId: "state-human"}}, {"SymphonyAgentAddComment", %{body: body}}] = linear_calls()
+      # The move comes first, through the guard's tracker: a move out of Backlog after the comment
+      # would close the request.
+      assert [{"SymphonyAgentHumanActionScope", _variables}, {:tracker_moved, "issue-24", "Human Review"}, {"SymphonyAgentAddComment", %{body: body}}] =
+               linear_and_tracker_calls()
 
       posted =
         scope
@@ -2026,9 +2057,12 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                Linear.open_human_action_requests(context, settings, linear_client: human_action_client(self(), posted))
     end
 
-    defp linear_calls(acc \\ []) do
+    # Drains the mailbox in order: both the tool's Linear calls and the tracker moves, so a test
+    # can assert the order a run makes them in.
+    defp linear_and_tracker_calls(acc \\ []) do
       receive do
-        {:linear_called, name, variables} -> linear_calls([{name, variables} | acc])
+        {:linear_called, name, variables} -> linear_and_tracker_calls([{name, variables} | acc])
+        {:tracker_moved, issue_id, state} -> linear_and_tracker_calls([{:tracker_moved, issue_id, state} | acc])
       after
         0 -> Enum.reverse(acc)
       end
@@ -2046,7 +2080,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert_received {:linear_called, "SymphonyAgentAddComment", %{body: body}}
       assert body =~ "move the issue out of In Review."
-      assert_received {:linear_called, "SymphonyAgentUpdateIssueState", %{stateId: "state-review"}}
+      assert_received {:tracker_moved, "issue-24", "In Review"}
 
       no_states = human_action_scope(%{issue: %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-progress", "name" => "In Progress"}]}}}})
       assert {:error, {:state_not_found, ["In Progress"]}} = request_human_action(context, no_states)
@@ -2059,12 +2093,13 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       scope = human_action_scope()
       refused = fn field -> {:ok, %{"data" => %{field => %{"success" => false}}}} end
 
-      for {overrides, expected} <- [
-            {%{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
-            {%{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
-            {%{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}},
-            {%{"SymphonyAgentUpdateIssueState" => refused.("issueUpdate")}, {:error, {:linear_mutation_failed, "issueUpdate", :_}}}
+      for {overrides, tracker_result, expected} <- [
+            {%{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, :ok, {:error, :linear_down}},
+            {%{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, :ok, {:error, :issue_not_found}},
+            {%{"SymphonyAgentAddComment" => refused.("commentCreate")}, :ok, {:error, {:linear_mutation_failed, "commentCreate", :_}}},
+            {%{}, {:error, :tracker_down}, {:error, :tracker_down}}
           ] do
+        Process.put(:linear_tool_tracker_result, tracker_result)
         result = request_human_action(context, scope, overrides)
 
         case expected do
@@ -2076,6 +2111,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         end
       end
 
+      Process.delete(:linear_tool_tracker_result)
       refute_received :refreshed
       assert Agent.get(registry, & &1.human_actions) == 0
       refute Linear.CommentRegistry.human_action_requested?(registry)
@@ -2158,7 +2194,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       for context <- [%{issue_id: "issue-24"}, %{issue: %Issue{id: "issue-24", repo_key: nil}}] do
         assert {:ok, %{"requested" => true, "state" => "Human Review"}} =
-                 Linear.request_human_action(Map.put(context, :comment_registry, registry), @human_action, linear_client: client)
+                 Linear.request_human_action(Map.put(context, :comment_registry, registry), @human_action,
+                   linear_client: client,
+                   tracker: FakeTracker
+                 )
       end
     end
   end
@@ -2198,7 +2237,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "MOT-24"}}
       assert_received {:linear_called, "SymphonyAgentAddReply", %{issueId: "issue-24", parentId: "comment-1", body: reply}}
-      assert_received {:linear_called, "SymphonyAgentUpdateIssueState", %{id: "issue-24", stateId: "state-todo"}}
+      assert_received {:tracker_moved, "issue-24", "Todo"}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
       refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
       assert_received :refreshed
       assert reply == "## Action withdrawn\n\nThe dialyzer run had started minutes earlier, not 11 hours ago."
@@ -2234,14 +2274,14 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-1"}}
       refute_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-2"}}
-      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
 
       # Without a title, every open request goes, and the issue goes back to In Progress when its
       # history doesn't name the active state it came from.
       assert {:ok, %{"requestCommentIds" => ["comment-1", "comment-2"], "replyCommentIds" => ["reply-to-comment-1", "reply-to-comment-2"], "remaining" => 0, "state" => "In Progress"}} =
                withdraw_human_action(%{issue_id: "issue-24"}, scope)
 
-      assert_received {:linear_called, "SymphonyAgentUpdateIssueState", %{stateId: "state-progress"}}
+      assert_received {:tracker_moved, "issue-24", "In Progress"}
     end
 
     test "an issue outside Human Review stays where it is, and a deprecated request label comes off" do
@@ -2255,7 +2295,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert_received {:linear_called, "SymphonyAgentRemoveLabel", %{issueId: "issue-24", labelId: "label-on-issue"}}
       refute_received {:linear_called, "SymphonyAgentRemoveLabel", %{labelId: "label-other"}}
-      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
 
       # Without the deprecated setting, the label is left alone.
       assert {:ok, %{"withdrawn" => true}} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
@@ -2346,10 +2386,14 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert {:error, {:linear_mutation_failed, "commentCreate", _body}} =
                withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentAddReply" => refused.("commentCreate")})
 
-      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
 
-      assert {:error, {:linear_mutation_failed, "issueUpdate", _body}} =
-               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentUpdateIssueState" => refused.("issueUpdate")})
+      # The move back out of Human Review goes through the guard's tracker, so its failure is the
+      # tracker's error.
+      Process.put(:linear_tool_tracker_result, {:error, :tracker_down})
+
+      assert {:error, :tracker_down} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
+      Process.delete(:linear_tool_tracker_result)
 
       legacy = put_in(Config.settings!().human_actions.label, "human-action")
       labelled = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => %{"nodes" => [%{"id" => "l-1", "name" => "human-action"}]}})
