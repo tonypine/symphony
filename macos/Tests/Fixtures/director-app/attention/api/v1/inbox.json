@@ -1,0 +1,143 @@
+{
+  "counts": {
+    "action": 0,
+    "clarify": 0,
+    "final_verification": 0,
+    "plan": 0,
+    "pr": 2,
+    "total": 2
+  },
+  "generated_at": "2026-10-07T14:20:00Z",
+  "items": [
+    {
+      "ask": "Rewrite the quick start around the installer.",
+      "identifier": "DOCS-40",
+      "issue_id": "i-40",
+      "kind": "pr",
+      "repo_key": "docs",
+      "review": {
+        "brief": {
+          "decisions": [],
+          "format": "parsed",
+          "headline": "Rewrite the quick start around the installer.",
+          "moves": [
+            {
+              "move": "approve",
+              "text": "move DOCS-40 to Merging; Symphony merges the PR."
+            },
+            {
+              "move": "change",
+              "text": "leave review comments on the PR."
+            },
+            {
+              "move": "reject",
+              "text": "move DOCS-40 to Rework."
+            }
+          ],
+          "supervisor_check": null,
+          "what_changed": [],
+          "what_to_review": [
+            {
+              "links": [
+                {
+                  "label": "PR #88",
+                  "url": "https://github.com/acme/docs/pull/88"
+                }
+              ],
+              "text": "PR #88"
+            }
+          ]
+        },
+        "pull_request": {
+          "change": {
+            "additions": 120,
+            "deletions": 40,
+            "files": 4,
+            "largest": []
+          },
+          "ci": "passed",
+          "gate": {
+            "agent_verdict": "approve",
+            "mode": "shadow",
+            "verdict": "escalate"
+          },
+          "qa": {
+            "report_url": null,
+            "verdict": "pass"
+          },
+          "url": "https://github.com/acme/docs/pull/88"
+        }
+      },
+      "state": "Human Review",
+      "title": "Quick start rewrite",
+      "url": "https://linear.app/acme/issue/DOCS-40",
+      "waiting_seconds": 11520,
+      "waiting_since": "2026-10-07T11:08:00Z"
+    },
+    {
+      "ask": "Suggest addresses as the shopper types.",
+      "identifier": "SHOP-290",
+      "issue_id": "i-290",
+      "kind": "pr",
+      "repo_key": "web-shop",
+      "review": {
+        "brief": {
+          "decisions": [],
+          "format": "parsed",
+          "headline": "Suggest addresses as the shopper types.",
+          "moves": [
+            {
+              "move": "approve",
+              "text": "move SHOP-290 to Merging; Symphony merges the PR."
+            },
+            {
+              "move": "change",
+              "text": "leave review comments on the PR."
+            },
+            {
+              "move": "reject",
+              "text": "move SHOP-290 to Rework."
+            }
+          ],
+          "supervisor_check": null,
+          "what_changed": [],
+          "what_to_review": [
+            {
+              "links": [
+                {
+                  "label": "PR #409",
+                  "url": "https://github.com/acme/web-shop/pull/409"
+                }
+              ],
+              "text": "PR #409"
+            }
+          ]
+        },
+        "pull_request": {
+          "change": {
+            "additions": 120,
+            "deletions": 40,
+            "files": 4,
+            "largest": []
+          },
+          "ci": "passed",
+          "gate": {
+            "agent_verdict": "approve",
+            "mode": "shadow",
+            "verdict": "approve"
+          },
+          "qa": {
+            "report_url": null,
+            "verdict": "pass"
+          },
+          "url": "https://github.com/acme/web-shop/pull/409"
+        }
+      },
+      "state": "Human Review",
+      "title": "Address autocomplete",
+      "url": "https://linear.app/acme/issue/SHOP-290",
+      "waiting_seconds": 2400,
+      "waiting_since": "2026-10-07T13:40:00Z"
+    }
+  ]
+}

@@ -447,6 +447,12 @@ Symphony's control API
 comment counts as yours,
 so it starts the plan revision run like any comment of yours.
 
+Every ticket row opens the ticket's page: what runs now, a timeline of its runs and of your moves, its
+facts and the agent's last message, with **View Transcript** (the run's events, grouped by turn, in their
+own window) and **Stop Run…**. Stop Run says what a stop does before it does it, and can also move the
+ticket to Backlog with a note; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
+you".
+
 A run that reports an external block leaves its ticket in place with the `Blocked` machine label and
 what it waits on recorded. The machine lifts a dependency hold on its own; an access hold is a
 person's to lift, and `POST /api/v1/control/unblock` clears it by hand: no Linear state moves and

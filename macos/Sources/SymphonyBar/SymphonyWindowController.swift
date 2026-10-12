@@ -28,6 +28,14 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
+    /// The transcript windows (D4), which stay open after the main window closes.
+    private lazy var transcripts: TranscriptWindows = {
+        let transcripts = TranscriptWindows(client: client)
+        transcripts.reference = { [weak self] in
+            self?.client.stateJSON.flatMap(OverviewState.decode)?.generatedAt ?? Date()
+        }
+        return transcripts
+    }()
     private var state = WindowState.stopped
     private var paused = false
 
@@ -90,6 +98,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 return result
             }
             model.onOpenURL = { url in NSWorkspace.shared.open(url) }
+            model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
+                self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
+            }
             self.model = model
 
             let hostingController = NSHostingController(rootView: SymphonyWindowView(model: model))
@@ -134,7 +145,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     // MARK: View menu
 
-    /// The main menu's View items: one per sidebar view on ⌘1–⌘8, and Refresh on ⌘R.
+    /// The main menu's View items: one per sidebar view on ⌘1–⌘8, Back and Forward on ⌘[ and ⌘], and Refresh on ⌘R.
     func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
         let sidebar = Sidebar()
@@ -145,6 +156,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             item.target = self
             menu.addItem(item)
         }
+        menu.addItem(.separator())
+        let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: "[")
+        back.target = self
+        menu.addItem(back)
+        let forward = NSMenuItem(title: NavigationHistory.forwardTitle, action: #selector(goForward(_:)), keyEquivalent: "]")
+        forward.target = self
+        menu.addItem(forward)
         menu.addItem(.separator())
         let refresh = NSMenuItem(title: "Refresh", action: #selector(refresh(_:)), keyEquivalent: "r")
         refresh.target = self
@@ -161,8 +179,21 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         client.refresh()
     }
 
+    @objc private func goBack(_ sender: Any?) {
+        model?.goBack()
+    }
+
+    @objc private func goForward(_ sender: Any?) {
+        model?.goForward()
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        window?.isKeyWindow == true
+        guard window?.isKeyWindow == true else { return false }
+        switch menuItem.action {
+        case #selector(goBack(_:)): return model?.history.canGoBack ?? false
+        case #selector(goForward(_:)): return model?.history.canGoForward ?? false
+        default: return true
+        }
     }
 
     // MARK: NSWindowDelegate
