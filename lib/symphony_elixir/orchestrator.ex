@@ -4264,7 +4264,6 @@ defmodule SymphonyElixir.Orchestrator do
   # a dependency hold. The store is the truth; the board label is only its projection. A legacy
   # repo never records a hold, so this is false there and dispatch is unaffected.
   defp blocked_hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held?(repo_key, issue_id, :blocked)
-  defp blocked_hold?(_issue), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
