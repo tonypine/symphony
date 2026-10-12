@@ -2849,6 +2849,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert response["hold"] == "Blocked"
       assert response["reason"] =~ "reported a block"
       assert response["message"] =~ "Blocked"
+      assert response["message"] =~ "a person lifts an access hold with Unblock"
       assert_received {:machine_label_set, "issue-1", "Blocked"}
 
       assert %{holds: [%{kind: :blocked, waits_on: %{type: "access"}}]} =

@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Hold do
 
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
   @kinds [:blocked, :needs_decision]
+  @access_type "access"
 
   @typedoc "The holds the design defines."
   @type kind :: :blocked | :needs_decision
@@ -54,6 +55,16 @@ defmodule SymphonyElixir.Hold do
   @doc "Whether a hold of `kind` is set on the ticket's record (the store truth)."
   @spec held?(String.t() | nil, String.t() | nil, kind(), keyword()) :: boolean()
   def held?(repo_key, issue_id, kind, opts \\ []), do: get(repo_key, issue_id, kind, opts) != nil
+
+  @doc """
+  Whether a hold is waiting on an access grant a person hands over — what an agent's block report
+  records. A dependency or fix-ticket hold clears on its own when what it waits on goes terminal;
+  an access hold is lifted by a person's `Unblock` (see `SymphonyElixir.DirectorMoves`), so it is
+  the one hold that never clears without a person.
+  """
+  @spec access_wait?(TicketState.hold() | term()) :: boolean()
+  def access_wait?(%{waits_on: %{type: @access_type}}), do: true
+  def access_wait?(_hold), do: false
 
   @doc """
   Sets the hold of `kind` on `issue_id`: the store record first, then the machine label. Returns

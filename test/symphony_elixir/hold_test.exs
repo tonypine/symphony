@@ -45,6 +45,15 @@ defmodule SymphonyElixir.HoldTest do
     end
   end
 
+  describe "access_wait?/1" do
+    test "is true only for a hold waiting on an access grant" do
+      assert Hold.access_wait?(%{waits_on: %{type: "access", keys: []}})
+      refute Hold.access_wait?(%{waits_on: %{type: "dependency", keys: ["TP-1"]}})
+      refute Hold.access_wait?(%{reason: "no waits_on"})
+      refute Hold.access_wait?(nil)
+    end
+  end
+
   describe "set/5 and clear/4" do
     test "set writes the store first, then projects the label" do
       assert :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waiting on TP-1"})

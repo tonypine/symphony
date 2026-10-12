@@ -699,8 +699,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # A designed repo retired the Backlog escape hatch: the guard turned the request into a Blocked
-  # hold, so the ticket keeps its phase and gains the label with the reason recorded. Symphony lifts
-  # the hold on its own; the agent did not move the issue.
+  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
+  # hold lifts on its own; the access hold this reports is lifted by a person's `Unblock` (or by the
+  # self-heal fix ticket). The agent did not move the issue.
   defp apply_hold(context, issue_id, kind, attrs, opts) do
     with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
       {:ok,
@@ -711,7 +712,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
          "clearing_condition" => Map.get(attrs, :clearing_condition),
          "message" =>
            "The issue stays in its current state with the `#{Hold.label(kind)}` label. " <>
-             "Symphony clears the hold and continues on its own; do not move the issue yourself."
+             "Symphony lifts a hold when what it waits on clears, and a person lifts an access " <>
+             "hold with Unblock; do not move the issue yourself."
        }}
     end
   end
