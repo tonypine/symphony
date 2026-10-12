@@ -901,7 +901,8 @@ agent:
 **Project guides:**
 
 - `prompts.include_project_guides` defaults to `true`. Set it to `false` to omit the injected
-  `## Project conventions` prompt section.
+  `## Project conventions` prompt section. A prompt that ends in an output contract, such as the
+  reviewer's JSON verdict, gets the section above that contract, so the contract stays last.
 - `prompts.project_guide_files: null` uses the runner default: `["CLAUDE.md"]` for Claude, `[]`
   for Codex. Codex keeps relying on native workspace `AGENTS.md` discovery unless an explicit list
   is configured.

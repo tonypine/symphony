@@ -69,6 +69,30 @@ defmodule SymphonyElixir.ProjectGuidesTest do
     end
   end
 
+  test "append_to_prompt puts the guides above the output contract marker so the contract stays last" do
+    workspace = tmp_workspace!("project-guides-contract")
+    marker = ProjectGuides.output_contract_marker()
+
+    try do
+      File.write!(Path.join(workspace, "CLAUDE.md"), "Body\n")
+      prompt = "Diff quoting #{marker} in a file\n#{marker}\nReturn ONLY JSON.\n"
+
+      assert {:ok, assembled} =
+               ProjectGuides.append_to_prompt(prompt, workspace, settings_with_files(["CLAUDE.md"], true), :claude)
+
+      assert assembled ==
+               "Diff quoting #{marker} in a file\n\n## Project conventions\n\n### CLAUDE.md\n\nBody\n\nReturn ONLY JSON.\n"
+
+      without_guides = {:ok, "Diff quoting #{marker} in a file\n\nReturn ONLY JSON.\n"}
+      disabled = settings_with_files(["CLAUDE.md"], false)
+      missing = settings_with_files(["MISSING.md"], true)
+      assert ProjectGuides.append_to_prompt(prompt, workspace, disabled, :claude) == without_guides
+      assert ProjectGuides.append_to_prompt(prompt, workspace, missing, :claude) == without_guides
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "append_to_prompt honors include flag and surfaces read errors" do
     workspace = tmp_workspace!("project-guides-append")
 
