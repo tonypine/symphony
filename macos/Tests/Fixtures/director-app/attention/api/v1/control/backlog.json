@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "In Progress",
+  "issue_id": "i-305",
+  "issue_identifier": "SHOP-305",
+  "move": "backlog",
+  "moved": true,
+  "to_state": "Backlog",
+  "undo_window_ms": 10000
+}
