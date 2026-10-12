@@ -83,6 +83,13 @@ defmodule SymphonyElixir.PlaybookTest do
       assert designed =~ "The tool sets the `Needs Decision` hold and the `Needs Decision` label\n  and leaves the ticket exactly where it is"
       assert designed =~ "Do not move the ticket"
       refute base =~ "a decision never moves a ticket"
+
+      # The designed machine leaves no `## Supervisor check` for a person to run: a check an agent
+      # can't run is a coverage gap (CI or a QA playbook), and the block that keeps it from running
+      # goes to the self-heal lane.
+      assert designed =~ "no `## Supervisor check` block and moves no ticket to a review state for a check"
+      assert designed =~ "the self-heal lane"
+      refute base =~ "no `## Supervisor check` block and moves no ticket"
     end
 
     test "a partial with no variant for a version falls back to the base body" do
