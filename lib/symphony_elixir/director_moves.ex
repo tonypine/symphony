@@ -29,7 +29,9 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:decide`: a designed repo's ticket waiting on a `Needs Decision` hold gets the Director's
     answer as a reply under the request comment, and the hold is cleared so the ticket continues in
     its phase. The optional `:move` names a state the decision directs — `rework` or `done` — and
-    the move goes through `SymphonyElixir.TransitionGuard`. A ticket with no such hold is refused.
+    the move goes through `SymphonyElixir.TransitionGuard`. A ticket with no such hold that a
+    request parked in the Human Review state gets the reply too, then moves to `Todo` (or the
+    directed state). Any other ticket with no hold is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
@@ -79,6 +81,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @rework_state "Rework"
   @done_state "Done"
   @backlog_state "Backlog"
+  @todo_state "Todo"
   @comment_preview_chars 500
 
   @type move ::
@@ -111,7 +114,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @type result :: {:ok, map()} | {:error, error()}
 
   @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
-  @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state}
+  @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
@@ -465,16 +468,26 @@ defmodule SymphonyElixir.DirectorMoves do
           {:error, reason} -> {:error, {:linear, reason}}
         end
 
+      :parked ->
+        comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
+
+        case reply_to_request(issue, input.request_comment_id, comment) do
+          :ok -> decision_finish(issue, input[:move] || @todo_state, comment, opts)
+          {:error, reason} -> {:error, {:linear, reason}}
+        end
+
       :error ->
         conflict("#{issue.identifier} is not waiting on a decision")
     end
   end
 
-  # The move the ticket's open Needs Decision hold carries, if any: only a ticket carrying the hold
-  # has a request to answer (a legacy repo never records one).
-  defp carried_move(%Issue{repo_key: repo_key, id: issue_id}, opts) do
+  # The move the ticket's open Needs Decision hold carries, if any. A ticket with no hold has a
+  # request to answer only when the request parked it in the Human Review state (a legacy repo, or
+  # a request made before the repo moved to the designed machine): `:parked`, and answering it
+  # moves the ticket to `Todo`, as the request's review brief says, so the next run carries it out.
+  defp carried_move(%Issue{repo_key: repo_key, id: issue_id} = issue, opts) do
     case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
-      nil -> :error
+      nil -> if HumanReview.in_state?(issue, Config.settings!()), do: :parked, else: :error
       hold -> {:ok, MergeConfirmation.confirm_target(hold)}
     end
   end
