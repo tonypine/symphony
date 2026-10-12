@@ -20,6 +20,9 @@ public enum ControlAction: Equatable {
     case decisions(String, picks: [DecisionPick])
     case signOff(String)
     case backlog(String, note: String?)
+    /// Answers a decision request: the picks, the id of the request comment they answer, and the state the
+    /// decision directs (`rework`, `done`) when it directs one.
+    case decide(String, requestCommentID: String, picks: [DecisionPick], move: String?)
     /// Clears an access hold on the ticket; it continues where it is (state-machine §Holds).
     case unblock(String)
     /// Takes back the last move on the ticket, within 10 s of it.
@@ -63,6 +66,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/sign_off"
         case .backlog:
             return "api/v1/control/backlog"
+        case .decide:
+            return "api/v1/control/decide"
         case .unblock:
             return "api/v1/control/unblock"
         case .undo:
@@ -76,7 +81,7 @@ public enum ControlAction: Equatable {
         case let .approvePlan(identifier), let .approvePR(identifier), let .rework(identifier, _),
              let .restart(identifier, _),
              let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _),
-             let .unblock(identifier), let .undo(identifier):
+             let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .resume, .force, .stopForcing, .stop:
             return nil
@@ -104,6 +109,14 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier, "picks": picks.map { ["question": $0.question, "answer": $0.answer] }]
         case let .backlog(identifier, note):
             return note.map { ["issue_identifier": identifier, "note": $0] } ?? ["issue_identifier": identifier]
+        case let .decide(identifier, requestCommentID, picks, move):
+            var body: [String: Any] = [
+                "issue_identifier": identifier,
+                "request_comment_id": requestCommentID,
+                "picks": picks.map { ["question": $0.question, "answer": $0.answer] },
+            ]
+            if let move { body["move"] = move }
+            return body
         }
     }
 
@@ -134,6 +147,8 @@ public enum ControlAction: Equatable {
             return "Couldn't sign off \(identifier)"
         case let .backlog(identifier, _):
             return "Couldn't move \(identifier) to Backlog"
+        case let .decide(identifier, _, _, _):
+            return "Couldn't send the decision on \(identifier)"
         case let .unblock(identifier):
             return "Couldn't unblock \(identifier)"
         case let .undo(identifier):

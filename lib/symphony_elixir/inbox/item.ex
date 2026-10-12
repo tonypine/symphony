@@ -111,16 +111,17 @@ defmodule SymphonyElixir.Inbox.Item do
     end
   end
 
-  defp ask(%{kind: :action}, node, settings), do: newest_request(node, settings).title
+  defp ask(%{kind: :action}, node, settings), do: Collector.newest_request(node, settings).title
   defp ask(%{headline: headline}, _node, _settings) when is_binary(headline), do: headline
   defp ask(%{kind: :plan}, _node, _settings), do: "Approve the plan"
   defp ask(%{kind: :final_verification}, _node, _settings), do: "Sign off the final verification"
   defp ask(%{kind: :pr}, _node, _settings), do: "Review the pull request"
 
   defp review(:action, node, _repo_key, settings, _lookups) do
-    request = newest_request(node, settings)
+    {comment_id, request} = Collector.newest_open_request(node, settings)
 
     %{
+      comment_id: comment_id,
       title: request.title,
       question: request.question,
       why: request.why,
@@ -138,13 +139,6 @@ defmodule SymphonyElixir.Inbox.Item do
     do: %{brief: brief(node), pull_request: pull_request(node, repo_key, lookups)}
 
   defp review(:final_verification, node, _repo_key, _settings, _lookups), do: %{brief: brief(node)}
-
-  defp newest_request(node, settings) do
-    node
-    |> Collector.open_requests(settings)
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.max_by(&((&1.created_at && DateTime.to_unix(&1.created_at, :microsecond)) || 0), fn -> nil end)
-  end
 
   @doc "A rendered request option (`**Label** (recommended): effect`) as its label, effect and whether it is recommended."
   @spec option(String.t()) :: %{label: String.t(), effect: String.t() | nil, recommended: boolean()}

@@ -855,12 +855,13 @@ state. The window opens on the Inbox the first time.
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
   **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
-  verification **Sign Off…**; a blocked ticket **Unblock…**, which clears the access hold and lets it continue in
-  place. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
+  verification **Sign Off…**; an action asking a decision **Send Decision…** (its options are the picks) and,
+  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access hold and
+  lets it continue in place. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
-  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `unblock`), and what went wrong
+  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `decide`, `unblock`), and what went wrong
   shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
   Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
   seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow
