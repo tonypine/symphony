@@ -60,8 +60,19 @@
   monitor, not a sleep). Then prove it stable with
   `mix test <file>:<line> --repeat-until-failure N` on the targeted test only.
 - Don't leave background processes running: stop any server or watcher before
-  ending the turn. Symphony kills whatever is still running in the workspace
-  when the run ends.
+  ending the turn. When the run ends, Symphony kills only the agent's own
+  process group. A detached process escapes it: it is reparented to launchd in
+  another group, and Symphony's stray-process watchdog only reports it, never
+  stops it, so it runs until a person notices.
+  - Never detach a process: no `( … &)` subshells, `nohup`, `setsid` or
+    `disown`. Use your tool's own background mode, such as Bash
+    `run_in_background`, which the harness tracks and stops.
+  - Bound every probe loop, for example `for i in $(seq 60)`; never
+    `while true`.
+  - If a process you started can't be stopped (the sandbox refuses `kill`),
+    record its pid and full command in the workpad `Notes`, then ask the
+    operator with `linear_request_human_action` to kill it. Never move on
+    without reporting it.
 - Tests and hooks that start login shells (`sh -lc`, `bash -lc`) may print
   `~/.profile: Operation not permitted` inside the sandbox. That is benign: the
   sandbox denies reading shell startup files and the command still runs. Do not
