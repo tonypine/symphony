@@ -57,6 +57,7 @@ defmodule SymphonyElixir.CodeReview do
 
   @verdict_kind "code_review"
   @reviewer_disabled_signal "code_review_reviewer_disabled"
+  @carried_signal "code_review_carried"
   @deepening_signal "code_review_deepened"
   @deepening_applied_signal "code_review_deepening_applied"
   @max_inconclusive_retries 2
@@ -101,15 +102,82 @@ defmodule SymphonyElixir.CodeReview do
 
   def reviewer_run?(_issue, _settings), do: false
 
-  defp review(issue, workspace, opts, settings) do
-    if ReviewAgent.enabled?(settings.review_agent) do
-      case pending_deepening(issue, workspace, opts) do
-        nil -> do_review(issue, workspace, opts, settings)
-        deepening -> apply_deepened(issue, workspace, opts, settings, deepening)
-      end
-    else
-      park(issue, opts)
+  @doc """
+  Re-binds this module's carrying verdict — an `approve` — to `head`, so a mechanical CI Fix that
+  pushed a new commit leaves the approval valid on the head the ticket now has instead of
+  invalidating it (`SymphonyElixir.CiFix`). The ticket's newest `code_review` verdict must be the
+  approve: a newer `request_changes` or block is the verdict, and nothing is carried.
+
+  Best-effort, like every ledger write, and a no-op when the approve already binds to `head` or
+  there is no head to bind it to.
+  """
+  @spec carry_verdict(String.t() | nil, String.t() | nil, String.t() | nil) :: :ok
+  def carry_verdict(repo_key, issue_id, head) do
+    case latest_verdict(repo_key, issue_id) do
+      %{outcome: "approve", head_sha: judged} when is_binary(head) and judged != head ->
+        TicketSignals.record_verdict(repo_key, issue_id, @verdict_kind, head, "approve")
+        TicketSignals.record(repo_key, issue_id, @carried_signal, %{head: head})
+        :ok
+
+      _no_carry ->
+        :ok
     end
+  end
+
+  # A dispatch first performs what an earlier one recorded for this head, before it reviews afresh:
+  # a deepening still awaiting its routing edge is applied (`apply_deepened/6`), and a carried approve
+  # — a mechanical CI Fix re-bound it to the head the repair left — is applied without a review
+  # (`carried_approval/3`). Only when neither holds does the reviewer run.
+  defp review(issue, workspace, opts, settings) do
+    case pending_deepening(issue, workspace, opts) do
+      nil -> review_afresh(issue, workspace, opts, settings)
+      deepening -> apply_deepened(issue, workspace, opts, settings, deepening)
+    end
+  end
+
+  defp review_afresh(issue, workspace, opts, settings) do
+    case carried_approval(issue, workspace, opts) do
+      {:ok, head} ->
+        carry(issue, workspace, opts, settings, head)
+
+      :none ->
+        if ReviewAgent.enabled?(settings.review_agent) do
+          do_review(issue, workspace, opts, settings)
+        else
+          park(issue, opts)
+        end
+    end
+  end
+
+  # An approve already valid on this head is the ticket's verdict, so no second review runs. That is
+  # how a mechanical CI Fix's return is carried forward: the lane re-binds the approval it carries to
+  # whatever head the repair left (`SymphonyElixir.CiFix.carry_verdict/5`, which records the carry),
+  # and this module applies it again instead of dispatching the reviewer. An unreadable head carries
+  # nothing, so the ordinary review runs.
+  #
+  # The carry has to be the lane's own, marked by `@carried_signal`, and not merely "an approve is
+  # bound to this head": a deepening also records its second pass's approve against the head it
+  # judged without routing it, and that verdict is the deepening's to perform (`pending_deepening/3`),
+  # not a lane carry to replay on a later dispatch.
+  defp carried_approval(issue, workspace, opts) do
+    head = workspace_head(workspace, opts)
+
+    with %{outcome: "approve"} <- verdict_for_head(repo_key(issue, opts), issue.id, head),
+         true <- carried_for_head?(issue, opts, head) do
+      {:ok, head}
+    else
+      _none -> :none
+    end
+  end
+
+  defp carried_for_head?(issue, opts, head) do
+    is_binary(head) and Enum.any?(signals(issue, opts), &(&1.name == @carried_signal and signal_head(&1) == head))
+  end
+
+  defp carry(issue, workspace, opts, settings, head) do
+    Logger.info("Code Review carried the earlier approve for #{issue_label(issue)} head=#{head}; not reviewing again")
+
+    approve(issue, workspace, opts, settings, %{carried: true})
   end
 
   defp do_review(issue, workspace, opts, settings) do
@@ -321,18 +389,19 @@ defmodule SymphonyElixir.CodeReview do
   # An approve carries the QA run/skip decision. The deterministic rule (docs-only/internal-only
   # diffs) skips QA and lands the ticket in `Merging`; everything else hands it to the QA state. The
   # decision and its reason are recorded with the verdict, so a skip is auditable wherever the
-  # verdict is read.
-  defp approve(issue, workspace, opts, settings) do
+  # verdict is read. `extra` marks a verdict carried forward from an earlier review, which is
+  # recorded so the audit trail shows no reviewer ran a second time.
+  defp approve(issue, workspace, opts, settings, extra \\ %{}) do
     policy = Keyword.get(opts, :qa_policy, QaPolicy)
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:run, _playbooks, reason} ->
         Logger.info("Code Review approved #{issue_label(issue)}; QA runs: #{reason}")
-        move(issue, opts, settings, :code_review_approve, %{qa_decision: "run", reason: reason})
+        move(issue, opts, settings, :code_review_approve, Map.merge(%{qa_decision: "run", reason: reason}, extra))
 
       {:skip, reason} ->
         Logger.info("Code Review approved #{issue_label(issue)}; QA skipped: #{reason}")
-        move(issue, opts, settings, :code_review_approve_skip, %{qa_decision: "skip", reason: reason})
+        move(issue, opts, settings, :code_review_approve_skip, Map.merge(%{qa_decision: "skip", reason: reason}, extra))
     end
   end
 
@@ -414,10 +483,25 @@ defmodule SymphonyElixir.CodeReview do
   defp record_move_signal(issue, opts, signal, extra) do
     details =
       extra
-      |> Map.take([:target, :reason, :qa_decision])
+      |> Map.take([:target, :reason, :qa_decision, :carried])
       |> Map.put(:signal, to_string(signal))
 
     TicketSignals.record(repo_key(issue, opts), issue.id, @verdict_kind, details)
+  end
+
+  # The ticket's newest `code_review` verdict, whatever head it judged: `carry_verdict/3` reads it to
+  # re-bind a carrying approve, and requires it to be the approve — a newer request-changes or block
+  # is the verdict and nothing is carried.
+  defp latest_verdict(repo_key, issue_id), do: List.first(Handoff.verdicts(repo_key, issue_id, @verdict_kind))
+
+  # The newest verdict bound to `head`, or nil. An unreadable head (`nil`) matches nothing: a verdict
+  # then binds to no commit rather than to the wrong one.
+  defp verdict_for_head(_repo_key, _issue_id, nil), do: nil
+
+  defp verdict_for_head(repo_key, issue_id, head) do
+    repo_key
+    |> Handoff.verdicts(issue_id, @verdict_kind)
+    |> Enum.find(&(&1.head_sha == head))
   end
 
   defp verdicts(issue, opts), do: Handoff.verdicts(repo_key(issue, opts), issue.id, @verdict_kind)

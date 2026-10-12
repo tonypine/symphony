@@ -3,6 +3,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, post: 3, json_response: 2]
 
+  alias SymphonyElixir.CiFix
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Notifications
 
@@ -462,6 +463,44 @@ defmodule SymphonyElixir.CiPollerTest do
     assert "Code Review" in states
     # The QA state's run is green-head gated too, so its head must be watched as well.
     assert "QA" in states
+    # Every phase whose head goes red routes to the CI Fix lane, Rework included.
+    assert "Rework" in states
+  end
+
+  describe "the CI Fix lane's entries" do
+    test "a red head in Code Review enters CI Fix with Code Review recorded as the origin" do
+      assert_ci_fix_entry("Code Review")
+    end
+
+    test "a red head in QA enters CI Fix with QA recorded as the origin" do
+      assert_ci_fix_entry("QA")
+    end
+
+    test "a red head in Merging enters CI Fix with Merging recorded as the origin" do
+      assert_ci_fix_entry("Merging")
+    end
+
+    test "a red head in Rework enters CI Fix with Rework recorded as the origin" do
+      assert_ci_fix_entry("Rework")
+    end
+
+    test "a legacy repo keeps the red -> In Progress fix loop with no origin recorded" do
+      now = ~U[2026-05-06 09:00:00Z]
+      # The default workflow here runs the legacy machine; `In Review` is the state its poller watches.
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_statuses, [failed_status("abc123"), failed_status("abc123")])
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+      assert_receive {:issue_state_update, "issue-2401", "In Progress"}
+      assert CiFix.origin(@repo_key, "issue-2401") == nil
+    end
   end
 
   test "a Human Review issue's PR is watched like an In Review one" do
@@ -3018,6 +3057,36 @@ defmodule SymphonyElixir.CiPollerTest do
       pr_urls: ["https://github.com/example/repo/pull/2401"],
       labels: []
     }
+  end
+
+  # A designed repo: the machine whose red heads route to the CI Fix lane.
+  defp designed_repo! do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
+      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+  end
+
+  # A red head in `origin` on a designed repo: the poll reruns the failed check first, then routes
+  # the ticket to CI Fix with `origin` recorded on it for the repair to return to.
+  defp assert_ci_fix_entry(origin) do
+    designed_repo!()
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: origin}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_statuses, [failed_status("abc123"), failed_status("abc123")])
+    put_run(issue, now)
+
+    assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "CI Fix"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+    assert_receive {:issue_state_update, "issue-2401", "CI Fix"}
+    assert CiFix.origin(@repo_key, "issue-2401") == origin
   end
 
   defp put_run(issue, now, status \\ "success") do

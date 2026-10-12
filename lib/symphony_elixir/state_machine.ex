@@ -61,12 +61,21 @@ defmodule SymphonyElixir.StateMachine do
     if version == @designed, do: Enum.uniq(base ++ designed_phase), else: base
   end
 
-  @doc "The configured designed phase state names that are present and non-empty."
+  @doc """
+  The configured designed phase state names that are present and non-empty.
+
+  Accepts the runtime settings struct, whose phase states sit under `tracker`, or a bare tracker
+  map, whose fields sit at its top level.
+  """
   @spec designed_phase_states(map()) :: [String.t()]
   def designed_phase_states(settings) do
     @designed_phase_fields
-    |> Enum.map(&field(settings, &1))
+    |> Enum.map(&phase_state(settings, &1))
     |> Enum.filter(&present_string?/1)
+  end
+
+  defp phase_state(settings, field_name) do
+    field(settings, field_name) || field(field(settings, :tracker), field_name)
   end
 
   defp configured_version(settings) when is_map(settings) do

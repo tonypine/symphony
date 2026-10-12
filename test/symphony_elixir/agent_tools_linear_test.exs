@@ -2949,6 +2949,46 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:moved_to, "state-backlog"}
       refute_received {:machine_label_set, _issue_id, _name}
     end
+
+    # The CI Fix lane's substantive exit: the fixing agent, finding the repair needs a real change,
+    # sends its own ticket to `Rework`. That is an ordinary state request — the guard performs no
+    # lane edge for it — so the only thing the lane does is record what the move meant.
+    defp ci_fix_move_client do
+      test_pid = self()
+
+      fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "state" => %{"name" => "CI Fix", "type" => "started"},
+                 "team" => %{"states" => %{"nodes" => [%{"id" => "state-rework", "name" => "Rework"}]}}
+               }
+             }
+           }}
+        else
+          send(test_pid, :state_mutated)
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+    end
+
+    test "a CI Fix ticket the agent sends to Rework records the substantive fix verdict" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+               Linear.update_state(context, "Rework",
+                 linear_client: ci_fix_move_client(),
+                 settings: designed_settings()
+               )
+
+      assert_received :state_mutated
+
+      assert [%{name: "fix verdict", details: %{outcome: "substantive", to: "Rework"}}] =
+               SymphonyElixir.Handoff.signals("repo-a", "issue-1")
+    end
   end
 
   describe "request_human_action/3 on a designed repo" do
@@ -3109,6 +3149,24 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         )
 
       %{"id" => id, "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}
+    end
+
+    # The lane's other non-mechanical exit: a repair the agent cannot make without access or a
+    # secret. Nothing moves — the ticket keeps its CI Fix state and takes the Needs Decision hold —
+    # so the verdict is the only record that the lane is where the block happened.
+    test "a CI Fix ticket's Needs Decision hold records the cannot_fix fix verdict" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      scope = human_action_scope(%{issue: %{"state" => %{"name" => "CI Fix"}}})
+      opts = designed_opts(human_action_client(self(), scope))
+
+      assert {:ok, %{"requested" => true, "state" => "CI Fix", "held" => true, "hold" => "Needs Decision"}} =
+               Linear.request_human_action(context, @human_action, opts)
+
+      refute_received {:tracker_moved, _issue_id, _state}
+
+      assert [%{name: "fix verdict", details: %{outcome: "cannot_fix"}}] =
+               SymphonyElixir.Handoff.signals("repo-a", "issue-24")
     end
   end
 end

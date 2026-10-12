@@ -26,7 +26,9 @@ defmodule SymphonyElixir.RunKind do
     8. `qa`: the issue is in the designed machine's configured `qa_state`: the poll-dispatched
        QA run, which exercises the change from the user's point of view and records a verdict.
        Designed-only, like `code_review`.
-    9. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
+    9. `ci_fix`: the issue is in the designed machine's configured `ci_fix_state` (the mechanical
+       repair lane a red head or a conflict routes to), or the run continues after a red CI run
+       (`:ci_failure` signal).
     10. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
     11. `implementation`: everything else.
@@ -36,7 +38,8 @@ defmodule SymphonyElixir.RunKind do
 
   #{@reserved_kind_names} are never returned by `classify/2`; they name the reviewer and
   acceptance gate runs, which Symphony starts itself. The designed machine's configured
-  `code_review_state` and `qa_state` *are* returned, as `code_review` and `qa`.
+  `code_review_state`, `qa_state` and `ci_fix_state` *are* returned, as `code_review`, `qa`
+  and `ci_fix`.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -82,6 +85,7 @@ defmodule SymphonyElixir.RunKind do
   @rework_state "rework"
   @code_review_state "code review"
   @qa_state "qa"
+  @ci_fix_state "ci fix"
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 
   @doc "Every run kind, in documentation order."
@@ -151,12 +155,13 @@ defmodule SymphonyElixir.RunKind do
   end
 
   # A designed repo's verdict phases classify to their own run kinds: the repo's configured
-  # `code_review_state` is the poll-dispatched reviewer run and its configured `qa_state` the
-  # poll-dispatched QA run. The configured name is what the rest of the designed flow routes on
+  # `code_review_state` is the poll-dispatched reviewer run, its configured `qa_state` the
+  # poll-dispatched QA run, and its configured `ci_fix_state` the mechanical repair lane a red head
+  # or a conflict routes to. The configured name is what the rest of the designed flow routes on
   # (`QaVerification.qa_run?/2`, the transition guard), so a repo that renames a phase state still
-  # classifies its runs correctly. Both are designed-only — a legacy repo whose workflow happens to
-  # name a state the same way keeps the run kind it had before — so a repo without the phases is
-  # not either kind.
+  # classifies its runs correctly. All three are designed-only — a legacy repo whose workflow
+  # happens to name a state the same way keeps the run kind it had before — so a repo without the
+  # phases is not any of them.
   defp designed_phase_kind(issue, signals) do
     settings = Keyword.get(signals, :settings)
 
@@ -164,6 +169,7 @@ defmodule SymphonyElixir.RunKind do
       cond do
         in_state?(issue, phase_state(settings, :code_review_state, @code_review_state)) -> :code_review
         in_state?(issue, phase_state(settings, :qa_state, @qa_state)) -> :qa
+        in_state?(issue, phase_state(settings, :ci_fix_state, @ci_fix_state)) -> :ci_fix
         true -> nil
       end
     end

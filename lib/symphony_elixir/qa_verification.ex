@@ -70,6 +70,27 @@ defmodule SymphonyElixir.QaVerification do
   def qa_run?(_issue, _settings), do: false
 
   @doc """
+  Re-binds this module's carrying verdict — a `pass` — to `head`, so a mechanical CI Fix that pushed
+  a new commit leaves the pass valid on the head the ticket now has instead of invalidating it
+  (`SymphonyElixir.CiFix`). The ticket's newest `qa` verdict must be the pass: a newer `fail` or
+  `blocked` is the verdict, and nothing is carried.
+
+  Best-effort, like every ledger write, and a no-op when the pass already binds to `head` or there is
+  no head to bind it to.
+  """
+  @spec carry_verdict(String.t() | nil, String.t() | nil, String.t() | nil) :: :ok
+  def carry_verdict(repo_key, issue_id, head) do
+    case latest_verdict(repo_key, issue_id) do
+      %{outcome: "pass", head_sha: judged} when is_binary(head) and judged != head ->
+        TicketSignals.record_verdict(repo_key, issue_id, @verdict_kind, head, "pass")
+        :ok
+
+      _no_carry ->
+        :ok
+    end
+  end
+
+  @doc """
   The journey context for `issue`: the ticket's `## User walkthrough` when it has one, else its
   acceptance criteria, else nothing but the instruction to derive them. The QA prompt renders this,
   so the run knows what to verify from the user's point of view.
@@ -130,12 +151,51 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp verify_head(issue, workspace, opts, settings, head) do
+    if carried_pass?(issue, opts, head) do
+      carry(issue, opts, settings, head)
+    else
+      decide(issue, workspace, opts, settings, head)
+    end
+  end
+
+  defp decide(issue, workspace, opts, settings, head) do
     policy = Keyword.get(opts, :qa_policy, QaPolicy)
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
       {:run, playbooks, _reason} -> run_agent(issue, workspace, opts, settings, head, playbooks)
     end
+  end
+
+  # A pass already valid on this head is the ticket's verdict, so no second QA run happens. That is
+  # how a mechanical CI Fix's return is carried forward: the lane re-binds the pass it carries to
+  # whatever head the repair left (`SymphonyElixir.CiFix.carry_verdict/5`), and this module carries
+  # the ticket on instead of verifying it again. The run/skip policy is not consulted: the pass
+  # already decided the journey, and the report says the pass was carried rather than re-earned.
+  defp carried_pass?(issue, opts, head) do
+    case verdict_for_head(repo_key(issue, opts), issue.id, head) do
+      %{outcome: "pass"} -> true
+      _none -> false
+    end
+  end
+
+  defp carry(issue, opts, settings, head) do
+    Logger.info("QA carried the earlier pass for #{issue_label(issue)} head=#{head}; not verifying again")
+    publish_report(issue, opts, head, carried_outcome(), "Merging")
+
+    move(issue, opts, settings, :qa_pass, %{reason: "the earlier QA pass still covers this head", carried: true})
+  end
+
+  defp carried_outcome do
+    %{
+      verdict: :pass,
+      summary: "carried forward: QA already passed this change; the repair that followed was mechanical and re-bound the pass to the new head",
+      steps: [],
+      findings: [],
+      reason: nil,
+      needs_person: false,
+      playbooks: []
+    }
   end
 
   # The same hybrid skip rule the Code Review verdict applied, seen from the QA state: a docs-only
@@ -328,10 +388,23 @@ defmodule SymphonyElixir.QaVerification do
   defp record_move_signal(issue, opts, signal, extra) do
     details =
       extra
-      |> Map.take([:target, :reason])
+      |> Map.take([:target, :reason, :carried])
       |> Map.put(:signal, to_string(signal))
 
     TicketSignals.record(repo_key(issue, opts), issue.id, @verdict_kind, details)
+  end
+
+  # The ticket's newest `qa` verdict, whatever head it judged: `carry_verdict/3` reads it to re-bind a
+  # carrying pass, and requires it to be the pass — a newer fail or blocked is the verdict and nothing
+  # is carried.
+  defp latest_verdict(repo_key, issue_id), do: List.first(Handoff.verdicts(repo_key, issue_id, @verdict_kind))
+
+  # The newest verdict bound to `head`, or nil. `head` is the workspace's real head — an unreadable
+  # one parks the run before it gets here (`park_unreadable_head/2`) — so it always binds to a commit.
+  defp verdict_for_head(repo_key, issue_id, head) do
+    repo_key
+    |> Handoff.verdicts(issue_id, @verdict_kind)
+    |> Enum.find(&(&1.head_sha == head))
   end
 
   defp verdicts(issue, opts), do: Handoff.verdicts(repo_key(issue, opts), issue.id, @verdict_kind)
