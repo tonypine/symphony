@@ -128,8 +128,19 @@ final class InboxMovesTests: XCTestCase {
             .decide("X-1", requestCommentID: "c-1", picks: [.init(question: "Close TP-612 as a duplicate?", answer: "Keep it open")], move: nil)
         )
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Sent your decision")
-        XCTAssertFalse(sheet.expectedOutcome.moved)
+        XCTAssertEqual(sheet.expectedOutcome, MoveOutcome(moved: false, toState: nil))
         XCTAssertEqual(sheet.id, "id-X-1:decide")
+
+        // A merge confirmation's Decide moves the ticket to the state its hold names.
+        var merge = action
+        merge.review.action?.confirm = "Merging"
+        let confirm = ConsequenceSheet(move: .decide, item: merge)
+        XCTAssertEqual(confirm.targetState, "Merging")
+        XCTAssertEqual(confirm.happens, "Records your answer on X-1 as a reply to its request, clears the `Needs Decision` label and moves X-1 to Merging.")
+        XCTAssertEqual(confirm.stays, "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision.")
+        XCTAssertEqual(confirm.expectedOutcome, MoveOutcome(moved: true, toState: "Merging"))
+        XCTAssertEqual(confirm.banner(after: confirm.expectedOutcome).text, "Moved to Merging")
+        XCTAssertEqual(confirm.action(), sheet.action())
 
         // The redirect is the same answer with the move Rework named.
         let redirect = ConsequenceSheet(move: .sendToRework, item: action)
