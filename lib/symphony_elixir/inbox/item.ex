@@ -13,18 +13,26 @@ defmodule SymphonyElixir.Inbox.Item do
   - `:pr`: any other ticket in `In Review` or `Human Review`, a pull request to review, with its
     PR, CI result, Auto Review QA verdict, acceptance gate verdict and change size;
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
-    round and what the gate found.
+    round and what the gate found;
+  - `:blocked`: a ticket an access hold pauses in place (`SymphonyElixir.Hold`), with the reason the
+    hold recorded and what clears it; the Director lifts it with `Unblock`.
 
   A plan, PR or final verification carries its `## Review brief` comment parsed
   (`SymphonyElixir.Inbox.ReviewBrief`) as `review.brief`, nil when it has none.
+
+  A hold only becomes a `:blocked` item when nothing else already waits on the ticket: `from_node/4`
+  reads the store's hold after `SymphonyElixir.HumanActions.Waiting` found no entry, so an open
+  request or a review keeps its own, richer item. A dependency or fix-ticket hold clears on its own
+  and is not listed at all — only an access hold waits on a person.
   """
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.QaAgent.Report
 
-  @type kind :: :action | :final_verification | :plan | :pr | :clarify
+  @type kind :: :action | :final_verification | :plan | :pr | :clarify | :blocked
   @type t :: %{
           issue_id: String.t(),
           identifier: String.t() | nil,
@@ -47,13 +55,14 @@ defmodule SymphonyElixir.Inbox.Item do
   @doc """
   The item of an issue node read from Linear (the fields of `SymphonyElixir.Inbox`'s detail query),
   or nil when nothing about it waits on a person. `lookups` reads what Symphony knows locally:
-  `:ci` (`(issue_id, repo_key) -> conclusion | nil`) and `:gate` (`(repo_key, issue_id) -> run | nil`).
+  `:ci` (`(issue_id, repo_key) -> conclusion | nil`), `:gate` (`(repo_key, issue_id) -> run | nil`)
+  and `:hold` (`(repo_key, issue_id) -> hold | nil`).
   """
   @spec from_node(map(), String.t() | nil, Schema.t(), map()) :: t() | nil
   def from_node(node, repo_key, settings, lookups) do
     case Waiting.entries([node], settings) do
       [entry] -> build(node, entry, repo_key, settings, lookups)
-      [] -> nil
+      [] -> from_hold(node, repo_key, lookups)
     end
   end
 
@@ -70,6 +79,36 @@ defmodule SymphonyElixir.Inbox.Item do
       url: entry.url,
       review: review(entry.kind, node, repo_key, settings, lookups)
     }
+  end
+
+  # A ticket an access hold pauses in place waits on a person's Unblock, so it is listed with the
+  # reason the hold recorded even though no review covers it. A dependency or fix-ticket hold
+  # clears on its own, so it is not listed.
+  defp from_hold(node, repo_key, lookups) do
+    with hold when is_map(hold) <- store_hold(repo_key, node["id"], lookups),
+         true <- Hold.access_wait?(hold) do
+      %{
+        issue_id: node["id"],
+        identifier: node["identifier"],
+        title: node["title"],
+        repo_key: repo_key,
+        kind: :blocked,
+        state: get_in(node, ["state", "name"]),
+        ask: Map.get(hold, :reason) || "Unblock the ticket and it continues",
+        waiting_since: Map.get(hold, :set_at),
+        url: node["url"],
+        review: %{reason: Map.get(hold, :reason), clearing_condition: Map.get(hold, :clearing_condition)}
+      }
+    else
+      _none -> nil
+    end
+  end
+
+  defp store_hold(repo_key, issue_id, lookups) do
+    case Map.get(lookups, :hold) do
+      fun when is_function(fun, 2) -> fun.(repo_key, issue_id)
+      _none -> nil
+    end
   end
 
   defp ask(%{kind: :action}, node, settings), do: newest_request(node, settings).title

@@ -62,7 +62,7 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2a · Inbox: a plan to review
 
-- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify (and Final verifications), each row with
+- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked (and Final verifications), each row with
   identifier, title, one-line ask and age. The review: header with kind, wait and state badges; the brief's headline;
   **What to review** (the plan's Linear documents and HTML); **Decisions needed** as radio groups with the recommended
   option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker.
@@ -110,6 +110,15 @@ later journeys point back to it. The mock draws every screen under its ID.
 #### D2e · Inbox: empty
 
 - `ContentUnavailableView`: "Nothing waits on you.", how many were answered today, and **Open Overview**.
+
+#### D2f · Inbox: a blocked ticket
+
+- **Shows:** a ticket an access hold pauses in place: why it is blocked (the reason the hold recorded) and what
+  clears it.
+- **Actions:** **Unblock…** (prominent), **Open in Linear**. The sheet asks "Unblock SHOP-360?", says the ticket
+  keeps its state and continues from where it stopped, and the banner afterwards says "Hold cleared" with no Undo
+  (nothing moved).
+- **Data:** the Inbox list's `blocked` kind and `POST /api/v1/control/unblock` (section 2).
 
 ### J2. The glance (US3)
 

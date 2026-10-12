@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "In Progress",
+  "issue_id": "i-360",
+  "issue_identifier": "SHOP-360",
+  "move": "unblock",
+  "moved": false,
+  "to_state": "In Progress",
+  "undo_window_ms": null
+}
