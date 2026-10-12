@@ -168,7 +168,16 @@ defmodule SymphonyElixir.QaRunner do
   end
 
   def handle_call(:snapshot, _from, state) do
-    running = for {issue_id, entry} <- state.running, do: %{issue_id: issue_id, identifier: entry.identifier, sha: entry.sha, forced: entry.forced}
+    running =
+      for {issue_id, entry} <- state.running,
+          do: %{
+            issue_id: issue_id,
+            identifier: entry.identifier,
+            sha: entry.sha,
+            forced: entry.forced,
+            repo_key: Map.get(entry, :repo_key),
+            started_at: Map.get(entry, :started_at)
+          }
 
     queued =
       state
@@ -278,7 +287,17 @@ defmodule SymphonyElixir.QaRunner do
         ref = Process.monitor(pid)
         identifier = issue_identifier(job, issue_id)
         if forced?, do: Logger.info("QA pass started on the forced allowance issue_id=#{issue_id} issue_identifier=#{identifier} sha=#{sha} forced=true")
-        entry = %{sha: sha, ref: ref, paths: pass_paths(job, sha), identifier: identifier, forced: forced?}
+
+        entry = %{
+          sha: sha,
+          ref: ref,
+          paths: pass_paths(job, sha),
+          identifier: identifier,
+          repo_key: job |> Map.get(:record, %{}) |> Map.get(:repo_key),
+          started_at: DateTime.utc_now(),
+          forced: forced?
+        }
+
         {:reply, :started, %{state | running: Map.put(state.running, issue_id, entry)}}
 
       {:error, reason} ->
