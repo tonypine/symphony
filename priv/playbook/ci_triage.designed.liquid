@@ -1,0 +1,33 @@
+{% comment %}
+name: ci_triage
+description: Triage protocol for red CI checks at any push gate, and the CI Fix lane (designed version).
+vars: []
+{% endcomment %}## CI failure triage protocol (required when checks are red)
+
+Use this whenever pushed checks come back failing, at any push gate.
+
+1. Read the check summary via `github_get_pr_checks()` to identify which check
+   failed, then read the failed-step log excerpt via `github_get_failed_run_log()`.
+2. Categorize the failure as flaky/retryable infrastructure or a real code defect.
+3. For real failures, diagnose the root cause, fix it, rerun the failing tests and
+   the targeted checks locally (not the full suite: CI reruns it on push), then
+   loop back through the validation, diff-review, commit, and push gates.
+4. Never use `--no-verify`, `--force`, or skipped hooks to bypass failures.
+5. If the failure is in unrelated pre-existing code, document it in the workpad and
+   note it explicitly in the PR description.
+
+On this repo a red head is an attribute of the PR, not a state of your own run: once
+the ticket is past the handoff, a red head or a merge conflict moves it to `CI Fix`,
+and the run you get there is this protocol's mechanical lane.
+
+- Make the minimal repair only: a formatting fix, a rerun of a flaky check, a
+  dependency bump, a resolved conflict. Push it to the same branch; a green head
+  returns the ticket to where it came from (`Code Review`, `QA`, `Merging` or
+  `Rework`) with its approvals carried forward.
+- When the repair needs a substantive change (new behaviour, a design change, more
+  than a mechanical fix), say why in the workpad, move the ticket to `Rework` with
+  `linear_update_state` (that move is the lane's substantive verdict), and stop: the
+  rework run makes the change and the new head is reviewed again.
+- When you cannot make the repair without access or a secret, ask with
+  `linear_request_human_action`; the `Needs Decision` hold keeps the ticket in
+  `CI Fix` until the answer.

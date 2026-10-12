@@ -1,3 +1,17 @@
+{% if state_machine == "designed" -%}
+## Step 3: Code Review, QA and merge handling
+
+1. After the handoff push the machine runs the review: do not code or change ticket content while the ticket is in `Code Review`, `QA` or `Merging`, or while a hold is set. Holds are requested, never performed: ask for a person with `linear_request_human_action` (a `Needs Decision` hold) or report a block (a `Blocked` hold), and Symphony sets and clears the label.
+2. `Code Review`: the reviewer agent judges the PR on its green head (correctness, scope, acceptance criteria, intent) and records its verdict against that head. Approve moves the ticket to `QA`, or straight to `Merging` when QA is skipped (a docs-only or internal-only change); a rework verdict moves it to `Rework` on the same PR; an escalation sets a `Needs Decision` hold.
+3. `QA`: a QA agent exercises the user journeys the change delivers, end to end, as a user would. Pass moves the ticket to `Merging`; fail moves it to `Rework` with the failing journey; a QA environment that cannot run is retried, then repaired through a fix ticket while a `Blocked` hold pauses the ticket.
+4. With the repo's manual review on, the step into `Merging` waits on a `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR link; a person's confirmation continues into `Merging`, a redirect sends it where the person says.
+5. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) bring the ticket back to `In Progress` on the same PR with the comments. Address them with the PR feedback sweep protocol and push: that push hands off to `Code Review` again. Do not close the PR or reset the branch for review comments.
+6. A red head or a merge conflict in `Code Review`, `QA`, `Merging` or `Rework` moves the ticket to `CI Fix` (see the `CI failure triage protocol`). A mechanical repair returns it to where it came from with its approvals carried forward; a substantive one goes through `Rework` and is reviewed again.
+7. When the issue is in `Merging`, Symphony turns on GitHub auto-merge for the PR, updates the branch when it falls behind the base branch, and moves the issue to `Done` once GitHub merges it; no agent runs. A merged ticket with started sub-tickets still open waits in `Waiting on sub-tickets` until they finish.
+
+   Only when auto-merge can't be used does Symphony dispatch you in `Merging` (with a comment on the issue saying why): then open and follow `.agents/skills/land/SKILL.md`, and run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
+   - When checks are still pending, and your runtime allows `gh` (Claude sessions deny it), wait for them inside the turn with one foreground `gh pr checks <pr-number> --watch` call that finishes under the 10-minute tool limit; waiting in a tool call costs no tokens. If they are still pending after that, or you cannot run `gh`, end the turn. Do not rely on `ScheduleWakeup`, `sleep` loops, or other in-session timers; they do nothing in unattended runs. Symphony keeps the issue in `Merging`, holds it until CI on the PR head settles, and then resumes the landing agent so it can merge without a second approval.
+{%- else -%}
 ## Step 3: In Review and merge handling
 
 1. When the issue is in `In Review`, do not code or change ticket content.
@@ -11,3 +25,4 @@
    Only when auto-merge can't be used does Symphony dispatch you in `Merging` (with a comment on the issue saying why): then open and follow `.agents/skills/land/SKILL.md`, and run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
    - When checks are still pending, and your runtime allows `gh` (Claude sessions deny it), wait for them inside the turn with one foreground `gh pr checks <pr-number> --watch` call that finishes under the 10-minute tool limit; waiting in a tool call costs no tokens. If they are still pending after that, or you cannot run `gh`, end the turn. Do not rely on `ScheduleWakeup`, `sleep` loops, or other in-session timers; they do nothing in unattended runs. Symphony keeps the issue in `Merging`, holds it until CI on the PR head settles, and then resumes the landing agent so it can merge without a second approval.
 6. After merge is complete, move the issue to `Done`.
+{%- endif %}

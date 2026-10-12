@@ -464,8 +464,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              Jason.decode!(response["output"])
 
     assert message =~ "cannot move the issue to \"Plan Review\""
-    assert message =~ "naming `In Review`, and Symphony performs the move"
-    assert message =~ "do not name this state"
+    assert message =~ "only a plan parent's handoff enters \"Plan Review\""
+    assert message =~ "hands its work over with its pushed PR instead"
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 

@@ -1878,8 +1878,8 @@ not require recognizing or validating extension fields unless that extension is 
   null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
   MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
   and create it when it is missing, logging what it created; a missing one MUST be reported with its
-  exact name and the `issues.states.*` key to point at the new name before it is created. They land
-  inert: no dispatch, transition or read uses them yet.
+  exact name and the `issues.states.*` key to point at the new name before it is created. Only a
+  repo on the `designed` machine (see 7.6) dispatches from or moves into them.
 - `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
   the numbers `0`..`4`, or `no priority`, default `[]`; empty means every priority is
   dispatch-eligible. See 8.2 Candidate Selection Rules.
@@ -2060,6 +2060,8 @@ not require recognizing or validating extension fields unless that extension is 
   `window_days` `14`, `max_lines` `300`), `inconclusive_limit` (default `2`)
 - `repositories[].acceptance_gate`: `mode`, `max_turns`, `timeout_ms` and `escalate` for that
   repository; scalars replace the global values, lists add to them. See `docs/acceptance_gate.md`.
+- `repositories[].state_machine`: `legacy` (default) or `designed`, the ticket state machine the
+  repo runs (see 7.6). An unknown value reads as `legacy`.
 - `repositories[].manual_review`: `off` (default) or `on`, who decides that a verified ticket
   merges. `on` pauses the step into `Merging` on a **Needs Decision** hold carrying the summary;
   confirming continues into `Merging`, a redirect directs a move. It is a per-repo setting with no
@@ -2440,6 +2442,82 @@ dashboard-visible agent execution. The PR review poller owns only polling-mode G
 state transitions, and tracked PR cleanup. Pending review-comment, merge-conflict, and CI-failure
 prompt context lookups use the issue's repository scope when one is known, and otherwise search the
 configured repositories.
+
+### 7.6 Ticket State Machine (`designed`)
+
+A repo's ticket state machine is chosen per repo by `repositories[].state_machine`: `legacy` (the
+default) or `designed`. One resolver (`StateMachine.version/1`) answers it for the transition guard,
+dispatch and prompt assembly alike. A `legacy` repo keeps every rule elsewhere in this
+specification that names Auto Review, `In Review`, the Human Review state, supervisor checks or
+`Final verification:` tickets. A `designed` repo runs the machine below instead. The design of
+record is [`docs/design/state-machine.md`](docs/design/state-machine.md); this section states what
+the implementation enforces.
+
+States and owners:
+
+| State | Owner | Entered by | Left by |
+|---|---|---|---|
+| `Backlog` | Person | A person's deprioritize | A person's triage to `Todo` |
+| `Todo` | Machine | Triage; a plan approval's promotion | The claim → `In Progress` |
+| `In Progress` | Agent | The claim; `Restart`; PR review comments (addressed on the same PR) | The handoff → `Code Review` |
+| `Code Review` | Agent (reviewer) | The handoff (from `In Progress` or `Rework`); a `CI Fix` return | Approve → `QA`, or `Merging` when QA is skipped; rework → `Rework`; block → `Needs Decision` hold; red head → `CI Fix` |
+| `QA` | Agent (QA) | A Code Review approve | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
+| `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation) | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix` |
+| `Rework` | Agent | A rework verdict; a QA fail; a substantive CI Fix; a plan change | The handoff → `Code Review` (an epic parent → `Plan Review`) |
+| `CI Fix` | Agent (mechanical lane) | A red head or a conflict in `Code Review`, `QA`, `Merging` or `Rework` | A green head → the recorded origin, approvals carried; substantive → `Rework`; access needed → `Needs Decision` hold |
+| `Plan Review` | Person | A plan parent's handoff | Approve → `Waiting on sub-tickets` (sub-tickets promoted); a comment or a rejection → `Rework` |
+| `Waiting on sub-tickets` | Machine | Plan approval; a merge with started sub-tickets open | Every sub-ticket terminal → `Epic Review` (a non-plan ticket → `Done`) |
+| `Epic Review` | Machine + QA agent | Every sub-ticket terminal | Pass → `Done`; gaps → follow-ups filed in `Todo`, parent → `Waiting on sub-tickets` |
+| `Done` | — | A merge; an epic review pass | — |
+
+Rules:
+
+- **One writer.** Every move is a named signal performed through `TransitionGuard`, whose edge
+  table for a `designed` repo is the legacy table plus the designed edges. Agents and people request
+  moves; the guard validates and performs them. An agent's request to enter `Code Review`, `QA`,
+  `Epic Review` or `Waiting on sub-tickets` MUST be refused; so MUST a request to enter `Plan Review`
+  from any ticket but a plan parent, for which that request is the plan handoff. A request for
+  `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
+- **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
+  signal the push and pull-request tool hooks record against the pushed head. A run that ends
+  without it MUST record `handoff_missing` and leave the ticket where it is for the retry machinery.
+- **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
+  state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
+  `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
+  origin recorded. A repo with the reviewer off parks its `Code Review` tickets with
+  `code_review_reviewer_disabled` recorded and never approves without a reviewer.
+- **Verdicts bind to a head.** Code Review and QA verdicts are recorded against the head SHA they
+  judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
+  so the new head is reviewed again.
+- **QA skip.** Code Review's approve carries a recorded run-or-skip decision: a diff whose paths are
+  all docs, tests or `auto_review.skip_globs` skips QA; any other diff runs it.
+- **Holds overlay, never relocate.** `Blocked` and `Needs Decision` are holds persisted in the
+  ticket-state store and projected as machine-owned labels, which only the machine writes. A held
+  ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
+  blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
+  `In Progress` or `Rework`, or a self-heal fix ticket, and clears by itself when what it waits on
+  goes terminal (an access hold clears on a person's `Unblock`). `Needs Decision` is set by an
+  agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal or a manual
+  review confirmation, and clears when the decision is recorded (a reply under the request, the
+  Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
+  directs a move.
+- **Manual review.** With `repositories[].manual_review: on`, the step into `Merging` waits on a
+  `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR;
+  confirming continues into `Merging`. Rework verdicts never wait on a person.
+- **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
+  (or reuses) one high-priority fix ticket per broken component and sets a `Blocked` hold on the
+  affected ticket waiting on it. Only the same failure recurring with no new information escalates
+  to a `Needs Decision` hold.
+- **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
+  promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
+  `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
+  machine enters `Epic Review` and runs the QA agent against the default branch; it files follow-ups
+  in `Todo` under the epic, never in `Backlog`. No `Final verification:` ticket or close-out run is
+  created for a `designed` repo.
+- **Prompt.** Prompt assembly passes `state_machine` to the template, serves each playbook
+  partial's `designed` variant when it has one, and a repo's instruction files MAY branch on
+  `state_machine`. A `designed` repo's rendered prompt MUST NOT name Auto Review, `In Review`, the
+  Human Review state, supervisor checks or `Final verification:` tickets.
 
 ## 8. Polling, Scheduling, and Reconciliation
 

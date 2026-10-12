@@ -173,7 +173,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
         settings: %{agent: %{kind: "claude"}, pr_review: %{mode: "polling"}, state_machine: "designed"}
       )
 
-    assert prompt =~ "An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR"
+    assert prompt =~ "A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR"
+    refute prompt =~ "acceptance gate"
     assert prompt =~ "Do not move the issue to `Rework` by hand"
     assert prompt =~ "the human-only `Restart` is what starts over"
     refute prompt =~ "Do not treat it as `Rework`"

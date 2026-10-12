@@ -300,9 +300,10 @@ defmodule SymphonyElixir.TransitionGuard do
   parent's sub-issues are all terminal and its review's verdict leaves it.
 
   A designed repo's plan parent is redirected to its configured `Plan Review` state whatever runs:
-  the run hands the plan over by asking for the review state (see `ctx`'s `:plan_parent?`), and an
-  agent naming `Plan Review` itself is refused — the epic path's plan state is the handoff's to
-  enter. A legacy repo keeps the `In Review` / Human Review handoff exactly as before.
+  the run hands the plan over by naming `Plan Review` or the review state (see `ctx`'s
+  `:plan_parent?`), and an agent naming `Plan Review` for anything but a plan parent is refused —
+  the epic path's plan state is the plan handoff's to enter. A legacy repo keeps the `In Review` /
+  Human Review handoff exactly as before.
 
   On a repo running the designed machine, an agent asking to park its issue in `Backlog` while it
   is `In Progress` or `Rework` is not a move: the guard returns `{:hold, :blocked, attrs}`, which
@@ -327,7 +328,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
       :not_a_hold ->
         with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
-             :ok <- refuse_plan_review_entry(state_name, settings),
+             :ok <- refuse_plan_review_entry(state_name, ctx, settings),
              state = redirect_state(state, ctx, settings),
              :ok <- refuse_human_only(state),
              :ok <- refuse_restart_state(state, ctx, settings),
@@ -426,13 +427,13 @@ defmodule SymphonyElixir.TransitionGuard do
       else: :ok
   end
 
-  # `Plan Review` is a designed repo's plan handoff: the plan run hands the plan over by asking for
-  # the review state, and the guard puts the parent in `Plan Review` (`plan_review_redirect/3`). An
-  # agent naming `Plan Review` itself is refused, so the state belongs to the handoff, not to the
-  # tool. The request is judged by the name asked for, before any redirect: the redirect's own
-  # target is the state this refusal guards.
-  defp refuse_plan_review_entry(state_name, settings) do
-    with true <- StateMachine.designed?(settings),
+  # `Plan Review` is a designed repo's plan handoff: the plan run hands the plan over by naming
+  # `Plan Review` (or the review state it used to ask for, which `plan_review_redirect/3` turns into
+  # `Plan Review`). Any other ticket naming `Plan Review` is refused, so the state belongs to the plan
+  # handoff, not to the tool. The request is judged by the name asked for, before any redirect.
+  defp refuse_plan_review_entry(state_name, ctx, settings) do
+    with false <- Map.get(ctx, :plan_parent?, false),
+         true <- StateMachine.designed?(settings),
          plan_review when is_binary(plan_review) <- HumanReview.plan_review_state(settings),
          true <- state_name_matches?(state_name, plan_review) do
       {:error, {:plan_review_requires_handoff_signal, state_name}}

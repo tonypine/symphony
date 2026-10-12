@@ -1,6 +1,6 @@
-In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting either builds its control in the macOS app or names a sibling sub-ticket that does; that sibling has a `## User walkthrough` and blocks the `Final verification:` sub-ticket.
+In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting either builds its control in the macOS app or names a sibling sub-ticket that does; that sibling has a `## User walkthrough` and {% if state_machine == "designed" %}is in the parent's plan, which the epic review checks.{% else %}blocks the `Final verification:` sub-ticket.{% endif %}
 
-## Step 2: Execution phase (Todo -> In Progress -> In Review)
+## Step 2: Execution phase (Todo -> In Progress -> {% if state_machine == "designed" %}Code Review{% else %}In Review{% endif %})
 
 1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
 2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
@@ -55,6 +55,21 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
+{% if state_machine == "designed" -%}
+11. Before the handoff push, sweep PR feedback and checks:
+    - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
+    - Run the full PR feedback sweep protocol.
+    - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
+    - Re-open and refresh the workpad before the handoff so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
+12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
+    - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
+    - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
+    - A block is not a handoff: follow the blocked-access escape hatch, which sets a `Blocked` or `Needs Decision` hold and leaves the ticket in its phase.
+    - After the handoff push, end the turn. CI runs on the pushed head: a red head comes back to you through `CI Fix`, and the reviewer runs once the head is green. Do not continue ordinary implementation work unless Symphony injects reviewer, QA, CI or operator context.
+13. For `Todo` tickets that already had a PR attached at kickoff:
+    - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
+    - Then push the updates to the same branch; that push is the handoff to `Code Review`.
+{%- else -%}
 11. Before moving to `In Review`, poll PR feedback and checks:
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
@@ -70,3 +85,4 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Ensure branch was pushed with any required updates.
     - Then move to `In Review`.
+{%- endif %}

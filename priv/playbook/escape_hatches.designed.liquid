@@ -12,8 +12,8 @@ steps.
 - A check an implementation run can't run — launching the app, a host crash check, a
   check on a device or a database — is a coverage gap to close, never a handoff:
   automate it in CI, or bring it into a QA playbook (`priv/qa_playbooks/*`) that the QA
-  state runs on its own VM, emulator and host driver. A repo running this machine leaves
-  no `## Supervisor check` block and moves no ticket to a review state for a check.
+  state runs on its own VM, emulator and host driver. A check is never handed to a
+  person and never moves a ticket.
 - When such a check blocks the work, it is an environment block like any other: the
   flow retries it boundedly, then the self-heal lane files the fix ticket for the broken
   component and pauses the ticket on a `Blocked` hold that clears by itself when the fix
