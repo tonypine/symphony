@@ -98,6 +98,35 @@ defmodule SymphonyElixir.InitiativesTest do
       assert initiative.final_verification.identifier == "BIL-8"
       assert hd(Enum.filter(initiative.sub_tickets, &(&1.identifier == "BIL-4"))).blocked_by == [%{identifier: "BIL-3", state: "x", open: true}]
       assert initiative.repo_key == "billing"
+      refute initiative.incomplete
+    end
+
+    test "keeps the oldest open final verification and leaves the others in the sub-tickets" do
+      final = &child(&1, &2, %{"title" => "Final verification: the epic", "createdAt" => &3})
+
+      children = [
+        final.("BIL-4", @todo, "2026-10-03T09:00:00Z"),
+        final.("BIL-3", @todo, "2026-10-02T09:00:00Z"),
+        final.("BIL-2", @done, "2026-10-01T09:00:00Z")
+      ]
+
+      initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings(), @now)
+      assert initiative.final_verification.identifier == "BIL-3"
+      assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-2", "BIL-4"]
+
+      all_done = [final.("BIL-6", @done, "2026-10-02T09:00:00Z"), final.("BIL-5", @done, "2026-10-01T09:00:00Z")]
+      all_done = Initiative.from_node(plan("BIL-1", @in_progress, all_done), "billing", settings(), @now)
+      assert all_done.final_verification.identifier == "BIL-5"
+      assert Enum.map(all_done.sub_tickets, & &1.identifier) == ["BIL-6"]
+    end
+
+    test "flags a plan whose sub-tickets or blockers run past one read as incomplete" do
+      more = %{"pageInfo" => %{"hasNextPage" => true}}
+      many_children = plan("BIL-1", @in_progress, [child("BIL-2", @todo)], %{"children" => Map.put(more, "nodes", [child("BIL-2", @todo)])})
+      assert Initiative.from_node(many_children, "billing", settings(), @now).incomplete
+
+      many_blockers = child("BIL-2", @todo, %{"inverseRelations" => Map.put(more, "nodes", [])})
+      assert Initiative.from_node(plan("BIL-1", @in_progress, [many_blockers]), "billing", settings(), @now).incomplete
     end
   end
 
@@ -203,6 +232,15 @@ defmodule SymphonyElixir.InitiativesTest do
       # A second read with the same answer leaves the cache as it is.
       Initiatives.run_once(state)
       assert [%{identifier: "BIL-1"}] = Initiatives.cached(name)
+    end
+
+    test "warns about a plan read incomplete" do
+      truncated = plan("BIL-1", @in_progress, [], %{"children" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => true}}})
+      state = server_state(linear(self(), %{nil => page([truncated])}))
+
+      log = capture_log(fn -> Initiatives.run_once(state) end)
+      assert log =~ "Initiatives: BIL-1 has more sub-tickets or blockers than one read returns"
+      assert [%{incomplete: true}] = Initiatives.cached(Keyword.fetch!(state.opts, :name))
     end
 
     defp plan_label(name), do: %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => name}}}}

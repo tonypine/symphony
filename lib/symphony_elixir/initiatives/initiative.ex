@@ -15,7 +15,10 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   - `slot`: it can run and waits for a free slot.
 
   Landing order is blocked-by order between the sub-tickets, then creation order. Canceled
-  sub-tickets are left out.
+  sub-tickets are left out. When several sub-tickets are titled `Final verification:`, the oldest
+  one not done is the final verification (the oldest one when all are done); the others stay in
+  the sub-tickets. `incomplete` is true when Linear had more sub-tickets, or more blockers on one,
+  than the read returns: the counts and landing order then cover only what was read.
   """
 
   alias SymphonyElixir.HumanReview
@@ -45,7 +48,8 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           group: String.t(),
           completed_at: String.t() | nil,
           sub_tickets: [sub_ticket()],
-          final_verification: sub_ticket() | nil
+          final_verification: sub_ticket() | nil,
+          incomplete: boolean()
         }
 
   @typedoc "What Symphony knows locally at GET time: running and waiting-on-you issue ids, the human-gated states."
@@ -77,7 +81,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           |> Enum.map(&sub_ticket/1)
           |> Enum.reject(&(&1.state_type == "canceled"))
 
-        {final, parts} = Enum.split_with(children, &final_verification?/1)
+        {final, parts} = split_final(children)
 
         %{
           id: id,
@@ -89,7 +93,8 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           group: group,
           completed_at: node["completedAt"],
           sub_tickets: landing_order(parts),
-          final_verification: List.first(final)
+          final_verification: final,
+          incomplete: truncated?(node)
         }
     end
   end
@@ -142,6 +147,22 @@ defmodule SymphonyElixir.Initiatives.Initiative do
       %{identifier: issue["identifier"], state: get_in(issue, ["state", "name"]), open: type not in ["completed", "canceled"]}
     end
   end
+
+  defp split_final(children) do
+    finals = children |> Enum.filter(&final_verification?/1) |> Enum.sort_by(&{&1.created_at || "", &1.identifier || ""})
+
+    case Enum.find(finals, &(&1.state_type != "completed")) || List.first(finals) do
+      nil -> {nil, children}
+      final -> {final, List.delete(children, final)}
+    end
+  end
+
+  defp truncated?(node) do
+    more?(node["children"]) or node |> get_in(["children", "nodes"]) |> List.wrap() |> Enum.any?(&more?(&1["inverseRelations"]))
+  end
+
+  defp more?(%{"pageInfo" => %{"hasNextPage" => true}}), do: true
+  defp more?(_connection), do: false
 
   defp final_verification?(%{title: title}) when is_binary(title),
     do: title |> String.trim_leading() |> String.downcase() |> String.starts_with?(@final_verification_prefix)

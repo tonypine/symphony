@@ -49,8 +49,10 @@ defmodule SymphonyElixir.Initiatives do
             state { name type }
             inverseRelations(first: $relationsFirst) {
               nodes { type issue { identifier state { name type } } }
+              pageInfo { hasNextPage }
             }
           }
+          pageInfo { hasNextPage }
         }
       }
       pageInfo { hasNextPage endCursor }
@@ -140,6 +142,10 @@ defmodule SymphonyElixir.Initiatives do
             initiative = Initiative.from_node(node, repo.name, settings(state, repo), now),
             initiative != nil,
             do: initiative
+
+      for %{incomplete: true} = initiative <- initiatives do
+        Logger.warning("Initiatives: #{initiative.identifier} has more sub-tickets or blockers than one read returns; its list is incomplete")
+      end
 
       put_initiatives(state, initiatives)
       state
