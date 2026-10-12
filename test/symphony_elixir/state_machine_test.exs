@@ -57,6 +57,15 @@ defmodule SymphonyElixir.StateMachineTest do
                ["Todo", "In Progress", "Code Review", "QA", "Epic Review", "CI Fix"]
     end
 
+    test "designed never dispatches from Plan Review, even when the active states name it" do
+      tracker = %{active_states: ["Todo", " plan review "], plan_review_state: "Plan Review", qa_state: "QA"}
+
+      assert StateMachine.active_states(%{state_machine: "designed", tracker: tracker}) == ["Todo", "QA"]
+      assert StateMachine.tracker_active_states("designed", tracker) == ["Todo", "QA"]
+      assert StateMachine.tracker_active_states("legacy", tracker) == ["Todo", " plan review "]
+      assert StateMachine.tracker_active_states("designed", %{tracker | plan_review_state: nil}) == ["Todo", " plan review ", "QA"]
+    end
+
     test "a settings without a tracker has no base active states" do
       assert StateMachine.active_states(%{state_machine: "designed", qa_state: "QA"}) == ["QA"]
     end
