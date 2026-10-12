@@ -1612,6 +1612,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
 | `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
+| `qa_api_requests` | returns the requests an app launched with `api_fixtures` logged to `api-requests.jsonl` in its QA root since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; on a `worker_host` it reads the log there | a log that cannot be read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
 Only QA agents see these tools; executor and reviewer sessions cannot list or call them.
@@ -1750,6 +1751,8 @@ host and the worktree checks still apply there. Then:
   the agent attaches them as before;
 - `qa_put_file` copies the fixture over SSH into the run directory's `files/` and returns that
   path, since the app cannot read files on the Symphony host;
+- `qa_api_requests` moves the app's `api-requests.jsonl` aside in the run directory and copies it
+  back over SSH;
 - the run directory is removed when the pass ends. A build that times out is stopped on the
   Symphony side; on the QA host it may run until it finishes.
 
