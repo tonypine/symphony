@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Handoff
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.Workspace
@@ -1976,6 +1977,128 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
       {:error, _reason} ->
         :ok
+    end
+  end
+
+  test "a designed repo's push and pull request record the explicit handoff signal" do
+    fixture = sync_fixture!("github-agent-handoff")
+    repo_key = "github-agent-handoff-repo"
+    issue_id = "issue-github-agent-handoff"
+
+    try do
+      RunStore.delete_ticket_state(repo_key, issue_id)
+      command_security = Map.put(fixture.context.command_security, :origin_repo, "acme/symphony")
+
+      context =
+        fixture.context
+        |> Map.put(:issue, %{id: issue_id, repo_key: repo_key})
+        |> Map.put(:command_security, command_security)
+
+      designed = %Schema{state_machine: "designed"}
+
+      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context, settings: designed)
+
+      head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
+      assert Handoff.emitted?(repo_key, issue_id, head)
+      assert [%{name: "handoff", details: details}] = Handoff.signals(repo_key, issue_id)
+      assert details.head == head
+      assert details.branch == "auto/ACME-483"
+
+      # Opening the PR is a handoff too.
+      RunStore.delete_ticket_state(repo_key, issue_id)
+
+      git_runner = fn ["branch", "--show-current"], _opts -> {"auto/ACME-483\n", 0} end
+      gh_runner = fn _args, _opts -> {"https://github.com/acme/symphony/pull/9\n", 0} end
+
+      assert {:ok, %{"url" => "https://github.com/acme/symphony/pull/9"}} =
+               GitHub.create_pull_request(context, "Title", "Body", false,
+                 settings: designed,
+                 git_runner: git_runner,
+                 gh_runner: gh_runner
+               )
+
+      assert Handoff.emitted?(repo_key, issue_id, head)
+
+      # A legacy repo records nothing at all.
+      RunStore.delete_ticket_state(repo_key, issue_id)
+      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context, settings: %Schema{})
+      assert Handoff.signals(repo_key, issue_id) == []
+
+      # Nor does a tool call made outside a configured repo.
+      RunStore.delete_ticket_state(repo_key, issue_id)
+      assert {:ok, _result} = GitHub.push_branch(fixture.context, settings: designed)
+      assert Handoff.signals(repo_key, issue_id) == []
+    after
+      File.rm_rf(fixture.root)
+      RunStore.delete_ticket_state(repo_key, issue_id)
+    end
+  end
+
+  test "a handoff with no explicit settings resolves the repo's own config, and an unreadable head binds to nothing" do
+    fixture = sync_fixture!("github-agent-handoff-config")
+    repo_key = "github-agent-handoff-config-repo"
+    issue_id = "issue-github-agent-handoff-config"
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [
+          %{
+            "name" => repo_key,
+            "path" => Path.dirname(Workflow.workflow_file_path()),
+            "workflow" => Path.basename(Workflow.workflow_file_path()),
+            "team" => "Test",
+            "state_machine" => "designed"
+          }
+        ]
+      )
+
+      RunStore.delete_ticket_state(repo_key, issue_id)
+
+      context =
+        fixture.context
+        |> Map.put(:issue, %{id: issue_id, repo_key: repo_key})
+        |> Map.update!(:command_security, &Map.put(&1, :origin_repo, "acme/symphony"))
+
+      # No `settings:` opt: the handoff resolves the repo's own designed config.
+      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context)
+
+      head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
+      assert Handoff.emitted?(repo_key, issue_id, head)
+
+      # A workspace whose HEAD the tool cannot read records no head, so the signal counts for any.
+      RunStore.delete_ticket_state(repo_key, issue_id)
+
+      git_runner = fn
+        ["branch", "--show-current"], _opts -> {"auto/ACME-483\n", 0}
+        ["rev-parse", "HEAD"], _opts -> {"", 0}
+      end
+
+      gh_runner = fn _args, _opts -> {"https://github.com/acme/symphony/pull/9\n", 0} end
+
+      assert {:ok, %{"url" => "https://github.com/acme/symphony/pull/9"}} =
+               GitHub.create_pull_request(context, "Title", "Body", false,
+                 git_runner: git_runner,
+                 gh_runner: gh_runner
+               )
+
+      assert [%{name: "handoff", details: details}] = Handoff.signals(repo_key, issue_id)
+      assert details.head == nil
+      assert Handoff.emitted?(repo_key, issue_id, "any-head-at-all")
+
+      # A context whose issue map carries no id hands off under the context's own issue id.
+      RunStore.delete_ticket_state(repo_key, issue_id)
+
+      bare =
+        fixture.context
+        |> Map.put(:issue, %{repo_key: repo_key})
+        |> Map.put(:issue_id, issue_id)
+
+      assert {:ok, _result} = GitHub.push_branch(bare, settings: %Schema{state_machine: "designed"})
+      assert [%{name: "handoff", details: %{head: ^head}}] = Handoff.signals(repo_key, issue_id)
+    after
+      File.rm_rf(fixture.root)
+      RunStore.delete_ticket_state(repo_key, issue_id)
     end
   end
 

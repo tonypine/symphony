@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Orchestrator do
     EpicLanes,
     ForcedQueue,
     ForcedStatus,
+    Handoff,
     Hold,
     HumanReview,
     Notifications,
@@ -39,6 +40,7 @@ defmodule SymphonyElixir.Orchestrator do
     StateProvisioning,
     StatusDashboard,
     SubIssueWait,
+    TicketState,
     TicketStateReconciler,
     Tracker,
     TransitionGuard,
@@ -70,6 +72,11 @@ defmodule SymphonyElixir.Orchestrator do
   # A landing session can see its issue turn terminal (for example Linear's
   # "PR merged -> Done" automation) before it posts its final workpad update.
   @merging_state "merging"
+  # The designed machine's reviewer state, as the fallback when a repo's settings are unavailable.
+  @code_review_state "Code Review"
+  # The ledger signal recorded when a designed repo's Code Review ticket has no reviewer to run;
+  # `SymphonyElixir.CodeReview` records the same name when it refuses to review.
+  @code_review_reviewer_disabled_signal "code_review_reviewer_disabled"
   # A breakdown parent goes back here for its run to revise the plan from people's comments.
   @plan_revision_state "In Progress"
   @merging_terminal_grace_ms 300_000
@@ -3422,7 +3429,7 @@ defmodule SymphonyElixir.Orchestrator do
         end
 
       not dispatch_gates_open?(issue, state, active_states, terminal_states) ->
-        {state, hold}
+        {note_blocked_code_review_head(state, issue), hold}
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
       # with its attempt, as a retry that comes due during the hold is.
@@ -3611,11 +3618,20 @@ defmodule SymphonyElixir.Orchestrator do
       !issue_held?(issue, terminal_states) and
       !Map.has_key?(state.update_holds, issue.id) and
       !replan_pending?(issue, state) and
-      !post_pr_quiet_active_issue?(issue, state) and
+      !review_flow_hold?(issue, state) and
       !landing_held?(issue, state) and
       !issue_taken?(issue, state) and
       !setup_failed_suppressed?(state.setup_failed, issue) and
       priority_allowed?(issue, state)
+  end
+
+  # The gates the review flow owns: a legacy repo's run that went quiet with its PR open (the
+  # catch-handler below), a designed repo's Code Review ticket whose head is not green yet, and one
+  # whose repo has no reviewer enabled to run.
+  defp review_flow_hold?(%Issue{} = issue, %State{} = state) do
+    post_pr_quiet_active_issue?(issue, state) or
+      code_review_head_blocked?(issue) or
+      code_review_reviewer_disabled?(issue)
   end
 
   # `tickets.priorities` narrows which priorities may start new work. A forced ticket, and a retry
@@ -3960,7 +3976,8 @@ defmodule SymphonyElixir.Orchestrator do
   # Landing runs finish approved work, so they use their own `finishing_max` allowance instead of
   # `max_total` and the epic lanes.
   defp finishing_issue?(%Issue{} = issue) do
-    RunKind.classify(issue, terminal_states: Config.settings!().tracker.terminal_states) == :landing
+    settings = Config.settings!()
+    RunKind.classify(issue, terminal_states: settings.tracker.terminal_states, settings: settings) == :landing
   end
 
   defp finishing_entry?(%{forced: true}), do: false
@@ -4979,7 +4996,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case result do
       :ok ->
-        record_ticket_signal(issue, "handoff", %{to: post_pr_state})
+        record_ticket_signal(issue, "handoff", %{to: post_pr_state, move: true})
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
         state
@@ -8909,7 +8926,15 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The run that opens the PR was dispatched without one, so the PR attached to the refetched
   # issue counts too.
-  defp post_pr_quiet_active_issue?(%Issue{id: issue_id} = issue, %State{} = state)
+  #
+  # A designed repo never takes this catch-handler: its handoff is the session's explicit signal,
+  # performed by the run itself (`SymphonyElixir.Handoff`), so a run that goes quiet without it
+  # leaves the ticket where it is instead of advancing it.
+  defp post_pr_quiet_active_issue?(%Issue{} = issue, %State{} = state) do
+    not designed_issue?(issue) and quiet_post_pr_issue?(issue, state)
+  end
+
+  defp quiet_post_pr_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
     completed_metadata = Map.get(state.completed_run_metadata, issue_id)
 
@@ -8922,7 +8947,166 @@ defmodule SymphonyElixir.Orchestrator do
       !pending_rework_signal?(issue, completed_metadata)
   end
 
-  defp post_pr_quiet_active_issue?(_issue, _state), do: false
+  defp quiet_post_pr_issue?(_issue, _state), do: false
+
+  # The reviewer run starts only on a green head. A verdict binds to the head it judged, so a
+  # verdict on a red head is not actionable; a head whose checks are still running, or that has
+  # none yet, is not green either.
+  #
+  # The gate is designed-only: a legacy repo has no Code Review state of its own, so a state that
+  # happens to share the name must keep dispatching exactly as it did before.
+  defp code_review_head_blocked?(%Issue{} = issue) do
+    designed_issue?(issue) and code_review_issue?(issue) and not green_head?(issue)
+  end
+
+  # A designed repo with the reviewer turned off cannot review anything. `ReviewAgent.evaluate/4`
+  # answers a disabled reviewer with a fabricated approval, so dispatching the run would record a
+  # verdict no reviewer made and move the ticket straight to `Merging`. The ticket is parked
+  # instead, with the reason recorded once; turning `review_agent` on opens the gate. Designed-only
+  # for the same reason as the head gate: a legacy repo has no Code Review state to review from.
+  defp code_review_reviewer_disabled?(%Issue{} = issue) do
+    designed_issue?(issue) and code_review_issue?(issue) and not code_review_reviewer_enabled?(issue)
+  end
+
+  # A repo's reviewer setting, read the way every other review-flow decision reads it. A repo whose
+  # config cannot be resolved has no reviewer to run, so it parks rather than risk a fabricated
+  # approval.
+  defp code_review_reviewer_enabled?(%Issue{} = issue) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) -> review_agent_enabled_for_repo(repo_key, issue)
+      _none -> false
+    end
+  end
+
+  defp code_review_issue?(%Issue{state: state} = issue) when is_binary(state) do
+    normalize_issue_state(state) == normalize_issue_state(code_review_state(issue))
+  end
+
+  defp code_review_issue?(_issue), do: false
+
+  defp code_review_state(%Issue{} = issue) do
+    case issue_repo_key(issue) do
+      nil ->
+        @code_review_state
+
+      repo_key ->
+        case Config.settings_for_repo(repo_key) do
+          {:ok, settings} -> settings.tracker.code_review_state
+          {:error, _reason} -> @code_review_state
+        end
+    end
+  end
+
+  defp green_head?(%Issue{} = issue) do
+    case ticket_ci_state(issue) do
+      %{status: status} -> normalize_issue_state(status) == "green"
+      _none -> false
+    end
+  end
+
+  defp ticket_ci_state(%Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    case issue_repo_key(issue) do
+      nil ->
+        nil
+
+      repo_key ->
+        case RunStore.get_ticket_state(repo_key, issue_id) do
+          %{} = record -> TicketState.current_ci_state(record)
+          _none_or_error -> nil
+        end
+    end
+  end
+
+  defp ticket_ci_state(_issue), do: nil
+
+  # Records the no-dispatch event when a gate closed because a designed repo's Code Review ticket
+  # is held back by a head that is not green or by a repo with no reviewer; a no-op for every other
+  # blocked ticket.
+  defp note_blocked_code_review_head(%State{} = state, %Issue{} = issue) do
+    cond do
+      code_review_reviewer_disabled?(issue) -> note_code_review_reviewer_disabled(state, issue)
+      code_review_head_blocked?(issue) -> note_code_review_head(state, issue)
+      true -> state
+    end
+  end
+
+  # Parks a Code Review ticket whose head is not green, recording why once per head so the ledger
+  # carries the no-dispatch event without repeating it on every poll tick. The ticket stays exactly
+  # where it is: the state is returned unchanged.
+  defp note_code_review_head(%State{} = state, %Issue{} = issue) do
+    case ticket_ci_state(issue) do
+      %{head_sha: head, status: status} ->
+        unless latest_code_review_head_signal?(issue, head) do
+          record_ticket_signal(issue, "code_review_head_not_green", %{head: head, status: status})
+        end
+
+        head_status = if status == "", do: "unknown", else: status
+
+        Logger.info("Not dispatching the reviewer for #{issue_context(issue)}: its head is #{head_status}")
+
+      _none ->
+        :ok
+    end
+
+    state
+  end
+
+  defp latest_code_review_head_signal?(%Issue{id: issue_id} = issue, head) when is_binary(issue_id) do
+    with repo_key when is_binary(repo_key) <- issue_repo_key(issue),
+         %{} = record <- RunStore.get_ticket_state(repo_key, issue_id) do
+      case TicketState.recent_signals(record, 1) do
+        [%{name: "code_review_head_not_green", details: details}] -> Map.get(details, :head) == head
+        _signals -> false
+      end
+    else
+      _none_or_error -> false
+    end
+  end
+
+  defp latest_code_review_head_signal?(_issue, _head), do: false
+
+  # Parks a Code Review ticket whose repo has the reviewer off, recording why once so the ledger
+  # carries the no-dispatch event without repeating it on every poll tick. The ticket stays exactly
+  # where it is: the state is returned unchanged, and turning `review_agent` on opens the gate.
+  defp note_code_review_reviewer_disabled(%State{} = state, %Issue{} = issue) do
+    unless code_review_reviewer_disabled_recorded?(issue) do
+      record_ticket_signal(issue, @code_review_reviewer_disabled_signal, %{})
+    end
+
+    Logger.warning("Not dispatching the reviewer for #{issue_context(issue)}: review_agent.enabled is false for its repo")
+
+    state
+  end
+
+  # The reason is a repo config, not a head, so one recording per ticket is enough; any signal of
+  # this name in the ledger means it was already recorded.
+  defp code_review_reviewer_disabled_recorded?(%Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) ->
+        Enum.any?(Handoff.signals(repo_key, issue_id), &(&1.name == @code_review_reviewer_disabled_signal))
+
+      _none ->
+        false
+    end
+  end
+
+  defp code_review_reviewer_disabled_recorded?(_issue), do: false
+
+  # The repo's resolved state-machine version, read from the issue's own repo key so a designed
+  # repo is never treated as a legacy one (and vice versa) when the settings are global.
+  defp designed_issue?(%Issue{} = issue) do
+    case issue_repo_key(issue) do
+      nil -> false
+      repo_key -> designed_repo?(repo_key)
+    end
+  end
+
+  defp designed_repo?(repo_key) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> StateMachine.designed?(settings)
+      {:error, _reason} -> false
+    end
+  end
 
   defp completed_run_has_pr?(completed_metadata) when is_map(completed_metadata) do
     is_binary(URLUtils.pull_request_url(completed_metadata))
