@@ -603,9 +603,10 @@ defmodule SymphonyElixir.CiPoller do
   # Merging ones too: the orchestrator holds a landing agent that ended its turn on pending checks
   # until this poller sees the head settle.
   #
-  # A designed repo's Code Review issues are watched too: the reviewer run only dispatches on a green
-  # head, and the ticket enters Code Review straight from In Progress, so nothing else would ever
-  # record CI for it. Watching the state here is what lets `green_head?/1` see the head's checks.
+  # A designed repo's Code Review and QA issues are watched too: their agent runs only dispatch on a
+  # green head, and a ticket enters Code Review straight from In Progress, so nothing else would ever
+  # record CI for them. Watching those states here is what lets `green_head?/1` see their heads'
+  # checks.
   defp watched_states(settings) do
     review_states = HumanReview.review_states(settings)
 
@@ -614,11 +615,13 @@ defmodule SymphonyElixir.CiPoller do
         do: review_states ++ [AutoReview.state(settings), @merging_state],
         else: review_states ++ [@merging_state]
 
-    base ++ code_review_states(settings)
+    base ++ designed_review_states(settings)
   end
 
-  defp code_review_states(settings) do
-    if StateMachine.designed?(settings), do: [settings.tracker.code_review_state], else: []
+  defp designed_review_states(settings) do
+    if StateMachine.designed?(settings),
+      do: [settings.tracker.code_review_state, settings.tracker.qa_state],
+      else: []
   end
 
   defp auto_review_issues(settings, issues) do

@@ -94,7 +94,8 @@ defmodule SymphonyElixir.QaAgent do
           optional(:dev_server_url) => String.t() | nil,
           optional(:host_ports) => [pos_integer()],
           optional(:verification_issue) => Issue.t(),
-          optional(:base_ref) => String.t()
+          optional(:base_ref) => String.t(),
+          optional(:journey) => %{source: String.t(), text: String.t() | nil}
         }
   @type run_result :: %{result: result(), tokens: map()}
 
@@ -182,7 +183,7 @@ defmodule SymphonyElixir.QaAgent do
     #{intro(job)}
 
     #{test_suite_rule(job)}
-
+    #{journey_section(job)}
     Write every artifact (transcripts, logs, screenshots) under `#{@evidence_dir}/` in this worktree
     or under `$TMPDIR`. Attach the files reviewers need with `linear_attach_file` and list the
     returned URLs as evidence.
@@ -321,6 +322,33 @@ defmodule SymphonyElixir.QaAgent do
     ran them green on this PR head. Build only what you need to use the change, and judge it by what
     a user sees.\
     """
+  end
+
+  # The designed QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
+  # stories and journeys the change delivers or updates, from the epic plan where one exists and
+  # otherwise from the ticket's walkthrough and acceptance criteria. Only a run carrying a `journey`
+  # (the QA state's) gets this section; Auto Review's jobs carry none, so their prompt is unchanged.
+  defp journey_section(%{journey: %{source: source, text: text}}) do
+    """
+    You are verifying user journeys, not running a script. The user stories and journeys this change
+    delivers or updates are what you exercise end to end from the user's point of view, and you judge
+    the outcome with critical thinking — what a careful engineer does when testing their own feature
+    before shipping. Automated end-to-end suites (Playwright and friends) belong to CI: use their
+    results as evidence, but walk the journeys yourself. Where the journeys come from the epic plan —
+    this ticket is a sub-ticket — read the parent issue and its plan documents with your Linear tools
+    and verify against the journeys they define.
+    #{journey_text(source, text)}
+    """
+  end
+
+  defp journey_section(_job), do: ""
+
+  defp journey_text(source, text) when is_binary(text) and text != "" do
+    "\nJourneys to verify, from #{source}:\n#{text}\n"
+  end
+
+  defp journey_text(_source, _text) do
+    "\nJourneys to verify: derive them from this ticket's walkthrough and acceptance criteria below.\n"
   end
 
   # An agent cannot write these paths (the sandbox denies it and CI's `protected-paths` job fails

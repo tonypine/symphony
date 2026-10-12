@@ -26,6 +26,7 @@ defmodule SymphonyElixir.AgentRunner do
     Notifications,
     PromptBuilder,
     PrReviewPoller,
+    QaVerification,
     ReviewAgent,
     RunKind,
     RunStore,
@@ -575,7 +576,8 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A designed repo's `Code Review` ticket is reviewed rather than executed
-  # (`SymphonyElixir.CodeReview`); a `Final verification:` ticket gets the Auto Review parent
+  # (`SymphonyElixir.CodeReview`), and its `QA` ticket verified rather than executed
+  # (`SymphonyElixir.QaVerification`); a `Final verification:` ticket gets the Auto Review parent
   # walkthrough in place of executor turns when it applies
   # (see `SymphonyElixir.AutoReview.ParentWalkthrough`). Anything else is an ordinary run.
   defp run_issue(workspace, issue, codex_update_recipient, opts, worker_host) do
@@ -585,6 +587,13 @@ defmodule SymphonyElixir.AgentRunner do
       |> Keyword.put(:on_message, codex_message_handler(codex_update_recipient, issue))
 
     case Keyword.get(opts, :code_review, CodeReview).run(issue, workspace, walkthrough_opts) do
+      :skip -> run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host)
+      result -> result
+    end
+  end
+
+  defp run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host) do
+    case Keyword.get(opts, :qa_verification, QaVerification).run(issue, workspace, walkthrough_opts) do
       :skip ->
         case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
           :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)

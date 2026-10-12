@@ -20,6 +20,8 @@ public enum ControlAction: Equatable {
     case decisions(String, picks: [DecisionPick])
     case signOff(String)
     case backlog(String, note: String?)
+    /// Clears an access hold on the ticket; it continues where it is (state-machine §Holds).
+    case unblock(String)
     /// Takes back the last move on the ticket, within 10 s of it.
     case undo(String)
 
@@ -61,6 +63,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/sign_off"
         case .backlog:
             return "api/v1/control/backlog"
+        case .unblock:
+            return "api/v1/control/unblock"
         case .undo:
             return "api/v1/control/undo"
         }
@@ -71,7 +75,8 @@ public enum ControlAction: Equatable {
         switch self {
         case let .approvePlan(identifier), let .approvePR(identifier), let .rework(identifier, _),
              let .restart(identifier, _),
-             let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _), let .undo(identifier):
+             let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _),
+             let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .resume, .force, .stopForcing, .stop:
             return nil
@@ -89,7 +94,7 @@ public enum ControlAction: Equatable {
         case let .stopForcing(identifier):
             return ["identifier": identifier, "clear": "true"]
         case let .stop(identifier), let .approvePlan(identifier), let .approvePR(identifier), let .signOff(identifier),
-             let .undo(identifier):
+             let .unblock(identifier), let .undo(identifier):
             return ["issue_identifier": identifier]
         case let .rework(identifier, reason):
             return ["issue_identifier": identifier, "reason": reason]
@@ -129,6 +134,8 @@ public enum ControlAction: Equatable {
             return "Couldn't sign off \(identifier)"
         case let .backlog(identifier, _):
             return "Couldn't move \(identifier) to Backlog"
+        case let .unblock(identifier):
+            return "Couldn't unblock \(identifier)"
         case let .undo(identifier):
             return "Couldn't undo the move on \(identifier)"
         }

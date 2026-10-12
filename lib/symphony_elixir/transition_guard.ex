@@ -24,7 +24,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
-  `:code_review_state`, `:waiting_on_sub_issues` and `:ci_escalation_state`.
+  `:code_review_state`, `:qa_state`, `:waiting_on_sub_issues` and `:ci_escalation_state`.
 
   The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`),
   taken from `ctx`: the repo's `:settings` when the caller has them, else resolved from
@@ -122,17 +122,27 @@ defmodule SymphonyElixir.TransitionGuard do
   # `In Progress` from a post-implementation phase on a designed repo: that request is a restart
   # without the reset.
   #
-  # The three `:code_review_*` rows are the reviewer run's verdicts. They bind to the head the
-  # reviewer judged (`SymphonyElixir.CodeReview` records the verdict against it): approve carries
-  # the ticket on to `Merging` (the QA-skipped policy path), a rework verdict returns it to
-  # `Rework`, and an escalation asks for a person through the request machinery.
+  # The `:code_review_*` rows are the reviewer run's verdicts. They bind to the head the reviewer
+  # judged (`SymphonyElixir.CodeReview` records the verdict against it): approve carries the ticket
+  # on to the QA state, or straight to `Merging` when the QA state's skip rule applies (the
+  # deterministic docs-only/internal-only diff — the caller picks the row and records the reason); a
+  # rework verdict returns it to `Rework`; and an escalation asks for a person through the request
+  # machinery.
+  #
+  # The `:qa_*` rows are the QA run's verdicts (`SymphonyElixir.QaVerification`): pass carries the
+  # ticket to `Merging`, fail returns it to `Rework`, and a skip — the same hybrid rule seen from the
+  # QA state — carries it to `Merging` without a run.
   @designed_edges @edges ++
                     [
                       %{signal: :restart, from: :any, to: "In Progress"},
                       %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
-                      %{signal: :code_review_approve, from: ["Code Review"], to: :requested},
+                      %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
+                      %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging"},
                       %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
-                      %{signal: :code_review_escalate, from: ["Code Review"], to: :requested}
+                      %{signal: :code_review_escalate, from: ["Code Review"], to: :requested},
+                      %{signal: :qa_pass, from: ["QA"], to: "Merging"},
+                      %{signal: :qa_skip, from: ["QA"], to: "Merging"},
+                      %{signal: :qa_fail, from: ["QA"], to: "Rework"}
                     ]
 
   # States an agent's request may never set, with the refusal it gets. Moving to `Merging` is how a
@@ -199,12 +209,13 @@ defmodule SymphonyElixir.TransitionGuard do
   Validates an agent's request to set the state `state` (its resolved Linear state map). Applies
   the machine's refusals and redirects in the same order as before — the Auto Review handoff
   refusal, the Human Review redirect, the human-only refusal, the restart refusal, the Code Review
-  entry refusal, then the waiting-state refusal — and returns `{:ok, state}` (the state to set,
-  after any redirect) or `{:error, reason}` with the same tuple the tool returned before. On a repo
-  running the designed machine, an agent asking to enter `Code Review` by hand is refused: the
-  state is the handoff signal's to enter, never the tool's. So is an agent asking for `In Progress`
-  from a phase past implementation (`Rework`, `Code Review`, `QA` or `Merging`): on the designed
-  machine that is a `Restart`, which only a person performs.
+  entry refusal, the QA entry refusal, then the waiting-state refusal — and returns `{:ok, state}`
+  (the state to set, after any redirect) or `{:error, reason}` with the same tuple the tool returned
+  before. On a repo running the designed machine, an agent asking to enter `Code Review` or `QA` by
+  hand is refused: `Code Review` is the handoff signal's to enter and `QA` the verdict's, never the
+  tool's. So is an agent asking for `In Progress` from a phase past implementation (`Rework`,
+  `Code Review`, `QA` or `Merging`): on the designed machine that is a `Restart`, which only a
+  person performs.
 
   On a repo running the designed machine, an agent asking to park its issue in `Backlog` while it
   is `In Progress` or `Rework` is not a move: the guard returns `{:hold, :blocked, attrs}`, which
@@ -232,6 +243,7 @@ defmodule SymphonyElixir.TransitionGuard do
              :ok <- refuse_human_only(state),
              :ok <- refuse_restart_state(state, ctx, settings),
              :ok <- refuse_code_review_entry(state, settings),
+             :ok <- refuse_qa_entry(state, settings),
              :ok <- refuse_waiting_state(state, settings) do
           {:ok, state}
         end
@@ -316,7 +328,19 @@ defmodule SymphonyElixir.TransitionGuard do
   # The phases past implementation: work is on a pull request there, so `In Progress` can only mean
   # a fresh start. `Rework` is the designed machine's rework phase, not a way back to In Progress.
   defp restart_origin?(from, settings) do
-    Enum.any?([@rework_state, @merging_state, settings.tracker.code_review_state, settings.tracker.qa_state], &state_name_matches?(from, &1))
+    Enum.any?(
+      [@rework_state, @merging_state, settings.tracker.code_review_state, settings.tracker.qa_state],
+      &state_name_matches?(from, &1)
+    )
+  end
+
+  # Entering `QA` on a designed repo is the QA verdict's job (a pass, or the Code Review approve that
+  # skips it), so an agent's request to set the state by hand is refused the same way the Code Review
+  # entry is.
+  defp refuse_qa_entry(%{"name" => state_name}, settings) do
+    if StateMachine.designed?(settings) and state_name_matches?(state_name, settings.tracker.qa_state),
+      do: {:error, {:qa_requires_verdict, state_name}},
+      else: :ok
   end
 
   # Moving a `breakdown` parent to the waiting state approves its plan and promotes its sub-tickets,
@@ -364,6 +388,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
   defp resolve(:requested, ctx), do: Map.fetch!(ctx, :target)
   defp resolve(:code_review_state, ctx), do: settings!(ctx).tracker.code_review_state
+  defp resolve(:qa_state, ctx), do: settings!(ctx).tracker.qa_state
   defp resolve(:waiting_on_sub_issues, ctx), do: SubIssueWait.state(settings!(ctx))
   defp resolve(:ci_escalation_state, ctx), do: settings!(ctx).ci.escalation_state || @in_review_state
   defp resolve(name, _ctx) when is_binary(name), do: name

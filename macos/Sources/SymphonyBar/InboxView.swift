@@ -246,6 +246,8 @@ struct InboxReviewBody: View {
                 if let action = item.review.action { ActionCards(action: action) }
             case .clarify:
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
+            case .blocked:
+                if let blocked = item.review.blocked { BlockedCards(blocked: blocked) }
             }
         }
         .padding(DesignTokens.Space.s5)
@@ -662,6 +664,20 @@ private struct ClarifyCards: View {
             Card(title: "Its questions") { BulletList(lines: clarify.questions) }
         }
         Card(title: "What happens next") { Text(clarify.nextLine) }
+    }
+}
+
+/// A ticket an access hold pauses in place: why it waits, and what clears it. The Unblock in the toolbar lifts it.
+private struct BlockedCards: View {
+    let blocked: InboxReview.Blocked
+
+    var body: some View {
+        Card(title: "Why it is blocked") {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                if let reason = blocked.reason { Text(reason).textSelection(.enabled) }
+                Text(blocked.nextLine).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
