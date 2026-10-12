@@ -385,6 +385,30 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-progress"}}
   end
 
+  test "update_state refuses Code Review on a designed repo: entering it is the handoff signal's job" do
+    settings = Config.settings!()
+    designed = %{settings | state_machine: "designed"}
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "Code Review"},
+        issue: %Issue{id: "issue-current"},
+        settings: designed,
+        linear_client: update_state_client(self(), [%{"id" => "state-code-review", "name" => "Code Review", "type" => "started"}])
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "code_review_requires_handoff_signal", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "cannot move the issue to \"Code Review\""
+    assert message =~ "push the branch or open the pull request"
+    assert message =~ "do not name the state"
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+  end
+
   describe "update_state and Human Review" do
     @review_states [
       %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"},
