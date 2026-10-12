@@ -325,9 +325,12 @@ repositories:
   `designed`. `legacy` is today's flow: dispatch from `states.active`, the legacy transition guard,
   and the legacy status-map prompt. `designed` moves this repo alone onto the designed machine of
   [`docs/design/state-machine.md`](design/state-machine.md): dispatch also picks up the designed
-  phase states (`states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review`,
-  `states.ci_fix`), the transition guard uses the designed machine's edge table, and prompts render
-  the designed status map. Unset reads as `legacy`. Every part of a run resolves the version through
+  phase states (`states.code_review`, `states.qa`, `states.epic_review`, `states.ci_fix`), the
+  transition guard uses the designed machine's edge table, and prompts render
+  the designed status map. `states.plan_review` is a designed state too, but dispatch never picks
+  it up: it is the epic path's person-owned plan review — where a plan parent's handoff lands, and
+  where the person reviewing the plan approves it or sends it back — so an issue in it is never
+  dispatched. Unset reads as `legacy`. Every part of a run resolves the version through
   the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
   a State machine picker. A `designed` repo reviews its work through the designed `Code Review`
   state, so it needs the reviewer on: with `review_agent.enabled` off, its `Code Review` tickets are

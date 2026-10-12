@@ -3556,7 +3556,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
-  test "active state set includes the designed phase states when a repo runs the designed machine" do
+  test "active state set includes the designed phase states when a repo runs the designed machine, but never Plan Review" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
@@ -3571,7 +3571,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert MapSet.member?(active_states, "in progress")
     assert MapSet.member?(active_states, "code review")
     assert MapSet.member?(active_states, "qa")
-    assert MapSet.member?(active_states, "plan review")
+    # `Plan Review` is the epic path's person-owned plan review: watched, never dispatched.
+    refute MapSet.member?(active_states, "plan review")
     assert MapSet.member?(active_states, "epic review")
     assert MapSet.member?(active_states, "ci fix")
   end

@@ -67,6 +67,7 @@ defmodule SymphonyElixir.TransitionGuard do
     # Claim: the workpad bootstrap moves a Todo ticket to In Progress before its first turn.
     %{signal: :claim, from: ["Todo"], to: "In Progress"},
     # A person commented on a plan under review: the parent returns to In Progress to revise it.
+    # (The designed table replaces this row: a designed parent is revised through `Rework`.)
     %{signal: :plan_revise, from: ["In Review", "Waiting on sub-tickets"], to: "In Progress"},
     # A person approved the plan: the parent waits on its sub-tickets.
     %{signal: :plan_approve, from: ["In Review"], to: :waiting_on_sub_issues},
@@ -116,9 +117,9 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :parent_walkthrough, from: :any, to: :requested}
   ]
 
-  # The designed machine's edge table: the legacy rows plus the edges the redesigned flow adds.
-  # Flow tickets replace rows here — never in `@edges` — so a repo left on `legacy` keeps today's
-  # behavior exactly.
+  # The designed machine's edge table: the legacy rows plus the edges the redesigned flow adds, with
+  # the rows the redesigned flow replaces taken out. Flow tickets replace rows here — never in
+  # `@edges` — so a repo left on `legacy` keeps today's behavior exactly.
   #
   # `:handoff` is the explicit handoff signal: `In Progress` (or `Rework`) enters `Code Review`
   # only on it, never when a run merely goes quiet. Its target is the repo's configured Code
@@ -152,12 +153,26 @@ defmodule SymphonyElixir.TransitionGuard do
   # make without access or a secret is a Needs Decision hold (`SymphonyElixir.Hold`), which never
   # moves the ticket at all. Both are recorded as a `fix verdict`.
   #
+  # `:plan_revise` is the one legacy row the redesigned flow replaces: a designed repo's plan parent
+  # is revised through `Rework` — the epic path's re-plan, which continues in place and hands the
+  # plan back to `Plan Review` — instead of through `In Progress`. The row names the epic path's
+  # `Plan Review` literally, the state the guard's redirect puts the parent in whatever the repo
+  # calls it (`HumanReview.plan_review_state/1`); the move itself is the machine's own, recorded with
+  # `RunStore.put_own_state_move/2`, so `SymphonyElixir.BreakdownReview` never reads it as a person's
+  # rejection of the plan (only a person's move to `Rework` cancels the plan's sub-tickets).
+  @designed_replaced_edges [
+    %{signal: :plan_revise, from: ["Plan Review"], to: "Rework"}
+  ]
+
+  @designed_replaced_signals Enum.map(@designed_replaced_edges, & &1.signal)
+
   # `confirm: true` marks the three rows whose move is a *verdict* carrying the ticket into `Merging`:
   # with the repo's manual review `on`, each waits for a person instead
   # (`SymphonyElixir.MergeConfirmation`). The rows that repair a red head (`:ci_fix_mechanical`, whose
   # target is the origin the caller read back) and the rework rows carry no marker, so a repair or a
   # rework never waits on a person in either mode.
-  @designed_edges @edges ++
+  @designed_edges Enum.reject(@edges, &(&1.signal in @designed_replaced_signals)) ++
+                    @designed_replaced_edges ++
                     [
                       %{signal: :restart, from: :any, to: "In Progress"},
                       %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
@@ -259,14 +274,19 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Validates an agent's request to set the state `state` (its resolved Linear state map). Applies
   the machine's refusals and redirects in the same order as before — the Auto Review handoff
-  refusal, the Human Review redirect, the human-only refusal, the restart refusal, the Code Review
-  entry refusal, the QA entry refusal, then the waiting-state refusal — and returns `{:ok, state}`
-  (the state to set, after any redirect) or `{:error, reason}` with the same tuple the tool returned
-  before. On a repo running the designed machine, an agent asking to enter `Code Review` or `QA` by
-  hand is refused: `Code Review` is the handoff signal's to enter and `QA` the verdict's, never the
-  tool's. So is an agent asking for `In Progress` from a phase past implementation (`Rework`,
-  `Code Review`, `QA` or `Merging`): on the designed machine that is a `Restart`, which only a
-  person performs.
+  refusal, the Plan Review entry refusal, the plan-review and Human Review redirects, the
+  human-only refusal, the restart refusal, the Code Review entry refusal, the QA entry refusal,
+  then the waiting-state refusal — and returns `{:ok, state}` (the state to set, after any
+  redirect) or `{:error, reason}` with the same tuple the tool returned before. On a repo running
+  the designed machine, an agent asking to enter `Code Review` or `QA` by hand is refused: `Code
+  Review` is the handoff signal's to enter and `QA` the verdict's, never the tool's. So is an agent
+  asking for `In Progress` from a phase past implementation (`Rework`, `Code Review`, `QA` or
+  `Merging`): on the designed machine that is a `Restart`, which only a person performs.
+
+  A designed repo's plan parent is redirected to its configured `Plan Review` state whatever runs:
+  the run hands the plan over by asking for the review state (see `ctx`'s `:plan_parent?`), and an
+  agent naming `Plan Review` itself is refused — the epic path's plan state is the handoff's to
+  enter. A legacy repo keeps the `In Review` / Human Review handoff exactly as before.
 
   On a repo running the designed machine, an agent asking to park its issue in `Backlog` while it
   is `In Progress` or `Rework` is not a move: the guard returns `{:hold, :blocked, attrs}`, which
@@ -274,10 +294,11 @@ defmodule SymphonyElixir.TransitionGuard do
   hatch is retired there). Every other request, and every legacy repo, returns `{:ok, state}` or
   `{:error, reason}` as before.
 
-  `ctx` carries `:settings`, `:states` (the team's states, for the redirect), `:from_state` (the
+  `ctx` carries `:settings`, `:states` (the team's states, for the redirects), `:from_state` (the
   issue's current state), `:pr_less?` (a plan parent or a `Final verification:` ticket opens no
-  PR), and `:needs_person?` (the ticket's own rule says a person reviews it, or the run asked for a
-  person).
+  PR), `:plan_parent?` (the issue carries the `plan` label, so it is a designed repo's epic
+  parent), and `:needs_person?` (the ticket's own rule says a person reviews it, or the run asked
+  for a person).
   """
   @spec resolve_request(map(), context()) ::
           {:ok, map()} | {:hold, :blocked | :needs_decision, map()} | {:error, term()}
@@ -290,6 +311,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
       :not_a_hold ->
         with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
+             :ok <- refuse_plan_review_entry(state_name, settings),
              state = redirect_state(state, ctx, settings),
              :ok <- refuse_human_only(state),
              :ok <- refuse_restart_state(state, ctx, settings),
@@ -338,7 +360,30 @@ defmodule SymphonyElixir.TransitionGuard do
   # An issue only a person can move on goes to the Human Review state instead of `In Review`, when
   # the state is available: a `breakdown` plan whose ticket says a person reviews it, and the issue
   # of a run that asked a person for something.
+  #
+  # A designed repo's plan parent goes to its configured `Plan Review` state instead of either: the
+  # epic path's plan review is its own state, and no rule about the ticket's text decides it. The
+  # plan run still hands over by asking for the review state it has always asked for; the machine
+  # owns where the plan lands.
   defp redirect_state(state, ctx, settings) do
+    case plan_review_redirect(state, ctx, settings) do
+      %{"id" => _} = plan_review -> plan_review
+      nil -> human_review_redirect(state, ctx, settings)
+    end
+  end
+
+  defp plan_review_redirect(%{"name" => state_name}, ctx, settings) do
+    with true <- Map.get(ctx, :plan_parent?, false),
+         true <- state_name_matches?(state_name, @in_review_state),
+         plan_review when is_binary(plan_review) <- HumanReview.plan_review_state(settings),
+         %{"id" => _} = state <- Enum.find(Map.get(ctx, :states, []), &state_name_matches?(&1["name"], plan_review)) do
+      state
+    else
+      _keep -> nil
+    end
+  end
+
+  defp human_review_redirect(state, ctx, settings) do
     with true <- HumanReview.enabled?(settings),
          true <- Map.get(ctx, :needs_person?, false),
          %{"id" => _} = human_review <- Enum.find(Map.get(ctx, :states, []), &state_name_matches?(&1["name"], HumanReview.state(settings))) do
@@ -362,6 +407,21 @@ defmodule SymphonyElixir.TransitionGuard do
     if StateMachine.designed?(settings) and state_name_matches?(state_name, settings.tracker.code_review_state),
       do: {:error, {:code_review_requires_handoff_signal, state_name}},
       else: :ok
+  end
+
+  # `Plan Review` is a designed repo's plan handoff: the plan run hands the plan over by asking for
+  # the review state, and the guard puts the parent in `Plan Review` (`plan_review_redirect/3`). An
+  # agent naming `Plan Review` itself is refused, so the state belongs to the handoff, not to the
+  # tool. The request is judged by the name asked for, before any redirect: the redirect's own
+  # target is the state this refusal guards.
+  defp refuse_plan_review_entry(state_name, settings) do
+    with true <- StateMachine.designed?(settings),
+         plan_review when is_binary(plan_review) <- HumanReview.plan_review_state(settings),
+         true <- state_name_matches?(state_name, plan_review) do
+      {:error, {:plan_review_requires_handoff_signal, state_name}}
+    else
+      _keep -> :ok
+    end
   end
 
   # `Restart` is a person's move — the control API closes the pull request, starts a fresh branch

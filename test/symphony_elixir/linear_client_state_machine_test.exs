@@ -21,7 +21,7 @@ defmodule SymphonyElixir.LinearClientStateMachineTest do
       assert states["LEGACY"] == ["Todo", "In Progress", "Waiting on sub-tickets"]
 
       assert states["DESIGNED"] ==
-               ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Plan Review", "Epic Review", "CI Fix"]
+               ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
     end
 
     test "a repo with no state_machine set polls the active states, unchanged" do

@@ -92,6 +92,21 @@ defmodule SymphonyElixir.PlaybookTest do
       refute base =~ "no `## Supervisor check` block and moves no ticket"
     end
 
+    test "parent_tickets' designed variant hands over to Plan Review and sends a change through Rework" do
+      assert {:ok, designed} = Playbook.fetch("parent_tickets", "designed")
+      assert {:ok, base} = Playbook.fetch("parent_tickets")
+
+      assert designed != base
+      assert {:ok, _template} = Solid.parse(designed)
+      assert designed =~ "name: parent_tickets\n"
+      assert designed =~ "naming `In Review`: Symphony\n  performs that move and the parent lands in `Plan Review`"
+      assert designed =~ "Never name `Plan Review` yourself"
+      assert designed =~ "Symphony moves the\n  parent to `Rework` itself, and the run revises the plan in place"
+      assert designed =~ "State: only `Plan Review`"
+      # The base body hands the plan to `In Review` and knows no `Plan Review` at all.
+      refute base =~ "Plan Review"
+    end
+
     test "a partial with no variant for a version falls back to the base body" do
       assert Playbook.fetch("status_map", "legacy") == Playbook.fetch("status_map")
       assert Playbook.fetch("guardrails", "designed") == Playbook.fetch("guardrails")
