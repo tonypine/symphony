@@ -1421,8 +1421,10 @@ When enabled:
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
-  links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
-  events sent to that app alone, and the tools MUST NOT return a secure field's value.
+  links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
+  root since the last call, read where the app runs, and MUST read nothing outside that QA root.
+  `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
+  sent to that app alone, and the tools MUST NOT return a secure field's value.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
@@ -1696,7 +1698,9 @@ Fallback prompt behavior:
   back to a prompt.
 - If project guides are enabled and at least one configured guide is present, the runtime MAY append
   a `## Project conventions` section after the rendered workflow prompt. If no configured guide is
-  present, the section SHOULD be omitted rather than rendering an empty heading.
+  present, the section SHOULD be omitted rather than rendering an empty heading. A prompt whose last
+  section is a structured-output contract (such as the reviewer's JSON verdict) SHOULD get the section
+  inserted before that contract, so the contract stays the last thing the model reads.
 - When settings are known, the runtime SHOULD append a poller-aware PR-feedback/CI posture derived
   from config so repo `WORKFLOW.md` templates need not restate it. When the PR-review poller is
   active (`pr_review.mode == "polling"`), the agent is told PR review feedback arrives via Symphony
@@ -4686,6 +4690,41 @@ Minimum endpoints:
       ]
     }
     ```
+
+- `GET /api/v1/initiatives`
+  - Returns the plan tickets (label `plan` or `breakdown`) the operator follows to done, for the Mac
+    app's Initiatives: active ones, then those in review (`In Review`, the human review state, the
+    Plan Review state or `Epic Review`), then those done in the last 7 days. A canceled plan, one in
+    Backlog or Triage, and one done earlier are left out. Read-only, served like `/api/v1/state`,
+    and it MUST make no tracker request: the implementation reads the tracker on its own poll and
+    serves what it cached.
+  - The Elixir implementation (`SymphonyElixir.Initiatives`) reads Linear every
+    `polling.interval_ms`: one query per repository route lists the plan tickets in its scope with
+    their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
+    the last list. Its Linear requests count as `initiatives`.
+  - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
+    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `final_verification`, `counts`
+    and `slot`.
+  - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
+    order; a cycle is broken by creation order), canceled ones left out and the `Final
+    verification:` sub-issue set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
+    `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
+    locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
+    state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
+    Review, QA, Merging, CI Fix or Epic Review with nothing running) or `slot` (it can run and waits
+    for a free slot).
+  - `final_verification` is the `Final verification:` sub-issue in the same shape plus
+    `open_tickets`, the number of sub-tickets not done yet; null without one.
+  - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
+    `you`, `queued` (`slot`) and `blocked` (`blocker`).
+  - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),
+    the `identifier` of the part it runs or waits on and the `reason` it yielded; or `status`
+    `queued` with its `position` among the epics waiting for a lane; null when it has no lane.
+  - The response has `generated_at`, `read` (false while the server has not read Linear yet),
+    `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
+    out or is unavailable, return `200` with an `error` object in place of the list, as
+    `/api/v1/state` does.
 
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information

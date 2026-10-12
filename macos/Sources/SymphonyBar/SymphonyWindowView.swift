@@ -49,6 +49,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxMoveError: String?
     /// The banner after a move, with Undo for 10 s (C18).
     @Published private(set) var inboxBanner: InboxBanner?
+    /// The last Initiatives Symphony served, read again after each state poll.
+    @Published private(set) var initiatives: InitiativesPayload?
+    /// What the last Initiatives read got when it got none, nil after one that did.
+    @Published private(set) var initiativesResult: EndpointResult?
+    /// The initiative shown, by issue id; nil shows the first.
+    @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
     @Published var history: NavigationHistory
     /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
@@ -101,6 +107,7 @@ final class SymphonyWindowModel: ObservableObject {
     private var reposReadAt: Date?
     private var readingRepos = false
     private var readingInbox = false
+    private var readingInitiatives = false
     var readingTicket = false
     /// When the ticket page last read its runs and audit records, which change slowly.
     var ticketSlowReadAt: Date?
@@ -121,6 +128,7 @@ final class SymphonyWindowModel: ObservableObject {
                 overviewState = data.flatMap(OverviewState.decode)
                 readReposIfDue()
                 readInbox()
+                readInitiatives()
                 readTicket()
             }
             .store(in: &cancellables)
@@ -145,6 +153,35 @@ final class SymphonyWindowModel: ObservableObject {
         if let id { inboxSelection = id }
         show(.inbox)
         readInbox()
+    }
+
+    /// Opens Initiatives on the initiative with issue id `id`.
+    func showInitiative(_ id: String) {
+        initiativeSelection = id
+        show(.initiatives)
+        readInitiatives()
+    }
+
+    /// The Initiatives under the window's scope.
+    var initiativesList: InitiativesList? {
+        initiatives.map { InitiativesList(initiatives: $0.initiatives, scope: scope) }
+    }
+
+    /// Reads the Initiatives; Symphony serves them from what it cached on its last poll, so this costs no Linear
+    /// request.
+    private func readInitiatives() {
+        guard !readingInitiatives, state.countsKnown else { return }
+        readingInitiatives = true
+        Task {
+            let result = await client.get(InitiativesPayload.path)
+            if case let .loaded(data) = result, let payload = InitiativesPayload.decode(data) {
+                initiatives = payload
+                initiativesResult = nil
+            } else {
+                initiativesResult = result
+            }
+            readingInitiatives = false
+        }
     }
 
     /// The Inbox under the window's scope.
@@ -578,6 +615,8 @@ struct SymphonyDetail: View {
                 InboxContent(model: model, client: client)
             case .overview:
                 OverviewContent(model: model, client: client)
+            case .initiatives:
+                InitiativesContent(model: model, client: client)
             case .tickets:
                 TicketsContent(model: model, client: client)
             case .diagnostics:
@@ -604,8 +643,10 @@ struct OverviewContent: View {
                     controlInFlight: model.controlInFlight,
                     openInbox: { model.showInbox() },
                     openTicket: model.openTicket,
-                    openTickets: model.showTickets
-                )
+                    openTickets: model.showTickets,
+                    openInitiative: model.showInitiative
+                ),
+                initiatives: model.initiativesList?.active ?? []
             )
         } else if client.stateResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)

@@ -16,6 +16,7 @@ defmodule SymphonyElixir.ChangedCoverageTest do
       git: fn
         ["merge-base", "HEAD", "origin/main"] -> {:ok, "abc123\n"}
         ["diff", "--name-only", "--diff-filter=ACMR", "abc123"] -> {:ok, "lib/symphony_elixir/foo.ex\nlib/symphony_elixir/bar.ex\nREADME.md\n"}
+        ["diff", "--name-only", "--diff-filter=D", "abc123"] -> {:ok, "lib/symphony_elixir/gone.ex\n"}
         ["ls-files", "--others", "--exclude-standard"] -> {:ok, ""}
       end,
       modules: fn ->
@@ -101,6 +102,7 @@ defmodule SymphonyElixir.ChangedCoverageTest do
     git = fn
       ["merge-base", "HEAD", "origin/dev"] -> {:ok, "def456\n"}
       ["diff", "--name-only", "--diff-filter=ACMR", "def456"] -> {:ok, "lib/symphony_elixir/foo.ex\nlib/symphony_elixir/bar.ex\n"}
+      ["diff", "--name-only", "--diff-filter=D", "def456"] -> {:ok, ""}
       ["ls-files", "--others", "--exclude-standard"] -> {:ok, "test/symphony_elixir/other_test.exs\nlib/symphony_elixir/foo.ex\n"}
     end
 
@@ -114,6 +116,48 @@ defmodule SymphonyElixir.ChangedCoverageTest do
              "skipped SymphonyElixir.Bar: in mix.exs test_coverage ignore_modules",
              "skipped SymphonyElixir.Foo.Helper: in mix.exs test_coverage ignore_modules" | _rest
            ] = infos()
+  end
+
+  test "checks the unchanged modules a deleted test named, with the tests left that name them" do
+    git = fn
+      ["merge-base" | _] -> {:ok, "abc123\n"}
+      ["diff", "--name-only", "--diff-filter=ACMR", "abc123"] -> {:ok, "test/symphony_elixir/foo_test.exs\n"}
+      ["diff", "--name-only", "--diff-filter=D", "abc123"] -> {:ok, "test/symphony_elixir/gone_test.exs\ntest/support/gone.ex\n"}
+      ["show", "abc123:test/symphony_elixir/gone_test.exs"] -> {:ok, "alias SymphonyElixir.{Bar, Other}\nSymphonyElixir.Foo.Helper.run()\n"}
+      ["ls-files" | _] -> {:ok, ""}
+    end
+
+    coverage = fn modules ->
+      Map.new(modules, fn
+        SymphonyElixir.Other = module -> {module, {:ok, [{{module, 3}, {1, 0}}, {{module, 552}, {0, 1}}]}}
+        module -> {module, {:ok, []}}
+      end)
+    end
+
+    assert {:error, message} = ChangedCoverage.run([ignore_modules: [SymphonyElixir.Bar]], deps(%{git: git, coverage: coverage}))
+    assert message =~ "1 changed module(s) below 100% coverage: SymphonyElixir.Other."
+
+    assert_received {:run_tests, ["test/symphony_elixir/foo_test.exs", "test/symphony_elixir/other_test.exs"]}
+    lines = infos()
+    assert "SymphonyElixir.Foo.Helper 100.00% (lib/symphony_elixir/foo.ex)" in lines
+    assert "checking SymphonyElixir.Bar: named by deleted test/symphony_elixir/gone_test.exs" in lines
+    assert "checking SymphonyElixir.Other: named by deleted test/symphony_elixir/gone_test.exs" in lines
+    assert "skipped SymphonyElixir.Bar: in mix.exs test_coverage ignore_modules" in lines
+    assert "SymphonyElixir.Other 50.00%, uncovered: lib/symphony_elixir/other.ex:552" in lines
+  end
+
+  test "fails naming a deleted test git could not read" do
+    git = fn
+      ["merge-base" | _] -> {:ok, "abc123\n"}
+      ["diff", "--name-only", "--diff-filter=ACMR", _base] -> {:ok, ""}
+      ["diff", "--name-only", "--diff-filter=D", _base] -> {:ok, "test/a_test.exs\ntest/b_test.exs\n"}
+      ["show", "abc123:test/a_test.exs"] -> {:ok, ""}
+      ["show", "abc123:test/b_test.exs"] -> {:error, "fatal: bad object"}
+      ["ls-files" | _] -> {:ok, ""}
+    end
+
+    assert {:error, "git could not read deleted test/b_test.exs (git show abc123:test/b_test.exs): fatal: bad object"} =
+             ChangedCoverage.run([], deps(%{git: git}))
   end
 
   test "passes without running tests when no lib/ module changed" do
