@@ -11,7 +11,13 @@ defmodule SymphonyElixir.DirectorMoves do
     moves to the waiting state (`Waiting on sub-tickets`). It is a person's move, so Symphony
     promotes the plan's `Backlog` sub-tickets as it does today (`SymphonyElixir.BreakdownReview`);
   - `:approve_pr`: a pull request in a review state moves to `Merging`;
-  - `:rework`: a ticket in a review state gets the reason as a comment, then moves to `Rework`;
+  - `:rework`: a ticket in a review state gets the reason as a comment, then moves to `Rework`.
+    On a designed repo that continues the existing pull request; the full reset is `:restart`;
+  - `:restart`: the full reset, and only a person makes it (design doc D7). A designed repo closes
+    the ticket's pull requests, removes its workspaces — so the next dispatch branches fresh from
+    the configured base branch — and supersedes the workpad, then moves the ticket to `In Progress`
+    (`SymphonyElixir.Restart`). A legacy repo is refused: its `Rework` already closes the pull
+    request and starts over, so a second full reset would only be ambiguous;
   - `:decisions`: a plan in a review state gets one comment with the picked options. A plan in the
     Human Review state first moves to `In Review`, so the comment, posted after the move, starts
     Symphony's plan revision run (`SymphonyElixir.PlanComments`);
@@ -53,7 +59,9 @@ defmodule SymphonyElixir.DirectorMoves do
     HumanReview,
     MergeConfirmation,
     Orchestrator,
+    Restart,
     RunKind,
+    StateMachine,
     SubIssueWait,
     TicketSignals,
     Tracker,
@@ -66,13 +74,23 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @undo_window_ms 10_000
   @review_state "In Review"
+  @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
   @done_state "Done"
   @backlog_state "Backlog"
   @comment_preview_chars 500
 
-  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog | :unblock | :decide
+  @type move ::
+          :approve_plan
+          | :approve_pr
+          | :rework
+          | :restart
+          | :decisions
+          | :sign_off
+          | :backlog
+          | :unblock
+          | :decide
   @type pick :: %{question: String.t(), answer: String.t()}
   @type input :: %{
           optional(:reason) => String.t() | nil,
@@ -85,13 +103,14 @@ defmodule SymphonyElixir.DirectorMoves do
           {:invalid, String.t()}
           | {:conflict, String.t()}
           | {:github, String.t()}
+          | {:restart, String.t()}
           | {:store, String.t()}
           | :issue_not_found
           | {:linear, term()}
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :decide]
+  @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -146,6 +165,9 @@ defmodule SymphonyElixir.DirectorMoves do
   within #{div(@undo_window_ms, 1000)} s of the move and only while it is still where the move put
   it. A comment the move posted stays. Takes the options of `move/4`.
 
+  `:restart` is never taken back: it closed the pull request and removed the workspace, so the
+  ticket stays in `In Progress`.
+
   Undoing `:approve_pr` reads the pull request first: a merged one can't be taken back (a 409), and
   GitHub auto-merge on it (which Symphony turns on for a `Merging` ticket) is turned off before the
   ticket moves back, so the PR doesn't merge anyway. When GitHub can't be read or refuses, the ticket stays in
@@ -190,6 +212,13 @@ defmodule SymphonyElixir.DirectorMoves do
   @spec rework_comment(String.t()) :: String.t()
   def rework_comment(reason) when is_binary(reason), do: "Sent to Rework by the Director:\n\n#{reason}"
 
+  @doc "The comment `:restart` posts: what the full reset did, then the Director's reason."
+  @spec restart_comment(String.t(), String.t()) :: String.t()
+  def restart_comment(identifier, reason) when is_binary(identifier) and is_binary(reason) do
+    "Restarted by the Director: #{identifier} starts again from main — its pull requests are closed, its workspace is gone, " <>
+      "and the workpad's prior attempt is superseded.\n\n#{reason}"
+  end
+
   @doc "The comment `:backlog` posts with the Director's note."
   @spec backlog_comment(String.t()) :: String.t()
   def backlog_comment(note) when is_binary(note), do: "Moved to Backlog by the Director:\n\n#{note}"
@@ -211,6 +240,10 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp validate_input(:rework, input) do
+    if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
+  end
+
+  defp validate_input(:restart, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
   end
 
@@ -273,6 +306,21 @@ defmodule SymphonyElixir.DirectorMoves do
     with :ok <- require_review(issue, settings), do: {:ok, @rework_state}
   end
 
+  # The full reset (design doc D7) is a designed-repo move: a legacy repo's `Rework` is already
+  # the full reset, so offering a second one there would only be ambiguous.
+  defp target(:restart, %Issue{state: state} = issue, settings) do
+    cond do
+      not StateMachine.designed?(settings) ->
+        conflict("#{issue.identifier} is on the legacy state machine, where Rework already closes the pull request and starts over")
+
+      Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)) ->
+        conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted")
+
+      true ->
+        {:ok, @in_progress_state}
+    end
+  end
+
   defp target(:decisions, issue, settings) do
     with :ok <- require_kind(issue, :plan, "decisions"),
          :ok <- require_review(issue, settings) do
@@ -327,6 +375,15 @@ defmodule SymphonyElixir.DirectorMoves do
   # goes after the move to In Review, so the plan revision trigger counts it.
   defp apply_move(:rework, issue, to_state, %{reason: reason}, opts),
     do: comment_then_move(:rework, issue, rework_comment(String.trim(reason)), to_state, opts)
+
+  # The reset runs before the comment and the move, so a failure stops the move: the Inbox shows
+  # what GitHub or Linear refused, and the ticket stays where it is until the person tries again.
+  defp apply_move(:restart, issue, to_state, input, opts) do
+    case Restart.perform(issue, restart_opts(opts)) do
+      :ok -> comment_then_move(:restart, issue, restart_comment(issue.identifier, String.trim(input[:reason])), to_state, opts)
+      {:error, {:restart, message}} -> {:error, {:restart, "#{issue.identifier} was not restarted: #{message}"}}
+    end
+  end
 
   defp apply_move(:backlog, issue, to_state, input, opts) do
     if present?(input[:note]),
@@ -526,6 +583,20 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp store_opts(opts), do: Keyword.take(opts, [:store])
 
+  # Restart moves through its own signal, whose target the designed edge table owns (`In Progress`),
+  # rather than a requested one: the ledger then names the move `restart`, as the design doc's
+  # signal vocabulary does.
+  defp update_state(issue, to_state, :restart) do
+    case TransitionGuard.perform(issue.id, :restart, %{repo_key: Map.get(issue, :repo_key), settings: Config.settings!()}) do
+      :ok ->
+        record_move_signal(issue, :restart, to_state)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:linear, reason}}
+    end
+  end
+
   defp update_state(issue, to_state, move) do
     case TransitionGuard.perform(issue.id, :director_move, %{target: to_state, repo_key: Map.get(issue, :repo_key)}) do
       :ok ->
@@ -540,12 +611,17 @@ defmodule SymphonyElixir.DirectorMoves do
   # Best-effort recording of a Director move into the ticket's signals ledger (inert; a store
   # failure never changes the move). Runs only after the move has succeeded.
   defp record_move_signal(issue, move, to_state) do
-    TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{
+    TicketSignals.record(issue.repo_key, issue.id, signal_name(move), %{
       move: Atom.to_string(move),
       from: issue.state,
       to: to_state
     })
   end
+
+  defp signal_name(:restart), do: "restart"
+  defp signal_name(_move), do: "decision returned"
+
+  defp restart_opts(opts), do: Keyword.take(opts, [:github, :workspace, :settings, :linear_client, :now, :linear_retry_opts])
 
   defp finish(move, issue, to_state, comment, opts) do
     name = Atom.to_string(move)
@@ -564,7 +640,7 @@ defmodule SymphonyElixir.DirectorMoves do
        to_state: to_state || issue.state,
        moved: to_state != nil,
        commented: comment != nil,
-       undo_window_ms: if(to_state, do: @undo_window_ms)
+       undo_window_ms: if(to_state && move != :restart, do: @undo_window_ms)
      }}
   end
 
@@ -577,6 +653,11 @@ defmodule SymphonyElixir.DirectorMoves do
     case Agent.get(server(opts), &Map.get(&1, issue.id)) do
       nil ->
         conflict("there is no move on #{issue.identifier} to undo")
+
+      # A restart closed the pull request, deleted the workspace and superseded the workpad; none
+      # of that comes back, so moving the ticket to its previous phase would strand it without its work.
+      %{move: :restart} ->
+        conflict("#{issue.identifier} was restarted; the pull request is closed and the workspace is gone, so it can't be undone")
 
       last ->
         cond do

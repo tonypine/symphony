@@ -164,6 +164,21 @@ defmodule SymphonyElixir.PromptBuilderTest do
     refute prompt =~ "check it yourself"
   end
 
+  test "prompt builder teaches Rework-as-continuation on a designed repo" do
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+
+    prompt =
+      PromptBuilder.build_prompt(
+        %Issue{identifier: "MT-127D", repo_key: "default"},
+        settings: %{agent: %{kind: "claude"}, pr_review: %{mode: "polling"}, state_machine: "designed"}
+      )
+
+    assert prompt =~ "An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR"
+    assert prompt =~ "Do not move the issue to `Rework` by hand"
+    assert prompt =~ "the human-only `Restart` is what starts over"
+    refute prompt =~ "Do not treat it as `Rework`"
+  end
+
   test "prompt builder injects active-fetch feedback posture when pollers disabled" do
     write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
 
@@ -796,6 +811,37 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "github_list_pr_review_comments()"
   end
 
+  test "the Rework instructions branch on the repo's state-machine version" do
+    repo_root = Path.expand("../..", __DIR__)
+    dir = Path.join(System.tmp_dir!(), "prompt-playbook-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    File.cp_r!(Path.join(repo_root, ".symphony"), Path.join(dir, ".symphony"))
+    File.write!(Path.join(dir, "WORKFLOW.md"), playbook_only(File.read!(Path.join(repo_root, "WORKFLOW.md"))))
+    {:ok, workflow} = Workflow.load(Path.join(dir, "WORKFLOW.md"))
+
+    issue = %Issue{identifier: "MT-REWORK", title: "Rework", state: "Rework", repo_key: "default"}
+
+    designed =
+      PromptBuilder.build_prompt(issue,
+        workflow: workflow,
+        settings: %{agent: %{kind: "claude"}, state_machine: "designed"}
+      )
+
+    legacy = PromptBuilder.build_prompt(issue, workflow: workflow, settings: %{agent: %{kind: "claude"}})
+
+    assert designed =~ "## Step 4: Rework handling"
+    assert designed =~ "Continue on the **same** pull request and the same branch"
+    assert designed =~ "It is a person's move from the Director app"
+    refute designed =~ "Close the existing PR tied to the issue"
+
+    assert legacy =~ "## Step 4: Rework handling"
+    assert legacy =~ "Close the existing PR tied to the issue"
+    assert legacy =~ "Create a fresh branch from `origin/main`"
+    refute legacy =~ "Continue on the **same** pull request and the same branch"
+  end
+
   test "prompt builder renders a partial with passed variables" do
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_kind: "codex",
@@ -926,5 +972,16 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
       PromptBuilder.build_prompt(issue, settings: settings, workflow: workflow)
     end
+  end
+
+  defp playbook_only(content) do
+    ["", front_matter, _body] = String.split(content, ~r/^---$/m, parts: 3)
+
+    front_matter =
+      if front_matter =~ ~r/^playbook:/m,
+        do: front_matter,
+        else: "\nplaybook:\n  lockfile: mix.lock" <> front_matter
+
+    "---" <> front_matter <> "---\n\n{% render \"playbook\" %}\n"
   end
 end

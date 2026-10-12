@@ -19,6 +19,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       send(self(), {:disable_auto_merge, pr_url, pr_node_id})
       Application.get_env(:symphony_elixir, :director_moves_test_disable, :ok)
     end
+
+    def close(pr_url, _opts) do
+      send(self(), {:close_pr, pr_url})
+      Application.get_env(:symphony_elixir, :director_moves_test_close, :ok)
+    end
+  end
+
+  defmodule FakeWorkspace do
+    def remove_issue_workspaces(issue) do
+      send(self(), {:remove_workspaces, issue.identifier})
+      Application.get_env(:symphony_elixir, :director_moves_test_workspace, :ok)
+    end
   end
 
   defmodule CannedLinearClient do
@@ -46,6 +58,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :director_moves_test_activity)
       Application.delete_env(:symphony_elixir, :director_moves_test_disable)
+      Application.delete_env(:symphony_elixir, :director_moves_test_close)
+      Application.delete_env(:symphony_elixir, :director_moves_test_workspace)
       SubIssueWait.reset_for_test(@waiting)
       restore_app_env(:audit_log_dir, previous_audit_dir)
       File.rm_rf(audit_dir)
@@ -142,6 +156,168 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:rework, "MOT-40", %{}, opts)
       assert {:error, {:conflict, _message}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
       refute_received {:memory_tracker_comment, _id, _body}
+    end
+  end
+
+  describe "restart" do
+    @restart_pr_url "https://github.com/example/repo/pull/40"
+
+    defp restart_opts(opts) do
+      Keyword.merge(opts, github: FakeGitHub, workspace: FakeWorkspace)
+    end
+
+    defp designed_workflow! do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    end
+
+    defp restart_issue(fields \\ []) do
+      struct(%{pr("Rework") | pr_urls: [@restart_pr_url]}, fields)
+    end
+
+    test "closes the pull request, removes the workspace and moves the ticket to In Progress", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+
+      assert {:ok, result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "  The approach is wrong  "}, restart_opts(opts))
+
+      assert result == %{
+               move: "restart",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "Rework",
+               to_state: "In Progress",
+               moved: true,
+               commented: true,
+               undo_window_ms: nil
+             }
+
+      assert_received {:fetch_activity, @restart_pr_url}
+      assert_received {:close_pr, @restart_pr_url}
+      assert_received {:remove_workspaces, "MOT-40"}
+
+      assert_received {:memory_tracker_comment, "pr", comment}
+      assert comment =~ "Restarted by the Director: MOT-40 starts again from main"
+      assert comment =~ "The approach is wrong"
+
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+
+      assert [%{"move" => "restart", "from_state" => "Rework", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "records the restart in the ticket's signals ledger", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      RunStore.delete_ticket_state("repo-restart", "pr")
+      put_issues([%{restart_issue() | repo_key: "repo-restart"}])
+
+      assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      assert [%{name: "restart", details: %{move: "restart", from: "Rework", to: "In Progress"}}] =
+               RunStore.get_ticket_state("repo-restart", "pr").signals
+    end
+
+    test "a ticket with no pull request restarts just the same", %{opts: opts} do
+      designed_workflow!()
+      put_issues([%{pr("In Progress") | pr_urls: []}])
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert_received {:remove_workspaces, "MOT-40"}
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "a restart can't be undone: it closed the pull request and removed the workspace", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+
+      assert {:ok, %{to_state: "In Progress", undo_window_ms: nil}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      put_issues([%{restart_issue() | state: "In Progress"}])
+
+      assert {:error, {:conflict, message}} = DirectorMoves.undo("MOT-40", restart_opts(opts))
+
+      assert message ==
+               "MOT-40 was restarted; the pull request is closed and the workspace is gone, so it can't be undone"
+
+      refute_received {:memory_tracker_state_update, "pr", "Rework"}
+    end
+
+    test "a legacy repo is refused: its Rework already is the full reset", %{opts: opts} do
+      put_issues([restart_issue()])
+
+      assert {:error, {:conflict, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert message == "MOT-40 is on the legacy state machine, where Rework already closes the pull request and starts over"
+      refute_received {:memory_tracker_state_update, _id, _state}
+      refute_received {:memory_tracker_comment, _id, _body}
+    end
+
+    test "a terminal ticket is refused", %{opts: opts} do
+      designed_workflow!()
+      put_issues([%{restart_issue() | state: "Done"}])
+
+      assert {:error, {:conflict, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert message == "MOT-40 is Done; only an open ticket can be restarted"
+      refute_received {:remove_workspaces, _identifier}
+    end
+
+    test "needs a reason", %{opts: opts} do
+      designed_workflow!()
+      put_issues([restart_issue()])
+
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "  "}, restart_opts(opts))
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:restart, "MOT-40", %{}, restart_opts(opts))
+      refute_received {:memory_tracker_state_update, _id, _state}
+    end
+
+    test "a reset GitHub refuses stops the move, so nothing is half-done", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :director_moves_test_close, {:error, :forbidden})
+      put_issues([restart_issue()])
+
+      assert {:error, {:restart, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      assert message == "MOT-40 was not restarted: GitHub refused to close #{@restart_pr_url} (:forbidden)"
+      refute_received {:memory_tracker_state_update, _id, _state}
+      refute_received {:memory_tracker_comment, _id, _body}
+      refute_received {:remove_workspaces, _identifier}
+      assert audit_records() == []
+    end
+
+    test "a workspace that cannot be removed stops the move", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :director_moves_test_workspace, {:error, :busy})
+      put_issues([restart_issue()])
+
+      assert {:error, {:restart, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      assert message == "MOT-40 was not restarted: couldn't remove the workspace of MOT-40 ({:error, :busy})"
+      refute_received {:memory_tracker_state_update, _id, _state}
+    end
+
+    test "a move Linear refuses after the reset is a partial move", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
+      put_issues([restart_issue()])
+
+      assert {:error, {:partial, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert message =~ "MOT-40"
+      assert_received {:memory_tracker_comment, "pr", _body}
+      assert_received {:close_pr, @restart_pr_url}
+    end
+
+    test "the restart comment says what the reset did" do
+      assert DirectorMoves.restart_comment("MOT-40", "The approach is wrong") ==
+               "Restarted by the Director: MOT-40 starts again from main — its pull requests are closed, its workspace is gone, " <>
+                 "and the workpad's prior attempt is superseded.\n\nThe approach is wrong"
     end
   end
 
@@ -683,6 +859,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     for body <- [
           DirectorMoves.decisions_comment([%{question: "Where?", answer: "B"}]),
           DirectorMoves.rework_comment("Split it"),
+          DirectorMoves.restart_comment("MOT-40", "Start over"),
           DirectorMoves.backlog_comment("Later")
         ] do
       assert PlanComments.human?(%{bot?: false, body: body})
@@ -701,7 +878,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :decide]
+    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 

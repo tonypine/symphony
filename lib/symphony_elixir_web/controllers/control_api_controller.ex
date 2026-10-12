@@ -6,13 +6,14 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
   audit record.
 
-  The Director's moves from the Mac app's Inbox (`approve_plan`, `approve_pr`, `rework`,
+  The Director's moves from the Mac app's Inbox (`approve_plan`, `approve_pr`, `rework`, `restart`,
   `decisions`, `sign_off`, `backlog`, `unblock`, `decide` and `undo`) are made by
   `SymphonyElixir.DirectorMoves`:
   each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
-  `move_incomplete` when Linear took one of the move's two writes and refused the other, and 200 with
-  the states it moved between. `decide` answers a designed repo's decision request: it takes the
-  `picks`, the `request_comment_id` they answer and the optional `move` the decision directs.
+  `move_incomplete` when Linear took one of the move's two writes and refused the other, 502
+  `restart_incomplete` when the reset behind `restart` stopped partway, and 200 with the states it
+  moved between. `decide` answers a designed repo's decision request: it takes the `picks`, the
+  `request_comment_id` they answer and the optional `move` the decision directs.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -80,6 +81,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec rework(Conn.t(), map()) :: Conn.t()
   def rework(conn, params), do: director_move(conn, :rework, params, %{reason: string_param(params["reason"])})
+
+  @spec restart(Conn.t(), map()) :: Conn.t()
+  def restart(conn, params), do: director_move(conn, :restart, params, %{reason: string_param(params["reason"])})
 
   @spec decisions(Conn.t(), map()) :: Conn.t()
   def decisions(conn, params), do: director_move(conn, :decisions, params, %{picks: picks(params["picks"])})
@@ -151,6 +155,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_move(conn, _identifier, {:error, {:conflict, message}}), do: error_response(conn, 409, "move_not_allowed", message)
 
   defp respond_move(conn, _identifier, {:error, {:partial, message}}), do: error_response(conn, 502, "move_incomplete", message)
+  defp respond_move(conn, _identifier, {:error, {:restart, message}}), do: error_response(conn, 502, "restart_incomplete", message)
   defp respond_move(conn, _identifier, {:error, {:github, message}}), do: error_response(conn, 502, "github_error", message)
   defp respond_move(conn, _identifier, {:error, {:store, message}}), do: error_response(conn, 502, "store_error", message)
 
