@@ -26,8 +26,16 @@ _What exists today, related tickets, designs or constraints the work should know
 
 ## User walkthrough
 
+_Steps a machine can reproduce: an end-to-end test in CI, or the QA agent driving the app or CLI
+on its own VM. Never a check only you can make once the change is live._
+
 1. _A step the user takes._ Expected: _what they see._
 2. _The next step._ Expected: _what they see._
+
+## After release
+
+_Optional. A one-off check you make yourself once the change is live. QA skips it and it never
+blocks the ticket._
 
 ## Out of scope
 
