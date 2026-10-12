@@ -40,6 +40,8 @@ public struct StateSnapshot: Equatable {
             case action
             /// A ticket the quality gate held for clarification or skipped.
             case clarify
+            /// A ticket an access hold pauses in place, waiting on an Unblock.
+            case blocked
             /// A kind this app doesn't know yet.
             case other(String)
 
@@ -50,6 +52,7 @@ public struct StateSnapshot: Equatable {
                 case "final_verification"?: self = .finalVerification
                 case "action"?: self = .action
                 case "clarify"?: self = .clarify
+                case "blocked"?: self = .blocked
                 default: self = .other(text ?? "")
                 }
             }
@@ -62,6 +65,7 @@ public struct StateSnapshot: Equatable {
                 case .finalVerification: .finalVerification
                 case .action: .action
                 case .clarify: .clarify
+                case .blocked: .blocked
                 case .other: nil
                 }
             }

@@ -150,6 +150,8 @@ public enum StatusMenu {
             return "Action"
         case .clarify:
             return "Clarify"
+        case .blocked:
+            return "Blocked"
         case .other:
             return "Review"
         }

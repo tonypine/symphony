@@ -1,11 +1,12 @@
 {
   "counts": {
     "action": 1,
+    "blocked": 1,
     "clarify": 1,
     "final_verification": 1,
     "plan": 1,
     "pr": 1,
-    "total": 5
+    "total": 6
   },
   "generated_at": "2026-10-07T14:20:00Z",
   "items": [
@@ -274,6 +275,22 @@
       "url": "https://linear.app/acme/issue/SHOP-341",
       "waiting_seconds": 600,
       "waiting_since": "2026-10-07T14:10:00Z"
+    },
+    {
+      "ask": "The run reported a block",
+      "identifier": "SHOP-360",
+      "issue_id": "i-360",
+      "kind": "blocked",
+      "repo_key": "web-shop",
+      "review": {
+        "clearing_condition": "when the block is resolved; a person clears an access hold",
+        "reason": "The run reported a block"
+      },
+      "state": "In Progress",
+      "title": "Refund a gift card",
+      "url": "https://linear.app/acme/issue/SHOP-360",
+      "waiting_seconds": 300,
+      "waiting_since": "2026-10-07T14:15:00Z"
     }
   ]
 }

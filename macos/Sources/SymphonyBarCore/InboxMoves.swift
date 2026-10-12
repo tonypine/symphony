@@ -10,6 +10,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case signOff
     /// Answers a decision request: the ticket continues in its phase, or the answer directs a move.
     case decide
+    case unblock
 
     public var id: String { rawValue }
 
@@ -22,6 +23,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .sendToRework: "Send to Rework…"
         case .signOff: "Sign Off…"
         case .decide: "Send Decision…"
+        case .unblock: "Unblock…"
         }
     }
 
@@ -34,6 +36,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .sendToRework: "Send to Rework"
         case .signOff: "Sign Off"
         case .decide: "Send Decision"
+        case .unblock: "Unblock"
         }
     }
 }
@@ -67,10 +70,10 @@ public struct InboxToolbar: Equatable {
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
     /// recommendation) and ⋯ Send to Rework…; a PR Approve and Merge… and Send to Rework…, with Open PR the default
-    /// while a check is red (D2b); a final verification Sign Off…. An action carrying an answerable decision offers
-    /// Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action, and a clarify item, keep
-    /// their links, but an action whose options are listed in its card drops the Copy Steps link that would only
-    /// repeat them.
+    /// while a check is red (D2b); a final verification Sign Off…; a blocked ticket Unblock…. An action carrying an
+    /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
+    /// and a clarify item, keep their links, but an action whose options are listed in its card drops the Copy Steps
+    /// link that would only repeat them.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
@@ -87,6 +90,8 @@ public struct InboxToolbar: Equatable {
             return InboxToolbar(buttons: moves + links, overflow: [])
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
+        case .blocked:
+            return InboxToolbar(buttons: [move(.unblock)] + links, overflow: [])
         case .action:
             let action = item.review.action
             // A request's options are shown and picked in its card, so its Copy Steps link (which would list the
@@ -234,6 +239,12 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
             happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
             stays = "The ticket doesn't move: the decision is what it was waiting on."
+        case .unblock:
+            title = "Unblock \(id)?"
+            // The ticket keeps its phase: clearing a hold moves nothing, it resumes in place.
+            targetState = nil
+            happens = "Clears the hold on \(id) and notes it on the ticket; \(id) continues from where it stopped."
+            stays = "The ticket keeps its state. Nothing else changes in Linear."
         }
     }
 
@@ -271,16 +282,21 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .decide:
             guard let requestCommentID else { return nil }
             return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
+        case .unblock: return .unblock(identifier)
         }
     }
 
     /// What the sheet expects Symphony to answer, for an answer that didn't say.
     public var expectedOutcome: MoveOutcome { MoveOutcome(moved: targetState != nil, toState: targetState) }
 
-    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
+    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved. Unblock
+    /// moves nothing, so it says what it did instead of where the ticket went.
     public func banner(after outcome: MoveOutcome) -> InboxBanner {
         if outcome.moved {
             return InboxBanner(itemID: itemID, identifier: identifier, text: "Moved to \(outcome.toState ?? targetState ?? "its next state")", undo: true)
+        }
+        if move == .unblock {
+            return InboxBanner(itemID: itemID, identifier: identifier, text: "Hold cleared", undo: false)
         }
         return InboxBanner(itemID: itemID, identifier: identifier, text: move == .decide ? "Sent your decision" : "Sent your decisions", undo: false)
     }

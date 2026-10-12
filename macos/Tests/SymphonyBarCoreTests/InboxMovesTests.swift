@@ -50,9 +50,16 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.finalVerification)).buttons.map(\.command), [.move(.signOff), .link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.action)).buttons.map(\.command), [.link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.clarify)).buttons.map(\.command), [.link(.editInLinear(linear))])
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).buttons.map(\.command), [.move(.unblock), .link(.openInLinear(linear))])
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).defaultCommand, .move(.unblock))
         XCTAssertNil(InboxToolbar(buttons: [.init(command: .move(.sendDecisions), enabled: false)], overflow: []).defaultCommand)
-        XCTAssertEqual(InboxMove.allCases.map(\.verb), ["Approve Plan", "Send Decisions", "Approve and Merge", "Send to Rework", "Sign Off", "Send Decision"])
+        XCTAssertEqual(
+            InboxMove.allCases.map(\.verb),
+            ["Approve Plan", "Send Decisions", "Approve and Merge", "Send to Rework", "Sign Off", "Send Decision", "Unblock"]
+        )
         XCTAssertEqual(InboxMove.approvePlan.id, "approvePlan")
+        XCTAssertEqual(InboxMove.decide.id, "decide")
+        XCTAssertEqual(InboxMove.unblock.id, "unblock")
     }
 
     func testAnActionAskingADecisionOffersSendDecisionAndARedirectUnderMore() {
@@ -237,6 +244,25 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertTrue(sheet.canSend(reason: ""))
     }
 
+    func testUnblockClearsTheHoldAndTheTicketContinuesInPlace() throws {
+        let sheet = ConsequenceSheet(move: .unblock, item: try shipped("SHOP-360"))
+        XCTAssertEqual(sheet.title, "Unblock SHOP-360?")
+        XCTAssertEqual(sheet.happens, "Clears the hold on SHOP-360 and notes it on the ticket; SHOP-360 continues from where it stopped.")
+        XCTAssertEqual(sheet.stays, "The ticket keeps its state. Nothing else changes in Linear.")
+        XCTAssertEqual(sheet.verb, "Unblock")
+        XCTAssertFalse(sheet.isDestructive)
+        XCTAssertFalse(sheet.needsReason)
+        XCTAssertTrue(sheet.canSend(reason: ""))
+        XCTAssertEqual(sheet.action(), .unblock("SHOP-360"))
+        XCTAssertNil(sheet.targetState)
+        XCTAssertEqual(sheet.id, "i-360:unblock")
+
+        // Unblock moves nothing, so its banner says what it did rather than a state it went to, and offers no Undo.
+        XCTAssertEqual(sheet.expectedOutcome, MoveOutcome(moved: false, toState: nil))
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-360", identifier: "SHOP-360", text: "Hold cleared", undo: false))
+        XCTAssertEqual(sheet.banner(after: MoveOutcome(moved: false, toState: "In Progress")).text, "Hold cleared")
+    }
+
     func testBannersSayWhatHappenedAndOfferUndoOnlyAfterAMove() {
         let moved = InboxBanner(itemID: "i-1", identifier: "BIL-206", text: "Moved to Merging", undo: true)
         XCTAssertEqual(moved.announcement, "BIL-206: Moved to Merging. Undo is available for 10 seconds.")
@@ -278,6 +304,7 @@ final class InboxMovesTests: XCTestCase {
                 "decide",
                 ["issue_identifier": "NOTE-90", "request_comment_id": "c-1", "picks": [["question": "Where?", "answer": "B"]], "move": "rework"]
             ),
+            (.unblock("SHOP-360"), "unblock", ["issue_identifier": "SHOP-360"]),
             (.undo("BIL-206"), "undo", ["issue_identifier": "BIL-206"]),
         ]
         for (action, path, body) in cases {
@@ -299,7 +326,7 @@ final class InboxMovesTests: XCTestCase {
         )
         let prefixes = [
             ControlAction.approvePlan("X"), .rework("X", reason: "r"), .decisions("X", picks: []), .signOff("X"), .backlog("X", note: nil),
-            .decide("X", requestCommentID: "c-1", picks: [], move: nil), .undo("X"),
+            .decide("X", requestCommentID: "c-1", picks: [], move: nil), .unblock("X"), .undo("X"),
         ].map { ControlAPI.result($0, statusCode: 500, data: Data()) }
         XCTAssertEqual(prefixes, [
             .failed("Couldn't approve the plan of X: HTTP 500"),
@@ -308,8 +335,20 @@ final class InboxMovesTests: XCTestCase {
             .failed("Couldn't sign off X: HTTP 500"),
             .failed("Couldn't move X to Backlog: HTTP 500"),
             .failed("Couldn't send the decision on X: HTTP 500"),
+            .failed("Couldn't unblock X: HTTP 500"),
             .failed("Couldn't undo the move on X: HTTP 500"),
         ])
+    }
+
+    func testUnblockReadsSymphonysAnswerAndItsRefusal() {
+        let answer = Data(#"{"move":"unblock","issue_id":"i-360","issue_identifier":"SHOP-360","from_state":"In Progress","to_state":"In Progress","moved":false,"commented":true,"undo_window_ms":null}"#.utf8)
+        XCTAssertEqual(ControlAPI.result(.unblock("SHOP-360"), statusCode: 200, data: answer), .moved(MoveOutcome(moved: false, toState: "In Progress")))
+
+        let refused = Data(#"{"error":{"code":"move_not_allowed","message":"SHOP-360 is not waiting on an access hold"}}"#.utf8)
+        XCTAssertEqual(
+            ControlAPI.result(.unblock("SHOP-360"), statusCode: 409, data: refused),
+            .failed("Couldn't unblock SHOP-360: SHOP-360 is not waiting on an access hold (HTTP 409)")
+        )
     }
 
     /// The walkthrough's requests, as QA mode records them in `api-requests.jsonl`.
@@ -319,6 +358,7 @@ final class InboxMovesTests: XCTestCase {
         let fixtures = APIFixtures(directory: fixture().deletingLastPathComponent().deletingLastPathComponent(), requestLog: root.appendingPathComponent("api-requests.jsonl"))
         let plan = try shipped("SHOP-330")
         let pr = try shipped("BIL-206")
+        let blocked = try shipped("SHOP-360")
 
         let actions = [
             try XCTUnwrap(ConsequenceSheet(move: .sendDecisions, item: plan, picks: DecisionPicks(picks: [0: 1])).action()),
@@ -329,6 +369,7 @@ final class InboxMovesTests: XCTestCase {
             .signOff("BIL-213"),
             .backlog("BIL-206", note: nil),
             .decide("NOTE-90", requestCommentID: "c-1", picks: [.init(question: "Add it?", answer: "Add it")], move: nil),
+            try XCTUnwrap(ConsequenceSheet(move: .unblock, item: blocked).action()),
         ]
         for action in actions {
             let (data, response) = fixtures.answer(ControlAPI.request(action, base: APIFixtures.baseURL, token: APIFixtures.token))
@@ -342,6 +383,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(entries.map { $0["path"] as? String }, [
             "/api/v1/control/decisions", "/api/v1/control/approve_plan", "/api/v1/control/undo", "/api/v1/control/approve_pr",
             "/api/v1/control/rework", "/api/v1/control/sign_off", "/api/v1/control/backlog", "/api/v1/control/decide",
+            "/api/v1/control/unblock",
         ])
         let decisions = try XCTUnwrap(entries[0]["body"] as? [String: Any])
         XCTAssertEqual(decisions["picks"] as? [[String: String]], [

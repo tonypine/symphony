@@ -426,11 +426,25 @@ defmodule SymphonyElixir.HumanActions.Collector do
     })
   end
 
-  defp request_done_when(context, %{options: [_ | _]}),
-    do: "you reply with your pick and move #{context.issue.identifier} out of #{context.issue.state}, or the agent withdraws the request."
+  # A designed repo's request never moves its ticket: the person's reply (or the Inbox's Decide)
+  # records the decision and clears the hold, so the line names no state move.
+  defp request_done_when(context, %{options: [_ | _]}) do
+    if designed?(context) do
+      "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
+    else
+      "you reply with your pick and move #{context.issue.identifier} out of #{context.issue.state}, or the agent withdraws the request."
+    end
+  end
 
-  defp request_done_when(context, _request),
-    do: "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
+  defp request_done_when(context, _request) do
+    if designed?(context) do
+      "you reply to the request, or the agent withdraws the request."
+    else
+      "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
+    end
+  end
+
+  defp designed?(%{settings: settings}), do: StateMachine.designed?(settings)
 
   defp task_action(context) do
     action(context, %{

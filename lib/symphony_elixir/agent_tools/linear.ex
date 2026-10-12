@@ -1872,6 +1872,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
+  # The one state write outside the guard is sub-issue creation's initial state: the guard resolves
+  # a move of an existing issue (from-state to target), and an `issueCreate` has no from-state to
+  # move from. So sub-issue creation's initial state is outside TransitionGuard's scope, and this is
+  # the only stateId the Linear tool hands Linear without `TransitionGuard.resolve_request/2`; the
+  # state-scanning test in `agent_tools_linear_test.exs` keeps that list to the two known sites.
   defp subissue_input(parent, state_id, title, description, priority) do
     %{
       "teamId" => get_in(parent, ["team", "id"]),

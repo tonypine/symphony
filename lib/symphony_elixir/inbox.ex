@@ -7,17 +7,19 @@ defmodule SymphonyElixir.Inbox do
   GET makes no Linear request:
 
   1. one light query per repository route lists the issues in its scope that sit in `In Review`
-     or the Human Review state (`SymphonyElixir.HumanReview.review_states/1`), each with its
-     `updatedAt` and the time its newest comment was last edited;
+     or the Human Review state (`SymphonyElixir.HumanReview.review_states/1`) or carry the
+     `Blocked` label, each with its `updatedAt` and the time its newest comment was last edited;
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
      their comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
   3. each becomes an `SymphonyElixir.Inbox.Item`, with what Symphony knows locally about its PR
-     (the CI poller's last conclusion, the acceptance gate's latest verdict).
+     (the CI poller's last conclusion, the acceptance gate's latest verdict) and, for a ticket no
+     review covers, the access hold its store record carries.
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
   `clarify`), drops an issue that is running or that the orchestrator saw leave the review states
-  since, and sorts the list oldest first. A failed read keeps the last list.
+  since, and sorts the list oldest first. A held ticket is kept whatever state the orchestrator
+  reports: the hold is what waits on the Director. A failed read keeps the last list.
 
   Each read also reconciles the read tickets' `Needs Decision` holds
   (`SymphonyElixir.NeedsDecisionHold`): a designed repo's decision request pauses its ticket in
@@ -114,7 +116,8 @@ defmodule SymphonyElixir.Inbox do
   @doc """
   What waits on the Director now: the cached items and the quality gate's holds and skips in
   `snapshot`, without an issue that is running or that the orchestrator saw leave the review
-  states, oldest first (an item with no known wait last).
+  states, oldest first (an item with no known wait last). A ticket a hold pauses in place is kept
+  whatever state the orchestrator saw it in: the hold itself is what waits on the Director.
   """
   @spec items(map(), GenServer.name()) :: [Item.t()]
   def items(snapshot, server) when is_map(snapshot) do
@@ -131,7 +134,7 @@ defmodule SymphonyElixir.Inbox do
     |> cached()
     |> Enum.reject(fn item ->
       MapSet.member?(running_ids, item.issue_id) or
-        (Map.has_key?(watched_states, item.issue_id) and not HumanReview.review_state?(watched_states[item.issue_id]))
+        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not HumanReview.review_state?(watched_states[item.issue_id]))
     end)
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> Enum.concat(clarify)
@@ -227,15 +230,24 @@ defmodule SymphonyElixir.Inbox do
 
   defp list_repo(repo, state) do
     scope_filter = Keyword.get(state.opts, :scope_filter, &Client.repo_scope_filter/1)
-    settings = settings(state, repo)
 
     with {:ok, scope} <- scope_filter.(repo) do
-      states = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
-      # A designed repo's decision request leaves the ticket in its phase with the hold's label, so
-      # the label is what lists it too. A legacy repo never carries the label.
-      held = %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => Hold.label(:needs_decision)}}}}
-      list_pages(%{"and" => [scope, %{"or" => states ++ [held]}]}, nil, [], state)
+      list_pages(%{"and" => [scope, %{"or" => list_conditions(settings(state, repo))}]}, nil, [], state)
     end
+  end
+
+  # The issues a review covers, plus the ones carrying a `Blocked` or `Needs Decision` label: a hold
+  # pauses a ticket in its phase, so it need not sit in a review state to wait on the Director.
+  # `Item.from_node/4` reads each one's store record and keeps only the holds a person lifts; a
+  # designed repo's decision request is listed by the hold's label wherever in the workflow it sits.
+  defp list_conditions(settings) do
+    reviews = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+
+    reviews ++
+      Enum.map(
+        [Hold.label(:blocked), Hold.label(:needs_decision)],
+        &%{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => &1}}}}
+      )
   end
 
   defp list_pages(filter, after_cursor, acc, state) do
@@ -301,7 +313,8 @@ defmodule SymphonyElixir.Inbox do
   defp lookups(state) do
     %{
       ci: Keyword.get(state.opts, :ci, &ci_conclusion/2),
-      gate: Keyword.get(state.opts, :gate, &Agreement.latest/2)
+      gate: Keyword.get(state.opts, :gate, &Agreement.latest/2),
+      hold: Keyword.get(state.opts, :hold, &Hold.get(&1, &2, :blocked))
     }
   end
 
