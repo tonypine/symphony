@@ -13,12 +13,12 @@ defmodule SymphonyElixir.RunKind do
        never-approved plan stopped midway, or one revising its plan from review comments.
     5. `landing`: the issue is in `Merging`.
     6. `rework`: the issue is in `Rework`.
-    7. `code_review`: the issue is in the designed machine's `Code Review` state: the
-       poll-dispatched reviewer run, which judges the PR head and records a verdict. Only a
+    7. `code_review`: the issue is in the designed machine's configured `code_review_state`:
+       the poll-dispatched reviewer run, which judges the PR head and records a verdict. Only a
        repo on the designed machine reaches this: a legacy repo whose Linear workflow happens
        to have a `Code Review` column keeps classifying its runs as it did before.
-    8. `qa`: the issue is in the designed machine's `QA` state: the poll-dispatched QA run,
-       which exercises the change from the user's point of view and records a verdict.
+    8. `qa`: the issue is in the designed machine's configured `qa_state`: the poll-dispatched
+       QA run, which exercises the change from the user's point of view and records a verdict.
        Designed-only, like `code_review`.
     9. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
     10. `review_feedback`: the run continues after PR review comments
@@ -114,7 +114,7 @@ defmodule SymphonyElixir.RunKind do
       (default: the `issues.states.terminal` default).
     * `:ci_failure` - the pending red CI context, or nil.
     * `:reviewer_comments` - the pending PR review comments, or `[]`.
-    * `:settings` - the repo's settings, used to tell a designed repo's `Code Review` state
+    * `:settings` - the repo's settings, used to tell a designed repo's configured phase states
       from a legacy workflow that happens to name a state the same way.
   """
   @spec classify(Issue.t(), keyword()) :: t()
@@ -137,16 +137,31 @@ defmodule SymphonyElixir.RunKind do
     if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue), do: :close_out, else: :breakdown
   end
 
-  # A designed repo's verdict phases classify to their own run kinds: `Code Review` is the
-  # poll-dispatched reviewer run and `QA` the poll-dispatched QA run. Both are designed-only — a
-  # legacy repo whose workflow happens to name a state the same way keeps the run kind it had
-  # before — so a repo without the phases is not either kind.
+  # A designed repo's verdict phases classify to their own run kinds: the repo's configured
+  # `code_review_state` is the poll-dispatched reviewer run and its configured `qa_state` the
+  # poll-dispatched QA run. The configured name is what the rest of the designed flow routes on
+  # (`QaVerification.qa_run?/2`, the transition guard), so a repo that renames a phase state still
+  # classifies its runs correctly. Both are designed-only — a legacy repo whose workflow happens to
+  # name a state the same way keeps the run kind it had before — so a repo without the phases is
+  # not either kind.
   defp designed_phase_kind(issue, signals) do
-    cond do
-      not StateMachine.designed?(Keyword.get(signals, :settings)) -> nil
-      in_state?(issue, @code_review_state) -> :code_review
-      in_state?(issue, @qa_state) -> :qa
-      true -> nil
+    settings = Keyword.get(signals, :settings)
+
+    if StateMachine.designed?(settings) do
+      cond do
+        in_state?(issue, phase_state(settings, :code_review_state, @code_review_state)) -> :code_review
+        in_state?(issue, phase_state(settings, :qa_state, @qa_state)) -> :qa
+        true -> nil
+      end
+    end
+  end
+
+  # The phase state's configured name, falling back to the machine default when settings does not
+  # carry it (a caller that only needs the state-machine version, as some tests pass).
+  defp phase_state(settings, field, default) do
+    case Map.get(settings, :tracker) do
+      tracker when is_map(tracker) -> Map.get(tracker, field) || default
+      _none -> default
     end
   end
 
@@ -156,11 +171,13 @@ defmodule SymphonyElixir.RunKind do
 
   defp final_verification?(_issue), do: false
 
-  defp in_state?(%Issue{state: state}, expected) when is_binary(state) do
-    state |> String.trim() |> String.downcase() == expected
+  defp in_state?(%Issue{state: state}, expected) when is_binary(state) and is_binary(expected) do
+    normalize_state(state) == normalize_state(expected)
   end
 
   defp in_state?(_issue, _expected), do: false
+
+  defp normalize_state(state), do: state |> String.trim() |> String.downcase()
 
   defp present?(nil), do: false
   defp present?([]), do: false

@@ -361,12 +361,16 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "the sandbox could not start"
     end
 
-    test "a QA agent that cannot run on an SSH worker records why" do
+    test "a QA run on an SSH worker is blocked with the reason instead of parking" do
       {workspace, _head} = git_workspace!()
-      Process.put(:qa_agent_result, {:error, {:remote_worker_unsupported, "worker-1"}, %{}})
 
-      assert :ok = run(workspace, [])
-      assert :ok = run(workspace, [])
+      # The agent is never reached: the worker host blocks the run before the head is read, so the
+      # ticket retries boundedly and then takes the hold rather than parking on an unreadable head.
+      assert :ok = run(workspace, worker_host: "worker-1")
+      refute_received {:qa_agent_run, _, _}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+
+      assert :ok = run(workspace, worker_host: "worker-1")
 
       assert %{reason: reason} = Hold.get(@repo_key, @issue_id, :blocked)
       assert reason =~ "QA cannot run on the remote worker \"worker-1\""

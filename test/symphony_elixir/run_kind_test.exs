@@ -109,6 +109,22 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(issue(state: " qa "), settings: designed) == :qa
     end
 
+    test "a designed repo's renamed Code Review state is still a code review run" do
+      designed = %{state_machine: "designed", tracker: %{code_review_state: "Peer Review"}}
+
+      assert RunKind.classify(issue(state: "Peer Review"), settings: designed) == :code_review
+      assert RunKind.classify(issue(state: " peer review "), settings: designed) == :code_review
+      assert RunKind.classify(issue(state: "Code Review"), settings: designed) == :implementation
+    end
+
+    test "a designed repo's renamed QA state is still a QA run" do
+      designed = %{state_machine: "designed", tracker: %{qa_state: "Verification"}}
+
+      assert RunKind.classify(issue(state: "Verification"), settings: designed) == :qa
+      assert RunKind.classify(issue(state: " verification "), settings: designed) == :qa
+      assert RunKind.classify(issue(state: "QA"), settings: designed) == :implementation
+    end
+
     test "a designed repo's other states keep the run kind they had" do
       designed = %{state_machine: "designed"}
 

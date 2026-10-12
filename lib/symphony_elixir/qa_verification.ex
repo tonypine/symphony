@@ -91,7 +91,21 @@ defmodule SymphonyElixir.QaVerification do
   def journey(_issue), do: %{source: "the ticket's walkthrough and acceptance criteria", text: nil}
 
   defp verify(issue, workspace, opts, settings) do
-    case WorkspaceHead.read(workspace, Keyword.get(opts, :worker_host)) do
+    case Keyword.get(opts, :worker_host) do
+      host when is_binary(host) -> remote_worker_unsupported(issue, opts, settings, host)
+      _local -> read_head(issue, workspace, opts, settings)
+    end
+  end
+
+  # The QA agent runs where the workspace lives, and the designed flow never runs it on an SSH
+  # worker. There is no local head to read there either, so the run is blocked with the reason
+  # (retried boundedly, then a Blocked hold) rather than parking on an unreadable head forever.
+  defp remote_worker_unsupported(issue, opts, settings, host) do
+    blocked(issue, opts, settings, nil, blocked_outcome(error_reason({:remote_worker_unsupported, host}), %{}))
+  end
+
+  defp read_head(issue, workspace, opts, settings) do
+    case WorkspaceHead.read(workspace, nil) do
       nil -> park_unreadable_head(issue, opts)
       head -> verify_head(issue, workspace, opts, settings, head)
     end
