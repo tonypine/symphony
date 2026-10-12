@@ -1814,6 +1814,12 @@ defmodule SymphonyElixir.Orchestrator do
   def put_blocked_for_test(%State{} = state, issues) when is_list(issues), do: put_blocked(state, issues)
 
   @doc false
+  @spec sweep_blocked_holds_for_test(String.t(), [Issue.t()], [String.t()]) :: non_neg_integer()
+  def sweep_blocked_holds_for_test(repo_name, issues, terminal_states) when is_list(issues) do
+    sweep_blocked_holds(repo_name, issues, terminal_states)
+  end
+
+  @doc false
   @spec review_breakdown_parents_for_test([Issue.t()], term(), keyword()) :: term()
   def review_breakdown_parents_for_test(issues, %State{} = state, opts \\ []) when is_list(issues),
     do: issues |> review_breakdown_parents(state, opts) |> await_tracker_tasks()

@@ -103,17 +103,25 @@ defmodule SymphonyElixir.BlockedHold do
     end
   end
 
-  # The store is the truth for a hold. A `Blocked` label with no store hold is a hand-added label:
-  # report it and clear it, so the board matches the store.
+  # The store is the truth for a hold, so the board is repaired to match it in both directions. A
+  # `Blocked` label with no store hold is a hand-added label: report it and clear it. A store hold
+  # whose `Blocked` label is missing — its label write failed, or a person removed it by hand — is
+  # re-projected from the store, so a hold that is pausing dispatch is never silently invisible.
   defp repair_drift(repo_key, issue_id, labels, opts) do
     case Hold.report_drift(repo_key, issue_id, labels, opts) do
       {:stray_label, :blocked} -> clear_label(repo_key, issue_id, opts)
+      {:missing_label, :blocked} -> reproject_label(repo_key, issue_id, opts)
       _ok_or_missing -> :ok
     end
   end
 
   defp clear_label(repo_key, issue_id, opts) do
     _ = Hold.clear(repo_key, issue_id, :blocked, opts)
+    :ok
+  end
+
+  defp reproject_label(repo_key, issue_id, opts) do
+    _ = Hold.reproject(repo_key, issue_id, :blocked, opts)
     :ok
   end
 

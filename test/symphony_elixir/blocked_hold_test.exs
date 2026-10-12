@@ -173,6 +173,24 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert stored_hold() == nil
     end
 
+    test "re-projects a store hold whose Blocked label is missing" do
+      # The hold's label write failed (or a person removed it): the store has the hold, the board
+      # does not. The sweep re-asserts the label from the store truth.
+      :ok =
+        RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{
+          reason: "waiting on TP-1",
+          clearing_condition: "when every blocker is terminal",
+          waits_on: %{type: "dependency", keys: ["TP-1"]}
+        })
+
+      open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
+      assert labels() == []
+
+      assert BlockedHold.sync(open_issue, @terminal, settings: designed_settings()) == :none
+      assert labels() == ["Blocked"]
+      assert stored_hold() != nil
+    end
+
     test "a store failure is logged and reports no change" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
 

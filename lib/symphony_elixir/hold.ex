@@ -91,6 +91,24 @@ defmodule SymphonyElixir.Hold do
   end
 
   @doc """
+  Re-projects the machine label of a hold already in the store, without writing the store. A store
+  hold whose label write failed (the failure is swallowed by `set/5`) or whose label a person removed
+  by hand is invisible on the board; this re-asserts the projection from the store truth so the hold
+  becomes visible again. Returns `{:error, {:no_hold, kind}}` when the store has no such hold.
+  """
+  @spec reproject(String.t() | nil, String.t() | nil, kind(), keyword()) :: :ok | {:error, term()}
+  def reproject(repo_key, issue_id, kind, opts \\ []) do
+    if label(kind) do
+      case get(repo_key, issue_id, kind, opts) do
+        nil -> {:error, {:no_hold, kind}}
+        _hold -> project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :set)
+      end
+    else
+      {:error, {:unknown_hold_kind, kind}}
+    end
+  end
+
+  @doc """
   Compares the ticket's store holds (`record`) with the machine labels it carries on the board
   (`labels`). Returns `:ok`, `{:stray_label, kind}` for a label with no store hold (a hand-added
   label), or `{:missing_label, kind}` for a store hold whose label the board is missing.

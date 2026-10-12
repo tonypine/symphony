@@ -114,6 +114,34 @@ defmodule SymphonyElixir.HoldTest do
     end
   end
 
+  describe "reproject/4" do
+    test "re-asserts a store hold's label without touching the store" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      assert labels() == []
+
+      assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked)
+      assert labels() == ["Blocked"]
+      assert %{reason: "waiting"} = Hold.get(@repo_key, @issue_id, :blocked)
+    end
+
+    test "reports a hold the store does not have and refuses an unknown kind" do
+      assert Hold.reproject(@repo_key, @issue_id, :blocked) == {:error, {:no_hold, :blocked}}
+      assert Hold.reproject(@repo_key, @issue_id, :unknown) == {:error, {:unknown_hold_kind, :unknown}}
+      assert labels() == []
+    end
+
+    test "a failed label write is reported and leaves the store hold in place" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{reason: "waiting"})
+      Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, {:error, :boom})
+
+      log = capture_log(fn -> assert :ok = Hold.reproject(@repo_key, @issue_id, :blocked) end)
+
+      assert log =~ "Failed to set the machine label"
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      assert labels() == []
+    end
+  end
+
   describe "drift/2" do
     test "is ok when the store and the board agree" do
       held = TicketState.set_hold(TicketState.new(@repo_key, @issue_id), :blocked, %{reason: "waiting"})
