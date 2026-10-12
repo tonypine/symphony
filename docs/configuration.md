@@ -2246,14 +2246,17 @@ human_actions:
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
 its own poll, not on this read: every `polling.interval_ms` it lists the tickets in `In Review` or
-the `issues.states.human_review` state in each route's scope, reads a ticket's comments again only
-when the ticket changed, and adds the quality gate's holds and skips. Each entry has
+the `issues.states.human_review` state in each route's scope plus the ones carrying the `Blocked`
+label (a hold pauses a ticket in its phase, so it need not sit in a review state), reads a ticket's
+comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request, else
 `final_verification`, `plan` for a `plan` or `breakdown` parent, or `pr`; `clarify` for a quality
-gate hold or skip), `headline` (its one-line ask: the text after `**What to review:**` in the latest
+gate hold or skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
+recorded and what clears it), `headline` (its one-line ask: the text after `**What to review:**` in the latest
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
-or watches outside those states, is dropped. It doesn't depend on `human_actions.enabled`.
+or watches outside those states, is dropped — unless a hold pauses it, which is what waits on the
+Director. It doesn't depend on `human_actions.enabled`.
 `inbox_read` is false while Symphony has not yet read Linear for the list (the first read starts a
 second after startup), and true from its first successful read on, or when the tracker isn't Linear.
 The Mac app waits for it before it remembers what already waits, so nothing that was there notifies.

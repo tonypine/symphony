@@ -44,6 +44,8 @@ public struct InboxItem: Equatable, Identifiable {
         case finalVerification = "final_verification"
         case action
         case clarify
+        /// A ticket an access hold pauses in place, waiting on an Unblock.
+        case blocked
 
         /// The group's heading in the list.
         public var groupTitle: String {
@@ -53,6 +55,7 @@ public struct InboxItem: Equatable, Identifiable {
             case .finalVerification: "Final verifications"
             case .action: "Actions"
             case .clarify: "Clarify"
+            case .blocked: "Blocked"
             }
         }
 
@@ -64,6 +67,7 @@ public struct InboxItem: Equatable, Identifiable {
             case .finalVerification: "Final verification"
             case .action: "Action"
             case .clarify: "Clarify"
+            case .blocked: "Blocked"
             }
         }
 
@@ -75,6 +79,7 @@ public struct InboxItem: Equatable, Identifiable {
             case .finalVerification: "checkmark.seal"
             case .action: "hand.raised"
             case .clarify: "questionmark.bubble"
+            case .blocked: "hand.raised.slash"
             }
         }
     }
@@ -168,13 +173,15 @@ public struct InboxReview: Equatable {
     public var pullRequest: PullRequest?
     public var action: Action?
     public var clarify: Clarify?
+    public var blocked: Blocked?
 
-    public init(brief: Brief? = nil, subTickets: [SubTicket] = [], pullRequest: PullRequest? = nil, action: Action? = nil, clarify: Clarify? = nil) {
+    public init(brief: Brief? = nil, subTickets: [SubTicket] = [], pullRequest: PullRequest? = nil, action: Action? = nil, clarify: Clarify? = nil, blocked: Blocked? = nil) {
         self.brief = brief
         self.subTickets = subTickets
         self.pullRequest = pullRequest
         self.action = action
         self.clarify = clarify
+        self.blocked = blocked
     }
 
     /// The brief in its parts, or as text when it didn't parse.
@@ -261,11 +268,26 @@ public struct InboxReview: Equatable {
         public var estMinutes: Int?
         public var steps: [String]
         public var options: [Option]
+        /// The id of the request comment a decision answers: its reply goes under it. Nil for a request Symphony
+        /// can't answer from the Inbox.
+        public var commentID: String?
 
         public struct Option: Equatable {
             public var label: String
             public var effect: String?
             public var recommended: Bool
+        }
+
+        /// The request as one decision (C16), so the Inbox's picks answer it: its question and its options, the
+        /// recommended one picked to start with. Nil when the request offers no options to answer with.
+        public var decision: Decision? {
+            guard !options.isEmpty else { return nil }
+            return Decision(
+                question: question ?? "",
+                options: options.map(\.label),
+                recommendation: options.first(where: \.recommended)?.label,
+                recommended: options.firstIndex(where: \.recommended)
+            )
         }
 
         /// "About 5 min", nil when unknown.
@@ -278,6 +300,18 @@ public struct InboxReview: Equatable {
                 : steps
             guard !lines.isEmpty else { return nil }
             return lines.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        }
+    }
+
+    /// A ticket an access hold pauses in place (state-machine §Holds): the reason the hold recorded, and what
+    /// clears it. Only an access hold is listed — a dependency or fix-ticket hold clears on its own.
+    public struct Blocked: Equatable {
+        public var reason: String?
+        public var clearingCondition: String?
+
+        /// What the review says under the reason: what clears the hold.
+        public var nextLine: String {
+            clearingCondition.map { "Clears \($0)." } ?? "Symphony lifts the hold when what it waits on clears."
         }
     }
 
@@ -393,6 +427,8 @@ public struct InboxReview: Equatable {
         let estMinutes: Int?
         let steps: [String]?
         let options: [OptionPayload]?
+        /// The request comment a decision answers.
+        let commentId: String?
         // A clarify item.
         let held: Bool?
         let score: Int?
@@ -401,6 +437,9 @@ public struct InboxReview: Equatable {
         let maxRounds: Int?
         let found: String?
         let questions: [String]?
+        // A blocked item.
+        let reason: String?
+        let clearingCondition: String?
     }
 
     init(_ payload: Payload) {
@@ -433,7 +472,8 @@ public struct InboxReview: Equatable {
                 steps: payload.steps ?? [],
                 options: (payload.options ?? []).compactMap { option in
                     option.label.map { Action.Option(label: $0, effect: option.effect, recommended: option.recommended ?? false) }
-                }
+                },
+                commentID: payload.commentId
             ),
             clarify: payload.held.map { held in
                 Clarify(
@@ -445,7 +485,10 @@ public struct InboxReview: Equatable {
                     found: payload.found,
                     questions: payload.questions ?? []
                 )
-            }
+            },
+            blocked: payload.reason == nil && payload.clearingCondition == nil
+                ? nil
+                : Blocked(reason: payload.reason, clearingCondition: payload.clearingCondition)
         )
     }
 
@@ -566,6 +609,8 @@ public enum InboxAction: Equatable {
             return [linear, item.review.action?.copyText.map(InboxAction.copySteps)].compactMap { $0 }
         case .clarify:
             return [item.url.map(InboxAction.editInLinear)].compactMap { $0 }
+        case .blocked:
+            return [linear].compactMap { $0 }
         }
     }
 }

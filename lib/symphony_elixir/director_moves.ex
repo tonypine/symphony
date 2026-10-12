@@ -19,7 +19,11 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
     cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
-    clears on its own, so it is refused.
+    clears on its own, so it is refused;
+  - `:decide`: a designed repo's ticket waiting on a `Needs Decision` hold gets the Director's
+    answer as a reply under the request comment, and the hold is cleared so the ticket continues in
+    its phase. The optional `:move` names a state the decision directs — `rework` or `done` — and
+    the move goes through `SymphonyElixir.TransitionGuard`. A ticket with no such hold is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
@@ -67,12 +71,14 @@ defmodule SymphonyElixir.DirectorMoves do
   @backlog_state "Backlog"
   @comment_preview_chars 500
 
-  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog | :unblock
+  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog | :unblock | :decide
   @type pick :: %{question: String.t(), answer: String.t()}
   @type input :: %{
           optional(:reason) => String.t() | nil,
           optional(:note) => String.t() | nil,
-          optional(:picks) => [pick()]
+          optional(:picks) => [pick()],
+          optional(:request_comment_id) => String.t() | nil,
+          optional(:move) => String.t() | nil
         }
   @type error ::
           {:invalid, String.t()}
@@ -84,7 +90,8 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock]
+  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :decide]
+  @decide_targets %{"rework" => @rework_state, "done" => @done_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
@@ -101,7 +108,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @doc """
   Makes `move` on the ticket `identifier` (its identifier or id). `input` carries the rework
-  `:reason` (required), the backlog `:note` (optional) or the decisions' `:picks` (required).
+  `:reason` (required), the backlog `:note` (optional), the decisions' `:picks` (required) or the
+  decision's `:picks` (required) with the `:request_comment_id` they answer (required) and the
+  optional `:move` the decision directs.
 
   Options: `:server` (the Agent, default this module), `:clock` (monotonic milliseconds, for the undo
   window), `:orchestrator` (asked to poll again after the move, default `SymphonyElixir.Orchestrator`)
@@ -117,6 +126,10 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # Unblock is not a Linear move: it lifts an access hold in place, so no state is resolved.
   defp do_move(:unblock, issue, _input, opts), do: unblock(issue, opts)
+
+  # Decide is a decision, not a state: it answers the request and clears the hold, and only moves
+  # when the decision directs one.
+  defp do_move(:decide, issue, input, opts), do: decide(issue, input, opts)
 
   defp do_move(move, issue, input, opts) do
     settings = Config.settings!()
@@ -185,6 +198,17 @@ defmodule SymphonyElixir.DirectorMoves do
   def unblock_comment(identifier) when is_binary(identifier),
     do: "Unblocked by the Director: #{identifier} continues in place."
 
+  @doc "The reply `:decide` posts under the request: each question with the option the Director picked."
+  @spec decide_comment([pick()]) :: String.t()
+  def decide_comment(picks) when is_list(picks) do
+    lines =
+      picks
+      |> Enum.with_index(1)
+      |> Enum.map(fn {%{question: question, answer: answer}, index} -> "#{index}. #{question}\n   **Decision:** #{answer}" end)
+
+    Enum.join(["Decision from the Director:" | lines], "\n\n")
+  end
+
   defp validate_input(:rework, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
   end
@@ -194,9 +218,23 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp validate_input(:decisions, _input), do: invalid_picks()
+
+  defp validate_input(:decide, input) do
+    cond do
+      not (is_list(input[:picks]) and input[:picks] != [] and Enum.all?(input.picks, &valid_pick?/1)) -> invalid_picks()
+      not present?(input[:request_comment_id]) -> {:error, {:invalid, "request_comment_id is required"}}
+      not valid_decide_move?(input[:move]) -> {:error, {:invalid, "move must be #{inspect(Map.keys(@decide_targets))} or left out"}}
+      true -> :ok
+    end
+  end
+
   defp validate_input(_move, _input), do: :ok
 
   defp invalid_picks, do: {:error, {:invalid, "picks must list each decision's question and answer"}}
+
+  defp valid_decide_move?(nil), do: true
+  defp valid_decide_move?(move) when is_binary(move), do: Map.has_key?(@decide_targets, String.downcase(String.trim(move)))
+  defp valid_decide_move?(_move), do: false
 
   defp valid_pick?(%{question: question, answer: answer}), do: present?(question) and present?(answer)
   defp valid_pick?(_pick), do: false
@@ -345,6 +383,70 @@ defmodule SymphonyElixir.DirectorMoves do
     end
 
     finish(:unblock, issue, nil, comment, opts)
+  end
+
+  # Decide answers a decision request. The reply under the request comment is what marks it answered
+  # in Linear, so the next read no longer finds the request and the hold it set clears; the hold is
+  # cleared here too, so the ticket continues at once, and the move the decision directs — when it
+  # directs one — goes through the guard after it.
+  defp decide(%Issue{} = issue, input, opts) do
+    with :ok <- require_decision_hold(issue, opts) do
+      comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
+
+      case reply_to_request(issue, input.request_comment_id, comment) do
+        :ok -> clear_decision_hold(issue, input, comment, opts)
+        {:error, reason} -> {:error, {:linear, reason}}
+      end
+    end
+  end
+
+  # Only a ticket carrying the hold has a request to answer: a legacy repo never records one.
+  defp require_decision_hold(%Issue{repo_key: repo_key, id: issue_id} = issue, opts) do
+    if Hold.held?(repo_key, issue_id, :needs_decision, store_opts(opts)),
+      do: :ok,
+      else: conflict("#{issue.identifier} is not waiting on a decision")
+  end
+
+  defp reply_to_request(issue, comment_id, comment) do
+    case Tracker.create_reply(issue.id, comment_id, comment) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp clear_decision_hold(issue, input, comment, opts) do
+    case Hold.clear(issue.repo_key, issue.id, :needs_decision, store_opts(opts)) do
+      :ok -> decision_finish(issue, input[:move], comment, opts)
+      {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
+    end
+  end
+
+  defp decision_finish(issue, move, comment, opts) when is_binary(move) and move != "" do
+    to_state = @decide_targets[String.downcase(String.trim(move))]
+
+    case update_state(issue, to_state, :decide) do
+      :ok -> finish(:decide, issue, to_state, comment, opts)
+      {:error, {:linear, reason}} -> decision_move_refused(issue, to_state, reason, comment, opts)
+    end
+  end
+
+  # With nothing to move, the ticket continues in its phase: the decision is recorded and the hold
+  # is gone, so the next poll dispatches it again.
+  defp decision_finish(issue, _move, comment, opts) do
+    TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{move: "decide", from: issue.state, to: issue.state})
+    finish(:decide, issue, nil, comment, opts)
+  end
+
+  # The decision is recorded in Linear and the hold is already cleared, so a refused move is
+  # reported without taking either back: the ticket continues in place, with the decision on it.
+  defp decision_move_refused(issue, to_state, reason, comment, opts) do
+    record_audit("decide", issue, issue.state, issue.state, comment, %{failed: "move", directed: to_state})
+    request_refresh(opts)
+
+    partial(
+      "recorded the decision on #{issue.identifier} and cleared the hold, but Linear refused the move to " <>
+        "#{to_state} (#{inspect(reason)}); #{issue.identifier} continues in place"
+    )
   end
 
   defp comment_then_move(move, issue, comment, to_state, opts) do

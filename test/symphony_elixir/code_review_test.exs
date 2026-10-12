@@ -23,6 +23,16 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
   end
 
+  # The QA run/skip decision an approve carries. Driven from the test rather than from git; the rule
+  # itself is tested in `QaPolicyTest`.
+  defmodule FakeQaPolicy do
+    @playbook %{kind: "cli", paths: ["lib/symphony_elixir/cli.ex"], prompt: "Follow the CLI playbook."}
+
+    def decide(_issue, _settings, _opts) do
+      Process.get(:fake_qa_policy_result, {:run, [@playbook], "the change delivers or updates a user journey"})
+    end
+  end
+
   defmodule OptsReviewAgent do
     def evaluate(_issue, _workspace, _settings, opts) do
       send(self(), {:review_opts, opts})
@@ -100,7 +110,11 @@ defmodule SymphonyElixir.CodeReviewTest do
   end
 
   defp run(workspace, opts, state \\ "Code Review") do
-    CodeReview.run(issue(state), workspace, [review_agent: FakeReviewAgent, tracker: FakeTracker] ++ opts)
+    CodeReview.run(
+      issue(state),
+      workspace,
+      [review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy] ++ opts
+    )
   end
 
   defp run_with(agent, workspace, opts, state \\ "Code Review") do
@@ -173,18 +187,59 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{name: "code_review_reviewer_disabled"}] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
-    test "an approve verdict records the verdict against the head and moves to Merging" do
+    test "an approve verdict binds the head and carries the ticket on to QA" do
       {workspace, head} = git_workspace!()
 
       assert :ok = run(workspace, settings: designed_settings())
       assert_received {:reviewed, @issue_id, "Code Review"}
-      assert_received {:moved, @issue_id, "Merging"}
+      assert_received {:moved, @issue_id, "QA"}
 
       assert [%{kind: "code_review", head_sha: ^head, outcome: "approve"}] =
                SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
 
-      assert [%{name: "code_review", details: %{signal: "code_review_approve", target: "Merging"}}] =
-               SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+      assert [
+               %{
+                 name: "code_review",
+                 details: %{signal: "code_review_approve", target: "QA", qa_decision: "run", reason: reason}
+               }
+             ] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+
+      assert reason == "the change delivers or updates a user journey"
+    end
+
+    test "an approve whose QA decision is skip lands the ticket in Merging, with the decision recorded" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:skip, "the PR only changes docs, tests or `auto_review.skip_globs` paths"})
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:moved, @issue_id, "Merging"}
+
+      assert [
+               %{
+                 name: "code_review",
+                 details: %{
+                   signal: "code_review_approve_skip",
+                   target: "Merging",
+                   qa_decision: "skip",
+                   reason: "the PR only changes docs, tests or `auto_review.skip_globs` paths"
+                 }
+               }
+             ] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+    end
+
+    test "with no policy override the repo's own skip rule decides" do
+      {workspace, _head} = git_workspace!()
+
+      # The real `QaPolicy` cannot read this scratch checkout's diff, and a change whose paths
+      # cannot be read runs QA rather than skipping it.
+      assert :ok =
+               CodeReview.run(issue(), workspace,
+                 settings: designed_settings(),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker
+               )
+
+      assert_received {:moved, @issue_id, "QA"}
     end
 
     test "a request_changes verdict moves to Rework" do
@@ -249,8 +304,14 @@ defmodule SymphonyElixir.CodeReviewTest do
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
 
-      assert :ok = CodeReview.run(issue(), "/tmp/workspace", settings: designed_settings(), review_agent: FakeReviewAgent)
-      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert :ok =
+               CodeReview.run(issue(), "/tmp/workspace",
+                 settings: designed_settings(),
+                 review_agent: FakeReviewAgent,
+                 qa_policy: FakeQaPolicy
+               )
+
+      assert_received {:memory_tracker_state_update, @issue_id, "QA"}
     end
 
     test "an issue with no identifier is labelled by its id" do
@@ -260,10 +321,11 @@ defmodule SymphonyElixir.CodeReviewTest do
                CodeReview.run(no_identifier, "/tmp/workspace",
                  settings: designed_settings(),
                  review_agent: FakeReviewAgent,
-                 tracker: FakeTracker
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
                )
 
-      assert_received {:moved, @issue_id, "Merging"}
+      assert_received {:moved, @issue_id, "QA"}
     end
 
     test "a block verdict with only comments uses the first comment as the reason" do
@@ -402,8 +464,14 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert :ok = run(workspace, settings: designed_settings())
 
-      assert_received {:moved, @issue_id, "Merging"}
+      # The performed deepening routes through the same approve edge a fresh verdict takes, so the
+      # QA decision is made here exactly as it is for a first-pass approval.
+      assert_received {:moved, @issue_id, "QA"}
       refute_received {:reviewed, _, _}
+
+      assert [
+               %{name: "code_review", details: %{signal: "code_review_approve", qa_decision: "run"}}
+             ] = signals() |> Enum.filter(&(&1.name == "code_review"))
 
       assert [%{name: "code_review_deepening_applied", details: %{head: ^head}}] =
                signals() |> Enum.filter(&(&1.name == "code_review_deepening_applied"))
@@ -418,7 +486,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:reviewed, @issue_id, "Code Review"}
 
       assert :ok = run(workspace, settings: designed_settings())
-      assert_received {:moved, @issue_id, "Merging"}
+      assert_received {:moved, @issue_id, "QA"}
       refute_received {:reviewed, _, _}
 
       # A further dispatch of the ticket finds the deepening performed, so it reviews afresh rather
@@ -523,7 +591,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert_received {:reviewed, @issue_id, "Code Review"}
       refute_received {:reviewed, _, _}
-      assert_received {:moved, @issue_id, "Merging"}
+      assert_received {:moved, @issue_id, "QA"}
 
       assert [%{head_sha: ^head, outcome: "approve"}] = verdicts()
       refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
@@ -553,7 +621,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       # The stale deepening is ignored: the reviewer ran and the verdict routed as usual.
       assert_received {:reviewed, @issue_id, "Code Review"}
-      assert_received {:moved, @issue_id, "Merging"}
+      assert_received {:moved, @issue_id, "QA"}
     end
   end
 end

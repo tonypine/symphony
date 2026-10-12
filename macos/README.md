@@ -348,8 +348,8 @@ starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens 
 Open Logs opens `menubar-child.log`.
 
 While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans and PRs in
-`In Review` or `Human Review`, final verifications to sign off, open decisions, and tickets the quality gate
-holds or skipped), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
+`In Review` or `Human Review`, final verifications to sign off, open decisions, tickets the quality gate
+holds or skipped, and tickets an access hold pauses in place), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
 each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
 ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
 row opens the Symphony window on it in the Inbox. The menu lists five; **N more…** opens the Inbox for the rest.
@@ -841,30 +841,33 @@ version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbo
 state. The window opens on the Inbox the first time.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
-  verifications, Actions and Clarify, oldest first in each group, each row with its ticket, title, one-line ask
+  verifications, Actions, Clarify and Blocked, oldest first in each group, each row with its ticket, title, one-line ask
   and age; its sidebar item counts them in orange, in every repo. ↑ and ↓ move through the list and Return
   takes the review's first action. Beside the list, the review of the selected item: a plan's **What to
   review** with its links, **Decisions needed** with the recommended option picked, and its sub-tickets in
   landing order; a PR's checks (CI, Auto Review QA with its report, the acceptance gate's verdict and mode,
   and how many files and lines it changes), with **Open PR**; an action's why, numbered steps, time and what it
-  unblocks, with **Copy Steps**; and what the quality gate found in a ticket it holds, its score and round, with
-  **Edit in Linear**. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
+  unblocks, with **Copy Steps**; what the quality gate found in a ticket it holds, its score and round, with
+  **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
   the ticket in Linear; the review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
   items says how many ("2 more in other repos").
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
   **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
-  verification **Sign Off…**. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
+  verification **Sign Off…**; an action asking a decision **Send Decision…** (its options are the picks) and,
+  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access hold and
+  lets it continue in place. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
-  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`), and what went wrong
+  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `decide`, `unblock`), and what went wrong
   shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
   Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
   seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow
   Symphony's answer (`moved`, `to_state`), so decisions that moved a plan out of the workflow's Human Review
-  state, whatever its name, offer Undo too.
+  state, whatever its name, offer Undo too. Unblock moves no ticket, so its banner just says "Hold cleared" with
+  no Undo.
 
 - **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
   are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
