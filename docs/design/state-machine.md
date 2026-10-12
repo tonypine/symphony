@@ -94,6 +94,7 @@ Holds pause a ticket in its current phase. They are attributes persisted at the 
 
 - **Handoff.** In Progress → Code Review happens on the session's explicit handoff signal (with the PR), not when a run merely goes quiet.
 - **CI gating.** A verdict on a red head is not actionable: red anywhere in Code Review / QA / Merging → CI Fix → return to origin once green.
+- **A reviewer is what Code Review is.** The state has no verdict without a reviewer to make one: a repo with `review_agent` off parks its Code Review tickets with the reason recorded (`code_review_reviewer_disabled`) and never dispatches a run, rather than recording an approval no reviewer made. Turning the reviewer on opens the gate. The gate is designed-only, like the green-head one.
 - **Mechanical vs substantive.** CI Fix is constrained to minimal repairs; if the fixing agent judges the repair needs a substantive change, it says so and the ticket goes to Rework.
 - **No re-traversal for repairs.** CI Fix returns to where it came from and approvals survive; only Rework re-enters review.
 - **Escalation rules route or deepen — they never queue.** A rule that needs a person (protected files, access, product calls) sets a Needs Decision hold; risk rules (size, sensitive areas) deepen the Code Review run instead of routing anywhere; an inconclusive review retries boundedly, then sets a Needs Decision hold.

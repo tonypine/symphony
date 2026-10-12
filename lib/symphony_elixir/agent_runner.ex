@@ -11,13 +11,14 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
-    AutoReview,
     AutoReview.ParentWalkthrough,
     CiPoller,
+    CodeReview,
     Config,
     DependencyAudit,
     DependencyGate,
     GitHub.PullRequest,
+    Handoff,
     LeftoverProcesses,
     Linear.Issue,
     Linear.TransientRetry,
@@ -67,7 +68,8 @@ defmodule SymphonyElixir.AgentRunner do
       RunKind.classify(issue,
         terminal_states: settings.tracker.terminal_states,
         ci_failure: pending_ci_failure(issue, opts),
-        reviewer_comments: pending_reviewer_comments(issue, opts)
+        reviewer_comments: pending_reviewer_comments(issue, opts),
+        settings: settings
       )
 
     settings |> Config.run_profile(kind) |> Map.put(:kind, kind) |> UsageLimit.for_agent_kind(settings.agent.kind)
@@ -572,17 +574,25 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A `Final verification:` ticket gets the Auto Review parent walkthrough in place of executor
-  # turns when it applies (see `SymphonyElixir.AutoReview.ParentWalkthrough`).
+  # A designed repo's `Code Review` ticket is reviewed rather than executed
+  # (`SymphonyElixir.CodeReview`); a `Final verification:` ticket gets the Auto Review parent
+  # walkthrough in place of executor turns when it applies
+  # (see `SymphonyElixir.AutoReview.ParentWalkthrough`). Anything else is an ordinary run.
   defp run_issue(workspace, issue, codex_update_recipient, opts, worker_host) do
     walkthrough_opts =
       opts
       |> Keyword.put(:worker_host, worker_host)
       |> Keyword.put(:on_message, codex_message_handler(codex_update_recipient, issue))
 
-    case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
-      :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
-      result -> result
+    case Keyword.get(opts, :code_review, CodeReview).run(issue, workspace, walkthrough_opts) do
+      :skip ->
+        case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
+          :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+          result -> result
+        end
+
+      result ->
+        result
     end
   end
 
@@ -1720,20 +1730,54 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
+  # A designed repo hands its work off to `Code Review`; a legacy repo keeps the Auto Review
+  # post-PR state it always used.
+  defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> Handoff.target_state()
 
+  # A designed repo moves an implementation handoff to `Code Review` only on the session's explicit
+  # handoff signal, which the push and PR tool hooks emit into the ticket's ledger. Without it the
+  # run does not advance: the ticket is left where it is with a `handoff_missing` event recorded,
+  # and the run fails so the orchestrator's retry machinery picks it up.
   defp move_to_post_pr_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
-    move = fn -> TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, settings: Keyword.fetch!(run_context.opts, :settings)}) end
+    settings = Keyword.fetch!(run_context.opts, :settings)
 
-    case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
-      :ok ->
-        record_move_signal(issue, "handoff", %{to: post_pr_state, reason: reason}, run_context.opts)
-        :ok
+    if Handoff.required?(issue.state, settings) and not handoff_emitted?(issue, run_context) do
+      Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: no handoff signal for its head")
+      record_move_signal(issue, Handoff.missing_signal(), %{to: post_pr_state, reason: reason}, run_context.opts)
+      {:error, {:handoff_signal_missing, post_pr_state}}
+    else
+      # A designed repo's handoff is the table's explicit `:handoff` edge, whose target resolves
+      # from the settings to the configured Code Review state; a legacy repo keeps the
+      # `:post_pr_handoff` edge with the explicit post-PR target it always used.
+      signal = if Handoff.designed?(settings), do: :handoff, else: :post_pr_handoff
+      move = fn -> TransitionGuard.perform(issue_id, signal, %{target: post_pr_state, settings: settings}) end
 
-      error ->
-        error
+      case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
+        :ok ->
+          # A record of the completed move, marked as a move so it never stands in for the explicit
+          # signal a later run's own head must still emit (`Handoff.emitted?/3`): a workspace HEAD
+          # that reads nil, as an SSH worker's does, would otherwise make this head-less record count
+          # for any head.
+          record_move_signal(
+            issue,
+            "handoff",
+            %{to: post_pr_state, reason: reason, head: run_context.progress.head, move: true},
+            run_context.opts
+          )
+
+          :ok
+
+        error ->
+          error
+      end
     end
   end
+
+  defp handoff_emitted?(%Issue{id: issue_id} = issue, run_context) when is_binary(issue_id) do
+    Handoff.emitted?(run_repo_key(issue, run_context.opts), issue_id, run_context.progress.head)
+  end
+
+  defp handoff_emitted?(_issue, _run_context), do: false
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
   # human's merge approval.
@@ -1834,7 +1878,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
          :ok <- with_linear_retry(comment, label, run_context.opts) do
-      record_move_signal(issue, "handoff", %{to: @merging_state, kind: kind, head: head}, run_context.opts)
+      record_move_signal(issue, "handoff", %{to: @merging_state, kind: kind, head: head, move: true}, run_context.opts)
       :ok
     else
       {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}

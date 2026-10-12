@@ -445,6 +445,23 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:fetch_issues_by_states, ["In Review", "Merging"]}
   end
 
+  test "a designed repo's Code Review state is watched so its head can be called green" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    Application.put_env(:symphony_elixir, :ci_test_issues, [])
+
+    assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: ~U[2026-05-06 09:00:00Z])
+
+    assert_receive {:fetch_issues_by_states, states}
+    assert "Code Review" in states
+  end
+
   test "a Human Review issue's PR is watched like an In Review one" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = %{in_review_issue() | state: "Human Review"}

@@ -20,6 +20,7 @@ defmodule SymphonyElixir.RunKindTest do
              :final_verification,
              :rework,
              :landing,
+             :code_review,
              :ci_fix,
              :review_feedback,
              :pre_push_review,
@@ -28,6 +29,10 @@ defmodule SymphonyElixir.RunKindTest do
            ]
 
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
+  end
+
+  test "the final-verification title prefix is exposed for callers that build the title" do
+    assert RunKind.final_verification_prefix() == "Final verification:"
   end
 
   describe "classify/2" do
@@ -88,6 +93,23 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(issue(state: " merging ")) == :landing
       assert RunKind.classify(issue(state: "Rework")) == :rework
       assert RunKind.classify(issue(state: "REWORK")) == :rework
+    end
+
+    test "the designed machine's Code Review state is a code review run, whatever the case" do
+      designed = %{state_machine: "designed"}
+
+      assert RunKind.classify(issue(state: "Code Review"), settings: designed) == :code_review
+      assert RunKind.classify(issue(state: " code review "), settings: designed) == :code_review
+    end
+
+    test "a legacy repo's Code Review state keeps the run kind it had before" do
+      legacy = %{state_machine: "legacy"}
+      in_review = issue(state: "Code Review")
+
+      assert RunKind.classify(in_review) == :implementation
+      assert RunKind.classify(in_review, settings: legacy) == :implementation
+      assert RunKind.classify(in_review, settings: legacy, ci_failure: %{check: "test"}) == :ci_fix
+      assert RunKind.classify(in_review, settings: legacy, reviewer_comments: [%{body: "Rename this"}]) == :review_feedback
     end
 
     test "a continuation after red CI is a CI fix run" do
