@@ -833,8 +833,9 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 ## The Symphony window
 
 **Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
-and, in the toolbar, the view's title, Symphony's connection state (quiet while Symphony answers; the time of
-the last update is in its help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
+and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views and the ticket pages shown), the
+view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
+help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
 version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, then under
 **Factory**, **Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and
 state. The window opens on the Inbox the first time.
@@ -848,7 +849,7 @@ state. The window opens on the Inbox the first time.
   and how many files and lines it changes), with **Open PR**; an action's why, numbered steps, time and what it
   unblocks, with **Copy Steps**; and what the quality gate found in a ticket it holds, its score and round, with
   **Edit in Linear**. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
-  the ticket. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
+  the ticket in Linear; the review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
   items says how many ("2 more in other repos").
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
@@ -874,12 +875,31 @@ state. The window opens on the Inbox the first time.
   **Needs attention** shows only when something does, most severe and oldest first, one row per ticket or
   hold: a run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than
   one repo (**Open in Linear**), a usage-limit hold with the time runs resume, a forced ticket gone stale
-  (**Stop Forcing**) and stray processes (**Open Diagnostics**); **Open** opens the ticket in Linear. The
-  sidebar's Overview item counts these rows. **Now working** lists the agent runs, QA passes and landings
+  (**Stop Forcing**) and stray processes (**Open Diagnostics**); **Open** opens the ticket page, and a stuck or
+  failing row also has **Stop Run…**. The sidebar's Overview item counts these rows. **Now working** lists the agent runs, QA passes and landings
   with their phase, turn, last activity, running time and tokens, and **Next up** the tickets waiting for a
   slot or a retry. On the side, **Today** has the day's tokens against the daily budget and each provider
   limit Symphony reports, accent below 75%, orange from 75% and red from 95%, and **Repos** says in one line
-  whether each repo is healthy.
+  whether each repo is healthy. Return or a double-click on a ticket row opens its ticket page.
+- A **ticket page** tells one ticket's story: its badges, repo and initiative, what it is doing ("Waiting on a
+  retry at 14:32", "In review · QA pass running"), **Now** (the run and its model and effort, running time,
+  turn, last activity, the tool call it waits on, its workspace with **Reveal**, and its tokens against the
+  per-ticket cap), the **Timeline** of every run with its result, duration and tokens, the gate's verdict and
+  your moves ("Stopped by you, moved to Backlog", from the audit records), and the ticket's facts (state,
+  type, initiative, pull request, gate verdict, forced, and for a done ticket when it merged) and the agent's
+  last message. It reads `/api/v1/:issue_identifier`, `/api/v1/runs` and `/api/v1/audit` besides the state;
+  a done ticket, which Symphony no longer tracks, shows what the state and the run records still say. Its
+  actions: **View Transcript**, **Open in Linear**, **Stop Run…**, and under ⋯ **Copy API URL**, **Show Audit
+  Records** (the web dashboard's Audit view, filtered to the ticket) and **Reveal Worktree**.
+- **View Transcript** opens the run's transcript in its own window (⌘-click opens another): the agent's
+  messages, each tool call with its result and duration, and errors, grouped by turn, with **All**,
+  **Messages**, **Tools** and **Errors**, a search field (⌘F) and **Copy Session ID**. The selected event shows
+  in full below, monospaced and selectable, and a call that hasn't returned says how long it has been silent.
+- **Stop Run…** opens a sheet first. It says what a stop does: it ends the agent and removes its workspace,
+  with any work not pushed, and the ticket keeps its Linear state, so Symphony starts it again on its next
+  poll. **Also move to Backlog** (on from Needs attention, off from the ticket page) then moves the ticket to
+  Backlog with your note as a comment (`POST /api/v1/control/stop`, then `backlog`). A failing ticket between
+  attempts has no run to stop, so only the Backlog move is left.
 - The **scope** pop-up shows all repos or one of the repos Symphony has tickets in. It filters every count
   and row of the Overview (the sidebar badge still counts every repo), and the app remembers it across
   relaunches.
@@ -1029,7 +1049,9 @@ Four more variables, read only in QA mode:
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
   are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
-  hold), `paused` and `idle`, and of the Inbox: `inbox` (one item of each kind) and `inbox-empty`. Ages in them count from the payload's `generated_at`, so they read the same
+  hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
+  ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
+  `paused` and `idle`, and of the Inbox: `inbox` (one item of each kind) and `inbox-empty`. Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

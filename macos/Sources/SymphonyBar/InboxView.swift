@@ -14,7 +14,8 @@ struct InboxContent: View {
                 picks: model.picks(for:),
                 pick: model.pick,
                 perform: { model.perform($0, on: $1) },
-                openOverview: { model.show(.overview) }
+                openOverview: { model.show(.overview) },
+                openTicket: model.openTicket
             )
             .safeAreaInset(edge: .bottom) {
                 if let banner = model.inboxBanner {
@@ -51,13 +52,15 @@ struct InboxView: View {
     let pick: (Int, Int, String) -> Void
     let perform: (InboxCommand, InboxItem) -> Void
     let openOverview: () -> Void
+    /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
+    var openTicket: (String) -> Void = { _ in }
 
     var body: some View {
         if list.isEmpty {
             InboxEmpty(hiddenLine: list.hiddenLine, openOverview: openOverview)
         } else {
             HStack(spacing: 0) {
-                InboxListColumn(list: list, selection: $selection, picks: picks, perform: perform)
+                InboxListColumn(list: list, selection: $selection, picks: picks, perform: perform, openTicket: openTicket)
                     .frame(width: DesignTokens.Layout.listColumnWidth)
                     .background(DesignTokens.Surface.content.color)
                 Divider()
@@ -67,7 +70,8 @@ struct InboxView: View {
                             item: item,
                             picks: picks(item.id),
                             pick: { option, decision in pick(option, decision, item.id) },
-                            perform: { perform($0, item) }
+                            perform: { perform($0, item) },
+                            openTicket: { openTicket(item.identifier) }
                         )
                     }
                     // A new item starts with its own picks (the recommended options).
@@ -101,12 +105,13 @@ private struct InboxListColumn: View {
     @Binding var selection: String?
     let picks: (String) -> DecisionPicks
     let perform: (InboxCommand, InboxItem) -> Void
+    let openTicket: (String) -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                InboxListRows(list: list, selected: list.selection(selection)?.id) { selection = $0 }
+                InboxListRows(list: list, selected: list.selection(selection)?.id, select: { selection = $0 }, open: openTicket)
             }
             .focusable()
             .focusEffectDisabled()
@@ -140,6 +145,8 @@ struct InboxListRows: View {
     let list: InboxList
     let selected: String?
     let select: (String) -> Void
+    /// Opens the ticket's page, by identifier.
+    var open: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -154,8 +161,10 @@ struct InboxListRows: View {
                     InboxRow(item: item, selected: item.id == selected)
                         .id(item.id)
                         .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { open(item.identifier) }
                         .onTapGesture { select(item.id) }
                         .accessibilityAction { select(item.id) }
+                        .accessibilityAction(named: "Open Ticket") { open(item.identifier) }
                 }
             }
             if let hiddenLine = list.hiddenLine {
@@ -219,10 +228,11 @@ struct InboxReviewBody: View {
     var picks = DecisionPicks()
     var pick: (Int, Int) -> Void = { _, _ in }
     let perform: (InboxCommand) -> Void
+    var openTicket: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform)
+            ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform, openTicket: openTicket)
             switch item.kind {
             case .plan:
                 BriefSections(brief: item.review.brief, picks: picks, pick: pick)
@@ -247,6 +257,7 @@ private struct ReviewHeader: View {
     let item: InboxItem
     let toolbar: InboxToolbar
     let perform: (InboxCommand) -> Void
+    let openTicket: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -263,10 +274,17 @@ private struct ReviewHeader: View {
                     ActionButtons(toolbar: toolbar, perform: perform)
                 }
             }
-            Text([item.identifier, item.title].compactMap { $0 }.joined(separator: " "))
-                .font(DesignTokens.TypeStyle.sentence.font)
-                .textSelection(.enabled)
-                .accessibilityAddTraits(.isHeader)
+            // The ticket's identifier and title open its page (D3, principle 5).
+            Button(action: openTicket) {
+                Text([item.identifier, item.title].compactMap { $0 }.joined(separator: " "))
+                    .font(DesignTokens.TypeStyle.sentence.font)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.plain)
+            .help("Open the ticket page")
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityHint("Opens the ticket page")
             Text(item.ask)
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
