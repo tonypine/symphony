@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.CodeReviewTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.CiFix
   alias SymphonyElixir.CodeReview
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
@@ -159,6 +160,26 @@ defmodule SymphonyElixir.CodeReviewTest do
              ] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
 
       assert reason == "the change delivers or updates a user journey"
+    end
+
+    test "an approve the CI Fix lane re-bound to this head carries the ticket on without a second review" do
+      {workspace, head} = git_workspace!()
+
+      # A mechanical repair pushed this head; the lane re-binds the approval it carries to it.
+      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "the-repaired-head", "approve")
+      assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "Code Review", head, designed_settings())
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      # No reviewer ran: the ticket keeps the approval it already earned and QA is re-decided.
+      refute_received {:reviewed, _, _}
+      assert_received {:moved, @issue_id, "QA"}
+
+      assert [%{kind: "code_review", head_sha: ^head, outcome: "approve"} | _] =
+               SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
+
+      assert [%{name: "code_review", details: %{signal: "code_review_approve", target: "QA", carried: true}} | _] =
+               SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
     test "an approve whose QA decision is skip lands the ticket in Merging, with the decision recorded" do

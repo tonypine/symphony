@@ -669,6 +669,73 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a CI Fix run that returns to its origin" do
+    # The CI Fix lane's return: a mechanical repair that pushed nothing goes back where it came
+    # from, rather than to the post-PR state review would judge again.
+    @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
+
+    test "a repair on a Code Review ticket returns to Code Review, clearing the recorded origin" do
+      :ok = put_pending_ci_failure(approved: true)
+      :ok = SymphonyElixir.CiFix.record_origin("default", "issue-progress", "Code Review")
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      log = capture_log(fn -> run_issue!("CI Fix", heads: ["sha-same"], max_turns: 6, repos: designed_repos()) end)
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+      assert_signal("ci fix return", %{to: "Code Review", kind: :ci_fix, head: "sha-same", move: true})
+      assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same"
+      assert log =~ "returning it to its CI Fix origin"
+    end
+
+    test "a repair on a Merging ticket returns to Merging with auto-merge re-armed" do
+      :ok = put_pending_ci_failure(approved: true)
+      :ok = put_auto_merge_hold()
+      :ok = SymphonyElixir.CiFix.record_origin("default", "issue-progress", "Merging")
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      run_issue!("CI Fix", heads: ["sha-same"], max_turns: 6, repos: designed_repos())
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+      # The lane turned auto-merge off and held it; the return releases the hold so it re-arms.
+      assert PrReviewPoller.auto_merge("issue-progress") == nil
+      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+    end
+
+    test "a repair that pushed a new head returns to its origin with the approval re-bound to it" do
+      :ok = put_pending_ci_failure(approved: true)
+      :ok = SymphonyElixir.CiFix.record_origin("default", "issue-progress", "Code Review")
+      # The approval the lane carries, bound to the head the red one replaced.
+      :ok = RunStore.record_ticket_verdict("default", "issue-progress", "code_review", "sha-same", "approve")
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-new", checks: @green_checks}})
+
+      run_issue!("CI Fix", heads: ["sha-same", "sha-new"], max_turns: 6, repos: designed_repos())
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert SymphonyElixir.CiFix.origin("default", "issue-progress") == nil
+
+      # The approval moved with the ticket: the head it now covers is the repair's, not the red one's.
+      assert [%{head_sha: "sha-new", outcome: "approve"} | _] =
+               SymphonyElixir.Handoff.verdicts("default", "issue-progress", "code_review")
+
+      assert_signal("ci fix return", %{to: "Code Review", kind: :ci_fix, head: "sha-new", move: true})
+    end
+
+    test "a repair that lost its origin goes to the post-PR state rather than guessing" do
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      opts = [heads: ["sha-same"], max_turns: 6, repos: designed_repos(), auto_review: %{enabled: true}]
+      log = capture_log(fn -> run_issue!("CI Fix", opts) end)
+
+      # A designed repo's post-PR state is `Code Review`, where the head is judged afresh.
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert log =~ "No CI Fix origin recorded for issue_id=issue-progress issue_identifier=TP-337"
+      assert log =~ "moving it to Code Review"
+    end
+  end
+
   describe "a merge-conflict run that pushes nothing" do
     # TP-658: the PR no longer conflicts by the time the run looks (the base branch moved on), so
     # there is nothing to resolve.

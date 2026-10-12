@@ -6,7 +6,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiPoller, Config, HumanReview, Notifications, RunStore}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiFix, CiPoller, Config, HumanReview, Notifications, RunStore}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -1380,19 +1380,20 @@ defmodule SymphonyElixir.PrReviewPoller do
     if active_agent_run?(issue_id, opts) do
       complete_review_update(opts, record, Map.merge(attrs, %{status: "conflict_active_run"}), {:active_run, issue_id, :conflict})
     else
-      record
-      |> parked_for_person(settings, opts)
-      |> transition_unless_parked(record, attrs, opts, now)
+      parked = parked_for_person(record, settings, opts)
+      ctx = %{settings: settings, origin_state: conflict_origin_state(parked)}
+
+      transition_unless_parked(parked, record, attrs, ctx, opts, now)
     end
   end
 
-  defp transition_unless_parked({:error, reason}, record, _attrs, opts, now),
+  defp transition_unless_parked({:error, reason}, record, _attrs, _ctx, opts, now),
     do: record_poll_error(record, {:issue_read_failed, reason}, opts, now)
 
-  defp transition_unless_parked({:parked, issue}, record, attrs, opts, _now),
+  defp transition_unless_parked({:parked, issue}, record, attrs, _ctx, opts, _now),
     do: await_human_action_for_conflict(record, attrs, issue, opts)
 
-  defp transition_unless_parked(:not_parked, record, attrs, opts, now) do
+  defp transition_unless_parked(_result, record, attrs, ctx, opts, now) do
     if conflict_retry_count(record) >= @conflict_max_retries do
       complete_review_update(
         opts,
@@ -1406,9 +1407,15 @@ defmodule SymphonyElixir.PrReviewPoller do
         {:conflict_escalated, Map.get(record, :issue_id), @conflict_max_retries}
       )
     else
-      transition_issue_for_action(record, attrs, opts, now, "conflict")
+      transition_issue_for_action(record, attrs, opts, now, "conflict", ctx)
     end
   end
+
+  # The state the issue was in when its PR was found conflicting, for the designed CI Fix lane to
+  # record as the origin it returns to. nil when this poll's read did not have the issue, which
+  # keeps the legacy conflict path.
+  defp conflict_origin_state({:ok, %Issue{state: state}}), do: state
+  defp conflict_origin_state(_result), do: nil
 
   # An issue that waits on a person sits in the Human Review state, outside the active states
   # with a label that asks for one, or, with that state off, in `In Review` with an open request
@@ -1430,20 +1437,25 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   # This cycle's watched issues have the issue when it sits in a review state; any other issue
-  # (`Backlog`, an active state) is read by id.
+  # (`Backlog`, an active state) is read by id. The issue comes back with a not-parked result, so
+  # the caller can read the state a conflict routes the ticket out of.
   defp parked_for_person(record, settings, opts) do
     issue_id = Map.get(record, :issue_id)
 
     with {:ok, issues} <- watched_or_fetched_issue(issue_id, Keyword.get(opts, :tracker, Tracker), opts) do
       case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
-        %Issue{} = issue -> parked_result(issue, HumanReview.held_for_person(issue, settings, opts))
-        nil -> :not_parked
+        %Issue{} = issue ->
+          held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
+          parked_result(issue, HumanReview.held_for_person(issue, settings, held_opts))
+
+        nil ->
+          :not_parked
       end
     end
   end
 
   defp parked_result(issue, {:ok, true}), do: {:parked, issue}
-  defp parked_result(_issue, {:ok, false}), do: :not_parked
+  defp parked_result(issue, {:ok, false}), do: {:ok, issue}
   defp parked_result(_issue, {:error, reason}), do: {:error, reason}
 
   # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
@@ -1665,70 +1677,102 @@ defmodule SymphonyElixir.PrReviewPoller do
       Map.fetch!(attrs, :last_activity_at)
   end
 
-  defp transition_issue_for_action(record, attrs, opts, now, action) do
+  defp transition_issue_for_action(record, attrs, opts, now, action, ctx \\ %{}) do
+    move = transition_move(action, ctx)
+
     if dispatch_paused?(opts) do
-      defer_transition_action(record, attrs, opts, now, action)
+      defer_transition_action(record, attrs, opts, now, action, move)
     else
-      persist_and_transition_action(record, attrs, opts, now, action)
+      persist_and_transition_action(record, attrs, opts, now, action, move)
     end
   end
 
-  defp persist_and_transition_action(record, attrs, opts, now, action) do
-    pending_attrs = pending_transition_action_attrs(attrs, action, now)
+  # The move an action performs. A rework, a merge and every legacy conflict keep the edge they
+  # always used; a designed repo's conflict in one of the phases the CI Fix lane serves enters that
+  # lane instead, carrying the origin the repair returns to and the settings the guard resolves the
+  # lane's state name from.
+  defp transition_move(action, ctx) do
+    with "conflict" <- action,
+         settings when is_map(settings) <- Map.get(ctx, :settings),
+         {:ok, signal, origin} <- CiFix.entry(Map.get(ctx, :origin_state), settings) do
+      %{signal: signal, target: CiFix.state(settings), origin: origin, settings: settings}
+    else
+      _legacy -> %{signal: :review_rework, target: @active_state, origin: nil, settings: Map.get(ctx, :settings)}
+    end
+  end
+
+  defp persist_and_transition_action(record, attrs, opts, now, action, move) do
+    pending_attrs = pending_transition_action_attrs(attrs, action, move, now)
 
     case update_review(opts, record, pending_attrs) do
       :ok ->
-        transition_persisted_action(record, pending_attrs, opts, now, action)
+        transition_persisted_action(record, pending_attrs, opts, now, action, move)
 
       {:error, reason} ->
         {:state_transition_update_error, Map.get(record, :issue_id), action_atom(action), reason}
     end
   end
 
-  defp transition_persisted_action(record, pending_attrs, opts, now, action) do
+  defp transition_persisted_action(record, pending_attrs, opts, now, action, move) do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case TransitionGuard.perform(issue_id, :review_rework, %{repo_key: Map.get(record, :repo_key)}, tracker: tracker) do
-      :ok ->
-        record_review_action_signal(record, action)
-        complete_transition_action(record, pending_attrs, opts, now, action)
-
-      {:error, reason} ->
-        record_transition_error(record, pending_attrs, opts, now, action, reason)
+    with :ok <- record_transition_origin(record, move, opts),
+         :ok <- TransitionGuard.perform(issue_id, move.signal, guard_ctx(record, move), tracker: tracker) do
+      record_review_action_signal(record, action, move.target)
+      complete_transition_action(record, pending_attrs, opts, now, action, move.target)
+    else
+      {:error, reason} -> record_transition_error(record, pending_attrs, opts, now, action, reason)
     end
   end
 
-  # The review activity moved the ticket back to the active state; its signal goes in the ledger,
-  # best effort. `action` is the review action that caused the move (`rework`, `conflict`, `merge`).
-  defp record_review_action_signal(record, action) do
+  # The CI Fix lane's origin is recorded before the move, so a repair that cannot be recorded has
+  # nowhere to return and the move is not made: the next poll retries. The legacy paths record
+  # nothing.
+  defp record_transition_origin(_record, %{origin: nil}, _opts), do: :ok
+
+  defp record_transition_origin(record, %{origin: origin}, opts) do
+    case CiFix.record_origin(Map.get(record, :repo_key), Map.get(record, :issue_id), origin, opts) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:ci_fix_origin_failed, reason}}
+    end
+  end
+
+  defp guard_ctx(record, move) do
+    %{repo_key: Map.get(record, :repo_key), settings: Map.get(move, :settings), target: move.target}
+  end
+
+  # The review activity moved the ticket out of its phase; its signal goes in the ledger, best
+  # effort. `action` is the review action that caused the move (`rework`, `conflict`, `merge`) and
+  # `target` the state it moved to.
+  defp record_review_action_signal(record, action, target) do
     TicketSignals.record(Map.get(record, :repo_key), Map.get(record, :issue_id), "review verdict", %{
       outcome: action,
-      to: @active_state
+      to: target
     })
   end
 
-  defp defer_transition_action(record, attrs, opts, now, action) do
+  defp defer_transition_action(record, attrs, opts, now, action, move) do
     complete_review_update(
       opts,
       record,
       Map.merge(attrs, %{
         status: "#{action}_deferred",
-        target_issue_state: @active_state,
+        target_issue_state: move.target,
         last_action: nil,
         last_action_at: nil,
         error: nil,
         updated_at: now
       }),
-      {:state_transition_deferred, Map.get(record, :issue_id), action_atom(action), @active_state}
+      {:state_transition_deferred, Map.get(record, :issue_id), action_atom(action), move.target}
     )
   end
 
-  defp complete_transition_action(record, attrs, opts, now, action) do
-    case update_review(opts, record, transition_success_attrs(record, attrs, action, now)) do
+  defp complete_transition_action(record, attrs, opts, now, action, target) do
+    case update_review(opts, record, transition_success_attrs(record, attrs, action, target, now)) do
       :ok ->
         maybe_emit_reviewer_commented(record, attrs, action, now)
-        {:state_transitioned, Map.get(record, :issue_id), action_atom(action), @active_state}
+        {:state_transitioned, Map.get(record, :issue_id), action_atom(action), target}
 
       {:error, reason} ->
         {:state_transition_update_error, Map.get(record, :issue_id), action_atom(action), reason}
@@ -1755,10 +1799,10 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp pending_transition_action_attrs(attrs, action, now) do
+  defp pending_transition_action_attrs(attrs, action, move, now) do
     Map.merge(attrs, %{
       status: "#{action}_transition_pending",
-      target_issue_state: @active_state,
+      target_issue_state: move.target,
       last_action: nil,
       last_action_at: nil,
       error: nil,
@@ -1766,10 +1810,10 @@ defmodule SymphonyElixir.PrReviewPoller do
     })
   end
 
-  defp transition_success_attrs(record, attrs, action, now) do
+  defp transition_success_attrs(record, attrs, action, target, now) do
     %{
       status: "#{action}_requested",
-      target_issue_state: @active_state,
+      target_issue_state: target,
       error: nil,
       last_action: action,
       last_action_at: now,

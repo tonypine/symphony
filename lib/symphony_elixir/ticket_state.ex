@@ -2,9 +2,10 @@ defmodule SymphonyElixir.TicketState do
   @moduledoc """
   The canonical per-ticket state machine record.
 
-  A record holds everything the designed machine owns for one ticket: its current phase, the
-  holds that pause it (Blocked / Needs Decision), the CI state of each PR head it has seen, its
-  verdict records and its signals ledger (the timeline both the machinery and agents read).
+  A record holds everything the designed machine owns for one ticket: its current phase, the phase
+  a CI Fix stay came from (so a mechanical repair can return it), the holds that pause it
+  (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records and its
+  signals ledger (the timeline both the machinery and agents read).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -55,6 +56,7 @@ defmodule SymphonyElixir.TicketState do
           issue_id: String.t() | nil,
           issue_identifier: String.t() | nil,
           phase: String.t() | nil,
+          ci_fix_origin: String.t() | nil,
           holds: [hold()],
           ci_states: [ci_state()],
           verdicts: [verdict()],
@@ -86,6 +88,7 @@ defmodule SymphonyElixir.TicketState do
       issue_id: map_string(record, :issue_id),
       issue_identifier: map_string(record, :issue_identifier),
       phase: map_string(record, :phase),
+      ci_fix_origin: map_string(record, :ci_fix_origin),
       holds: normalize_holds(Map.get(record, :holds)),
       ci_states: normalize_ci_states(Map.get(record, :ci_states)),
       verdicts: normalize_verdicts(Map.get(record, :verdicts)),
@@ -100,6 +103,7 @@ defmodule SymphonyElixir.TicketState do
       issue_id: nil,
       issue_identifier: nil,
       phase: nil,
+      ci_fix_origin: nil,
       holds: [],
       ci_states: [],
       verdicts: [],
@@ -116,6 +120,23 @@ defmodule SymphonyElixir.TicketState do
     |> Map.put(:phase, normalize_string(phase))
     |> Map.put(:updated_at, at)
   end
+
+  @doc """
+  Records the phase a CI Fix ticket came from, so a mechanical repair can return it there. The
+  origin is recorded when the ticket enters the CI Fix state (see `SymphonyElixir.CiFix`); a `nil`
+  clears it.
+  """
+  @spec put_ci_fix_origin(t(), String.t() | nil, DateTime.t()) :: t()
+  def put_ci_fix_origin(record, origin, at \\ DateTime.utc_now()) do
+    record
+    |> normalize()
+    |> Map.put(:ci_fix_origin, normalize_string(origin))
+    |> Map.put(:updated_at, at)
+  end
+
+  @doc "The phase the ticket's current CI Fix stay came from, or nil."
+  @spec ci_fix_origin(t()) :: String.t() | nil
+  def ci_fix_origin(record), do: record |> normalize() |> Map.fetch!(:ci_fix_origin)
 
   @doc """
   Records a named signal at the head of the ledger, with `details` (a map) and the time it

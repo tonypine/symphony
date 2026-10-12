@@ -34,6 +34,7 @@ defmodule SymphonyElixir.HumanReview do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.StateMachine
   alias SymphonyElixir.Tracker
 
   @review_state "In Review"
@@ -181,24 +182,33 @@ defmodule SymphonyElixir.HumanReview do
 
   @doc """
   `parked_for_person/3` for the CI and PR review pollers, which also leave an issue where it is
-  when it sits outside every state they move issues on from: `tracker.active_states`,
-  `review_states/1`, the Auto Review state and `Merging`. Such an issue (`Backlog`, a terminal
-  state) waits for a person to promote it, so a red head or a merge conflict starts no fix run and
-  spends no retry.
+  when it sits outside every state they move issues on from: the machine's active states,
+  `review_states/1`, the Auto Review state and `Merging`, plus any `:watched_states` a poller adds
+  (a designed repo's `Rework`, say, whose red head routes to the CI Fix lane). Such an issue
+  (`Backlog`, a terminal state) waits for a person to promote it, so a red head or a merge conflict
+  starts no fix run and spends no retry.
   """
   @spec held_for_person(Issue.t(), Schema.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
   def held_for_person(%Issue{state: issue_state} = issue, %Schema{} = settings, opts) do
-    if poller_state?(issue_state, settings),
+    if poller_state?(issue_state, settings, opts),
       do: parked_for_person(issue, settings, opts),
       else: {:ok, true}
   end
 
-  defp poller_state?(issue_state, settings) when is_binary(issue_state) do
-    states = settings.tracker.active_states ++ review_states(settings) ++ [settings.auto_review.state, @merging_state]
+  defp poller_state?(issue_state, settings, opts) when is_binary(issue_state) do
+    states = default_poller_states(settings) ++ List.wrap(Keyword.get(opts, :watched_states))
     Enum.any?(states, &(is_binary(&1) and normalize(&1) == normalize(issue_state)))
   end
 
-  defp poller_state?(_issue_state, _settings), do: false
+  defp poller_state?(_issue_state, _settings, _opts), do: false
+
+  # The states an issue is not waiting on a person in, whatever a caller adds: the machine's active
+  # states — not `tracker.active_states`, so a designed repo's phase states (`Code Review`, `QA`)
+  # count even though the config lists only the base states — the human review states, the Auto
+  # Review state and `Merging`.
+  defp default_poller_states(settings) do
+    StateMachine.active_states(settings) ++ review_states(settings) ++ [settings.auto_review.state, @merging_state]
+  end
 
   defp request_parks_in_review?(%Issue{state: issue_state}, settings) do
     settings.human_actions.enabled and not enabled?(settings) and is_binary(issue_state) and

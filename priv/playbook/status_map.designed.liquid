@@ -16,7 +16,7 @@ vars: []
 - `Epic Review` -> an automatic integrity check of an epic parent once its children are terminal: artifacts, comments and PRs verified against the epic's intent. Pass moves it to `Done`; gaps are filed as follow-ups in `Todo` within the same epic and the parent returns to `Waiting on sub-tickets`.
 - `Merging` -> the machine lands the merge; follow the repo's landing flow (do not call `gh pr merge` directly). A red head or a conflict routes to `CI Fix`.
 - `Rework` -> a reviewer or QA returned the work for changes; continue on the existing PR (never from scratch). Changes done hand off to `Code Review` (for an epic parent, to `Plan Review`).
-- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: minimal repair only. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`.
+- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: minimal repair only — formatting, a rerun of a flaky check, a dependency bump, resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing.
 - `Done` -> terminal state; no further action required.
 
 `Blocked` and `Needs Decision` are labels, not states: they pause a ticket in its current phase and never move it. Do not change the issue or PR while a hold is set; it clears automatically when its condition clears (a dependency or fix ticket goes terminal, access is granted, or a decision is recorded) and the ticket continues from where it stopped.
