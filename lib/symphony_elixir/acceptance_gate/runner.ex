@@ -113,7 +113,16 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
   end
 
   def handle_call(:snapshot, _from, state) do
-    running = for {issue_id, entry} <- state.running, do: %{issue_id: issue_id, identifier: entry.identifier, sha: entry.sha, forced: entry.forced}
+    running =
+      for {issue_id, entry} <- state.running,
+          do: %{
+            issue_id: issue_id,
+            identifier: entry.identifier,
+            sha: entry.sha,
+            forced: entry.forced,
+            repo_key: Map.get(entry, :repo_key),
+            started_at: Map.get(entry, :started_at)
+          }
 
     queued =
       state
@@ -162,7 +171,17 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
       {:ok, pid} ->
         ref = Process.monitor(pid)
         identifier = Map.get(job.issue, :identifier) || issue_id
-        entry = %{sha: sha, ref: ref, paths: pass_paths(job, sha), identifier: identifier, forced: Map.get(job, :forced) == true}
+
+        entry = %{
+          sha: sha,
+          ref: ref,
+          paths: pass_paths(job, sha),
+          identifier: identifier,
+          repo_key: job |> Map.get(:record, %{}) |> Map.get(:repo_key),
+          started_at: DateTime.utc_now(),
+          forced: Map.get(job, :forced) == true
+        }
+
         {:reply, :started, %{state | running: Map.put(state.running, issue_id, entry)}}
 
       {:error, reason} ->
