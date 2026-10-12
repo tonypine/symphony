@@ -14,7 +14,8 @@ struct InboxContent: View {
                 picks: model.picks(for:),
                 pick: model.pick,
                 perform: { model.perform($0, on: $1) },
-                openOverview: { model.show(.overview) }
+                openOverview: { model.show(.overview) },
+                openTicket: model.openTicket
             )
             .safeAreaInset(edge: .bottom) {
                 if let banner = model.inboxBanner {
@@ -51,13 +52,15 @@ struct InboxView: View {
     let pick: (Int, Int, String) -> Void
     let perform: (InboxCommand, InboxItem) -> Void
     let openOverview: () -> Void
+    /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
+    var openTicket: (String) -> Void = { _ in }
 
     var body: some View {
         if list.isEmpty {
             InboxEmpty(hiddenLine: list.hiddenLine, openOverview: openOverview)
         } else {
             HStack(spacing: 0) {
-                InboxListColumn(list: list, selection: $selection, picks: picks, perform: perform)
+                InboxListColumn(list: list, selection: $selection, picks: picks, perform: perform, openTicket: openTicket)
                     .frame(width: DesignTokens.Layout.listColumnWidth)
                     .background(DesignTokens.Surface.content.color)
                 Divider()
@@ -67,7 +70,8 @@ struct InboxView: View {
                             item: item,
                             picks: picks(item.id),
                             pick: { option, decision in pick(option, decision, item.id) },
-                            perform: { perform($0, item) }
+                            perform: { perform($0, item) },
+                            openTicket: { openTicket(item.identifier) }
                         )
                     }
                     // A new item starts with its own picks (the recommended options).
@@ -101,12 +105,13 @@ private struct InboxListColumn: View {
     @Binding var selection: String?
     let picks: (String) -> DecisionPicks
     let perform: (InboxCommand, InboxItem) -> Void
+    let openTicket: (String) -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                InboxListRows(list: list, selected: list.selection(selection)?.id) { selection = $0 }
+                InboxListRows(list: list, selected: list.selection(selection)?.id, select: { selection = $0 }, open: openTicket)
             }
             .focusable()
             .focusEffectDisabled()
@@ -140,6 +145,8 @@ struct InboxListRows: View {
     let list: InboxList
     let selected: String?
     let select: (String) -> Void
+    /// Opens the ticket's page, by identifier.
+    var open: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -154,8 +161,10 @@ struct InboxListRows: View {
                     InboxRow(item: item, selected: item.id == selected)
                         .id(item.id)
                         .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { open(item.identifier) }
                         .onTapGesture { select(item.id) }
                         .accessibilityAction { select(item.id) }
+                        .accessibilityAction(named: "Open Ticket") { open(item.identifier) }
                 }
             }
             if let hiddenLine = list.hiddenLine {
@@ -219,10 +228,11 @@ struct InboxReviewBody: View {
     var picks = DecisionPicks()
     var pick: (Int, Int) -> Void = { _, _ in }
     let perform: (InboxCommand) -> Void
+    var openTicket: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform)
+            ReviewHeader(item: item, toolbar: InboxToolbar.toolbar(for: item, picks: picks), perform: perform, openTicket: openTicket)
             switch item.kind {
             case .plan:
                 BriefSections(brief: item.review.brief, picks: picks, pick: pick)
@@ -233,9 +243,13 @@ struct InboxReviewBody: View {
             case .finalVerification:
                 BriefSections(brief: item.review.brief)
             case .action:
-                if let action = item.review.action { ActionCards(action: action) }
+                if let action = item.review.action {
+                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, answerable: action.commentID != nil && action.decision != nil)
+                }
             case .clarify:
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
+            case .blocked:
+                if let blocked = item.review.blocked { BlockedCards(blocked: blocked) }
             }
         }
         .padding(DesignTokens.Space.s5)
@@ -247,6 +261,7 @@ private struct ReviewHeader: View {
     let item: InboxItem
     let toolbar: InboxToolbar
     let perform: (InboxCommand) -> Void
+    let openTicket: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -263,10 +278,17 @@ private struct ReviewHeader: View {
                     ActionButtons(toolbar: toolbar, perform: perform)
                 }
             }
-            Text([item.identifier, item.title].compactMap { $0 }.joined(separator: " "))
-                .font(DesignTokens.TypeStyle.sentence.font)
-                .textSelection(.enabled)
-                .accessibilityAddTraits(.isHeader)
+            // The ticket's identifier and title open its page (D3, principle 5).
+            Button(action: openTicket) {
+                Text([item.identifier, item.title].compactMap { $0 }.joined(separator: " "))
+                    .font(DesignTokens.TypeStyle.sentence.font)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.plain)
+            .help("Open the ticket page")
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityHint("Opens the ticket page")
             Text(item.ask)
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
@@ -572,9 +594,14 @@ private struct CheckRow: View {
     }
 }
 
-/// D2c: why, the numbered steps or the options, about how long, and what it unblocks.
+/// D2c: why, the numbered steps or the options, about how long, and what it unblocks. A request's options are
+/// selectable: the picked one is the answer the toolbar's Send Decision sends.
 private struct ActionCards: View {
     let action: InboxReview.Action
+    var picks = DecisionPicks()
+    var pick: (Int) -> Void = { _ in }
+    /// True when the item carries an answerable request.
+    var answerable = false
 
     var body: some View {
         if let why = action.why {
@@ -585,17 +612,7 @@ private struct ActionCards: View {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     Text(question).textSelection(.enabled)
                     ForEach(Array(action.options.enumerated()), id: \.offset) { index, option in
-                        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                            Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
-                            Text(option.label).bold()
-                            if option.recommended {
-                                Text("Recommended")
-                                    .font(DesignTokens.TypeStyle.label.font)
-                                    .padding(.horizontal, DesignTokens.Space.s2)
-                                    .background(Color.accentColor.opacity(0.18), in: Capsule())
-                            }
-                            if let effect = option.effect { Text(effect).foregroundStyle(.secondary) }
-                        }
+                        OptionRow(option: option, number: index + 1, selected: selected(index), selectable: answerable) { pick(index) }
                     }
                 }
             }
@@ -622,6 +639,48 @@ private struct ActionCards: View {
             }
         }
     }
+
+    /// Whether the option at `index` is the answer the toolbar sends: the Director's pick, else the recommendation.
+    private func selected(_ index: Int) -> Bool {
+        guard answerable, let decision = action.decision else { return false }
+        return picks.pick(0, in: decision) == index
+    }
+}
+
+/// One option of a request (D2c): selectable when the item can be answered, with the picked one marked.
+private struct OptionRow: View {
+    let option: InboxReview.Action.Option
+    let number: Int
+    let selected: Bool
+    let selectable: Bool
+    let choose: () -> Void
+
+    var body: some View {
+        Button(action: choose) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                if selectable {
+                    Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                        .accessibilityHidden(true)
+                }
+                Text("\(number).").monospacedDigit().foregroundStyle(.secondary)
+                Text(option.label).bold()
+                if option.recommended {
+                    Text("Recommended")
+                        .font(DesignTokens.TypeStyle.label.font)
+                        .padding(.horizontal, DesignTokens.Space.s2)
+                        .background(Color.accentColor.opacity(0.18), in: Capsule())
+                }
+                if let effect = option.effect { Text(effect).foregroundStyle(.secondary) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!selectable)
+        .accessibilityLabel(option.label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
 }
 
 /// D2d: what the quality gate found, its score and round, its questions, and what happens next.
@@ -644,6 +703,20 @@ private struct ClarifyCards: View {
             Card(title: "Its questions") { BulletList(lines: clarify.questions) }
         }
         Card(title: "What happens next") { Text(clarify.nextLine) }
+    }
+}
+
+/// A ticket an access hold pauses in place: why it waits, and what clears it. The Unblock in the toolbar lifts it.
+private struct BlockedCards: View {
+    let blocked: InboxReview.Blocked
+
+    var body: some View {
+        Card(title: "Why it is blocked") {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                if let reason = blocked.reason { Text(reason).textSelection(.enabled) }
+                Text(blocked.nextLine).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

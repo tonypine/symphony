@@ -32,6 +32,35 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         refute line =~ "stateId"
       end
     end
+
+    test "sub-issue creation's initial state is the only stateId outside the guard" do
+      source = File.read!("lib/symphony_elixir/agent_tools/linear.ex")
+
+      state_id_lines =
+        source
+        |> String.split("\n")
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&String.starts_with?(&1, "#"))
+        |> Enum.filter(&(&1 =~ "stateId"))
+
+      # An existing issue's move: the mutation's variables, its issueUpdate input, and its one call
+      # site, whose `state_id` is what TransitionGuard.resolve_request/2 resolved.
+      assert Enum.any?(state_id_lines, &(&1 =~ "$stateId: String!"))
+      assert Enum.any?(state_id_lines, &(&1 =~ "input: { stateId: $stateId }"))
+      assert Enum.any?(state_id_lines, &(&1 =~ "graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}"))
+
+      # The only other stateId this module hands Linear is a new sub-issue's initial state, built by
+      # subissue_input/5 for @create_subissue_mutation and explicitly documented there as outside the
+      # guard's scope.
+      assert Enum.any?(state_id_lines, &(&1 =~ ~s("stateId" => state_id)))
+      assert source =~ "subissue_input(parent, state_id, title, description, priority)"
+      assert source =~ ~r/graphql\(@create_subissue_mutation, %\{input: input\}/
+      assert source =~ "sub-issue creation's initial state is outside TransitionGuard's scope"
+
+      # A new stateId may not appear unnoticed: it must either resolve through the guard or be
+      # documented here as another explicit exception.
+      assert length(state_id_lines) == 4
+    end
   end
 
   describe "dynamic read output prompt safety" do
@@ -2919,6 +2948,167 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert_received {:moved_to, "state-backlog"}
       refute_received {:machine_label_set, _issue_id, _name}
+    end
+  end
+
+  describe "request_human_action/3 on a designed repo" do
+    # The tool's Linear traffic plus the machine label a hold projects; a legacy repo's move is the
+    # FakeTracker's, so a designed test asserting no move sees nothing on that mailbox either.
+    defmodule DesignedTracker do
+      def set_machine_label(issue_id, name) do
+        send(self(), {:machine_label_set, issue_id, name})
+        :ok
+      end
+
+      def clear_machine_label(issue_id, name) do
+        send(self(), {:machine_label_cleared, issue_id, name})
+        :ok
+      end
+    end
+
+    defp designed_opts(client, extra \\ []) do
+      test_pid = self()
+
+      Keyword.merge(
+        [
+          linear_client: client,
+          settings: designed_settings(),
+          tracker: DesignedTracker,
+          logger: fn _event -> :ok end,
+          refresh_human_actions: fn -> send(test_pid, :refreshed) end
+        ],
+        extra
+      )
+    end
+
+    defp designed_context do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
+    end
+
+    test "holds the ticket in its phase with the Needs Decision label, and moves nothing" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      opts = designed_opts(human_action_client(self(), human_action_scope()))
+
+      assert {:ok,
+              %{
+                "requested" => true,
+                "commentId" => "comment-new",
+                "url" => "https://linear.app/c",
+                "state" => "In Progress",
+                "held" => true,
+                "hold" => "Needs Decision"
+              }} = Linear.request_human_action(context, @human_action, opts)
+
+      # A decision never moves a ticket: no tracker move, no direct state mutation.
+      refute_received {:tracker_moved, _issue_id, _state}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
+
+      assert_received {:linear_called, "SymphonyAgentAddComment", %{body: body}}
+      assert body =~ "## Decision needed: Add the release signing secrets"
+      assert body =~ "the ticket stays in In Progress until the decision is recorded"
+      assert body =~ "or answer it in the Symphony Inbox"
+      refute body =~ "then move the issue out of"
+
+      # The hold carries the decision, so the Inbox reads the ask off it and the flow resumes there.
+      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
+
+      assert_received :refreshed
+      assert Linear.CommentRegistry.human_action_requested?(context.comment_registry)
+    end
+
+    test "a request the ticket already has is the one the hold records, and nothing is posted again" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+
+      body =
+        Request.render_hold(
+          %{
+            title: "Add the release signing secrets",
+            question: "Add the signing secrets, or ship unsigned builds?",
+            why: "Every Release run on main fails without them.",
+            unblocks: nil,
+            est_minutes: nil,
+            options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}]
+          },
+          "In Progress"
+        )
+
+      scope =
+        human_action_scope(%{
+          issue: %{"comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}]}}
+        })
+
+      assert {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => "comment-1", "held" => true}} =
+               Linear.request_human_action(context, @human_action, designed_opts(human_action_client(self(), scope)))
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
+
+      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets"}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
+    end
+
+    test "a withdrawal clears the hold so the ticket continues, and another open request keeps it" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      opts = designed_opts(human_action_client(self(), human_action_scope()))
+
+      assert {:ok, %{"requested" => true}} = Linear.request_human_action(context, @human_action, opts)
+
+      assert SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+
+      # The second request is on the board too; withdrawing the first leaves the ticket waiting.
+      scope =
+        human_action_scope(%{
+          issue: %{
+            "comments" => %{
+              "nodes" => [
+                held_comment("comment-1", "Add the release signing secrets"),
+                held_comment("comment-2", "Rotate the CI token")
+              ]
+            }
+          }
+        })
+
+      assert {:ok, %{"withdrawn" => true, "remaining" => 1}} =
+               Linear.withdraw_human_action(
+                 context,
+                 %{"reason" => "Handled it myself", "title" => "Rotate the CI token"},
+                 designed_opts(human_action_client(self(), scope))
+               )
+
+      assert SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      refute_received {:machine_label_cleared, _issue_id, _name}
+
+      # With nothing left open the hold clears and the ticket continues where it is.
+      assert {:ok, %{"withdrawn" => true, "remaining" => 0}} =
+               Linear.withdraw_human_action(context, %{"reason" => "Not needed yet"}, designed_opts(human_action_client(self(), scope)))
+
+      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
+      # Nothing moved: the ticket never left its phase.
+      refute_received {:tracker_moved, _issue_id, _state}
+    end
+
+    defp held_comment(id, title) do
+      body =
+        Request.render_hold(
+          %{
+            title: title,
+            question: "Add the signing secrets, or ship unsigned builds?",
+            why: "Every Release run on main fails without them.",
+            unblocks: nil,
+            est_minutes: nil,
+            options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}]
+          },
+          "In Progress"
+        )
+
+      %{"id" => id, "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}
     end
   end
 end

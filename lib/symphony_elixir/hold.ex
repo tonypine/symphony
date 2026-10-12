@@ -57,6 +57,16 @@ defmodule SymphonyElixir.Hold do
   def held?(repo_key, issue_id, kind, opts \\ []), do: get(repo_key, issue_id, kind, opts) != nil
 
   @doc """
+  Whether the ticket carries a hold of any kind, read from the store in one go. Every hold pauses
+  the flow the same way, whatever set it, so a dispatch gate asks this rather than naming a kind.
+  """
+  @spec held_any?(String.t() | nil, String.t() | nil, keyword()) :: boolean()
+  def held_any?(repo_key, issue_id, opts \\ []) do
+    record = record(repo_key, issue_id, opts)
+    Enum.any?(@kinds, &TicketState.hold?(record, &1))
+  end
+
+  @doc """
   Whether a hold is waiting on an access grant a person hands over — what an agent's block report
   records. A dependency or fix-ticket hold clears on its own when what it waits on goes terminal;
   an access hold is lifted by a person's `Unblock` (see `SymphonyElixir.DirectorMoves`), so it is

@@ -4515,8 +4515,8 @@ Minimum endpoints:
     dropped.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
-    asks), `waiting_since` (the latest move into its state, else its newest request; for `clarify`,
-    when the gate scored it), `waiting_seconds`, `url` and `review`:
+    asks), `waiting_since` (the later of the latest move into its state and its newest open
+    request; for `clarify`, when the gate scored it), `waiting_seconds`, `url` and `review`:
     - `plan`, `pr`, `final_verification`: `brief`, the latest `## Review brief` comment parsed into
       `headline`, `what_to_review` (`text` and `links`), `what_changed`, `decisions` (`question`,
       `options`, `recommendation`, `recommended`: the index of the recommended option, null when it
@@ -4679,6 +4679,7 @@ Minimum endpoints:
     | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
     | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
+    | `decide` | any designed repo's ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
@@ -4694,7 +4695,8 @@ Minimum endpoints:
     ticket Linear then keeps in `Merging` gets auto-merge on again on the next poll. When GitHub
     can't be read or refuses to turn it off, `undo` answers `502` `github_error` and leaves the
     ticket in `Merging`.
-  - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
+  - A missing `issue_identifier`, `reason`, `picks` or `request_comment_id` answers `422`, an
+    unknown ticket `404`, and a
     Linear error `502`.
   - When Linear takes the first of a move's two writes and refuses the second, the move answers
     `502` `move_incomplete` with a message that says what was already done, and still writes the

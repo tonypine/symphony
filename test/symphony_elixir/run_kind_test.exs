@@ -31,6 +31,39 @@ defmodule SymphonyElixir.RunKindTest do
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
   end
 
+  test "the moduledoc names exactly the reserved kinds as never returned by classify/2" do
+    {:docs_v1, _, _, _, %{"en" => doc}, _, _} = Code.fetch_docs(RunKind)
+
+    named = Enum.map_join(RunKind.reserved_kinds(), " and ", &"`#{&1}`")
+
+    assert RunKind.reserved_kinds() == [:pre_push_review, :acceptance_gate]
+    assert doc =~ "#{named} are never returned by `classify/2`"
+  end
+
+  test "classify/2 can return every kind except the reserved ones" do
+    designed = %{state_machine: "designed"}
+
+    samples = [
+      {:implementation, issue(), []},
+      {:breakdown, breakdown_parent(sub_issues: []), []},
+      {:close_out, breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Done"}]), []},
+      {:final_verification, issue(title: "Final verification: run profiles"), []},
+      {:rework, issue(state: "Rework"), []},
+      {:landing, issue(state: "Merging"), []},
+      {:code_review, issue(state: "Code Review"), [settings: designed]},
+      {:ci_fix, issue(), [ci_failure: %{check: "test"}]},
+      {:review_feedback, issue(), [reviewer_comments: [%{body: "Rename this"}]]},
+      {:qa, issue(state: "QA"), [settings: designed]}
+    ]
+
+    for {kind, sample, signals} <- samples do
+      assert RunKind.classify(sample, signals) == kind
+    end
+
+    assert Enum.map(samples, &elem(&1, 0)) |> Enum.sort() ==
+             Enum.sort(RunKind.kinds() -- RunKind.reserved_kinds())
+  end
+
   test "the final-verification title prefix is exposed for callers that build the title" do
     assert RunKind.final_verification_prefix() == "Final verification:"
   end

@@ -38,8 +38,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   """
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
-  alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait}
+  alias SymphonyElixir.{HumanReview, RunKind, StateMachine, SubIssueWait}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.QaAgent.Report
 
@@ -286,13 +287,18 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp merge_pages("history", nodes, pages), do: Enum.concat([nodes | pages])
 
   defp filter(scope, settings) do
-    labelled = Enum.map(HumanReview.legacy_request_labels(settings), &%{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => &1}}}})
+    labelled = Enum.map(HumanReview.legacy_request_labels(settings), &label_filter/1)
     in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
     final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
-    wanted = %{"or" => labelled ++ in_review ++ [final_verification]}
+    # A designed repo's request leaves the ticket in its phase, so the hold's label is what finds it.
+    # A legacy repo never carries the label, so this reads nothing there.
+    held = label_filter(Hold.label(:needs_decision))
+    wanted = %{"or" => labelled ++ in_review ++ [final_verification, held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
+
+  defp label_filter(name), do: %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => name}}}}
 
   defp by_project(actions) do
     actions
@@ -345,21 +351,57 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @doc """
   The open `## Action needed:` comments of an issue as read from Linear (its `comments` with
   `id`, `body`, `createdAt` and `parent`, and its state `history`), as `{comment_id, request}`.
-  A request with an `## Action withdrawn` reply under it is closed.
+  A request with an `## Action withdrawn` reply under it is closed, and so is one a person answered.
   """
   @spec open_requests(map(), Schema.t()) :: [{String.t(), Request.t()}]
   def open_requests(node, settings) do
     changes = state_changes(node)
     owned = owned_states(settings)
-    withdrawn = withdrawn_ids(node)
+    closed = MapSet.union(withdrawn_ids(node), answered_ids(node, settings))
 
     Enum.filter(requests(node), fn {comment_id, request} ->
-      not MapSet.member?(withdrawn, comment_id) and Request.open?(request, changes, owned)
+      not MapSet.member?(closed, comment_id) and Request.open?(request, changes, owned)
     end)
   end
 
+  @doc """
+  The newest open request on the issue node and the id of the comment that carries it, or nil when
+  none is open. The comment id is what a reply answers, so the Director app can close it.
+  """
+  @spec newest_open_request(map(), Schema.t()) :: {String.t(), Request.t()} | nil
+  def newest_open_request(node, settings) do
+    node
+    |> open_requests(settings)
+    |> Enum.max_by(&request_at/1, fn -> nil end)
+  end
+
+  # When the request was posted, as a comparable integer; a request whose comment carried no
+  # `createdAt` sorts oldest.
+  defp request_at({_comment_id, request}) do
+    (request.created_at && DateTime.to_unix(request.created_at, :microsecond)) || 0
+  end
+
+  @doc "The newest open request on the issue node, or nil when none is open."
+  @spec newest_request(map(), Schema.t()) :: Request.t() | nil
+  def newest_request(node, settings), do: node |> newest_open_request(settings) |> then(&(&1 && elem(&1, 1)))
+
   defp withdrawn_ids(node) do
     for %{"parent" => %{"id" => parent_id}} = comment <- comments(node), Request.withdrawal?(comment["body"]), into: MapSet.new(), do: parent_id
+  end
+
+  # A designed repo's request does not move its issue, so no state change says it is over: a person's
+  # reply under the request is the answer that closes it. On a legacy repo the request is closed by
+  # the state move alone, and a reply under it — a person commenting to ask something, say — leaves
+  # it open, so this reads nothing there.
+  defp answered_ids(node, settings) do
+    if StateMachine.designed?(settings) do
+      for %{"parent" => %{"id" => parent_id}} = comment <- comments(node),
+          not Request.withdrawal?(comment["body"]),
+          into: MapSet.new(),
+          do: parent_id
+    else
+      MapSet.new()
+    end
   end
 
   defp requests(node) do
@@ -384,11 +426,25 @@ defmodule SymphonyElixir.HumanActions.Collector do
     })
   end
 
-  defp request_done_when(context, %{options: [_ | _]}),
-    do: "you reply with your pick and move #{context.issue.identifier} out of #{context.issue.state}, or the agent withdraws the request."
+  # A designed repo's request never moves its ticket: the person's reply (or the Inbox's Decide)
+  # records the decision and clears the hold, so the line names no state move.
+  defp request_done_when(context, %{options: [_ | _]}) do
+    if designed?(context) do
+      "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
+    else
+      "you reply with your pick and move #{context.issue.identifier} out of #{context.issue.state}, or the agent withdraws the request."
+    end
+  end
 
-  defp request_done_when(context, _request),
-    do: "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
+  defp request_done_when(context, _request) do
+    if designed?(context) do
+      "you reply to the request, or the agent withdraws the request."
+    else
+      "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
+    end
+  end
+
+  defp designed?(%{settings: settings}), do: StateMachine.designed?(settings)
 
   defp task_action(context) do
     action(context, %{

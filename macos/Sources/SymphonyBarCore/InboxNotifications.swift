@@ -3,7 +3,7 @@ import Foundation
 /// What notifies (D14, DD8, P11): a new Inbox item of each kind, and a new problem in Needs attention. Each can be
 /// turned off in Settings.
 public enum NoticeKind: String, CaseIterable, Equatable {
-    case plan, pr, finalVerification, action, clarify, problem
+    case plan, pr, finalVerification, action, clarify, blocked, problem
 
     /// The switch's title in Settings.
     public var settingsTitle: String {
@@ -13,6 +13,7 @@ public enum NoticeKind: String, CaseIterable, Equatable {
         case .finalVerification: "Final verifications to sign off"
         case .action: "Actions only you can do"
         case .clarify: "Tickets the quality gate holds"
+        case .blocked: "Blocked tickets to unblock"
         case .problem: "Problems that need attention"
         }
     }
@@ -24,6 +25,7 @@ public enum NoticeKind: String, CaseIterable, Equatable {
         case .finalVerification?: self = .finalVerification
         case .action?: self = .action
         case .clarify?: self = .clarify
+        case .blocked?: self = .blocked
         case nil: return nil
         }
     }

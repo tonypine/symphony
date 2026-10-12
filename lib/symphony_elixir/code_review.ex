@@ -24,6 +24,13 @@ defmodule SymphonyElixir.CodeReview do
   repo never reaches this module: `run/3` returns `:skip` for anything but a designed repo's
   `Code Review` ticket, so the executor path is untouched.
 
+  A change that matches a risk rule of the repo's `auto_review.acceptance_gate.escalate` block
+  (size, sensitive areas, sensitive content) is not approved straight on: the run *deepens* it with
+  a second reviewer pass on the same head, records that verdict bound to the head and fires no
+  routing edge. The next dispatch performs the deepened verdict. This is the guard's "risk rules
+  deepen the review instead of routing anywhere" (`docs/design/state-machine.md`); the person half
+  of the same guard (labels, ticket patterns) is not this module's to act on.
+
   A repo with the reviewer turned off (`review_agent.enabled: false`) has no reviewer to run, and
   `SymphonyElixir.ReviewAgent` answers a disabled reviewer with a fabricated approval. A Code Review
   ticket is never approved on that: dispatch is gated on the setting (the orchestrator parks the
@@ -32,6 +39,8 @@ defmodule SymphonyElixir.CodeReview do
   """
 
   require Logger
+
+  alias SymphonyElixir.AcceptanceGate.Escalation
 
   alias SymphonyElixir.{
     Config,
@@ -48,7 +57,19 @@ defmodule SymphonyElixir.CodeReview do
 
   @verdict_kind "code_review"
   @reviewer_disabled_signal "code_review_reviewer_disabled"
+  @deepening_signal "code_review_deepened"
+  @deepening_applied_signal "code_review_deepening_applied"
   @max_inconclusive_retries 2
+
+  # The design guard's risk rules (`docs/design/state-machine.md`): the diff-based escalation rules
+  # (size, sensitive areas, sensitive content) *deepen* the Code Review run. The person rules
+  # (`:label`, `:ticket_pattern`, `:dependency`, `:settings_ui`) route or hold and are not this
+  # module's to act on; `:busy_file` needs the base branch's commit history and is left to the gate.
+  @risk_rules [:path, :diff_pattern, :size]
+
+  # The verdict strings a deepening records, back to the atoms `route_verdict/5` routes on. A string
+  # that names no verdict stays what it is, and is refused as an unknown verdict.
+  @verdict_atoms %{"approve" => :approve, "request_changes" => :request_changes, "block" => :block}
 
   @doc """
   Runs the reviewer for `issue` when it is a designed repo's `Code Review` ticket, else `:skip` so
@@ -82,7 +103,10 @@ defmodule SymphonyElixir.CodeReview do
 
   defp review(issue, workspace, opts, settings) do
     if ReviewAgent.enabled?(settings.review_agent) do
-      do_review(issue, workspace, opts, settings)
+      case pending_deepening(issue, workspace, opts) do
+        nil -> do_review(issue, workspace, opts, settings)
+        deepening -> apply_deepened(issue, workspace, opts, settings, deepening)
+      end
     else
       park(issue, opts)
     end
@@ -90,19 +114,140 @@ defmodule SymphonyElixir.CodeReview do
 
   defp do_review(issue, workspace, opts, settings) do
     case evaluate(issue, workspace, opts, settings) do
+      {:ok, %{verdict: :approve} = result} ->
+        if risky?(issue, settings, result),
+          do: deepen(issue, workspace, opts, settings),
+          else: apply_verdict(issue, workspace, opts, settings, :approve, result)
+
       {:ok, %{verdict: verdict} = result} ->
         apply_verdict(issue, workspace, opts, settings, verdict, result)
 
-      {:error, {:review_agent_inconclusive, reason}} ->
-        inconclusive(issue, workspace, opts, settings, reason)
-
-      {:error, {:review_agent_blocked, payload}} ->
-        blocked(issue, workspace, opts, settings, payload)
-
       {:error, reason} ->
-        {:error, {:code_review_failed, reason}}
+        handle_review_error(issue, workspace, opts, settings, reason)
     end
   end
+
+  # The reviewer's failure modes, exactly as the verdict path handles them, so the deepened pass
+  # fails the same way the first one would.
+  defp handle_review_error(issue, workspace, opts, settings, reason) do
+    case reason do
+      {:review_agent_inconclusive, cause} -> inconclusive(issue, workspace, opts, settings, cause)
+      {:review_agent_blocked, payload} -> blocked(issue, workspace, opts, settings, payload)
+      other -> {:error, {:code_review_failed, other}}
+    end
+  end
+
+  # A risky approval is not routed straight on: the run takes a second reviewer pass on the same
+  # head, records the deepened verdict bound to that head, and fires no routing edge — it returns
+  # without a move. The next dispatch performs the recorded verdict (`pending_deepening/3`).
+  defp deepen(issue, workspace, opts, settings) do
+    case evaluate(issue, workspace, opts, settings) do
+      {:ok, %{verdict: verdict} = result} ->
+        head = workspace_head(workspace, opts)
+        record_verdict(issue, opts, head, to_string(verdict))
+        record_deepening(issue, opts, head, verdict, verdict_reason(result))
+
+        Logger.info("Code Review for #{issue_label(issue)} head=#{head || "unknown"} deepened with a second reviewer pass verdict=#{inspect(verdict)}; not routing")
+
+        :ok
+
+      {:error, reason} ->
+        handle_review_error(issue, workspace, opts, settings, reason)
+    end
+  end
+
+  # A deepening already recorded for the head this run is checked out on is performed rather than
+  # re-reviewed: the second pass happened on the previous dispatch, and its verdict was recorded
+  # against this head. Routing it is this dispatch's whole job — once, so a move that fails is
+  # retried and a move that lands is not replayed (`record_deepening_applied/3`).
+  defp apply_deepened(issue, workspace, opts, settings, deepening) do
+    head = signal_head(deepening)
+    verdict = verdict_atom(deepening.details[:verdict])
+
+    Logger.info("Code Review for #{issue_label(issue)} head=#{head || "unknown"} performs its deepened verdict=#{inspect(verdict)}")
+
+    case route_verdict(issue, workspace, opts, settings, verdict, deepening.details[:reason]) do
+      :ok ->
+        record_deepening_applied(issue, opts, head)
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  # The deepening recorded for the head this run is checked out on, if the second pass has not
+  # performed it yet. A deepening for another head is a different change's; a performed one is done.
+  defp pending_deepening(issue, workspace, opts) do
+    head = workspace_head(workspace, opts)
+    deepenings = Enum.filter(signals(issue, opts), &(signal_head(&1) == head))
+
+    if Enum.any?(deepenings, &(&1.name == @deepening_applied_signal)) do
+      nil
+    else
+      Enum.find(deepenings, &(&1.name == @deepening_signal))
+    end
+  end
+
+  # A change the repo's risk rules match is deepened, not approved: the run records the verdict the
+  # second pass made against the same head, and the deepening it just took. It fires no routing edge
+  # — no move — so the ticket stays in Code Review for the next dispatch to route `pending_deepening/3`.
+  defp record_deepening(issue, opts, head, verdict, reason) do
+    TicketSignals.record(repo_key(issue, opts), issue.id, @deepening_signal, %{
+      head: head,
+      verdict: to_string(verdict),
+      reason: reason
+    })
+  end
+
+  defp record_deepening_applied(issue, opts, head) do
+    TicketSignals.record(repo_key(issue, opts), issue.id, @deepening_applied_signal, %{head: head})
+  end
+
+  # Whether the reviewer's own judgment of `result`'s diff trips a risk rule. The rules are the same
+  # `auto_review.acceptance_gate.escalate` block the acceptance gate escalates on, filtered to the
+  # diff-based subset the design deepens on: the rest need a person.
+  defp risky?(%Issue{} = issue, settings, result) do
+    rules = settings.auto_review.acceptance_gate.escalate
+
+    Escalation.check(issue, diff_summary(result), [], rules)
+    |> Enum.any?(&(&1.rule in @risk_rules))
+  end
+
+  # The reviewer already built the diff it judged (`ReviewAgent.Context`), so the risk check reads it
+  # rather than running git again. The inventory's shape is the escalation rules' own `changed_file`.
+  defp diff_summary(result) do
+    source = Map.get(result, :source) || %{}
+    files = source |> Map.get(:changed_file_inventory, []) |> Enum.map(&changed_file/1)
+
+    %{files: files}
+  end
+
+  defp changed_file(file) do
+    %{
+      path: Map.get(file, :path),
+      additions: Map.get(file, :additions) || 0,
+      deletions: Map.get(file, :deletions) || 0,
+      added_lines: added_lines(Map.get(file, :patch) || "")
+    }
+  end
+
+  # The patch's added lines, without the leading `+`: the `+++` file header adds none.
+  defp added_lines(patch) do
+    patch
+    |> String.split("\n")
+    |> Enum.filter(&String.starts_with?(&1, "+"))
+    |> Enum.reject(&String.starts_with?(&1, "+++"))
+    |> Enum.map(&String.replace_prefix(&1, "+", ""))
+  end
+
+  # Every normalized signal carries a `details` map, but not always with atom keys (a tool hook's
+  # emission is normalized from JSON), so both keyings are read, as `Handoff` reads them.
+  defp signal_head(%{details: details}), do: Map.get(details, :head) || Map.get(details, "head")
+
+  defp signals(issue, opts), do: Handoff.signals(repo_key(issue, opts), issue.id)
+
+  defp verdict_atom(verdict), do: Map.get(@verdict_atoms, verdict, verdict)
 
   # A reviewer that is turned off judges nothing: `ReviewAgent.evaluate/4` answers it with a
   # fabricated approval, so running one would record a verdict no reviewer made and move the ticket
@@ -156,12 +301,19 @@ defmodule SymphonyElixir.CodeReview do
     record_verdict(issue, opts, head, to_string(verdict))
     Logger.info("Code Review verdict for #{issue_label(issue)} head=#{head || "unknown"} verdict=#{inspect(verdict)}")
 
+    route_verdict(issue, workspace, opts, settings, verdict, verdict_reason(result))
+  end
+
+  # The routing half of a decided verdict, shared by a verdict this run just made and a deepening a
+  # previous run recorded. Every edge goes through the one writer.
+  defp route_verdict(issue, workspace, opts, settings, verdict, reason) do
     case verdict do
       :approve -> approve(issue, workspace, opts, settings)
       :request_changes -> move(issue, opts, settings, :code_review_rework, %{})
       # The real reviewer exits a block through `blocked/5` (an error result), never this clause; an
-      # overridden reviewer that returns a `:block` verdict map escalates the same way.
-      :block -> escalate(issue, opts, settings, verdict_reason(result))
+      # overridden reviewer that returns a `:block` verdict map escalates the same way, and so does a
+      # deepened block performed on a later dispatch.
+      :block -> escalate(issue, opts, settings, reason)
       other -> {:error, {:code_review_unknown_verdict, other}}
     end
   end

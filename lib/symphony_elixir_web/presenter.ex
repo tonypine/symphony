@@ -32,6 +32,7 @@ defmodule SymphonyElixirWeb.Presenter do
     pr_opened
     prompt_sent
     refused_agent_action
+    run_stopped
     token_usage_delta
     tool_call
   )
@@ -139,7 +140,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
         %{
           generated_at: generated_at,
-          counts: Map.new(~w(plan pr final_verification action clarify), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          counts: Map.new(~w(plan pr final_verification action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
           items: Enum.map(items, &inbox_item_payload(&1, now))
         }
 
