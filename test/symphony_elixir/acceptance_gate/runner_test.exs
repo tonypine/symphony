@@ -57,7 +57,7 @@ defmodule SymphonyElixir.AcceptanceGate.RunnerTest do
     assert Runner.workspaces(name) == ["/workspaces/symphony/a", context_worktree, agent_worktree | AcceptanceGate.tmp_dirs(agent_worktree)]
 
     assert %{running: [running], queued: [%{issue_id: "b", forced: false}]} = Runner.snapshot(name)
-    assert running == %{issue_id: "a", identifier: "TP-a", sha: @sha, forced: false}
+    assert %{issue_id: "a", identifier: "TP-a", sha: @sha, forced: false, repo_key: "symphony", started_at: %DateTime{}} = running
 
     send(pass_pid, :finish)
     wait_until(fn -> Runner.snapshot(name).running == [] end)

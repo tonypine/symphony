@@ -5663,7 +5663,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            seconds_running: 9
          },
          rate_limits: nil,
-         polling: %{next_poll_in_ms: 5_000}
+         polling: %{next_poll_in_ms: 5_000},
+         qa: %{running: [%{issue_id: "qa-stale", identifier: "MT-QA", sha: "abc", forced: false}], queued: []}
        }, System.monotonic_time(:millisecond) - 5_000, System.system_time(:millisecond) - 5_000}
     )
 
@@ -5695,7 +5696,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         plain = Regex.replace(~r/\e\[[0-9;]*m/, rendered, "")
 
         assert plain =~ "Snapshot: stale 0m 5s (1 missed refresh, orchestrator mailbox "
-        assert plain =~ "No active agents"
+        refute plain =~ "No active agents"
+        assert plain =~ ~r/MT-QA\s+QA pass/
         assert plain =~ "Tokens: new 20 | cached 100 | created 0 | out 30"
         refute plain =~ "Orchestrator snapshot unavailable"
 

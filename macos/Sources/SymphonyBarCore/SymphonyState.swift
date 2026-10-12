@@ -25,6 +25,9 @@ public struct StateSnapshot: Equatable {
     /// False while Symphony hasn't read Linear for `waitingOnYou` yet, so an empty list may be incomplete; true
     /// once it has, or when Symphony predates the field.
     public var inboxRead: Bool
+    /// The kind of every live session (agent runs, QA passes, acceptance gate passes), in Symphony's
+    /// order; nil when Symphony predates `sessions`.
+    public var sessionKinds: [String]?
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -298,7 +301,8 @@ public struct StateSnapshot: Equatable {
         gateAgreement: [String: GateAgreement]? = nil,
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
-        inboxRead: Bool = true
+        inboxRead: Bool = true,
+        sessionKinds: [String]? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -312,6 +316,7 @@ public struct StateSnapshot: Equatable {
         self.runs = runs
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
+        self.sessionKinds = sessionKinds
     }
 }
 
@@ -410,6 +415,7 @@ public enum SymphonyState {
             )
         }
         snapshot.gateAgreement = gateAgreement(data)
+        snapshot.sessionKinds = payload.sessions?.map { $0.kind ?? "agent" }
         snapshot.runs = (payload.running ?? []).compactMap { run in
             guard let identifier = run.issueIdentifier ?? run.issueId else { return nil }
             return StateSnapshot.Run(
@@ -578,6 +584,10 @@ public enum SymphonyState {
             let lastEventAt: String?
         }
 
+        struct Session: Decodable {
+            let kind: String?
+        }
+
         struct Waiting: Decodable {
             let issueId: String?
             let issueIdentifier: String?
@@ -593,6 +603,8 @@ public enum SymphonyState {
         let counts: Counts?
         /// Every field is optional, so an entry missing one never fails the whole state.
         let running: [Running]?
+        /// Missing before Symphony listed every live session with its kind.
+        let sessions: [Session]?
         let pause: Pause?
         let budget: Budget?
         let usageLimits: [UsageLimit]?

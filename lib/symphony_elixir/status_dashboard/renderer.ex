@@ -10,7 +10,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   """
 
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.{Config, ForcedStatus, Format, HttpServer, RunKind, URLUtils, UsageLimit}
+  alias SymphonyElixir.{Config, ForcedStatus, Format, HttpServer, RunKind, Sessions, URLUtils, UsageLimit}
 
   @throughput_window_ms 5_000
   @throughput_graph_window_ms 10 * 60 * 1000
@@ -80,8 +80,9 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
         forced = Map.get(snapshot, :forced, [])
         forced_rows = format_forced_section(forced)
         running_event_width = running_event_width(terminal_columns_override)
-        running_rows = format_running_rows(running, running_event_width)
-        running_to_watching_spacer = if(running == [], do: [], else: ["│"])
+        passes = snapshot |> Map.get(:sessions, []) |> Enum.filter(&Sessions.pass?/1)
+        running_rows = format_running_rows(running, passes, running_event_width)
+        running_to_watching_spacer = if(running == [] and passes == [], do: [], else: ["│"])
         watching_url_width = watching_url_width(terminal_columns_override)
         watching_rows = format_watching_rows(watching, watching_url_width)
         {follow_up_checks, backoff_retries} = split_retry_rows_by_delay_type(retrying)
@@ -553,8 +554,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
     URLUtils.dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())
   end
 
-  defp format_running_rows(running, running_event_width) do
-    if running == [] do
+  defp format_running_rows(running, passes, running_event_width) do
+    if running == [] and passes == [] do
       [
         "│  " <> colorize("No active agents", @ansi_gray),
         "│"
@@ -563,7 +564,13 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
       running
       |> Enum.sort_by(& &1.identifier)
       |> Enum.flat_map(&[format_running_summary(&1, running_event_width) | format_running_profile_lines(&1)])
+      |> Kernel.++(Enum.map(passes, &format_pass_row/1))
     end
+  end
+
+  # A QA or acceptance gate pass: a session that isn't an agent run, so it has no agent columns.
+  defp format_pass_row(pass) do
+    "│ " <> colorize("●", @ansi_green) <> " " <> format_cell(pass.issue_identifier || pass.issue_id, @running_id_width) <> " " <> colorize(Sessions.label(pass.kind), @ansi_cyan)
   end
 
   defp format_running_profile_lines(running_entry) do
