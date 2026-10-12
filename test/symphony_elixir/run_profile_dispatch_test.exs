@@ -5,6 +5,14 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
   @run_profiles %{"breakdown" => %{"effort" => "high"}}
 
+  defmodule FakeQaVerification do
+    def run(issue, workspace, opts) do
+      recipient = Application.fetch_env!(:symphony_elixir, :qa_verification_recipient)
+      send(recipient, {:qa_verification, issue, workspace, opts})
+      Application.fetch_env!(:symphony_elixir, :qa_verification_result)
+    end
+  end
+
   defmodule FakeParentWalkthrough do
     def run(issue, workspace, opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :parent_walkthrough_recipient)
@@ -316,6 +324,35 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       on_message = Keyword.fetch!(opts, :on_message)
       on_message.(%{event: :notification})
       assert_received {:codex_worker_update, "issue-fv", %{event: :notification}}
+      assert argv_lines(ctx.argv_trace) == []
+    end
+
+    test "a QA ticket the QA verification handles starts no agent", ctx do
+      write_profile_workflow!(ctx)
+      workspace = Path.join([ctx.test_root, "workspaces", "MT-QA"])
+      File.mkdir_p!(workspace)
+      run_issue = issue("issue-qa", "MT-QA", %{state: "QA"})
+      Application.put_env(:symphony_elixir, :qa_verification_recipient, self())
+      Application.put_env(:symphony_elixir, :qa_verification_result, :ok)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :qa_verification_recipient)
+        Application.delete_env(:symphony_elixir, :qa_verification_result)
+      end)
+
+      assert :ok =
+               AgentRunner.run(run_issue, self(),
+                 workspace_path: workspace,
+                 qa_verification: FakeQaVerification,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+
+      assert_received {:qa_verification, %Issue{identifier: "MT-QA"}, ^workspace, opts}
+      assert opts[:worker_host] == nil
+      assert %Config.Schema{} = opts[:settings]
+      on_message = Keyword.fetch!(opts, :on_message)
+      on_message.(%{event: :notification})
+      assert_received {:codex_worker_update, "issue-qa", %{event: :notification}}
       assert argv_lines(ctx.argv_trace) == []
     end
 

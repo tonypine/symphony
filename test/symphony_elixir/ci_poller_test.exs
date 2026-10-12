@@ -460,6 +460,8 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert_receive {:fetch_issues_by_states, states}
     assert "Code Review" in states
+    # The QA state's run is green-head gated too, so its head must be watched as well.
+    assert "QA" in states
   end
 
   test "a Human Review issue's PR is watched like an In Review one" do

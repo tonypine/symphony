@@ -652,6 +652,32 @@ defmodule SymphonyElixir.QaAgentTest do
       refute QaAgent.prompt(job(), nil) =~ "Android app:"
     end
 
+    test "a job carrying the ticket's journey states the journeys to verify" do
+      journey = %{source: "the ticket's `## User walkthrough`", text: "1. Run `symphony check`."}
+      prompt = QaAgent.prompt(job(%{journey: journey}), nil)
+
+      assert prompt =~ "You are verifying user journeys, not running a script."
+      assert prompt =~ "Automated end-to-end suites (Playwright and friends) belong to CI"
+      assert prompt =~ "read the parent issue and its plan documents with your Linear tools"
+      assert prompt =~ "Journeys to verify, from the ticket's `## User walkthrough`:"
+      assert prompt =~ "1. Run `symphony check`."
+    end
+
+    test "a journey with no text asks the run to derive it from the ticket" do
+      journey = %{source: "the ticket's walkthrough and acceptance criteria", text: nil}
+      prompt = QaAgent.prompt(job(%{journey: journey}), nil)
+
+      assert prompt =~
+               "Journeys to verify: derive them from this ticket's walkthrough and acceptance criteria below."
+    end
+
+    test "a job with no journey renders no journey section, so the Auto Review prompts are unchanged" do
+      prompt = QaAgent.prompt(job(), nil)
+
+      refute prompt =~ "You are verifying user journeys"
+      refute prompt =~ "Journeys to verify"
+    end
+
     test "every QA prompt forbids starting an emulator or simulator and blocks device steps without the android_app playbook" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
