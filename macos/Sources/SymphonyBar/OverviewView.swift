@@ -11,17 +11,21 @@ struct OverviewActions {
     var openInbox: () -> Void = {}
     /// Return or a double-click on a ticket row opens its page (D3).
     var openTicket: (String) -> Void = { _ in }
+    /// A click on an initiative in the Initiatives card opens it in Initiatives (D5), by issue id.
+    var openInitiative: (String) -> Void = { _ in }
 }
 
 /// The Overview in a scroll view, laid out for the width it gets.
 struct OverviewView: View {
     let overview: Overview
     let actions: OverviewActions
+    /// The active initiatives under the scope, for the side column's Initiatives card.
+    var initiatives: [Initiative] = []
     @State private var width: CGFloat = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
 
     var body: some View {
         ScrollView {
-            OverviewBody(overview: overview, actions: actions, width: width)
+            OverviewBody(overview: overview, actions: actions, width: width, initiatives: initiatives)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
@@ -34,6 +38,7 @@ struct OverviewBody: View {
     let actions: OverviewActions
     /// The width available: the side column goes beside the main column when both fit, under it otherwise.
     let width: CGFloat
+    var initiatives: [Initiative] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let sideColumnWidth: CGFloat = 300
@@ -68,7 +73,7 @@ struct OverviewBody: View {
         .animation(reduceMotion ? nil : .standard, value: overview.problems.map(\.id))
     }
 
-    private var hasSideColumn: Bool { !overview.meters.isEmpty || overview.reposLine != nil }
+    private var hasSideColumn: Bool { !overview.meters.isEmpty || overview.reposLine != nil || !initiatives.isEmpty }
 
     @ViewBuilder private var mainColumn: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -100,6 +105,9 @@ struct OverviewBody: View {
                         ForEach(overview.meters) { MeterView(meter: $0) }
                     }
                 }
+            }
+            if !initiatives.isEmpty {
+                InitiativesCard(initiatives: initiatives, open: actions.openInitiative)
             }
             if let line = overview.reposLine {
                 Card(title: Overview.reposTitle) {
