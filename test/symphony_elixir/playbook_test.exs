@@ -386,7 +386,10 @@ defmodule SymphonyElixir.PlaybookTest do
       assert slots["parent_tickets"] < slots["plan_pipeline"] and slots["plan_pipeline"] < slots["review_brief"]
 
       {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
-      assert body =~ "then execute end-to-end.\n\n" <> @plan_pipeline_tag <> ~s(\n\n{% render "review_brief" %})
+
+      # The repo's Step 4 closes with the `{% endif %}` of its state-machine branch, which
+      # `{%-` left-trims away in the render, leaving the blank line `plan_pipeline` expects.
+      assert body =~ "then execute end-to-end.\n{%- endif %}\n\n" <> @plan_pipeline_tag <> ~s(\n\n{% render "review_brief" %})
     end
 
     # A plan written before the templates (no `Artifacts wanted`) keeps today's plain split.

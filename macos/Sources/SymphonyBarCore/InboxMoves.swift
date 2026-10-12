@@ -7,6 +7,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case sendDecisions
     case approveAndMerge
     case sendToRework
+    case restart
     case signOff
     /// Answers a decision request: the ticket continues in its phase, or the answer directs a move.
     case decide
@@ -21,6 +22,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .sendDecisions: "Send Decisions"
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
+        case .restart: "Restart…"
         case .signOff: "Sign Off…"
         case .decide: "Send Decision…"
         case .unblock: "Unblock…"
@@ -34,6 +36,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .sendDecisions: "Send Decisions"
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
+        case .restart: "Restart"
         case .signOff: "Sign Off"
         case .decide: "Send Decision"
         case .unblock: "Unblock"
@@ -69,8 +72,10 @@ public struct InboxToolbar: Equatable {
     public var defaultCommand: InboxCommand? { buttons.first.flatMap { $0.enabled ? $0.command : nil } }
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
-    /// recommendation) and ⋯ Send to Rework…; a PR Approve and Merge… and Send to Rework…, with Open PR the default
-    /// while a check is red (D2b); a final verification Sign Off…; a blocked ticket Unblock…. An action carrying an
+    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR Approve and Merge… and Send to Rework…, with Open PR
+    /// the default while a check is red (D2b), and ⋯ Restart…; a final verification Sign Off…; a blocked ticket
+    /// Unblock…. Actions and clarify items keep their links. Restart (the human-only full reset) sits under ⋯ on
+    /// both, so it takes a deliberate trip through the menu and its consequence sheet. An action carrying an
     /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
     /// and a clarify item, keep their links, but an action whose options are listed in its card drops the Copy Steps
     /// link that would only repeat them.
@@ -81,13 +86,16 @@ public struct InboxToolbar: Equatable {
         case .plan:
             let changed = picks.changed(item.review.decisions)
             let sendDecisions = item.review.decisions.isEmpty ? [] : [move(.sendDecisions, enabled: changed)]
-            return InboxToolbar(buttons: [move(.approvePlan)] + sendDecisions + links, overflow: [.move(.sendToRework)])
+            return InboxToolbar(
+                buttons: [move(.approvePlan)] + sendDecisions + links,
+                overflow: [.move(.sendToRework), .move(.restart)]
+            )
         case .pr:
             let moves = [move(.approveAndMerge), move(.sendToRework)]
             if item.review.pullRequest?.hasRedCheck == true, let openPR = links.first, case .link(.openPR) = openPR.command {
-                return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: [])
+                return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: [.move(.restart)])
             }
-            return InboxToolbar(buttons: moves + links, overflow: [])
+            return InboxToolbar(buttons: moves + links, overflow: [.move(.restart)])
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .blocked:
@@ -174,11 +182,14 @@ public struct ConsequenceSheet: Equatable, Identifiable {
 
     public var id: String { "\(itemID):\(move.rawValue)" }
     public var verb: String { move.verb }
-    /// Send to Rework uses the destructive style.
-    public var isDestructive: Bool { move == .sendToRework }
-    /// Send to Rework can't be sent without a reason.
-    public var needsReason: Bool { move == .sendToRework }
-    public var reasonPrompt: String { "Why does \(identifier) go back?" }
+    /// Send to Rework and Restart use the destructive style.
+    public var isDestructive: Bool { move == .sendToRework || move == .restart }
+    /// Send to Rework and Restart can't be sent without a reason.
+    public var needsReason: Bool { move == .sendToRework || move == .restart }
+    /// Why the ticket goes back (Rework), or starts over (Restart).
+    public var reasonPrompt: String {
+        move == .restart ? "Why does \(identifier) start over?" : "Why does \(identifier) go back?"
+    }
 
     public init(move: InboxMove, item: InboxItem, picks: DecisionPicks = DecisionPicks()) {
         self.move = move
@@ -225,9 +236,14 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 happens = "Posts your reason on \(id) and moves it to Rework: Symphony cancels the plan's sub-tickets still in Backlog and plans again."
                 stays = "Your reason stays on the ticket as your comment, even after Undo."
             } else {
-                happens = "Posts your reason on \(id) and moves it to Rework: Symphony closes the PR and starts over."
+                happens = "Posts your reason on \(id) and moves it to Rework: Symphony continues on the same pull request. Restart instead closes the pull request and starts over from main."
                 stays = "Your reason stays on the ticket as your comment, even after Undo."
             }
+        case .restart:
+            title = "Restart \(id) from main?"
+            targetState = "In Progress"
+            happens = "Closes \(id)'s open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
+            stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
         case .signOff:
             title = "Sign off \(id)?"
             targetState = "Done"
@@ -278,6 +294,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 picks: [.init(question: request?.question ?? identifier, answer: answer)],
                 move: "rework"
             )
+        case .restart: return .restart(identifier, reason: answer)
         case .signOff: return .signOff(identifier)
         case .decide:
             guard let requestCommentID else { return nil }
@@ -289,11 +306,18 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// What the sheet expects Symphony to answer, for an answer that didn't say.
     public var expectedOutcome: MoveOutcome { MoveOutcome(moved: targetState != nil, toState: targetState) }
 
-    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved. Unblock
-    /// moves nothing, so it says what it did instead of where the ticket went.
+    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
+    /// A restart offers no Undo: it closed the pull request, deleted the workspace and superseded the
+    /// workpad, and Symphony can't take any of that back. Unblock moves nothing, so it says what it did
+    /// instead of where the ticket went.
     public func banner(after outcome: MoveOutcome) -> InboxBanner {
         if outcome.moved {
-            return InboxBanner(itemID: itemID, identifier: identifier, text: "Moved to \(outcome.toState ?? targetState ?? "its next state")", undo: true)
+            return InboxBanner(
+                itemID: itemID,
+                identifier: identifier,
+                text: "Moved to \(outcome.toState ?? targetState ?? "its next state")",
+                undo: move != .restart
+            )
         }
         if move == .unblock {
             return InboxBanner(itemID: itemID, identifier: identifier, text: "Hold cleared", undo: false)

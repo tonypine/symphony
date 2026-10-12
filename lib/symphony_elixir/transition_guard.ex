@@ -39,7 +39,9 @@ defmodule SymphonyElixir.TransitionGuard do
   alias SymphonyElixir.{AutoReview, Config, HumanReview, StateMachine, SubIssueWait, Tracker}
 
   @in_review_state "In Review"
+  @in_progress_state "In Progress"
   @merging_state "Merging"
+  @rework_state "Rework"
   @backlog_state "Backlog"
 
   @typedoc "A named transition the machine can perform."
@@ -115,6 +117,12 @@ defmodule SymphonyElixir.TransitionGuard do
   # only on it, never when a run merely goes quiet. Its target is the repo's configured Code
   # Review state, so a repo that names it differently still lands there.
   #
+  # `:restart` is the Director app's full reset: close the pull request, start a fresh branch from
+  # main, supersede the workpad, back to `In Progress`. Only a person performs it (the control
+  # API's `restart` move), which is why `resolve_request/2` refuses an agent asking for
+  # `In Progress` from a post-implementation phase on a designed repo: that request is a restart
+  # without the reset.
+  #
   # The `:code_review_*` rows are the reviewer run's verdicts. They bind to the head the reviewer
   # judged (`SymphonyElixir.CodeReview` records the verdict against it): approve carries the ticket
   # on to the QA state, or straight to `Merging` when the QA state's skip rule applies (the
@@ -138,6 +146,7 @@ defmodule SymphonyElixir.TransitionGuard do
   # moves the ticket at all. Both are recorded as a `fix verdict`.
   @designed_edges @edges ++
                     [
+                      %{signal: :restart, from: :any, to: "In Progress"},
                       %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
                       %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
                       %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging"},
@@ -216,11 +225,14 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Validates an agent's request to set the state `state` (its resolved Linear state map). Applies
   the machine's refusals and redirects in the same order as before — the Auto Review handoff
-  refusal, the Human Review redirect, the human-only refusal, the Code Review entry refusal, the QA
-  entry refusal, then the waiting-state refusal — and returns `{:ok, state}` (the state to set,
-  after any redirect) or `{:error, reason}` with the same tuple the tool returned before. On a repo
-  running the designed machine, an agent asking to enter `Code Review` or `QA` by hand is refused:
-  `Code Review` is the handoff signal's to enter and `QA` the verdict's, never the tool's.
+  refusal, the Human Review redirect, the human-only refusal, the restart refusal, the Code Review
+  entry refusal, the QA entry refusal, then the waiting-state refusal — and returns `{:ok, state}`
+  (the state to set, after any redirect) or `{:error, reason}` with the same tuple the tool returned
+  before. On a repo running the designed machine, an agent asking to enter `Code Review` or `QA` by
+  hand is refused: `Code Review` is the handoff signal's to enter and `QA` the verdict's, never the
+  tool's. So is an agent asking for `In Progress` from a phase past implementation (`Rework`,
+  `Code Review`, `QA` or `Merging`): on the designed machine that is a `Restart`, which only a
+  person performs.
 
   On a repo running the designed machine, an agent asking to park its issue in `Backlog` while it
   is `In Progress` or `Rework` is not a move: the guard returns `{:hold, :blocked, attrs}`, which
@@ -246,6 +258,7 @@ defmodule SymphonyElixir.TransitionGuard do
         with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
              state = redirect_state(state, ctx, settings),
              :ok <- refuse_human_only(state),
+             :ok <- refuse_restart_state(state, ctx, settings),
              :ok <- refuse_code_review_entry(state, settings),
              :ok <- refuse_qa_entry(state, settings),
              :ok <- refuse_waiting_state(state, settings) do
@@ -315,6 +328,27 @@ defmodule SymphonyElixir.TransitionGuard do
     if StateMachine.designed?(settings) and state_name_matches?(state_name, settings.tracker.code_review_state),
       do: {:error, {:code_review_requires_handoff_signal, state_name}},
       else: :ok
+  end
+
+  # `Restart` is a person's move — the control API closes the pull request, starts a fresh branch
+  # from main and supersedes the workpad before it moves the ticket back to `In Progress`. An agent
+  # asking for `In Progress` from a post-implementation phase on a designed repo is asking for that
+  # restart without its reset, so it is refused; the claim from `Todo` and every move the machine
+  # makes itself are unaffected. A legacy repo has no `Restart`, so nothing is refused there.
+  defp refuse_restart_state(%{"name" => state_name}, ctx, settings) do
+    if StateMachine.designed?(settings) and state_name_matches?(state_name, @in_progress_state) and
+         restart_origin?(Map.get(ctx, :from_state), settings),
+       do: {:error, {:restart_requires_human_approval, state_name}},
+       else: :ok
+  end
+
+  # The phases past implementation: work is on a pull request there, so `In Progress` can only mean
+  # a fresh start. `Rework` is the designed machine's rework phase, not a way back to In Progress.
+  defp restart_origin?(from, settings) do
+    Enum.any?(
+      [@rework_state, @merging_state, settings.tracker.code_review_state, settings.tracker.qa_state],
+      &state_name_matches?(from, &1)
+    )
   end
 
   # Entering `QA` on a designed repo is the QA verdict's job (a pass, or the Code Review approve that

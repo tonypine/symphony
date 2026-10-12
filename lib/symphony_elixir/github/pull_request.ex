@@ -400,6 +400,24 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   @doc """
+  Closes the PR `pr_url` without merging it. Closing an already closed PR is a no-op on GitHub, so
+  a restart is idempotent; a pull request id that doesn't exist comes back as the `gh` failure.
+  The Director's `restart` move is the only caller: a full reset starts from a closed PR, so the
+  fresh branch's pull request does not confuse the head the pollers read.
+  """
+  @spec close(String.t(), keyword()) :: :ok | {:error, term()}
+  def close(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--method", "PATCH", "-f", "state=closed"],
+         {:ok, _output} <- run_gh(args, opts) do
+      :ok
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Merges the base branch into the PR branch on GitHub, only if the head is still
   `expected_head_sha`. A merge conflict comes back as `{:error, :conflict}`.
   """
