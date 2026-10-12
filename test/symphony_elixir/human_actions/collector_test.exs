@@ -12,6 +12,10 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   # the deprecated `human_actions.label`.
   defp settings, do: put_in(%Schema{}.human_actions.label, "human-action")
 
+  # A repo on the designed machine, where a decision request sets a `Needs Decision` hold instead of
+  # moving the ticket.
+  defp designed_settings, do: %Schema{state_machine: "designed"}
+
   defp collect(nodes, opts \\ []) do
     test_pid = self()
 
@@ -178,6 +182,52 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                done_when: "you reply with your pick and move MOT-24 out of Backlog, or the agent withdraws the request."
              }
            ] = actions(collected)
+  end
+
+  test "a designed repo's decision names the reply (or the Inbox) as enough, with no state move" do
+    issue =
+      node("MOT-90", %{
+        "state" => %{"name" => "Human Review"},
+        "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")])
+      })
+
+    assert {:ok, collected} = collect([issue], settings: designed_settings())
+
+    assert [%Action{kind: :request, options: [_ | _], done_when: done_when}] = actions(collected)
+
+    assert done_when == "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
+    refute done_when =~ "move"
+  end
+
+  test "the same line for a legacy request still names the state move" do
+    issue =
+      node("MOT-91", %{
+        "state" => %{"name" => "Human Review"},
+        "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")])
+      })
+
+    assert {:ok, collected} = collect([issue])
+
+    assert [%Action{kind: :request, options: [_ | _], done_when: done_when}] = actions(collected)
+
+    assert done_when == "you reply with your pick and move MOT-91 out of Human Review, or the agent withdraws the request."
+  end
+
+  test "a designed repo's hand-written steps request names the reply, with no state move" do
+    issue =
+      node("MOT-92", %{
+        "state" => %{"name" => "Human Review"},
+        "comments" =>
+          comments([
+            %{"id" => "comment-1", "body" => "## Action needed: Add the release signing secrets\n\n**Steps:**\n1. Add them.", "createdAt" => "2026-10-03T10:00:00.000Z"}
+          ])
+      })
+
+    assert {:ok, collected} = collect([issue], settings: designed_settings())
+
+    assert [%Action{kind: :request, options: [], done_when: done_when}] = actions(collected)
+
+    assert done_when == "you reply to the request, or the agent withdraws the request."
   end
 
   test "lists a labelled issue without a request as a task, and one whose requests all closed as nothing" do
