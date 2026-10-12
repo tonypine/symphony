@@ -32,6 +32,35 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         refute line =~ "stateId"
       end
     end
+
+    test "sub-issue creation's initial state is the only stateId outside the guard" do
+      source = File.read!("lib/symphony_elixir/agent_tools/linear.ex")
+
+      state_id_lines =
+        source
+        |> String.split("\n")
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&String.starts_with?(&1, "#"))
+        |> Enum.filter(&(&1 =~ "stateId"))
+
+      # An existing issue's move: the mutation's variables, its issueUpdate input, and its one call
+      # site, whose `state_id` is what TransitionGuard.resolve_request/2 resolved.
+      assert Enum.any?(state_id_lines, &(&1 =~ "$stateId: String!"))
+      assert Enum.any?(state_id_lines, &(&1 =~ "input: { stateId: $stateId }"))
+      assert Enum.any?(state_id_lines, &(&1 =~ "graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}"))
+
+      # The only other stateId this module hands Linear is a new sub-issue's initial state, built by
+      # subissue_input/5 for @create_subissue_mutation and explicitly documented there as outside the
+      # guard's scope.
+      assert Enum.any?(state_id_lines, &(&1 =~ ~s("stateId" => state_id)))
+      assert source =~ "subissue_input(parent, state_id, title, description, priority)"
+      assert source =~ ~r/graphql\(@create_subissue_mutation, %\{input: input\}/
+      assert source =~ "sub-issue creation's initial state is outside TransitionGuard's scope"
+
+      # A new stateId may not appear unnoticed: it must either resolve through the guard or be
+      # documented here as another explicit exception.
+      assert length(state_id_lines) == 4
+    end
   end
 
   describe "dynamic read output prompt safety" do
