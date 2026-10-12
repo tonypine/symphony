@@ -14,7 +14,8 @@ failures=0
 make_release() {
   local root="$1"
   mkdir -p "$root/erts-99.1/bin" "$root/releases/1.2.3" "$root/lib"
-  echo "99.1 1.2.3" > "$root/releases/start_erl.data"
+  # Mix writes this file without a trailing newline.
+  printf '99.1 1.2.3' > "$root/releases/start_erl.data"
   cat > "$root/erts-99.1/bin/erl" <<'ERL'
 #!/bin/sh
 printf 'ROOT=%s\n' "$SYMPHONY_RELEASE_ROOT"
@@ -72,6 +73,17 @@ ln -s "$resources/symphony" "$work/links/symphony"
 ln -s ../symphony "$work/links/nested/symphony"
 check "absolute symlink" "$bundle_root" "$work/links/symphony" check --config "/tmp/a b.yml"
 check "chained relative symlink" "$bundle_root" "$work/links/nested/symphony" check --config "/tmp/x.yml"
+
+# With runtime config, -config points at a writable copy of sys.config in RELEASE_TMP.
+printf '%%%% RUNTIME_CONFIG=true\n[].\n' > "$release/releases/1.2.3/sys.config"
+config="$(RELEASE_TMP="$work/rt" "$release/bin/symphony-app" check | sed -n '/^-config$/{n;p;}')"
+if [[ "$config" == "$work/rt/symphony-1.2.3-"*.runtime ]] && cmp -s "$config.config" "$release/releases/1.2.3/sys.config"; then
+  echo "ok - runtime config copied to RELEASE_TMP"
+else
+  echo "not ok - runtime config copied to RELEASE_TMP (got -config $config)"
+  failures=$((failures + 1))
+fi
+rm "$release/releases/1.2.3/sys.config"
 
 # No release next to the launcher.
 mkdir -p "$work/empty/bin"

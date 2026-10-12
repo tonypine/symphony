@@ -21,8 +21,11 @@ script_dir="$(cd "$(dirname "$script")" && pwd -P)"
 
 if [ -d "$script_dir/symphony-release" ]; then
   root="$script_dir/symphony-release"
+  # The bundle is signed and read-only: keep temporary files outside it.
+  default_tmp="${TMPDIR:-/tmp}/symphony-release"
 else
   root="$(cd "$script_dir/.." && pwd -P)"
+  default_tmp="$root/tmp"
 fi
 
 if [ ! -f "$root/releases/start_erl.data" ]; then
@@ -30,16 +33,36 @@ if [ ! -f "$root/releases/start_erl.data" ]; then
   exit 1
 fi
 
-read -r erts_vsn rel_vsn < "$root/releases/start_erl.data"
+# Mix writes start_erl.data without a trailing newline.
+erts_vsn="$(cut -d' ' -f1 "$root/releases/start_erl.data")"
+rel_vsn="$(cut -d' ' -f2 "$root/releases/start_erl.data" | tr -d '\n')"
 rel_dir="$root/releases/$rel_vsn"
 
 SYMPHONY_RELEASE_ROOT="$root"
 export SYMPHONY_RELEASE_ROOT
 
+# The runtime config provider reads these, as when started through bin/symphony.
+RELEASE_ROOT="$root"
+RELEASE_NAME="${RELEASE_NAME:-symphony}"
+RELEASE_VSN="$rel_vsn"
+RELEASE_TMP="${RELEASE_TMP:-$default_tmp}"
+export RELEASE_ROOT RELEASE_NAME RELEASE_VSN RELEASE_TMP
+
+# With runtime config the provider rewrites sys.config, so it gets a writable copy.
+RELEASE_SYS_CONFIG="$rel_dir/sys"
+if grep -q "RUNTIME_CONFIG=true" "$rel_dir/sys.config" 2>/dev/null; then
+  RELEASE_SYS_CONFIG="$RELEASE_TMP/$RELEASE_NAME-$RELEASE_VSN-$(date +%Y%m%d%H%M%S)-$$.runtime"
+  if ! { mkdir -p "$RELEASE_TMP" && cat "$rel_dir/sys.config" > "$RELEASE_SYS_CONFIG.config"; }; then
+    echo "symphony: could not write $RELEASE_SYS_CONFIG.config" >&2
+    exit 1
+  fi
+fi
+export RELEASE_SYS_CONFIG
+
 exec "$root/erts-$erts_vsn/bin/erl" \
   -boot "$rel_dir/start" \
   -boot_var RELEASE_LIB "$root/lib" \
-  -config "$rel_dir/sys" \
+  -config "$RELEASE_SYS_CONFIG" \
   -args_file "$rel_dir/vm.args" \
   -mode embedded \
   -noshell \

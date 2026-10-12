@@ -40,6 +40,19 @@ jobs:
       - name: Test the release launcher's argument contract
         run: scripts/release/launcher_test.sh
 
+      - name: Set up mise tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install: true
+          cache: true
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      # Boots an assembled plain `mix release` through the launcher.
+      - name: Boot a real release through the launcher
+        run: time scripts/release/launcher_boot_test.sh
+
   audit:
     name: audit
     runs-on: ubuntu-latest
