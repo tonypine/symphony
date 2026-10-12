@@ -95,6 +95,10 @@ defmodule SymphonyElixir.PromptBuilder do
         "attempt" => Keyword.get(opts, :attempt),
         "agent" => to_solid_value(agent_context),
         "repo_key" => repo_key,
+        # The repo's resolved state-machine version. Instruction files branch on it — the
+        # designed `Rework` continues the pull request, the legacy one starts over — so it is a
+        # template variable, not only the file-system option that picks partial variants.
+        "state_machine" => version,
         "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
         "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
         "reviewer_comments" => to_solid_value(reviewer_comments),
@@ -689,7 +693,7 @@ defmodule SymphonyElixir.PromptBuilder do
   defp append_feedback_protocol(prompt, %{pr_review: %{mode: mode}} = settings) when is_binary(mode) do
     pr_polling? = mode == "polling"
     ci_polling? = pr_polling? and ci_poller_enabled?(settings)
-    prompt <> "\n\n" <> feedback_protocol_section(pr_polling?, ci_polling?)
+    prompt <> "\n\n" <> feedback_protocol_section(pr_polling?, ci_polling?, StateMachine.designed?(settings))
   end
 
   defp append_feedback_protocol(prompt, _settings), do: prompt
@@ -697,15 +701,25 @@ defmodule SymphonyElixir.PromptBuilder do
   defp ci_poller_enabled?(%{ci: %{enabled: enabled}}), do: enabled == true
   defp ci_poller_enabled?(_settings), do: false
 
-  defp feedback_protocol_section(pr_polling?, ci_polling?) do
+  defp feedback_protocol_section(pr_polling?, ci_polling?, designed?) do
     [
       "PR feedback and CI delivery:",
       "",
       pr_feedback_protocol_line(pr_polling?),
       ci_feedback_protocol_line(ci_polling?),
-      "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not treat it as `Rework`, which still means closing the PR and starting over."
+      acceptance_gate_protocol_line(designed?)
     ]
     |> Enum.join("\n")
+  end
+
+  # The acceptance gate comes back as `In Progress`, never as a rework phase. What `Rework` means
+  # differs by the repo's machine, so the line naming it does too.
+  defp acceptance_gate_protocol_line(false) do
+    "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not treat it as `Rework`, which still means closing the PR and starting over."
+  end
+
+  defp acceptance_gate_protocol_line(true) do
+    "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
   end
 
   defp pr_feedback_protocol_line(true) do

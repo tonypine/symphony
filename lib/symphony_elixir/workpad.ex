@@ -24,6 +24,11 @@ defmodule SymphonyElixir.Workpad do
   @in_progress_state "In Progress"
   @todo_state "todo"
   @comment_limit 100
+  @superseded_heading "### Superseded — attempt "
+  @superseded_pattern ~r/### Superseded — attempt /
+  @restart_note "A person restarted this ticket: the attempt under the `Superseded` heading is the one before, and the workspace starts fresh from main."
+  # A workpad's headings are demoted one level so they nest under the `Superseded` heading.
+  @heading_line ~r/\A(#+)(\s.*)\z/
 
   @type bootstrap_result :: {:ok, Issue.t()} | {:error, term()}
 
@@ -55,6 +60,14 @@ defmodule SymphonyElixir.Workpad do
     #{environment_stamp(workspace, opts)}
     ```
 
+    #{fresh_sections(timestamp, "Symphony created this bootstrap workpad before the first agent turn.")}
+    """
+  end
+
+  # The headings every workpad carries, from the bootstrap on. A restart reuses them, so the
+  # sections the run is expected to fill in never drift between a first attempt and a fresh one.
+  defp fresh_sections(timestamp, note) do
+    """
     ### Plan
 
     - [ ] Reconcile this bootstrap workpad with the Linear issue before implementation.
@@ -69,10 +82,124 @@ defmodule SymphonyElixir.Workpad do
 
     ### Notes
 
-    - #{timestamp} - Symphony created this bootstrap workpad before the first agent turn.
+    - #{timestamp} - #{note}
 
     ### Confusions
     """
+  end
+
+  @doc """
+  Rewrites `body` for a restart: everything the ticket's workpad held so far moves under
+  `### Superseded — attempt <attempt>` (its own headings demoted one level, so they nest), and a
+  fresh `Plan`, `Acceptance Criteria`, `Validation` and `Notes` follow it. The prior attempt stays
+  on the issue as the record of what was already tried; nothing is deleted.
+  """
+  @spec supersede_body(String.t(), String.t() | nil, pos_integer(), String.t()) :: String.t()
+  def supersede_body(heading, body, attempt, timestamp)
+      when is_binary(heading) and is_binary(timestamp) and is_integer(attempt) and attempt > 0 do
+    superseded = [@superseded_heading <> Integer.to_string(attempt), demote_headings(previous_attempt(body))]
+
+    [heading | superseded ++ [String.trim_trailing(fresh_sections(timestamp, @restart_note))]]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+    |> Kernel.<>("\n")
+  end
+
+  # The attempt number the next supersession records: one more than the highest already on the
+  # workpad, so a ticket restarted twice reads `attempt 1` then `attempt 2`.
+  defp next_attempt(body) do
+    @superseded_pattern
+    |> Regex.scan(body)
+    |> length()
+    |> Kernel.+(1)
+  end
+
+  # The old body without its own workpad heading, which the rewritten one replaces.
+  defp previous_attempt(body) do
+    lines =
+      body
+      |> to_string_body()
+      |> String.split(~r/\R/)
+      |> Enum.drop_while(&(String.trim(&1) == ""))
+
+    lines |> drop_workpad_heading() |> Enum.join("\n") |> String.trim()
+  end
+
+  defp to_string_body(body) when is_binary(body), do: body
+  defp to_string_body(_body), do: ""
+
+  defp drop_workpad_heading([line | rest] = lines) do
+    if Regex.match?(~r/\A#+\s.*workpad/i, String.trim(line)), do: rest, else: lines
+  end
+
+  defp drop_workpad_heading([]), do: []
+
+  defp demote_headings(body) when is_binary(body) do
+    body
+    |> String.split(~r/\R/)
+    |> Enum.map_join("\n", fn line ->
+      case Regex.run(@heading_line, line) do
+        [_line, hashes, rest] -> "#" <> hashes <> rest
+        nil -> line
+      end
+    end)
+  end
+
+  @doc """
+  Supersedes the ticket's workpad comment for a restart: the prior attempt is preserved under a
+  `Superseded` heading and a fresh one follows it, so the next run starts with an empty plan in
+  the same comment. Best-effort by design — a ticket with no workpad yet, and a tracker whose
+  comments Symphony cannot rewrite, are both `:ok`: the move's comment on the issue is the record.
+  """
+  @spec supersede(Issue.t(), keyword()) :: :ok | {:error, term()}
+  def supersede(%Issue{} = issue, opts) when is_list(opts) do
+    settings = Keyword.get(opts, :settings) || Config.settings!()
+    heading = agent_workpad_heading(settings)
+
+    if linear_tracker?(settings) do
+      supersede_workpad(issue, heading, opts)
+    else
+      :ok
+    end
+  end
+
+  defp supersede_workpad(issue, heading, opts) do
+    rewrite = fn -> rewrite_workpad(issue, heading, opts) end
+
+    case with_linear_retry(rewrite, "superseding the workpad for #{issue_context(issue)}", opts) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, {:workpad_supersede_failed, reason}}
+    end
+  end
+
+  defp rewrite_workpad(issue, heading, opts) do
+    context = %{issue: issue, workspace: Keyword.get(opts, :workspace, "")}
+
+    with {:ok, comments} <- AgentTools.Linear.get_comments(context, @comment_limit, linear_opts(opts)) do
+      case find_workpad_comment(comments) do
+        nil -> {:ok, :ok}
+        comment -> replace_workpad(owned_context(context, comment), heading, comment, opts)
+      end
+    end
+  end
+
+  # The rewrite is the Director's, made outside any agent run, so there is no run registry to own
+  # the comment: this one is seeded with the workpad the marker check just identified. Linear's own
+  # comments are still out of reach — only the comment the markers named as a workpad is rewritten.
+  defp owned_context(context, comment) do
+    {:ok, registry} = CommentRegistry.start_link(seed_ids: [Map.get(comment, "id")])
+    Map.put(context, :comment_registry, registry)
+  end
+
+  defp replace_workpad(context, heading, comment, opts) do
+    body = comment |> comment_body() |> normalize_existing_comment_body()
+    now = opts |> Keyword.get_lazy(:now, &DateTime.utc_now/0) |> DateTime.to_iso8601()
+    superseded = supersede_body(heading, body, next_attempt(body), now)
+
+    case AgentTools.Linear.update_comment(context, Map.get(comment, "id"), superseded, linear_opts(opts)) do
+      {:ok, _response} -> {:ok, :ok}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp pr_mode?(opts), do: Keyword.get(opts, :prompt_mode) in [:pr, "pr"]
