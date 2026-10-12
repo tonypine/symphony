@@ -129,9 +129,6 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
-- **Acceptance gate: Enforce (repo)** (one row per repo whose acceptance gate runs, in Shadow or Enforce) is
-  the gate's kill switch: its submenu switches that repo to **Shadow** or **Off** at once. See
-  [Settings](#settings).
 - **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
@@ -150,7 +147,7 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: a sidebar of the connected repos and the detail of the selected one
   (its health, source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
-  acceptance gate, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
+  manual review, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
   managed clone, **Remove Clone…**. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
@@ -190,7 +187,7 @@ set (or, in Development mode, no checkout folder).
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
   Each epic under way keeps one agent for its sub-tickets and the tickets blocking them
   (`agent.concurrency.epic_lanes`, default every slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
-  Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
+  QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
   run on top.
 - **Limit tokens per day** and **Limit tokens per ticket** are `agent.limits.tokens_per_day` and
   `agent.limits.tokens_per_issue`, also in the `symphony.yml` itself. A switch turned off writes `null`, which
@@ -241,20 +238,6 @@ set (or, in Development mode, no checkout folder).
   the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
-- **Acceptance gate (saved in symphony.yml)** sets `auto_review.acceptance_gate.mode`, the gate's kill switch
-  (see [the acceptance gate](../docs/acceptance_gate.md)). Each mode shows a line under it: **Off** never
-  runs the gate; **Shadow** records a verdict and moves nothing; **Enforce** approves to Merging, sends back
-  to In Progress and escalates to In Review. Choosing Enforce asks first ("PRs the gate approves merge
-  without a person reviewing them"), and Cancel leaves the mode as it was. A missing key shows Off,
-  Symphony's default. Save runs `symphony check` on a copy of the changed file first, as for Models, then
-  rewrites only that value, keeping its comment, or inserts `mode:`, `acceptance_gate:` and `auto_review:`
-  when they are missing. An `off` is written quoted (`mode: "off"`), which Symphony reads the same as `off`.
-  Symphony reads the mode on its next poll, without a restart. Under the picker, one line per repo shows the
-  gate's agreement stats from `/api/v1/state`'s `acceptance_gate.agreement`, for example
-  `symphony: 12 judged · 92% agreement · 0 unsafe approvals · not ready: at least 20 judged tickets (12 so
-  far)`, ending in `ready to enforce` once the stats say so. While Symphony isn't running the line reads
-  "Start Symphony to see the gate's record." A repo's own mode is set in its **Edit…** sheet (see
-  [Repos](#repos)), and the status menu's **Acceptance gate** rows switch a repo to Shadow or Off at once.
 - `LINEAR_API_KEY` and any extra environment variables are stored only in
   `~/Library/Application Support/symphony/release/secrets.json`, next to Symphony's `control_token`, as a
   JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
@@ -477,8 +460,6 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
   it runs on, how long it has run and its last activity, and **Reveal Worktree** for a worktree on this
   Mac. **No agents running** otherwise.
-- **Acceptance gate**: the repo's mode (**Inherit: Shadow** while it follows Settings) and the gate's
-  record for the repo.
 - **Disconnect…** at the foot, in red.
 
 While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
@@ -486,7 +467,7 @@ few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete disc
 the same confirmation), and ⌘W closes the window.
 
 When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
-set in Settings instead. Their source, Linear routing and acceptance gate come from the file, and
+set in Settings instead. Their source, Linear routing and manual review come from the file, and
 **WORKFLOW.md** and **Activity** fold into one line: "Live status shows while Symphony runs." with **Start
 Symphony** (or that Symphony is starting, or isn't answering). A Symphony too old to serve
 `GET /api/v1/repos` shows the same repos with "Update Symphony to see live status."
@@ -562,11 +543,6 @@ or no longer has the repo.
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
   them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
-  The **Acceptance gate** picker sets `repositories[<key>].acceptance_gate.mode`: **Inherit** (the mode in
-  Settings, named in brackets) removes the key, and an `acceptance_gate:` block it leaves empty; **Off**,
-  **Shadow** and **Enforce** write it, and Enforce asks first as in Settings. Under it, the repo's agreement
-  line shows as in Settings. A Save that changes the gate runs `symphony check` first and saves nothing when
-  it fails. The detail's **Acceptance gate** section then shows the repo's mode.
 - **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
   lines right above it (with no blank line between), and leaves one blank line between its neighbours.
   It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
@@ -845,8 +821,7 @@ state. The window opens on the Inbox the first time.
   and age; its sidebar item counts them in orange, in every repo. ↑ and ↓ move through the list and Return
   takes the review's first action. Beside the list, the review of the selected item: a plan's **What to
   review** with its links, **Decisions needed** with the recommended option picked, and its sub-tickets in
-  landing order; a PR's checks (CI, Auto Review QA with its report, the acceptance gate's verdict and mode,
-  and how many files and lines it changes), with **Open PR**; an action's why, numbered steps, time and what it
+  landing order; a PR's checks (CI, and QA with its report), with **Open PR**; an action's why, numbered steps, time and what it
   unblocks, with **Copy Steps**; what the quality gate found in a ticket it holds, its score and round, with
   **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
   the ticket in Linear; the review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
@@ -872,7 +847,7 @@ state. The window opens on the Inbox the first time.
 - **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
   are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
   freeze." with **Resume Dispatch**, or "The factory is idle.", with a line of context under it. The flow
-  strip counts the tickets at each stage: Queued, Working, Auto Review, Waiting on you (the Inbox; the tile
+  strip counts the tickets at each stage: Queued, Working, Code Review & QA, Waiting on you (the Inbox; the tile
   opens it), Merging
   and Shipped today (the tickets Symphony saw reach Done today, UTC); a stage at 0 stays in place in grey.
   **Needs attention** shows only when something does, most severe and oldest first, one row per ticket or
@@ -887,9 +862,9 @@ state. The window opens on the Inbox the first time.
 - A **ticket page** tells one ticket's story: its badges, repo and initiative, what it is doing ("Waiting on a
   retry at 14:32", "In review · QA pass running"), **Now** (the run and its model and effort, running time,
   turn, last activity, the tool call it waits on, its workspace with **Reveal**, and its tokens against the
-  per-ticket cap), the **Timeline** of every run with its result, duration and tokens, the gate's verdict and
+  per-ticket cap), the **Timeline** of every run with its result, duration and tokens, and
   your moves ("Stopped by you, moved to Backlog", from the audit records), and the ticket's facts (state,
-  type, initiative, pull request, gate verdict, forced, and for a done ticket when it merged) and the agent's
+  type, initiative, pull request, forced, and for a done ticket when it merged) and the agent's
   last message. It reads `/api/v1/:issue_identifier`, `/api/v1/runs` and `/api/v1/audit` besides the state;
   a done ticket, which Symphony no longer tracks, shows what the state and the run records still say. Its
   actions: **View Transcript**, **Open in Linear**, **Stop Run…**, and under ⋯ **Copy API URL**, **Show Audit
@@ -967,13 +942,13 @@ certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.pli
 replaces an installed release too; reinstall the release with the install script afterwards.
 
 Every build also carries `Contents/Helpers/SymphonyQADriver.app`, the helper that takes screenshots and reads
-the accessibility tree for Auto Review's `macos_app` QA. Grant Screen Recording and Accessibility to that helper,
+the accessibility tree for the QA state's `macos_app` playbook. Grant Screen Recording and Accessibility to that helper,
 never to Symphony.app: macOS passes Symphony.app's grants to the agents it starts (see
 [One-time macOS permissions](../docs/configuration.md#one-time-macos-permissions)).
 
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
 itself. `make qa-app` builds this checkout's Symphony (an escript, so it needs the checkout's Erlang and
-Elixir) and embeds it as `make bundle` does, for Auto Review's `macos_app` QA (see
+Elixir) and embeds it as `make bundle` does, for the QA state's `macos_app` playbook (see
 [macOS app QA](../docs/configuration.md#macos-app-qa)). It sets no update key, so it can't update itself either.
 
 ### Run a checkout
@@ -993,7 +968,7 @@ instead of the app; see [Running](../README.md#running).
 ## QA mode
 
 QA mode is for test launches, by hand or by a QA agent: the app keeps everything it would store under one
-directory and leaves your real settings, secrets and Symphony alone. Auto Review's `macos_app` playbook
+directory and leaves your real settings, secrets and Symphony alone. The QA state's `macos_app` playbook
 always launches the app this way (see [macOS app QA](../docs/configuration.md#macos-app-qa)). Turn it on by starting the app's binary
 with `SYMPHONY_BAR_QA_ROOT` set to a directory. A launch from Finder or `open` doesn't pass the variable on, so
 run the binary directly:

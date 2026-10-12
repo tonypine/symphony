@@ -64,13 +64,6 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.manualReview = "on"
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
 
-        yaml = try record("setting the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.shadow, in: $0) }, from: yaml)
-        yaml = try record("changing the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.enforce, in: $0) }, from: yaml)
-        yaml = try record("setting a repository's gate mode", {
-            try AcceptanceGate.settingRepositoryMode(.mode(.off), of: "api", in: $0)
-        }, from: yaml)
-        yaml = try record("inheriting the gate mode", { try AcceptanceGate.settingRepositoryMode(.inherit, of: "api", in: $0) }, from: yaml)
-
         let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic")
         let profiles = RunProfiles(defaults: every, kinds: Dictionary(uniqueKeysWithValues: RunKind.allCases.map { ($0, every) }))
         let old = try RunProfilesConfig.scopedProfiles(in: yaml)
@@ -95,7 +88,11 @@ final class SettingsUIManifestTests: XCTestCase {
         }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
-        for key in SettingsUIManifest.keyPaths where !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
+        // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops
+        // them after the deprecation window; no control writes them any more (TP-827).
+        let retired: Set = ["auto_review.acceptance_gate.mode", "repositories[].acceptance_gate.mode"]
+        for key in SettingsUIManifest.keyPaths
+        where !retired.contains(key) && !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
             XCTFail("SettingsUIManifest.keyPaths lists `\(key)`, which no editor writes")
         }
     }

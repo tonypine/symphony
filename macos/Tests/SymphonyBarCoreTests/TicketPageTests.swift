@@ -81,16 +81,15 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.timeline[3].detail, pullRequest.absoluteString)
     }
 
-    func testAPullRequestInTheInboxShowsWhatItWaitsOnAndTheGatesVerdict() throws {
+    func testAPullRequestInTheInboxShowsWhatItWaitsOn() throws {
         let page = try fixturePage("DOCS-40")
 
         XCTAssertEqual(page.phase, .waiting(on: "you"))
         XCTAssertEqual(page.phaseSentence, "Waiting on you")
         XCTAssertEqual(page.badges, [TicketPage.Badge(status: .you, word: "Waiting on you")])
         XCTAssertEqual(page.facts.first { $0.label == "Pull request" }?.value, "acme/docs#88")
-        XCTAssertEqual(page.facts.first { $0.label == "Gate verdict" }?.value, "escalate (shadow)")
-        XCTAssertEqual(page.timeline.map(\.title), ["Gate: escalate (shadow)"])
-        XCTAssertEqual(page.timeline[0].detail, "The quick start skips the install step the ticket asks for.")
+        XCTAssertNil(page.facts.first { $0.label == "Gate verdict" })
+        XCTAssertEqual(page.timeline.map(\.title), [])
     }
 
     // MARK: - Stopped by you
@@ -166,31 +165,30 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(phase(["watching": with(["state": "Human Review"])]), .waiting(on: "you"))
         XCTAssertEqual(phase(["watching": with(["state": "Merging"])]), .waiting(on: "CI"))
         XCTAssertEqual(phase(["watching": with(["state": "Todo"])]), .waiting(on: "Todo"))
-        XCTAssertEqual(phase(["watching": with(["state": "Auto Review"]), "qa": ["running": [["identifier": "T-1"]], "queued": []]]),
-                       .inReview(gate: nil, qa: "QA pass running"))
+        XCTAssertEqual(phase(["watching": with(["state": "QA"]), "qa": ["running": [["identifier": "T-1"]], "queued": []]]),
+                       .inReview(qa: "QA pass running"))
         XCTAssertEqual(phase(["watching": with(["state": "In Review"]), "qa": ["running": [], "queued": [["issue_id": "i-1"]]]]),
-                       .inReview(gate: nil, qa: "QA pass queued"))
+                       .inReview(qa: "QA pass queued"))
         XCTAssertEqual(phase(["shipped_today": with([:])]), .done(pullRequest: nil, mergedAt: nil))
     }
 
-    func testInReviewShowsTheGateAndAFailingTicketSaysHowOften() throws {
+    func testInReviewAndAFailingTicketSaysHowOften() throws {
         let state = json([
             "generated_at": "2026-10-07T14:20:00Z",
-            "watching": [["issue_identifier": "T-1", "state": "In Review", "title": "Final verification: billing"]],
+            "watching": [["issue_identifier": "T-1", "state": "Code Review", "title": "Final verification: billing"]],
             "retrying": [["issue_identifier": "T-1", "attempt": 3, "forced": true, "error": "boom", "workspace_path": "/w/T-1"]],
             "epic_lanes": ["lanes": [["identifier": "T-0", "title": "Billing", "sub_issue": ["identifier": "T-1"]]]],
         ])
-        let issue = json(["acceptance_gate": ["verdict": "rework", "mode": "enforce", "judged_at": "2026-10-07T14:00:00Z"], "last_error": "x"])
+        let issue = json(["last_error": "x"])
         let page = TicketPage(identifier: "T-1", sources: TicketPage.Sources(state: state, issue: issue), now: wallClock, timeZone: utc)
 
-        XCTAssertEqual(page.phase, .inReview(gate: "Gate: rework", qa: nil))
-        XCTAssertEqual(page.phaseSentence, "In review · Gate: rework")
+        XCTAssertEqual(page.phase, .inReview(qa: nil))
+        XCTAssertEqual(page.phaseSentence, "In review")
         XCTAssertEqual(page.badges.map(\.word), ["In review", "Failed 3 times", "Forced"])
         XCTAssertEqual(page.initiative, "T-0 Billing")
-        XCTAssertEqual(page.facts.map(\.label), ["State", "Type", "Initiative", "Gate verdict", "Forced"])
+        XCTAssertEqual(page.facts.map(\.label), ["State", "Type", "Initiative", "Forced"])
         XCTAssertEqual(page.facts[1].value, "Final verification")
-        XCTAssertEqual(page.timeline.map(\.title), ["Gate: rework"])
-        XCTAssertEqual(page.timeline[0].result, .failed)
+        XCTAssertEqual(page.timeline.map(\.title), [])
         XCTAssertEqual(page.lastMessage, "boom")
         XCTAssertEqual(page.workspacePath, "/w/T-1")
     }
