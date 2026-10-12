@@ -239,7 +239,8 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       fixtures = Path.join(root, "worktree/macos/Tests/Fixtures/director-app/running/api/v1")
       File.mkdir_p!(fixtures)
       File.write!(Path.join(fixtures, "overview.json"), ~s({"running":2}))
-      worktree = git_worktree!(root, ~s(echo "fixtures $SYMPHONY_BAR_QA_API_FIXTURES"; cat "$SYMPHONY_BAR_QA_API_FIXTURES/api/v1/overview.json"; echo))
+      log_request = ~s(mkdir -p "$SYMPHONY_BAR_QA_ROOT"; echo '{"method":"POST","path":"/api/v1/refresh"}' >> "$SYMPHONY_BAR_QA_ROOT/api-requests.jsonl")
+      worktree = git_worktree!(root, ~s(#{log_request}; echo "fixtures $SYMPHONY_BAR_QA_API_FIXTURES"; cat "$SYMPHONY_BAR_QA_API_FIXTURES/api/v1/overview.json"; echo))
       prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
 
       {:ok, driver} =
@@ -261,6 +262,12 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       wait_until(fn -> Enum.any?(:sys.get_state(driver).apps, fn {_pid, app} -> app.output =~ ~s({"running":2}) end) end)
       assert {:ok, %{"output" => output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       assert output =~ "fixtures #{copy}\n"
+
+      # The app's request log is read back from its QA root on the QA host, and taken away.
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) ==
+               {:ok, %{"requests" => [%{"method" => "POST", "path" => "/api/v1/refresh"}], "dropped" => 0}}
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) == {:ok, %{"requests" => [], "dropped" => 0}}
 
       QaDriver.stop(driver)
       refute File.exists?(run_dir)

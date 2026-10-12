@@ -650,6 +650,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "files every gap as a follow-up sub-ticket in `Todo`"
       assert prompt =~ "Epic checklist (TP-823, this epic's own acceptance criteria and user walkthrough)"
       assert prompt =~ "You are verifying the epic itself, not running a script"
+      assert prompt =~ "It never fails or blocks the ticket."
       assert prompt =~ "Journeys to verify, from the epic's acceptance criteria:\n- [ ] The settings window opens"
       assert prompt =~ ~s("checklist": true | false)
 
@@ -731,6 +732,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "read the parent issue and its plan documents with your Linear tools"
       assert prompt =~ "Journeys to verify, from the ticket's `## User walkthrough`:"
       assert prompt =~ "1. Run `symphony check`."
+      assert prompt =~ "anything under an `After release` heading, is not yours to run"
+      assert prompt =~ "It never fails or blocks the ticket."
     end
 
     test "a journey with no text asks the run to derive it from the ticket" do

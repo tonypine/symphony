@@ -78,7 +78,10 @@ second document for a stage.
    sub-ticket last). Every sub-ticket names the feature it builds, the journey
    and the screens it serves and the feature's Kano class (feature → journey →
    screen → ticket), and carries a `## User walkthrough`: numbered steps a user
-   takes, each with the result they should see. File the Must-be tickets first,
+   takes, each with the result they should see, written so an end-to-end test or
+   the QA agent can reproduce it (a check only the operator can make once the
+   change is live goes under `## After release`, which QA skips and which never
+   blocks the ticket). File the Must-be tickets first,
    then Performance, then Attractive; Indifferent features get no ticket unless
    the description asks for them. With no Kano map, name the part of the
    description each sub-ticket serves instead.

@@ -792,7 +792,12 @@ not expand scope. File it with `linear_create_subissue` instead.
 
 Every new issue must include a clear title, a description, and acceptance
 criteria. A user-facing issue also needs a `## User walkthrough` section: numbered
-steps a user takes, each with the result they should see. Record the new issue
+steps a user takes, each with the result they should see. Write every step so a
+machine can reproduce it: an end-to-end test in CI, or the QA agent driving the
+app or CLI through a QA playbook. A check only the operator can make once the
+change is live (on their own machine, in production, with their account) is not a
+walkthrough step: put it under `## After release`, which QA skips and which never
+blocks the ticket. Record the new issue
 identifiers in the current workpad's `Notes`. If the tool refuses, list the
 remaining issues in the workpad `Notes` for a human to file.
 

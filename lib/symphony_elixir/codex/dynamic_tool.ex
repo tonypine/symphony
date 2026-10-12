@@ -614,6 +614,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "remote_name" => %{"type" => "string", "description" => "File name on the QA host: letters, digits, `.`, `_`, `-`. Defaults to the local file name."}
         }
       }
+    },
+    %{
+      "name" => "qa_api_requests",
+      "description" =>
+        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Takes no arguments.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     }
   ]
 
@@ -823,6 +829,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],
+    "qa_api_requests" => [],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],

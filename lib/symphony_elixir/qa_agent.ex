@@ -346,6 +346,7 @@ defmodule SymphonyElixir.QaAgent do
     and its comments with your Linear tools (`linear_get_document`, `linear_get_comments`) and
     verify against what they define.
     #{epic_journey_text(journey)}
+    #{operator_only_steps()}
     """
   end
 
@@ -359,10 +360,21 @@ defmodule SymphonyElixir.QaAgent do
     this ticket is a sub-ticket — read the parent issue and its plan documents with your Linear tools
     and verify against the journeys they define.
     #{journey_text(source, text)}
+    #{operator_only_steps()}
     """
   end
 
   defp journey_section(_job), do: ""
+
+  # A walkthrough is written for a machine to reproduce; a check only the operator can make once
+  # the change is live is theirs, never a QA step, and never fails or blocks the ticket.
+  defp operator_only_steps do
+    """
+    A step only the operator can take once the change is live (in production, on their own machine,
+    with their account), and anything under an `After release` heading, is not yours to run: name it
+    in your report as outside QA's reach and judge the rest. It never fails or blocks the ticket.
+    """
+  end
 
   defp epic_journey_text(%{source: source, text: text}) when is_binary(text) and text != "" do
     "\nJourneys to verify, from #{source}:\n#{text}\n"
