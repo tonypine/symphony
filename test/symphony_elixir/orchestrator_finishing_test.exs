@@ -22,6 +22,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     File.chmod!(fake_claude, 0o755)
 
     on_exit(fn ->
+      stop_orchestrator_agent_tasks()
       Application.delete_env(:symphony_elixir, :memory_tracker_issues)
       File.rm_rf(test_root)
     end)
