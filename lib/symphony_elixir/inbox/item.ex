@@ -38,17 +38,17 @@ defmodule SymphonyElixir.Inbox.Item do
 
   @type kind :: :action | :final_verification | :plan | :pr | :clarify | :blocked
   @type t :: %{
-          issue_id: String.t(),
-          identifier: String.t() | nil,
-          title: String.t() | nil,
-          repo_key: String.t() | nil,
-          state_machine: StateMachine.version(),
-          kind: kind(),
-          state: String.t() | nil,
-          ask: String.t(),
-          waiting_since: DateTime.t() | nil,
-          url: String.t() | nil,
-          review: map()
+          required(:issue_id) => String.t(),
+          required(:identifier) => String.t() | nil,
+          required(:title) => String.t() | nil,
+          required(:repo_key) => String.t() | nil,
+          optional(:state_machine) => StateMachine.version(),
+          required(:kind) => kind(),
+          required(:state) => String.t() | nil,
+          required(:ask) => String.t(),
+          required(:waiting_since) => DateTime.t() | nil,
+          required(:url) => String.t() | nil,
+          required(:review) => map()
         }
 
   @pull_request_url ~r{^https://github\.com/[^/]+/[^/]+/pull/\d+}
