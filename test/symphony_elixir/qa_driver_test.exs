@@ -76,6 +76,13 @@ defmodule SymphonyElixir.QaDriverTest do
   # The crash report listing: none unless a test's `crash_reports` replies say so.
   defp default_cmd("/bin/sh", ["-c", _script, "sh", "Demo"], _opts, replies), do: Map.get(replies, "crash_reports", {:ok, {"", 0}})
 
+  defp default_cmd("/bin/mv", ["-f", from, to], _opts, _replies) do
+    case File.rename(from, to) do
+      :ok -> {:ok, {"", 0}}
+      {:error, _reason} -> {:ok, {"mv: No such file or directory\n", 1}}
+    end
+  end
+
   defp default_cmd(@helper, ["screenshot" | _rest] = args, _opts, _replies) do
     File.write!(List.last(args), "png")
     {:ok, {~s({"ok":true}), 0}}
@@ -955,6 +962,42 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_screenshot_failed"
       refute File.exists?(Path.join(worktree, "qa-evidence/x.png"))
       assert File.read!(secret) == "host secret"
+    end
+  end
+
+  describe "qa_api_requests" do
+    defp api_requests(driver), do: QaDriver.call_tool(driver, "qa_api_requests", %{})
+
+    test "returns the requests the app logged under its QA root and takes the log away", %{worktree: worktree} do
+      {driver, _pid} = launched_app(worktree)
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+
+      # No log yet: the app answered no POST.
+      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0}}
+
+      File.mkdir_p!(qa_root)
+      log = Path.join(qa_root, "api-requests.jsonl")
+      File.write!(log, ~s({"body":{"id":"TP-1"},"method":"POST","path":"/api/v1/refresh"}\nnot json\n))
+
+      assert api_requests(driver) ==
+               {:ok, %{"requests" => [%{"body" => %{"id" => "TP-1"}, "method" => "POST", "path" => "/api/v1/refresh"}, "not json"], "dropped" => 0}}
+
+      refute File.exists?(log)
+      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0}}
+
+      File.write!(log, Enum.map_join(1..502, &~s({"n":#{&1}}\n)))
+      assert {:ok, %{"requests" => [%{"n" => 3} | _rest] = requests, "dropped" => 2}} = api_requests(driver)
+      assert length(requests) == 500
+    end
+
+    test "reports a log that cannot be read", %{worktree: worktree} do
+      driver = start_driver(worktree, host: Map.put(host(), :read, fn _path -> {:error, :unreadable} end))
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      File.mkdir_p!(qa_root)
+      File.write!(Path.join(qa_root, "api-requests.jsonl"), "{}\n")
+
+      assert {:error, {:qa_tool, "qa_api_requests_failed", message}} = api_requests(driver)
+      assert message =~ "api-requests.jsonl could not be read"
     end
   end
 

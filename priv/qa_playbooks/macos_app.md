@@ -35,6 +35,9 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_quit_app`: quits the app and returns its recent output.
 - `qa_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (a test `symphony.yml`,
   a `WORKFLOW.md`) where the app can open it, and returns the `path` to give the app.
+- `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
+  last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
+  `method`, `path` and `body`. The log lives where you cannot read it, so use this instead.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
@@ -58,7 +61,8 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
 2. Run `qa_launch_app`. In QA mode the app starts with empty settings. When the walkthrough
    runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
    directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
-   API from those files instead of a running Symphony.
+   API from those files instead of a running Symphony. When the walkthrough checks what the app
+   sent (`api-requests.jsonl`), call `qa_api_requests` after the action and judge its `requests`.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
    buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act.
 4. Let every window settle before you judge it. A window can open at the right size and

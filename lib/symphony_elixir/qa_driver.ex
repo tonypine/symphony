@@ -43,6 +43,11 @@ defmodule SymphonyElixir.QaDriver do
     between the check and the read. Locally it returns the file's path; on a QA
     host it copies the checked bytes into the run directory's `files/` there and
     returns that path.
+  - `qa_api_requests` returns the requests the app logged to `api-requests.jsonl`
+    in its QA root since the last call (the POSTs it answered from
+    `api_fixtures`), at most the last 500, and takes the log away so the next
+    call returns only newer ones. The QA root is outside the agent sandbox, on
+    the QA host for a `worker_host`, so the agent cannot read the log itself.
 
   Screenshots and accessibility calls run in the helper app,
   `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
@@ -115,6 +120,9 @@ defmodule SymphonyElixir.QaDriver do
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
   @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
+  # The app logs each request it answers from API fixtures here, under its QA root.
+  @api_requests_log "api-requests.jsonl"
+  @max_api_requests 500
   # The QA host's loopback ports an app's SSH session may forward to the stub.
   @stub_remote_ports 20_000..59_999
   @host_port_count 3
@@ -158,7 +166,7 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file qa_api_requests)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -367,6 +375,18 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, name} <- put_file_name(Map.get(args, "remote_name"), local_path),
          {:ok, path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_file") do
       put_file(config, path, bytes, name)
+    end
+  end
+
+  defp run_tool("qa_api_requests", _driver, config, _args) do
+    log = Path.join(config.qa_root, @api_requests_log)
+    taken = Path.join(config.host_dir, "api-requests-#{System.unique_integer([:positive])}.jsonl")
+
+    # Moved aside before it is read, so a request the app logs meanwhile lands in
+    # a fresh log for the next call instead of being lost.
+    case config.host.cmd.("/bin/mv", ["-f", log, taken], timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
+      {:ok, {_output, 0}} -> read_api_requests(config, taken)
+      _missing -> api_requests([])
     end
   end
 
@@ -741,6 +761,28 @@ defmodule SymphonyElixir.QaDriver do
 
     File.rm(tar)
     result
+  end
+
+  defp read_api_requests(config, path) do
+    case config.host.read.(path) do
+      {:ok, bytes} ->
+        bytes |> String.split("\n", trim: true) |> Enum.map(&api_request/1) |> api_requests()
+
+      {:error, reason} ->
+        tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be read: #{inspect(reason)}")
+    end
+  end
+
+  defp api_request(line) do
+    case Jason.decode(line) do
+      {:ok, request} -> request
+      {:error, _reason} -> line
+    end
+  end
+
+  defp api_requests(requests) do
+    dropped = max(length(requests) - @max_api_requests, 0)
+    {:ok, %{"requests" => Enum.drop(requests, dropped), "dropped" => dropped}}
   end
 
   # -- argument checks --------------------------------------------------------
