@@ -162,6 +162,8 @@ public struct DecisionPicks: Equatable {
 public struct ConsequenceSheet: Equatable, Identifiable {
     public static let waitingState = "Waiting on sub-tickets"
     public static let reviewState = "In Review"
+    public static let humanReviewState = "Human Review"
+    public static let todoState = "Todo"
 
     public var move: InboxMove
     /// The Inbox item's issue id.
@@ -253,10 +255,18 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             stays = "Nothing else changes in Linear."
         case .decide:
             title = "Send your decision on \(id)?"
-            targetState = nil
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
-            happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
-            stays = "The ticket doesn't move: the decision is what it was waiting on."
+            // A request that parked its ticket in Human Review set no hold: answering it moves the ticket to Todo,
+            // so the next run carries the decision out.
+            if item.state?.caseInsensitiveCompare(Self.humanReviewState) == .orderedSame {
+                targetState = Self.todoState
+                happens = "Records your answer on \(id) as a reply to its request and moves \(id) to \(Self.todoState): the next run carries it out."
+                stays = "Your answer stays on the ticket as the recorded decision, even after Undo."
+            } else {
+                targetState = nil
+                happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
+                stays = "The ticket doesn't move: the decision is what it was waiting on."
+            }
         case .unblock:
             title = "Unblock \(id)?"
             // The ticket keeps its phase: clearing a hold moves nothing, it resumes in place.
