@@ -169,7 +169,14 @@ jobs:
       - name: Run coverage partition
         env:
           MIX_TEST_PARTITION: ${{ matrix.partition }}
-        run: time mix test --cover --partitions 4
+        run: |
+          set -o pipefail
+          time mix test --cover --partitions 4 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      # Job logs need admin rights; annotations don't, so agents can read failures.
+      - name: Annotate test failures
+        if: failure()
+        run: scripts/ci/annotate-test-failures.sh "$RUNNER_TEMP/test.log"
 
       - name: Upload coverage partition
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
