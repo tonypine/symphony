@@ -321,6 +321,15 @@ repositories:
 - `acceptance_gate`: per-repo acceptance gate `mode`, `max_turns`, `timeout_ms` and `escalate`
   rules. The mode and numbers replace the global `auto_review.acceptance_gate` ones; lists add to
   them. See [`docs/acceptance_gate.md`](acceptance_gate.md).
+- `state_machine`: the ticket state-machine version this repo runs, `legacy` (the default) or
+  `designed`. `legacy` is today's flow: dispatch from `states.active`, the legacy transition guard,
+  and the legacy status-map prompt. `designed` moves this repo alone onto the designed machine of
+  [`docs/design/state-machine.md`](design/state-machine.md): dispatch also picks up the designed
+  phase states (`states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review`,
+  `states.ci_fix`), the transition guard uses the designed machine's edge table, and prompts render
+  the designed status map. Unset reads as `legacy`. Every part of a run resolves the version through
+  the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
+  a State machine picker.
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
