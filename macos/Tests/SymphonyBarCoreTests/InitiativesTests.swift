@@ -31,8 +31,10 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(initiative.barAccessibilityLabel, "4 of 8 done: 4 done, 1 working, 1 waiting on you, 2 blocked")
         XCTAssertEqual(
             initiative.subTickets[6].accessibilityLabel,
-            "BIL-207, Credit notes for downgrades, waits on bil-206, blocked by BIL-206"
+            "BIL-207, Credit notes for downgrades, waits on BIL-206, blocked by BIL-206"
         )
+        XCTAssertEqual(Initiative.SubTicket.spoken("Waits on 3 tickets"), "waits on 3 tickets")
+        XCTAssertEqual(Initiative.SubTicket.spoken(""), "")
     }
 
     func testTheReviewedSubTicketIsAnInboxItem() throws {

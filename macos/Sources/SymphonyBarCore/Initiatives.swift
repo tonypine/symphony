@@ -331,9 +331,16 @@ extension Initiative.SubTicket {
     public var accessibilityLabel: String {
         var parts = [identifier]
         if let title { parts.append(title) }
-        parts.append(waits.line.lowercased())
+        parts.append(Self.spoken(waits.line))
         if !blockedBy.isEmpty { parts.append("blocked by " + ListFormatter.localizedString(byJoining: blockedBy)) }
         return parts.joined(separator: ", ")
+    }
+
+    /// A line read mid-sentence: only its first letter lowercased, so identifiers keep their case
+    /// ("Waits on BIL-206" reads "waits on BIL-206").
+    public static func spoken(_ line: String) -> String {
+        guard let first = line.first else { return line }
+        return first.lowercased() + line.dropFirst()
     }
 }
 

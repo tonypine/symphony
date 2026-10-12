@@ -285,9 +285,32 @@ private struct SubTicketRow: View {
         .padding(.vertical, DesignTokens.Space.s2)
         .contentShape(Rectangle())
         .onTapGesture { actions.openTicket(ticket.identifier) }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(finalLine.map { "\(ticket.identifier), final verification, \($0.lowercased())" } ?? ticket.accessibilityLabel)
-        .accessibilityAction(named: "Open Ticket") { actions.openTicket(ticket.identifier) }
+        // One button-like element: its default action is the row's own (Review, else the ticket page);
+        // Review, the ticket page and each blocker are named actions.
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(
+            finalLine.map { "\(ticket.identifier), final verification, \(Initiative.SubTicket.spoken($0))" }
+                ?? ticket.accessibilityLabel
+        )
+        .accessibilityAction { primaryAction() }
+        .accessibilityActions {
+            if let issueID = reviewIssueID {
+                Button("Review") { actions.review(issueID) }
+            }
+            Button("Open Ticket") { actions.openTicket(ticket.identifier) }
+            if ticket.waits != .done {
+                ForEach(ticket.blockedBy, id: \.self) { blocker in
+                    Button("Open \(blocker)") { actions.openTicket(blocker) }
+                }
+            }
+        }
+    }
+
+    private var reviewIssueID: String? { ticket.waits == .you ? ticket.issueID : nil }
+
+    private func primaryAction() {
+        if let issueID = reviewIssueID { actions.review(issueID) } else { actions.openTicket(ticket.identifier) }
     }
 }
 
