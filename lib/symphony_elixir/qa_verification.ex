@@ -27,7 +27,17 @@ defmodule SymphonyElixir.QaVerification do
 
   require Logger
 
-  alias SymphonyElixir.{Handoff, QaPolicy, SelfHeal, StateMachine, TicketSignals, TransitionGuard, WorkspaceHead}
+  alias SymphonyElixir.{
+    Handoff,
+    MergeConfirmation,
+    QaPolicy,
+    SelfHeal,
+    StateMachine,
+    TicketSignals,
+    TransitionGuard,
+    WorkspaceHead
+  }
+
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.Report
@@ -183,7 +193,10 @@ defmodule SymphonyElixir.QaVerification do
     Logger.info("QA carried the earlier pass for #{issue_label(issue)} head=#{head}; not verifying again")
     publish_report(issue, opts, head, carried_outcome(), "Merging")
 
-    move(issue, opts, settings, :qa_pass, %{reason: "the earlier QA pass still covers this head", carried: true})
+    merge_entry(issue, opts, settings, :qa_pass, %{reason: "the earlier QA pass still covers this head", carried: true}, %{
+      recommendation: "the earlier QA pass still covers this head; ready to merge",
+      qa: "carried forward: QA already passed this change; the repair that followed was mechanical"
+    })
   end
 
   defp carried_outcome do
@@ -205,7 +218,10 @@ defmodule SymphonyElixir.QaVerification do
     publish_report(issue, opts, head, %{verdict: :skip, reason: reason, steps: [], findings: []}, "Merging")
     Logger.info("Skipping QA for #{issue_label(issue)} head=#{head}: #{reason}")
 
-    move(issue, opts, settings, :qa_skip, %{reason: reason})
+    merge_entry(issue, opts, settings, :qa_skip, %{reason: reason}, %{
+      recommendation: "no QA run applies to this diff; ready to merge",
+      qa: "QA skipped: #{reason}"
+    })
   end
 
   defp run_agent(issue, _workspace, opts, settings, head, []) do
@@ -247,7 +263,17 @@ defmodule SymphonyElixir.QaVerification do
     publish_report(issue, opts, head, outcome, "Merging")
     Logger.info("QA passed for #{issue_label(issue)} head=#{head}")
 
-    move(issue, opts, settings, :qa_pass, %{reason: "every journey verified"})
+    merge_entry(issue, opts, settings, :qa_pass, %{reason: "every journey verified"}, %{
+      recommendation: "every journey verified; ready to merge",
+      qa: qa_result(outcome)
+    })
+  end
+
+  defp qa_result(outcome) do
+    case Map.get(outcome, :summary) do
+      summary when is_binary(summary) and summary != "" -> summary
+      _none -> verdict_reason(outcome)
+    end
   end
 
   defp fail(issue, opts, settings, head, outcome) do
@@ -352,6 +378,31 @@ defmodule SymphonyElixir.QaVerification do
     case Report.publish(issue, report, Keyword.take(opts, [:linear_client, :settings])) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to publish the QA report for #{issue_label(issue)}: #{inspect(reason)}")
+    end
+  end
+
+  # The step into `Merging`. With the repo's manual review `on`, the verdict pauses the ticket where
+  # it is on a Needs Decision hold carrying the summary and waits for a person's confirmation
+  # (`SymphonyElixir.MergeConfirmation`); with it `off` — the default — the verdict moves the ticket
+  # as it always did. The gate itself is the guard's edge table, not a check here.
+  defp merge_entry(issue, opts, settings, signal, extra, parts) do
+    if TransitionGuard.confirmation_required?(signal, %{settings: settings}) do
+      confirm_merge(issue, opts, parts)
+    else
+      move(issue, opts, settings, signal, extra)
+    end
+  end
+
+  defp confirm_merge(issue, opts, parts) do
+    summary = MergeConfirmation.summary(issue, opts, parts)
+
+    case MergeConfirmation.pause(issue, opts, summary) do
+      :ok ->
+        record_move_signal(issue, opts, :merge_confirmation, %{target: "Merging", reason: parts[:recommendation]})
+        :ok
+
+      {:error, reason} ->
+        {:error, {:qa_merge_confirmation_failed, reason}}
     end
   end
 

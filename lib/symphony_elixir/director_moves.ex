@@ -57,6 +57,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Config,
     Hold,
     HumanReview,
+    MergeConfirmation,
     Orchestrator,
     Restart,
     RunKind,
@@ -110,7 +111,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @type result :: {:ok, map()} | {:error, error()}
 
   @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
-  @decide_targets %{"rework" => @rework_state, "done" => @done_state}
+  @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
@@ -450,22 +451,32 @@ defmodule SymphonyElixir.DirectorMoves do
   # in Linear, so the next read no longer finds the request and the hold it set clears; the hold is
   # cleared here too, so the ticket continues at once, and the move the decision directs — when it
   # directs one — goes through the guard after it.
+  #
+  # A merge confirmation's hold carries the move confirming performs (`SymphonyElixir.MergeConfirmation`),
+  # so confirming from the Inbox moves the ticket exactly as it would with manual review off; an
+  # explicit `:move` (the Inbox's Send to Rework) directs its own move instead.
   defp decide(%Issue{} = issue, input, opts) do
-    with :ok <- require_decision_hold(issue, opts) do
-      comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
+    case carried_move(issue, opts) do
+      {:ok, carried} ->
+        comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
 
-      case reply_to_request(issue, input.request_comment_id, comment) do
-        :ok -> clear_decision_hold(issue, input, comment, opts)
-        {:error, reason} -> {:error, {:linear, reason}}
-      end
+        case reply_to_request(issue, input.request_comment_id, comment) do
+          :ok -> clear_decision_hold(issue, input, comment, carried, opts)
+          {:error, reason} -> {:error, {:linear, reason}}
+        end
+
+      :error ->
+        conflict("#{issue.identifier} is not waiting on a decision")
     end
   end
 
-  # Only a ticket carrying the hold has a request to answer: a legacy repo never records one.
-  defp require_decision_hold(%Issue{repo_key: repo_key, id: issue_id} = issue, opts) do
-    if Hold.held?(repo_key, issue_id, :needs_decision, store_opts(opts)),
-      do: :ok,
-      else: conflict("#{issue.identifier} is not waiting on a decision")
+  # The move the ticket's open Needs Decision hold carries, if any: only a ticket carrying the hold
+  # has a request to answer (a legacy repo never records one).
+  defp carried_move(%Issue{repo_key: repo_key, id: issue_id}, opts) do
+    case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
+      nil -> :error
+      hold -> {:ok, MergeConfirmation.confirm_target(hold)}
+    end
   end
 
   defp reply_to_request(issue, comment_id, comment) do
@@ -475,9 +486,9 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp clear_decision_hold(issue, input, comment, opts) do
+  defp clear_decision_hold(issue, input, comment, carried, opts) do
     case Hold.clear(issue.repo_key, issue.id, :needs_decision, store_opts(opts)) do
-      :ok -> decision_finish(issue, input[:move], comment, opts)
+      :ok -> decision_finish(issue, input[:move] || carried, comment, opts)
       {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
     end
   end

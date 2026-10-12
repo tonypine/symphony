@@ -348,6 +348,9 @@ struct AddRepoView: View {
                     Section(StateMachine.pickerTitle) {
                         StateMachinePicker(choice: $model.draft.stateMachine)
                     }
+                    Section(ManualReview.pickerTitle) {
+                        ManualReviewPicker(choice: $model.draft.manualReview)
+                    }
                 }
             }
             .formStyle(.grouped)

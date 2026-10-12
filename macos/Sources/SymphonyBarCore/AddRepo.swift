@@ -148,6 +148,8 @@ public struct AddRepoDraft: Equatable {
     public var acceptanceGate: AcceptanceGateChoice
     /// The repo's state-machine version, which only the Edit sheet shows.
     public var stateMachine: StateMachineChoice
+    /// The repo's manual review setting, which only the Edit sheet shows.
+    public var manualReview: ManualReviewChoice
 
     public init(
         mode: Mode = .gitHub,
@@ -158,7 +160,8 @@ public struct AddRepoDraft: Equatable {
         project: String? = nil,
         labels: [String] = [],
         acceptanceGate: AcceptanceGateChoice = .inherit,
-        stateMachine: StateMachineChoice = .legacy
+        stateMachine: StateMachineChoice = .legacy,
+        manualReview: ManualReviewChoice = .off
     ) {
         self.mode = mode
         self.gitHubInput = gitHubInput
@@ -169,6 +172,7 @@ public struct AddRepoDraft: Equatable {
         self.labels = labels
         self.acceptanceGate = acceptanceGate
         self.stateMachine = stateMachine
+        self.manualReview = manualReview
     }
 
     /// `owner/repo` of the source the draft names, nil while it names none.

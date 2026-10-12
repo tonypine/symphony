@@ -74,11 +74,11 @@ defmodule SymphonyElixir.TransitionGuardTest do
                  %{signal: :restart, from: :any, to: "In Progress"},
                  %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
                  %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
-                 %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging"},
+                 %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging", confirm: true},
                  %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
                  %{signal: :code_review_escalate, from: ["Code Review"], to: :requested},
-                 %{signal: :qa_pass, from: ["QA"], to: "Merging"},
-                 %{signal: :qa_skip, from: ["QA"], to: "Merging"},
+                 %{signal: :qa_pass, from: ["QA"], to: "Merging", confirm: true},
+                 %{signal: :qa_skip, from: ["QA"], to: "Merging", confirm: true},
                  %{signal: :qa_fail, from: ["QA"], to: "Rework"},
                  %{signal: :ci_fix_enter_code_review, from: ["Code Review"], to: :ci_fix_state},
                  %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
@@ -241,6 +241,51 @@ defmodule SymphonyElixir.TransitionGuardTest do
       for origin <- ["Code Review", "QA", "Merging", "Rework"] do
         assert TransitionGuard.target(:ci_fix_mechanical, %{target: origin, settings: designed}) == origin
       end
+    end
+  end
+
+  describe "confirmation_required?/2" do
+    test "is true only for the verdicts into Merging, and only with manual review on" do
+      on = designed_settings(%{"manual_review" => "on"})
+      off = designed_settings(%{"manual_review" => "off"})
+
+      for signal <- [:code_review_approve_skip, :qa_pass, :qa_skip] do
+        assert TransitionGuard.confirmation_required?(signal, %{settings: on})
+        refute TransitionGuard.confirmation_required?(signal, %{settings: off})
+      end
+    end
+
+    test "a verdict that does not land in Merging never waits: rework, escalation, approve-to-QA" do
+      on = designed_settings(%{"manual_review" => "on"})
+
+      signals = [
+        :code_review_approve,
+        :code_review_rework,
+        :code_review_escalate,
+        :qa_fail,
+        :handoff,
+        :ci_fix_mechanical
+      ]
+
+      for signal <- signals do
+        refute TransitionGuard.confirmation_required?(signal, %{settings: on})
+      end
+    end
+
+    test "the edges are the designed table's: a legacy repo, an unknown signal and no settings are false" do
+      refute TransitionGuard.confirmation_required?(:qa_pass, %{settings: memory_settings(%{"manual_review" => "on"})})
+      refute TransitionGuard.confirmation_required?(:not_a_signal, %{settings: designed_settings(%{"manual_review" => "on"})})
+      refute TransitionGuard.confirmation_required?(:qa_pass, %{})
+      refute TransitionGuard.confirmation_required?(:qa_pass, %{repo_key: "web"})
+    end
+
+    test "an unset or unknown setting is off" do
+      for settings <- [designed_settings(), designed_settings(%{"manual_review" => nil})] do
+        refute TransitionGuard.confirmation_required?(:qa_pass, %{settings: settings})
+      end
+
+      # The runtime schema refuses an unknown value, so the guard only ever sees the two.
+      assert {:error, _reason} = Schema.parse(%{"manual_review" => "maybe"})
     end
   end
 

@@ -4,7 +4,9 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.CodeReview
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.RunStore
 
   @repo_key "repo-code-review"
@@ -21,6 +23,11 @@ defmodule SymphonyElixir.CodeReviewTest do
     def update_issue_state(issue_id, state) do
       send(self(), {:moved, issue_id, state})
       Process.get(:fake_tracker_result, :ok)
+    end
+
+    def create_comment(issue_id, body) do
+      send(self(), {:commented, issue_id, body})
+      Process.get(:fake_tracker_comment_result, :ok)
     end
   end
 
@@ -246,6 +253,44 @@ defmodule SymphonyElixir.CodeReviewTest do
                  }
                }
              ] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+    end
+
+    test "manual review on pauses an approve-skip on a merge confirmation instead of moving to Merging" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:skip, "the PR only changes docs, tests or `auto_review.skip_globs` paths"})
+
+      assert :ok = run(workspace, settings: designed_settings(%{"manual_review" => "on"}))
+
+      refute_received {:moved, @issue_id, _state}
+      assert_received {:commented, @issue_id, request}
+      assert request =~ "## Decision needed:"
+      assert request =~ "Merge TP-815 into its base branch?"
+      assert request =~ "Code Review: looks good"
+      assert request =~ "QA: QA skipped: the PR only changes docs, tests or `auto_review.skip_globs` paths"
+      assert request =~ "the ticket stays in Code Review until the decision is recorded"
+
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert MergeConfirmation.confirm_target(Hold.get(@repo_key, @issue_id, :needs_decision)) == "Merging"
+
+      assert [%{name: "code_review", details: %{signal: "merge_confirmation", target: "Merging", qa_decision: "skip"}}] =
+               SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+    end
+
+    test "a merge confirmation that cannot be posted is reported" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:skip, "the PR only changes docs, tests or `auto_review.skip_globs` paths"})
+      Process.put(:fake_tracker_comment_result, {:error, :rate_limited})
+
+      assert {:error, {:code_review_merge_confirmation_failed, {:merge_confirmation_request_failed, :rate_limited}}} =
+               run(workspace, settings: designed_settings(%{"manual_review" => "on"}))
+    end
+
+    test "an approve that runs QA still moves to QA with manual review on: only the merge waits" do
+      {workspace, _head} = git_workspace!()
+
+      assert :ok = run(workspace, settings: designed_settings(%{"manual_review" => "on"}))
+      assert_received {:moved, @issue_id, "QA"}
+      refute Hold.held_any?(@repo_key, @issue_id)
     end
 
     test "with no policy override the repo's own skip rule decides" do

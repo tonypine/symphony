@@ -40,6 +40,7 @@ public enum SettingsUIManifest {
         "repositories[].base_branch",
         "repositories[].default",
         "repositories[].key",
+        "repositories[].manual_review",
         "repositories[].route.assignee",
         "repositories[].route.labels",
         "repositories[].route.projects",
