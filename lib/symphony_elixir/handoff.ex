@@ -68,7 +68,9 @@ defmodule SymphonyElixir.Handoff do
 
   @doc """
   Whether the ticket's ledger holds a handoff signal for `head`. A signal with no recorded head
-  counts for any head, so a tool hook that could not read the workspace HEAD still hands off.
+  counts for any head, so a tool hook that could not read the workspace HEAD still hands off. The
+  runner's own record of a completed move is a `handoff` signal too, marked `move: true`, and never
+  counts: only a real emission opens the gate.
   """
   @spec emitted?(String.t() | nil, String.t() | nil, String.t() | nil) :: boolean()
   def emitted?(repo_key, issue_id, head) do
@@ -107,15 +109,22 @@ defmodule SymphonyElixir.Handoff do
 
   defp ticket_state(_repo_key, _issue_id), do: nil
 
-  defp handoff_for_head?(%{name: @signal, details: details}, head) when is_binary(head) do
+  defp handoff_for_head?(%{name: @signal} = signal, head), do: not move_record?(signal) and head_matches?(signal, head)
+
+  defp handoff_for_head?(_signal, _head), do: false
+
+  # A signal the runner records for its own completed move, not a tool hook's emission. Every
+  # normalized signal carries a `details` map.
+  defp move_record?(%{details: details}), do: map_value(details, :move) == true
+
+  defp head_matches?(%{details: details}, head) when is_binary(head) do
     case map_value(details, :head) do
       nil -> true
       recorded -> matches?(recorded, head)
     end
   end
 
-  defp handoff_for_head?(%{name: @signal}, _head), do: true
-  defp handoff_for_head?(_signal, _head), do: false
+  defp head_matches?(_signal, _head), do: true
 
   defp map_value(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
 

@@ -68,7 +68,8 @@ defmodule SymphonyElixir.AgentRunner do
       RunKind.classify(issue,
         terminal_states: settings.tracker.terminal_states,
         ci_failure: pending_ci_failure(issue, opts),
-        reviewer_comments: pending_reviewer_comments(issue, opts)
+        reviewer_comments: pending_reviewer_comments(issue, opts),
+        settings: settings
       )
 
     settings |> Config.run_profile(kind) |> Map.put(:kind, kind) |> UsageLimit.for_agent_kind(settings.agent.kind)
@@ -1753,12 +1754,14 @@ defmodule SymphonyElixir.AgentRunner do
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
         :ok ->
-          # Bound to the head it moved, so this record of a completed move never stands in for the
-          # explicit signal a later run's own head must still emit (`Handoff.emitted?/3`).
+          # A record of the completed move, marked as a move so it never stands in for the explicit
+          # signal a later run's own head must still emit (`Handoff.emitted?/3`): a workspace HEAD
+          # that reads nil, as an SSH worker's does, would otherwise make this head-less record count
+          # for any head.
           record_move_signal(
             issue,
             "handoff",
-            %{to: post_pr_state, reason: reason, head: run_context.progress.head},
+            %{to: post_pr_state, reason: reason, head: run_context.progress.head, move: true},
             run_context.opts
           )
 
@@ -1875,7 +1878,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
          :ok <- with_linear_retry(comment, label, run_context.opts) do
-      record_move_signal(issue, "handoff", %{to: @merging_state, kind: kind, head: head}, run_context.opts)
+      record_move_signal(issue, "handoff", %{to: @merging_state, kind: kind, head: head, move: true}, run_context.opts)
       :ok
     else
       {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}

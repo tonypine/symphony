@@ -96,8 +96,20 @@ defmodule SymphonyElixir.RunKindTest do
     end
 
     test "the designed machine's Code Review state is a code review run, whatever the case" do
-      assert RunKind.classify(issue(state: "Code Review")) == :code_review
-      assert RunKind.classify(issue(state: " code review ")) == :code_review
+      designed = %{state_machine: "designed"}
+
+      assert RunKind.classify(issue(state: "Code Review"), settings: designed) == :code_review
+      assert RunKind.classify(issue(state: " code review "), settings: designed) == :code_review
+    end
+
+    test "a legacy repo's Code Review state keeps the run kind it had before" do
+      legacy = %{state_machine: "legacy"}
+      in_review = issue(state: "Code Review")
+
+      assert RunKind.classify(in_review) == :implementation
+      assert RunKind.classify(in_review, settings: legacy) == :implementation
+      assert RunKind.classify(in_review, settings: legacy, ci_failure: %{check: "test"}) == :ci_fix
+      assert RunKind.classify(in_review, settings: legacy, reviewer_comments: [%{body: "Rename this"}]) == :review_feedback
     end
 
     test "a continuation after red CI is a CI fix run" do

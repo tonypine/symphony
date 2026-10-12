@@ -3976,7 +3976,8 @@ defmodule SymphonyElixir.Orchestrator do
   # Landing runs finish approved work, so they use their own `finishing_max` allowance instead of
   # `max_total` and the epic lanes.
   defp finishing_issue?(%Issue{} = issue) do
-    RunKind.classify(issue, terminal_states: Config.settings!().tracker.terminal_states) == :landing
+    settings = Config.settings!()
+    RunKind.classify(issue, terminal_states: settings.tracker.terminal_states, settings: settings) == :landing
   end
 
   defp finishing_entry?(%{forced: true}), do: false
@@ -4995,7 +4996,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case result do
       :ok ->
-        record_ticket_signal(issue, "handoff", %{to: post_pr_state})
+        record_ticket_signal(issue, "handoff", %{to: post_pr_state, move: true})
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
         state

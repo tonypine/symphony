@@ -86,6 +86,26 @@ defmodule SymphonyElixir.HandoffTest do
       assert Handoff.emitted?(@repo_key, @issue_id, nil)
     end
 
+    test "a move record never counts, even head-less, and even for its own head" do
+      # The runner records its own completed move as a `handoff` marked `move: true`. On an SSH
+      # worker the workspace HEAD reads nil, so such a record is head-less and would otherwise count
+      # for every head; only a tool hook's real emission may open the gate.
+      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{to: "Code Review", move: true})
+      refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
+      refute Handoff.emitted?(@repo_key, @issue_id, nil)
+
+      # Not even when it names the head being checked, or when recorded under string keys.
+      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{head: "abc123", move: true})
+      refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
+
+      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{"head" => "abc123", "move" => true})
+      refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
+
+      # A real emission still opens it.
+      assert :ok = Handoff.emit(@repo_key, @issue_id, %{head: "abc123"})
+      assert Handoff.emitted?(@repo_key, @issue_id, "abc123")
+    end
+
     test "only the handoff signal counts, and only for its own head" do
       assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "code_review", %{signal: "approve"})
       refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
