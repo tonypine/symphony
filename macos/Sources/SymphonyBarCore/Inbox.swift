@@ -274,9 +274,9 @@ public struct InboxReview: Equatable {
         /// The request as one decision (C16), so the Inbox's picks answer it: its question and its options, the
         /// recommended one picked to start with. Nil when the request offers no options to answer with.
         public var decision: Decision? {
-            guard let question, !question.isEmpty, !options.isEmpty else { return nil }
+            guard !options.isEmpty else { return nil }
             return Decision(
-                question: question,
+                question: question ?? "",
                 options: options.map(\.label),
                 recommendation: options.first(where: \.recommended)?.label,
                 recommended: options.firstIndex(where: \.recommended)

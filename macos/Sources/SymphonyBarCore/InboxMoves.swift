@@ -69,7 +69,8 @@ public struct InboxToolbar: Equatable {
     /// recommendation) and ⋯ Send to Rework…; a PR Approve and Merge… and Send to Rework…, with Open PR the default
     /// while a check is red (D2b); a final verification Sign Off…. An action carrying an answerable decision offers
     /// Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action, and a clarify item, keep
-    /// their links.
+    /// their links, but an action whose options are listed in its card drops the Copy Steps link that would only
+    /// repeat them.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
@@ -87,10 +88,17 @@ public struct InboxToolbar: Equatable {
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .action:
-            guard item.review.action?.commentID != nil, item.review.action?.decision != nil else {
-                return InboxToolbar(buttons: links, overflow: [])
+            let action = item.review.action
+            // A request's options are shown and picked in its card, so its Copy Steps link (which would list the
+            // same options) is left out; a steps-only action keeps it.
+            let actionLinks = links.filter { button in
+                if case .link(.copySteps) = button.command, action?.options.isEmpty == false { return false }
+                return true
             }
-            return InboxToolbar(buttons: [move(.decide)] + links, overflow: [.move(.sendToRework)])
+            guard action?.commentID != nil, action?.decision != nil else {
+                return InboxToolbar(buttons: actionLinks, overflow: [])
+            }
+            return InboxToolbar(buttons: [move(.decide)] + actionLinks, overflow: [.move(.sendToRework)])
         case .clarify:
             return InboxToolbar(buttons: links, overflow: [])
         }
@@ -173,9 +181,10 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         identifier = item.identifier
         let id = item.identifier
         // An action carrying a request is answered through `decide`, whatever the button: the reply under the
-        // request comment is what closes it, and a plain move would leave the hold behind.
+        // request comment is what closes it, and a plain move would leave the hold behind. Without the request
+        // comment there is nothing to reply under, so neither button answers one.
         let answersRequest = item.kind == .action && item.review.action?.commentID != nil
-        isDecision = move == .decide || (move == .sendToRework && answersRequest)
+        isDecision = (move == .decide || move == .sendToRework) && answersRequest
         request = isDecision ? item.review.action?.decision : nil
         requestCommentID = isDecision ? item.review.action?.commentID : nil
         self.picks = []
