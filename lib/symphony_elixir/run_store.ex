@@ -764,6 +764,39 @@ defmodule SymphonyElixir.RunStore do
   def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :invalid_issue_id}
 
   @doc """
+  Writes the ticket's self-heal bookkeeping (the broken component, the repo that owns the fix, the
+  failure signature, the fix ticket and the retry count) into the ticket's record, creating the
+  record when none exists. The read-modify-write runs in one durable transaction.
+  """
+  @spec record_ticket_self_heal(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_self_heal(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_self_heal(repo_key, issue_id, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_self_heal(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Drops the stale fix-ticket pointer from the ticket's self-heal bookkeeping, keeping the broken
+  component, the failure signature and the retry count, so a block that recurs after the fix landed
+  is compared against the last failure instead of judged as a first one. A record the store does not
+  have yet has nothing to drop, so it is a no-op.
+  """
+  @spec clear_ticket_fix_ticket(String.t(), String.t()) :: :ok | {:error, term()}
+  def clear_ticket_fix_ticket(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_clear_ticket_fix_ticket(repo_key, issue_id) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def clear_ticket_fix_ticket(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @doc """
   Writes the CI state (`running` / `green` / `red`) of one PR head into the ticket's record, with
   last-write-wins ordering by `at`. The read-modify-write runs in one durable transaction.
   Returns `{:ok, :changed}` when the head's state changed (`:unchanged` when it repeated,
@@ -1534,6 +1567,34 @@ defmodule SymphonyElixir.RunStore do
     case :mnesia.read(@ticket_state_table, key) do
       [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
         updated = TicketState.clear_hold(record, kind)
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp write_ticket_self_heal(repo_key, issue_id, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.put_self_heal(record, attrs)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_clear_ticket_fix_ticket(repo_key, issue_id) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        updated = TicketState.clear_fix_ticket(record)
         :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
         :ok
 

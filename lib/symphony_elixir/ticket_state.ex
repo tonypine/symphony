@@ -51,6 +51,21 @@ defmodule SymphonyElixir.TicketState do
   @typedoc "The CI state of one PR head."
   @type ci_state :: %{head_sha: String.t() | nil, status: String.t(), updated_at: DateTime.t() | nil}
 
+  @typedoc """
+  What the self-heal lane last did for this ticket: the broken component and the failure signature
+  it last saw, the repo that owns the fix (the design's scope rule), the fix ticket it filed or
+  reused, and how many times the flow has retried the block. It is how a recurring block is
+  compared old against new (`SymphonyElixir.SelfHeal`).
+  """
+  @type self_heal :: %{
+          component: String.t(),
+          scope: String.t() | nil,
+          signature: String.t(),
+          fix_ticket: String.t() | nil,
+          attempts: non_neg_integer(),
+          at: DateTime.t() | nil
+        }
+
   @type t :: %{
           repo_key: String.t() | nil,
           issue_id: String.t() | nil,
@@ -61,6 +76,7 @@ defmodule SymphonyElixir.TicketState do
           ci_states: [ci_state()],
           verdicts: [verdict()],
           signals: [signal()],
+          self_heal: self_heal() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -93,6 +109,7 @@ defmodule SymphonyElixir.TicketState do
       ci_states: normalize_ci_states(Map.get(record, :ci_states)),
       verdicts: normalize_verdicts(Map.get(record, :verdicts)),
       signals: normalize_signals(Map.get(record, :signals)),
+      self_heal: normalize_self_heal(Map.get(record, :self_heal)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -108,6 +125,7 @@ defmodule SymphonyElixir.TicketState do
       ci_states: [],
       verdicts: [],
       signals: [],
+      self_heal: nil,
       updated_at: nil
     }
   end
@@ -137,6 +155,38 @@ defmodule SymphonyElixir.TicketState do
   @doc "The phase the ticket's current CI Fix stay came from, or nil."
   @spec ci_fix_origin(t()) :: String.t() | nil
   def ci_fix_origin(record), do: record |> normalize() |> Map.fetch!(:ci_fix_origin)
+
+  @doc """
+  Records what the self-heal lane last did for the ticket: the broken component, the repo that owns
+  the fix, the failure signature, the fix ticket it filed or reused and the retry count. A record
+  with no `:component` clears it, which is how a healed ticket forgets the block.
+  """
+  @spec put_self_heal(t(), map(), DateTime.t()) :: t()
+  def put_self_heal(record, attrs, at \\ DateTime.utc_now()) do
+    record
+    |> normalize()
+    |> Map.put(:self_heal, self_heal_from(attrs, at))
+    |> Map.put(:updated_at, at)
+  end
+
+  @doc "The ticket's self-heal bookkeeping, or nil when it has none."
+  @spec self_heal(t()) :: self_heal() | nil
+  def self_heal(record), do: record |> normalize() |> Map.fetch!(:self_heal)
+
+  @doc """
+  Drops the stale fix-ticket pointer from the ticket's self-heal bookkeeping, keeping the broken
+  component, the failure signature and the retry count. The fix ticket a hold waited on has gone
+  terminal, so it no longer owns the component; the signature stays so a block that recurs after the
+  repair landed is compared against the failure the repair was for rather than judged as a first
+  one. A record with no bookkeeping is unchanged.
+  """
+  @spec clear_fix_ticket(t(), DateTime.t()) :: t()
+  def clear_fix_ticket(record, at \\ DateTime.utc_now()) do
+    record
+    |> normalize()
+    |> Map.update!(:self_heal, &drop_fix_ticket/1)
+    |> Map.put(:updated_at, at)
+  end
 
   @doc """
   Records a named signal at the head of the ledger, with `details` (a map) and the time it
@@ -354,6 +404,35 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_signal(_signal), do: []
+
+  # Self-heal bookkeeping keeps only a non-blank component: anything else is no bookkeeping at all.
+  defp normalize_self_heal(attrs) when is_map(attrs), do: self_heal_from(attrs, map_datetime(attrs, :at))
+
+  defp normalize_self_heal(_attrs), do: nil
+
+  # A record with no bookkeeping has no fix ticket to drop.
+  defp drop_fix_ticket(nil), do: nil
+  defp drop_fix_ticket(self_heal), do: Map.put(self_heal, :fix_ticket, nil)
+
+  defp self_heal_from(attrs, at) do
+    case normalize_string(Map.get(attrs, :component)) do
+      nil ->
+        nil
+
+      component ->
+        %{
+          component: component,
+          scope: map_string(attrs, :scope),
+          signature: map_string(attrs, :signature) || "",
+          fix_ticket: map_string(attrs, :fix_ticket),
+          attempts: normalize_attempts(Map.get(attrs, :attempts)),
+          at: at
+        }
+    end
+  end
+
+  defp normalize_attempts(value) when is_integer(value) and value >= 0, do: value
+  defp normalize_attempts(_value), do: 0
 
   defp map_decision(attrs) do
     case Map.get(attrs, :decision) do
