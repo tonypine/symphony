@@ -73,6 +73,8 @@ public struct RepositoryEntry: Equatable {
     public var workspace: RepositoryWorkspace
     /// `acceptance_gate.mode`, the repository's own acceptance gate mode, as written; nil inherits the global one.
     public var acceptanceGateMode: String?
+    /// The repo's state-machine version, `legacy` or `designed`, as written; nil uses the default (`legacy`).
+    public var stateMachine: String?
 
     public init(
         key: String,
@@ -81,7 +83,8 @@ public struct RepositoryEntry: Equatable {
         workflow: String? = nil,
         route: RepositoryRoute = RepositoryRoute(),
         workspace: RepositoryWorkspace = RepositoryWorkspace(),
-        acceptanceGateMode: String? = nil
+        acceptanceGateMode: String? = nil,
+        stateMachine: String? = nil
     ) {
         self.key = key
         self.isDefault = isDefault
@@ -90,6 +93,7 @@ public struct RepositoryEntry: Equatable {
         self.route = route
         self.workspace = workspace
         self.acceptanceGateMode = acceptanceGateMode
+        self.stateMachine = stateMachine
     }
 }
 
@@ -200,7 +204,7 @@ public enum RepositoriesConfig {
     // MARK: Fields
 
     /// Keys of an entry in the order new ones are written.
-    static let entryOrder = ["key", "default", "base_branch", "workflow", "route", "workspace", "acceptance_gate"]
+    static let entryOrder = ["key", "default", "base_branch", "workflow", "state_machine", "route", "workspace", "acceptance_gate"]
     static let groups = ["route", "workspace", "acceptance_gate"]
 
     /// The fields the model knows, in the order they are written. Fields of one group stay together.
@@ -208,6 +212,7 @@ public enum RepositoriesConfig {
         .bool(["default"], \.isDefault),
         .string(["base_branch"], \.baseBranch),
         .string(["workflow"], \.workflow),
+        .string(["state_machine"], \.stateMachine),
         .string(["route", "team"], \.route.team),
         .list(["route", "projects"], \.route.projects),
         .list(["route", "labels"], \.route.labels),

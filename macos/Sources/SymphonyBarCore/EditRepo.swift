@@ -20,7 +20,8 @@ public enum EditRepo {
             baseBranch: entry.baseBranch ?? "",
             project: entry.route.projects?.first,
             labels: entry.route.labels ?? [],
-            acceptanceGate: AcceptanceGateChoice(override: entry.acceptanceGateMode)
+            acceptanceGate: AcceptanceGateChoice(override: entry.acceptanceGateMode),
+            stateMachine: StateMachineChoice(override: entry.stateMachine)
         )
     }
 
@@ -82,6 +83,12 @@ public enum EditRepo {
 
         if draft.acceptanceGate != AcceptanceGateChoice(override: original.acceptanceGateMode) {
             entry.acceptanceGateMode = draft.acceptanceGate.override
+        }
+
+        // Like the acceptance gate mode, the state machine changes only when its picker moved, so a
+        // value Symphony rejects stays until another one is picked; Legacy removes the key.
+        if draft.stateMachine != StateMachineChoice(override: original.stateMachine) {
+            entry.stateMachine = draft.stateMachine.override
         }
 
         let others = existing.filter { $0.key != original.key }

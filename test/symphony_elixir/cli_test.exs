@@ -471,6 +471,20 @@ defmodule SymphonyElixir.CLITest do
     assert output =~ "You are working on `ABC-123`"
   end
 
+  test "workflow preview forwards the repo key" do
+    path = Path.join(System.tmp_dir!(), "cli_preview_#{System.unique_integer([:positive])}.md")
+    File.write!(path, "---\nprompts: {}\n---\nrepo={{ repo_key }}\n")
+    on_exit(fn -> File.rm_rf(path) end)
+
+    output =
+      capture_io(fn ->
+        assert {:halt, 0} =
+                 CLI.evaluate(["workflow", "preview", "--file", path, "--repo", "api"], base_deps())
+      end)
+
+    assert output =~ "repo=api"
+  end
+
   test "workflow preview reports a friendly error for a missing file" do
     assert {:error, message} =
              CLI.evaluate(["workflow", "preview", "--file", "/no/such.md"], base_deps())

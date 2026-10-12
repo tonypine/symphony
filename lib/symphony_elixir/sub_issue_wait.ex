@@ -175,7 +175,7 @@ defmodule SymphonyElixir.SubIssueWait do
   @doc "Moves `issue` to `Done` and comments how each of its sub-issues ended or waits."
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
   def close(%Issue{id: issue_id} = issue, tracker) do
-    with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, %{}, tracker: tracker) do
+    with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, %{repo_key: issue.repo_key}, tracker: tracker) do
       Logger.info("Moved issue to #{@done_state}: every sub-issue is finished #{issue_fields(issue)}")
       _ = RunStore.delete_merged_wait(issue_id)
       comment(issue, close_comment(issue), tracker)

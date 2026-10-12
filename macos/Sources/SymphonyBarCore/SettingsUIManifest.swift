@@ -44,6 +44,7 @@ public enum SettingsUIManifest {
         "repositories[].route.labels",
         "repositories[].route.projects",
         "repositories[].route.team",
+        "repositories[].state_machine",
         "repositories[].workflow",
         "repositories[].workspace.fetch_before_dispatch",
         "repositories[].workspace.repo",

@@ -842,7 +842,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hold_dependency_approval(%Issue{id: issue_id} = issue, items, turn_session, opts)
        when is_binary(issue_id) do
-    move = fn -> TransitionGuard.perform(issue_id, :dependency_review) end
+    move = fn -> TransitionGuard.perform(issue_id, :dependency_review, %{settings: Keyword.fetch!(opts, :settings)}) end
 
     case with_linear_retry(move, "moving #{issue_context(issue)} to #{@dependency_review_state} for dependency approval", opts) do
       :ok ->
@@ -1723,7 +1723,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
 
   defp move_to_post_pr_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
-    move = fn -> TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state}) end
+    move = fn -> TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, settings: Keyword.fetch!(run_context.opts, :settings)}) end
 
     case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
       :ok ->
@@ -1829,7 +1829,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp return_to_merging(%Issue{id: issue_id} = issue, kind, head, run_context) do
     label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
-    move = fn -> TransitionGuard.perform(issue_id, :merge_ready) end
+    move = fn -> TransitionGuard.perform(issue_id, :merge_ready, %{settings: Keyword.fetch!(run_context.opts, :settings)}) end
     comment = fn -> Tracker.create_comment(issue_id, green_fix_note(kind, head)) end
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
@@ -1883,7 +1883,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
 
-    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park) end, label, opts),
+    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, %{settings: Keyword.fetch!(opts, :settings)}) end, label, opts),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
       record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: "idle_park"}, opts)
       :ok

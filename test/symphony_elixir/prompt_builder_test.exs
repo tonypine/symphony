@@ -887,4 +887,44 @@ defmodule SymphonyElixir.PromptBuilderTest do
       refute PromptBuilder.build_compact_prompt(issue) =~ "Ticket state:"
     end
   end
+
+  describe "state-machine version" do
+    setup do
+      path = Workflow.workflow_file_path()
+
+      write_workflow_file!(path,
+        repos: [
+          %{"name" => "legacy", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["legacy"]},
+          %{"name" => "designed", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["designed"], "state_machine" => "designed"}
+        ]
+      )
+
+      :ok
+    end
+
+    test "a repo left on legacy renders today's status map" do
+      prompt = status_map_prompt(Config.settings_for_repo!("legacy"))
+
+      assert prompt =~ "`Auto Review`"
+      assert prompt =~ "`In Review`"
+      refute prompt =~ "`Code Review`"
+    end
+
+    test "a repo on designed renders the designed status map" do
+      prompt = status_map_prompt(Config.settings_for_repo!("designed"))
+
+      assert prompt =~ "`Code Review`"
+      assert prompt =~ "`QA`"
+      refute prompt =~ "`Auto Review`"
+      refute prompt =~ "`In Review`"
+    end
+
+    defp status_map_prompt(settings) do
+      template = ~s({% render "status_map" %})
+      workflow = {:ok, %{config: %{}, prompt: template, prompt_template: template}}
+      issue = %Issue{identifier: "ABC-1", title: "T", state: "In Progress", repo_key: "legacy"}
+
+      PromptBuilder.build_prompt(issue, settings: settings, workflow: workflow)
+    end
+  end
 end

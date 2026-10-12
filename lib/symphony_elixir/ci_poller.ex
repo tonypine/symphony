@@ -1160,7 +1160,7 @@ defmodule SymphonyElixir.CiPoller do
 
     case complete_ci_update(opts, record, attrs, :ok) do
       :ok ->
-        case TransitionGuard.perform(issue_id, :ci_fix_dispatch, %{}, tracker: tracker) do
+        case TransitionGuard.perform(issue_id, :ci_fix_dispatch, %{repo_key: Map.get(record, :repo_key)}, tracker: tracker) do
           :ok ->
             TicketSignals.record(Map.get(record, :repo_key), issue_id, "fix verdict", %{
               outcome: "mechanical",

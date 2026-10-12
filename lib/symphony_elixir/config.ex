@@ -994,7 +994,14 @@ defmodule SymphonyElixir.Config do
     |> merge_repo_workspace(repo)
     |> merge_repo_agent(repo)
     |> merge_repo_acceptance_gate(repo)
+    |> merge_repo_state_machine(repo)
     |> deep_merge(repo_config)
+  end
+
+  # The repo's state-machine version. `SystemSchema.Repo.state_machine` defaults to `legacy`, so
+  # this always has a value; it is put on the config for `StateMachine.version/1` to read.
+  defp merge_repo_state_machine(config, %SystemSchema.Repo{state_machine: state_machine}) do
+    Map.put(config, "state_machine", state_machine)
   end
 
   defp merge_repo_acceptance_gate(config, %SystemSchema.Repo{acceptance_gate: nil}), do: config

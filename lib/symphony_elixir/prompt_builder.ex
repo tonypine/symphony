@@ -3,13 +3,18 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, TicketState, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, StateMachine, TicketState, Workflow}
 
-  @render_opts [
-    strict_variables: true,
-    strict_filters: true,
-    file_system: {SymphonyElixir.Playbook.FileSystem, nil}
-  ]
+  # The file system carries the repo's resolved state-machine version as its option, so `{% render %}`
+  # serves the version's partial variants (see `Playbook.fetch/2`).
+  defp render_opts(version) do
+    [
+      strict_variables: true,
+      strict_filters: true,
+      file_system: {SymphonyElixir.Playbook.FileSystem, version}
+    ]
+  end
+
   @compact_comment_limit 5
   # CI log excerpts can reach 20k sanitized bytes, larger than the stdio soft
   # limit that forced the compact prompt in the first place. Keep only the tail
@@ -75,6 +80,7 @@ defmodule SymphonyElixir.PromptBuilder do
     {repo_key, workflow_source} = repo_context_for_prompt(issue, opts)
     agent_context = agent_context_for_prompt(opts, workflow_source)
     prompt_mode = prompt_mode(opts)
+    version = state_machine_version_for_prompt(opts, workflow_source)
 
     template =
       opts
@@ -84,16 +90,19 @@ defmodule SymphonyElixir.PromptBuilder do
       |> parse_template!()
 
     template
-    |> render_template!(%{
-      "attempt" => Keyword.get(opts, :attempt),
-      "agent" => to_solid_value(agent_context),
-      "repo_key" => repo_key,
-      "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
-      "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
-      "reviewer_comments" => to_solid_value(reviewer_comments),
-      "ci_failure" => to_solid_value(ci_failure),
-      "pr_conflict" => to_solid_value(pr_conflict)
-    })
+    |> render_template!(
+      %{
+        "attempt" => Keyword.get(opts, :attempt),
+        "agent" => to_solid_value(agent_context),
+        "repo_key" => repo_key,
+        "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
+        "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
+        "reviewer_comments" => to_solid_value(reviewer_comments),
+        "ci_failure" => to_solid_value(ci_failure),
+        "pr_conflict" => to_solid_value(pr_conflict)
+      },
+      version
+    )
     |> prepend_managed_context(prompt_mode, agent_context, repo_key)
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
@@ -190,8 +199,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # an unknown playbook partial. `Solid.render!` would silently keep the file-system
   # fallback text (a missing partial is not a strict variable/filter error), so a
   # typo'd partial name must be caught here rather than shipped in the prompt.
-  defp render_template!(template, assigns) do
-    case Solid.render(template, assigns, @render_opts) do
+  defp render_template!(template, assigns, version) do
+    case Solid.render(template, assigns, render_opts(version)) do
       {:ok, result, errors} ->
         raise_on_partial_errors!(errors)
         IO.iodata_to_binary(result)
@@ -390,6 +399,30 @@ defmodule SymphonyElixir.PromptBuilder do
     case Config.settings() do
       {:ok, settings} -> agent_kind_from_settings(settings)
       {:error, _reason} -> nil
+    end
+  end
+
+  # The repo's resolved state-machine version, from the caller's settings when it passed them, else
+  # resolved from the repo's config the same way the agent kind is. Selects the partial variants the
+  # render serves.
+  defp state_machine_version_for_prompt(opts, workflow_source) do
+    case Keyword.get(opts, :settings) do
+      %{} = settings -> StateMachine.version(settings)
+      _unset -> state_machine_version_from_workflow_source(workflow_source)
+    end
+  end
+
+  defp state_machine_version_from_workflow_source({:repo, repo_key}) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> StateMachine.version(settings)
+      {:error, _reason} -> StateMachine.default_version()
+    end
+  end
+
+  defp state_machine_version_from_workflow_source(:current) do
+    case Config.settings() do
+      {:ok, settings} -> StateMachine.version(settings)
+      {:error, _reason} -> StateMachine.default_version()
     end
   end
 

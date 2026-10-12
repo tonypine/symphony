@@ -88,7 +88,7 @@ defmodule SymphonyElixir.Workpad do
 
   defp ensure_in_progress(%Issue{id: issue_id, state: state} = issue, opts) when is_binary(issue_id) do
     if todo_state?(state) do
-      move = fn -> TransitionGuard.perform(issue_id, :claim) end
+      move = fn -> TransitionGuard.perform(issue_id, :claim, %{repo_key: Map.get(issue, :repo_key)}) end
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{@in_progress_state}", opts) do
         :ok ->

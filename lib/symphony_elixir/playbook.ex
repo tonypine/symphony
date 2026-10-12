@@ -66,14 +66,30 @@ defmodule SymphonyElixir.Playbook do
     {"workpad_template", 140}
   ]
 
+  # Version-specific partial variants, keyed by partial name and state-machine version. A variant
+  # is served by `fetch/2` when the repo's resolved version matches, and by nothing else: the base
+  # partial still holds the name, so `names/0`, the catalog and `{% render "playbook" %}` are
+  # unchanged. A partial with no variant for a version falls back to its base body.
+  @variant_files %{
+    "status_map" => %{"designed" => "status_map.designed.liquid"}
+  }
+
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "priv", "playbook"]))
 
   for name <- @partial_names do
     @external_resource Path.join(@source_root, name <> ".liquid")
   end
 
+  for {_name, by_version} <- @variant_files, {_version, file} <- by_version do
+    @external_resource Path.join(@source_root, file)
+  end
+
   @partials (for name <- @partial_names, into: %{} do
                {name, File.read!(Path.join(@source_root, name <> ".liquid"))}
+             end)
+
+  @variants (for {name, by_version} <- @variant_files, {version, file} <- by_version, into: %{} do
+               {{name, version}, File.read!(Path.join(@source_root, file))}
              end)
 
   @names Enum.sort(@partial_names)
@@ -103,4 +119,16 @@ defmodule SymphonyElixir.Playbook do
   @doc "Fetch a partial body by name."
   @spec fetch(String.t()) :: {:ok, String.t()} | :error
   def fetch(name) when is_binary(name), do: Map.fetch(@partials, name)
+
+  @doc """
+  Fetch a partial body by name for a state-machine version: the version's variant when it has one,
+  else the base body.
+  """
+  @spec fetch(String.t(), String.t() | nil) :: {:ok, String.t()} | :error
+  def fetch(name, version) when is_binary(name) do
+    case Map.fetch(@variants, {name, version}) do
+      {:ok, body} -> {:ok, body}
+      :error -> fetch(name)
+    end
+  end
 end

@@ -198,18 +198,18 @@ defmodule SymphonyElixir.DependencyGate do
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp move_issue_to_hold(%{issue: %{id: issue_id} = issue}) when is_binary(issue_id) do
+  defp move_issue_to_hold(%{issue: %{id: issue_id} = issue} = gate) when is_binary(issue_id) do
     if issue_terminal?(issue) do
       Logger.info("Skipping dependency hold state move for terminal issue issue_id=#{issue_id}")
     else
-      update_issue_to_hold(issue)
+      update_issue_to_hold(issue, Map.get(gate, :settings), Map.get(gate, :repo_key))
     end
   end
 
   defp move_issue_to_hold(_gate), do: :ok
 
-  defp update_issue_to_hold(%{id: issue_id} = issue) do
-    case TransitionGuard.perform(issue_id, :dependency_hold) do
+  defp update_issue_to_hold(%{id: issue_id} = issue, settings, repo_key) do
+    case TransitionGuard.perform(issue_id, :dependency_hold, %{settings: settings, repo_key: repo_key}) do
       :ok ->
         record_hold_signal(issue, issue_id)
         :ok

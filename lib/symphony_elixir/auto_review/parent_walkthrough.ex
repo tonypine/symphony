@@ -239,7 +239,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       |> Report.render()
 
     Enum.each([parent, issue], &publish(&1, report, settings, opts))
-    move = fn -> TransitionGuard.perform(issue.id, :parent_walkthrough, %{target: target_state}, Keyword.take(opts, [:tracker])) end
+    move = fn -> TransitionGuard.perform(issue.id, :parent_walkthrough, %{target: target_state, settings: settings}, Keyword.take(opts, [:tracker])) end
     move_label = "moving #{issue.identifier} to #{target_state} after the parent walkthrough"
 
     case with_linear_retry(move, move_label, verdict_move_opts(opts)) do

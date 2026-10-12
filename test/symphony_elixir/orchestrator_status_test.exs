@@ -3552,6 +3552,35 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "active state set includes the designed phase states when a repo runs the designed machine" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"],
+      repos: [
+        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+      ]
+    )
+
+    active_states = Orchestrator.active_state_set_for_test()
+
+    assert MapSet.member?(active_states, "todo")
+    assert MapSet.member?(active_states, "in progress")
+    assert MapSet.member?(active_states, "code review")
+    assert MapSet.member?(active_states, "qa")
+    assert MapSet.member?(active_states, "plan review")
+    assert MapSet.member?(active_states, "epic review")
+    assert MapSet.member?(active_states, "ci fix")
+  end
+
+  test "active state set is the configured active states when every repo runs the legacy machine" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"]
+    )
+
+    assert Orchestrator.active_state_set_for_test() == MapSet.new(["todo", "in progress", "waiting on sub-tickets"])
+  end
+
   test "orchestrator hydrates budget state from runs across every repo partition" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",

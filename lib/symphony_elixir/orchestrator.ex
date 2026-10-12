@@ -33,6 +33,7 @@ defmodule SymphonyElixir.Orchestrator do
     RunStore,
     Secret,
     ShippedToday,
+    StateMachine,
     StateProvisioning,
     StatusDashboard,
     SubIssueWait,
@@ -1014,7 +1015,11 @@ defmodule SymphonyElixir.Orchestrator do
 
     start_tracker_task(state, context, fn ->
       comment.()
-      TransitionGuard.perform(issue_id, :review_agent_blocked, %{target: blocked_state})
+
+      TransitionGuard.perform(issue_id, :review_agent_blocked, %{
+        target: blocked_state,
+        repo_key: running_repo_key(state, running_entry)
+      })
     end)
   end
 
@@ -1850,6 +1855,10 @@ defmodule SymphonyElixir.Orchestrator do
   def sort_issues_for_dispatch_for_test(issues) when is_list(issues) do
     sort_issues_for_dispatch(issues)
   end
+
+  @doc false
+  @spec active_state_set_for_test() :: MapSet.t(String.t())
+  def active_state_set_for_test, do: active_state_set()
 
   @doc false
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
@@ -3105,7 +3114,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp move_breakdown_sub_issue(issue, action, %{id: sub_issue_id, identifier: identifier}) do
-    case BreakdownReview.move(action, sub_issue_id, Tracker.adapter()) do
+    case BreakdownReview.move(action, sub_issue_id, Tracker.adapter(), %{repo_key: issue_repo_key(issue)}) do
       :ok ->
         record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier)
         {:ok, identifier}
@@ -3205,7 +3214,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp act_on_pending_plan_comments(_issue, _action, []), do: true
 
   defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
-    case TransitionGuard.perform(issue_id, :plan_revise) do
+    case TransitionGuard.perform(issue_id, :plan_revise, %{repo_key: issue_repo_key(issue)}) do
       :ok ->
         record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: @plan_revision_state})
         Logger.info("Moved breakdown parent to #{@plan_revision_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
@@ -4259,10 +4268,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp active_state_set do
-    Config.settings!().tracker.active_states
+    tracker = Config.settings!().tracker
+
+    tracker.active_states
+    |> active_states_with_designed(StateMachine.designed_phase_states(tracker))
     |> Enum.map(&normalize_issue_state/1)
     |> Enum.filter(&(&1 != ""))
     |> MapSet.new()
+  end
+
+  # A repo on the designed machine dispatches from its designed phase states too, so the global
+  # active set (the dispatch gate and the reconciliation filter) is the union across repos. With
+  # every repo on `legacy` this is exactly the configured active states.
+  defp active_states_with_designed(base, designed_phase) do
+    if any_repo_designed?(), do: StateMachine.active_states("designed", base, designed_phase), else: base
+  end
+
+  defp any_repo_designed? do
+    case Config.repos() do
+      {:ok, repos} -> Enum.any?(repos, &StateMachine.designed?/1)
+      _error -> false
+    end
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
@@ -4911,12 +4937,12 @@ defmodule SymphonyElixir.Orchestrator do
     Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
     context = %{kind: :post_pr_transition, issue_ids: [issue_id], issue: issue, attempt: attempt, metadata: metadata}
-    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state) end)}
+    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state, issue_repo_key(issue)) end)}
   end
 
-  defp move_post_pr_issue(issue_id, post_pr_state) do
+  defp move_post_pr_issue(issue_id, post_pr_state, repo_key) do
     Usage.with_caller(:post_pr_transition, fn ->
-      TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state})
+      TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, repo_key: repo_key})
     end)
   end
 
