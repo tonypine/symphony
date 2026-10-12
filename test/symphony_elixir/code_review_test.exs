@@ -132,6 +132,21 @@ defmodule SymphonyElixir.CodeReviewTest do
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
+    test "a reviewer block error escalates through the configured escalation state" do
+      Process.put(
+        :fake_review_result,
+        {:error, {:review_agent_blocked, %{reason: "touches protected files", findings: [], comments: []}}}
+      )
+
+      assert :ok = run("/tmp/workspace", settings: designed_settings())
+      assert_received {:moved, @issue_id, "In Review"}
+
+      assert [%{outcome: "block"}] = SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
+
+      assert [%{name: "code_review", details: %{signal: "code_review_escalate", reason: "touches protected files"}}] =
+               SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+    end
+
     test "an unknown verdict is refused without a move" do
       Process.put(:fake_review_result, {:ok, %{verdict: :shrug, comments: []}})
 

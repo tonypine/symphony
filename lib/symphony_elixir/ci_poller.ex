@@ -17,7 +17,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.{Notifications, Orchestrator, RunStore, StateMachine, Tracker}
   alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.TransitionGuard
 
@@ -602,12 +602,23 @@ defmodule SymphonyElixir.CiPoller do
   # Auto Review and Human Review issues have an open PR waiting on CI, just like In Review ones.
   # Merging ones too: the orchestrator holds a landing agent that ended its turn on pending checks
   # until this poller sees the head settle.
+  #
+  # A designed repo's Code Review issues are watched too: the reviewer run only dispatches on a green
+  # head, and the ticket enters Code Review straight from In Progress, so nothing else would ever
+  # record CI for it. Watching the state here is what lets `green_head?/1` see the head's checks.
   defp watched_states(settings) do
     review_states = HumanReview.review_states(settings)
 
-    if AutoReview.enabled?(settings),
-      do: review_states ++ [AutoReview.state(settings), @merging_state],
-      else: review_states ++ [@merging_state]
+    base =
+      if AutoReview.enabled?(settings),
+        do: review_states ++ [AutoReview.state(settings), @merging_state],
+        else: review_states ++ [@merging_state]
+
+    base ++ code_review_states(settings)
+  end
+
+  defp code_review_states(settings) do
+    if StateMachine.designed?(settings), do: [settings.tracker.code_review_state], else: []
   end
 
   defp auto_review_issues(settings, issues) do

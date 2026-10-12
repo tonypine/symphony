@@ -67,6 +67,9 @@ defmodule SymphonyElixir.CodeReview do
       {:error, {:review_agent_inconclusive, reason}} ->
         inconclusive(issue, workspace, opts, settings, reason)
 
+      {:error, {:review_agent_blocked, payload}} ->
+        blocked(issue, workspace, opts, settings, payload)
+
       {:error, reason} ->
         {:error, {:code_review_failed, reason}}
     end
@@ -106,6 +109,8 @@ defmodule SymphonyElixir.CodeReview do
     case verdict do
       :approve -> move(issue, opts, settings, :code_review_approve, %{target: @merging_state})
       :request_changes -> move(issue, opts, settings, :code_review_rework, %{})
+      # The real reviewer exits a block through `blocked/5` (an error result), never this clause; an
+      # overridden reviewer that returns a `:block` verdict map escalates the same way.
       :block -> escalate(issue, opts, settings, verdict_reason(result))
       other -> {:error, {:code_review_unknown_verdict, other}}
     end
@@ -127,6 +132,18 @@ defmodule SymphonyElixir.CodeReview do
       record_verdict(issue, opts, head, "inconclusive_escalated")
       escalate(issue, opts, settings, "inconclusive after #{retries} retries: #{inspect(reason)}")
     end
+  end
+
+  # `ReviewAgent`'s own block exit: it returns `{:error, {:review_agent_blocked, payload}}` rather
+  # than a `{:ok, %{verdict: :block}}` map, so a real block never reaches `apply_verdict/6`'s
+  # `:block` clause. It records the verdict against the judged head and escalates exactly the same
+  # way, through the escalation edge.
+  defp blocked(issue, workspace, opts, settings, payload) do
+    head = workspace_head(workspace, opts)
+    record_verdict(issue, opts, head, "block")
+    Logger.warning("Code Review blocked for #{issue_label(issue)} head=#{head || "unknown"} verdict=block")
+
+    escalate(issue, opts, settings, verdict_reason(payload))
   end
 
   defp inconclusive_retries(issue, opts, head) do

@@ -1745,7 +1745,11 @@ defmodule SymphonyElixir.AgentRunner do
       record_move_signal(issue, Handoff.missing_signal(), %{to: post_pr_state, reason: reason}, run_context.opts)
       {:error, {:handoff_signal_missing, post_pr_state}}
     else
-      move = fn -> TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, settings: settings}) end
+      # A designed repo's handoff is the table's explicit `:handoff` edge, whose target resolves
+      # from the settings to the configured Code Review state; a legacy repo keeps the
+      # `:post_pr_handoff` edge with the explicit post-PR target it always used.
+      signal = if Handoff.designed?(settings), do: :handoff, else: :post_pr_handoff
+      move = fn -> TransitionGuard.perform(issue_id, signal, %{target: post_pr_state, settings: settings}) end
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
         :ok ->
