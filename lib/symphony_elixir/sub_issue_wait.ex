@@ -9,8 +9,9 @@ defmodule SymphonyElixir.SubIssueWait do
   all still in `Backlog` was never approved, so it is not moved: it gets a breakdown run that
   picks the plan up where it stopped (see `Issue.unapproved_plan?/2`). The poll's candidates
   can be stale, so the parent's state is read again just before the move. The state is active but
-  held: an issue in it is dispatched only for the close-out run, once it is a
-  `breakdown` parent whose sub-issues are all terminal.
+  held: an issue in it is dispatched only to close its epic, once it is a `breakdown` parent whose
+  sub-issues are all terminal — the close-out run on a legacy repo, the epic review on a designed
+  one (`SymphonyElixir.EpicReview`), which moves the parent to `Epic Review` and reviews it.
 
   Any other issue whose pull request merges with a sub-issue still open outside `Backlog` waits there
   too, instead of closing (`wait_on_merge?/3`), and Symphony moves it to `Done` itself, with no run,
@@ -99,7 +100,8 @@ defmodule SymphonyElixir.SubIssueWait do
 
   @doc """
   True when an issue in the waiting state must not run: anything but a `breakdown`
-  parent whose sub-issues are all terminal.
+  parent whose sub-issues are all terminal. The run it is released for is the epic's
+  close, and which run that is (`:close_out`, `:epic_review`) is `SymphonyElixir.RunKind`'s.
   """
   @spec held?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def held?(issue, terminal_states, settings) do

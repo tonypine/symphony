@@ -232,10 +232,14 @@ issues:
   one in the configured teams and creates it as a started state when it is missing, logging what
   it created; a second start finds them all and creates nothing. A state renamed or deleted in
   Linear is reported at startup with its exact name and the `issues.states.*` key to point at the
-  new name, and is then recreated, so a name is never silently duplicated. These states land
-  inert: nothing dispatches on, enters or reads them yet. They sit in Linear's `started` group,
-  beside `In Progress`, so they read as active columns; do not add them to `states.active` until a
-  feature moves tickets into them.
+  new name, and is then recreated, so a name is never silently duplicated. On a `designed` repo the
+  machine enters them and dispatch picks them up — `Code Review` for the reviewer run, `QA` for the
+  QA pass, `CI Fix` for mechanical repair, and `Epic Review` for the automatic close of a plan
+  parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each one filed as a follow-up
+  sub-ticket in `Todo` under the same epic, with the parent back in `Waiting on sub-tickets`). They
+  sit in Linear's `started` group, beside `In Progress`, so they read as active columns;
+  `states.plan_review` is the one person-owned state of the five: it is never dispatched, and an
+  issue in it waits for the person reviewing the plan.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
@@ -670,8 +674,9 @@ agent:
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `final_verification` (title starts with `Final verification:`), `breakdown` (plan ticket in
-  `Rework`), `close_out` (plan ticket whose sub-issues are all terminal), `breakdown` (other
+  `final_verification` (title starts with `Final verification:`; a legacy repo only), `breakdown` (plan ticket in
+  `Rework`), `close_out` (a legacy repo's plan ticket whose sub-issues are all terminal), `epic_review`
+  (a designed repo's plan ticket whose sub-issues are all terminal: the epic review), `breakdown` (other
   plan ticket: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
@@ -743,7 +748,7 @@ agent:
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
   queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `auto_review`, `waiting_for_human`, `landing`,
-  `breakdown`, `close_out`, `final_verification`), whether an agent or QA pass is `running` for it,
+  `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent or QA pass is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan

@@ -604,6 +604,56 @@ defmodule SymphonyElixir.QaAgentTest do
       assert QaAgent.prompt(job(), nil) =~ "so the executor can fix it"
     end
 
+    test "an epic review judges the epic itself at the base branch head against its own checklist" do
+      epic =
+        issue(%{
+          id: "issue-epic",
+          identifier: "TP-823",
+          title: "Land the epic path",
+          description: "## Acceptance criteria\n\n- [ ] The settings window opens\n"
+        })
+
+      prompt =
+        QaAgent.prompt(
+          job(%{
+            issue: epic,
+            epic_review: true,
+            base_ref: "origin/main",
+            journey: %{source: "the epic's acceptance criteria", text: "- [ ] The settings window opens"}
+          }),
+          nil
+        )
+
+      assert prompt =~ "You are the QA agent in Symphony's epic review"
+      assert prompt =~ "Every sub-ticket of this epic has merged, and the epic now has to close itself"
+      assert prompt =~ "the head of `origin/main`"
+      assert prompt =~ "files every gap as a follow-up sub-ticket in `Todo`"
+      assert prompt =~ "Epic checklist (TP-823, this epic's own acceptance criteria and user walkthrough)"
+      assert prompt =~ "You are verifying the epic itself, not running a script"
+      assert prompt =~ "Journeys to verify, from the epic's acceptance criteria:\n- [ ] The settings window opens"
+      assert prompt =~ ~s("checklist": true | false)
+
+      flat = String.replace(prompt, ~r/\s+/, " ")
+
+      assert flat =~
+               ~s(Every row of the epic's checklist is a required step. Report each row as its own step with `"checklist": true` and the status `pass` or `fail`)
+
+      assert flat =~ "Symphony does not accept `pass` when no checklist row is reported or most of them are skipped"
+      assert flat =~ "a follow-up sub-ticket"
+
+      # The epic is its own parent: no parent section and no verification ticket.
+      refute prompt =~ "Parent issue (this is a sub-ticket"
+      refute prompt =~ "Verification checklist"
+      refute prompt =~ "running the parent walkthrough"
+      refute prompt =~ "so the executor can fix it"
+
+      # An epic whose plan names no journeys: the review derives them itself.
+      derived = QaAgent.prompt(job(%{issue: epic, epic_review: true, base_ref: "origin/main"}), nil)
+
+      assert derived =~
+               "Journeys to verify: derive them from the epic's description, its acceptance criteria and its plan documents."
+    end
+
     test "a walkthrough with cli and macos_app keeps running the CLI checks when the app part is blocked" do
       config = %{playbooks: %{"macos_app" => %{"build" => "make -C macos app", "app" => "macos/build/Symphony.app"}}}
       assert [%{kind: "cli"}, %{kind: "macos_app"}] = playbooks = Selection.playbooks(config)
@@ -1693,6 +1743,27 @@ defmodule SymphonyElixir.QaAgentTest do
       assert body =~ "### Filed tickets\n\n- TP-912 Parent walkthrough fails: open Settings"
     end
 
+    test "renders the epic review's pre-checks, and nothing when a run carries none" do
+      body =
+        Report.render(%{
+          verdict: :pass,
+          sha: @sha,
+          target_state: "Done",
+          checks: [
+            %{name: :artifacts, status: :ok, detail: "all 2 sub-issue(s) terminal"},
+            %{name: :comments, status: :attention, detail: "1 comment(s) to account for, the newest from kim"}
+          ]
+        })
+
+      assert body =~
+               "### Pre-checks\n\n- **ok** artifacts: all 2 sub-issue(s) terminal\n" <>
+                 "- **attention** comments: 1 comment(s) to account for, the newest from kim"
+
+      # The QA and walkthrough reports carry no pre-checks, so their format is unchanged.
+      refute Report.render(%{verdict: :pass, sha: @sha, target_state: "In Review"}) =~ "### Pre-checks"
+      refute Report.render(%{verdict: :pass, sha: @sha, target_state: "In Review", checks: []}) =~ "### Pre-checks"
+    end
+
     test "creates the report comment on Linear and then rewrites it in place" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
       recipient = self()
@@ -1734,6 +1805,15 @@ defmodule SymphonyElixir.QaAgentTest do
       assert :ok = Report.publish(issue(), "## Symphony QA Report\n")
       assert_receive {:memory_tracker_comment, "issue-qa", "## Symphony QA Report\n"}
       assert Report.heading() == "## Symphony QA Report"
+    end
+
+    test "withdrawing a report comment that is not on the ticket is fine" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
+
+      comments = [%{"id" => "w", "body" => "## Symphony Workpad"}, %{"id" => "n", "body" => nil}]
+      client = fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => comments}}}}} end
+
+      assert :ok = Report.withdraw(issue(), heading: "## Symphony QA Report", linear_client: client)
     end
   end
 end

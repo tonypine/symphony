@@ -107,6 +107,20 @@ defmodule SymphonyElixir.PlaybookTest do
       refute base =~ "Plan Review"
     end
 
+    test "plan_pipeline's designed variant files no verification sub-ticket: the epic closes itself" do
+      assert {:ok, designed} = Playbook.fetch("plan_pipeline", "designed")
+      assert {:ok, base} = Playbook.fetch("plan_pipeline")
+
+      assert designed != base
+      assert {:ok, _template} = Solid.parse(designed)
+      assert designed =~ "name: plan_pipeline\n"
+      assert designed =~ "There is no `Final verification:` sub-ticket: the epic closes"
+
+      # The base body makes the verification ticket the last sub-ticket of the split.
+      assert base =~ "`blocked_by` links, the `Final verification:`\n   sub-ticket last)"
+      refute designed =~ "sub-ticket last)"
+    end
+
     test "a partial with no variant for a version falls back to the base body" do
       assert Playbook.fetch("status_map", "legacy") == Playbook.fetch("status_map")
       assert Playbook.fetch("guardrails", "designed") == Playbook.fetch("guardrails")

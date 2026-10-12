@@ -24,7 +24,8 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
-  `:code_review_state`, `:qa_state`, `:ci_fix_state`, `:waiting_on_sub_issues` and
+  `:code_review_state`, `:qa_state`, `:epic_review_state`, `:ci_fix_state`,
+  `:waiting_on_sub_issues` and
   `:ci_escalation_state`.
 
   The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`),
@@ -140,6 +141,16 @@ defmodule SymphonyElixir.TransitionGuard do
   # records that origin on the ticket. `:ci_fix_mechanical` is the return — the target is the origin
   # the caller read back from the ticket, so the lane never has to name a state itself.
   #
+  # The `:epic_review_*` rows are the epic path's close (`SymphonyElixir.EpicReview`). A designed
+  # repo's epic parent whose sub-issues are all terminal enters `Epic Review` from the waiting state,
+  # and the review's verdict either closes the epic or sends it back: `Done` when the epic's intent
+  # holds, and the waiting state when gaps were found, with the gaps filed as follow-ups in `Todo`
+  # inside the same epic — never `Backlog`, which would freeze the epic with nobody noticing. The
+  # parent's own open follow-up holds it waiting until that follow-up lands, and the review runs
+  # again. `:epic_review_enter`'s target is the repo's configured Epic Review state and
+  # `:epic_review_gaps`'s the configured waiting state, so a repo that names either differently
+  # still lands where the design says.
+  #
   # The lane's other two exits have no row, because they are not machine moves: a repair the fixing
   # agent judges substantive is the agent's own request to set `Rework` (an agent state request is
   # validated by `resolve_request/2`, never performed through this table), and a repair it cannot
@@ -175,7 +186,10 @@ defmodule SymphonyElixir.TransitionGuard do
                       %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
                       %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
                       %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
-                      %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested}
+                      %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
+                      %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
+                      %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
+                      %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}
                     ]
 
   # States an agent's request may never set, with the refusal it gets. Moving to `Merging` is how a
@@ -243,12 +257,14 @@ defmodule SymphonyElixir.TransitionGuard do
   the machine's refusals and redirects in the same order as before — the Auto Review handoff
   refusal, the Plan Review entry refusal, the plan-review and Human Review redirects, the
   human-only refusal, the restart refusal, the Code Review entry refusal, the QA entry refusal,
-  then the waiting-state refusal — and returns `{:ok, state}` (the state to set, after any
-  redirect) or `{:error, reason}` with the same tuple the tool returned before. On a repo running
-  the designed machine, an agent asking to enter `Code Review` or `QA` by hand is refused: `Code
-  Review` is the handoff signal's to enter and `QA` the verdict's, never the tool's. So is an agent
-  asking for `In Progress` from a phase past implementation (`Rework`, `Code Review`, `QA` or
-  `Merging`): on the designed machine that is a `Restart`, which only a person performs.
+  the Epic Review entry refusal, then the waiting-state refusal — and returns `{:ok, state}` (the
+  state to set, after any redirect) or `{:error, reason}` with the same tuple the tool returned
+  before. On a repo running the designed machine, an agent asking to enter `Code Review` or `QA` by
+  hand is refused: `Code Review` is the handoff signal's to enter and `QA` the verdict's, never the
+  tool's. So is an agent asking for `In Progress` from a phase past implementation (`Rework`,
+  `Code Review`, `QA` or `Merging`): on the designed machine that is a `Restart`, which only a
+  person performs. `Epic Review` is refused the same way: the machine enters it once an epic
+  parent's sub-issues are all terminal and its review's verdict leaves it.
 
   A designed repo's plan parent is redirected to its configured `Plan Review` state whatever runs:
   the run hands the plan over by asking for the review state (see `ctx`'s `:plan_parent?`), and an
@@ -284,6 +300,7 @@ defmodule SymphonyElixir.TransitionGuard do
              :ok <- refuse_restart_state(state, ctx, settings),
              :ok <- refuse_code_review_entry(state, settings),
              :ok <- refuse_qa_entry(state, settings),
+             :ok <- refuse_epic_review_entry(state, settings),
              :ok <- refuse_waiting_state(state, settings) do
           {:ok, state}
         end
@@ -421,6 +438,15 @@ defmodule SymphonyElixir.TransitionGuard do
       else: :ok
   end
 
+  # Entering `Epic Review` is the epic path's own move: the machine enters it when a designed repo's
+  # parent has every sub-issue terminal, and the review's verdict leaves it. An agent's request to
+  # set the state by hand is refused the same way the Code Review and QA entries are.
+  defp refuse_epic_review_entry(%{"name" => state_name}, settings) do
+    if StateMachine.designed?(settings) and state_name_matches?(state_name, settings.tracker.epic_review_state),
+      do: {:error, {:epic_review_requires_machine_move, state_name}},
+      else: :ok
+  end
+
   # Moving a `breakdown` parent to the waiting state approves its plan and promotes its sub-tickets,
   # so only a human does it.
   defp refuse_waiting_state(%{"name" => state_name}, settings) do
@@ -467,6 +493,7 @@ defmodule SymphonyElixir.TransitionGuard do
   defp resolve(:requested, ctx), do: Map.fetch!(ctx, :target)
   defp resolve(:code_review_state, ctx), do: settings!(ctx).tracker.code_review_state
   defp resolve(:qa_state, ctx), do: settings!(ctx).tracker.qa_state
+  defp resolve(:epic_review_state, ctx), do: settings!(ctx).tracker.epic_review_state
   defp resolve(:ci_fix_state, ctx), do: settings!(ctx).tracker.ci_fix_state
   defp resolve(:waiting_on_sub_issues, ctx), do: SubIssueWait.state(settings!(ctx))
   defp resolve(:ci_escalation_state, ctx), do: settings!(ctx).ci.escalation_state || @in_review_state

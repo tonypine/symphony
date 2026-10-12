@@ -43,6 +43,11 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   The executor run (`Parent tickets` in `WORKFLOW.md`) is used instead when Auto Review is off,
   the tracker is not Linear, the run is on a remote worker, the ticket has the `qa:skip` label, or
   it has no parent.
+
+  A designed repo never reaches this module: `SymphonyElixir.RunKind` only classifies a
+  `Final verification:` ticket on a legacy repo (`StateMachine.designed?/1`), and a designed repo
+  closes an epic parent with the epic review (`SymphonyElixir.EpicReview`) instead. `run/3` returns
+  `:skip` there, so the legacy close-out flow is untouched.
   """
 
   require Logger
@@ -96,7 +101,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   def run(%Issue{} = issue, workspace, opts) do
     settings = Keyword.fetch!(opts, :settings)
 
-    if RunKind.classify(issue) == :final_verification do
+    if RunKind.classify(issue, settings: settings) == :final_verification do
       case walkthrough_parent(issue, settings, opts) do
         {:ok, %Issue{} = parent} ->
           run_walkthrough(issue, parent, workspace, settings, opts)

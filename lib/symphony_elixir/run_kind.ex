@@ -12,34 +12,40 @@ defmodule SymphonyElixir.RunKind do
   Classification is deterministic and uses the signals the orchestrator already
   routes on. The first match wins:
 
-    1. `final_verification`: the title starts with `Final verification:`.
+    1. `final_verification`: the title starts with `Final verification:` (a legacy repo only:
+       the designed machine's epic path reviews the epic in `Epic Review` instead).
     2. `breakdown`: a `breakdown` parent in `Rework`, whose rejected plan is made again.
-    3. `close_out`: a `breakdown` parent whose sub-issues are all terminal.
-    4. `breakdown`: any other `breakdown` parent: one without sub-issues yet, one whose
+    3. `close_out`: a legacy repo's `breakdown` parent whose sub-issues are all terminal.
+    4. `epic_review`: a designed repo's `breakdown` parent whose sub-issues are all terminal:
+       the epic path's close, which Symphony starts from `Waiting on sub-tickets`.
+    5. `breakdown`: any other `breakdown` parent: one without sub-issues yet, one whose
        never-approved plan stopped midway, or one revising its plan from review comments.
-    5. `landing`: the issue is in `Merging`.
-    6. `rework`: the issue is in `Rework`.
-    7. `code_review`: the issue is in the designed machine's configured `code_review_state`:
+    6. `landing`: the issue is in `Merging`.
+    7. `rework`: the issue is in `Rework`.
+    8. `code_review`: the issue is in the designed machine's configured `code_review_state`:
        the poll-dispatched reviewer run, which judges the PR head and records a verdict. Only a
        repo on the designed machine reaches this: a legacy repo whose Linear workflow happens
        to have a `Code Review` column keeps classifying its runs as it did before.
-    8. `qa`: the issue is in the designed machine's configured `qa_state`: the poll-dispatched
+    9. `qa`: the issue is in the designed machine's configured `qa_state`: the poll-dispatched
        QA run, which exercises the change from the user's point of view and records a verdict.
        Designed-only, like `code_review`.
-    9. `ci_fix`: the issue is in the designed machine's configured `ci_fix_state` (the mechanical
+    10. `epic_review`: the issue is in the designed machine's configured `epic_review_state`:
+       the poll-dispatched epic review, which the tick starts again if the run that moved the
+       parent there stopped. Designed-only, like the phases above.
+    11. `ci_fix`: the issue is in the designed machine's configured `ci_fix_state` (the mechanical
        repair lane a red head or a conflict routes to), or the run continues after a red CI run
        (`:ci_failure` signal).
-    10. `review_feedback`: the run continues after PR review comments
+    12. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
-    11. `implementation`: everything else.
+    13. `implementation`: everything else.
 
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
 
   #{@reserved_kind_names} are never returned by `classify/2`; they name the reviewer and
   acceptance gate runs, which Symphony starts itself. The designed machine's configured
-  `code_review_state`, `qa_state` and `ci_fix_state` *are* returned, as `code_review`, `qa`
-  and `ci_fix`.
+  `code_review_state`, `qa_state`, `epic_review_state` and `ci_fix_state` *are* returned, as
+  `code_review`, `qa`, `epic_review` and `ci_fix`.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -53,6 +59,7 @@ defmodule SymphonyElixir.RunKind do
           | :rework
           | :landing
           | :code_review
+          | :epic_review
           | :ci_fix
           | :review_feedback
           | :pre_push_review
@@ -73,6 +80,7 @@ defmodule SymphonyElixir.RunKind do
     :rework,
     :landing,
     :code_review,
+    :epic_review,
     :ci_fix,
     :review_feedback,
     :pre_push_review,
@@ -85,6 +93,7 @@ defmodule SymphonyElixir.RunKind do
   @rework_state "rework"
   @code_review_state "code review"
   @qa_state "qa"
+  @epic_review_state "epic review"
   @ci_fix_state "ci fix"
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 
@@ -103,7 +112,7 @@ defmodule SymphonyElixir.RunKind do
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
 
-  @doc "The title prefix that makes a ticket a `final_verification` run."
+  @doc "The title prefix that makes a ticket a `final_verification` run on a legacy repo."
   @spec final_verification_prefix() :: String.t()
   def final_verification_prefix, do: @final_verification_prefix
 
@@ -132,43 +141,52 @@ defmodule SymphonyElixir.RunKind do
     * `:ci_failure` - the pending red CI context, or nil.
     * `:reviewer_comments` - the pending PR review comments, or `[]`.
     * `:settings` - the repo's settings, used to tell a designed repo's configured phase states
-      from a legacy workflow that happens to name a state the same way.
+      and its epic path from a legacy workflow that happens to name a state the same way.
   """
   @spec classify(Issue.t(), keyword()) :: t()
   def classify(%Issue{} = issue, signals \\ []) do
     terminal_states = Keyword.get(signals, :terminal_states, @default_terminal_states)
+    settings = Keyword.get(signals, :settings)
 
     cond do
-      final_verification?(issue) -> :final_verification
-      Issue.breakdown?(issue) -> parent_kind(issue, terminal_states)
+      final_verification?(issue, settings) -> :final_verification
+      Issue.breakdown?(issue) -> parent_kind(issue, terminal_states, settings)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
-      (kind = designed_phase_kind(issue, signals)) != nil -> kind
+      (kind = designed_phase_kind(issue, settings)) != nil -> kind
       present?(Keyword.get(signals, :ci_failure)) -> :ci_fix
       present?(Keyword.get(signals, :reviewer_comments)) -> :review_feedback
       true -> :implementation
     end
   end
 
-  defp parent_kind(issue, terminal_states) do
-    if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue), do: :close_out, else: :breakdown
+  # A designed repo closes an epic parent by reviewing the epic, not by a close-out run: the parent's
+  # epic review is started from `Waiting on sub-tickets` once every sub-issue is terminal
+  # (`SymphonyElixir.EpicReview`). A legacy repo keeps the close-out run exactly as it was.
+  defp parent_kind(%Issue{} = issue, terminal_states, settings) do
+    cond do
+      not Issue.close_out_ready?(issue, terminal_states) -> :breakdown
+      Issue.replanning?(issue) -> :breakdown
+      StateMachine.designed?(settings) -> :epic_review
+      true -> :close_out
+    end
   end
 
   # A designed repo's verdict phases classify to their own run kinds: the repo's configured
   # `code_review_state` is the poll-dispatched reviewer run, its configured `qa_state` the
-  # poll-dispatched QA run, and its configured `ci_fix_state` the mechanical repair lane a red head
-  # or a conflict routes to. The configured name is what the rest of the designed flow routes on
-  # (`QaVerification.qa_run?/2`, the transition guard), so a repo that renames a phase state still
-  # classifies its runs correctly. All three are designed-only — a legacy repo whose workflow
+  # poll-dispatched QA run, its configured `epic_review_state` the poll-dispatched epic review, and
+  # its configured `ci_fix_state` the mechanical repair lane a red head or a conflict routes to. The
+  # configured name is what the rest of the designed flow routes on (`QaVerification.qa_run?/2`,
+  # `EpicReview.epic_review_run?/2`, the transition guard), so a repo that renames a phase state
+  # still classifies its runs correctly. All four are designed-only — a legacy repo whose workflow
   # happens to name a state the same way keeps the run kind it had before — so a repo without the
   # phases is not any of them.
-  defp designed_phase_kind(issue, signals) do
-    settings = Keyword.get(signals, :settings)
-
+  defp designed_phase_kind(issue, settings) do
     if StateMachine.designed?(settings) do
       cond do
         in_state?(issue, phase_state(settings, :code_review_state, @code_review_state)) -> :code_review
         in_state?(issue, phase_state(settings, :qa_state, @qa_state)) -> :qa
+        in_state?(issue, phase_state(settings, :epic_review_state, @epic_review_state)) -> :epic_review
         in_state?(issue, phase_state(settings, :ci_fix_state, @ci_fix_state)) -> :ci_fix
         true -> nil
       end
@@ -184,11 +202,15 @@ defmodule SymphonyElixir.RunKind do
     end
   end
 
-  defp final_verification?(%Issue{title: title}) when is_binary(title) do
-    title |> String.trim_leading() |> String.starts_with?(@final_verification_prefix)
+  # A designed repo has no `Final verification:` tickets: the epic path reviews the epic itself in
+  # `Epic Review` (`SymphonyElixir.EpicReview`), so the title no longer names a run kind there. A
+  # legacy repo keeps the title's run kind exactly as before.
+  defp final_verification?(%Issue{title: title}, settings) when is_binary(title) do
+    not StateMachine.designed?(settings) and
+      title |> String.trim_leading() |> String.starts_with?(@final_verification_prefix)
   end
 
-  defp final_verification?(_issue), do: false
+  defp final_verification?(_issue, _settings), do: false
 
   defp in_state?(%Issue{state: state}, expected) when is_binary(state) and is_binary(expected) do
     normalize_state(state) == normalize_state(expected)
