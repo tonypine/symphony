@@ -74,6 +74,17 @@ defmodule SymphonyElixir.HumanReviewTest do
 
       assert message =~ "human_review_state must not be an active state"
     end
+
+    test "a designed repo's Plan Review must not be an active state either" do
+      tracker = %{"kind" => "memory", "active_states" => ["Todo", " plan review"]}
+
+      assert {:error, {:invalid_workflow_config, message}} =
+               Schema.parse(%{"state_machine" => "designed", "tracker" => tracker})
+
+      assert message =~ "tracker.plan_review_state must not be an active state on a designed repo"
+      assert {:ok, %Schema{}} = Schema.parse(%{"tracker" => tracker})
+      assert {:ok, %Schema{}} = Schema.parse(%{"state_machine" => "designed", "tracker" => Map.put(tracker, "plan_review_state", nil)})
+    end
   end
 
   describe "state checks" do
