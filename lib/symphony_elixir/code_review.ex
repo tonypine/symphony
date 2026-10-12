@@ -11,9 +11,14 @@ defmodule SymphonyElixir.CodeReview do
   recorded CI state). Its verdict is recorded bound to the head SHA it judged, then performed
   through the one writer, `SymphonyElixir.TransitionGuard`:
 
-    * `approve` -> `Merging` (the QA-skipped policy path)
+    * `approve` -> `QA`, or straight to `Merging` when the QA state's skip rule applies
     * `request_changes` -> `Rework`
     * `block` -> the escalation state, through the request machinery
+
+  An approve carries the QA run/skip decision: `SymphonyElixir.QaPolicy` decides it deterministically
+  from the changed paths (docs-only/internal-only diffs skip QA), the decision and its reason are
+  recorded in the verdict's signal, and the guard row it picks does the move — `:code_review_approve`
+  into the configured QA state, `:code_review_approve_skip` into `Merging`.
 
   An inconclusive review retries boundedly on the same head, then escalates the same way. A legacy
   repo never reaches this module: `run/3` returns `:skip` for anything but a designed repo's
@@ -28,13 +33,22 @@ defmodule SymphonyElixir.CodeReview do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Handoff, ReviewAgent, StateMachine, TicketSignals, TransitionGuard, WorkspaceHead}
+  alias SymphonyElixir.{
+    Config,
+    Handoff,
+    QaPolicy,
+    ReviewAgent,
+    StateMachine,
+    TicketSignals,
+    TransitionGuard,
+    WorkspaceHead
+  }
+
   alias SymphonyElixir.Linear.Issue
 
   @verdict_kind "code_review"
   @reviewer_disabled_signal "code_review_reviewer_disabled"
   @max_inconclusive_retries 2
-  @merging_state "Merging"
 
   @doc """
   Runs the reviewer for `issue` when it is a designed repo's `Code Review` ticket, else `:skip` so
@@ -143,12 +157,30 @@ defmodule SymphonyElixir.CodeReview do
     Logger.info("Code Review verdict for #{issue_label(issue)} head=#{head || "unknown"} verdict=#{inspect(verdict)}")
 
     case verdict do
-      :approve -> move(issue, opts, settings, :code_review_approve, %{target: @merging_state})
+      :approve -> approve(issue, workspace, opts, settings)
       :request_changes -> move(issue, opts, settings, :code_review_rework, %{})
       # The real reviewer exits a block through `blocked/5` (an error result), never this clause; an
       # overridden reviewer that returns a `:block` verdict map escalates the same way.
       :block -> escalate(issue, opts, settings, verdict_reason(result))
       other -> {:error, {:code_review_unknown_verdict, other}}
+    end
+  end
+
+  # An approve carries the QA run/skip decision. The deterministic rule (docs-only/internal-only
+  # diffs) skips QA and lands the ticket in `Merging`; everything else hands it to the QA state. The
+  # decision and its reason are recorded with the verdict, so a skip is auditable wherever the
+  # verdict is read.
+  defp approve(issue, workspace, opts, settings) do
+    policy = Keyword.get(opts, :qa_policy, QaPolicy)
+
+    case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
+      {:run, _playbooks, reason} ->
+        Logger.info("Code Review approved #{issue_label(issue)}; QA runs: #{reason}")
+        move(issue, opts, settings, :code_review_approve, %{qa_decision: "run", reason: reason})
+
+      {:skip, reason} ->
+        Logger.info("Code Review approved #{issue_label(issue)}; QA skipped: #{reason}")
+        move(issue, opts, settings, :code_review_approve_skip, %{qa_decision: "skip", reason: reason})
     end
   end
 
@@ -204,10 +236,11 @@ defmodule SymphonyElixir.CodeReview do
   # the designed table; the table itself is what defines them, and is tested directly.
   defp move(issue, opts, settings, signal, extra) do
     ctx = Map.merge(%{settings: settings}, extra)
+    target = TransitionGuard.target(signal, ctx)
 
     case TransitionGuard.perform(issue.id, signal, ctx, tracker_opts(opts)) do
       :ok ->
-        record_move_signal(issue, opts, signal, extra)
+        record_move_signal(issue, opts, signal, Map.put(extra, :target, target))
         :ok
 
       {:error, reason} ->
@@ -229,7 +262,7 @@ defmodule SymphonyElixir.CodeReview do
   defp record_move_signal(issue, opts, signal, extra) do
     details =
       extra
-      |> Map.take([:target, :reason])
+      |> Map.take([:target, :reason, :qa_decision])
       |> Map.put(:signal, to_string(signal))
 
     TicketSignals.record(repo_key(issue, opts), issue.id, @verdict_kind, details)
