@@ -41,6 +41,20 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
   end
 
+  # Answers each reviewer pass with the next queued result, so a test can give the first pass and the
+  # deepened second pass different verdicts.
+  defmodule SequencedReviewAgent do
+    def evaluate(issue, _workspace, _settings, _opts) do
+      send(self(), {:reviewed, issue.id, issue.state})
+
+      index = Process.get(:review_pass, 0)
+      Process.put(:review_pass, index + 1)
+
+      Process.get(:fake_review_results, [])
+      |> Enum.at(index, {:ok, %{verdict: :approve, comments: [], reason: "looks good"}})
+    end
+  end
+
   setup do
     RunStore.delete_ticket_state(@repo_key, @issue_id)
     on_exit(fn -> RunStore.delete_ticket_state(@repo_key, @issue_id) end)
@@ -102,6 +116,38 @@ defmodule SymphonyElixir.CodeReviewTest do
       workspace,
       [review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy] ++ opts
     )
+  end
+
+  defp run_with(agent, workspace, opts, state \\ "Code Review") do
+    CodeReview.run(issue(state), workspace, [review_agent: agent, tracker: FakeTracker] ++ opts)
+  end
+
+  defp verdicts, do: SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
+  defp signals, do: SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+
+  # A reviewer result carrying the diff it judged, the way `ReviewAgent.evaluate/4` returns one.
+  defp approve_result(inventory) do
+    {:ok, %{verdict: :approve, comments: [], reason: "looks good", source: %{changed_file_inventory: inventory}}}
+  end
+
+  # `lib/app/secret_store.ex` matches the built-in sensitive-area glob `**/*secret*`, so a repo with
+  # no escalation config of its own still deepens a change to it.
+  defp risky_file do
+    %{
+      path: "lib/app/secret_store.ex",
+      additions: 2,
+      deletions: 0,
+      patch: "+++ b/lib/app/secret_store.ex\n@@ -1 +1,2 @@\n def read, do: :ok\n+def token, do: read()\n"
+    }
+  end
+
+  defp plain_file do
+    %{
+      path: "lib/app/widget.ex",
+      additions: 3,
+      deletions: 1,
+      patch: "+++ b/lib/app/widget.ex\n@@ -1 +1,3 @@\n-def widget, do: :old\n+def widget, do: :ok\n"
+    }
   end
 
   describe "reviewer_run?/2" do
@@ -386,6 +432,217 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert {:error, {:code_review_inconclusive, :no_grounding}} =
                run(other_workspace, settings: designed_settings())
+    end
+  end
+
+  describe "risk rules deepening the review" do
+    test "a change matching a risk rule runs a second reviewer pass on the same head and fires no routing edge" do
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_review_results, [approve_result([risky_file()]), approve_result([])])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+
+      # The extra pass ran on the same head, and nothing moved.
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      refute_received {:reviewed, _, _}
+      refute_received {:moved, _, _}
+
+      # The second pass's verdict is the one recorded, bound to the head it judged.
+      assert [%{kind: "code_review", head_sha: ^head, outcome: "approve"}] = verdicts()
+
+      assert [%{name: "code_review_deepened", details: %{head: ^head, verdict: "approve", reason: "looks good"}}] =
+               signals()
+    end
+
+    test "a diff over the size limit deepens the review as well" do
+      {workspace, _head} = git_workspace!()
+      oversized = %{path: "lib/app/widget.ex", additions: 40, deletions: 0, patch: ""}
+      Process.put(:fake_review_results, [approve_result([oversized]), approve_result([])])
+
+      settings =
+        designed_settings(%{
+          "auto_review" => %{"acceptance_gate" => %{"escalate" => %{"max_changed_lines" => 10}}}
+        })
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: settings)
+
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      refute_received {:moved, _, _}
+    end
+
+    test "the next dispatch performs the deepened verdict and routes it, without reviewing again" do
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_review_results, [approve_result([risky_file()]), approve_result([])])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+
+      # The two passes of the first dispatch, drained so the next assertions see only the second.
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      refute_received {:moved, _, _}
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      # The performed deepening routes through the same approve edge a fresh verdict takes, so the
+      # QA decision is made here exactly as it is for a first-pass approval.
+      assert_received {:moved, @issue_id, "QA"}
+      refute_received {:reviewed, _, _}
+
+      assert [
+               %{name: "code_review", details: %{signal: "code_review_approve", qa_decision: "run"}}
+             ] = signals() |> Enum.filter(&(&1.name == "code_review"))
+
+      assert [%{name: "code_review_deepening_applied", details: %{head: ^head}}] =
+               signals() |> Enum.filter(&(&1.name == "code_review_deepening_applied"))
+    end
+
+    test "a performed deepening is not replayed" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_review_results, [approve_result([risky_file()]), approve_result([])])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:reviewed, @issue_id, "Code Review"}
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:moved, @issue_id, "QA"}
+      refute_received {:reviewed, _, _}
+
+      # A further dispatch of the ticket finds the deepening performed, so it reviews afresh rather
+      # than routing the same verdict again.
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:reviewed, @issue_id, "Code Review"}
+    end
+
+    test "a deepened request_changes routes to Rework on the next dispatch" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:fake_review_results, [
+        approve_result([risky_file()]),
+        {:ok, %{verdict: :request_changes, comments: ["Rename this"], reason: nil}}
+      ])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+      refute_received {:moved, _, _}
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:moved, @issue_id, "Rework"}
+
+      assert [%{outcome: "request_changes"}] = verdicts()
+    end
+
+    test "a deepened block escalates with the reason the second pass gave" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:fake_review_results, [
+        approve_result([risky_file()]),
+        {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}}
+      ])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+      refute_received {:moved, _, _}
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:moved, @issue_id, "In Review"}
+
+      assert [%{outcome: "block"}] = verdicts()
+
+      assert [%{details: %{signal: "code_review_escalate", reason: "touches protected files"}}] =
+               signals() |> Enum.filter(&(&1.name == "code_review"))
+    end
+
+    test "a deepened verdict whose move fails stays pending instead of being performed" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_review_results, [approve_result([risky_file()]), approve_result([])])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+
+      Process.put(:fake_tracker_result, {:error, :rate_limited})
+
+      assert {:error, {:code_review_move_failed, :code_review_approve, :rate_limited}} =
+               run(workspace, settings: designed_settings())
+
+      refute Enum.any?(signals(), &(&1.name == "code_review_deepening_applied"))
+    end
+
+    test "a second pass that cannot ground a verdict fails the same way the first one would" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:fake_review_results, [
+        approve_result([risky_file()]),
+        {:error, {:review_agent_inconclusive, :no_grounding}}
+      ])
+
+      assert {:error, {:code_review_inconclusive, :no_grounding}} =
+               run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+
+      refute_received {:moved, _, _}
+      assert [%{outcome: "inconclusive"}] = verdicts()
+    end
+
+    test "a second pass that blocks escalates instead of deepening" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:fake_review_results, [
+        approve_result([risky_file()]),
+        {:error, {:review_agent_blocked, %{reason: "touches protected files", findings: [], comments: []}}}
+      ])
+
+      assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+
+      assert_received {:moved, @issue_id, "In Review"}
+      refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
+    end
+
+    test "a second pass that fails outright is reported" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_review_results, [approve_result([risky_file()]), {:error, :model_unreachable}])
+
+      assert {:error, {:code_review_failed, :model_unreachable}} =
+               run_with(SequencedReviewAgent, workspace, settings: designed_settings())
+    end
+
+    test "an approval whose diff matches no risk rule routes in one pass" do
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      refute_received {:reviewed, _, _}
+      assert_received {:moved, @issue_id, "QA"}
+
+      assert [%{head_sha: ^head, outcome: "approve"}] = verdicts()
+      refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
+    end
+
+    test "a risky change is not deepened when the reviewer is off" do
+      Process.put(:fake_review_result, approve_result([risky_file()]))
+
+      assert :ok = run("/tmp/workspace", settings: reviewer_disabled_settings())
+
+      refute_received {:reviewed, _, _}
+      refute_received {:moved, _, _}
+      refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
+    end
+
+    test "a deepening recorded for another head does not deepen this one" do
+      {workspace, _head} = git_workspace!()
+
+      SymphonyElixir.TicketSignals.record(@repo_key, @issue_id, "code_review_deepened", %{
+        head: "0000000000000000000000000000000000000000",
+        verdict: "approve"
+      })
+
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      # The stale deepening is ignored: the reviewer ran and the verdict routed as usual.
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:moved, @issue_id, "QA"}
     end
   end
 end
