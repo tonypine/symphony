@@ -253,10 +253,17 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             stays = "Nothing else changes in Linear."
         case .decide:
             title = "Send your decision on \(id)?"
-            targetState = nil
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
-            happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
-            stays = "The ticket doesn't move: the decision is what it was waiting on."
+            // A merge confirmation continues into the state its hold names; an ordinary decision moves nothing.
+            if let confirm = item.review.action?.confirm {
+                targetState = confirm
+                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
+                stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
+            } else {
+                targetState = nil
+                happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
+                stays = "The ticket doesn't move: the decision is what it was waiting on."
+            }
         case .unblock:
             title = "Unblock \(id)?"
             // The ticket keeps its phase: clearing a hold moves nothing, it resumes in place.
