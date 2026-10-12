@@ -7,20 +7,21 @@ defmodule SymphonyElixir.DirectorMoves do
   (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
   move, writes a `director_move` audit record and answers with the states it moved between:
 
-  - `:approve_plan`: a plan (label `plan` or `breakdown`) in `In Review` or the Human Review state
-    moves to the waiting state (`Waiting on sub-tickets`). It is a person's move, so Symphony
+  - `:approve_plan`: a plan (label `plan` or `breakdown`) in a review state — `In Review`, the
+    Human Review state, or a designed repo's `Plan Review` — moves to the waiting state (`Waiting on sub-tickets`). It is a person's move, so Symphony
     promotes the plan's `Backlog` sub-tickets as it does today (`SymphonyElixir.BreakdownReview`);
   - `:approve_pr`: a pull request in a review state moves to `Merging`;
-  - `:rework`: a ticket in a review state gets the reason as a comment, then moves to `Rework`.
+  - `:rework`: a ticket in a review state (a designed repo's `Plan Review` included) gets the reason as a comment, then moves to `Rework`.
     On a designed repo that continues the existing pull request; the full reset is `:restart`;
   - `:restart`: the full reset, and only a person makes it (design doc D7). A designed repo closes
     the ticket's pull requests, removes its workspaces — so the next dispatch branches fresh from
     the configured base branch — and supersedes the workpad, then moves the ticket to `In Progress`
     (`SymphonyElixir.Restart`). A legacy repo is refused: its `Rework` already closes the pull
     request and starts over, so a second full reset would only be ambiguous;
-  - `:decisions`: a plan in a review state gets one comment with the picked options. A plan in the
-    Human Review state first moves to `In Review`, so the comment, posted after the move, starts
-    Symphony's plan revision run (`SymphonyElixir.PlanComments`);
+  - `:decisions`: a plan in a review state (a designed repo's `Plan Review` included) gets one
+    comment with the picked options. A plan in the Human Review state first moves to `In Review`,
+    so the comment, posted after the move, starts Symphony's plan revision run
+    (`SymphonyElixir.PlanComments`); a plan in `In Review` or `Plan Review` gets the comment in place;
   - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold

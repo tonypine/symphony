@@ -182,6 +182,26 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert labels() == []
     end
 
+    test "a reply naming Send to Rework moves the ticket to Rework through the guard, and one naming Merge to Merging" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+      merge_request = MergeConfirmation.request(issue(), %{recommendation: "ready to merge", review: nil, qa: nil, pr: nil})
+      body = Request.render_hold(merge_request, "In Progress")
+
+      for {answer, state} <- [{"send to rework, the tests are thin", "Rework"}, {"Merge", "Merging"}] do
+        :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, MergeConfirmation.attrs(merge_request))
+        withdrawn = %{"id" => "other", "body" => Request.render_withdrawal("Send to Rework is moot"), "parent" => %{"id" => @comment_id}}
+        unrelated = %{"id" => "loose", "body" => "Send to Rework", "parent" => %{"id" => "elsewhere"}}
+        comments = [request_comment(@comment_id, body), unrelated, withdrawn, reply(@comment_id, answer)]
+        node = ticket_node(%{"comments" => %{"nodes" => comments}})
+
+        assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+        assert_received {:memory_tracker_state_update, @issue_id, ^state}
+        assert stored_hold() == nil
+      end
+    end
+
     test "a confirmation whose move fails reports it and leaves the ticket where it is" do
       merge_request = MergeConfirmation.request(issue(), %{recommendation: "ready to merge", review: nil, qa: nil, pr: nil})
       :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, MergeConfirmation.attrs(merge_request))
