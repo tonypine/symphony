@@ -365,6 +365,38 @@ final class RepositoriesConfigTests: XCTestCase {
         XCTAssertEqual(try RepositoriesConfig.updating("symphony", to: entry, in: config), expected)
     }
 
+    func testSetsAndClearsManualReview() throws {
+        let yaml = "repositories:\n  - key: a\n    manual_review: on\n    base_branch: main\n"
+        XCTAssertEqual(try RepositoriesConfig.entries(in: yaml).map(\.manualReview), ["on"])
+
+        // `on` and `off` read as booleans in YAML, so the editor writes them quoted.
+        var off = RepositoryEntry(key: "a", baseBranch: "main")
+        off.manualReview = "off"
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: off, in: yaml),
+            "repositories:\n  - key: a\n    manual_review: \"off\"\n    base_branch: main\n"
+        )
+
+        // Off is the default, so removing the key puts the repo back on it.
+        var cleared = RepositoryEntry(key: "a", baseBranch: "main")
+        cleared.manualReview = nil
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: cleared, in: yaml),
+            "repositories:\n  - key: a\n    base_branch: main\n"
+        )
+    }
+
+    func testManualReviewSitsAfterTheStateMachine() throws {
+        let yaml = "repositories:\n  - key: a\n    base_branch: main\n"
+        var entry = RepositoryEntry(key: "a", baseBranch: "main")
+        entry.stateMachine = "designed"
+        entry.manualReview = "on"
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: yaml),
+            "repositories:\n  - key: a\n    base_branch: main\n    state_machine: designed\n    manual_review: \"on\"\n"
+        )
+    }
+
     func testRemovesAnEmptiedBlockWithItsComments() throws {
         var entry = symphony
         entry.route = RepositoryRoute()

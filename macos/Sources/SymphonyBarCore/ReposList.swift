@@ -561,6 +561,8 @@ public struct RepoDetail: Equatable, Identifiable {
     public var live: Live
     /// Nil for a repo `symphony.yml` doesn't have.
     public var gate: Gate?
+    /// `manual_review`, nil for a repo `symphony.yml` doesn't have.
+    public var manualReview: RepoField?
     public var actions: RepoActions
     public var health: RepoHealth
 
@@ -573,6 +575,7 @@ public struct RepoDetail: Equatable, Identifiable {
         routing: Routing,
         live: Live,
         gate: Gate? = nil,
+        manualReview: RepoField? = nil,
         actions: RepoActions = RepoActions(),
         health: RepoHealth = .notChecked(status: .stopped, poll: nil)
     ) {
@@ -584,6 +587,7 @@ public struct RepoDetail: Equatable, Identifiable {
         self.routing = routing
         self.live = live
         self.gate = gate
+        self.manualReview = manualReview
         self.actions = actions
         self.health = health
     }
@@ -975,10 +979,13 @@ public enum ReposList {
 }
 
 private extension RepoDetail {
-    /// The detail with its gate from `symphony.yml`'s `entries` and the global mode, and the record in `snapshot`.
+    /// The detail with its gate and manual review from `symphony.yml`'s `entries` and the global mode, and the
+    /// gate's record in `snapshot`.
     func withGate(_ entries: [RepositoryEntry], _ global: AcceptanceGateMode?, _ snapshot: StateSnapshot?) -> RepoDetail {
         var detail = self
-        detail.gate = entries.first { $0.key == key }.map { AcceptanceGate.repoGate($0, global: global, in: snapshot) }
+        let entry = entries.first { $0.key == key }
+        detail.gate = entry.map { AcceptanceGate.repoGate($0, global: global, in: snapshot) }
+        detail.manualReview = entry.map { ManualReview.repoField($0) }
         return detail
     }
 }

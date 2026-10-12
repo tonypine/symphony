@@ -995,6 +995,7 @@ defmodule SymphonyElixir.Config do
     |> merge_repo_agent(repo)
     |> merge_repo_acceptance_gate(repo)
     |> merge_repo_state_machine(repo)
+    |> merge_repo_manual_review(repo, system_config)
     |> deep_merge(repo_config)
   end
 
@@ -1003,6 +1004,22 @@ defmodule SymphonyElixir.Config do
   defp merge_repo_state_machine(config, %SystemSchema.Repo{state_machine: state_machine}) do
     Map.put(config, "state_machine", state_machine)
   end
+
+  # The repo's manual review setting, on the config for the machinery to read. An explicit
+  # `repositories[].manual_review` wins; otherwise the deprecated acceptance-gate mode derives it,
+  # so a config that only sets a gate mode still gets the review authority that mode meant.
+  defp merge_repo_manual_review(config, %SystemSchema.Repo{manual_review: manual_review} = repo, %SystemSchema{} = system_config) do
+    Map.put(config, "manual_review", manual_review || gate_manual_review(repo, system_config))
+  end
+
+  # The repo's effective acceptance-gate mode: its own when it sets one, else the global block's.
+  defp gate_manual_review(%SystemSchema.Repo{acceptance_gate: %{"mode" => mode}}, _system_config),
+    do: SystemSchema.manual_review_for_gate_mode(mode)
+
+  defp gate_manual_review(_repo, %SystemSchema{auto_review: %{acceptance_gate: %{mode: mode}}}),
+    do: SystemSchema.manual_review_for_gate_mode(mode)
+
+  defp gate_manual_review(_repo, _system_config), do: SystemSchema.manual_review_for_gate_mode(nil)
 
   defp merge_repo_acceptance_gate(config, %SystemSchema.Repo{acceptance_gate: nil}), do: config
 

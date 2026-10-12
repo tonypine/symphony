@@ -319,8 +319,8 @@ struct Badge: View {
     }
 }
 
-/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity and Acceptance gate, then
-/// Disconnect….
+/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity, Acceptance gate and Manual
+/// review, then Disconnect….
 struct RepoDetailView: View {
     let repo: RepoDetail
     @ObservedObject var model: ReposViewModel
@@ -345,6 +345,11 @@ struct RepoDetailView: View {
                         LabeledContent("Record") {
                             Text(gate.record).multilineTextAlignment(.trailing)
                         }
+                    }
+                }
+                if let manualReview = repo.manualReview {
+                    Section("Manual review") {
+                        FieldRow(field: manualReview)
                     }
                 }
             }

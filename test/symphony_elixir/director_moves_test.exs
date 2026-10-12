@@ -405,6 +405,23 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{"move" => "decide", "to_state" => "Rework"}, %{"to_state" => "Done"}] = audit_records()
     end
 
+    test "a merge confirmation's hold is what Decide does with no move picked: into Merging", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+
+      :ok =
+        Hold.set("repo-director", "pr", :needs_decision, %{
+          reason: "Merge MOT-40 into its base branch?",
+          clearing_condition: "when the decision is recorded",
+          decision: %{title: "Merge MOT-40", question: "Merge MOT-40 into its base branch?", confirm: "Merging"}
+        })
+
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+      assert %{moved: true, to_state: "Merging", undo_window_ms: 10_000} = result
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      assert_received {:memory_tracker_state_update, "pr", "Merging"}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
     test "refuses a decision that names no answer, no request, or an unknown move", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()

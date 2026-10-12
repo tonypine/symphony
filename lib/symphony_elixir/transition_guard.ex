@@ -50,9 +50,16 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @typedoc """
   One row of the legal-edge table: the signal, the states it may fire from (`:any` when the machine
-  derives the origin itself), and the target it moves to.
+  derives the origin itself), and the target it moves to. `confirm: true` marks the rows whose move
+  into `Merging` waits for a person when the repo's manual review is `on`
+  (`SymphonyElixir.MergeConfirmation`).
   """
-  @type edge :: %{signal: signal(), from: [String.t()] | :any, to: String.t() | atom()}
+  @type edge :: %{
+          required(:signal) => signal(),
+          required(:from) => [String.t()] | :any,
+          required(:to) => String.t() | atom(),
+          optional(:confirm) => true
+        }
 
   @edges [
     # Claim: the workpad bootstrap moves a Todo ticket to In Progress before its first turn.
@@ -136,15 +143,21 @@ defmodule SymphonyElixir.TransitionGuard do
   # validated by `resolve_request/2`, never performed through this table), and a repair it cannot
   # make without access or a secret is a Needs Decision hold (`SymphonyElixir.Hold`), which never
   # moves the ticket at all. Both are recorded as a `fix verdict`.
+  #
+  # `confirm: true` marks the three rows whose move is a *verdict* carrying the ticket into `Merging`:
+  # with the repo's manual review `on`, each waits for a person instead
+  # (`SymphonyElixir.MergeConfirmation`). The rows that repair a red head (`:ci_fix_mechanical`, whose
+  # target is the origin the caller read back) and the rework rows carry no marker, so a repair or a
+  # rework never waits on a person in either mode.
   @designed_edges @edges ++
                     [
                       %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
                       %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
-                      %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging"},
+                      %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging", confirm: true},
                       %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
                       %{signal: :code_review_escalate, from: ["Code Review"], to: :requested},
-                      %{signal: :qa_pass, from: ["QA"], to: "Merging"},
-                      %{signal: :qa_skip, from: ["QA"], to: "Merging"},
+                      %{signal: :qa_pass, from: ["QA"], to: "Merging", confirm: true},
+                      %{signal: :qa_skip, from: ["QA"], to: "Merging", confirm: true},
                       %{signal: :qa_fail, from: ["QA"], to: "Rework"},
                       %{signal: :ci_fix_enter_code_review, from: ["Code Review"], to: :ci_fix_state},
                       %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
@@ -187,6 +200,27 @@ defmodule SymphonyElixir.TransitionGuard do
     case edge(signal, version) do
       nil -> false
       %{from: froms, to: target} -> origin_allowed?(froms, from) and target_allowed?(target, to)
+    end
+  end
+
+  @doc """
+  True when `signal`'s move must wait for a person's confirmation: the edge is one of the table's
+  verdict rows into `Merging` (`confirm: true`), and the repo's manual review setting is `on`
+  (`docs/design/state-machine.md` §Attributes). The caller pauses with a Needs Decision hold instead
+  of performing the move (`SymphonyElixir.MergeConfirmation`); `off`, the default, moves the ticket.
+  """
+  @spec confirmation_required?(signal(), context()) :: boolean()
+  def confirmation_required?(signal, ctx) do
+    case edge(signal, version(ctx)) do
+      %{confirm: true} -> manual_review_on?(ctx)
+      _edge -> false
+    end
+  end
+
+  defp manual_review_on?(ctx) do
+    case Map.get(ctx, :settings) do
+      %{manual_review: "on"} -> true
+      _settings -> false
     end
   end
 
