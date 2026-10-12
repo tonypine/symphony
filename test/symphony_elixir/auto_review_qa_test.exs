@@ -242,6 +242,12 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert %{qa_sha: @sha, qa_verdict: "pass", qa_passed: true, qa_applied: true, qa_fix_attempts: 0, qa_failure: nil} =
                stored_record()
 
+      assert [%{name: "QA verdict", details: %{outcome: "pass", to: "In Review"}} | _] =
+               RunStore.get_ticket_state(@repo_key, "issue-qa-flow").signals
+
+      assert [%{kind: "qa", head_sha: @sha, outcome: "pass"} | _] =
+               RunStore.get_ticket_state(@repo_key, "issue-qa-flow").verdicts
+
       assert [%{kind: "qa", status: "qa_pass", head_sha: @sha, playbooks: ["cli"], tokens: %{total_tokens: 91_000}} = run] =
                RunStore.list_runs(@repo_key, :all)
 

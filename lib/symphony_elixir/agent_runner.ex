@@ -29,7 +29,9 @@ defmodule SymphonyElixir.AgentRunner do
     RunKind,
     RunStore,
     SubIssueWait,
+    TicketSignals,
     Tracker,
+    TransitionGuard,
     URLUtils,
     UsageLimit,
     Verification,
@@ -609,6 +611,7 @@ defmodule SymphonyElixir.AgentRunner do
         |> put_ci_failure(issue)
         |> put_qa_failure(issue)
         |> put_pr_conflict(issue)
+        |> put_ticket_state(issue)
 
       run_context = %{
         workspace: workspace,
@@ -839,10 +842,12 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hold_dependency_approval(%Issue{id: issue_id} = issue, items, turn_session, opts)
        when is_binary(issue_id) do
-    move = fn -> Tracker.update_issue_state(issue_id, @dependency_review_state) end
+    move = fn -> TransitionGuard.perform(issue_id, :dependency_review, %{settings: Keyword.fetch!(opts, :settings)}) end
 
     case with_linear_retry(move, "moving #{issue_context(issue)} to #{@dependency_review_state} for dependency approval", opts) do
       :ok ->
+        record_move_signal(issue, "decision requested", %{to: @dependency_review_state, reason: "dependency_source_requires_approval"}, opts)
+
         Notifications.emit_issue_event(
           :dependency_pending_approval,
           issue,
@@ -1224,6 +1229,7 @@ defmodule SymphonyElixir.AgentRunner do
       |> put_ci_failure(issue)
       |> put_qa_failure(issue)
       |> put_pr_conflict(issue)
+      |> put_ticket_state(issue)
 
     prompt = PromptBuilder.build_prompt(issue, prompt_opts)
     maybe_compact_codex_initial_prompt(prompt, issue, prompt_opts)
@@ -1416,6 +1422,23 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp pending_pr_conflict(_issue, _opts), do: nil
+
+  defp put_ticket_state(opts, issue) when is_list(opts) do
+    if Keyword.has_key?(opts, :ticket_state) do
+      opts
+    else
+      Keyword.put(opts, :ticket_state, pending_ticket_state(issue, opts))
+    end
+  end
+
+  defp pending_ticket_state(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) and repo_key != "" -> RunStore.get_ticket_state(repo_key, issue_id)
+      _repo_key -> nil
+    end
+  end
+
+  defp pending_ticket_state(_issue, _opts), do: nil
 
   defp pending_lookup_opts(%Issue{} = issue, opts) do
     case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
@@ -1700,8 +1723,16 @@ defmodule SymphonyElixir.AgentRunner do
   defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
 
   defp move_to_post_pr_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
-    move = fn -> Tracker.update_issue_state(issue_id, post_pr_state) end
-    with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts)
+    move = fn -> TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, settings: Keyword.fetch!(run_context.opts, :settings)}) end
+
+    case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
+      :ok ->
+        record_move_signal(issue, "handoff", %{to: post_pr_state, reason: reason}, run_context.opts)
+        :ok
+
+      error ->
+        error
+    end
   end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
@@ -1798,11 +1829,12 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp return_to_merging(%Issue{id: issue_id} = issue, kind, head, run_context) do
     label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
-    move = fn -> Tracker.update_issue_state(issue_id, @merging_state) end
+    move = fn -> TransitionGuard.perform(issue_id, :merge_ready, %{settings: Keyword.fetch!(run_context.opts, :settings)}) end
     comment = fn -> Tracker.create_comment(issue_id, green_fix_note(kind, head)) end
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
          :ok <- with_linear_retry(comment, label, run_context.opts) do
+      record_move_signal(issue, "handoff", %{to: @merging_state, kind: kind, head: head}, run_context.opts)
       :ok
     else
       {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}
@@ -1851,8 +1883,9 @@ defmodule SymphonyElixir.AgentRunner do
 
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
 
-    with :ok <- with_linear_retry(fn -> Tracker.update_issue_state(issue_id, @idle_park_state) end, label, opts),
+    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, %{settings: Keyword.fetch!(opts, :settings)}) end, label, opts),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
+      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: "idle_park"}, opts)
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
@@ -1971,6 +2004,14 @@ defmodule SymphonyElixir.AgentRunner do
   defp issue_repo_key(%{repo_key: repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
   defp issue_repo_key(%{"repo_key" => repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
   defp issue_repo_key(_issue), do: nil
+
+  # Best-effort recording of a state move into the ticket's signals ledger (inert; a store failure
+  # never changes the move). Runs only after the move has succeeded.
+  defp record_move_signal(%Issue{id: issue_id} = issue, name, details, opts) when is_binary(issue_id) do
+    TicketSignals.record(Keyword.get(opts, :repo_key) || issue_repo_key(issue), issue_id, name, details)
+  end
+
+  defp record_move_signal(_issue, _name, _details, _opts), do: :ok
 
   defp worker_host_for_log(nil), do: "local"
   defp worker_host_for_log(worker_host), do: worker_host

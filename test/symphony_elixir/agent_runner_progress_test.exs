@@ -3,6 +3,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.PrReviewPoller
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.WorkspaceHead
 
   @pr_url "https://github.com/example/repo/pull/337"
@@ -114,6 +115,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 1
     assert_received {:pr_head_fetched, @pr_url}
     assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+    assert_signal("handoff", %{to: "Auto Review", reason: "after rework"})
   end
 
   test "with Auto Review off a finished Rework run moves to In Review" do
@@ -185,6 +187,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 2
     assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+    assert_signal("blocked", %{to: "Backlog", reason: "idle_park"})
   end
 
   test "a turn that can't reach the model API ends the run on the provider hold, so outage turns never park the issue" do
@@ -336,6 +339,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
       refute log =~ "Parking"
+      assert_signal("handoff", %{to: "Auto Review", reason: "with CI running on its pushed head"})
     end
 
     test "finds its PR past the first page of attachments, so CI running on the head it pushed moves it to Auto Review" do
@@ -505,6 +509,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert PrReviewPoller.auto_merge("issue-progress") == nil
       assert log =~ "CI fix run for issue_id=issue-progress issue_identifier=TP-337 pushed nothing and CI on its PR head sha-same is green; moving back to Merging"
       refute log =~ "Parking"
+      assert_signal("handoff", %{to: "Merging", kind: :ci_fix, head: "sha-same"})
     end
 
     test "on a PR that was not approved goes to the post-PR state once CI on its head is green" do
@@ -542,6 +547,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert log =~
                "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a CI fix run with no new commit; moving to Auto Review"
+
+      assert_signal("handoff", %{to: "Auto Review", reason: "with CI green on its PR head"})
     end
 
     test "waits while CI on its head runs, then goes back to Merging once it is green" do
@@ -983,7 +990,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server", run_on: "always"})
     )
 
-    issue = %Issue{id: "issue-progress", identifier: "TP-337", title: "Leave Rework", description: "Fix the PR", state: state, pull_request_url: pr_url}
+    issue = %Issue{
+      id: "issue-progress",
+      identifier: "TP-337",
+      title: "Leave Rework",
+      description: "Fix the PR",
+      state: state,
+      pull_request_url: pr_url,
+      repo_key: "default"
+    }
 
     try do
       AgentRunner.run(
@@ -1002,6 +1017,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  # The newest signal recorded for the run's issue, asserting its name and details.
+  defp assert_signal(name, details) do
+    assert [%{name: ^name, details: ^details} | _rest] = RunStore.get_ticket_state("default", "issue-progress").signals
   end
 
   # A checkout with a commit past `origin/main`, for the pre-push reviewer to read its diff from.

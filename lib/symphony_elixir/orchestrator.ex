@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Orchestrator do
     AuditLog,
     AutoMerge,
     AutoReview,
+    BlockedHold,
     BreakdownReview,
     BuildInfo,
     CiPoller,
@@ -21,6 +22,7 @@ defmodule SymphonyElixir.Orchestrator do
     EpicLanes,
     ForcedQueue,
     ForcedStatus,
+    Hold,
     HumanReview,
     Notifications,
     PlanComments,
@@ -33,9 +35,13 @@ defmodule SymphonyElixir.Orchestrator do
     RunStore,
     Secret,
     ShippedToday,
+    StateMachine,
+    StateProvisioning,
     StatusDashboard,
     SubIssueWait,
+    TicketStateReconciler,
     Tracker,
+    TransitionGuard,
     UpdateHold,
     URLUtils,
     UsageLimit,
@@ -219,6 +225,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = state |> seed_watching_from_completed_run_metadata() |> arm_usage_limit_timers()
 
     mark_interrupted_runs_for_configured_repos(repo_key)
+    TicketStateReconciler.reconcile_all()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -738,11 +745,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:usage_limited, %{} = info} = reason) do
-    if Config.settings!().agent.usage_limit.auto_pause do
-      persist_run_completion(running_entry, "usage_limited", "agent exited: #{agent_exit_reason_summary(reason)}")
-      pause_for_usage_limit(state, issue_id, running_entry, session_id, info)
-    else
-      handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+    cond do
+      not Config.settings!().agent.usage_limit.auto_pause ->
+        handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+
+      usage_limit_holds_run?(state, running_entry, info) ->
+        persist_run_completion(running_entry, "usage_limited", "agent exited: #{agent_exit_reason_summary(reason)}")
+        pause_for_usage_limit(state, issue_id, running_entry, session_id, info)
+
+      true ->
+        hold_other_provider_and_retry(state, issue_id, running_entry, session_id, reason, info)
     end
   end
 
@@ -865,6 +877,32 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A usage limit for another provider seen by a run on this one: recording the hold still pauses
+  # that provider's runs, but this run is not held until the other provider resets. It backs off and
+  # retries like any other failure. This is the OpenRouter case: an OpenRouter run through the Claude
+  # runtime can see the Claude subscription's limit, which must not stop OpenRouter work.
+  defp hold_other_provider_and_retry(%State{} = state, issue_id, running_entry, session_id, reason, info) do
+    {state, entry} = put_usage_limit(state, info, running_entry.identifier)
+
+    Logger.info(
+      "Usage limit provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} does not hold " <>
+        "this run's provider=#{run_profile_for_issue(state, running_entry.issue).provider}; retrying with backoff " <>
+        "issue_id=#{issue_id} session_id=#{session_id}"
+    )
+
+    handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+  end
+
+  # Whether a usage limit for `info`'s provider holds a run for `running_entry`: only when the run's
+  # own provider matches. An OpenRouter run (Claude runtime) never matches a Claude subscription
+  # limit. An entry without an issue follows the old behavior and is held.
+  defp usage_limit_holds_run?(%State{} = state, %{issue: %Issue{} = issue}, info) do
+    {provider, _scope} = UsageLimit.key(info)
+    run_profile_for_issue(state, issue).provider == provider
+  end
+
+  defp usage_limit_holds_run?(_state, _running_entry, _info), do: true
+
   defp agent_exit_reason_summary({%RuntimeError{message: message}, _stacktrace}) when is_binary(message) do
     strip_ansi(message)
   end
@@ -979,13 +1017,19 @@ defmodule SymphonyElixir.Orchestrator do
 
     start_tracker_task(state, context, fn ->
       comment.()
-      Tracker.update_issue_state(issue_id, blocked_state)
+
+      TransitionGuard.perform(issue_id, :review_agent_blocked, %{
+        target: blocked_state,
+        repo_key: running_repo_key(state, running_entry)
+      })
     end)
   end
 
   defp maybe_transition_review_agent_blocked_issue(%State{} = state, _issue_id, _running_entry, _blocked_state, _comment), do: state
 
   defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], issue: issue, blocked_state: blocked_state}, :ok) do
+    record_ticket_signal(issue, "blocked", %{to: blocked_state})
+
     state =
       case issue do
         %Issue{} = issue -> put_watching_issue(state, %{issue | state: blocked_state, updated_at: DateTime.utc_now()})
@@ -1248,11 +1292,25 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that
   # `UpdateHold.hold/4` needs. Tickets of repos not polled this cycle were looked up when they were.
-  defp resolve_update_holds({_repo_name, {:ok, issues}}, cache) when is_list(issues) do
-    UpdateHold.resolve(issues, BuildInfo.current(), cache, Config.settings!().tracker.terminal_states, [])
+  defp resolve_update_holds({repo_name, {:ok, issues}}, cache) when is_list(issues) do
+    terminal_states = Config.settings!().tracker.terminal_states
+    sweep_blocked_holds(repo_name, issues, terminal_states)
+    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, [])
   end
 
   defp resolve_update_holds(_repo_result, cache), do: cache
+
+  # Runs in the poll task: reconciles each polled issue's Blocked hold against its blockers — a
+  # designed repo's Todo ticket with an open blocker gains the hold (and pauses), and one whose
+  # blockers all went terminal loses it and dispatches, with no state move and no person involved.
+  # `BlockedHold.sync/3` skips a repo that is not on the designed machine, so legacy repos are
+  # untouched. Resolving the repo's settings once here keeps it off the per-issue config read.
+  defp sweep_blocked_holds(repo_name, issues, terminal_states) do
+    case Config.settings_for_repo(repo_name) do
+      {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings)
+      {:error, _reason} -> 0
+    end
+  end
 
   defp apply_repo_poll_task_result(
          %State{} = state,
@@ -1756,6 +1814,12 @@ defmodule SymphonyElixir.Orchestrator do
   def put_blocked_for_test(%State{} = state, issues) when is_list(issues), do: put_blocked(state, issues)
 
   @doc false
+  @spec sweep_blocked_holds_for_test(String.t(), [Issue.t()], [String.t()]) :: non_neg_integer()
+  def sweep_blocked_holds_for_test(repo_name, issues, terminal_states) when is_list(issues) do
+    sweep_blocked_holds(repo_name, issues, terminal_states)
+  end
+
+  @doc false
   @spec review_breakdown_parents_for_test([Issue.t()], term(), keyword()) :: term()
   def review_breakdown_parents_for_test(issues, %State{} = state, opts \\ []) when is_list(issues),
     do: issues |> review_breakdown_parents(state, opts) |> await_tracker_tasks()
@@ -1813,6 +1877,10 @@ defmodule SymphonyElixir.Orchestrator do
   def sort_issues_for_dispatch_for_test(issues) when is_list(issues) do
     sort_issues_for_dispatch(issues)
   end
+
+  @doc false
+  @spec active_state_set_for_test() :: MapSet.t(String.t())
+  def active_state_set_for_test, do: active_state_set()
 
   @doc false
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
@@ -2939,7 +3007,7 @@ defmodule SymphonyElixir.Orchestrator do
         waiting_state = SubIssueWait.state(settings)
 
         start_tracker_task(state, %{kind: :park_parents, issue_ids: Enum.map(candidates, & &1.id)}, fn ->
-          {:ok, candidates |> still_parkable() |> Enum.filter(&park_breakdown_parent(&1, waiting_state)) |> Enum.map(& &1.id)}
+          {:ok, candidates |> still_parkable() |> Enum.filter(&park_breakdown_parent(&1, waiting_state, settings)) |> Enum.map(& &1.id)}
         end)
     end
   end
@@ -2991,8 +3059,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp close_finished_parent(%Issue{} = issue) do
-    with {:error, reason} <- SubIssueWait.close(issue, Tracker.adapter()) do
-      Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
+    case SubIssueWait.close(issue, Tracker.adapter()) do
+      :ok ->
+        record_ticket_signal(issue, "merge settled", %{sub_issues: length(issue.sub_issues)})
+
+      {:error, reason} ->
+        Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
     end
   end
 
@@ -3064,8 +3136,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp move_breakdown_sub_issue(issue, action, %{id: sub_issue_id, identifier: identifier}) do
-    case BreakdownReview.move(action, sub_issue_id, Tracker.adapter()) do
+    case BreakdownReview.move(action, sub_issue_id, Tracker.adapter(), %{repo_key: issue_repo_key(issue)}) do
       :ok ->
+        record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier)
         {:ok, identifier}
 
       {:error, reason} ->
@@ -3073,6 +3146,25 @@ defmodule SymphonyElixir.Orchestrator do
         :error
     end
   end
+
+  # A promoted sub-issue carries the plan's approval; a replaced one is the plan's changes, which
+  # cancel the sub-issues it judged.
+  defp record_breakdown_sub_issue_signal(issue, action, sub_issue_id, identifier) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) ->
+        details = %{outcome: breakdown_sub_issue_outcome(action), sub_issue: identifier, to: BreakdownReview.target(action)}
+        record_ticket_signal(repo_key, sub_issue_id, breakdown_sub_issue_signal(action), details)
+
+      _repo_key ->
+        :ok
+    end
+  end
+
+  defp breakdown_sub_issue_signal(:promote), do: "plan verdict"
+  defp breakdown_sub_issue_signal(_action), do: "deprioritized"
+
+  defp breakdown_sub_issue_outcome(:promote), do: "approve"
+  defp breakdown_sub_issue_outcome(_action), do: "changes"
 
   defp log_breakdown_review([], _issue, _action), do: true
 
@@ -3144,8 +3236,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp act_on_pending_plan_comments(_issue, _action, []), do: true
 
   defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
-    case Tracker.update_issue_state(issue_id, @plan_revision_state) do
+    case TransitionGuard.perform(issue_id, :plan_revise, %{repo_key: issue_repo_key(issue)}) do
       :ok ->
+        record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: @plan_revision_state})
         Logger.info("Moved breakdown parent to #{@plan_revision_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
         true
 
@@ -3249,11 +3342,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The move is recorded before it is made, so a review reading the parent's history never sees
   # it without the record that marks it as Symphony's.
-  defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state) do
+  defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state, settings) do
     issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
 
-    case Tracker.update_issue_state(issue_id, waiting_state) do
+    case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings}) do
       :ok ->
+        record_ticket_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")
         true
 
@@ -3520,7 +3614,23 @@ defmodule SymphonyElixir.Orchestrator do
       !post_pr_quiet_active_issue?(issue, state) and
       !landing_held?(issue, state) and
       !issue_taken?(issue, state) and
-      !setup_failed_suppressed?(state.setup_failed, issue)
+      !setup_failed_suppressed?(state.setup_failed, issue) and
+      priority_allowed?(issue, state)
+  end
+
+  # `tickets.priorities` narrows which priorities may start new work. A forced ticket, and a retry
+  # that is waiting for a slot (its claim is released while it waits), bypass it, so the filter only
+  # gates fresh picks and never stalls work already under way.
+  defp priority_allowed?(%Issue{id: issue_id, priority: priority} = issue, %State{} = state) do
+    case Config.ticket_priority_filter() do
+      nil ->
+        true
+
+      allowed ->
+        forced_issue?(issue, state) or
+          Map.has_key?(state.slot_waiting, issue_id) or
+          MapSet.member?(allowed, priority || 0)
+    end
   end
 
   defp issue_taken?(%Issue{id: issue_id}, %State{} = state) do
@@ -4144,10 +4254,16 @@ defmodule SymphonyElixir.Orchestrator do
   # again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
     Issue.blocked?(issue, terminal_states) or
+      blocked_hold?(issue) or
       (not Issue.replanning?(issue) and
          (Issue.waiting_on_sub_issues?(issue, terminal_states) or
             SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
+
+  # A Blocked hold pauses the ticket in its phase — an agent reported a block, or the poll sweep set
+  # a dependency hold. The store is the truth; the board label is only its projection. A legacy
+  # repo never records a hold, so this is false there and dispatch is unaffected.
+  defp blocked_hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held?(repo_key, issue_id, :blocked)
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -4180,10 +4296,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp active_state_set do
-    Config.settings!().tracker.active_states
+    tracker = Config.settings!().tracker
+
+    tracker.active_states
+    |> active_states_with_designed(StateMachine.designed_phase_states(tracker))
     |> Enum.map(&normalize_issue_state/1)
     |> Enum.filter(&(&1 != ""))
     |> MapSet.new()
+  end
+
+  # A repo on the designed machine dispatches from its designed phase states too, so the global
+  # active set (the dispatch gate and the reconciliation filter) is the union across repos. With
+  # every repo on `legacy` this is exactly the configured active states.
+  defp active_states_with_designed(base, designed_phase) do
+    if any_repo_designed?(), do: StateMachine.active_states("designed", base, designed_phase), else: base
+  end
+
+  defp any_repo_designed? do
+    case Config.repos() do
+      {:ok, repos} -> Enum.any?(repos, &StateMachine.designed?/1)
+      _error -> false
+    end
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
@@ -4832,17 +4965,21 @@ defmodule SymphonyElixir.Orchestrator do
     Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
     context = %{kind: :post_pr_transition, issue_ids: [issue_id], issue: issue, attempt: attempt, metadata: metadata}
-    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state) end)}
+    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state, issue_repo_key(issue)) end)}
   end
 
-  defp move_post_pr_issue(issue_id, post_pr_state),
-    do: Usage.with_caller(:post_pr_transition, fn -> Tracker.update_issue_state(issue_id, post_pr_state) end)
+  defp move_post_pr_issue(issue_id, post_pr_state, repo_key) do
+    Usage.with_caller(:post_pr_transition, fn ->
+      TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, repo_key: repo_key})
+    end)
+  end
 
   defp finish_post_pr_transition(%State{} = state, %{issue: %Issue{} = issue, attempt: attempt, metadata: metadata, post_pr_state: post_pr_state}, result) do
     issue_id = issue.id
 
     case result do
       :ok ->
+        record_ticket_signal(issue, "handoff", %{to: post_pr_state})
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
         state
@@ -4911,6 +5048,9 @@ defmodule SymphonyElixir.Orchestrator do
     case Config.repos() do
       {:ok, repos} ->
         teams = AutoReview.configured_teams(settings, repos)
+        # The machine-owned states and labels are created before the checks that read them, so a
+        # state a later feature needs exists by the time that feature looks for it.
+        StateProvisioning.provision(settings, teams)
         AutoReview.check_tracker_state(settings, teams)
         SubIssueWait.check_tracker_state(settings, teams)
         HumanReview.check_tracker_state(settings, teams)
@@ -6781,6 +6921,25 @@ defmodule SymphonyElixir.Orchestrator do
     :ok
   end
 
+  # Every move the orchestrator makes is recorded in the ticket's signals ledger, best effort: a
+  # store failure must never change a transition, the board or a label.
+  defp record_ticket_signal(%Issue{id: issue_id} = issue, name, details) when is_binary(issue_id) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) -> record_ticket_signal(repo_key, issue_id, name, details)
+      _repo_key -> :ok
+    end
+  end
+
+  defp record_ticket_signal(_issue, _name, _details), do: :ok
+
+  defp record_ticket_signal(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
+    repo_key
+    |> RunStore.record_ticket_signal(issue_id, name, details)
+    |> log_run_store_error("record #{name} signal")
+  end
+
+  defp record_ticket_signal(_repo_key, _issue_id, _name, _details), do: :ok
+
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
     request_refresh(__MODULE__)
@@ -8501,9 +8660,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_hold(%State{usage_limits: usage_limits}, _issue, _continuation?) when map_size(usage_limits) == 0, do: nil
 
   defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue, continuation?) do
-    repo_key = dispatch_repo_key(state, issue)
-    profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
+    profile = run_profile_for_issue(state, issue)
     UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue, state)}), issue.id)
+  end
+
+  # The run's provider and model, resolved as at dispatch.
+  defp run_profile_for_issue(%State{} = state, %Issue{} = issue) do
+    repo_key = dispatch_repo_key(state, issue)
+    AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
   end
 
   defp remember_usage_windows(%State{} = state, %{usage_windows: %{} = windows}) do

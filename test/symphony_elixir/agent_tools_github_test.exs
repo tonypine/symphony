@@ -438,14 +438,14 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
     try do
       commit_files!(fixture.workspace, %{"lib/feature.ex" => "feature\n"}, "agent work")
-      commit_files!(fixture.upstream, %{".ai/skills/push/SKILL.md" => "push v2\n"}, "change the push skill")
+      commit_files!(fixture.upstream, %{".agents/skills/push/SKILL.md" => "push v2\n"}, "change the push skill")
       git!(fixture.upstream, ["push", "origin", "main"])
 
       assert {:ok, %{"status" => "merge_staged", "base" => "origin/main", "conflicts" => [], "message" => message}} =
                GitHub.sync_base(fixture.context)
 
       assert message =~ "Run `git commit --no-edit`"
-      assert File.read!(Path.join(fixture.workspace, ".ai/skills/push/SKILL.md")) == "push v2\n"
+      assert File.read!(Path.join(fixture.workspace, ".agents/skills/push/SKILL.md")) == "push v2\n"
 
       git!(fixture.workspace, ["commit", "--no-edit"])
       head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
@@ -466,13 +466,13 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
     try do
       git!(fixture.workspace, ["push", "origin", "auto/ACME-483"])
-      commit_files!(fixture.upstream, %{".ai/skills/push/SKILL.md" => "push v2\n"}, "change the push skill")
+      commit_files!(fixture.upstream, %{".agents/skills/push/SKILL.md" => "push v2\n"}, "change the push skill")
       # GitHub brought the branch up to date with main.
       git!(fixture.upstream, ["push", "origin", "main", "main:auto/ACME-483"])
       main = fixture.upstream |> git!(["rev-parse", "HEAD"]) |> String.trim()
 
       assert {:ok, %{"status" => "synced", "head" => ^main}} = GitHub.sync_base(fixture.context)
-      assert File.read!(Path.join(fixture.workspace, ".ai/skills/push/SKILL.md")) == "push v2\n"
+      assert File.read!(Path.join(fixture.workspace, ".agents/skills/push/SKILL.md")) == "push v2\n"
     after
       File.rm_rf(fixture.root)
     end
@@ -503,11 +503,11 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     fixture = sync_fixture!("github-agent-sync-base-protected")
 
     try do
-      commit_files!(fixture.workspace, %{".ai/skills/push/SKILL.md" => "agent rewrite\n", "WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
+      commit_files!(fixture.workspace, %{".agents/skills/push/SKILL.md" => "agent rewrite\n", "WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
       commit_files!(fixture.upstream, %{"lib/app.ex" => "app v2\n"}, "main work")
       git!(fixture.upstream, ["push", "origin", "main"])
 
-      files = [".ai/skills/push/SKILL.md", "WORKFLOW.md"]
+      files = [".agents/skills/push/SKILL.md", "WORKFLOW.md"]
       assert {:error, {:protected_paths_changed, ^files}} = GitHub.sync_base(fixture.context)
       assert {:error, {:protected_paths_changed, ^files}} = GitHub.push_branch(fixture.context)
       assert {_output, status} = System.cmd("git", ["rev-parse", "--verify", "--quiet", "refs/heads/auto/ACME-483"], cd: fixture.origin)
@@ -534,9 +534,9 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     fixture = sync_fixture!("github-agent-sync-base-skill-link")
 
     try do
-      # As in Symphony's own repo: `.ai/skills/pull` links to the shipped `priv/skills/pull`.
+      # As in Symphony's own repo: `.agents/skills/pull` links to the shipped `priv/skills/pull`.
       commit_files!(fixture.upstream, %{"priv/skills/pull/SKILL.md" => "pull v1\n"}, "ship the pull skill")
-      File.ln_s!("../../priv/skills/pull", Path.join(fixture.upstream, ".ai/skills/pull"))
+      File.ln_s!("../../priv/skills/pull", Path.join(fixture.upstream, ".agents/skills/pull"))
       commit_files!(fixture.upstream, %{}, "link the pull skill")
       git!(fixture.upstream, ["push", "origin", "main"])
       git!(fixture.workspace, ["pull", "--ff-only", "origin", "main"])
@@ -562,7 +562,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["ls-remote", "--symref", "origin", "HEAD"], _opts -> {"ref: refs/heads/main\tHEAD\n", 0}
         ["ls-remote" | _rest], _opts -> {"abc123\trefs/heads/main\n", 0}
         ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], _opts -> {"", 1}
-        ["ls-tree" | _rest], _opts -> {"100644 blob aaa111\t.ai/skills/push/SKILL.md\0" <> "120000 blob bbb222\t.ai/skills/pull\0", 0}
+        ["ls-tree" | _rest], _opts -> {"100644 blob aaa111\t.agents/skills/push/SKILL.md\0" <> "120000 blob bbb222\t.agents/skills/pull\0", 0}
         ["cat-file", "blob", "bbb222"], _opts -> {"fatal: bad object\n", 128}
       end
 
@@ -589,11 +589,11 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ]
       )
 
-      commit_files!(fixture.upstream, %{".ai/skills/push/SKILL.md" => "push develop\n"}, "develop work")
+      commit_files!(fixture.upstream, %{".agents/skills/push/SKILL.md" => "push develop\n"}, "develop work")
       git!(fixture.upstream, ["push", "origin", "main:develop"])
 
       assert {:ok, %{"status" => "synced", "base" => "origin/develop"}} = GitHub.sync_base(fixture.context)
-      assert File.read!(Path.join(fixture.workspace, ".ai/skills/push/SKILL.md")) == "push develop\n"
+      assert File.read!(Path.join(fixture.workspace, ".agents/skills/push/SKILL.md")) == "push develop\n"
     after
       File.rm_rf(fixture.root)
     end
@@ -1991,7 +1991,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     File.mkdir_p!(upstream)
     git!(upstream, ["init", "-b", "main"])
     configure_identity!(upstream)
-    commit_files!(upstream, %{".ai/skills/push/SKILL.md" => "push v1\n", "lib/app.ex" => "app v1\n"}, "initial")
+    commit_files!(upstream, %{".agents/skills/push/SKILL.md" => "push v1\n", "lib/app.ex" => "app v1\n"}, "initial")
     git!(upstream, ["remote", "add", "origin", origin])
     git!(upstream, ["push", "origin", "main"])
 

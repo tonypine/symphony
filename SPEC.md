@@ -445,6 +445,7 @@ but startup validation will fail unless required fields such as `repositories:` 
 Top-level keys accepted by the Elixir implementation:
 
 - `issues`
+- `tickets`
 - `repositories`
 - `workspaces`
 - `workers`
@@ -1504,7 +1505,7 @@ When enabled:
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and a
   parent walkthrough marks a criterion that only asks for tests or CI to pass `skipped` as covered
   by CI on the base branch. QA exercises the change the way a user would.
-- The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.ai/skills`, the project
+- The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
   a sub-issue or the workpad hands it to a person. A criterion a change elsewhere could meet, such as
@@ -1872,6 +1873,16 @@ not require recognizing or validating extension fields unless that extension is 
   the active states when set
 - `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
   NOT be one of the active states (see the human review rule)
+- `issues.states.code_review`, `issues.states.qa`, `issues.states.plan_review`,
+  `issues.states.epic_review`, `issues.states.ci_fix`: the machine-owned phase states, string or
+  null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
+  MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
+  and create it when it is missing, logging what it created; a missing one MUST be reported with its
+  exact name and the `issues.states.*` key to point at the new name before it is created. They land
+  inert: no dispatch, transition or read uses them yet.
+- `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
+  the numbers `0`..`4`, or `no priority`, default `[]`; empty means every priority is
+  dispatch-eligible. See 8.2 Candidate Selection Rules.
 - `issues.poll_interval_ms`: integer, default `30000`
 - `poller.backoff_base_ms`: positive integer or null; null uses the effective poll interval
 - `poller.max_backoff_ms`: positive integer, default `300000`
@@ -2273,12 +2284,16 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
-- leaves out the checks of a GitHub Actions run whose every check on the head was cancelled while
-  another run of the same workflow on the head reported a check that wasn't (a duplicate run a
-  concurrency group cancelled): the other run says how the head's CI went, so such a run starts
-  no rerun and no CI-fix run. It logs `Ignoring the checks of cancelled run(s) <ids> superseded by
-  another run of the same workflow`. When every run of the workflow was cancelled, or a cancelled
-  job sits beside others in its own run, the cancelled checks still read as a failure.
+- keeps only the newest run of each GitHub Actions workflow among the checks on a head, ordered by
+  run id (GitHub numbers runs as it creates them and the numbers grow), and leaves out the checks
+  of every other run of that workflow: the head reads as the check list GitHub shows. That covers
+  a duplicate run a concurrency group cancelled (one whose every check on the head was cancelled
+  while another run of the same workflow reported a check that wasn't) and a completed run left
+  beside a newer run of the same workflow (a re-run on the same head, such as for an edited pull
+  request body); neither starts a rerun or a CI-fix run. It logs `Ignoring the checks of superseded
+  run(s) <ids>: only the newest run of their workflow counts`. When every run of the workflow was
+  cancelled, or a cancelled job sits beside live ones in its own run, the cancelled checks still
+  read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets
@@ -2375,8 +2390,14 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `fallback`, `merged`) is kept in
   the PR review record, logged on every change, and listed under `auto_merge` in
   `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
-- Apart from the conflict and CI-fix paths, moving an issue out of `Merging` does not turn
-  auto-merge off on GitHub; disable it on the PR to stop the merge.
+- When an issue leaves `Merging` for any state but `Done` (a person's move in Linear, or the
+  Director's `undo`) while its open PR is in the `enabled`, `updating_branch` or `merging` state,
+  the next poll MUST turn auto-merge off (GraphQL `disablePullRequestAutoMerge`) when GitHub shows
+  it on, so the PR doesn't merge without the approval. When it turned it off, the poller logs it,
+  writes an `auto_merge_disabled` audit event with `reason: "left_merging"`, and comments on the
+  issue why. Either way it then drops the `auto_merge` state, so the next move to `Merging` turns
+  auto-merge on again, even at the same head. While GitHub refuses, the poll records an error and
+  the next poll tries again. An issue moved to `Done`, or a PR already merged or closed, keeps it.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
@@ -2424,6 +2445,8 @@ An issue is dispatch-eligible only if all are true:
 - Its state is in `active_states` and not in `terminal_states`.
 - It is not already in `running`.
 - It is not already in `claimed`.
+- Its priority is among `tickets.priorities` when that key is set, unless it is a forced ticket or
+  a retry waiting for a slot (see 5.4).
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
 - Blocker rule for `Todo` state passes:
@@ -2782,6 +2805,10 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   and any Linear rate-limit pause.
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
+- A limit for a provider other than the run's own records or refreshes the hold for that provider,
+  so its runs pause, but does not hold the run itself: an OpenRouter run through the Claude runtime
+  can see the Claude subscription's window, and it retries with the normal backoff instead of
+  waiting for the Claude reset. That run is recorded as `failure` and emits the usual `run_failed`.
 - An Auto Review QA pass whose agent hits the limit creates or refreshes the hold the same way. It
   records no verdict, writes no QA report and leaves the issue's state alone; a PR-head pass is
   requested again by the first green CI poll after the hold clears, and a `Final verification:`
@@ -3634,7 +3661,7 @@ Scoped GitHub tool extension contract:
   write-protected workspace path itself, except files identical to the
   branch's `origin` copy.
 - For both, a write-protected path includes the files a symlink inside one
-  points at (`.ai/skills/pull -> ../../priv/skills/pull` protects
+  points at (`.agents/skills/pull -> ../../priv/skills/pull` protects
   `priv/skills/pull`). Both MUST read the base and branch heads from the remote
   (`git ls-remote`), not from local remote-tracking refs, which the agent can
   rewrite.
@@ -4651,6 +4678,7 @@ Minimum endpoints:
     | `decisions` | a plan in a review state | `In Review` from the Human Review state, else no move | one comment with `picks` (required, `[{"question", "answer"}]`), posted after the move |
     | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
+    | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
@@ -4659,6 +4687,13 @@ Minimum endpoints:
   - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
     still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
     otherwise it answers `409`. A comment the move posted stays.
+  - `undo` of `approve_pr` reads the ticket's pull request first. One already merged answers `409`
+    (`BIL-206 already merged; move it in Linear instead`). When GitHub shows auto-merge on, `undo`
+    turns it off (GraphQL `disablePullRequestAutoMerge`) before it moves the ticket back, so the PR
+    doesn't merge once its checks pass, and drops the PR review record's `auto_merge` state, so a
+    ticket Linear then keeps in `Merging` gets auto-merge on again on the next poll. When GitHub
+    can't be read or refuses to turn it off, `undo` answers `502` `github_error` and leaves the
+    ticket in `Merging`.
   - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
     Linear error `502`.
   - When Linear takes the first of a move's two writes and refuses the second, the move answers

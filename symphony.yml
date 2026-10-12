@@ -17,6 +17,11 @@ issues:
     active: [Todo, In Progress, Merging, Rework]
     terminal: [Closed, Cancelled, Canceled, Duplicate, Done, "Won't Do"]
 
+# Only these Linear priorities start new work; empty (the default) lets every priority start.
+# Use it to focus a limited API budget, e.g. on urgent and high tickets only.
+# tickets:
+#   priorities: [urgent, high]
+
 repositories:
   - key: symphony
     # default: true

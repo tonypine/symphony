@@ -24,6 +24,7 @@ defmodule SymphonyElixir.BreakdownReview do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.SubIssueWait
   alias SymphonyElixir.Tracker
+  alias SymphonyElixir.TransitionGuard
 
   @backlog_state "Backlog"
   @todo_state "Todo"
@@ -82,11 +83,16 @@ defmodule SymphonyElixir.BreakdownReview do
 
   @doc "Moves one sub-issue as `action` asks: to `Todo`, or to the team's canceled state."
   @spec move(action(), String.t(), module()) :: :ok | {:error, term()}
-  def move(:promote, sub_issue_id, tracker), do: tracker.update_issue_state(sub_issue_id, @todo_state)
+  def move(action, sub_issue_id, tracker), do: move(action, sub_issue_id, tracker, %{})
 
-  def move(:replace, sub_issue_id, tracker) do
+  @doc false
+  @spec move(action(), String.t(), module(), map()) :: :ok | {:error, term()}
+  def move(:promote, sub_issue_id, tracker, ctx),
+    do: TransitionGuard.perform(sub_issue_id, :breakdown_promote, ctx, tracker: tracker)
+
+  def move(:replace, sub_issue_id, tracker, ctx) do
     Enum.reduce_while(@canceled_states, {:error, :state_not_found}, fn state, _result ->
-      case tracker.update_issue_state(sub_issue_id, state) do
+      case TransitionGuard.perform(sub_issue_id, :breakdown_cancel, Map.put(ctx, :target, state), tracker: tracker) do
         {:error, :state_not_found} = error -> {:cont, error}
         result -> {:halt, result}
       end

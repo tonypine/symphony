@@ -449,6 +449,12 @@ own window) and **Stop Run…**. Stop Run says what a stop does before it does i
 ticket to Backlog with a note; a stop writes a `run_stopped` audit record, so the timeline says "Stopped by
 you".
 
+A run that reports an external block leaves its ticket in place with the `Blocked` machine label and
+what it waits on recorded. The machine lifts a dependency hold on its own; an access hold is a
+person's to lift, and `POST /api/v1/control/unblock` clears it by hand: no Linear state moves and
+the ticket continues where it stopped. A legacy repo is unaffected — it keeps today's Backlog escape
+hatch.
+
 Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
 **Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is
 `Me`, order it by **Updated**, and save it as `Waiting on me`. It shows on the phone app

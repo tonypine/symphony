@@ -291,6 +291,25 @@ defmodule SymphonyElixir.CiPollerTest do
     end
   end
 
+  # FakeTracker plus the machine-label writes `SymphonyElixir.CiState` projects, so a test can see
+  # the CI labels a webhook delivery or a poll puts on the ticket.
+  defmodule LabelTracker do
+    defdelegate fetch_issues_by_states(states), to: FakeTracker
+    defdelegate fetch_issue_states_by_ids(issue_ids), to: FakeTracker
+    defdelegate update_issue_state(issue_id, state_name), to: FakeTracker
+    defdelegate create_comment(issue_id, body), to: FakeTracker
+
+    def set_machine_label(issue_id, label_name) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:machine_label_set, issue_id, label_name})
+      :ok
+    end
+
+    def clear_machine_label(issue_id, label_name) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:machine_label_clear, issue_id, label_name})
+      :ok
+    end
+  end
+
   setup do
     audit_root =
       Path.join(
@@ -917,6 +936,9 @@ defmodule SymphonyElixir.CiPollerTest do
       assert_receive {:issue_comment, "issue-2401", body}
       assert body =~ "PR conflicts with `develop`; merge it and push."
       refute_receive {:qa_request, _job}
+
+      assert [%{name: "review verdict", details: %{outcome: "rework", to: "Rework", reason: "pr_conflict"}} | _] =
+               RunStore.get_ticket_state(@repo_key, "issue-2401").signals
     end
 
     test "a conflicting PR without a base branch names the repository's base branch" do
@@ -1244,6 +1266,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:fetch_failed_log, "987"}
     assert_receive {:notification_event, %{event: "ci_failed", state: "In Progress", metadata: %{retry_count: 1}}}
     assert transition_log_excerpt =~ "ERROR: specs failed"
+
+    assert [%{name: "fix verdict", details: %{outcome: "mechanical", to: "In Progress", reason: "ci_failure"}} | _] =
+             RunStore.get_ticket_state(@repo_key, "issue-2401").signals
 
     assert %{
              commit_sha: "abc123",
@@ -1802,6 +1827,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:notification_event, %{event: "ci_escalated", state: "In Review", metadata: %{max_retries: 1, escalation_state: "In Review"}}}
 
     assert [%{status: "escalated", ci_retry_count: 1}] = RunStore.list_ci_checks()
+
+    assert [%{name: "decision requested", details: %{to: "In Review", reason: "ci_failure"}} | _] =
+             RunStore.get_ticket_state(@repo_key, "issue-2401").signals
   end
 
   test "escalation persists pending transition before final ci update" do
@@ -2697,6 +2725,119 @@ defmodule SymphonyElixir.CiPollerTest do
       refute_receive {:fetch_ci_status, _pr_url}, 400
     end
 
+    test "a red delivery writes the CI attribute and the CI red label without a poll", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, tracker: LabelTracker, webhook_debounce_ms: 3_600_000)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") != nil end)
+      assert_receive {:machine_label_set, "issue-2401", "CI running"}, 5_000
+
+      assert %{"status" => "accepted"} = deliver_webhook("check_suite", check_suite_failed("abc123"), 202)
+
+      assert_receive {:machine_label_set, "issue-2401", "CI red"}, 5_000
+      assert_receive {:machine_label_clear, "issue-2401", "CI running"}, 5_000
+      assert %{ci_states: [%{head_sha: "abc123", status: "red"}]} = RunStore.get_ticket_state(@repo_key, "issue-2401")
+      refute_receive {:fetch_ci_status, _pr_url}, 200
+    end
+
+    test "a push to a new head projects CI running at once", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, tracker: LabelTracker, webhook_debounce_ms: 3_600_000)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> match?(%{ci_states: [%{status: "green"}]}, RunStore.get_ticket_state(@repo_key, "issue-2401")) end)
+      assert_receive {:machine_label_set, "issue-2401", "CI green"}, 5_000
+
+      assert %{"status" => "accepted"} = deliver_webhook("pull_request", pull_request_synchronized("newsha"), 202)
+
+      assert_receive {:machine_label_set, "issue-2401", "CI running"}, 5_000
+      assert_receive {:machine_label_clear, "issue-2401", "CI green"}, 5_000
+
+      assert %{ci_states: [%{head_sha: "newsha", status: "running"}, %{head_sha: "abc123", status: "green"}]} =
+               RunStore.get_ticket_state(@repo_key, "issue-2401")
+    end
+
+    test "a delivery older than the poll's read cannot overwrite it", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, tracker: LabelTracker, webhook_debounce_ms: 3_600_000)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> match?(%{ci_states: [%{status: "green"}]}, RunStore.get_ticket_state(@repo_key, "issue-2401")) end)
+      assert_receive {:machine_label_set, "issue-2401", "CI green"}, 5_000
+
+      assert %{"status" => "accepted"} = deliver_webhook("check_suite", check_suite_failed("abc123", "2020-01-01T00:00:00Z"), 202)
+
+      refute_receive {:machine_label_set, "issue-2401", "CI red"}, 300
+      assert %{ci_states: [%{head_sha: "abc123", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-2401")
+    end
+
+    test "closing a PR clears the CI labels and leaves the recorded state", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, tracker: LabelTracker, webhook_debounce_ms: 3_600_000)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") != nil end)
+      assert_receive {:machine_label_set, "issue-2401", "CI running"}, 5_000
+      assert_receive {:machine_label_clear, "issue-2401", "CI green"}, 5_000
+      assert_receive {:machine_label_clear, "issue-2401", "CI red"}, 5_000
+
+      assert %{"status" => "accepted"} = deliver_webhook("pull_request", pull_request_closed(), 202)
+
+      for label <- ["CI green", "CI red", "CI running"] do
+        assert_receive {:machine_label_clear, "issue-2401", ^label}, 5_000
+      end
+
+      refute_receive {:machine_label_set, "issue-2401", _label}, 200
+      assert %{ci_states: [%{head_sha: "abc123", status: "running"}]} = RunStore.get_ticket_state(@repo_key, "issue-2401")
+    end
+
+    test "a check event on a head the record has moved past leaves the store and labels alone", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, tracker: LabelTracker, webhook_debounce_ms: 3_600_000)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> match?(%{ci_states: [%{status: "green"}]}, RunStore.get_ticket_state(@repo_key, "issue-2401")) end)
+      assert_receive {:machine_label_set, "issue-2401", "CI green"}, 5_000
+
+      assert %{"status" => "accepted"} = deliver_webhook("check_suite", check_suite_failed("oldsha"), 202)
+
+      refute_receive {:machine_label_set, "issue-2401", "CI red"}, 300
+      assert %{ci_states: [%{head_sha: "abc123", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-2401")
+    end
+
+    test "a synchronize delivery naming no head is a no-op", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, tracker: LabelTracker, webhook_debounce_ms: 3_600_000)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> match?(%{ci_states: [%{status: "green"}]}, RunStore.get_ticket_state(@repo_key, "issue-2401")) end)
+      assert_receive {:machine_label_set, "issue-2401", "CI green"}, 5_000
+
+      assert %{"status" => "accepted"} = deliver_webhook("pull_request", pull_request_synchronized_without_head(), 202)
+
+      refute_receive {:machine_label_set, "issue-2401", "CI running"}, 300
+      assert %{ci_states: [%{head_sha: "abc123", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-2401")
+    end
+
     test "a webhook poll that fails is logged and the poller keeps running", %{name: name} do
       log =
         capture_log(fn ->
@@ -2788,6 +2929,38 @@ defmodule SymphonyElixir.CiPollerTest do
   end
 
   defp repository, do: %{"full_name" => "example/repo", "html_url" => "https://github.com/example/repo"}
+
+  defp check_suite_failed(head_sha, completed_at \\ nil) do
+    suite = %{"head_sha" => head_sha, "conclusion" => "failure", "pull_requests" => [%{"number" => 2401}]}
+    suite = if completed_at, do: Map.put(suite, "completed_at", completed_at), else: suite
+
+    %{"action" => "completed", "repository" => repository(), "check_suite" => suite}
+  end
+
+  defp pull_request_synchronized(head_sha) do
+    %{
+      "action" => "synchronize",
+      "repository" => repository(),
+      "pull_request" => %{"html_url" => "https://github.com/example/repo/pull/2401", "head" => %{"sha" => head_sha}}
+    }
+  end
+
+  defp pull_request_closed do
+    %{
+      "action" => "closed",
+      "repository" => repository(),
+      "pull_request" => %{"html_url" => "https://github.com/example/repo/pull/2401", "head" => %{"sha" => "abc123"}}
+    }
+  end
+
+  # A synchronize whose payload names no head: GitHub's shape when the head branch was deleted.
+  defp pull_request_synchronized_without_head do
+    %{
+      "action" => "synchronize",
+      "repository" => repository(),
+      "pull_request" => %{"html_url" => "https://github.com/example/repo/pull/2401", "head" => %{}}
+    }
+  end
 
   defp assert_eventually(fun, attempts \\ 100) do
     cond do

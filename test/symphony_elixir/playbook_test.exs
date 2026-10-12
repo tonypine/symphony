@@ -61,6 +61,33 @@ defmodule SymphonyElixir.PlaybookTest do
     end
   end
 
+  describe "versioned partials" do
+    test "status_map's designed variant parses, names itself and differs from the base" do
+      assert {:ok, designed} = Playbook.fetch("status_map", "designed")
+      assert {:ok, base} = Playbook.fetch("status_map")
+
+      assert designed != base
+      assert {:ok, _template} = Solid.parse(designed)
+      assert designed =~ "name: status_map\n"
+      assert designed =~ "`Code Review`"
+      refute designed =~ "`Auto Review`"
+    end
+
+    test "a partial with no variant for a version falls back to the base body" do
+      assert Playbook.fetch("status_map", "legacy") == Playbook.fetch("status_map")
+      assert Playbook.fetch("guardrails", "designed") == Playbook.fetch("guardrails")
+      assert Playbook.fetch("not_a_partial", "designed") == :error
+    end
+
+    test "the file system serves the version's variant" do
+      assert {:ok, designed} = FileSystem.read_template_file("status_map", "designed")
+      assert {:ok, legacy} = FileSystem.read_template_file("status_map", "legacy")
+
+      assert designed != legacy
+      assert {:error, %Solid.FileSystem.Error{}} = FileSystem.read_template_file("not_a_partial", "designed")
+    end
+  end
+
   test "parent_tickets ends a breakdown run in In Review and leaves the approval to a human" do
     assert {:ok, body} = Playbook.fetch("parent_tickets")
 

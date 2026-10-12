@@ -7,8 +7,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   audit record.
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `approve_pr`, `rework`,
-  `decisions`, `sign_off`, `backlog` and `undo`) are made by `SymphonyElixir.DirectorMoves`: each
-  takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
+  `decisions`, `sign_off`, `backlog`, `unblock` and `undo`) are made by `SymphonyElixir.DirectorMoves`:
+  each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
   `move_incomplete` when Linear took one of the move's two writes and refused the other, and 200 with
   the states it moved between.
   """
@@ -88,6 +88,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec backlog(Conn.t(), map()) :: Conn.t()
   def backlog(conn, params), do: director_move(conn, :backlog, params, %{note: string_param(params["note"])})
 
+  @spec unblock(Conn.t(), map()) :: Conn.t()
+  def unblock(conn, params), do: director_move(conn, :unblock, params, %{})
+
   @spec undo(Conn.t(), map()) :: Conn.t()
   def undo(conn, params) do
     case string_param(params["issue_identifier"]) do
@@ -137,6 +140,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_move(conn, _identifier, {:error, {:conflict, message}}), do: error_response(conn, 409, "move_not_allowed", message)
 
   defp respond_move(conn, _identifier, {:error, {:partial, message}}), do: error_response(conn, 502, "move_incomplete", message)
+  defp respond_move(conn, _identifier, {:error, {:github, message}}), do: error_response(conn, 502, "github_error", message)
+  defp respond_move(conn, _identifier, {:error, {:store, message}}), do: error_response(conn, 502, "store_error", message)
 
   defp respond_move(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")

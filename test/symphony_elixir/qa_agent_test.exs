@@ -731,7 +731,7 @@ defmodule SymphonyElixir.QaAgentTest do
       prompt = QaAgent.prompt(job(%{issue: ticket}), nil)
 
       assert prompt =~ ~r/Agents cannot change these paths: the sandbox denies the writes and CI fails a PR whose own\s+commits touch them: `WORKFLOW.md`, /
-      assert prompt =~ "`.ai/skills`"
+      assert prompt =~ "`.agents/skills`"
       assert prompt =~ "`.claude/settings.json`"
       assert prompt =~ ~r/it files a sub-issue \(read them with `linear_get_subissues`\)/
 

@@ -549,6 +549,25 @@ defmodule SymphonyElixir.AutoMerge do
     end
   end
 
+  @doc """
+  True while Symphony has GitHub auto-merge on for the PR (or is merging it) and hasn't turned it
+  off since: a record `disable_for_exit/5` acts on once the issue leaves `Merging`.
+  """
+  @spec on?(term()) :: boolean()
+  def on?(%{state: state, enabled_head_sha: head}) when state in ["enabled", "updating_branch", "merging"], do: is_binary(head)
+  def on?(_auto_merge), do: false
+
+  @doc """
+  Turns GitHub auto-merge off for a PR whose issue left `Merging` for a state other than `Done`
+  (a person's move, or the Director's undo), so it doesn't merge without the approval. Results
+  as for `disable_for_conflict/5`; either way the PR poller then forgets the stay, so the next
+  move to `Merging` turns auto-merge on again, even at the same head.
+  """
+  @spec disable_for_exit(map(), map(), t(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
+  def disable_for_exit(record, activity, current, opts, %DateTime{} = now) do
+    turn_off(record, activity, current, opts, now)
+  end
+
   defp turn_off(record, activity, current, opts, now) do
     if auto_merge_on?(Map.get(record, :auto_merge), activity, current) do
       case disable(record, activity, opts) do
@@ -595,6 +614,15 @@ defmodule SymphonyElixir.AutoMerge do
     "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because CI failed and a fix run may push new code. " <>
       "The approval covered the diff before the fix, so the fix goes back through review; " <>
       back_to_merging(rereview?)
+  end
+
+  @doc "The Linear comment posted when auto-merge is turned off because the issue left `Merging` (see `disable_for_exit/5`)."
+  @spec exit_comment(String.t() | nil, String.t() | nil) :: String.t()
+  def exit_comment(pr_url, state) do
+    left = if state, do: "left Merging for #{state}", else: "left Merging"
+
+    "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because this ticket #{left}, " <>
+      "so the PR doesn't merge without an approval; moving this ticket to Merging again turns auto-merge back on."
   end
 
   defp back_to_merging(true), do: "the acceptance gate judges it in Auto Review, and its approve moves this ticket back to Merging and turns auto-merge back on."

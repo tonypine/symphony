@@ -20,8 +20,8 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     test "runs the start command with sh -lc under sandbox-exec and the dev server profile", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
       executable = Path.join(root, "sandbox-exec")
       File.write!(executable, "")
-      File.mkdir_p!(Path.join(workspace, ".ai/skills"))
-      File.ln_s!("../../priv/skills/pull", Path.join(workspace, ".ai/skills/pull"))
+      File.mkdir_p!(Path.join(workspace, ".agents/skills"))
+      File.ln_s!("../../priv/skills/pull", Path.join(workspace, ".agents/skills/pull"))
 
       assert {:ok, [^executable, "-p", profile, "/bin/sh", "-lc", "mix phx.server"], []} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir,
@@ -38,7 +38,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
         assert profile =~ ~s{(subpath "#{cache_dir}")}
       end
 
-      for path <- [".git", "WORKFLOW.md", ".ai/skills", "priv/skills/pull"] do
+      for path <- [".git", "WORKFLOW.md", ".agents/skills", "priv/skills/pull"] do
         assert profile =~ ~s{(subpath "#{Path.join(real(workspace), path)}")}
       end
     end
@@ -215,7 +215,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       protected = AgentSandboxConfig.workspace_protected_paths() ++ [".git"]
       write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths()
       assert {args, ^placeholders} = DevServerSandbox.bwrap_args(workspace, write_paths, protected)
-      assert Enum.map(placeholders, &Path.relative_to(&1, real(workspace))) == [".claude", ".ai", ".codex", "config"]
+      assert Enum.map(placeholders, &Path.relative_to(&1, real(workspace))) == [".claude", ".agents", ".codex", "config"]
 
       proxy_socket = Path.join(real(tmp_dir), "proxy.sock")
       serve_socket = Path.join(real(tmp_dir), "serve.sock")
@@ -339,7 +339,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
         "mise.toml",
         ".claude/settings.local.json",
         "deep/a/b",
-        ".ai/skills",
+        ".agents/skills",
         "top/a/b",
         "WORKFLOW.md",
         "config/settings_ui_exempt.yml",
@@ -348,7 +348,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
       assert {args, placeholders} = DevServerSandbox.bwrap_args(workspace, [workspace, tmp_dir], protected, home)
       ws = real(workspace)
-      assert placeholders == [Path.join(ws, ".ai"), Path.join(ws, "top")]
+      assert placeholders == [Path.join(ws, ".agents"), Path.join(ws, "top")]
 
       options = chunk_options(args)
       read_only = for ["--ro-bind", path, path] <- options, String.starts_with?(path, ws <> "/"), do: Path.relative_to(path, ws)
@@ -715,7 +715,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       File.write!(Path.join(home, "notes.txt"), "notes")
       File.mkdir_p!(Path.join(workspace, ".git"))
       File.mkdir_p!(Path.join(workspace, ".claude"))
-      protected = [".git", ".claude/settings.local.json", ".ai/skills"]
+      protected = [".git", ".claude/settings.local.json", ".agents/skills"]
       {args, _placeholders} = DevServerSandbox.bwrap_args(workspace, [workspace, tmp_dir], protected, home)
 
       assert {output, status} = bwrap(args, "cat #{home}/.ssh/id_ed25519")
@@ -727,7 +727,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert File.read!(Path.join(workspace, "build.txt")) == "built\n"
       assert File.read!(Path.join(tmp_dir, "tmp.txt")) == "tmp\n"
 
-      for script <- ["echo hook > #{home}/planted.txt", "echo hook > .git/config", "echo '{}' > .claude/settings.local.json", "mkdir -p .ai/skills"] do
+      for script <- ["echo hook > #{home}/planted.txt", "echo hook > .git/config", "echo '{}' > .claude/settings.local.json", "mkdir -p .agents/skills"] do
         assert {_output, status} = bwrap(args, script)
         assert status != 0, script
       end
@@ -735,7 +735,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       refute File.exists?(Path.join(home, "planted.txt"))
       refute File.exists?(Path.join(workspace, ".git/config"))
       refute File.exists?(Path.join(workspace, ".claude/settings.local.json"))
-      refute File.exists?(Path.join(workspace, ".ai/skills"))
+      refute File.exists?(Path.join(workspace, ".agents/skills"))
     end
 
     test "a command reaches the network only on its loopback, and the dependency hosts only through the proxy", %{workspace: workspace, tmp_dir: tmp_dir} do

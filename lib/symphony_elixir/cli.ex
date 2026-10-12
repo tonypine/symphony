@@ -321,18 +321,21 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  @workflow_preview_usage "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude] [--repo REPO_KEY]"
+
   defp evaluate_workflow(["preview" | preview_args]), do: dispatch_workflow_preview(preview_args)
 
   defp evaluate_workflow(_args),
-    do: {:error, "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"}
+    do: {:error, @workflow_preview_usage}
 
   defp dispatch_workflow_preview(args) do
-    case OptionParser.parse(args, strict: [file: :string, agent: :string]) do
+    case OptionParser.parse(args, strict: [file: :string, agent: :string, repo: :string]) do
       {opts, [], []} ->
         render_opts =
           []
           |> maybe_put(:file, Keyword.get(opts, :file))
           |> maybe_put(:agent_kind, Keyword.get(opts, :agent))
+          |> maybe_put(:repo_key, Keyword.get(opts, :repo))
 
         case SymphonyElixir.WorkflowPreview.render(render_opts) do
           {:ok, prompt} ->
@@ -344,7 +347,7 @@ defmodule SymphonyElixir.CLI do
         end
 
       _ ->
-        {:error, "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"}
+        {:error, @workflow_preview_usage}
     end
   end
 

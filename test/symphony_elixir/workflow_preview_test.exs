@@ -27,6 +27,19 @@ defmodule SymphonyElixir.WorkflowPreviewTest do
     refute prompt =~ "{% render"
   end
 
+  test "uses the repo key it is given" do
+    path =
+      write!("""
+      ---
+      prompts: {}
+      ---
+      repo={{ repo_key }}
+      """)
+
+    assert {:ok, prompt} = WorkflowPreview.render(file: path, repo_key: "api")
+    assert prompt =~ "repo=api"
+  end
+
   test "returns a friendly error for an unknown render partial" do
     path =
       write!("""

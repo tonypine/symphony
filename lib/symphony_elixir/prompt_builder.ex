@@ -3,19 +3,25 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, StateMachine, TicketState, Workflow}
 
-  @render_opts [
-    strict_variables: true,
-    strict_filters: true,
-    file_system: {SymphonyElixir.Playbook.FileSystem, nil}
-  ]
+  # The file system carries the repo's resolved state-machine version as its option, so `{% render %}`
+  # serves the version's partial variants (see `Playbook.fetch/2`).
+  defp render_opts(version) do
+    [
+      strict_variables: true,
+      strict_filters: true,
+      file_system: {SymphonyElixir.Playbook.FileSystem, version}
+    ]
+  end
+
   @compact_comment_limit 5
   # CI log excerpts can reach 20k sanitized bytes, larger than the stdio soft
   # limit that forced the compact prompt in the first place. Keep only the tail
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
   @qa_findings_limit 10_000
+  @ticket_state_limit 4_000
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -74,6 +80,7 @@ defmodule SymphonyElixir.PromptBuilder do
     {repo_key, workflow_source} = repo_context_for_prompt(issue, opts)
     agent_context = agent_context_for_prompt(opts, workflow_source)
     prompt_mode = prompt_mode(opts)
+    version = state_machine_version_for_prompt(opts, workflow_source)
 
     template =
       opts
@@ -83,22 +90,26 @@ defmodule SymphonyElixir.PromptBuilder do
       |> parse_template!()
 
     template
-    |> render_template!(%{
-      "attempt" => Keyword.get(opts, :attempt),
-      "agent" => to_solid_value(agent_context),
-      "repo_key" => repo_key,
-      "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
-      "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
-      "reviewer_comments" => to_solid_value(reviewer_comments),
-      "ci_failure" => to_solid_value(ci_failure),
-      "pr_conflict" => to_solid_value(pr_conflict)
-    })
+    |> render_template!(
+      %{
+        "attempt" => Keyword.get(opts, :attempt),
+        "agent" => to_solid_value(agent_context),
+        "repo_key" => repo_key,
+        "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
+        "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
+        "reviewer_comments" => to_solid_value(reviewer_comments),
+        "ci_failure" => to_solid_value(ci_failure),
+        "pr_conflict" => to_solid_value(pr_conflict)
+      },
+      version
+    )
     |> prepend_managed_context(prompt_mode, agent_context, repo_key)
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
     |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
+    |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -161,6 +172,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ci_failure(ci_failure)
     |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
+    |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -187,8 +199,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # an unknown playbook partial. `Solid.render!` would silently keep the file-system
   # fallback text (a missing partial is not a strict variable/filter error), so a
   # typo'd partial name must be caught here rather than shipped in the prompt.
-  defp render_template!(template, assigns) do
-    case Solid.render(template, assigns, @render_opts) do
+  defp render_template!(template, assigns, version) do
+    case Solid.render(template, assigns, render_opts(version)) do
       {:ok, result, errors} ->
         raise_on_partial_errors!(errors)
         IO.iodata_to_binary(result)
@@ -390,6 +402,30 @@ defmodule SymphonyElixir.PromptBuilder do
     end
   end
 
+  # The repo's resolved state-machine version, from the caller's settings when it passed them, else
+  # resolved from the repo's config the same way the agent kind is. Selects the partial variants the
+  # render serves.
+  defp state_machine_version_for_prompt(opts, workflow_source) do
+    case Keyword.get(opts, :settings) do
+      %{} = settings -> StateMachine.version(settings)
+      _unset -> state_machine_version_from_workflow_source(workflow_source)
+    end
+  end
+
+  defp state_machine_version_from_workflow_source({:repo, repo_key}) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> StateMachine.version(settings)
+      {:error, _reason} -> StateMachine.default_version()
+    end
+  end
+
+  defp state_machine_version_from_workflow_source(:current) do
+    case Config.settings() do
+      {:ok, settings} -> StateMachine.version(settings)
+      {:error, _reason} -> StateMachine.default_version()
+    end
+  end
+
   defp agent_kind_from_settings(%{agent: %{kind: kind}}), do: present_string(kind)
   defp agent_kind_from_settings(_settings), do: nil
 
@@ -550,6 +586,76 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp append_pr_conflict(prompt, pr_conflict) when is_map(pr_conflict) do
     prompt <> "\n\n" <> pr_conflict_section(pr_conflict)
+  end
+
+  # The per-ticket machine record is injected as continuation context (D9), never read through a
+  # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
+  defp append_ticket_state(prompt, ticket_state) do
+    case ticket_state_section(ticket_state) do
+      nil -> prompt
+      section -> prompt <> "\n\n" <> section
+    end
+  end
+
+  defp ticket_state_section(ticket_state) when is_map(ticket_state) do
+    state = TicketState.normalize(ticket_state)
+
+    if ticket_state_empty?(state) do
+      nil
+    else
+      render_ticket_state(state)
+    end
+  end
+
+  defp ticket_state_section(_ticket_state), do: nil
+
+  # Verdicts are deliberately not part of the section (only phase, holds, CI and signals are
+  # rendered), so they do not count as content here: a verdict-only record adds nothing.
+  defp ticket_state_empty?(state) do
+    state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == []
+  end
+
+  defp render_ticket_state(state) do
+    [
+      "Ticket state:",
+      "",
+      "- Phase: #{blank_fallback(state.phase, "unknown")}",
+      "- Holds: #{ticket_state_holds(state.holds)}",
+      "- CI: #{ticket_state_ci(state.ci_states)}",
+      "Recent signals:",
+      PromptSafety.linear_block(ticket_state_signal_lines(state.signals), "ticket_state", @ticket_state_limit)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp ticket_state_holds([]), do: "none"
+
+  defp ticket_state_holds(holds) do
+    Enum.map_join(holds, "; ", fn hold ->
+      reason = blank_fallback(hold.reason, "no reason recorded")
+      clearing = blank_fallback(hold.clearing_condition, "no clearing condition recorded")
+      "#{hold.kind} (#{reason}; clears when #{clearing})"
+    end)
+  end
+
+  defp ticket_state_ci([]), do: "unknown"
+
+  defp ticket_state_ci([state | _rest]) do
+    "#{blank_fallback(state.status, "unknown")} at #{blank_fallback(state.head_sha, "unknown head")}"
+  end
+
+  defp ticket_state_signal_lines([]), do: "none"
+
+  defp ticket_state_signal_lines(signals) do
+    Enum.map_join(signals, "\n", fn signal ->
+      details = Enum.map_join(signal.details, " ", fn {key, value} -> "#{key}=#{value}" end)
+      line = "- #{signal.name} at #{signal.at}"
+
+      case details do
+        "" -> line
+        details -> line <> " " <> details
+      end
+    end)
   end
 
   defp append_review_agent_instructions(prompt, %{review_agent: %{enabled: true} = config}, opts) do

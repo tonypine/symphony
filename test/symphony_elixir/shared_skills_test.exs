@@ -30,7 +30,7 @@ defmodule SymphonyElixir.SharedSkillsTest do
   test "the pull skill syncs through github_sync_base and writes no git config" do
     {_path, pull} = "/tmp/codex-home" |> SharedSkills.codex_home_files() |> Enum.find(&String.ends_with?(elem(&1, 0), "/pull/SKILL.md"))
 
-    # The sandbox denies writes to the repo's git config and to `.ai/skills`.
+    # The sandbox denies writes to the repo's git config and to `.agents/skills`.
     refute pull =~ ~r/git config\s+\S+\.\S+/
     assert pull =~ "git -c rerere.enabled=true -c rerere.autoupdate=true"
     assert pull =~ "`github_sync_base` tool"

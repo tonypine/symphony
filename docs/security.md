@@ -61,10 +61,10 @@ shim there.
 
 Both runtimes also deny writes to the workspace's workflow and guardrail files: `WORKFLOW.md`,
 `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, the skill directories
-`.ai/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions` and
+`.agents/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions` and
 `config/settings_ui_exempt.yml`. The agent instruction files in `.symphony/instructions/` are left
 writable on purpose; see [Workflow and instruction files](#workflow-and-instruction-files). In a local workspace the deny
-also covers the files a symlink in one of those points at: Symphony's own `.ai/skills/pull` links
+also covers the files a symlink in one of those points at: Symphony's own `.agents/skills/pull` links
 to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
 gets the plain list.
 
@@ -475,7 +475,7 @@ On Linux, `bwrap` builds the same limits from mounts and namespaces:
   and the protected paths read-only over them. A protected path that doesn't exist yet can't be
   mounted over, so its nearest folder inside the checkout is read-only instead (all of `.claude`
   when `.claude/settings.local.json` is missing), and a missing top-level folder (`.claude`,
-  `.ai`, `.codex`, `config`) gets an empty read-only placeholder while the server runs, removed
+  `.agents`, `.codex`, `config`) gets an empty read-only placeholder while the server runs, removed
   when it stops. A missing top-level file (`WORKFLOW.md`, `symphony.yml`, `mise.toml`,
   `.tool-versions`) is not blocked, since its placeholder would be an empty file in the agent's
   `git status` for the whole run; the server can create it, and the protected paths check on

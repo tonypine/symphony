@@ -18,7 +18,7 @@ arguments — Symphony injects the scope server-side. To refresh remote refs, us
 rather than reading SSH config or credential files from the sandbox.
 To merge the base branch into your branch, use `github_sync_base()` (no arguments)
 rather than `git merge` in your shell: it merges outside the sandbox, so the base
-branch's changes to write-protected files such as `.ai/skills` come through. The
+branch's changes to write-protected files such as `.agents/skills` come through. The
 `pull` skill says what to do with its result.
 
 Do not craft raw Linear GraphQL from prompts.

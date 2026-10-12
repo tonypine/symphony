@@ -375,7 +375,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "github_sync_base",
       "description" =>
-        "Fetch origin and merge the base branch (e.g. origin/main) into the current workspace branch, outside the sandbox, so the merge can update write-protected files such as `.ai/skills`. Fast-forwards to the branch's remote copy first when it is ahead. Merges with `--no-commit`: on `merge_staged` run `git commit --no-edit`; on `conflicts` resolve the listed files, `git add` them, then `git -c rerere.enabled=true commit --no-edit`. Refuses a branch that changes a protected path itself.",
+        "Fetch origin and merge the base branch (e.g. origin/main) into the current workspace branch, outside the sandbox, so the merge can update write-protected files such as `.agents/skills`. Fast-forwards to the branch's remote copy first when it is ahead. Merges with `--no-commit`: on `merge_staged` run `git commit --no-edit`; on `conflicts` resolve the listed files, `git add` them, then `git -c rerere.enabled=true commit --no-edit`. Refuses a branch that changes a protected path itself.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{

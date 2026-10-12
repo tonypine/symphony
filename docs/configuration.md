@@ -18,6 +18,7 @@ Required sections:
 
 Common optional sections:
 
+- `tickets`
 - `workspaces`
 - `pull_requests`
 - `pre_push_review`
@@ -118,6 +119,11 @@ issues:
     terminal: [Closed, Cancelled, Canceled, Duplicate, Done]
     waiting_on_sub_issues: Waiting on sub-tickets
     human_review: Human Review
+    code_review: Code Review
+    qa: QA
+    plan_review: Plan Review
+    epic_review: Epic Review
+    ci_fix: CI Fix
 ```
 
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
@@ -220,8 +226,38 @@ issues:
   list and the menu bar list them with the plans and PRs in `In Review` (see `human_actions`). A supervisor moves a ticket there when it needs the operator, and never moves
   one out of it on the operator's behalf.
 
+- `states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review` and `states.ci_fix`:
+  the machine-owned phase states — the board columns — defaulting to `Code Review`, `QA`,
+  `Plan Review`, `Epic Review` and `CI Fix`; `null` turns one off. At startup Symphony finds each
+  one in the configured teams and creates it as a started state when it is missing, logging what
+  it created; a second start finds them all and creates nothing. A state renamed or deleted in
+  Linear is reported at startup with its exact name and the `issues.states.*` key to point at the
+  new name, and is then recreated, so a name is never silently duplicated. These states land
+  inert: nothing dispatches on, enters or reads them yet. They sit in Linear's `started` group,
+  beside `In Progress`, so they read as active columns; do not add them to `states.active` until a
+  feature moves tickets into them.
+
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
+
+### `tickets`
+
+Which tickets may start new work, by Linear priority. Empty (the default) lets every priority
+start.
+
+```yaml
+tickets:
+  priorities: [urgent, high]
+```
+
+- `priorities`: the Linear priorities allowed to start new work: `urgent` (1), `high` (2),
+  `medium` (3), `low` (4) and `none` (0, Linear's "No priority"). The numbers `0`–`4` and
+  `no priority` are accepted too, and an issue Linear reports with no priority reads as `none`.
+  An issue whose priority is not listed is not dispatched: Symphony waits with free lanes even
+  when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
+  example on `[urgent, high]` only. It never stops a forced ticket (`agent.concurrency.force_label`)
+  or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
+  `null` turns the filter off.
 
 ### `repositories`
 
@@ -285,6 +321,15 @@ repositories:
 - `acceptance_gate`: per-repo acceptance gate `mode`, `max_turns`, `timeout_ms` and `escalate`
   rules. The mode and numbers replace the global `auto_review.acceptance_gate` ones; lists add to
   them. See [`docs/acceptance_gate.md`](acceptance_gate.md).
+- `state_machine`: the ticket state-machine version this repo runs, `legacy` (the default) or
+  `designed`. `legacy` is today's flow: dispatch from `states.active`, the legacy transition guard,
+  and the legacy status-map prompt. `designed` moves this repo alone onto the designed machine of
+  [`docs/design/state-machine.md`](design/state-machine.md): dispatch also picks up the designed
+  phase states (`states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review`,
+  `states.ci_fix`), the transition guard uses the designed machine's edge table, and prompts render
+  the designed status map. Unset reads as `legacy`. Every part of a run resolves the version through
+  the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
+  a State machine picker.
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
@@ -783,7 +828,10 @@ agent:
   holds new runs of that provider until the limit resets instead of failing the run. The retry
   keeps its attempt, gets no backoff and no `run_failed` notification, and the run is recorded as
   `usage_limited`. Runs on another provider (for example an `openrouter` run profile) keep
-  dispatching, and a weekly Opus limit holds only Opus runs. Codex runs (`agent.kind: codex`) are
+  dispatching, and a weekly Opus limit holds only Opus runs. A limit for another provider that a
+  run itself sees also leaves that run alone: an OpenRouter run through the Claude runtime can see
+  the Claude subscription's window, which records the Claude hold but lets the OpenRouter run retry
+  with the normal backoff instead of waiting for the Claude reset. Codex runs (`agent.kind: codex`) are
   their own provider (`openai`): a Codex limit holds only Codex runs, and a Claude limit never
   holds them. `false` keeps the old behaviour: the
   run fails and retries with the normal backoff.
@@ -1073,8 +1121,10 @@ pull_requests:
     update-branch keeps it. The conflict and CI-fix comments then say the gate's approve, not a
     person, moves the fix back to `Merging`. The audit log (`acceptance_gate_rereview`, with the
     old and new head) and a ticket comment record it. See `docs/acceptance_gate.md`.
-  - Apart from a merge conflict, a CI fix or a re-review, moving a ticket out of `Merging` does not turn auto-merge off;
-    disable it on the PR to stop the merge.
+  - Moving a ticket out of `Merging` to any state but `Done` (by hand in Linear, or with the
+    Director's Undo) turns auto-merge off on the next poll, with a ticket comment and an
+    `auto_merge_disabled` audit event (`reason: "left_merging"`), so the PR doesn't merge without
+    the approval. Moving it back to `Merging` turns auto-merge on again.
   - Repository requirements: **Allow auto-merge** on (`allow_auto_merge`), and branch protection on
     the base branch with required status checks. Requiring branches to be up to date before merging
     (`strict`) is recommended, so GitHub never merges stale code; Symphony keeps the branch updated.
@@ -1226,7 +1276,7 @@ says, so a stray variable cannot send a key to another host. Checks against the 
 real key (a real model list, a real run) are manual: a person runs them by hand, with a cheap
 model, outside QA.
 
-An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
+An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.agents/skills`, the
 project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
 `config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands

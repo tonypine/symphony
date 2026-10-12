@@ -60,6 +60,7 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.workflow = "WORKFLOW.md"
         changed.route = RepositoryRoute(team: "OPS", projects: ["ops"], labels: ["infra"], assignee: "you")
         changed.workspace = RepositoryWorkspace(source: "acme/api", fetchBeforeDispatch: false)
+        changed.stateMachine = "designed"
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
 
         yaml = try record("setting the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.shadow, in: $0) }, from: yaml)
@@ -81,6 +82,16 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting token limits", { try TokenLimits.updating($0, from: TokenLimits(), to: limits) }, from: yaml)
         let timeouts = OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 1_200_000, pendingToolReportMs: 120_000)
         yaml = try record("setting timeouts", { try OperationTimeouts.updating($0, from: OperationTimeouts(), to: timeouts) }, from: yaml)
+        yaml = try record("setting allowed ticket priorities", {
+            try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))
+        }, from: yaml)
+        yaml = try record("setting the board states", {
+            try WorkflowStates.updating(
+                $0,
+                from: WorkflowStates(),
+                to: WorkflowStates(codeReview: "Review", qa: "Quality", planReview: "Planning", epicReview: "Epic", ciFix: "Fixing")
+            )
+        }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         for key in SettingsUIManifest.keyPaths where !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {

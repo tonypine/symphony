@@ -190,12 +190,15 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute SubIssueWait.wait_on_merge?(nil, terminal, settings)
 
       # Sub-issues are never promoted on merge, whatever their state.
-      with_backlog = %{issue | sub_issues: [%{id: "c1", identifier: "MT-2"}, %{id: "c2", identifier: "MT-3", state: "Backlog"}]}
+      sub_issues = [%{id: "c1", identifier: "MT-2"}, %{id: "c2", identifier: "MT-3", state: "Backlog"}]
+      with_backlog = %{issue | sub_issues: sub_issues, repo_key: "repo-sub-wait"}
+      RunStore.delete_ticket_state("repo-sub-wait", "p")
       assert :ok = SubIssueWait.wait_on_merge(with_backlog, settings, SymphonyElixir.Tracker.Memory)
       assert_received {:memory_tracker_state_update, "p", @waiting}
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert_received {:memory_tracker_comment, "p", _wait_comment}
       assert RunStore.merged_wait?("p")
+      assert [%{name: "merge settled", details: %{to: @waiting}}] = RunStore.get_ticket_state("repo-sub-wait", "p").signals
       :ok = RunStore.delete_merged_wait("p")
 
       waiting = %{issue | state: @waiting}
@@ -518,6 +521,53 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       assert_receive {:memory_tracker_state_update, "parent-poll", @waiting}, 2_000
       assert %{running: running} = :sys.get_state(pid)
       refute Map.has_key?(running, "parent-poll")
+    end
+
+    test "records a plan verdict signal when a breakdown parent is parked" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "parent-signal")
+      open = [%{id: "child-1", identifier: "MT-1802", state: "Todo"}]
+
+      parent = %Issue{
+        id: "parent-signal",
+        identifier: "MT-1801",
+        title: "Parent",
+        state: "In Progress",
+        labels: ["breakdown"],
+        sub_issues: open,
+        repo_key: repo_key
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent])
+      Orchestrator.park_breakdown_parents_for_test([parent], orchestrator_state())
+
+      assert [%{name: "plan verdict", details: %{outcome: "approve", to: @waiting}}] =
+               RunStore.get_ticket_state(repo_key, "parent-signal").signals
+    end
+
+    test "records a merge settled signal when an issue waiting on its sub-tickets is closed" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "waiting-signal")
+
+      sub_issues = [%{id: "child-1", identifier: "MT-1902", state: "Done"}]
+
+      waiting = %Issue{
+        id: "waiting-signal",
+        identifier: "MT-1901",
+        title: "Work",
+        state: @waiting,
+        labels: ["improvement"],
+        sub_issues: sub_issues,
+        repo_key: repo_key
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting])
+      :ok = RunStore.put_merged_wait("waiting-signal")
+
+      Orchestrator.close_finished_parents_for_test([waiting], orchestrator_state())
+
+      assert [%{name: "merge settled", details: %{sub_issues: 1}}] =
+               RunStore.get_ticket_state(repo_key, "waiting-signal").signals
     end
   end
 

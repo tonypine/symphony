@@ -7,7 +7,10 @@ defmodule SymphonyElixir.UsageLimit do
   window resets. Codex runs are provider `"openai"` (see `for_agent_kind/2`), so a Claude hold
   never holds them and a Codex hold never holds Claude runs. Each hold is keyed by
   `{provider, scope}`: scope `:all` holds every run of the provider, a model scope
-  (`"opus"`, `"sonnet"`) only runs whose model is in that family.
+  (`"opus"`, `"sonnet"`) only runs whose model is in that family. A run that sees a limit for a
+  provider other than its own — an OpenRouter run through the Claude runtime can see the Claude
+  subscription's window — records the hold for that provider but is not held itself: the
+  orchestrator retries it with the normal backoff.
 
   At `resume_at` a hold moves to `phase: :canary`: one held run goes out alone while the
   hold keeps covering every other run, and the canary's outcome decides whether the hold

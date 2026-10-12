@@ -168,7 +168,7 @@ defmodule SymphonyElixir.WorkflowInstructionsTest do
   test "the protected paths still cover WORKFLOW.md, the skills and config files, but not the instruction files" do
     protected = AgentSandboxConfig.workspace_protected_paths()
 
-    for path <- ~w(WORKFLOW.md .ai/skills .claude/skills .claude/hooks .claude/settings.json mise.toml config/settings_ui_exempt.yml) do
+    for path <- ~w(WORKFLOW.md .agents/skills .claude/skills .claude/hooks .claude/settings.json mise.toml config/settings_ui_exempt.yml) do
       assert path in protected
     end
 

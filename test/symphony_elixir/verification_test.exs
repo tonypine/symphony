@@ -583,7 +583,7 @@ defmodule SymphonyElixir.VerificationTest do
       assert File.dir?(Path.join(workspace, ".claude"))
       assert :ok = DevServer.stop(pid)
       refute File.exists?(Path.join(workspace, ".claude"))
-      refute File.exists?(Path.join(workspace, ".ai"))
+      refute File.exists?(Path.join(workspace, ".agents"))
     end
 
     # On Linux the server listens on its port, inside its own network namespace: it has no socket.

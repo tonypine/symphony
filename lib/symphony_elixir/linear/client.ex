@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{AgentLabels, AuditLog, Config, IssueSummary, Linear.Issue, Secret}
+  alias SymphonyElixir.{AgentLabels, AuditLog, Config, IssueSummary, Linear.Issue, Secret, StateMachine}
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
 
@@ -329,7 +329,7 @@ defmodule SymphonyElixir.Linear.Client do
   def fetch_candidate_issues do
     with {:ok, context} <- repo_poll_context(),
          {:ok, repo_results} <-
-           fetch_repo_issue_results(context.repos, context.tracker.active_states, context.tracker, &graphql/2) do
+           fetch_repo_issue_results(context.repos, dispatch_states_for(context.tracker), context.tracker, &graphql/2) do
       {:ok, aggregate_repo_results(repo_results).dispatchable}
     end
   end
@@ -337,8 +337,20 @@ defmodule SymphonyElixir.Linear.Client do
   @spec fetch_candidate_issues_for_repo(term()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues_for_repo(repo) do
     with {:ok, context} <- repo_poll_context() do
-      do_fetch_repo_by_states(repo, context.tracker.active_states, context.tracker)
+      do_fetch_repo_by_states(repo, dispatch_state_names(repo, context.tracker), context.tracker)
     end
+  end
+
+  # Dispatch picks work up from a repo's version-dependent active states: the tracker's configured
+  # active states, plus the designed phase states for a repo on the `designed` machine.
+  defp dispatch_states_for(tracker), do: &dispatch_state_names(&1, tracker)
+
+  defp dispatch_state_names(repo, tracker) do
+    StateMachine.active_states(
+      StateMachine.version(repo),
+      tracker.active_states,
+      StateMachine.designed_phase_states(tracker)
+    )
   end
 
   @spec fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
@@ -518,7 +530,7 @@ defmodule SymphonyElixir.Linear.Client do
   def fetch_candidate_issues_for_test(graphql_fun) when is_function(graphql_fun, 2) do
     with {:ok, context} <- repo_poll_context(),
          {:ok, repo_results} <-
-           fetch_repo_issue_results(context.repos, context.tracker.active_states, context.tracker, graphql_fun) do
+           fetch_repo_issue_results(context.repos, dispatch_states_for(context.tracker), context.tracker, graphql_fun) do
       {:ok, aggregate_repo_results(repo_results).dispatchable}
     end
   end
@@ -598,7 +610,7 @@ defmodule SymphonyElixir.Linear.Client do
     else
       with {:ok, context} <- repo_poll_context() do
         context.repos
-        |> collect_repo_issue_results(normalized_states, context.tracker, graphql_fun)
+        |> collect_repo_issue_results(states_reader(normalized_states), context.tracker, graphql_fun)
         |> issues_with_failures()
       end
     end
@@ -607,9 +619,10 @@ defmodule SymphonyElixir.Linear.Client do
   defp issues_with_failures({[], [_ | _] = errors}), do: {:error, {:repo_poll_failed, errors}}
   defp issues_with_failures({results, errors}), do: {:ok, dedupe_repo_issues(results), errors}
 
-  defp fetch_repo_issue_results(repos, state_names, tracker, graphql_fun)
+  defp fetch_repo_issue_results(repos, states, tracker, graphql_fun)
        when is_list(repos) and is_function(graphql_fun, 2) do
-    {results, errors} = collect_repo_issue_results(repos, state_names, tracker, graphql_fun)
+    states_for_repo = states_reader(states)
+    {results, errors} = collect_repo_issue_results(repos, states_for_repo, tracker, graphql_fun)
 
     cond do
       errors == [] ->
@@ -624,12 +637,17 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
-  defp collect_repo_issue_results(repos, state_names, tracker, graphql_fun) do
+  # Callers that poll one fixed state list for every repo pass it directly; callers whose states
+  # depend on the repo (its resolved state machine) pass a function.
+  defp states_reader(states) when is_list(states), do: fn _repo -> states end
+  defp states_reader(states_for_repo) when is_function(states_for_repo, 1), do: states_for_repo
+
+  defp collect_repo_issue_results(repos, states_for_repo, tracker, graphql_fun) do
     {results, errors} =
       Enum.reduce(repos, {[], []}, fn repo, {results, errors} ->
         repo_key = repo_key(repo)
 
-        case do_fetch_repo_by_states(repo, state_names, tracker, graphql_fun: graphql_fun) do
+        case do_fetch_repo_by_states(repo, states_for_repo.(repo), tracker, graphql_fun: graphql_fun) do
           {:ok, issues} -> {[{repo_key, issues} | results], errors}
           {:error, reason} -> {results, [{repo_key, reason} | errors]}
         end

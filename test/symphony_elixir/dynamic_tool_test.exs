@@ -7,6 +7,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
 
+  # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
+  # asked to make and answers with the result a test sets (`:ok` by default).
+  defmodule FakeTracker do
+    def update_issue_state(issue_id, state) do
+      send(self(), {:tracker_moved, issue_id, state})
+      Process.get(:linear_tool_tracker_result, :ok)
+    end
+  end
+
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
     tool_names = Enum.map(DynamicTool.tool_specs(), & &1["name"])
 
@@ -687,7 +696,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert %{"identifier" => "TP-3", "canceled" => true} = Jason.decode!(response["output"])
       assert_received {:linear_client_called, _query, %{issueId: "issue-3", body: "Merged into TP-2"}}
-      assert_received {:linear_client_called, _query, %{id: "issue-3", input: %{"stateId" => "state-canceled"}}}
+      # The cancel goes through TransitionGuard, which writes through the tracker.
+      assert_received {:tracker_moved, "issue-3", "Canceled"}
+      refute_received {:linear_client_called, _query, %{input: %{"stateId" => _state_id}}}
 
       no_canceled = update_subissue_opts(states: [%{"id" => "state-backlog", "name" => "Backlog"}])
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "cancel_reason" => "Dropped"}, no_canceled)
@@ -696,7 +707,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       by_type = update_subissue_opts(states: [%{"id" => "state-wontfix", "name" => "Won't do", "type" => "canceled"}])
       DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "cancel_reason" => "Dropped"}, by_type)
-      assert_received {:linear_client_called, _query, %{input: %{"stateId" => "state-wontfix"}}}
+      assert_received {:tracker_moved, "issue-3", "Won't do"}
+
+      # The tracker's failure surfaces as-is when the guard's move fails.
+      Process.put(:linear_tool_tracker_result, {:error, :tracker_down})
+      failing = update_subissue_opts()
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "cancel_reason" => "Dropped"}, failing)
+      Process.delete(:linear_tool_tracker_result)
+
+      assert %{"error" => %{"reason" => ":tracker_down"}} = Jason.decode!(response["output"])
+      assert_received {:linear_client_called, _query, %{body: "Dropped"}}
     end
 
     test "never changes a sub-issue a person promoted, or an issue that is not a sub-issue" do
@@ -823,7 +843,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       if field, do: {:ok, %{"data" => %{field => %{"success" => fail != name}}}}, else: {:ok, scope}
     end
 
-    [issue: %Issue{id: "issue-current"}, linear_client: client]
+    [issue: %Issue{id: "issue-current"}, linear_client: client, tracker: FakeTracker]
   end
 
   describe "linear_create_subissue" do
@@ -1512,7 +1532,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         end
       end
 
-      opts = [issue: %Issue{id: "issue-current", identifier: "MOT-24"}, comment_registry: registry, linear_client: client]
+      opts = [
+        issue: %Issue{id: "issue-current", identifier: "MOT-24"},
+        comment_registry: registry,
+        linear_client: client,
+        tracker: FakeTracker
+      ]
 
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert response["success"] == true
@@ -2558,10 +2583,10 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert {false, %{"error" => %{"code" => "merge_in_progress", "message" => message}}} = sync.(:merging)
       assert message =~ "git commit --no-edit"
 
-      assert {false, %{"error" => %{"code" => "protected_paths_changed", "files" => [".ai/skills/push/SKILL.md"], "message" => message}}} =
+      assert {false, %{"error" => %{"code" => "protected_paths_changed", "files" => [".agents/skills/push/SKILL.md"], "message" => message}}} =
                sync.(:protected)
 
-      assert message =~ "changes write-protected files itself: .ai/skills/push/SKILL.md"
+      assert message =~ "changes write-protected files itself: .agents/skills/push/SKILL.md"
       assert message =~ "linear_create_subissue"
 
       assert {false, %{"error" => %{"code" => "git_merge_failed", "status" => 2, "output" => "local changes would be overwritten", "message" => message}}} =
@@ -3174,7 +3199,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   defp merge_head_status(:merging), do: {"fed789\n", 0}
   defp merge_head_status(_scenario), do: {"", 1}
 
-  defp protected_diff(:protected), do: {".ai/skills/push/SKILL.md\n", 0}
+  defp protected_diff(:protected), do: {".agents/skills/push/SKILL.md\n", 0}
   defp protected_diff(_scenario), do: {"", 0}
 
   defp merge_status(:refused), do: {"local changes would be overwritten", 2}

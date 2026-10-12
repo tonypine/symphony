@@ -754,7 +754,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp host_allow_write_paths(_worker_host), do: []
 
-  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`), and the
+  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`), and the
   # config, hooks and attributes in the workspace's git dirs: Claude Code lets a worktree's
   # session write the shared repo's `.git` and protects only part of it. An SSH worker's
   # workspace isn't on this host, so it keeps the plain deny list.

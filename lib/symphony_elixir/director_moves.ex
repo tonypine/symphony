@@ -16,7 +16,10 @@ defmodule SymphonyElixir.DirectorMoves do
     Human Review state first moves to `In Review`, so the comment, posted after the move, starts
     Symphony's plan revision run (`SymphonyElixir.PlanComments`);
   - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
-  - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`.
+  - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
+  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
+    cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
+    clears on its own, so it is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
@@ -29,7 +32,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   `undo/2` takes back the last move on a ticket within 10 s of it, and only while
   the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
-  promoted its sub-tickets. The last move per ticket is kept in this
+  promoted its sub-tickets. Undoing `:approve_pr` turns GitHub auto-merge off first, and refuses a
+  pull request that already merged. The last move per ticket is kept in this
   module's Agent, so a restart forgets it.
   """
 
@@ -37,8 +41,23 @@ defmodule SymphonyElixir.DirectorMoves do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, BreakdownReview, Config, HumanReview, Orchestrator, RunKind, SubIssueWait, Tracker}
+  alias SymphonyElixir.{
+    AuditLog,
+    BreakdownReview,
+    Config,
+    Hold,
+    HumanReview,
+    Orchestrator,
+    RunKind,
+    SubIssueWait,
+    TicketSignals,
+    Tracker,
+    TransitionGuard
+  }
+
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PrReviewPoller
 
   @undo_window_ms 10_000
   @review_state "In Review"
@@ -48,7 +67,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @backlog_state "Backlog"
   @comment_preview_chars 500
 
-  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog
+  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog | :unblock
   @type pick :: %{question: String.t(), answer: String.t()}
   @type input :: %{
           optional(:reason) => String.t() | nil,
@@ -58,12 +77,14 @@ defmodule SymphonyElixir.DirectorMoves do
   @type error ::
           {:invalid, String.t()}
           | {:conflict, String.t()}
+          | {:github, String.t()}
+          | {:store, String.t()}
           | :issue_not_found
           | {:linear, term()}
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog]
+  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock]
 
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
@@ -83,18 +104,26 @@ defmodule SymphonyElixir.DirectorMoves do
   `:reason` (required), the backlog `:note` (optional) or the decisions' `:picks` (required).
 
   Options: `:server` (the Agent, default this module), `:clock` (monotonic milliseconds, for the undo
-  window) and `:orchestrator` (asked to poll again after the move, default `SymphonyElixir.Orchestrator`).
+  window), `:orchestrator` (asked to poll again after the move, default `SymphonyElixir.Orchestrator`)
+  and `:store` (the run store read and written, default `SymphonyElixir.RunStore`).
   """
   @spec move(move(), String.t(), input(), keyword()) :: result()
   def move(move, identifier, input, opts \\ []) when move in @moves and is_binary(identifier) and is_map(input) do
     with :ok <- validate_input(move, input),
          {:ok, issue} <- fetch_issue(identifier) do
-      settings = Config.settings!()
+      do_move(move, issue, input, opts)
+    end
+  end
 
-      with {:ok, to_state} <- target(move, issue, settings),
-           {:ok, comment} <- apply_move(move, issue, to_state, input, opts) do
-        finish(move, issue, to_state, comment, opts)
-      end
+  # Unblock is not a Linear move: it lifts an access hold in place, so no state is resolved.
+  defp do_move(:unblock, issue, _input, opts), do: unblock(issue, opts)
+
+  defp do_move(move, issue, input, opts) do
+    settings = Config.settings!()
+
+    with {:ok, to_state} <- target(move, issue, settings),
+         {:ok, comment} <- apply_move(move, issue, to_state, input, opts) do
+      finish(move, issue, to_state, comment, opts)
     end
   end
 
@@ -102,12 +131,19 @@ defmodule SymphonyElixir.DirectorMoves do
   Takes back the last move on the ticket `identifier`: moves it back to the state it came from,
   within #{div(@undo_window_ms, 1000)} s of the move and only while it is still where the move put
   it. A comment the move posted stays. Takes the options of `move/4`.
+
+  Undoing `:approve_pr` reads the pull request first: a merged one can't be taken back (a 409), and
+  GitHub auto-merge on it (which Symphony turns on for a `Merging` ticket) is turned off before the
+  ticket moves back, so the PR doesn't merge anyway. When GitHub can't be read or refuses, the ticket stays in
+  `Merging` and the undo answers `{:error, {:github, message}}`. Option `:github` replaces
+  `SymphonyElixir.GitHub.PullRequest`.
   """
   @spec undo(String.t(), keyword()) :: result()
   def undo(identifier, opts \\ []) when is_binary(identifier) do
     with {:ok, issue} <- fetch_issue(identifier),
          {:ok, last} <- undoable(issue, opts),
-         :ok <- update_state(issue, last.from_state) do
+         :ok <- release_pr(last.move, issue, opts),
+         :ok <- update_state(issue, last.from_state, :undo) do
       Agent.update(server(opts), &Map.delete(&1, issue.id))
       record_audit("undo", issue, issue.state, last.from_state, nil)
       Logger.info("Director undid #{last.move} issue_id=#{issue.id} issue_identifier=#{issue.identifier} state=#{last.from_state}")
@@ -143,6 +179,11 @@ defmodule SymphonyElixir.DirectorMoves do
   @doc "The comment `:backlog` posts with the Director's note."
   @spec backlog_comment(String.t()) :: String.t()
   def backlog_comment(note) when is_binary(note), do: "Moved to Backlog by the Director:\n\n#{note}"
+
+  @doc "The comment `:unblock` posts: the access hold is cleared and the ticket continues in place."
+  @spec unblock_comment(String.t()) :: String.t()
+  def unblock_comment(identifier) when is_binary(identifier),
+    do: "Unblocked by the Director: #{identifier} continues in place."
 
   defp validate_input(:rework, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
@@ -257,7 +298,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp apply_move(:decisions, issue, to_state, %{picks: picks}, opts) do
     comment = picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decisions_comment()
 
-    with :ok <- maybe_update_state(issue, to_state) do
+    with :ok <- maybe_update_state(issue, to_state, :decisions) do
       case post_comment(issue, comment) do
         :ok -> {:ok, comment}
         {:error, {:linear, reason}} when is_binary(to_state) -> moved_without_comment(issue, to_state, reason, opts)
@@ -268,9 +309,47 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
 
+  # Unblock lifts an access hold in place: the store hold is cleared through `Hold` (the store
+  # first, then the `Blocked` label), so the ticket keeps its phase and the next poll dispatches it
+  # again. A hold waiting on anything else clears on its own, so it is refused.
+  defp unblock(%Issue{} = issue, opts) do
+    if issue |> access_hold(opts) |> Hold.access_wait?(),
+      do: clear_access_hold(issue, opts),
+      else: access_conflict(issue)
+  end
+
+  defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} is not waiting on an access hold"}}
+
+  defp clear_access_hold(issue, opts) do
+    comment = unblock_comment(issue.identifier)
+
+    case Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts)) do
+      :ok ->
+        TicketSignals.record(issue.repo_key, issue.id, "unblocked", %{by: "the Director"})
+        post_unblock_comment(issue, comment, opts)
+
+      {:error, reason} ->
+        {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
+    end
+  end
+
+  # The hold is already cleared, so a comment Linear refuses is reported and does not undo it.
+  defp post_unblock_comment(issue, comment, opts) do
+    case post_comment(issue, comment) do
+      :ok ->
+        :ok
+
+      {:error, {:linear, reason}} ->
+        Logger.warning("Unblocked #{issue.identifier} but Linear refused the comment: #{inspect(reason)}")
+        :ok
+    end
+
+    finish(:unblock, issue, nil, comment, opts)
+  end
+
   defp comment_then_move(move, issue, comment, to_state, opts) do
     with :ok <- maybe_post_comment(issue, comment, opts) do
-      case update_state(issue, to_state) do
+      case update_state(issue, to_state, move) do
         :ok ->
           Agent.update(server(opts), &Map.delete(&1, {:posted, issue.id}))
           {:ok, comment}
@@ -325,14 +404,34 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp maybe_update_state(_issue, nil), do: :ok
-  defp maybe_update_state(issue, to_state), do: update_state(issue, to_state)
+  defp maybe_update_state(_issue, nil, _move), do: :ok
+  defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
 
-  defp update_state(issue, to_state) do
-    case Tracker.update_issue_state(issue.id, to_state) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:linear, reason}}
+  # The Blocked hold in the store — the truth, whatever the board shows. Only a designed repo ever
+  # records one, so a legacy ticket always has none here.
+  defp access_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
+
+  defp store_opts(opts), do: Keyword.take(opts, [:store])
+
+  defp update_state(issue, to_state, move) do
+    case TransitionGuard.perform(issue.id, :director_move, %{target: to_state, repo_key: Map.get(issue, :repo_key)}) do
+      :ok ->
+        record_move_signal(issue, move, to_state)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:linear, reason}}
     end
+  end
+
+  # Best-effort recording of a Director move into the ticket's signals ledger (inert; a store
+  # failure never changes the move). Runs only after the move has succeeded.
+  defp record_move_signal(issue, move, to_state) do
+    TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{
+      move: Atom.to_string(move),
+      from: issue.state,
+      to: to_state
+    })
   end
 
   defp finish(move, issue, to_state, comment, opts) do
@@ -383,6 +482,52 @@ defmodule SymphonyElixir.DirectorMoves do
         end
     end
   end
+
+  # An approval's auto-merge would still merge the PR once its checks pass, after the ticket moved back.
+  defp release_pr(:approve_pr, %Issue{pr_urls: [pr_url | _]} = issue, opts) when is_binary(pr_url) do
+    github = Keyword.get(opts, :github, PullRequest)
+
+    case github.fetch_activity(pr_url, []) do
+      {:ok, activity} ->
+        cond do
+          String.upcase(to_string(activity[:state])) == "MERGED" ->
+            conflict("#{issue.identifier} already merged; move it in Linear instead")
+
+          activity[:auto_merge_enabled] == true ->
+            turn_off_auto_merge(issue, pr_url, activity[:pr_node_id], github, opts)
+
+          true ->
+            :ok
+        end
+
+      {:error, reason} ->
+        github_error("couldn't read #{pr_url} (#{inspect(reason)}); #{issue.identifier} stays in Merging")
+    end
+  end
+
+  defp release_pr(_move, _issue, _opts), do: :ok
+
+  defp turn_off_auto_merge(issue, pr_url, node_id, github, opts) do
+    case disable_auto_merge(github, pr_url, node_id) do
+      :ok ->
+        Logger.info("Director undo turned GitHub auto-merge off issue_id=#{issue.id} issue_identifier=#{issue.identifier} pr_url=#{pr_url}")
+        # Should Linear refuse the move back, the ticket stays in Merging: the next poll turns auto-merge on again.
+        PrReviewPoller.forget_auto_merge(issue.id, poller_opts(issue, opts))
+
+      {:error, reason} ->
+        github_error("GitHub refused to turn auto-merge off on #{pr_url} (#{inspect(reason)}); #{issue.identifier} stays in Merging")
+    end
+  end
+
+  defp disable_auto_merge(github, pr_url, node_id) when is_binary(node_id), do: github.disable_auto_merge(pr_url, node_id, [])
+  defp disable_auto_merge(_github, _pr_url, _node_id), do: {:error, :missing_pr_node_id}
+
+  defp poller_opts(%Issue{repo_key: repo_key}, opts) when is_binary(repo_key) and repo_key != "",
+    do: [repo_key: repo_key] ++ Keyword.take(opts, [:run_store])
+
+  defp poller_opts(_issue, opts), do: Keyword.take(opts, [:run_store])
+
+  defp github_error(message), do: {:error, {:github, message}}
 
   defp record_audit(move, issue, from_state, to_state, comment, extra \\ %{}) do
     %{

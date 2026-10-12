@@ -3,6 +3,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixir.Tracker.Memory, as: MemoryTracker
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -385,6 +386,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     orchestrator_name = Module.concat(__MODULE__, :BoundedRunWritesOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
     on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
+
+    # The startup poll would stop runs the memory tracker does not list, so let it finish before
+    # injecting the run below.
+    wait_for_poll_cycle_idle(pid)
 
     {worker_pid, worker_ref} = start_blocked_worker()
     on_exit(fn -> send(worker_pid, :finish) end)
@@ -2594,6 +2599,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         }
       end)
 
+      Cache.clear()
+      assert {:ok, repos} = Config.repos()
+      assert Enum.sort(Enum.map(repos, & &1.name)) == ["api", "bad"]
+
       log =
         capture_log(fn ->
           # A startup cycle still in flight would skip this one, and with it the age GC.
@@ -2608,7 +2617,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
             1_000
           )
 
-          wait_for_orchestrator_state(pid, &(&1.dispatch_readiness_tasks == %{}), 500)
+          # Hold the window open until the age GC's result is applied (`last_check` was just
+          # cleared), not merely until the readiness map drains — it is empty both before a
+          # task starts and after it ends.
+          wait_for_orchestrator_state(
+            pid,
+            &(not is_nil(&1.workspace_lifecycle_last_check_at_ms) and &1.dispatch_readiness_tasks == %{}),
+            1_000
+          )
         end)
 
       assert log =~ "Skipping workspace age GC for repo_key=bad"
@@ -3538,6 +3554,35 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert state.budget_daily_used == 0
     assert MapSet.member?(state.budget_exhausted, issue_id)
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "active state set includes the designed phase states when a repo runs the designed machine" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"],
+      repos: [
+        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+      ]
+    )
+
+    active_states = Orchestrator.active_state_set_for_test()
+
+    assert MapSet.member?(active_states, "todo")
+    assert MapSet.member?(active_states, "in progress")
+    assert MapSet.member?(active_states, "code review")
+    assert MapSet.member?(active_states, "qa")
+    assert MapSet.member?(active_states, "plan review")
+    assert MapSet.member?(active_states, "epic review")
+    assert MapSet.member?(active_states, "ci fix")
+  end
+
+  test "active state set is the configured active states when every repo runs the legacy machine" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"]
+    )
+
+    assert Orchestrator.active_state_set_for_test() == MapSet.new(["todo", "in progress", "waiting on sub-tickets"])
   end
 
   test "orchestrator hydrates budget state from runs across every repo partition" do
@@ -6745,8 +6790,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       id: "issue-review-agent-blocked",
       identifier: "MT-REVIEW-BLOCKED",
       title: "Review agent blocked",
-      state: "In Progress"
+      state: "In Progress",
+      repo_key: Config.repo_key!()
     }
+
+    RunStore.delete_ticket_state(Config.repo_key!(), issue.id)
 
     orchestrator_name = Module.concat(__MODULE__, :ReviewAgentBlockedOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -6794,6 +6842,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "Target human-review state: Needs Human."
 
     assert_received {:memory_tracker_state_update, "issue-review-agent-blocked", "Needs Human"}
+
+    assert [%{name: "blocked", details: %{to: "Needs Human"}}] =
+             RunStore.get_ticket_state(Config.repo_key!(), issue.id).signals
 
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)

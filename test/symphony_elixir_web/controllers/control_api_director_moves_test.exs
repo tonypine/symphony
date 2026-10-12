@@ -4,8 +4,13 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{DirectorMoves, SubIssueWait}
+  alias SymphonyElixir.{DirectorMoves, Hold, SubIssueWait}
   alias SymphonyElixirWeb.ControlApiController
+
+  defmodule UnwritableStore do
+    def get_ticket_state(repo_key, issue_id), do: SymphonyElixir.RunStore.get_ticket_state(repo_key, issue_id)
+    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
+  end
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
@@ -40,6 +45,30 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     end
   end
 
+  test "unblock clears an access hold in place, and refuses one that isn't an access hold", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+    :ok = Hold.set("repo-api", "held", :blocked, %{waits_on: %{type: "access"}})
+
+    conn = post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)
+
+    assert conn.status == 200
+    assert %{"move" => "unblock", "moved" => false, "from_state" => "In Progress", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
+    refute Hold.held?("repo-api", "held", :blocked)
+
+    assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)) ==
+             {409, "move_not_allowed", "MOT-60 is not waiting on an access hold"}
+  end
+
+  test "a hold the store refuses to clear is a 502", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+    :ok = Hold.set("repo-api", "held", :blocked, %{waits_on: %{type: "access"}})
+
+    assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, [store: UnwritableStore] ++ moves)) ==
+             {502, "store_error", "couldn't clear the hold on MOT-60: :boom"}
+  end
+
   test "undo takes the last move back", %{moves: moves} do
     assert post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves).status == 200
     merging = %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Merging"}
@@ -52,13 +81,32 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) == {409, "move_not_allowed", "there is no move on MOT-40 to undo"}
   end
 
+  test "undo of an approval GitHub won't turn auto-merge off for is a 502 that leaves the ticket in Merging", %{moves: moves} do
+    pr_url = "https://github.com/example/repo/pull/40"
+    in_review = %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Review", pr_urls: [pr_url]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [in_review])
+    moves = [github: __MODULE__.RefusingGitHub] ++ moves
+    assert post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves).status == 200
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{in_review | state: "Merging"}])
+
+    assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) ==
+             {502, "github_error", "GitHub refused to turn auto-merge off on #{pr_url} (:forbidden); MOT-40 stays in Merging"}
+
+    refute_received {:memory_tracker_state_update, "pr", "In Review"}
+  end
+
+  defmodule RefusingGitHub do
+    def fetch_activity(_pr_url, _opts), do: {:ok, %{state: "OPEN", auto_merge_enabled: true, pr_node_id: "PR_node"}}
+    def disable_auto_merge(_pr_url, _pr_node_id, _opts), do: {:error, :forbidden}
+  end
+
   test "a move the ticket's state doesn't allow is a 409", %{moves: moves} do
     assert error(post(:approve_pr, %{"issue_identifier" => "MOT-30"}, moves)) ==
              {409, "move_not_allowed", "MOT-30 is a plan; approve_pr is for a pull request"}
   end
 
   test "a missing identifier, reason or picks is a 422", %{moves: moves} do
-    for action <- [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :undo] do
+    for action <- [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :undo] do
       assert error(post(action, %{"issue_identifier" => " "}, moves)) == {422, "invalid_request", "issue_identifier is required"}
     end
 

@@ -3,6 +3,7 @@ defmodule SymphonyElixir.DependencyGateTest do
 
   alias SymphonyElixir.DependencyAudit
   alias SymphonyElixir.DependencyGate
+  alias SymphonyElixir.RunStore
 
   test "build/3 defaults the audit module and invalid gates allow by default" do
     assert DependencyGate.hold_state() == "In Review"
@@ -11,6 +12,10 @@ defmodule SymphonyElixir.DependencyGateTest do
 
     assert gate.audit_module == DependencyAudit
     assert DependencyGate.audit(:not_a_gate) == {:ok, []}
+
+    assert DependencyGate.github_create_pull_request_tool?("github_create_pull_request")
+    assert DependencyGate.github_create_pull_request_tool?("github.create_pull_request")
+    refute DependencyGate.github_create_pull_request_tool?("github_create_pull_request_comment")
   end
 
   test "react_to_hold logs tracker update failures and continues" do
@@ -40,8 +45,11 @@ defmodule SymphonyElixir.DependencyGateTest do
       id: "issue-dependency-gate-terminal",
       identifier: "ACME-GATE-TERMINAL",
       title: "Dependency gate terminal",
-      state: "In Progress"
+      state: "In Progress",
+      repo_key: "repo-dep-gate"
     }
+
+    RunStore.delete_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal")
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: "Done"}])
     gate = DependencyGate.build("/tmp/workspace", issue, nil, repo_key: "default")
@@ -54,6 +62,9 @@ defmodule SymphonyElixir.DependencyGateTest do
 
     assert :ok = DependencyGate.react_to_hold(gate, [])
     assert_received {:memory_tracker_state_update, "issue-dependency-gate-terminal", "In Review"}
+
+    assert [%{name: "decision requested", details: %{to: "In Review", reason: "dependency_source_requires_approval"}}] =
+             RunStore.get_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal").signals
   end
 
   test "issue_terminal? reads the refreshed state and treats lookup failures as active" do

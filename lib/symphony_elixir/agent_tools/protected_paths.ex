@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   @moduledoc """
   Finds a branch's own changes to the paths the agent sandbox write-protects in a workspace
-  (`.ai/skills`, `WORKFLOW.md`, ...), and to the files a symlink in one of them points at
-  (`priv/skills/pull` for `.ai/skills/pull -> ../../priv/skills/pull`).
+  (`.agents/skills`, `WORKFLOW.md`, ...), and to the files a symlink in one of them points at
+  (`priv/skills/pull` for `.agents/skills/pull -> ../../priv/skills/pull`).
 
   The sandbox keeps an agent from rewriting its own instructions, but git plumbing can still
   commit such a change without writing the file. `github_sync_base` and `github_push_branch` run

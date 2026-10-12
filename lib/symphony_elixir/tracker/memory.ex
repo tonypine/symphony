@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Tracker.Memory do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Routing.Resolver
+  alias SymphonyElixir.Tracker
 
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -175,6 +176,61 @@ defmodule SymphonyElixir.Tracker.Memory do
       {:error, _reason} = error -> error
       states when is_list(states) -> {:ok, normalize_state(state_name) in Enum.map(states, &normalize_state/1)}
     end
+  end
+
+  @doc """
+  The workflow states a test seeds in `:memory_tracker_workflow_states_list`, and the ones
+  `create_workflow_state/2` has added.
+  """
+  @spec workflow_states() :: {:ok, [Tracker.workflow_state()]} | {:error, term()}
+  def workflow_states do
+    case Application.get_env(:symphony_elixir, :memory_tracker_workflow_states_list) do
+      nil -> {:ok, []}
+      {:error, _reason} = error -> error
+      states when is_list(states) -> {:ok, states}
+    end
+  end
+
+  @spec create_workflow_state(String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
+    case next_result(:memory_tracker_create_workflow_state_result) do
+      :ok ->
+        state = %{id: "state:#{team}:#{state_name}", name: state_name, team_id: team, team_key: team}
+        put_env_list(:memory_tracker_workflow_states_list, state)
+        send_event({:memory_tracker_created_workflow_state, state_name, team})
+        {:ok, state}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @doc "The labels a test seeds in `:memory_tracker_labels_list`, and the ones `create_label/2` has added."
+  @spec labels() :: {:ok, [Tracker.label()]} | {:error, term()}
+  def labels do
+    case Application.get_env(:symphony_elixir, :memory_tracker_labels_list) do
+      nil -> {:ok, []}
+      {:error, _reason} = error -> error
+      labels when is_list(labels) -> {:ok, labels}
+    end
+  end
+
+  @spec create_label(String.t(), String.t()) :: {:ok, Tracker.label()} | {:error, term()}
+  def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
+    case next_result(:memory_tracker_create_label_result) do
+      :ok ->
+        label = %{id: "label:#{team}:#{label_name}", name: label_name, team_id: team}
+        put_env_list(:memory_tracker_labels_list, label)
+        send_event({:memory_tracker_created_label, label_name, team})
+        {:ok, label}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp put_env_list(key, value) do
+    Application.put_env(:symphony_elixir, key, List.wrap(Application.get_env(:symphony_elixir, key)) ++ [value])
   end
 
   # Edits the labels where the issues come from, `:memory_tracker_issues` or the issues file, so the

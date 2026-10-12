@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{DirectorMoves, PlanComments, RunKind, SubIssueWait}
+  alias SymphonyElixir.{DirectorMoves, PlanComments, RunKind, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -40,6 +40,22 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     assert Orchestrator.act_on_plan_comments_for_test(state, [parent]) == state
     refute_received {:memory_tracker_plan_comments, _issue_id}
     refute_received {:memory_tracker_state_update, _issue_id, _state}
+  end
+
+  test "records a plan verdict signal when a person's comment sends the plan back for revision" do
+    repo_key = "default"
+    RunStore.delete_ticket_state(repo_key, "parent")
+    backlog = [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}]
+    parent = %{parent("In Review", backlog, [~U[2026-10-04 12:10:00Z]]) | repo_key: repo_key}
+
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "In Review")], [
+      comment("c1", "Split MOT-31 in two", ~U[2026-10-04 12:10:00Z])
+    ])
+
+    act(state(), parent)
+
+    assert [%{name: "plan verdict", details: %{outcome: "changes", to: "In Progress"}}] =
+             RunStore.get_ticket_state(repo_key, "parent").signals
   end
 
   test "the Director's decisions from the app, sent on a plan in Human Review, start the plan revision run" do
