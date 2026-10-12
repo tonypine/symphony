@@ -12,9 +12,11 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   - `:plan`: a plan parent (label `plan` or `breakdown`) whose plan waits for approval;
   - `:pr`: any other issue, a pull request to review.
 
-  `waiting_since` is the latest move into the issue's current state in its history, else the
-  creation of its newest open request, else nil. `headline` is the line after `**What to review:**`
-  in the issue's latest `## Review brief` comment, nil when it has none.
+  `waiting_since` is the later of the latest move into the issue's current state in its history and
+  the creation of its newest open request, or whichever of the two exists, else nil: a designed
+  repo leaves the ticket in its phase, so the move into that phase can predate the request.
+  `headline` is the line after `**What to review:**` in the issue's latest `## Review brief`
+  comment, nil when it has none.
   """
 
   alias SymphonyElixir.Config.Schema
@@ -55,7 +57,7 @@ defmodule SymphonyElixir.HumanActions.Waiting do
           url: node["url"],
           state: state,
           kind: kind(node, requests),
-          waiting_since: entered_at(node, state) || newest_request_at(requests),
+          waiting_since: waiting_since(node, state, requests),
           headline: headline(node)
         }
       ]
@@ -76,6 +78,15 @@ defmodule SymphonyElixir.HumanActions.Waiting do
       Enum.any?(labels, &Issue.breakdown_label?/1) -> :plan
       true -> :pr
     end
+  end
+
+  # The current wait began at the later of the move into the current state and the newest open
+  # request. A designed repo keeps the ticket in its phase, so the phase move can predate the
+  # request; a request the phase move postdates still reads as the newer trigger.
+  defp waiting_since(node, state, requests) do
+    [entered_at(node, state), newest_request_at(requests)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max(DateTime, fn -> nil end)
   end
 
   defp entered_at(_node, nil), do: nil
