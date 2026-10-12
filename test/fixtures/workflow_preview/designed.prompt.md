@@ -175,7 +175,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 - `Backlog` -> out of scope for this workflow; do not modify, except when a person triages it to `Todo`.
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
   - Special case: if a PR is already attached, treat as feedback/rework loop (run the full PR feedback sweep, address or explicitly push back, revalidate, then hand off to `Code Review`).
-- `In Progress` -> implementation actively underway (net-new work on this ticket).
+- `In Progress` -> implementation actively underway: net-new work on this ticket, or PR review comments addressed on the same PR and branch.
   - Handing off is explicit: push the branch and open the pull request, and that push is the handoff signal that moves the ticket to `Code Review`. Do not ask for the state by hand — a `linear_update_state` call naming `Code Review` is refused. A run that ends without pushing and opening its PR never advances; the ticket stays here and is retried.
 - `Code Review` -> an agent reviews the PR: correctness, scope, acceptance criteria and intent. Approve moves the ticket to `QA` (or to `Merging` when QA is skipped by policy); a rework verdict returns it to `Rework`; a red head routes to `CI Fix`. Do not change the issue or PR while it is here. The reviewer runs on its own, once the head's checks are green, so there is nothing to start here — just wait.
 - `QA` -> an agent validates the change end to end as a user would, driven by the user journeys it delivers. Pass moves the ticket to `Merging`; fail returns it to `Rework`; a red head routes to `CI Fix`.

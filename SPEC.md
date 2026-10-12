@@ -2458,7 +2458,7 @@ States and owners:
 |---|---|---|---|
 | `Backlog` | Person | A person's deprioritize | A person's triage to `Todo` |
 | `Todo` | Machine | Triage; a plan approval's promotion | The claim → `In Progress` |
-| `In Progress` | Agent | The claim; `Restart` | The handoff → `Code Review` |
+| `In Progress` | Agent | The claim; `Restart`; PR review comments (addressed on the same PR) | The handoff → `Code Review` |
 | `Code Review` | Agent (reviewer) | The handoff (from `In Progress` or `Rework`); a `CI Fix` return | Approve → `QA`, or `Merging` when QA is skipped; rework → `Rework`; block → `Needs Decision` hold; red head → `CI Fix` |
 | `QA` | Agent (QA) | A Code Review approve | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
 | `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation) | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix` |

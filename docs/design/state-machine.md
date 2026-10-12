@@ -36,7 +36,7 @@ CI state is **not** a state: it is an attribute (`running` / `green` / `red`) tr
 |---|---|---|---|---|
 | **Backlog** | Person | A priority decision; parked work, never picked | Person only (deprioritization; an agent may move it only when explicitly asked by a person) | Triage → Todo |
 | **Todo** | Machine | A free slot; the ready queue | Triage from Backlog; sub-tickets promoted by plan approval | Deterministic claim (pre-first-turn) → In Progress; open blockers → Blocked hold |
-| **In Progress** | Agent | First implementation (net-new work on this ticket) | Claim from Todo; Restart (fresh re-implementation) | Handoff → Code Review; blocked report → Blocked hold; decision request → Needs Decision hold |
+| **In Progress** | Agent | First implementation (net-new work on this ticket), and PR review comments addressed on the same PR | Claim from Todo; Restart (fresh re-implementation); PR review comments (the poller's rework, same PR and branch) | Handoff → Code Review; blocked report → Blocked hold; decision request → Needs Decision hold |
 | **Code Review** | Agent (reviewer) | Implementation judgment on the PR: correctness, scope, criteria, intent | Handoff; Rework done (re-review); CI Fix return | Approve → QA (or → Merging when QA is skipped by policy); rework → Rework; escalate → Needs Decision hold; CI red → CI Fix |
 | **QA** | Agent (QA) | User-journey validation: the change exercised end to end from the user's point of view | Code Review approve | Pass → Merging; fail → Rework; blocked (tooling/env) → bounded retries, then fix ticket + Blocked hold; CI red → CI Fix |
 | **Merging** | Machine | The merge to land; deterministic, no agent on the happy path | QA pass, or review approve when QA is skipped (with manual review on, confirmed first via a Needs Decision hold) | Merged → Done; a merged parent whose started sub-tickets are still open waits in **Waiting on sub-tickets** until they finish; CI red or conflict → CI Fix |
@@ -48,7 +48,7 @@ Rework and CI Fix run agent work.
 
 | State | Owner | Waits on | Enters from | Exits to |
 |---|---|---|---|---|
-| **Rework** | Agent | Returned-for-changes work; continues the existing PR. Not from scratch | Code Review rework; QA fail; CI Fix (substantive); a return from a Needs Decision hold; review comments | Changes done → Code Review (re-review of the new head); for epic parents → Plan Review (revised plan) |
+| **Rework** | Agent | Returned-for-changes work; continues the existing PR. Not from scratch | Code Review rework; QA fail; CI Fix (substantive); a return from a Needs Decision hold | Changes done → Code Review (re-review of the new head); for epic parents → Plan Review (revised plan) |
 | **CI Fix** | Agent (mechanical lane) | Red checks or a merge conflict; minimal repair only | Any phase whose head goes red (Code Review, QA, Merging, Rework) | Fixed → origin state (returns where it came from; approvals carried forward); substantive → Rework; cannot fix → Rework or Needs Decision hold (needs access or a secret) |
 
 ## Epic path
