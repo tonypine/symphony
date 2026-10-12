@@ -71,7 +71,8 @@ defmodule SymphonyElixir.Playbook do
   # partial still holds the name, so `names/0`, the catalog and `{% render "playbook" %}` are
   # unchanged. A partial with no variant for a version falls back to its base body.
   @variant_files %{
-    "status_map" => %{"designed" => "status_map.designed.liquid"}
+    "status_map" => %{"designed" => "status_map.designed.liquid"},
+    "escape_hatches" => %{"designed" => "escape_hatches.designed.liquid"}
   }
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "priv", "playbook"]))

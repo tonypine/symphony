@@ -436,11 +436,15 @@ when the ticket changed, so a new ticket shows after the next poll.
 
 You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick
 differs from the brief's recommendation), a PR **Approve and Merge…**, a final verification
-**Sign Off…**, and each **Send to Rework…** with a required reason. Every action opens a sheet that
-says what happens in Linear before anything changes; the move goes through Symphony's control API
+**Sign Off…**, and each **Send to Rework…** with a required reason. An action that asks a decision
+offers **Send Decision…**: the option you pick is recorded as a reply under the request and the
+ticket continues in its phase, with **Send to Rework…** under ⋯ answering it as a redirect. Every
+action opens a sheet that says what happens in Linear before anything changes; the move goes through
+Symphony's control API
 (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `backlog`,
-`undo`), which checks the ticket's state, makes the Linear move and writes a `director_move` audit
-record. A banner offers **Undo** for 10 seconds after a move. The decisions comment counts as yours,
+`decide`, `undo`), which checks the ticket's state, makes the Linear move and writes a
+`director_move` audit record. A banner offers **Undo** for 10 seconds after a move. The decisions
+comment counts as yours,
 so it starts the plan revision run like any comment of yours.
 
 A run that reports an external block leaves its ticket in place with the `Blocked` machine label and
@@ -448,6 +452,14 @@ what it waits on recorded. The machine lifts a dependency hold on its own; an ac
 person's to lift, and `POST /api/v1/control/unblock` clears it by hand: no Linear state moves and
 the ticket continues where it stopped. A legacy repo is unaffected — it keeps today's Backlog escape
 hatch.
+
+A run that needs a person's call asks for it as a decision — one question, 2 to 4 options, one
+recommended — and the ticket keeps its phase with the `Needs Decision` machine label: no state
+moves, and Symphony dispatches it again the moment the decision is recorded. Answer it in the Inbox
+(**Send Decision…**) or with a reply under the request in Linear; either clears the label and the
+run continues from where it stopped, and **Send to Rework…** answers it as a redirect that moves the
+ticket through the guard. A legacy repo is unaffected — there a request still parks the ticket in
+`Human Review`.
 
 Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
 **Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is

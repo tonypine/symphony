@@ -8,8 +8,14 @@ defmodule SymphonyElixir.InboxTest do
   alias SymphonyElixir.Inbox
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.Linear.Usage
+  alias SymphonyElixir.{RunStore, TicketState}
 
   @repo %{name: "shop"}
+
+  defp designed_settings do
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+    settings
+  end
 
   defp issue_node(identifier, attrs \\ %{}) do
     Map.merge(
@@ -188,6 +194,7 @@ defmodule SymphonyElixir.InboxTest do
                kind: :action,
                ask: "Add the signing secret",
                review: %{
+                 comment_id: "request",
                  title: "Add the signing secret",
                  question: "Add the secret?",
                  why: "Releases fail to sign.",
@@ -201,6 +208,26 @@ defmodule SymphonyElixir.InboxTest do
                  requested_at: ~U[2026-10-01 08:00:01Z]
                }
              } = Item.from_node(action, "shop", %Schema{}, lookups())
+    end
+
+    test "a designed repo's held ticket waits in its phase, listed with the request's ask and age" do
+      # The hold pauses the ticket where it stands, so nothing in the review states would list it:
+      # the request on it does, and the decision is answerable from the Inbox with its comment id.
+      held =
+        issue_node("SHOP-91", %{
+          "state" => %{"name" => "In Progress"},
+          "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+          "history" => %{"nodes" => []},
+          "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
+        })
+
+      assert %{
+               kind: :action,
+               state: "In Progress",
+               ask: "Add the signing secret",
+               waiting_since: ~U[2026-10-01 08:00:01Z],
+               review: %{comment_id: "request", question: "Add the secret?", requested_at: ~U[2026-10-01 08:00:01Z]}
+             } = Item.from_node(held, "shop", %Schema{}, lookups())
     end
 
     test "a pull request's checks are green when CI passed and neither QA nor the gate objects" do
@@ -231,6 +258,39 @@ defmodule SymphonyElixir.InboxTest do
   end
 
   describe "the poller" do
+    test "a designed repo's read is also the one that sets and clears the Needs Decision hold" do
+      test_pid = self()
+
+      held =
+        issue_node("SHOP-92", %{
+          "state" => %{"name" => "In Progress"},
+          "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+          "history" => %{"nodes" => []},
+          "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
+        })
+
+      client = linear(test_pid, fn _variables -> page([light(held)]) end, %{held["id"] => held})
+      state = state(client, settings_fun: fn _repo -> designed_settings() end)
+
+      state = Inbox.run_once(state)
+      assert [%{identifier: "SHOP-92", kind: :action, ask: "Add the signing secret"}] = Inbox.cached(state.opts[:name])
+      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the signing secret"}}]} = RunStore.get_ticket_state("shop", "id-SHOP-92")
+
+      # The person answers under the request: the next read no longer finds it and clears the hold,
+      # so the ticket continues in its phase.
+      answered =
+        put_in(held, ["comments", "nodes"], [
+          comment("request", request_body(), "2026-10-01T08:00:01Z"),
+          %{"id" => "reply", "body" => "Add it", "parent" => %{"id" => "request"}}
+        ])
+
+      answered_client = linear(test_pid, fn _variables -> page([light(answered)]) end, %{answered["id"] => answered})
+      state = state(answered_client, settings_fun: fn _repo -> designed_settings() end) |> Inbox.run_once()
+
+      assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
+      assert Inbox.cached(state.opts[:name]) == []
+    end
+
     test "reads an issue in full once, and again only when it or a comment changed" do
       test_pid = self()
       pr = issue_node("SHOP-7", %{"comments" => %{"nodes" => [comment("brief", @brief)]}})
@@ -239,7 +299,11 @@ defmodule SymphonyElixir.InboxTest do
       state = state(client)
 
       state = Inbox.run_once(state)
-      assert_received {:listed, %{"and" => [%{"team" => _}, %{"or" => [%{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}} | _]}]}}
+
+      # A designed repo's held ticket sits in its phase, so the hold's label lists it too.
+      assert_received {:listed, %{"and" => [%{"team" => _}, %{"or" => wanted}]}}
+      assert %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}} = hd(wanted)
+      assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}} = List.last(wanted)
       assert_received {:read, ["id-SHOP-7"]}
       assert [%{identifier: "SHOP-7", ask: "The retry fix for the importer."}] = Inbox.cached(state.opts[:name])
 

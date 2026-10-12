@@ -361,6 +361,143 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "decide" do
+    test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+
+      assert result == %{
+               move: "decide",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "In Progress",
+               to_state: "In Progress",
+               moved: false,
+               commented: true,
+               undo_window_ms: nil
+             }
+
+      assert_received {:memory_tracker_reply, "pr", "comment-1", comment}
+      assert comment == "Decision from the Director:\n\n1. Add the signing secrets, or ship unsigned builds?\n   **Decision:** Add the secrets"
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      # The decision continues the flow in place: nothing moves.
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "a decision that directs a move sends the ticket there through the guard", %{opts: opts} do
+      for {move, target} <- [{"rework", "Rework"}, {"DONE", "Done"}] do
+        put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+        set_decision_hold()
+
+        assert {:ok, result} =
+                 DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: move}, opts)
+
+        assert %{moved: true, to_state: ^target, undo_window_ms: 10_000} = result
+        assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+        assert_received {:memory_tracker_state_update, "pr", ^target}
+        refute Hold.held?("repo-director", "pr", :needs_decision)
+      end
+
+      assert [%{"move" => "decide", "to_state" => "Rework"}, %{"to_state" => "Done"}] = audit_records()
+    end
+
+    test "refuses a decision that names no answer, no request, or an unknown move", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+
+      assert {:error, {:invalid, "picks must list each decision's question and answer"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{request_comment_id: "c"}, opts)
+
+      assert {:error, {:invalid, "picks must list each decision's question and answer"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: [%{question: "q", answer: ""}], request_comment_id: "c"}, opts)
+
+      assert {:error, {:invalid, "request_comment_id is required"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks()}, opts)
+
+      assert {:error, {:invalid, message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c", move: "nope"}, opts)
+
+      assert message =~ "move must be"
+
+      assert {:error, {:invalid, _message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c", move: 5}, opts)
+
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+    end
+
+    test "refuses a ticket that is not waiting on a decision", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+
+      assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
+
+      # A legacy ticket never carries the hold, so a decision never lands on one.
+      put_issues([pr("In Progress")])
+
+      assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
+
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+    end
+
+    test "a reply Linear refuses leaves the hold in place", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :reply_failed})
+
+      assert {:error, {:linear, :reply_failed}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
+
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert audit_records() == []
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
+    end
+
+    test "a refused directed move is partial: the decision stays recorded and the hold is gone", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
+
+      assert {:error, {:partial, message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
+
+      assert message =~ "recorded the decision on MOT-40 and cleared the hold, but Linear refused the move to Rework"
+      # The decision is already in Linear, so the refusal reports the move rather than taking it back.
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
+    end
+
+    test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+
+      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, Keyword.put(opts, :store, UnwritableStore))
+
+      assert_received {:memory_tracker_reply, "pr", "c", _comment}
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "decide_comment/1 numbers each question with the answer the Director picked" do
+      assert DirectorMoves.decide_comment([%{question: "Close TP-612 as a duplicate?", answer: "Close as duplicate"}]) ==
+               "Decision from the Director:\n\n1. Close TP-612 as a duplicate?\n   **Decision:** Close as duplicate"
+
+      assert DirectorMoves.decide_comment([
+               %{question: "q1", answer: "a1"},
+               %{question: "q2", answer: "a2"}
+             ]) == "Decision from the Director:\n\n1. q1\n   **Decision:** a1\n\n2. q2\n   **Decision:** a2"
+    end
+  end
+
   describe "errors" do
     test "an unknown ticket is not found", %{opts: opts} do
       put_issues([])
@@ -547,7 +684,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock]
+    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :decide]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 
@@ -582,6 +719,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+  defp picks, do: [%{question: "Add the signing secrets, or ship unsigned builds?", answer: "Add the secrets"}]
+
+  defp set_decision_hold do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "Add the signing secrets, or ship unsigned builds?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}
+      })
+  end
 
   defp plan(state), do: %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: state, labels: ["plan"]}
   defp pr(state), do: %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: state, labels: []}

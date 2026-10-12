@@ -77,7 +77,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
-  test "queries the route's scope for labelled, In Review, Human Review or final verification issues that are not terminal" do
+  test "queries the route's scope for labelled, In Review, Human Review, final verification or held issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -92,7 +92,9 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
-                   %{"title" => %{"startsWith" => "Final verification:"}}
+                   %{"title" => %{"startsWith" => "Final verification:"}},
+                   # A designed repo's decision request leaves the ticket in its phase.
+                   %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
                  ]
                },
                %{"state" => %{"name" => %{"nin" => ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]}}}
@@ -133,7 +135,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert wanted == [
              %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
              %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
-             %{"title" => %{"startsWith" => "Final verification:"}}
+             %{"title" => %{"startsWith" => "Final verification:"}},
+             %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
            ]
   end
 
@@ -539,8 +542,11 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert collected == %{}
 
     assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
-    assert [in_review, _final_verification] = wanted
+    assert [in_review, final_verification, held] = wanted
     assert in_review == %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
+    assert final_verification == %{"title" => %{"startsWith" => "Final verification:"}}
+    # The hold's label lists a designed repo's request wherever in the workflow it sits.
+    assert held == %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
   end
 
   test "skips issues outside a project and merges what several routes return" do

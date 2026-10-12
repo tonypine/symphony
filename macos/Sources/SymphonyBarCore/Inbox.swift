@@ -261,11 +261,26 @@ public struct InboxReview: Equatable {
         public var estMinutes: Int?
         public var steps: [String]
         public var options: [Option]
+        /// The id of the request comment a decision answers: its reply goes under it. Nil for a request Symphony
+        /// can't answer from the Inbox.
+        public var commentID: String?
 
         public struct Option: Equatable {
             public var label: String
             public var effect: String?
             public var recommended: Bool
+        }
+
+        /// The request as one decision (C16), so the Inbox's picks answer it: its question and its options, the
+        /// recommended one picked to start with. Nil when the request offers no options to answer with.
+        public var decision: Decision? {
+            guard let question, !question.isEmpty, !options.isEmpty else { return nil }
+            return Decision(
+                question: question,
+                options: options.map(\.label),
+                recommendation: options.first(where: \.recommended)?.label,
+                recommended: options.firstIndex(where: \.recommended)
+            )
         }
 
         /// "About 5 min", nil when unknown.
@@ -393,6 +408,8 @@ public struct InboxReview: Equatable {
         let estMinutes: Int?
         let steps: [String]?
         let options: [OptionPayload]?
+        /// The request comment a decision answers.
+        let commentId: String?
         // A clarify item.
         let held: Bool?
         let score: Int?
@@ -433,7 +450,8 @@ public struct InboxReview: Equatable {
                 steps: payload.steps ?? [],
                 options: (payload.options ?? []).compactMap { option in
                     option.label.map { Action.Option(label: $0, effect: option.effect, recommended: option.recommended ?? false) }
-                }
+                },
+                commentID: payload.commentId
             ),
             clarify: payload.held.map { held in
                 Clarify(

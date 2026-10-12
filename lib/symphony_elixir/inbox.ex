@@ -19,6 +19,11 @@ defmodule SymphonyElixir.Inbox do
   `clarify`), drops an issue that is running or that the orchestrator saw leave the review states
   since, and sorts the list oldest first. A failed read keeps the last list.
 
+  Each read also reconciles the read tickets' `Needs Decision` holds
+  (`SymphonyElixir.NeedsDecisionHold`): a designed repo's decision request pauses its ticket in
+  place, and the person's answer — or the run's withdrawal — clears the hold so the ticket
+  continues. Those tickets are listed by the hold's label wherever in the workflow they sit.
+
   The server tags itself `inbox` in `SymphonyElixir.Linear.Usage`.
   """
 
@@ -27,7 +32,7 @@ defmodule SymphonyElixir.Inbox do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.Agreement
-  alias SymphonyElixir.{CiPoller, Config, HumanReview}
+  alias SymphonyElixir.{CiPoller, Config, Hold, HumanReview, NeedsDecisionHold}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.Item
@@ -173,6 +178,8 @@ defmodule SymphonyElixir.Inbox do
     with {:ok, repos} <- repos(state),
          {:ok, listed} <- list_all(repos, state),
          {:ok, nodes} <- read_changed(listed, state) do
+      sweep_holds(listed, nodes, state)
+
       items =
         for {repo, light} <- listed,
             %{node: node} <- [Map.get(nodes, light["id"])],
@@ -187,6 +194,22 @@ defmodule SymphonyElixir.Inbox do
         Logger.warning("Inbox: could not read what waits on you from Linear: #{inspect(reason)}")
         state
     end
+  end
+
+  # A designed repo's decision requests are read here, with their comments and history, so the read
+  # that lists them is also the one that reconciles their hold: a request an agent posted sets the
+  # `Needs Decision` hold, and one the person answered (or the run withdrew) clears it, so the
+  # ticket continues in place. The tickets are swept a repo at a time, so each route resolves its
+  # settings once. `sweep/3` is a no-op on a legacy repo, whose requests move the ticket instead.
+  defp sweep_holds(listed, nodes, state) do
+    listed
+    |> Enum.group_by(&elem(&1, 0), &Map.get(nodes, elem(&1, 1)["id"]))
+    |> Enum.each(fn {repo, entries} ->
+      repo_nodes = for %{node: %{} = node} <- entries, do: node
+      NeedsDecisionHold.sweep(repo.name, repo_nodes, settings: settings(state, repo))
+    end)
+
+    :ok
   end
 
   defp list_all(repos, state) do
@@ -204,10 +227,14 @@ defmodule SymphonyElixir.Inbox do
 
   defp list_repo(repo, state) do
     scope_filter = Keyword.get(state.opts, :scope_filter, &Client.repo_scope_filter/1)
+    settings = settings(state, repo)
 
     with {:ok, scope} <- scope_filter.(repo) do
-      states = Enum.map(HumanReview.review_states(settings(state, repo)), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
-      list_pages(%{"and" => [scope, %{"or" => states}]}, nil, [], state)
+      states = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+      # A designed repo's decision request leaves the ticket in its phase with the hold's label, so
+      # the label is what lists it too. A legacy repo never carries the label.
+      held = %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => Hold.label(:needs_decision)}}}}
+      list_pages(%{"and" => [scope, %{"or" => states ++ [held]}]}, nil, [], state)
     end
   end
 
