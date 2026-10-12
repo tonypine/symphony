@@ -20,7 +20,9 @@ defmodule SymphonyElixir.QualityGate.Prompt do
     - Sandbox dependency: needs production credentials, manual UI testing, real browsers, deploys
     - User walkthrough: a user-facing issue (UI, CLI output, anything a user sees or does)
       without a "## User walkthrough" section of numbered steps, each with the expected
-      visible result, scores lower
+      visible result, scores lower; so does a walkthrough step only the operator can take once
+      the change is live (production, their own machine or account) instead of a step an
+      end-to-end test or a QA agent can reproduce
 
   Reply with ONLY a single JSON object:
     {"score": <integer 1-10>, "reason": "<one short sentence>", "questions": ["<question>", "<question>", "<question>"]}
