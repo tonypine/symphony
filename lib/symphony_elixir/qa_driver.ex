@@ -385,8 +385,16 @@ defmodule SymphonyElixir.QaDriver do
     # Moved aside before it is read, so a request the app logs meanwhile lands in
     # a fresh log for the next call instead of being lost.
     case config.host.cmd.("/bin/mv", ["-f", log, taken], timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
-      {:ok, {_output, 0}} -> read_api_requests(config, taken)
-      _missing -> api_requests([])
+      {:ok, {_output, 0}} ->
+        read_api_requests(config, taken)
+
+      {:ok, {output, _status}} ->
+        if output =~ "No such file",
+          do: api_requests([]),
+          else: tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be taken: #{String.trim(output)}")
+
+      {:error, reason} ->
+        tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be taken: #{inspect(reason)}")
     end
   end
 
@@ -763,8 +771,13 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
+  # The taken log is removed whether or not it could be read, so a long pass
+  # leaves no copies behind in the run directory.
   defp read_api_requests(config, path) do
-    case config.host.read.(path) do
+    result = config.host.read.(path)
+    config.host.cmd.("/bin/rm", ["-f", path], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
+
+    case result do
       {:ok, bytes} ->
         bytes |> String.split("\n", trim: true) |> Enum.map(&api_request/1) |> api_requests()
 

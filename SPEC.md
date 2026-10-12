@@ -1422,8 +1422,9 @@ When enabled:
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
-  root since the last call, read where the app runs, and MUST read nothing outside that QA root. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
-  events sent to that app alone, and the tools MUST NOT return a secure field's value.
+  root since the last call, read where the app runs, and MUST read nothing outside that QA root.
+  `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
+  sent to that app alone, and the tools MUST NOT return a secure field's value.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10

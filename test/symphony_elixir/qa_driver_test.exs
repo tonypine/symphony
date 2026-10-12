@@ -83,6 +83,11 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  defp default_cmd("/bin/rm", ["-f", path], _opts, _replies) do
+    File.rm(path)
+    {:ok, {"", 0}}
+  end
+
   defp default_cmd(@helper, ["screenshot" | _rest] = args, _opts, _replies) do
     File.write!(List.last(args), "png")
     {:ok, {~s({"ok":true}), 0}}
@@ -983,6 +988,8 @@ defmodule SymphonyElixir.QaDriverTest do
                {:ok, %{"requests" => [%{"body" => %{"id" => "TP-1"}, "method" => "POST", "path" => "/api/v1/refresh"}, "not json"], "dropped" => 0}}
 
       refute File.exists?(log)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      assert Path.wildcard(Path.join(host_dir, "api-requests-*.jsonl")) == []
       assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0}}
 
       File.write!(log, Enum.map_join(1..502, &~s({"n":#{&1}}\n)))
@@ -998,6 +1005,23 @@ defmodule SymphonyElixir.QaDriverTest do
 
       assert {:error, {:qa_tool, "qa_api_requests_failed", message}} = api_requests(driver)
       assert message =~ "api-requests.jsonl could not be read"
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      assert Path.wildcard(Path.join(host_dir, "api-requests-*.jsonl")) == []
+    end
+
+    test "reports a log that cannot be taken aside", %{worktree: worktree} do
+      denied = fn
+        "/bin/mv", _args, _opts -> {:ok, {"mv: Permission denied\n", 1}}
+        exe, args, opts -> default_cmd(exe, args, opts, %{})
+      end
+
+      driver = start_driver(worktree, host: host(%{cmd: denied}))
+      assert {:error, {:qa_tool, "qa_api_requests_failed", message}} = api_requests(driver)
+      assert message =~ "could not be taken: mv: Permission denied"
+
+      down = start_driver(worktree, host: host(%{cmd: fn _exe, _args, _opts -> {:error, :closed} end}))
+      assert {:error, {:qa_tool, "qa_api_requests_failed", message}} = api_requests(down)
+      assert message =~ "could not be taken: :closed"
     end
   end
 
