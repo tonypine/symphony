@@ -74,6 +74,10 @@ defmodule SymphonyElixir.Orchestrator do
   @merging_state "merging"
   # The designed machine's reviewer state, as the fallback when a repo's settings are unavailable.
   @code_review_state "Code Review"
+  # The designed machine's QA state, the fallback when a repo's settings are unavailable.
+  @qa_state "QA"
+  # The ledger signal recorded when a designed repo's QA ticket's head is not green.
+  @qa_head_not_green_signal "qa_head_not_green"
   # The ledger signal recorded when a designed repo's Code Review ticket has no reviewer to run;
   # `SymphonyElixir.CodeReview` records the same name when it refuses to review.
   @code_review_reviewer_disabled_signal "code_review_reviewer_disabled"
@@ -3429,7 +3433,7 @@ defmodule SymphonyElixir.Orchestrator do
         end
 
       not dispatch_gates_open?(issue, state, active_states, terminal_states) ->
-        {note_blocked_code_review_head(state, issue), hold}
+        {note_blocked_flow_head(state, issue), hold}
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
       # with its attempt, as a retry that comes due during the hold is.
@@ -3626,12 +3630,14 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The gates the review flow owns: a legacy repo's run that went quiet with its PR open (the
-  # catch-handler below), a designed repo's Code Review ticket whose head is not green yet, and one
-  # whose repo has no reviewer enabled to run.
+  # catch-handler below), a designed repo's Code Review ticket whose head is not green yet, one
+  # whose repo has no reviewer enabled to run, and a designed repo's QA ticket whose head is not
+  # green yet. The QA agent, like the reviewer, only runs on a green head.
   defp review_flow_hold?(%Issue{} = issue, %State{} = state) do
     post_pr_quiet_active_issue?(issue, state) or
       code_review_head_blocked?(issue) or
-      code_review_reviewer_disabled?(issue)
+      code_review_reviewer_disabled?(issue) or
+      qa_head_blocked?(issue)
   end
 
   # `tickets.priorities` narrows which priorities may start new work. A forced ticket, and a retry
@@ -9019,13 +9025,41 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp ticket_ci_state(_issue), do: nil
 
-  # Records the no-dispatch event when a gate closed because a designed repo's Code Review ticket
-  # is held back by a head that is not green or by a repo with no reviewer; a no-op for every other
-  # blocked ticket.
-  defp note_blocked_code_review_head(%State{} = state, %Issue{} = issue) do
+  # The QA run starts only on a green head, exactly as the reviewer run does. A verdict binds to
+  # the head it judged, so a verdict on a red head is not actionable; a head whose checks are still
+  # running, or that has none yet, is not green either. Designed-only, so a legacy repo whose
+  # workflow names a QA state keeps dispatching it as it did before.
+  defp qa_head_blocked?(%Issue{} = issue) do
+    designed_issue?(issue) and qa_issue?(issue) and not green_head?(issue)
+  end
+
+  defp qa_issue?(%Issue{state: state} = issue) when is_binary(state) do
+    normalize_issue_state(state) == normalize_issue_state(qa_state(issue))
+  end
+
+  defp qa_issue?(_issue), do: false
+
+  defp qa_state(%Issue{} = issue) do
+    case issue_repo_key(issue) do
+      nil ->
+        @qa_state
+
+      repo_key ->
+        case Config.settings_for_repo(repo_key) do
+          {:ok, settings} -> settings.tracker.qa_state
+          {:error, _reason} -> @qa_state
+        end
+    end
+  end
+
+  # Records the no-dispatch event when a gate closed because a designed repo's Code Review or QA
+  # ticket is held back (a head that is not green, or a repo with no reviewer); a no-op for every
+  # other blocked ticket.
+  defp note_blocked_flow_head(%State{} = state, %Issue{} = issue) do
     cond do
       code_review_reviewer_disabled?(issue) -> note_code_review_reviewer_disabled(state, issue)
       code_review_head_blocked?(issue) -> note_code_review_head(state, issue)
+      qa_head_blocked?(issue) -> note_qa_head(state, issue)
       true -> state
     end
   end
@@ -9051,11 +9085,36 @@ defmodule SymphonyElixir.Orchestrator do
     state
   end
 
-  defp latest_code_review_head_signal?(%Issue{id: issue_id} = issue, head) when is_binary(issue_id) do
+  defp latest_code_review_head_signal?(issue, head), do: latest_head_signal?(issue, "code_review_head_not_green", head)
+
+  # Parks a QA ticket whose head is not green, recording why once per head, exactly as a Code Review
+  # ticket is parked. The ticket stays where it is: the state is returned unchanged, and the run is
+  # dispatched once the poll's rollup read calls the head green.
+  defp note_qa_head(%State{} = state, %Issue{} = issue) do
+    case ticket_ci_state(issue) do
+      %{head_sha: head, status: status} ->
+        unless latest_head_signal?(issue, @qa_head_not_green_signal, head) do
+          record_ticket_signal(issue, @qa_head_not_green_signal, %{head: head, status: status})
+        end
+
+        head_status = if status == "", do: "unknown", else: status
+
+        Logger.info("Not dispatching QA for #{issue_context(issue)}: its head is #{head_status}")
+
+      _none ->
+        :ok
+    end
+
+    state
+  end
+
+  # Whether the newest signal on the ticket is `name` for the same head, so a no-dispatch event is
+  # recorded once per head rather than on every poll tick.
+  defp latest_head_signal?(%Issue{id: issue_id} = issue, name, head) when is_binary(issue_id) do
     with repo_key when is_binary(repo_key) <- issue_repo_key(issue),
          %{} = record <- RunStore.get_ticket_state(repo_key, issue_id) do
       case TicketState.recent_signals(record, 1) do
-        [%{name: "code_review_head_not_green", details: details}] -> Map.get(details, :head) == head
+        [%{name: ^name, details: details}] -> Map.get(details, :head) == head
         _signals -> false
       end
     else
@@ -9063,7 +9122,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp latest_code_review_head_signal?(_issue, _head), do: false
+  defp latest_head_signal?(_issue, _name, _head), do: false
 
   # Parks a Code Review ticket whose repo has the reviewer off, recording why once so the ledger
   # carries the no-dispatch event without repeating it on every poll tick. The ticket stays exactly

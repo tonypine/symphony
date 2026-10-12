@@ -17,10 +17,13 @@ defmodule SymphonyElixir.RunKind do
        poll-dispatched reviewer run, which judges the PR head and records a verdict. Only a
        repo on the designed machine reaches this: a legacy repo whose Linear workflow happens
        to have a `Code Review` column keeps classifying its runs as it did before.
-    8. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
-    9. `review_feedback`: the run continues after PR review comments
+    8. `qa`: the issue is in the designed machine's `QA` state: the poll-dispatched QA run,
+       which exercises the change from the user's point of view and records a verdict.
+       Designed-only, like `code_review`.
+    9. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
+    10. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
-    10. `implementation`: everything else.
+    11. `implementation`: everything else.
 
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
@@ -72,6 +75,7 @@ defmodule SymphonyElixir.RunKind do
   @landing_state "merging"
   @rework_state "rework"
   @code_review_state "code review"
+  @qa_state "qa"
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 
   @doc "Every run kind, in documentation order."
@@ -122,7 +126,7 @@ defmodule SymphonyElixir.RunKind do
       Issue.breakdown?(issue) -> parent_kind(issue, terminal_states)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
-      code_review?(issue, signals) -> :code_review
+      (kind = designed_phase_kind(issue, signals)) != nil -> kind
       present?(Keyword.get(signals, :ci_failure)) -> :ci_fix
       present?(Keyword.get(signals, :reviewer_comments)) -> :review_feedback
       true -> :implementation
@@ -133,10 +137,17 @@ defmodule SymphonyElixir.RunKind do
     if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue), do: :close_out, else: :breakdown
   end
 
-  # Only a repo on the designed machine has a `Code Review` phase; a legacy repo whose workflow
-  # names a state the same way keeps the run kind it had before.
-  defp code_review?(issue, signals) do
-    StateMachine.designed?(Keyword.get(signals, :settings)) and in_state?(issue, @code_review_state)
+  # A designed repo's verdict phases classify to their own run kinds: `Code Review` is the
+  # poll-dispatched reviewer run and `QA` the poll-dispatched QA run. Both are designed-only — a
+  # legacy repo whose workflow happens to name a state the same way keeps the run kind it had
+  # before — so a repo without the phases is not either kind.
+  defp designed_phase_kind(issue, signals) do
+    cond do
+      not StateMachine.designed?(Keyword.get(signals, :settings)) -> nil
+      in_state?(issue, @code_review_state) -> :code_review
+      in_state?(issue, @qa_state) -> :qa
+      true -> nil
+    end
   end
 
   defp final_verification?(%Issue{title: title}) when is_binary(title) do
