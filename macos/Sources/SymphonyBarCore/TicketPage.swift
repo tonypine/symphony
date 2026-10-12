@@ -248,8 +248,11 @@ public struct TicketPage: Equatable {
         let gate = issue?.acceptanceGate.flatMap(Self.gateWord)
         let qaRunning = (state?.qa?.running ?? []).contains { $0.identifier == identifier || $0.issueId == watching?.issueId }
         let qaQueued = (state?.qa?.queued ?? []).contains { $0.identifier == identifier || $0.issueId == watching?.issueId }
-        let ticketState = running?.state ?? watching?.state ?? retry?.state ?? slot?.state ?? blocked?.state
-            ?? waitingOnYou?.state ?? (shipped == nil ? history.last?.state : "Done")
+        // Split in two: a single `??` chain over all of these exceeds the type-checker's budget
+        // on Xcode 26.3.
+        let liveState: String? = [running?.state, watching?.state, retry?.state, slot?.state, blocked?.state,
+                                  waitingOnYou?.state].lazy.compactMap { $0 }.first
+        let ticketState: String? = liveState ?? (shipped == nil ? history.last?.state : "Done")
         let idle = running.flatMap { run in
             (run.lastEventAt ?? run.startedAt).flatMap(Self.date).map { Int(reference.timeIntervalSince($0)) }
         }
