@@ -2349,6 +2349,12 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   (the record then has no workspace, and cleanup removes none). Each repository's poll tracks only
   its own `Merging` issues (an issue with no repository belongs to the primary one). The orchestrator MUST NOT dispatch a
   `Merging` issue with an attached PR while auto-merge owns it; it takes no slot and no agent.
+- A move into `Merging` that Symphony makes MUST ask the poller to poll at once rather than wait
+  for its timer. On a poll of an open `Merging` PR whose `mergeStateStatus` is `CLEAN` and which
+  doesn't show auto-merge on yet, the poller MUST first read its checks: at the observed head with
+  every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or none), it squash-merges it directly with the
+  `mergePullRequest` fields below and turns nothing on; any other reading, or a merge GitHub
+  refuses, turns auto-merge on as below.
 - On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
   `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,
   `expectedHeadOid` = the observed head) at most once per head, and not at all when GitHub already
@@ -4103,8 +4109,14 @@ SHOULD return:
   or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
   one-line `summary`; for a forced plan parent with a current part, the phase and what it
   waits on are the part's
+- `sessions`: every live session, of any kind, in one list: the agent runs (`kind` is the run's
+  profile kind, such as `implementation` or `code_review`), then the Auto Review QA passes
+  (`qa_pass`), then the acceptance gate passes (`acceptance_gate`); each row has `kind`,
+  `issue_id`, `issue_identifier`, `repo_key` and `started_at`. Landing runs are agent runs. Every
+  surface that says what runs (the web dashboard, the terminal dashboard, the macOS menu bar)
+  SHOULD read it from this list, so a session that isn't an agent run is never missed
 - `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
-  the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
+  the pass runs on the forced allowance, `repo_key`, `started_at`) and `queued` rows (`issue_id`, `identifier`, `forced`:
   whether the request is a forced ticket's, at the front of the queue)
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)

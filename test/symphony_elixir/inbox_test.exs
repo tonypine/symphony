@@ -7,7 +7,8 @@ defmodule SymphonyElixir.InboxTest do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Inbox
   alias SymphonyElixir.Inbox.Item
-  alias SymphonyElixir.Linear.Usage
+  alias SymphonyElixir.Linear.{Issue, Usage}
+  alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.{RunStore, TicketState}
 
   @repo %{name: "shop"}
@@ -233,8 +234,23 @@ defmodule SymphonyElixir.InboxTest do
                state: "In Progress",
                ask: "Add the signing secret",
                waiting_since: ~U[2026-10-01 08:00:01Z],
-               review: %{comment_id: "request", question: "Add the secret?", requested_at: ~U[2026-10-01 08:00:01Z]}
+               review: %{comment_id: "request", question: "Add the secret?", requested_at: ~U[2026-10-01 08:00:01Z], confirm: nil}
              } = Item.from_node(held, "shop", %Schema{}, lookups())
+    end
+
+    test "a merge confirmation's request names the move its confirmation performs" do
+      held =
+        issue_node("SHOP-92", %{
+          "state" => %{"name" => "In Review"},
+          "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+          "history" => %{"nodes" => []},
+          "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
+        })
+
+      summary = %{recommendation: "merge", review: nil, qa: "pass", pr: nil}
+      hold = MergeConfirmation.attrs(MergeConfirmation.request(%Issue{identifier: "SHOP-92"}, summary))
+
+      assert %{kind: :action, review: %{confirm: "Merging"}} = Item.from_node(held, "shop", %Schema{}, lookups(nil, nil, hold))
     end
 
     test "a pull request's checks are green when CI passed and neither QA nor the gate objects" do

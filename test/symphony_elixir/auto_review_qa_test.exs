@@ -1251,21 +1251,25 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert_receive {:pass_started, "forced", _forced_pid}
       assert log =~ "QA pass started on the forced allowance issue_id=forced issue_identifier=FORCED sha=#{@sha} forced=true"
       assert Process.alive?(normal_pid)
-      assert %{running: [%{issue_id: "forced", forced: true}, %{issue_id: "normal", forced: false}]} = QaRunner.snapshot(name)
+
+      assert %{running: [%{issue_id: "forced", forced: true}, %{issue_id: "normal", forced: false} = normal]} =
+               QaRunner.snapshot(name)
+
+      assert %DateTime{} = normal.started_at
 
       # The allowance is taken: a second forced ticket gets no extra pass, but goes to the front.
       assert :busy = QaRunner.request(job.("forced-2", true), qa_runner_server: name)
 
-      assert QaRunner.snapshot(name) == %{
+      assert %{
                running: [
-                 %{issue_id: "forced", identifier: "FORCED", sha: @sha, forced: true},
-                 %{issue_id: "normal", identifier: "NORMAL", sha: @sha, forced: false}
+                 %{issue_id: "forced", identifier: "FORCED", sha: @sha, forced: true, repo_key: nil},
+                 %{issue_id: "normal", identifier: "NORMAL", sha: @sha, forced: false, repo_key: nil}
                ],
                queued: [
                  %{issue_id: "forced-2", identifier: "FORCED-2", forced: true},
                  %{issue_id: "waiting", identifier: "WAITING", forced: false}
                ]
-             }
+             } = QaRunner.snapshot(name)
 
       send(normal_pid, :finish)
       wait_until(fn -> map_size(QaRunner.running(name)) == 1 end)

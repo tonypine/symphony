@@ -185,11 +185,14 @@ final class InboxTests: XCTestCase {
           {"identifier": "X-3", "kind": "audit"},
           {"identifier": "X-4", "kind": "clarify", "review": {"held": false, "found": "Empty."}},
           {"identifier": "X-5", "kind": "plan", "review": {"brief": {"format": "parsed", "decisions": [{"question": "Q?", "options": ["A"], "recommended": 3}, {"options": []}],
-            "moves": [{"move": "approve"}], "what_to_review": [{"links": [{"url": "https://example.com/a"}]}]}, "sub_tickets": [{"title": "no id"}]}}
+            "moves": [{"move": "approve"}], "what_to_review": [{"links": [{"url": "https://example.com/a"}]}]}, "sub_tickets": [{"title": "no id"}]}},
+          {"identifier": "X-6", "kind": "action", "review": {"comment_id": "c-6", "options": [{"label": "Merge", "recommended": true}], "confirm": "Merging"}}
         ]}
         """
         let inbox = try XCTUnwrap(InboxPayload.decode(Data(json.utf8)))
-        XCTAssertEqual(inbox.items.map(\.identifier), ["X-1", "i-2", "X-4", "X-5"])
+        XCTAssertEqual(inbox.items.map(\.identifier), ["X-1", "i-2", "X-4", "X-5", "X-6"])
+        XCTAssertEqual(inbox.items[4].review.action?.confirm, "Merging")
+        XCTAssertEqual(inbox.items[4].review.action?.commentID, "c-6")
         XCTAssertEqual(inbox.items[0].review.brief, .raw("Just read it."))
         XCTAssertEqual(inbox.items[0].review.pullRequest?.ci, .failed)
         XCTAssertNil(inbox.items[0].review.pullRequest?.changeLine)

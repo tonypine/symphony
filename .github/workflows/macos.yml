@@ -78,9 +78,19 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # Fails on any expression the type-checker takes over 100ms on. Swift gives up on an
+      # expression after a fixed budget, and the budget runs out sooner on an older Xcode than
+      # on the one here, so an expression near the limit on this runner is a build failure on
+      # another: see TicketPage.swift's ticketState.
       - name: Build app
         working-directory: macos
-        run: time make
+        run: |
+          set -o pipefail
+          time make SWIFT_FLAGS='-Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=100' 2>&1 | tee "$RUNNER_TEMP/build.log"
+          if grep -q 'expression took' "$RUNNER_TEMP/build.log"; then
+            echo "::error::An expression is slow to type-check (see the warning above); break it up before it fails on an older Xcode."
+            exit 1
+          fi
 
       - name: Run tests
         working-directory: macos
