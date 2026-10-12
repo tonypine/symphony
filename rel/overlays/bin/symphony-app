@@ -1,0 +1,46 @@
+#!/bin/sh
+# Starts the Symphony release with the caller's arguments, untouched.
+#
+# In Symphony.app this script is `Contents/Resources/symphony` and the release is
+# `Contents/Resources/symphony-release/`; inside the release it is `bin/symphony-app`.
+# It execs the bundled ERTS directly, so `:init.get_plain_arguments/0` returns
+# exactly "$@" (everything after `-extra`). Node name and cookie are set in Elixir
+# (`SymphonyElixir.ReleaseNode`, `ReleaseCookie`), so `env.sh` is not sourced.
+set -e
+
+# Resolve this script through symlinks to the directory it really lives in.
+script="$0"
+while [ -L "$script" ]; do
+  target="$(readlink "$script")"
+  case "$target" in
+    /*) script="$target" ;;
+    *) script="$(dirname "$script")/$target" ;;
+  esac
+done
+script_dir="$(cd "$(dirname "$script")" && pwd -P)"
+
+if [ -d "$script_dir/symphony-release" ]; then
+  root="$script_dir/symphony-release"
+else
+  root="$(cd "$script_dir/.." && pwd -P)"
+fi
+
+if [ ! -f "$root/releases/start_erl.data" ]; then
+  echo "symphony: no release found at $root" >&2
+  exit 1
+fi
+
+read -r erts_vsn rel_vsn < "$root/releases/start_erl.data"
+rel_dir="$root/releases/$rel_vsn"
+
+SYMPHONY_RELEASE_ROOT="$root"
+export SYMPHONY_RELEASE_ROOT
+
+exec "$root/erts-$erts_vsn/bin/erl" \
+  -boot "$rel_dir/start" \
+  -boot_var RELEASE_LIB "$root/lib" \
+  -config "$rel_dir/sys" \
+  -args_file "$rel_dir/vm.args" \
+  -mode embedded \
+  -noshell \
+  -extra "$@"
