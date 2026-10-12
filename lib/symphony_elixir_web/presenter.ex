@@ -158,6 +158,7 @@ defmodule SymphonyElixirWeb.Presenter do
       identifier: item.identifier,
       title: item.title,
       repo_key: item.repo_key,
+      state_machine: Map.get(item, :state_machine),
       kind: Atom.to_string(item.kind),
       state: item.state,
       ask: item.ask,

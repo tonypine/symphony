@@ -46,6 +46,22 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(InboxToolbar.toolbar(for: unlinked).defaultCommand, .move(.approveAndMerge))
     }
 
+    func testALegacyRepoOffersNoRestartSinceSymphonyRefusesIt() throws {
+        let plan = try shipped("SHOP-330")
+        let pr = try shipped("BIL-206")
+        XCTAssertEqual(pr.stateMachine, .designed)
+
+        var legacyPlan = plan
+        legacyPlan.stateMachine = .legacy
+        XCTAssertEqual(InboxToolbar.toolbar(for: legacyPlan).overflow, [.move(.sendToRework)])
+
+        var legacyPR = pr
+        legacyPR.stateMachine = .legacy
+        XCTAssertEqual(InboxToolbar.toolbar(for: legacyPR).overflow, [])
+        legacyPR.review.pullRequest?.ci = .failed
+        XCTAssertEqual(InboxToolbar.toolbar(for: legacyPR).overflow, [])
+    }
+
     func testAFinalVerificationOffersSignOffAndTheOtherKindsKeepTheirLinks() {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.finalVerification)).buttons.map(\.command), [.move(.signOff), .link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.action)).buttons.map(\.command), [.link(.openInLinear(linear))])

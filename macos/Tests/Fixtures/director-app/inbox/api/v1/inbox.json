@@ -16,6 +16,7 @@
       "issue_id": "i-330",
       "kind": "plan",
       "repo_key": "web-shop",
+      "state_machine": "designed",
       "review": {
         "brief": {
           "decisions": [
@@ -138,6 +139,7 @@
       "issue_id": "i-206",
       "kind": "pr",
       "repo_key": "api",
+      "state_machine": "designed",
       "review": {
         "brief": {
           "decisions": [],

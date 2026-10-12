@@ -2130,7 +2130,8 @@ Important nuance:
   guard refuses an agent's request to enter `In Progress` from `Rework`, the Code Review state, the
   QA state or `Merging`: on those phases the request can only mean a full reset, which is not the
   agent's to make. `Restart` is offered on designed repos only — a legacy repo's `Rework` is
-  already the full reset.
+  already the full reset. Each Inbox item carries its repo's resolved `state_machine`, and the app
+  leaves `Restart` out on a legacy one; the control API refuses it there too.
 - Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
   that `HEAD` differs from the one the run started on and has checks that are still running or
   have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA

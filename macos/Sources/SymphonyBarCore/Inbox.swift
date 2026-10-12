@@ -89,6 +89,8 @@ public struct InboxItem: Equatable, Identifiable {
     public var identifier: String
     public var title: String?
     public var repoKey: String?
+    /// The state machine the item's repo runs, as Symphony resolved it; nil from a Symphony that doesn't say.
+    public var stateMachine: StateMachineChoice?
     public var kind: Kind
     public var state: String?
     /// The one-line ask: the brief's headline, the request's title, or what the quality gate wants.
@@ -103,6 +105,7 @@ public struct InboxItem: Equatable, Identifiable {
         identifier: String,
         title: String? = nil,
         repoKey: String? = nil,
+        stateMachine: StateMachineChoice? = nil,
         kind: Kind,
         state: String? = nil,
         ask: String,
@@ -114,6 +117,7 @@ public struct InboxItem: Equatable, Identifiable {
         self.identifier = identifier
         self.title = title
         self.repoKey = repoKey
+        self.stateMachine = stateMachine
         self.kind = kind
         self.state = state
         self.ask = ask
@@ -137,6 +141,7 @@ public struct InboxItem: Equatable, Identifiable {
         let identifier: String?
         let title: String?
         let repoKey: String?
+        let stateMachine: String?
         let kind: String?
         let state: String?
         let ask: String?
@@ -154,6 +159,7 @@ public struct InboxItem: Equatable, Identifiable {
             identifier: identifier,
             title: payload.title,
             repoKey: payload.repoKey,
+            stateMachine: payload.stateMachine.flatMap(StateMachineChoice.init(rawValue:)),
             kind: kind,
             state: payload.state,
             ask: payload.ask ?? payload.title ?? identifier,
