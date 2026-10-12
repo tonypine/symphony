@@ -4515,8 +4515,8 @@ Minimum endpoints:
     dropped.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
-    asks), `waiting_since` (the latest move into its state, else its newest request; for `clarify`,
-    when the gate scored it), `waiting_seconds`, `url` and `review`:
+    asks), `waiting_since` (the later of the latest move into its state and its newest open
+    request; for `clarify`, when the gate scored it), `waiting_seconds`, `url` and `review`:
     - `plan`, `pr`, `final_verification`: `brief`, the latest `## Review brief` comment parsed into
       `headline`, `what_to_review` (`text` and `links`), `what_changed`, `decisions` (`question`,
       `options`, `recommendation`, `recommended`: the index of the recommended option, null when it

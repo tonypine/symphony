@@ -94,6 +94,27 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
     assert [%{identifier: "TP-4", kind: :action, waiting_since: ~U[2026-10-02 07:00:00Z], headline: nil}] = entries([action])
   end
 
+  test "an open request newer than the move into the state waits since the request" do
+    held =
+      node("TP-11", %{
+        "state" => %{"name" => "In Progress"},
+        "history" => history([moved("In Progress", "2026-09-01T08:00:00Z")]),
+        "comments" => comments([request_comment("2026-10-02T07:00:00Z")])
+      })
+
+    assert [%{identifier: "TP-11", kind: :action, waiting_since: ~U[2026-10-02 07:00:00Z]}] = entries([held])
+  end
+
+  test "a held ticket with no request waits since the move into its state" do
+    held =
+      node("TP-12", %{
+        "state" => %{"name" => "Human Review"},
+        "history" => history([moved("In Review", "2026-10-01T09:00:00Z"), moved("Human Review", "2026-10-01T11:00:00Z")])
+      })
+
+    assert [%{identifier: "TP-12", kind: :pr, waiting_since: ~U[2026-10-01 11:00:00Z]}] = entries([held])
+  end
+
   test "skips issues outside a review state with no open request, and nodes without an id" do
     assert entries([node("TP-5", %{"state" => %{"name" => "Todo"}}), node("TP-6", %{"state" => nil}), %{"identifier" => "TP-7"}]) == []
   end
