@@ -117,7 +117,12 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url], repo_key: "designed"}
     ])
 
-    conn = post(:restart, %{"issue_identifier" => "MOT-40", "reason" => "The approach is wrong"}, [github: __MODULE__.OpenGitHub, workspace: __MODULE__.FakeWorkspace] ++ moves)
+    conn =
+      post(
+        :restart,
+        %{"issue_identifier" => "MOT-40", "reason" => "The approach is wrong"},
+        [github: __MODULE__.OpenGitHub, workspace: __MODULE__.FakeWorkspace] ++ moves
+      )
 
     assert conn.status == 200
     assert %{"move" => "restart", "from_state" => "Rework", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
@@ -141,7 +146,13 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url]}
     ])
 
-    assert error(post(:restart, %{"issue_identifier" => "MOT-40", "reason" => "No"}, [github: __MODULE__.RefusingCloseGitHub, workspace: __MODULE__.FakeWorkspace] ++ moves)) ==
+    assert error(
+             post(
+               :restart,
+               %{"issue_identifier" => "MOT-40", "reason" => "No"},
+               [github: __MODULE__.RefusingCloseGitHub, workspace: __MODULE__.FakeWorkspace] ++ moves
+             )
+           ) ==
              {502, "restart_incomplete", "MOT-40 was not restarted: GitHub refused to close #{pr_url} (:forbidden)"}
   end
 

@@ -187,7 +187,10 @@ defmodule SymphonyElixir.RestartTest do
       end
 
       assert :ok =
-               Restart.perform(issue(pr_urls: [@pr_url]), opts(settings: linear_settings(), linear_client: linear_client))
+               Restart.perform(
+                 issue(pr_urls: [@pr_url]),
+                 opts(settings: linear_settings(), linear_client: linear_client)
+               )
 
       assert_received {:workpad_read, %{id: "issue-restart", limit: 100}}
       assert_received {:workpad_written, %{id: "comment-workpad", body: body}}
@@ -207,7 +210,10 @@ defmodule SymphonyElixir.RestartTest do
       end
 
       assert :ok =
-               Restart.perform(issue(pr_urls: [@pr_url]), opts(settings: linear_settings(), linear_client: linear_client))
+               Restart.perform(
+                 issue(pr_urls: [@pr_url]),
+                 opts(settings: linear_settings(), linear_client: linear_client)
+               )
 
       assert_received {:remove_workspaces, "MT-RESTART"}
     end
