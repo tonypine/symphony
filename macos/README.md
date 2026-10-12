@@ -836,7 +836,7 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views and the ticket pages shown), the
 view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
 help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
-version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, then under
+version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, **Initiatives**, then under
 **Factory**, **Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and
 state. The window opens on the Inbox the first time.
 
@@ -868,6 +868,18 @@ state. The window opens on the Inbox the first time.
   Symphony's answer (`moved`, `to_state`), so decisions that moved a plan out of the workflow's Human Review
   state, whatever its name, offer Undo too. Unblock moves no ticket, so its banner just says "Hold cleared" with
   no Undo.
+
+- **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), in three columns like the
+  Inbox. The list groups the plan tickets as Active, In review and Done recently (a week after they are done),
+  each with "4 of 8 done" and a bar of its sub-tickets by stage (Done, Working, Waiting on you, Queued,
+  Blocked) with a legend that gives each stage's symbol, count and word; VoiceOver reads the counts too. The
+  detail opens with a sentence ("4 of 8 done. BIL-206 waits on you, and 2 tickets wait on it."), the bar and its
+  legend, the initiative's lane ("Holds a lane, running BIL-205"), and the sub-tickets in landing order, each
+  with what it waits on (you, a blocker, CI, a slot) and links to the tickets it is blocked by. **Review** on a
+  sub-ticket that waits on you opens its Inbox item; any other row opens its ticket page. The final
+  verification comes last and reads "Waits on 3 tickets" until the others are done, then its result. The
+  Overview's side column shows the active initiatives in an **Initiatives** card; a click opens one here. The
+  scope pop-up applies.
 
 - **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
   are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
@@ -1054,7 +1066,7 @@ Four more variables, read only in QA mode:
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
-  `paused` and `idle`, and of the Inbox: `inbox` (one item of each kind) and `inbox-empty`. Ages in them count from the payload's `generated_at`, so they read the same
+  `paused` and `idle`, and of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and `inbox-empty`. Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

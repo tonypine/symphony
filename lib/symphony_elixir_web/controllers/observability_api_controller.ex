@@ -34,6 +34,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     json(conn, Presenter.inbox_payload(orchestrator(), snapshot_timeout_ms(), inbox()))
   end
 
+  @spec initiatives(Conn.t(), map()) :: Conn.t()
+  def initiatives(conn, _params) do
+    json(conn, Presenter.initiatives_payload(orchestrator(), snapshot_timeout_ms(), initiatives(), inbox()))
+  end
+
   @spec repos(Conn.t(), map()) :: Conn.t()
   def repos(conn, _params) do
     case Presenter.repos_payload(orchestrator(), snapshot_timeout_ms()) do
@@ -164,6 +169,10 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp inbox do
     Endpoint.config(:inbox) || SymphonyElixir.Inbox
+  end
+
+  defp initiatives do
+    Endpoint.config(:initiatives) || SymphonyElixir.Initiatives
   end
 
   defp snapshot_timeout_ms do
