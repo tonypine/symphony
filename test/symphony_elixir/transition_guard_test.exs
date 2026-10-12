@@ -264,4 +264,51 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert {:ok, ^state} = TransitionGuard.resolve_request(state, %{settings: settings})
     end
   end
+
+  describe "resolve_request/2 and the Blocked hold" do
+    test "a designed repo turns an agent's Backlog request while working into a Blocked hold" do
+      state = state("Backlog")
+
+      assert {:hold, :blocked, attrs} =
+               TransitionGuard.resolve_request(state, %{settings: designed_settings(), from_state: "In Progress"})
+
+      assert attrs.reason =~ "reported a block"
+      assert attrs.clearing_condition =~ "access hold"
+      assert attrs.waits_on == %{type: "access", keys: []}
+    end
+
+    test "the hold fires from Rework too, matching the phase loosely" do
+      for from <- ["Rework", " in progress ", "REWORK"] do
+        assert {:hold, :blocked, _attrs} =
+                 TransitionGuard.resolve_request(state("Backlog"), %{settings: designed_settings(), from_state: from})
+      end
+    end
+
+    test "a Backlog request outside a running phase is an ordinary move" do
+      state = state("Backlog")
+
+      for from <- ["Todo", "Backlog", nil, 5] do
+        assert {:ok, ^state} =
+                 TransitionGuard.resolve_request(state, %{settings: designed_settings(), from_state: from})
+      end
+    end
+
+    test "a legacy repo keeps the Backlog escape hatch" do
+      state = state("Backlog")
+
+      assert {:ok, ^state} =
+               TransitionGuard.resolve_request(state, %{settings: memory_settings(), from_state: "In Progress"})
+    end
+
+    test "only a Backlog request is a hold: another state from a running phase is an ordinary move" do
+      state = state("Rework")
+
+      assert {:ok, ^state} =
+               TransitionGuard.resolve_request(state, %{settings: designed_settings(), from_state: "In Progress"})
+    end
+  end
+
+  defp designed_settings do
+    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+  end
 end

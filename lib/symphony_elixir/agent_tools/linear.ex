@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
@@ -210,6 +211,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
         nodes {
           url
         }
+      }
+      state {
+        name
+        type
       }
       team {
         states {
@@ -677,13 +682,42 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, run_handoff(context), opts),
-         {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
-      check_mutation_success(response, "issueUpdate")
+         result <- resolve_state_id(issue_id, state_name_or_id, run_handoff(context), opts) do
+      case result do
+        {:ok, {:state, state_id}} -> apply_state(issue_id, state_id, opts)
+        {:hold, kind, attrs} -> apply_hold(context, issue_id, kind, attrs, opts)
+        {:error, _reason} = error -> error
+      end
     end
   end
 
   def update_state(_context, _state_name_or_id, _opts), do: {:error, :invalid_state}
+
+  defp apply_state(issue_id, state_id, opts) do
+    with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
+      check_mutation_success(response, "issueUpdate")
+    end
+  end
+
+  # A designed repo retired the Backlog escape hatch: the guard turned the request into a Blocked
+  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
+  # hold lifts on its own; the access hold this reports is lifted by a person's `Unblock` (or by the
+  # self-heal fix ticket). The agent did not move the issue.
+  defp apply_hold(context, issue_id, kind, attrs, opts) do
+    with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
+      {:ok,
+       %{
+         "held" => true,
+         "hold" => Hold.label(kind),
+         "reason" => Map.get(attrs, :reason),
+         "clearing_condition" => Map.get(attrs, :clearing_condition),
+         "message" =>
+           "The issue stays in its current state with the `#{Hold.label(kind)}` label. " <>
+             "Symphony lifts a hold when what it waits on clears, and a person lifts an access " <>
+             "hold with Unblock; do not move the issue yourself."
+       }}
+    end
+  end
 
   # What the run did so far that changes where its issue may go.
   defp run_handoff(context) do
@@ -1799,17 +1833,26 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
-           pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff),
-           {:ok, state} <-
-             TransitionGuard.resolve_request(state, %{
-               settings: settings,
-               states: states,
-               pr_less?: pr_less?,
-               needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
-             }) do
-        {:ok, state["id"]}
+      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts) do
+        pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff)
+        guard_state(state, settings, states, issue, pr_less?, handoff)
       end
+    end
+  end
+
+  # The guard's answer decides what the tool does: a state the issue moves to, a hold that pauses it
+  # in place, or the refusal the tool passes back.
+  defp guard_state(state, settings, states, issue, pr_less?, handoff) do
+    case TransitionGuard.resolve_request(state, %{
+           settings: settings,
+           states: states,
+           from_state: get_in(issue, ["state", "name"]),
+           pr_less?: pr_less?,
+           needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
+         }) do
+      {:ok, resolved} -> {:ok, {:state, resolved["id"]}}
+      {:hold, _kind, _attrs} = hold -> hold
+      {:error, _reason} = error -> error
     end
   end
 

@@ -4678,6 +4678,7 @@ Minimum endpoints:
     | `decisions` | a plan in a review state | `In Review` from the Human Review state, else no move | one comment with `picks` (required, `[{"question", "answer"}]`), posted after the move |
     | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
+    | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts

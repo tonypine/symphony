@@ -34,6 +34,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @in_review_state "In Review"
   @merging_state "Merging"
+  @backlog_state "Backlog"
 
   @typedoc "A named transition the machine can perform."
   @type signal :: atom()
@@ -172,21 +173,58 @@ defmodule SymphonyElixir.TransitionGuard do
   returns `{:ok, state}` (the state to set, after any redirect) or `{:error, reason}` with the same
   tuple the tool returned before.
 
-  `ctx` carries `:settings`, `:states` (the team's states, for the redirect), `:pr_less?` (a plan
-  parent or a `Final verification:` ticket opens no PR), and `:needs_person?` (the ticket's own
-  rule says a person reviews it, or the run asked for a person).
+  On a repo running the designed machine, an agent asking to park its issue in `Backlog` while it
+  is `In Progress` or `Rework` is not a move: the guard returns `{:hold, :blocked, attrs}`, which
+  pauses the ticket in its phase with a recorded reason instead of moving it (the Backlog escape
+  hatch is retired there). Every other request, and every legacy repo, returns `{:ok, state}` or
+  `{:error, reason}` as before.
+
+  `ctx` carries `:settings`, `:states` (the team's states, for the redirect), `:from_state` (the
+  issue's current state), `:pr_less?` (a plan parent or a `Final verification:` ticket opens no
+  PR), and `:needs_person?` (the ticket's own rule says a person reviews it, or the run asked for a
+  person).
   """
-  @spec resolve_request(map(), context()) :: {:ok, map()} | {:error, term()}
+  @spec resolve_request(map(), context()) ::
+          {:ok, map()} | {:hold, :blocked | :needs_decision, map()} | {:error, term()}
   def resolve_request(%{"name" => state_name} = state, ctx) do
     settings = Map.fetch!(ctx, :settings)
 
-    with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
-         state = redirect_state(state, ctx, settings),
-         :ok <- refuse_human_only(state),
-         :ok <- refuse_waiting_state(state, settings) do
-      {:ok, state}
+    case hold_request(state_name, ctx, settings) do
+      {:hold, kind, attrs} ->
+        {:hold, kind, attrs}
+
+      :not_a_hold ->
+        with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
+             state = redirect_state(state, ctx, settings),
+             :ok <- refuse_human_only(state),
+             :ok <- refuse_waiting_state(state, settings) do
+          {:ok, state}
+        end
     end
   end
+
+  # On a designed repo the Backlog escape hatch is retired: an agent asking to park an issue it is
+  # working in Backlog has hit a block, so the guard turns the request into a Blocked hold instead
+  # of a state move — the ticket keeps its phase. Every other request, and every legacy repo, is
+  # not a hold.
+  defp hold_request(state_name, ctx, settings) do
+    if StateMachine.designed?(settings) and state_name_matches?(state_name, @backlog_state) and
+         running_phase?(Map.get(ctx, :from_state)) do
+      {:hold, :blocked,
+       %{
+         reason: "the run reported a block",
+         clearing_condition: "when the block is resolved; a person clears an access hold",
+         waits_on: %{type: "access", keys: []}
+       }}
+    else
+      :not_a_hold
+    end
+  end
+
+  defp running_phase?(from) when is_binary(from),
+    do: state_name_matches?(from, "In Progress") or state_name_matches?(from, "Rework")
+
+  defp running_phase?(_from), do: false
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an agent asking for
   # `In Review` or the Human Review state is refused rather than silently redirected. A `breakdown`
