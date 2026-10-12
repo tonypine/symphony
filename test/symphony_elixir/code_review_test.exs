@@ -41,8 +41,23 @@ defmodule SymphonyElixir.CodeReviewTest do
     settings
   end
 
+  # A designed repo with the reviewer on, which is what a Code Review state needs to have a reviewer
+  # run at all; `reviewer_disabled_settings/0` is the config this module must refuse to review under.
   defp designed_settings(extra \\ %{}) do
-    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"}, extra))
+    settings!(
+      Map.merge(
+        %{
+          "tracker" => %{"kind" => "memory"},
+          "state_machine" => "designed",
+          "review_agent" => %{"enabled" => true, "kind" => "codex", "command" => "codex app-server"}
+        },
+        extra
+      )
+    )
+  end
+
+  defp reviewer_disabled_settings do
+    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
   end
 
   defp legacy_settings(extra \\ %{}) do
@@ -95,6 +110,21 @@ defmodule SymphonyElixir.CodeReviewTest do
     test "skips a non-issue or a workspace-less call" do
       assert :skip = CodeReview.run(%{}, "/tmp/workspace", settings: designed_settings())
       assert :skip = CodeReview.run(issue(), nil, settings: designed_settings())
+    end
+
+    test "a repo with the reviewer off is never reviewed and never approved" do
+      disabled = reviewer_disabled_settings()
+
+      assert :ok = run("/tmp/workspace", settings: disabled)
+      refute_received {:reviewed, _, _}
+      refute_received {:moved, _, _}
+
+      assert [%{name: "code_review_reviewer_disabled"}] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+      assert SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review") == []
+
+      # The reason is recorded once, not again on the next dispatch of the parked ticket.
+      assert :ok = run("/tmp/workspace", settings: disabled)
+      assert [%{name: "code_review_reviewer_disabled"}] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
     test "an approve verdict records the verdict against the head and moves to Merging" do

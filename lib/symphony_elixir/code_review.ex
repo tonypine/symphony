@@ -18,6 +18,12 @@ defmodule SymphonyElixir.CodeReview do
   An inconclusive review retries boundedly on the same head, then escalates the same way. A legacy
   repo never reaches this module: `run/3` returns `:skip` for anything but a designed repo's
   `Code Review` ticket, so the executor path is untouched.
+
+  A repo with the reviewer turned off (`review_agent.enabled: false`) has no reviewer to run, and
+  `SymphonyElixir.ReviewAgent` answers a disabled reviewer with a fabricated approval. A Code Review
+  ticket is never approved on that: dispatch is gated on the setting (the orchestrator parks the
+  ticket with a `code_review_reviewer_disabled` signal recorded), and `run/3` itself refuses to
+  review without a reviewer, recording the same signal and leaving the ticket where it is.
   """
 
   require Logger
@@ -26,6 +32,7 @@ defmodule SymphonyElixir.CodeReview do
   alias SymphonyElixir.Linear.Issue
 
   @verdict_kind "code_review"
+  @reviewer_disabled_signal "code_review_reviewer_disabled"
   @max_inconclusive_retries 2
   @merging_state "Merging"
 
@@ -60,6 +67,14 @@ defmodule SymphonyElixir.CodeReview do
   def reviewer_run?(_issue, _settings), do: false
 
   defp review(issue, workspace, opts, settings) do
+    if ReviewAgent.enabled?(settings.review_agent) do
+      do_review(issue, workspace, opts, settings)
+    else
+      park(issue, opts)
+    end
+  end
+
+  defp do_review(issue, workspace, opts, settings) do
     case evaluate(issue, workspace, opts, settings) do
       {:ok, %{verdict: verdict} = result} ->
         apply_verdict(issue, workspace, opts, settings, verdict, result)
@@ -73,6 +88,27 @@ defmodule SymphonyElixir.CodeReview do
       {:error, reason} ->
         {:error, {:code_review_failed, reason}}
     end
+  end
+
+  # A reviewer that is turned off judges nothing: `ReviewAgent.evaluate/4` answers it with a
+  # fabricated approval, so running one would record a verdict no reviewer made and move the ticket
+  # on. The run leaves the ticket exactly where it is and records why, once. Dispatch is gated on the
+  # same setting (the orchestrator parks the ticket), so this is the belt to that gate: no path
+  # through this module can approve a ticket without a real review.
+  defp park(issue, opts) do
+    unless reviewer_disabled_recorded?(issue, opts) do
+      TicketSignals.record(repo_key(issue, opts), issue.id, @reviewer_disabled_signal, %{})
+    end
+
+    Logger.warning("Not reviewing #{issue_label(issue)}: review_agent.enabled is false for its repo")
+
+    :ok
+  end
+
+  defp reviewer_disabled_recorded?(issue, opts) do
+    repo_key(issue, opts)
+    |> Handoff.signals(issue.id)
+    |> Enum.any?(&(&1.name == @reviewer_disabled_signal))
   end
 
   # The same read-only reviewer the pre-push pass uses, pointed at the PR head this run is checked

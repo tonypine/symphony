@@ -329,7 +329,9 @@ repositories:
   `states.ci_fix`), the transition guard uses the designed machine's edge table, and prompts render
   the designed status map. Unset reads as `legacy`. Every part of a run resolves the version through
   the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
-  a State machine picker.
+  a State machine picker. A `designed` repo reviews its work through the designed `Code Review`
+  state, so it needs the reviewer on: with `review_agent.enabled` off, its `Code Review` tickets are
+  parked (a `code_review_reviewer_disabled` signal is recorded) instead of being dispatched.
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not

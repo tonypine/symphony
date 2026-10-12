@@ -9,13 +9,19 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
   @legacy_repo "legacy-repo"
   @issue_id "issue-code-review-dispatch"
 
+  defp designed_repos do
+    [
+      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"], state_machine: "designed"],
+      [key: @legacy_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["legacy"]]
+    ]
+  end
+
   setup do
+    # The reviewer is what a designed repo's Code Review ticket is dispatched to run.
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
-      repos: [
-        [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"], state_machine: "designed"],
-        [key: @legacy_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["legacy"]]
-      ]
+      review_agent: %{enabled: true, kind: "codex", command: "codex app-server"},
+      repos: designed_repos()
     )
 
     for repo <- [@designed_repo, @legacy_repo] do
@@ -42,6 +48,18 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
         record
         |> SymphonyElixir.TicketState.recent_signals(10)
         |> Enum.filter(&(&1.name == "code_review_head_not_green"))
+
+      _none ->
+        []
+    end
+  end
+
+  defp reviewer_disabled_signals(repo_key) do
+    case RunStore.get_ticket_state(repo_key, @issue_id) do
+      %{} = record ->
+        record
+        |> SymphonyElixir.TicketState.recent_signals(10)
+        |> Enum.filter(&(&1.name == "code_review_reviewer_disabled"))
 
       _none ->
         []
@@ -95,6 +113,25 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
     test "a legacy repo's Code Review ticket keeps dispatching with no CI state" do
       assert Orchestrator.should_dispatch_issue_for_test(issue(@legacy_repo, "Code Review"), state())
       assert head_signals(@legacy_repo) == []
+    end
+
+    test "a designed Code Review ticket whose repo has the reviewer off is parked, not approved" do
+      # Nothing to review with: the reviewer answers a disabled run with a fabricated approval, so
+      # the ticket must never be dispatched, even on a green head.
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: designed_repos())
+      record_ci!(@designed_repo, "abc123", "green")
+      review_ticket = issue(@designed_repo, "Code Review")
+
+      refute Orchestrator.should_dispatch_issue_for_test(review_ticket, state())
+      refute Map.has_key?(Orchestrator.dispatch_chosen_issues_for_test([review_ticket], state()).running, @issue_id)
+      refute Map.has_key?(Orchestrator.dispatch_chosen_issues_for_test([review_ticket], state()).running, @issue_id)
+
+      # Recorded once for the ticket: the reason is the repo's config, not the head.
+      assert [%{name: "code_review_reviewer_disabled"}] = reviewer_disabled_signals(@designed_repo)
+      assert head_signals(@designed_repo) == []
+
+      # A legacy repo's Code Review state is untouched by the gate.
+      assert Orchestrator.should_dispatch_issue_for_test(issue(@legacy_repo, "Code Review"), state())
     end
 
     test "a Code Review ticket whose reviewer run is missing is dispatched exactly once" do

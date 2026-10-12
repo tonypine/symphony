@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Orchestrator do
     EpicLanes,
     ForcedQueue,
     ForcedStatus,
+    Handoff,
     HumanReview,
     Notifications,
     PlanComments,
@@ -71,6 +72,9 @@ defmodule SymphonyElixir.Orchestrator do
   @merging_state "merging"
   # The designed machine's reviewer state, as the fallback when a repo's settings are unavailable.
   @code_review_state "Code Review"
+  # The ledger signal recorded when a designed repo's Code Review ticket has no reviewer to run;
+  # `SymphonyElixir.CodeReview` records the same name when it refuses to review.
+  @code_review_reviewer_disabled_signal "code_review_reviewer_disabled"
   # A breakdown parent goes back here for its run to revise the plan from people's comments.
   @plan_revision_state "In Progress"
   @merging_terminal_grace_ms 300_000
@@ -3599,10 +3603,13 @@ defmodule SymphonyElixir.Orchestrator do
       priority_allowed?(issue, state)
   end
 
-  # The two gates the review flow owns: a legacy repo's run that went quiet with its PR open (the
-  # catch-handler below), and a designed repo's Code Review ticket whose head is not green yet.
+  # The gates the review flow owns: a legacy repo's run that went quiet with its PR open (the
+  # catch-handler below), a designed repo's Code Review ticket whose head is not green yet, and one
+  # whose repo has no reviewer enabled to run.
   defp review_flow_hold?(%Issue{} = issue, %State{} = state) do
-    post_pr_quiet_active_issue?(issue, state) or code_review_head_blocked?(issue)
+    post_pr_quiet_active_issue?(issue, state) or
+      code_review_head_blocked?(issue) or
+      code_review_reviewer_disabled?(issue)
   end
 
   # `tickets.priorities` narrows which priorities may start new work. A forced ticket, and a retry
@@ -8923,6 +8930,25 @@ defmodule SymphonyElixir.Orchestrator do
     designed_issue?(issue) and code_review_issue?(issue) and not green_head?(issue)
   end
 
+  # A designed repo with the reviewer turned off cannot review anything. `ReviewAgent.evaluate/4`
+  # answers a disabled reviewer with a fabricated approval, so dispatching the run would record a
+  # verdict no reviewer made and move the ticket straight to `Merging`. The ticket is parked
+  # instead, with the reason recorded once; turning `review_agent` on opens the gate. Designed-only
+  # for the same reason as the head gate: a legacy repo has no Code Review state to review from.
+  defp code_review_reviewer_disabled?(%Issue{} = issue) do
+    designed_issue?(issue) and code_review_issue?(issue) and not code_review_reviewer_enabled?(issue)
+  end
+
+  # A repo's reviewer setting, read the way every other review-flow decision reads it. A repo whose
+  # config cannot be resolved has no reviewer to run, so it parks rather than risk a fabricated
+  # approval.
+  defp code_review_reviewer_enabled?(%Issue{} = issue) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) -> review_agent_enabled_for_repo(repo_key, issue)
+      _none -> false
+    end
+  end
+
   defp code_review_issue?(%Issue{state: state} = issue) when is_binary(state) do
     normalize_issue_state(state) == normalize_issue_state(code_review_state(issue))
   end
@@ -8965,9 +8991,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp ticket_ci_state(_issue), do: nil
 
   # Records the no-dispatch event when a gate closed because a designed repo's Code Review ticket
-  # is held back by a head that is not green; a no-op for every other blocked ticket.
+  # is held back by a head that is not green or by a repo with no reviewer; a no-op for every other
+  # blocked ticket.
   defp note_blocked_code_review_head(%State{} = state, %Issue{} = issue) do
-    if code_review_head_blocked?(issue), do: note_code_review_head(state, issue), else: state
+    cond do
+      code_review_reviewer_disabled?(issue) -> note_code_review_reviewer_disabled(state, issue)
+      code_review_head_blocked?(issue) -> note_code_review_head(state, issue)
+      true -> state
+    end
   end
 
   # Parks a Code Review ticket whose head is not green, recording why once per head so the ledger
@@ -9004,6 +9035,33 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp latest_code_review_head_signal?(_issue, _head), do: false
+
+  # Parks a Code Review ticket whose repo has the reviewer off, recording why once so the ledger
+  # carries the no-dispatch event without repeating it on every poll tick. The ticket stays exactly
+  # where it is: the state is returned unchanged, and turning `review_agent` on opens the gate.
+  defp note_code_review_reviewer_disabled(%State{} = state, %Issue{} = issue) do
+    unless code_review_reviewer_disabled_recorded?(issue) do
+      record_ticket_signal(issue, @code_review_reviewer_disabled_signal, %{})
+    end
+
+    Logger.warning("Not dispatching the reviewer for #{issue_context(issue)}: review_agent.enabled is false for its repo")
+
+    state
+  end
+
+  # The reason is a repo config, not a head, so one recording per ticket is enough; any signal of
+  # this name in the ledger means it was already recorded.
+  defp code_review_reviewer_disabled_recorded?(%Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) ->
+        Enum.any?(Handoff.signals(repo_key, issue_id), &(&1.name == @code_review_reviewer_disabled_signal))
+
+      _none ->
+        false
+    end
+  end
+
+  defp code_review_reviewer_disabled_recorded?(_issue), do: false
 
   # The repo's resolved state-machine version, read from the issue's own repo key so a designed
   # repo is never treated as a legacy one (and vice versa) when the settings are global.
