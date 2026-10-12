@@ -1544,6 +1544,179 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "Merging"
   end
 
+  test "discovers a designed repo's Code Review, QA and Rework PRs so a conflict there is polled" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    now = ~U[2026-05-01 09:00:00Z]
+
+    issues =
+      for {state, id, identifier} <- [
+            {"Code Review", "issue-cr", "ACME-CR"},
+            {"QA", "issue-qa", "ACME-QA"},
+            {"Rework", "issue-rw", "ACME-RW"}
+          ] do
+        assert :ok =
+                 RunStore.put_run(%{
+                   repo_key: @repo_key,
+                   run_id: "run-#{id}",
+                   issue_id: id,
+                   issue_identifier: identifier,
+                   status: "success",
+                   workspace_path: "/tmp/workspaces/#{identifier}",
+                   worker_host: nil,
+                   started_at: DateTime.add(now, -120, :second),
+                   ended_at: DateTime.add(now, -60, :second)
+                 })
+
+        %{in_review_issue(updated_at: now, id: id, identifier: identifier) | state: state}
+      end
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, issues)
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
+
+    assert {:ok, %{discovered: 3, processed: 3}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    discovered = RunStore.list_pr_reviews() |> Map.new(&{&1.issue_id, &1.status})
+
+    assert discovered == %{"issue-cr" => "watching", "issue-qa" => "watching", "issue-rw" => "watching"}
+  end
+
+  test "a conflict on a designed repo's Code Review, QA or Rework ticket enters CI Fix with the origin recorded" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    now = ~U[2026-05-01 09:00:00Z]
+
+    issues =
+      for {state, id, identifier} <- [
+            {"Code Review", "issue-cr", "ACME-CR"},
+            {"QA", "issue-qa", "ACME-QA"},
+            {"Rework", "issue-rw", "ACME-RW"}
+          ] do
+        assert :ok =
+                 RunStore.put_run(%{
+                   repo_key: @repo_key,
+                   run_id: "run-#{id}",
+                   issue_id: id,
+                   issue_identifier: identifier,
+                   status: "success",
+                   workspace_path: "/tmp/workspaces/#{identifier}",
+                   worker_host: nil,
+                   started_at: DateTime.add(now, -120, :second),
+                   ended_at: DateTime.add(now, -60, :second)
+                 })
+
+        %{in_review_issue(updated_at: now, id: id, identifier: identifier) | state: state}
+      end
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, issues)
+
+    Application.put_env(
+      :symphony_elixir,
+      :pr_review_test_activity,
+      open_activity(now,
+        mergeable: "CONFLICTING",
+        merge_state_status: "DIRTY",
+        head_ref_name: "auto/ACME",
+        head_ref_oid: "head-sha",
+        base_ref_name: "main",
+        base_ref_oid: "base-sha"
+      )
+    )
+
+    assert {:ok, %{actions: actions}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert Enum.sort(actions) == [
+             {:state_transitioned, "issue-cr", :conflict, "CI Fix"},
+             {:state_transitioned, "issue-qa", :conflict, "CI Fix"},
+             {:state_transitioned, "issue-rw", :conflict, "CI Fix"}
+           ]
+
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-cr") == "Code Review"
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-qa") == "QA"
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-rw") == "Rework"
+
+    assert_receive {:issue_state_update, "issue-cr", "CI Fix"}
+    assert_receive {:issue_state_update, "issue-qa", "CI Fix"}
+    assert_receive {:issue_state_update, "issue-rw", "CI Fix"}
+  end
+
+  test "review activity on a designed repo's Code Review ticket does not move it" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    now = ~U[2026-05-01 09:00:00Z]
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: @repo_key,
+               run_id: "run-cr",
+               issue_id: "issue-cr",
+               issue_identifier: "ACME-CR",
+               status: "success",
+               workspace_path: "/tmp/workspaces/ACME-CR",
+               worker_host: nil,
+               started_at: DateTime.add(now, -120, :second),
+               ended_at: DateTime.add(now, -60, :second)
+             })
+
+    issue = %{in_review_issue(updated_at: now, id: "issue-cr", identifier: "ACME-CR") | state: "Code Review"}
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, review_decision: "APPROVED"))
+
+    assert {:ok, %{actions: [{:watching, "issue-cr"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    # The designed phase owns its verdicts; the poller leaves the ticket where it is.
+    refute_receive {:issue_state_update, "issue-cr", _state}
+    assert [%{status: "watching"}] = RunStore.list_pr_reviews()
+  end
+
+  test "a conflict on a designed repo's In Review ticket keeps the legacy path" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    now = ~U[2026-05-01 09:00:00Z]
+    issue = in_review_issue(updated_at: now)
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    :ok = put_review(now)
+
+    Application.put_env(
+      :symphony_elixir,
+      :pr_review_test_activity,
+      open_activity(now,
+        mergeable: "CONFLICTING",
+        merge_state_status: "DIRTY",
+        head_ref_name: "auto/ACME-1780",
+        head_ref_oid: "head-sha",
+        base_ref_name: "main",
+        base_ref_oid: "base-sha"
+      )
+    )
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
+    # The legacy conflict path records no CI Fix origin.
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == nil
+  end
+
   test "deduplicates repeated polls of the same merge conflict" do
     now = ~U[2026-05-01 09:00:00Z]
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
