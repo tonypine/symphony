@@ -95,6 +95,17 @@ final class InboxMovesTests: XCTestCase {
 
     // MARK: - Deciding
 
+    func testSendDecisionOnARequestParkedInHumanReviewMovesItToTodo() {
+        var action = item(.action)
+        action.state = "Human Review"
+        action.review.action = InboxReview.Action(question: "Close TP-612 as a duplicate?", steps: [], options: options, commentID: "c-1")
+
+        let sheet = ConsequenceSheet(move: .decide, item: action)
+        XCTAssertEqual(sheet.happens, "Records your answer on X-1 as a reply to its request and moves X-1 to Todo: the next run carries it out.")
+        XCTAssertEqual(sheet.stays, "Your answer stays on the ticket as the recorded decision, even after Undo.")
+        XCTAssertEqual(sheet.targetState, "Todo")
+    }
+
     func testSendDecisionAnswersTheRequestInPlaceAndReworkRedirectsIt() {
         var action = item(.action)
         action.state = "In Progress"

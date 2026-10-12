@@ -162,6 +162,8 @@ public struct DecisionPicks: Equatable {
 public struct ConsequenceSheet: Equatable, Identifiable {
     public static let waitingState = "Waiting on sub-tickets"
     public static let reviewState = "In Review"
+    public static let humanReviewState = "Human Review"
+    public static let todoState = "Todo"
 
     public var move: InboxMove
     /// The Inbox item's issue id.
@@ -254,11 +256,17 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .decide:
             title = "Send your decision on \(id)?"
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
-            // A merge confirmation continues into the state its hold names; an ordinary decision moves nothing.
+            // A merge confirmation continues into the state its hold names. A request that parked its ticket in
+            // Human Review set no hold: answering it moves the ticket to Todo, so the next run carries the decision
+            // out. An ordinary decision moves nothing.
             if let confirm = item.review.action?.confirm {
                 targetState = confirm
                 happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
+            } else if item.state?.caseInsensitiveCompare(Self.humanReviewState) == .orderedSame {
+                targetState = Self.todoState
+                happens = "Records your answer on \(id) as a reply to its request and moves \(id) to \(Self.todoState): the next run carries it out."
+                stays = "Your answer stays on the ticket as the recorded decision, even after Undo."
             } else {
                 targetState = nil
                 happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
