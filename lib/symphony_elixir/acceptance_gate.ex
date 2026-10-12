@@ -118,7 +118,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   plan parent or a `Final verification:` ticket, whose review stays with a person.
   """
   @spec enforces?(Issue.t(), Schema.t()) :: boolean()
-  def enforces?(%Issue{} = issue, %Schema{} = settings), do: mode(settings) == "enforce" and RunKind.classify(issue) not in @guarded_kinds
+  def enforces?(%Issue{} = issue, %Schema{} = settings), do: mode(settings) == "enforce" and RunKind.classify(issue, settings: settings) not in @guarded_kinds
 
   @doc """
   Where an enforced `verdict` moves `issue`, or nil when the verdict is advisory (see

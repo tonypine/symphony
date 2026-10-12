@@ -1726,7 +1726,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert %{state: "Auto Review"} = retry_post_pr_issue("issue-post-pr-auto-review", :PostPrAutoReviewOrchestrator, "Auto Review")
 
-    assert [%{name: "handoff", details: %{to: "Auto Review"}}] =
+    assert [%{name: "handoff", details: %{to: "Auto Review", move: true}}] =
              RunStore.get_ticket_state(Config.repo_key!(), "issue-post-pr-auto-review").signals
   end
 

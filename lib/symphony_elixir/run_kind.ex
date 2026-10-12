@@ -13,10 +13,14 @@ defmodule SymphonyElixir.RunKind do
        never-approved plan stopped midway, or one revising its plan from review comments.
     5. `landing`: the issue is in `Merging`.
     6. `rework`: the issue is in `Rework`.
-    7. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
-    8. `review_feedback`: the run continues after PR review comments
+    7. `code_review`: the issue is in the designed machine's `Code Review` state: the
+       poll-dispatched reviewer run, which judges the PR head and records a verdict. Only a
+       repo on the designed machine reaches this: a legacy repo whose Linear workflow happens
+       to have a `Code Review` column keeps classifying its runs as it did before.
+    8. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
+    9. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
-    9. `implementation`: everything else.
+    10. `implementation`: everything else.
 
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
@@ -27,6 +31,7 @@ defmodule SymphonyElixir.RunKind do
   """
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.StateMachine
 
   @type t ::
           :implementation
@@ -35,6 +40,7 @@ defmodule SymphonyElixir.RunKind do
           | :final_verification
           | :rework
           | :landing
+          | :code_review
           | :ci_fix
           | :review_feedback
           | :pre_push_review
@@ -54,6 +60,7 @@ defmodule SymphonyElixir.RunKind do
     :final_verification,
     :rework,
     :landing,
+    :code_review,
     :ci_fix,
     :review_feedback,
     :pre_push_review,
@@ -64,6 +71,7 @@ defmodule SymphonyElixir.RunKind do
   @final_verification_prefix "Final verification:"
   @landing_state "merging"
   @rework_state "rework"
+  @code_review_state "code review"
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 
   @doc "Every run kind, in documentation order."
@@ -102,6 +110,8 @@ defmodule SymphonyElixir.RunKind do
       (default: the `issues.states.terminal` default).
     * `:ci_failure` - the pending red CI context, or nil.
     * `:reviewer_comments` - the pending PR review comments, or `[]`.
+    * `:settings` - the repo's settings, used to tell a designed repo's `Code Review` state
+      from a legacy workflow that happens to name a state the same way.
   """
   @spec classify(Issue.t(), keyword()) :: t()
   def classify(%Issue{} = issue, signals \\ []) do
@@ -112,6 +122,7 @@ defmodule SymphonyElixir.RunKind do
       Issue.breakdown?(issue) -> parent_kind(issue, terminal_states)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
+      code_review?(issue, signals) -> :code_review
       present?(Keyword.get(signals, :ci_failure)) -> :ci_fix
       present?(Keyword.get(signals, :reviewer_comments)) -> :review_feedback
       true -> :implementation
@@ -120,6 +131,12 @@ defmodule SymphonyElixir.RunKind do
 
   defp parent_kind(issue, terminal_states) do
     if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue), do: :close_out, else: :breakdown
+  end
+
+  # Only a repo on the designed machine has a `Code Review` phase; a legacy repo whose workflow
+  # names a state the same way keeps the run kind it had before.
+  defp code_review?(issue, signals) do
+    StateMachine.designed?(Keyword.get(signals, :settings)) and in_state?(issue, @code_review_state)
   end
 
   defp final_verification?(%Issue{title: title}) when is_binary(title) do
