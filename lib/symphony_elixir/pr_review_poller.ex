@@ -92,7 +92,26 @@ defmodule SymphonyElixir.PrReviewPoller do
     {:ok, schedule_poll(state, 0)}
   end
 
+  @doc """
+  Polls now instead of waiting for the timer, which then restarts from this poll. The CI poller
+  calls it when a GitHub webhook says a PR merged, so `Merging` PRs that fell behind the base
+  branch are updated right away. A no-op when the poller isn't running.
+  """
+  @spec poll_now(GenServer.server()) :: :ok
+  def poll_now(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil ->
+        :ok
+
+      pid ->
+        send(pid, :poll_now)
+        :ok
+    end
+  end
+
   @impl true
+  def handle_info(:poll_now, %State{} = state), do: {:noreply, schedule_poll(state, 0)}
+
   def handle_info(:poll, %State{} = state) do
     {state, delay_ms} =
       case poll_cycle_result(state) do
