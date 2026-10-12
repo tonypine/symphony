@@ -195,9 +195,7 @@ defmodule SymphonyElixir.CodeReview do
   defp risky?(%Issue{} = issue, settings, result) do
     rules = settings.auto_review.acceptance_gate.escalate
 
-    issue
-    |> Map.put(:labels, issue.labels || [])
-    |> Escalation.check(diff_summary(result), [], rules)
+    Escalation.check(issue, diff_summary(result), [], rules)
     |> Enum.any?(&(&1.rule in @risk_rules))
   end
 
