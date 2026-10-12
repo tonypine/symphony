@@ -143,6 +143,7 @@ defmodule SymphonyElixir.AutoMerge do
     previous = Map.get(record, :auto_merge)
     head = Map.get(activity, :head_ref_oid)
     current = for_head(previous, head, now)
+    cancel_stale_runs(previous, head, record, activity, opts)
 
     result =
       cond do
@@ -432,6 +433,27 @@ defmodule SymphonyElixir.AutoMerge do
         {:ok, %{current | reason: "updating the branch failed: #{reason}"}}
     end
   end
+
+  # Update-branch moved the PR past the head it was asked for: CI still running on that head can
+  # never land, so cancel it rather than let it hold runners. Only once the head has moved, so the
+  # PR's own head never reads as cancelled.
+  defp cancel_stale_runs(%{state: "updating_branch", head_sha: stale, update_branch_head_sha: stale}, head, record, activity, opts)
+       when is_binary(stale) and is_binary(head) and head != stale do
+    github = Keyword.get(opts, :github, PullRequest)
+
+    case github.cancel_stale_runs(pr_url(record, activity), stale, cwd: Map.get(record, :workspace_path)) do
+      {:ok, []} ->
+        :ok
+
+      {:ok, run_ids} ->
+        Logger.info("Auto-merge #{identifier(record)}: cancelled CI run(s) #{Enum.join(run_ids, ", ")} on #{short_sha(stale)}, which update-branch replaced with #{short_sha(head)}")
+
+      {:error, reason} ->
+        Logger.warning("Auto-merge #{identifier(record)}: could not cancel the CI runs on #{short_sha(stale)} after update-branch commit_sha=#{stale}: #{format_reason(reason)}")
+    end
+  end
+
+  defp cancel_stale_runs(_previous, _head, _record, _activity, _opts), do: :ok
 
   # Auto-merge is on and the head is green, but GitHub still won't merge (for example a
   # required check that never reports). Past `ci.merging_wait_timeout_ms`, hand it to the

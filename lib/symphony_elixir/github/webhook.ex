@@ -20,7 +20,8 @@ defmodule SymphonyElixir.GitHub.Webhook do
           head_sha: String.t() | nil,
           conclusion: String.t() | nil,
           completed_at: DateTime.t() | nil,
-          pr_urls: [String.t()]
+          pr_urls: [String.t()],
+          merged: boolean()
         }
 
   @type delivery :: {:ci, ci_event()} | :ping | :ignored
@@ -73,7 +74,7 @@ defmodule SymphonyElixir.GitHub.Webhook do
 
   @doc """
   Reads a delivery: `{:ci, event}` when a check finished or a pull request's head changed or
-  closed, `:ping` when GitHub (re)connected the hook, and `:ignored` for anything else,
+  closed (`merged: true` when it closed by merging, which moves its base branch), `:ping` when GitHub (re)connected the hook, and `:ignored` for anything else,
   including event types left out of `github.webhooks.events`.
   """
   @spec parse(String.t() | nil, term(), [String.t()]) :: delivery()
@@ -105,7 +106,10 @@ defmodule SymphonyElixir.GitHub.Webhook do
   defp parse_event("pull_request", %{"action" => action, "pull_request" => %{} = pull_request})
        when action in ["synchronize", "closed", "reopened"] do
     head_sha = get_in(pull_request, ["head", "sha"])
-    ci_event("pull_request", action, head_sha, nil, nil, string_list([Map.get(pull_request, "html_url")]))
+
+    with {:ci, event} <- ci_event("pull_request", action, head_sha, nil, nil, string_list([Map.get(pull_request, "html_url")])) do
+      {:ci, %{event | merged: action == "closed" and Map.get(pull_request, "merged") == true}}
+    end
   end
 
   defp parse_event(_event, _payload), do: :ignored
@@ -120,7 +124,8 @@ defmodule SymphonyElixir.GitHub.Webhook do
        head_sha: if(is_binary(head_sha), do: head_sha),
        conclusion: normalize_id(conclusion),
        completed_at: completed_at,
-       pr_urls: pr_urls
+       pr_urls: pr_urls,
+       merged: false
      }}
   end
 

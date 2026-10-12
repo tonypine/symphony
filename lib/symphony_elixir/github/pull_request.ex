@@ -439,6 +439,38 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @unfinished_run_statuses ["queued", "in_progress", "waiting", "requested", "pending"]
+
+  @doc """
+  Cancels the workflow runs still queued or in progress on `head_sha` in the PR's repository, and
+  returns the ids it cancelled. Auto-merge calls it once update-branch has moved the PR past
+  that head: CI on a head that can no longer merge only holds a runner.
+  """
+  @spec cancel_stale_runs(String.t(), String.t(), keyword()) :: {:ok, [integer()]} | {:error, term()}
+  def cancel_stale_runs(pr_url, head_sha, opts \\ []) when is_binary(pr_url) and is_binary(head_sha) do
+    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{repo}/actions/runs?head_sha=#{head_sha}&per_page=100"), opts),
+         {:ok, %{"workflow_runs" => runs}} when is_list(runs) <- Jason.decode(output) do
+      runs
+      |> Enum.filter(&(is_integer(&1["id"]) and &1["status"] in @unfinished_run_statuses))
+      |> Enum.map(& &1["id"])
+      |> cancel_runs(host, owner, repo, opts)
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :invalid_workflow_runs_payload}
+    end
+  end
+
+  defp cancel_runs(run_ids, host, owner, repo, opts) do
+    Enum.reduce_while(run_ids, {:ok, []}, fn run_id, {:ok, cancelled} ->
+      case run_gh(github_api_args(host, "repos/#{owner}/#{repo}/actions/runs/#{run_id}/cancel") ++ ["--method", "POST"], opts) do
+        {:ok, _output} -> {:cont, {:ok, cancelled ++ [run_id]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
   defp squash_mutation(pr_url, mutation, request, opts) do
     with {:ok, host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
          {:ok, _output} <- run_gh(github_api_args(host, "graphql") ++ squash_mutation_fields(mutation, request), opts) do

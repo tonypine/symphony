@@ -378,6 +378,19 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     {:ok, audit_dir: audit_root}
   end
 
+  test "poll_now wakes a running poller, which polls at once, and is a no-op without one" do
+    assert PrReviewPoller.poll_now(:pr_review_poller_not_running) == :ok
+
+    Process.register(self(), :pr_review_poller_poll_now_test)
+    assert PrReviewPoller.poll_now(:pr_review_poller_poll_now_test) == :ok
+    assert_receive :poll_now
+    Process.unregister(:pr_review_poller_poll_now_test)
+
+    state = %PrReviewPoller.State{poll_interval_ms: 3_600_000}
+    assert {:noreply, %PrReviewPoller.State{}} = PrReviewPoller.handle_info(:poll_now, state)
+    assert_receive :poll, 1_000
+  end
+
   test "discovers in-review PRs and persists workspace tracking metadata" do
     now = ~U[2026-05-01 09:00:00Z]
     issue = in_review_issue(updated_at: now)

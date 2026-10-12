@@ -6,6 +6,11 @@ suite, check run or workflow run finishes, or when a pull request's head moves o
 CI poller then polls that PR's repository at once, so a green head lands, or a red one goes to the
 fix run, within seconds.
 
+A pull request that closes by merging also moves its base branch, so every other PR on it falls
+behind. That delivery makes the PR poller poll at once too: a `Merging` PR that is now `BEHIND`
+gets its update-branch in seconds, and once its head moves, the CI runs still going on the old head
+are cancelled, since that head can never merge.
+
 Webhooks only speed up polling. The timed poll keeps running and catches up on any delivery lost
 while the Mac sleeps, Symphony restarts or the relay drops.
 

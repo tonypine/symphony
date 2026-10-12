@@ -12,7 +12,7 @@ defmodule SymphonyElixir.CiPoller do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.Agreement
-  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiFix, CiState, Config}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiFix, CiState, Config, PrReviewPoller}
   alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
@@ -134,7 +134,7 @@ defmodule SymphonyElixir.CiPoller do
       # GitHub pings a hook when it is created, which `gh webhook forward` does on every start:
       # poll everything now to catch up on events missed while the relay was away.
       :ping -> {:noreply, schedule_poll(state, 0)}
-      {:ci, event} -> {:noreply, apply_webhook_ci_state(event, state) |> queue_webhook_poll(event)}
+      {:ci, event} -> {:noreply, handle_ci_delivery(state, event)}
       _ignored -> {:noreply, state}
     end
   end
@@ -183,6 +183,20 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  defp handle_ci_delivery(%State{} = state, event) do
+    state |> base_moved(event) |> apply_webhook_ci_state(event) |> queue_webhook_poll(event)
+  end
+
+  # A merged PR moved its base branch, so every other PR on it is now behind. The PR poller polls
+  # now instead of on its timer: a `Merging` PR gets its update-branch (and its CI on the stale
+  # head cancelled) in seconds, rather than finishing a CI run that can never land.
+  defp base_moved(%State{} = state, %{merged: true}) do
+    Keyword.get(state.opts, :on_base_moved, &PrReviewPoller.poll_now/0).()
+    state
+  end
+
+  defp base_moved(%State{} = state, _event), do: state
+
   # Only deliveries about a PR the poller already watches run a poll; the timed poll discovers
   # new ones.
   defp webhook_repo_keys(event, opts) do
@@ -205,7 +219,7 @@ defmodule SymphonyElixir.CiPoller do
   # a red head or a new head moves the board without waiting for the poll (`SymphonyElixir.CiState`).
   # A passing check names no state of its own — only the poll's rollup read calls a head green — and
   # a delivery for a head the record has already moved past is left to the poll.
-  defp apply_webhook_ci_state(event, %State{} = state) do
+  defp apply_webhook_ci_state(%State{} = state, event) do
     status = Webhook.ci_status(event)
     at = webhook_at(event)
 

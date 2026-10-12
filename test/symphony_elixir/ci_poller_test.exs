@@ -2839,6 +2839,16 @@ defmodule SymphonyElixir.CiPollerTest do
       assert %{ci_states: [%{head_sha: "abc123", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-2401")
     end
 
+    test "a merged PR asks the PR poller to poll now; any other delivery does not", %{name: name} do
+      start_webhook_poller(name, on_base_moved: fn -> send(self_pid(), :base_moved) end)
+
+      deliver_webhook("pull_request", pull_request_closed(), 202)
+      refute_receive :base_moved, 100
+
+      deliver_webhook("pull_request", put_in(pull_request_closed(), ["pull_request", "merged"], true), 202)
+      assert_receive :base_moved, 5_000
+    end
+
     test "closing a PR clears the CI labels and leaves the recorded state", %{name: name} do
       issue = in_review_issue()
       Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
