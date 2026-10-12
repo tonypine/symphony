@@ -16,7 +16,10 @@ defmodule SymphonyElixir.DirectorMoves do
     Human Review state first moves to `In Review`, so the comment, posted after the move, starts
     Symphony's plan revision run (`SymphonyElixir.PlanComments`);
   - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
-  - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`.
+  - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
+  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
+    cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
+    clears on its own, so it is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
@@ -42,6 +45,7 @@ defmodule SymphonyElixir.DirectorMoves do
     AuditLog,
     BreakdownReview,
     Config,
+    Hold,
     HumanReview,
     Orchestrator,
     RunKind,
@@ -63,7 +67,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @backlog_state "Backlog"
   @comment_preview_chars 500
 
-  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog
+  @type move :: :approve_plan | :approve_pr | :rework | :decisions | :sign_off | :backlog | :unblock
   @type pick :: %{question: String.t(), answer: String.t()}
   @type input :: %{
           optional(:reason) => String.t() | nil,
@@ -74,12 +78,13 @@ defmodule SymphonyElixir.DirectorMoves do
           {:invalid, String.t()}
           | {:conflict, String.t()}
           | {:github, String.t()}
+          | {:store, String.t()}
           | :issue_not_found
           | {:linear, term()}
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog]
+  @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock]
 
   @spec start_link(keyword()) :: Agent.on_start()
   def start_link(opts \\ []) do
@@ -99,18 +104,26 @@ defmodule SymphonyElixir.DirectorMoves do
   `:reason` (required), the backlog `:note` (optional) or the decisions' `:picks` (required).
 
   Options: `:server` (the Agent, default this module), `:clock` (monotonic milliseconds, for the undo
-  window) and `:orchestrator` (asked to poll again after the move, default `SymphonyElixir.Orchestrator`).
+  window), `:orchestrator` (asked to poll again after the move, default `SymphonyElixir.Orchestrator`)
+  and `:store` (the run store read and written, default `SymphonyElixir.RunStore`).
   """
   @spec move(move(), String.t(), input(), keyword()) :: result()
   def move(move, identifier, input, opts \\ []) when move in @moves and is_binary(identifier) and is_map(input) do
     with :ok <- validate_input(move, input),
          {:ok, issue} <- fetch_issue(identifier) do
-      settings = Config.settings!()
+      do_move(move, issue, input, opts)
+    end
+  end
 
-      with {:ok, to_state} <- target(move, issue, settings),
-           {:ok, comment} <- apply_move(move, issue, to_state, input, opts) do
-        finish(move, issue, to_state, comment, opts)
-      end
+  # Unblock is not a Linear move: it lifts an access hold in place, so no state is resolved.
+  defp do_move(:unblock, issue, _input, opts), do: unblock(issue, opts)
+
+  defp do_move(move, issue, input, opts) do
+    settings = Config.settings!()
+
+    with {:ok, to_state} <- target(move, issue, settings),
+         {:ok, comment} <- apply_move(move, issue, to_state, input, opts) do
+      finish(move, issue, to_state, comment, opts)
     end
   end
 
@@ -166,6 +179,11 @@ defmodule SymphonyElixir.DirectorMoves do
   @doc "The comment `:backlog` posts with the Director's note."
   @spec backlog_comment(String.t()) :: String.t()
   def backlog_comment(note) when is_binary(note), do: "Moved to Backlog by the Director:\n\n#{note}"
+
+  @doc "The comment `:unblock` posts: the access hold is cleared and the ticket continues in place."
+  @spec unblock_comment(String.t()) :: String.t()
+  def unblock_comment(identifier) when is_binary(identifier),
+    do: "Unblocked by the Director: #{identifier} continues in place."
 
   defp validate_input(:rework, input) do
     if present?(input[:reason]), do: :ok, else: {:error, {:invalid, "reason is required"}}
@@ -291,6 +309,44 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
 
+  # Unblock lifts an access hold in place: the store hold is cleared through `Hold` (the store
+  # first, then the `Blocked` label), so the ticket keeps its phase and the next poll dispatches it
+  # again. A hold waiting on anything else clears on its own, so it is refused.
+  defp unblock(%Issue{} = issue, opts) do
+    if issue |> access_hold(opts) |> Hold.access_wait?(),
+      do: clear_access_hold(issue, opts),
+      else: access_conflict(issue)
+  end
+
+  defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} is not waiting on an access hold"}}
+
+  defp clear_access_hold(issue, opts) do
+    comment = unblock_comment(issue.identifier)
+
+    case Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts)) do
+      :ok ->
+        TicketSignals.record(issue.repo_key, issue.id, "unblocked", %{by: "the Director"})
+        post_unblock_comment(issue, comment, opts)
+
+      {:error, reason} ->
+        {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
+    end
+  end
+
+  # The hold is already cleared, so a comment Linear refuses is reported and does not undo it.
+  defp post_unblock_comment(issue, comment, opts) do
+    case post_comment(issue, comment) do
+      :ok ->
+        :ok
+
+      {:error, {:linear, reason}} ->
+        Logger.warning("Unblocked #{issue.identifier} but Linear refused the comment: #{inspect(reason)}")
+        :ok
+    end
+
+    finish(:unblock, issue, nil, comment, opts)
+  end
+
   defp comment_then_move(move, issue, comment, to_state, opts) do
     with :ok <- maybe_post_comment(issue, comment, opts) do
       case update_state(issue, to_state, move) do
@@ -350,6 +406,12 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp maybe_update_state(_issue, nil, _move), do: :ok
   defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
+
+  # The Blocked hold in the store — the truth, whatever the board shows. Only a designed repo ever
+  # records one, so a legacy ticket always has none here.
+  defp access_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
+
+  defp store_opts(opts), do: Keyword.take(opts, [:store])
 
   defp update_state(issue, to_state, move) do
     case TransitionGuard.perform(issue.id, :director_move, %{target: to_state, repo_key: Map.get(issue, :repo_key)}) do

@@ -387,6 +387,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
     on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
 
+    # The startup poll would stop runs the memory tracker does not list, so let it finish before
+    # injecting the run below.
+    wait_for_poll_cycle_idle(pid)
+
     {worker_pid, worker_ref} = start_blocked_worker()
     on_exit(fn -> send(worker_pid, :finish) end)
     started_at = DateTime.utc_now()

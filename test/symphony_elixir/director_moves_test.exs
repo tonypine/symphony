@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, DirectorMoves, PlanComments, PrReviewPoller, RunStore, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, DirectorMoves, Hold, PlanComments, PrReviewPoller, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -23,6 +23,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defmodule CannedLinearClient do
     def fetch_issue_by_identifier(_identifier), do: Application.fetch_env!(:symphony_elixir, :director_moves_test_fetch)
+  end
+
+  defmodule UnwritableStore do
+    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
   end
 
   setup do
@@ -291,6 +296,71 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "unblock" do
+    test "clears an access hold in place and posts its comment", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+
+      :ok =
+        Hold.set("repo-director", "pr", :blocked, %{
+          reason: "the run reported a block",
+          clearing_condition: "when the block is resolved; a person clears an access hold",
+          waits_on: %{type: "access", keys: []}
+        })
+
+      assert {:ok, result} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      assert result == %{
+               move: "unblock",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "In Progress",
+               to_state: "In Progress",
+               moved: false,
+               commented: true,
+               undo_window_ms: nil
+             }
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      refute_received {:memory_tracker_state_update, _id, _state}
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+      assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "refuses a ticket with no hold, and one waiting on something other than access", %{opts: opts} do
+      put_issues([pr("In Progress")])
+      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "waiting on MOT-1", waits_on: %{type: "dependency", keys: ["MOT-1"]}})
+
+      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert Hold.held?("repo-director", "pr", :blocked)
+      refute_received {:memory_tracker_comment, _id, _body}
+    end
+
+    test "the hold is cleared even when Linear refuses the comment", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{waits_on: %{type: "access"}})
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :comment_failed})
+
+      log = capture_log(fn -> assert {:ok, %{commented: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts) end)
+
+      assert log =~ "but Linear refused the comment"
+      refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
+    test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{waits_on: %{type: "access"}})
+
+      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
+               DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore))
+
+      assert Hold.held?("repo-director", "pr", :blocked)
+    end
+  end
+
   describe "errors" do
     test "an unknown ticket is not found", %{opts: opts} do
       put_issues([])
@@ -477,7 +547,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog]
+    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 

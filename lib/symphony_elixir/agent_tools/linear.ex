@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
@@ -26,6 +27,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.SupervisorCheck
+  alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
 
   @comment_limit_default 50
@@ -209,6 +211,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
         nodes {
           url
         }
+      }
+      state {
+        name
+        type
       }
       team {
         states {
@@ -676,13 +682,42 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, run_handoff(context), opts),
-         {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
-      check_mutation_success(response, "issueUpdate")
+         result <- resolve_state_id(issue_id, state_name_or_id, run_handoff(context), opts) do
+      case result do
+        {:ok, {:state, state_id}} -> apply_state(issue_id, state_id, opts)
+        {:hold, kind, attrs} -> apply_hold(context, issue_id, kind, attrs, opts)
+        {:error, _reason} = error -> error
+      end
     end
   end
 
   def update_state(_context, _state_name_or_id, _opts), do: {:error, :invalid_state}
+
+  defp apply_state(issue_id, state_id, opts) do
+    with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
+      check_mutation_success(response, "issueUpdate")
+    end
+  end
+
+  # A designed repo retired the Backlog escape hatch: the guard turned the request into a Blocked
+  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
+  # hold lifts on its own; the access hold this reports is lifted by a person's `Unblock` (or by the
+  # self-heal fix ticket). The agent did not move the issue.
+  defp apply_hold(context, issue_id, kind, attrs, opts) do
+    with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
+      {:ok,
+       %{
+         "held" => true,
+         "hold" => Hold.label(kind),
+         "reason" => Map.get(attrs, :reason),
+         "clearing_condition" => Map.get(attrs, :clearing_condition),
+         "message" =>
+           "The issue stays in its current state with the `#{Hold.label(kind)}` label. " <>
+             "Symphony lifts a hold when what it waits on clears, and a person lifts an access " <>
+             "hold with Unblock; do not move the issue yourself."
+       }}
+    end
+  end
 
   # What the run did so far that changes where its issue may go.
   defp run_handoff(context) do
@@ -904,7 +939,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, children} <- fetch_path(parent, ["children", "nodes"], []),
          {:ok, child} <- backlog_child(children, identifier) do
-      apply_subissue_change(parent, children, child, change, opts)
+      apply_subissue_change(parent, children, child, change, issue_repo_key(context), opts)
     end
   end
 
@@ -959,17 +994,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp apply_subissue_change(parent, _children, child, %{cancel_reason: reason}, opts) do
-    with {:ok, state_id} <- canceled_state_id(get_in(parent, ["team", "states", "nodes"]) || []),
+  defp apply_subissue_change(parent, _children, child, %{cancel_reason: reason}, repo_key, opts) do
+    with {:ok, canceled} <- canceled_state(get_in(parent, ["team", "states", "nodes"]) || []),
          {:ok, response} <- graphql(@add_comment_mutation, %{issueId: child["id"], body: reason}, opts),
          {:ok, _response} <- check_mutation_success(response, "commentCreate"),
-         {:ok, response} <- graphql(@update_subissue_mutation, %{id: child["id"], input: %{"stateId" => state_id}}, opts),
-         {:ok, _response} <- check_mutation_success(response, "issueUpdate") do
+         ctx = %{target: canceled, repo_key: repo_key},
+         :ok <- TransitionGuard.perform(child["id"], :breakdown_cancel, ctx, tracker: tracker(opts)) do
       {:ok, %{"identifier" => child["identifier"], "canceled" => true}}
     end
   end
 
-  defp apply_subissue_change(_parent, children, child, change, opts) do
+  defp apply_subissue_change(_parent, children, child, change, _repo_key, opts) do
     input = change |> Map.take([:title, :description]) |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
 
     with :ok <- update_subissue_fields(child, input, opts),
@@ -1036,13 +1071,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end)
   end
 
-  defp canceled_state_id(states) do
+  # The name of the team's canceled state: the state `:breakdown_cancel` resolves to for a Backlog
+  # sub-issue, found by name first and then by type.
+  defp canceled_state(states) do
     state =
       Enum.find(states, &(state_name_matches?(&1, "Canceled") or state_name_matches?(&1, "Cancelled"))) ||
         Enum.find(states, &(&1["type"] == "canceled"))
 
     case state do
-      %{"id" => state_id} -> {:ok, state_id}
+      %{"name" => name} -> {:ok, name}
       _ -> {:error, {:canceled_state_not_found, states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)}}
     end
   end
@@ -1276,7 +1313,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
       open = open_request_titled(issue, request.title, settings)
 
-      with {:ok, state} <- move_issue(issue, target, opts),
+      with {:ok, state} <- move_issue(issue, target, :human_action_request, settings, opts),
            {:ok, result} <- post_request(issue, open, request, target, opts) do
         {:ok, Map.put(result, "state", state)}
       end
@@ -1299,9 +1336,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  # Moves the issue to the team state named `target`, unless it is there already. Returns the
-  # state's name.
-  defp move_issue(issue, target, opts) do
+  # Moves the issue to the team state named `target`, unless it is there already. The write goes
+  # through `TransitionGuard.perform/4` for `signal`, so the guard stays the one writer for ticket
+  # state moves. Returns the state's name.
+  defp move_issue(issue, target, signal, settings, opts) do
     states = get_in(issue, ["team", "states", "nodes"]) || []
 
     cond do
@@ -1309,8 +1347,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
         {:ok, target}
 
       state = Enum.find(states, &state_name_matches?(&1, target)) ->
-        with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue["id"], stateId: state["id"]}, opts),
-             {:ok, _response} <- check_mutation_success(response, "issueUpdate") do
+        ctx = %{target: state["name"], settings: settings}
+
+        with :ok <- TransitionGuard.perform(issue["id"], signal, ctx, tracker: tracker(opts)) do
           {:ok, state["name"]}
         end
 
@@ -1318,6 +1357,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
         {:error, {:state_not_found, Enum.map(states, & &1["name"])}}
     end
   end
+
+  # The tracker `TransitionGuard.perform/4` writes through. Tests inject a spy; the run uses the
+  # repo's configured tracker.
+  defp tracker(opts), do: Keyword.get(opts, :tracker, Tracker)
 
   @doc """
   Withdraws open human-action requests on the current issue that are no longer needed: replies
@@ -1401,7 +1444,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp release_issue(issue, [], settings, opts) do
     with :ok <- remove_legacy_request_labels(issue, settings, opts) do
       if HumanReview.in_state?(get_in(issue, ["state", "name"]), settings),
-        do: move_issue(issue, return_state(issue, settings), opts),
+        do: move_issue(issue, return_state(issue, settings), :human_action_release, settings, opts),
         else: {:ok, get_in(issue, ["state", "name"])}
     end
   end
@@ -1790,17 +1833,26 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
-           pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff),
-           {:ok, state} <-
-             TransitionGuard.resolve_request(state, %{
-               settings: settings,
-               states: states,
-               pr_less?: pr_less?,
-               needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
-             }) do
-        {:ok, state["id"]}
+      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts) do
+        pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff)
+        guard_state(state, settings, states, issue, pr_less?, handoff)
       end
+    end
+  end
+
+  # The guard's answer decides what the tool does: a state the issue moves to, a hold that pauses it
+  # in place, or the refusal the tool passes back.
+  defp guard_state(state, settings, states, issue, pr_less?, handoff) do
+    case TransitionGuard.resolve_request(state, %{
+           settings: settings,
+           states: states,
+           from_state: get_in(issue, ["state", "name"]),
+           pr_less?: pr_less?,
+           needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
+         }) do
+      {:ok, resolved} -> {:ok, {:state, resolved["id"]}}
+      {:hold, _kind, _attrs} = hold -> hold
+      {:error, _reason} = error -> error
     end
   end
 

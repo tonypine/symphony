@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Orchestrator do
     AuditLog,
     AutoMerge,
     AutoReview,
+    BlockedHold,
     BreakdownReview,
     BuildInfo,
     CiPoller,
@@ -22,6 +23,7 @@ defmodule SymphonyElixir.Orchestrator do
     ForcedQueue,
     ForcedStatus,
     Handoff,
+    Hold,
     HumanReview,
     Notifications,
     PlanComments,
@@ -1297,11 +1299,25 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that
   # `UpdateHold.hold/4` needs. Tickets of repos not polled this cycle were looked up when they were.
-  defp resolve_update_holds({_repo_name, {:ok, issues}}, cache) when is_list(issues) do
-    UpdateHold.resolve(issues, BuildInfo.current(), cache, Config.settings!().tracker.terminal_states, [])
+  defp resolve_update_holds({repo_name, {:ok, issues}}, cache) when is_list(issues) do
+    terminal_states = Config.settings!().tracker.terminal_states
+    sweep_blocked_holds(repo_name, issues, terminal_states)
+    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, [])
   end
 
   defp resolve_update_holds(_repo_result, cache), do: cache
+
+  # Runs in the poll task: reconciles each polled issue's Blocked hold against its blockers — a
+  # designed repo's Todo ticket with an open blocker gains the hold (and pauses), and one whose
+  # blockers all went terminal loses it and dispatches, with no state move and no person involved.
+  # `BlockedHold.sync/3` skips a repo that is not on the designed machine, so legacy repos are
+  # untouched. Resolving the repo's settings once here keeps it off the per-issue config read.
+  defp sweep_blocked_holds(repo_name, issues, terminal_states) do
+    case Config.settings_for_repo(repo_name) do
+      {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings)
+      {:error, _reason} -> 0
+    end
+  end
 
   defp apply_repo_poll_task_result(
          %State{} = state,
@@ -1803,6 +1819,12 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec put_blocked_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_blocked_for_test(%State{} = state, issues) when is_list(issues), do: put_blocked(state, issues)
+
+  @doc false
+  @spec sweep_blocked_holds_for_test(String.t(), [Issue.t()], [String.t()]) :: non_neg_integer()
+  def sweep_blocked_holds_for_test(repo_name, issues, terminal_states) when is_list(issues) do
+    sweep_blocked_holds(repo_name, issues, terminal_states)
+  end
 
   @doc false
   @spec review_breakdown_parents_for_test([Issue.t()], term(), keyword()) :: term()
@@ -4248,10 +4270,16 @@ defmodule SymphonyElixir.Orchestrator do
   # again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
     Issue.blocked?(issue, terminal_states) or
+      blocked_hold?(issue) or
       (not Issue.replanning?(issue) and
          (Issue.waiting_on_sub_issues?(issue, terminal_states) or
             SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
+
+  # A Blocked hold pauses the ticket in its phase — an agent reported a block, or the poll sweep set
+  # a dependency hold. The store is the truth; the board label is only its projection. A legacy
+  # repo never records a hold, so this is false there and dispatch is unaffected.
+  defp blocked_hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held?(repo_key, issue_id, :blocked)
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))

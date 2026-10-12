@@ -4,8 +4,13 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{DirectorMoves, SubIssueWait}
+  alias SymphonyElixir.{DirectorMoves, Hold, SubIssueWait}
   alias SymphonyElixirWeb.ControlApiController
+
+  defmodule UnwritableStore do
+    def get_ticket_state(repo_key, issue_id), do: SymphonyElixir.RunStore.get_ticket_state(repo_key, issue_id)
+    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
+  end
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
@@ -38,6 +43,30 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       assert %{"move" => move, "issue_identifier" => ^identifier, "to_state" => ^to_state} = Jason.decode!(conn.resp_body)
       assert move == Atom.to_string(action)
     end
+  end
+
+  test "unblock clears an access hold in place, and refuses one that isn't an access hold", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+    :ok = Hold.set("repo-api", "held", :blocked, %{waits_on: %{type: "access"}})
+
+    conn = post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)
+
+    assert conn.status == 200
+    assert %{"move" => "unblock", "moved" => false, "from_state" => "In Progress", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
+    refute Hold.held?("repo-api", "held", :blocked)
+
+    assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)) ==
+             {409, "move_not_allowed", "MOT-60 is not waiting on an access hold"}
+  end
+
+  test "a hold the store refuses to clear is a 502", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+    :ok = Hold.set("repo-api", "held", :blocked, %{waits_on: %{type: "access"}})
+
+    assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, [store: UnwritableStore] ++ moves)) ==
+             {502, "store_error", "couldn't clear the hold on MOT-60: :boom"}
   end
 
   test "undo takes the last move back", %{moves: moves} do
@@ -77,7 +106,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   test "a missing identifier, reason or picks is a 422", %{moves: moves} do
-    for action <- [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :undo] do
+    for action <- [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :undo] do
       assert error(post(action, %{"issue_identifier" => " "}, moves)) == {422, "invalid_request", "issue_identifier is required"}
     end
 

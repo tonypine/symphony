@@ -429,6 +429,35 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_issue_id} = RunStore.record_ticket_verdict(@repo_key, nil, "qa", nil, "pass")
   end
 
+  test "sets and clears a ticket hold, creating the record when the issue has none" do
+    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+
+    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "waiting on TP-1"})
+
+    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-1", waits_on: nil}]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "waiting on TP-2"})
+    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-2"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-2"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-1", :blocked)
+    assert %{holds: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # An issue with no record has no hold to clear, and clearing one does not create the record.
+    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-missing", :blocked)
+    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+  end
+
+  test "rejects ticket hold writes without a repo_key or issue_id" do
+    assert {:error, :invalid_issue_id} = RunStore.set_ticket_hold(@repo_key, nil, :blocked, %{})
+    assert {:error, :invalid_issue_id} = RunStore.clear_ticket_hold(@repo_key, nil, :blocked)
+    assert {:error, :invalid_repo_key} = RunStore.set_ticket_hold(nil, "issue-1", :blocked, %{})
+    assert {:error, :invalid_repo_key} = RunStore.clear_ticket_hold(nil, "issue-1", :blocked)
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 

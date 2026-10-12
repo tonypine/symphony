@@ -156,6 +156,38 @@ defmodule SymphonyElixir.TicketStateTest do
       record = TicketState.clear_hold(TicketState.new("repo-a", "issue-1"), :needs_decision, @at)
       assert record.holds == []
     end
+
+    test "a hold records what it waits on, and get_hold/2 reads it back" do
+      record =
+        TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{
+          reason: "waiting on TP-1",
+          waits_on: %{type: " dependency ", keys: [" TP-1 ", nil, 5]}
+        })
+
+      assert [%{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-1"]}}] = record.holds
+      assert %{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-1"]}} = TicketState.get_hold(record, :blocked)
+      assert TicketState.get_hold(record, :needs_decision) == nil
+    end
+
+    test "a malformed waits_on is dropped to nil" do
+      blank_type = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "  "}})
+      assert [%{waits_on: nil}] = blank_type.holds
+
+      not_a_map = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: "nope"})
+      assert [%{waits_on: nil}] = not_a_map.holds
+
+      no_keys = TicketState.set_hold(TicketState.new("repo-a", "issue-1"), :blocked, %{waits_on: %{type: "access", keys: "nope"}})
+      assert [%{waits_on: %{type: "access", keys: []}}] = no_keys.holds
+    end
+
+    test "a stored record keeps its waits_on through normalization" do
+      record =
+        TicketState.new("repo-a", "issue-1")
+        |> TicketState.set_hold(:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-900"]}})
+        |> TicketState.normalize()
+
+      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-900"]}} = TicketState.get_hold(record, :blocked)
+    end
   end
 
   describe "record_verdict/5" do

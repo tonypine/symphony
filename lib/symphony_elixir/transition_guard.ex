@@ -4,9 +4,10 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Every Linear state move routes through this module. The machine's own moves — the orchestrator,
   the CI and PR review pollers, the Auto Review machinery, the runner, the Director app, the
-  workpad bootstrap — are performed by `perform/4`, the only caller of
-  `Tracker.update_issue_state/2`. An agent's request to set a state (the Linear tool) is validated
-  by `resolve_request/2`, which applies the machine's refusals and redirects and returns the same
+  workpad bootstrap, the Linear tool's human-action request and withdrawal, and its sub-issue
+  cancel — are performed by `perform/4`, the only caller of `Tracker.update_issue_state/2`. An
+  agent's request to set a state (the Linear tool's `update_state`) is validated by
+  `resolve_request/2`, which applies the machine's refusals and redirects and returns the same
   `{:error, reason}` tuples as before, so the existing `refused_agent_action` audit path is
   unchanged.
 
@@ -33,6 +34,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
   @in_review_state "In Review"
   @merging_state "Merging"
+  @backlog_state "Backlog"
 
   @typedoc "A named transition the machine can perform."
   @type signal :: atom()
@@ -77,6 +79,10 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :dependency_review, from: ["In Progress"], to: "In Review"},
     # A Todo ticket whose dependencies need a person waits in In Review.
     %{signal: :dependency_hold, from: ["Todo"], to: "In Review"},
+    # The Linear tool records an `## Action needed:` request: the issue waits in the human review state.
+    %{signal: :human_action_request, from: :any, to: :requested},
+    # Withdrawing the last open request: the issue goes back to the active state it came from.
+    %{signal: :human_action_release, from: :any, to: :requested},
     # A green fix run with nothing to push returns the issue to Merging.
     %{signal: :merge_ready, from: ["Rework", "In Progress"], to: "Merging"},
     # An idle run is parked in Backlog.
@@ -178,26 +184,65 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Validates an agent's request to set the state `state` (its resolved Linear state map). Applies
   the machine's refusals and redirects in the same order as before — the Auto Review handoff
-  refusal, the Human Review redirect, the human-only refusal, then the waiting-state refusal — and
-  returns `{:ok, state}` (the state to set, after any redirect) or `{:error, reason}` with the same
-  tuple the tool returned before.
+  refusal, the Human Review redirect, the human-only refusal, the Code Review entry refusal, then
+  the waiting-state refusal — and returns `{:ok, state}` (the state to set, after any redirect) or
+  `{:error, reason}` with the same tuple the tool returned before. On a repo running the designed
+  machine, an agent asking to enter `Code Review` by hand is refused: the state is the handoff
+  signal's to enter, never the tool's.
 
-  `ctx` carries `:settings`, `:states` (the team's states, for the redirect), `:pr_less?` (a plan
-  parent or a `Final verification:` ticket opens no PR), and `:needs_person?` (the ticket's own
-  rule says a person reviews it, or the run asked for a person).
+  On a repo running the designed machine, an agent asking to park its issue in `Backlog` while it
+  is `In Progress` or `Rework` is not a move: the guard returns `{:hold, :blocked, attrs}`, which
+  pauses the ticket in its phase with a recorded reason instead of moving it (the Backlog escape
+  hatch is retired there). Every other request, and every legacy repo, returns `{:ok, state}` or
+  `{:error, reason}` as before.
+
+  `ctx` carries `:settings`, `:states` (the team's states, for the redirect), `:from_state` (the
+  issue's current state), `:pr_less?` (a plan parent or a `Final verification:` ticket opens no
+  PR), and `:needs_person?` (the ticket's own rule says a person reviews it, or the run asked for a
+  person).
   """
-  @spec resolve_request(map(), context()) :: {:ok, map()} | {:error, term()}
+  @spec resolve_request(map(), context()) ::
+          {:ok, map()} | {:hold, :blocked | :needs_decision, map()} | {:error, term()}
   def resolve_request(%{"name" => state_name} = state, ctx) do
     settings = Map.fetch!(ctx, :settings)
 
-    with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
-         state = redirect_state(state, ctx, settings),
-         :ok <- refuse_human_only(state),
-         :ok <- refuse_code_review_entry(state, settings),
-         :ok <- refuse_waiting_state(state, settings) do
-      {:ok, state}
+    case hold_request(state_name, ctx, settings) do
+      {:hold, kind, attrs} ->
+        {:hold, kind, attrs}
+
+      :not_a_hold ->
+        with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
+             state = redirect_state(state, ctx, settings),
+             :ok <- refuse_human_only(state),
+             :ok <- refuse_code_review_entry(state, settings),
+             :ok <- refuse_waiting_state(state, settings) do
+          {:ok, state}
+        end
     end
   end
+
+  # On a designed repo the Backlog escape hatch is retired: an agent asking to park an issue it is
+  # working in Backlog has hit a block, so the guard turns the request into a Blocked hold instead
+  # of a state move — the ticket keeps its phase. Every other request, and every legacy repo, is
+  # not a hold.
+  defp hold_request(state_name, ctx, settings) do
+    if StateMachine.designed?(settings) and state_name_matches?(state_name, @backlog_state) and
+         running_phase?(Map.get(ctx, :from_state)) do
+      {:hold, :blocked,
+       %{
+         reason: "the run reported a block",
+         clearing_condition: "when the block is resolved; a person clears an access hold",
+         waits_on: %{type: "access", keys: []}
+       }}
+    else
+      :not_a_hold
+    end
+  end
+
+  defp running_phase?(from) when is_binary(from),
+    do: state_name_matches?(from, "In Progress") or state_name_matches?(from, "Rework")
+
+  defp running_phase?(_from), do: false
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an agent asking for
   # `In Review` or the Human Review state is refused rather than silently redirected. A `breakdown`
