@@ -658,6 +658,36 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
     end
 
+    test "answers a request that parked the ticket in Human Review with no hold, then moves it to Todo", %{opts: opts} do
+      # A legacy repo's request, and one made before the repo moved to the designed machine.
+      for issue <- [pr("Human Review"), %{pr("Human Review") | repo_key: "repo-director"}] do
+        put_issues([issue])
+
+        assert {:ok, %{moved: true, from_state: "Human Review", to_state: "Todo"}} =
+                 DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+
+        assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+        assert_received {:memory_tracker_state_update, "pr", "Todo"}
+      end
+
+      put_issues([pr("Human Review")])
+
+      assert {:ok, %{to_state: "Rework"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
+
+      assert_received {:memory_tracker_state_update, "pr", "Rework"}
+    end
+
+    test "a reply Linear refuses on a parked request moves nothing", %{opts: opts} do
+      put_issues([pr("Human Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :reply_failed})
+
+      assert {:error, {:linear, :reply_failed}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
+
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
     test "a reply Linear refuses leaves the hold in place", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()
