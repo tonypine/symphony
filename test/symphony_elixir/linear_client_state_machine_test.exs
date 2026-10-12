@@ -24,6 +24,24 @@ defmodule SymphonyElixir.LinearClientStateMachineTest do
                ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
     end
 
+    test "a designed repo never polls Plan Review, even when the active states name it" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "linear",
+        tracker_active_states: ["Todo", "Plan Review"],
+        repos: [
+          %{key: "legacy_repo", workflow: Workflow.workflow_file_path(), default: true, team: "LEGACY", state_machine: "legacy"},
+          %{key: "designed_repo", workflow: Workflow.workflow_file_path(), team: "DESIGNED", state_machine: "designed"}
+        ]
+      )
+
+      assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())
+
+      states = poll_states_by_team()
+      assert "Plan Review" in states["LEGACY"]
+      refute "Plan Review" in states["DESIGNED"]
+      assert "QA" in states["DESIGNED"]
+    end
+
     test "a repo with no state_machine set polls the active states, unchanged" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "linear",

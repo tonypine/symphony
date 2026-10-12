@@ -4332,8 +4332,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp active_state_set do
     tracker = Config.settings!().tracker
 
-    tracker.active_states
-    |> active_states_with_designed(StateMachine.designed_phase_states(tracker))
+    tracker
+    |> active_states_with_designed()
     |> Enum.map(&normalize_issue_state/1)
     |> Enum.filter(&(&1 != ""))
     |> MapSet.new()
@@ -4342,8 +4342,8 @@ defmodule SymphonyElixir.Orchestrator do
   # A repo on the designed machine dispatches from its designed phase states too, so the global
   # active set (the dispatch gate and the reconciliation filter) is the union across repos. With
   # every repo on `legacy` this is exactly the configured active states.
-  defp active_states_with_designed(base, designed_phase) do
-    if any_repo_designed?(), do: StateMachine.active_states("designed", base, designed_phase), else: base
+  defp active_states_with_designed(tracker) do
+    if any_repo_designed?(), do: StateMachine.tracker_active_states("designed", tracker), else: tracker.active_states
   end
 
   defp any_repo_designed? do
