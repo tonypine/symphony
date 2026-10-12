@@ -8,6 +8,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case approveAndMerge
     case sendToRework
     case signOff
+    case unblock
 
     public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
         case .signOff: "Sign Off…"
+        case .unblock: "Unblock…"
         }
     }
 
@@ -30,6 +32,7 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
         case .signOff: "Sign Off"
+        case .unblock: "Unblock"
         }
     }
 }
@@ -63,7 +66,8 @@ public struct InboxToolbar: Equatable {
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
     /// recommendation) and ⋯ Send to Rework…; a PR Approve and Merge… and Send to Rework…, with Open PR the default
-    /// while a check is red (D2b); a final verification Sign Off…. Actions and clarify items keep their links.
+    /// while a check is red (D2b); a final verification Sign Off…; a blocked ticket Unblock…. Actions and clarify
+    /// items keep their links.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
@@ -80,6 +84,8 @@ public struct InboxToolbar: Equatable {
             return InboxToolbar(buttons: moves + links, overflow: [])
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
+        case .blocked:
+            return InboxToolbar(buttons: [move(.unblock)] + links, overflow: [])
         case .action, .clarify:
             return InboxToolbar(buttons: links, overflow: [])
         }
@@ -190,6 +196,12 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = "Done"
             happens = "Moves \(id) to Done; the parent's close-out run follows."
             stays = "Nothing else changes in Linear."
+        case .unblock:
+            title = "Unblock \(id)?"
+            // The ticket keeps its phase: clearing a hold moves nothing, it resumes in place.
+            targetState = nil
+            happens = "Clears the hold on \(id) and notes it on the ticket; \(id) continues from where it stopped."
+            stays = "The ticket keeps its state. Nothing else changes in Linear."
         }
     }
 
@@ -216,16 +228,21 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .approveAndMerge: return .approvePR(identifier)
         case .sendToRework: return .rework(identifier, reason: reason.trimmingWhitespace())
         case .signOff: return .signOff(identifier)
+        case .unblock: return .unblock(identifier)
         }
     }
 
     /// What the sheet expects Symphony to answer, for an answer that didn't say.
     public var expectedOutcome: MoveOutcome { MoveOutcome(moved: targetState != nil, toState: targetState) }
 
-    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
+    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved. Unblock
+    /// moves nothing, so it says what it did instead of where the ticket went.
     public func banner(after outcome: MoveOutcome) -> InboxBanner {
         if outcome.moved {
             return InboxBanner(itemID: itemID, identifier: identifier, text: "Moved to \(outcome.toState ?? targetState ?? "its next state")", undo: true)
+        }
+        if move == .unblock {
+            return InboxBanner(itemID: itemID, identifier: identifier, text: "Hold cleared", undo: false)
         }
         return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent your decisions", undo: false)
     }
