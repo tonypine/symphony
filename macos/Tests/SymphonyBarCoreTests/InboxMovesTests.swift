@@ -179,6 +179,8 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(sheet.action())
         XCTAssertEqual(sheet.action(reason: " The approach is wrong \n"), .restart("BIL-206", reason: "The approach is wrong"))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Moved to In Progress")
+        // A restart can't be undone, so its banner must not offer Undo.
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).undo, false)
         XCTAssertEqual(sheet.id, "i-206:restart")
 
         // Rework keeps its own prompt, and is destructive too.

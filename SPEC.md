@@ -4706,7 +4706,9 @@ Minimum endpoints:
     plan.
   - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
     still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
-    otherwise it answers `409`. A comment the move posted stays.
+    otherwise it answers `409`. A comment the move posted stays. A `restart` is never undoable: it
+    closed the pull request, removed the workspace and superseded the workpad, none of which comes
+    back, so `undo` answers `409` and the ticket stays in `In Progress`.
   - `undo` of `approve_pr` reads the ticket's pull request first. One already merged answers `409`
     (`BIL-206 already merged; move it in Linear instead`). When GitHub shows auto-merge on, `undo`
     turns it off (GraphQL `disablePullRequestAutoMerge`) before it moves the ticket back, so the PR

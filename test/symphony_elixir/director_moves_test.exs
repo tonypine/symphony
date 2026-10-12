@@ -194,7 +194,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
                to_state: "In Progress",
                moved: true,
                commented: true,
-               undo_window_ms: 10_000
+               undo_window_ms: nil
              }
 
       assert_received {:fetch_activity, @restart_pr_url}
@@ -229,6 +229,23 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
       assert_received {:remove_workspaces, "MOT-40"}
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "a restart can't be undone: it closed the pull request and removed the workspace", %{opts: opts} do
+      designed_workflow!()
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+
+      assert {:ok, %{to_state: "In Progress", undo_window_ms: nil}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      put_issues([%{restart_issue() | state: "In Progress"}])
+
+      assert {:error, {:conflict, message}} = DirectorMoves.undo("MOT-40", restart_opts(opts))
+
+      assert message ==
+               "MOT-40 was restarted; the pull request is closed and the workspace is gone, so it can't be undone"
+
+      refute_received {:memory_tracker_state_update, "pr", "Rework"}
     end
 
     test "a legacy repo is refused: its Rework already is the full reset", %{opts: opts} do

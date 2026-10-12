@@ -240,9 +240,16 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var expectedOutcome: MoveOutcome { MoveOutcome(moved: targetState != nil, toState: targetState) }
 
     /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
+    /// A restart offers no Undo: it closed the pull request, deleted the workspace and superseded the
+    /// workpad, and Symphony can't take any of that back.
     public func banner(after outcome: MoveOutcome) -> InboxBanner {
         if outcome.moved {
-            return InboxBanner(itemID: itemID, identifier: identifier, text: "Moved to \(outcome.toState ?? targetState ?? "its next state")", undo: true)
+            return InboxBanner(
+                itemID: itemID,
+                identifier: identifier,
+                text: "Moved to \(outcome.toState ?? targetState ?? "its next state")",
+                undo: move != .restart
+            )
         }
         return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent your decisions", undo: false)
     }

@@ -142,6 +142,9 @@ defmodule SymphonyElixir.DirectorMoves do
   within #{div(@undo_window_ms, 1000)} s of the move and only while it is still where the move put
   it. A comment the move posted stays. Takes the options of `move/4`.
 
+  `:restart` is never taken back: it closed the pull request and removed the workspace, so the
+  ticket stays in `In Progress`.
+
   Undoing `:approve_pr` reads the pull request first: a merged one can't be taken back (a 409), and
   GitHub auto-merge on it (which Symphony turns on for a `Merging` ticket) is turned off before the
   ticket moves back, so the PR doesn't merge anyway. When GitHub can't be read or refuses, the ticket stays in
@@ -515,7 +518,7 @@ defmodule SymphonyElixir.DirectorMoves do
        to_state: to_state || issue.state,
        moved: to_state != nil,
        commented: comment != nil,
-       undo_window_ms: if(to_state, do: @undo_window_ms)
+       undo_window_ms: if(to_state && move != :restart, do: @undo_window_ms)
      }}
   end
 
@@ -528,6 +531,11 @@ defmodule SymphonyElixir.DirectorMoves do
     case Agent.get(server(opts), &Map.get(&1, issue.id)) do
       nil ->
         conflict("there is no move on #{issue.identifier} to undo")
+
+      # A restart closed the pull request, deleted the workspace and superseded the workpad; none
+      # of that comes back, so moving the ticket to its previous phase would strand it without its work.
+      %{move: :restart} ->
+        conflict("#{issue.identifier} was restarted; the pull request is closed and the workspace is gone, so it can't be undone")
 
       last ->
         cond do
