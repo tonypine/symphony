@@ -68,8 +68,12 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert Enum.map(designed_only, & &1.signal) == [
                :handoff,
                :code_review_approve,
+               :code_review_approve_skip,
                :code_review_rework,
-               :code_review_escalate
+               :code_review_escalate,
+               :qa_pass,
+               :qa_skip,
+               :qa_fail
              ]
 
       assert TransitionGuard.signals("designed") == TransitionGuard.signals() ++ Enum.map(designed_only, & &1.signal)
@@ -127,13 +131,49 @@ defmodule SymphonyElixir.TransitionGuardTest do
     end
 
     test "the reviewer's verdicts are designed edges out of Code Review" do
+      designed = designed_settings()
+
       assert TransitionGuard.legal?(:code_review_approve, "Code Review", nil, "designed")
+      assert TransitionGuard.legal?(:code_review_approve_skip, "Code Review", nil, "designed")
       assert TransitionGuard.legal?(:code_review_rework, "Code Review", nil, "designed")
       assert TransitionGuard.legal?(:code_review_escalate, "Code Review", nil, "designed")
       refute TransitionGuard.legal?(:code_review_approve, "In Progress", nil, "designed")
+      # The edges are designed-only: a legacy repo cannot fire them.
+      refute TransitionGuard.legal?(:code_review_approve, "Code Review", nil, "legacy")
+      refute TransitionGuard.legal?(:code_review_approve_skip, "Code Review", nil, "legacy")
 
-      assert TransitionGuard.target(:code_review_approve, %{settings: designed_settings(), target: "Merging"}) == "Merging"
-      assert TransitionGuard.target(:code_review_rework, %{settings: designed_settings()}) == "Rework"
+      assert TransitionGuard.target(:code_review_approve, %{settings: designed}) == "QA"
+      assert TransitionGuard.target(:code_review_approve_skip, %{settings: designed}) == "Merging"
+      assert TransitionGuard.target(:code_review_rework, %{settings: designed}) == "Rework"
+    end
+
+    test "an approve enters the repo's configured QA state, or Merging when QA is skipped" do
+      settings =
+        settings!(%{
+          "tracker" => %{"kind" => "memory", "qa_state" => "Verification"},
+          "state_machine" => "designed"
+        })
+
+      assert TransitionGuard.target(:code_review_approve, %{settings: settings}) == "Verification"
+      assert TransitionGuard.target(:code_review_approve_skip, %{settings: settings}) == "Merging"
+    end
+
+    test "the QA run's verdicts are designed edges out of QA" do
+      designed = designed_settings()
+
+      assert TransitionGuard.legal?(:qa_pass, "QA", nil, "designed")
+      assert TransitionGuard.legal?(:qa_skip, "QA", nil, "designed")
+      assert TransitionGuard.legal?(:qa_fail, "QA", nil, "designed")
+      refute TransitionGuard.legal?(:qa_pass, "Merging", nil, "designed")
+      refute TransitionGuard.legal?(:qa_fail, "Code Review", nil, "designed")
+
+      # The edges are designed-only: a legacy repo cannot fire them.
+      refute TransitionGuard.legal?(:qa_pass, "QA", nil, "legacy")
+      refute TransitionGuard.legal?(:qa_fail, "QA", nil, "legacy")
+
+      assert TransitionGuard.target(:qa_pass, %{settings: designed}) == "Merging"
+      assert TransitionGuard.target(:qa_skip, %{settings: designed}) == "Merging"
+      assert TransitionGuard.target(:qa_fail, %{settings: designed}) == "Rework"
     end
   end
 
@@ -316,6 +356,23 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
     test "passes the Code Review state through on a legacy repo" do
       state = state("Code Review")
+
+      assert {:ok, ^state} = TransitionGuard.resolve_request(state, %{settings: memory_settings()})
+    end
+
+    test "refuses an agent's hand move into QA on a designed repo" do
+      assert {:error, {:qa_requires_verdict, "QA"}} =
+               TransitionGuard.resolve_request(state("QA"), %{settings: designed_settings()})
+
+      # The refusal names the state's configured name, and matches it loosely.
+      assert {:error, {:qa_requires_verdict, "Verification"}} =
+               TransitionGuard.resolve_request(state("Verification"), %{
+                 settings: settings!(%{"tracker" => %{"kind" => "memory", "qa_state" => "Verification"}, "state_machine" => "designed"})
+               })
+    end
+
+    test "passes a QA state through on a legacy repo" do
+      state = state("QA")
 
       assert {:ok, ^state} = TransitionGuard.resolve_request(state, %{settings: memory_settings()})
     end
