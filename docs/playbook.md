@@ -108,6 +108,28 @@ like an edit to `WORKFLOW.md`. See [security](security.md#workflow-and-instructi
 `symphony workflow preview` shows the assembled prompt, instruction files included,
 read from the disk next to the `WORKFLOW.md` it renders.
 
+### One playbook, two state machines
+
+A repo's `repositories[].state_machine` (`legacy` by default, or `designed`) picks
+the prompt it gets. Partials that differ on the designed machine (`status_map`,
+`escape_hatches`, `parent_tickets`, `plan_pipeline`, `pr_feedback_sweep`,
+`ci_triage`, `review_brief`, `completion_bar`, `guardrails`) have a `designed`
+variant, `priv/playbook/<name>.designed.liquid`, served in place of the base body;
+every other partial renders the same on both. Instruction files branch on the
+`state_machine` variable:
+
+```liquid
+{% if state_machine == "designed" -%}
+designed text
+{%- else -%}
+legacy text
+{%- endif %}
+```
+
+A `-%}` trims the indentation of the line after it, so wrap an indented list item
+with untrimmed tags at the end of the line before it. `symphony workflow preview
+--repo <key>` renders the prompt for that repo's machine.
+
 ## Available partials
 
 | Partial | Vars | Description |

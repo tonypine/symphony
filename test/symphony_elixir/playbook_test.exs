@@ -87,9 +87,10 @@ defmodule SymphonyElixir.PlaybookTest do
       # The designed machine leaves no `## Supervisor check` for a person to run: a check an agent
       # can't run is a coverage gap (CI or a QA playbook), and the block that keeps it from running
       # goes to the self-heal lane.
-      assert designed =~ "no `## Supervisor check` block and moves no ticket to a review state for a check"
+      assert designed =~ "A check is never handed to a\n  person and never moves a ticket."
+      refute designed =~ "Supervisor check"
       assert designed =~ "the self-heal lane"
-      refute base =~ "no `## Supervisor check` block and moves no ticket"
+      refute base =~ "A check is never handed to a\n  person"
     end
 
     test "parent_tickets' designed variant hands over to Plan Review and sends a change through Rework" do
@@ -99,8 +100,11 @@ defmodule SymphonyElixir.PlaybookTest do
       assert designed != base
       assert {:ok, _template} = Solid.parse(designed)
       assert designed =~ "name: parent_tickets\n"
-      assert designed =~ "naming `In Review`: Symphony\n  performs that move and the parent lands in `Plan Review`"
-      assert designed =~ "Never name `Plan Review` yourself"
+      assert designed =~ "hands the parent over with `linear_update_state` naming `Plan Review`"
+      assert designed =~ "Only a plan parent may name it."
+      refute designed =~ "In Review"
+      refute designed =~ "Human Review"
+      refute designed =~ "Final verification:"
       assert designed =~ "Symphony moves the\n  parent to `Rework` itself, and the run revises the plan in place"
       assert designed =~ "State: only `Plan Review`"
       # The base body hands the plan to `In Review` and knows no `Plan Review` at all.
@@ -114,16 +118,41 @@ defmodule SymphonyElixir.PlaybookTest do
       assert designed != base
       assert {:ok, _template} = Solid.parse(designed)
       assert designed =~ "name: plan_pipeline\n"
-      assert designed =~ "There is no `Final verification:` sub-ticket: the epic closes"
+      assert designed =~ "The split files no verification sub-ticket: the epic closes"
+      refute designed =~ "Final verification:"
 
       # The base body makes the verification ticket the last sub-ticket of the split.
       assert base =~ "`blocked_by` links, the `Final verification:`\n   sub-ticket last)"
       refute designed =~ "sub-ticket last)"
     end
 
+    # The designed partials that replace a base hand-off to `In Review`: each parses, keeps its
+    # name, differs from the base and names none of the retired states, checks or tickets.
+    for {name, designed_says} <- [
+          {"pr_feedback_sweep", "before the push that hands it off to\n`Code Review`"},
+          {"ci_triage", "moves it to `CI Fix`"},
+          {"review_brief", "a PR handed off to `Code Review`"},
+          {"completion_bar", "## Completion bar before the handoff"},
+          {"guardrails", "while a `Blocked` or `Needs Decision` hold is set, do not make changes"}
+        ] do
+      test "#{name}'s designed variant hands off to the designed machine" do
+        assert {:ok, designed} = Playbook.fetch(unquote(name), "designed")
+        assert {:ok, base} = Playbook.fetch(unquote(name))
+
+        assert designed != base
+        assert {:ok, _template} = Solid.parse(designed)
+        assert designed =~ "name: #{unquote(name)}\n"
+        assert designed =~ unquote(designed_says)
+
+        for word <- ["Auto Review", "In Review", "Human Review", "Supervisor check", "Final verification"] do
+          refute designed =~ word
+        end
+      end
+    end
+
     test "a partial with no variant for a version falls back to the base body" do
       assert Playbook.fetch("status_map", "legacy") == Playbook.fetch("status_map")
-      assert Playbook.fetch("guardrails", "designed") == Playbook.fetch("guardrails")
+      assert Playbook.fetch("workpad_template", "designed") == Playbook.fetch("workpad_template")
       assert Playbook.fetch("not_a_partial", "designed") == :error
     end
 
@@ -616,7 +645,9 @@ defmodule SymphonyElixir.PlaybookTest do
       "sub_issues" => []
     }
 
-    assigns = %{"issue" => issue, "attempt" => nil, "agent" => %{"workpad_heading" => "## Symphony Workpad"}}
+    # `state_machine` is always assigned at runtime (`PromptBuilder`); the repo's instruction files
+    # branch on it.
+    assigns = %{"issue" => issue, "attempt" => nil, "agent" => %{"workpad_heading" => "## Symphony Workpad"}, "state_machine" => "legacy"}
     assert {:ok, rendered, []} = Solid.render(Solid.parse!(source), assigns, @render_opts)
     IO.iodata_to_binary(rendered)
   end

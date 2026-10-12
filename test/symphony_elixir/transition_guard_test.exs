@@ -482,14 +482,17 @@ defmodule SymphonyElixir.TransitionGuardTest do
       end
     end
 
-    test "refuses an agent's hand move into Plan Review on a designed repo" do
+    test "refuses a hand move into Plan Review on a designed repo, except a plan parent's handoff" do
       assert {:error, {:plan_review_requires_handoff_signal, "Plan Review"}} =
                TransitionGuard.resolve_request(state("Plan Review"), %{settings: designed_settings()})
 
-      # The refusal matches the name loosely, and a plan parent's hand move is refused too: the state
-      # belongs to the handoff, which enters it by asking for In Review.
+      # The refusal matches the name loosely.
       assert {:error, {:plan_review_requires_handoff_signal, "plan review"}} =
-               TransitionGuard.resolve_request(state("plan review"), %{settings: designed_settings(), plan_parent?: true})
+               TransitionGuard.resolve_request(state("plan review"), %{settings: designed_settings(), plan_parent?: false})
+
+      # A plan parent naming Plan Review is the plan handoff itself: the request stands.
+      assert {:ok, %{"name" => "Plan Review"}} =
+               TransitionGuard.resolve_request(state("Plan Review"), %{settings: designed_settings(), plan_parent?: true})
 
       # A legacy repo has no such state, and neither has a designed repo that turned it off.
       assert {:ok, %{"name" => "Plan Review"}} =

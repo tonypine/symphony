@@ -74,7 +74,12 @@ defmodule SymphonyElixir.Playbook do
     "status_map" => %{"designed" => "status_map.designed.liquid"},
     "escape_hatches" => %{"designed" => "escape_hatches.designed.liquid"},
     "parent_tickets" => %{"designed" => "parent_tickets.designed.liquid"},
-    "plan_pipeline" => %{"designed" => "plan_pipeline.designed.liquid"}
+    "plan_pipeline" => %{"designed" => "plan_pipeline.designed.liquid"},
+    "pr_feedback_sweep" => %{"designed" => "pr_feedback_sweep.designed.liquid"},
+    "ci_triage" => %{"designed" => "ci_triage.designed.liquid"},
+    "review_brief" => %{"designed" => "review_brief.designed.liquid"},
+    "completion_bar" => %{"designed" => "completion_bar.designed.liquid"},
+    "guardrails" => %{"designed" => "guardrails.designed.liquid"}
   }
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "priv", "playbook"]))

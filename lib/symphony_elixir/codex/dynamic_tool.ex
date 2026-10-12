@@ -2073,9 +2073,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "plan_review_requires_handoff_signal",
         "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo a plan parent's handoff " <>
-            "enters #{inspect(state_name)}: leave the review brief and hand the plan over with `linear_update_state` " <>
-            "naming `In Review`, and Symphony performs the move; do not name this state."
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo only a plan parent's " <>
+            "handoff enters #{inspect(state_name)}: this issue is not a plan parent, so it hands its work over with " <>
+            "its pushed PR instead."
       }
     }
   end

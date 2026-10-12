@@ -712,14 +712,15 @@ defmodule SymphonyElixir.PromptBuilder do
     |> Enum.join("\n")
   end
 
-  # The acceptance gate comes back as `In Progress`, never as a rework phase. What `Rework` means
-  # differs by the repo's machine, so the line naming it does too.
+  # The acceptance gate comes back as `In Progress`, never as a rework phase. A designed repo has no
+  # acceptance gate: its Code Review and QA verdicts are what return work, as `Rework` on the same
+  # pull request, so its line says that instead.
   defp acceptance_gate_protocol_line(false) do
     "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not treat it as `Rework`, which still means closing the PR and starting over."
   end
 
   defp acceptance_gate_protocol_line(true) do
-    "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
+    "- A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR, with the verdict's reasons in the continuation prompt. Fix it on the same branch and push; that push hands off to `Code Review` again. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
   end
 
   defp pr_feedback_protocol_line(true) do

@@ -2993,8 +2993,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:machine_label_set, _issue_id, _name}
     end
 
-    # A designed repo's plan parent: the plan run hands over by naming `In Review`, and the guard
-    # performs the move into the repo's configured `Plan Review` state.
+    # A designed repo's plan parent: the plan run hands over by naming `Plan Review` (or the older
+    # `In Review`), and the guard performs the move into the repo's configured `Plan Review` state.
     defp plan_review_client(extra \\ []) do
       states =
         [%{"id" => "state-review", "name" => "In Review"}, %{"id" => "state-plan-review", "name" => "Plan Review"}] ++ extra
@@ -3029,20 +3029,26 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
-    test "a designed repo refuses an agent naming Plan Review itself" do
-      client = fn query, variables, _opts ->
-        if query =~ "SymphonyAgentIssueTeamStates" do
-          plan_review_client().(query, variables, [])
-        else
-          send(self(), {:moved_to, variables.stateId})
-          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+    test "a designed repo's plan parent may name Plan Review itself; any other ticket is refused" do
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+               Linear.update_state(context, "Plan Review", linear_client: plan_review_client(), settings: designed_settings())
+
+      assert_received {:moved_to, "state-plan-review"}
+
+      not_a_plan = fn query, variables, opts ->
+        case plan_review_client().(query, variables, opts) do
+          {:ok, %{"data" => %{"issue" => issue}}} ->
+            {:ok, %{"data" => %{"issue" => Map.put(issue, "labels", %{"nodes" => []})}}}
+
+          other ->
+            other
         end
       end
 
-      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
-
       assert {:error, {:plan_review_requires_handoff_signal, "Plan Review"}} =
-               Linear.update_state(context, "Plan Review", linear_client: client, settings: designed_settings())
+               Linear.update_state(context, "Plan Review", linear_client: not_a_plan, settings: designed_settings())
 
       refute_received {:moved_to, _state_id}
     end

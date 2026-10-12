@@ -84,6 +84,15 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   (`nice -n 10`) than Symphony, so one run's busy loop can't starve Symphony, QA passes, or other runs.
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
+- **Designed state machine** — a repo with `state_machine: designed` runs the redesigned ticket
+  flow instead of the default (`legacy`) one described below: `In Progress` → `Code Review` (a
+  reviewer agent, on a green head) → `QA` (a journey-driven QA agent) → `Merging` → `Done`, with
+  `Rework` continuing the same PR, `CI Fix` repairing red heads and conflicts, and epic parents
+  going `Plan Review` → `Waiting on sub-tickets` → `Epic Review`. `Blocked` and `Needs Decision`
+  are labels that pause a ticket in place; a person only decides, and `Restart` from the Director
+  app is the full reset. Auto Review, `In Review`, `Human Review`, supervisor checks and
+  `Final verification:` tickets do not apply. See [docs/design/state-machine.md](docs/design/state-machine.md)
+  and SPEC §7.6.
 - **Human Review** — tickets only the operator can move on (a QA block that needs a secret or a hand
   check, a plan the ticket says a human reviews, a `linear_request_human_action` request, a final
   verification with manual checks left) wait in `Human Review` instead of `In Review`, so the board,
@@ -402,7 +411,12 @@ instruction files next to that `WORKFLOW.md` (`.symphony/instructions/` by defau
 ./bin/symphony workflow preview                       # renders ./WORKFLOW.md
 ./bin/symphony workflow preview --file path/to/WORKFLOW.md
 ./bin/symphony workflow preview --agent claude        # default: codex
+./bin/symphony workflow preview --repo my-repo        # that repo's state machine and settings
 ```
+
+With `--repo`, the preview renders the prompt for that configured repo's state machine: a
+`designed` repo gets the designed playbook partials and instruction branches, a `legacy` repo
+today's prompt. Without it the preview renders the `legacy` prompt.
 
 An unknown `{% render %}` partial or undefined variable is reported as an error, so the command
 doubles as a quick workflow lint.
