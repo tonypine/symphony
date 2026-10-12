@@ -1730,6 +1730,62 @@ defmodule SymphonyElixir.CoreTest do
              RunStore.get_ticket_state(Config.repo_key!(), "issue-post-pr-auto-review").signals
   end
 
+  test "retry for an active completed PR on a designed repo dispatches the run instead of moving to the global Auto Review" do
+    workflow = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow,
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+      pr_review_mode: "polling",
+      ci: %{enabled: true},
+      auto_review: %{enabled: true},
+      repos: [
+        [key: "legacy-repo", workflow: workflow, team: "Legacy"],
+        [key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]
+      ]
+    )
+
+    issue_id = "issue-post-pr-designed"
+    retry_token = make_ref()
+    last_ran_at = DateTime.utc_now()
+    pr_url = "https://github.com/example/repo/pull/880"
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    # The refetch carries no repo key, as `fetch_issue_states_by_ids` returns it.
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: issue_id, identifier: "MT-880", title: "Post PR", state: "In Progress", pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
+    ])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :PostPrDesignedOrchestrator))
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
+
+    log =
+      capture_log(fn ->
+        completed = %{identifier: "MT-880", pull_request_url: pr_url, last_ran_at: last_ran_at}
+        due_at_ms = System.monotonic_time(:millisecond)
+        retry = %{attempt: 1, timer_ref: nil, retry_token: retry_token, due_at_ms: due_at_ms, identifier: "MT-880"}
+        retry = Map.put(retry, :repo_key, "designed-repo")
+
+        :sys.replace_state(pid, fn state ->
+          %{state | claimed: MapSet.new([issue_id]), completed_run_metadata: %{issue_id => completed}, retry_attempts: %{issue_id => retry}}
+        end)
+
+        send(pid, {:retry_issue, issue_id, retry_token})
+        moved_or_ran? = &(Map.has_key?(&1.running, issue_id) or Map.has_key?(&1.watching, issue_id))
+        state = wait_for_orchestrator_state(pid, moved_or_ran?)
+        assert %{issue: %Issue{repo_key: "designed-repo"}} = state.running[issue_id]
+      end)
+
+    refute log =~ "moving to Auto Review"
+    refute_received {:memory_tracker_state_update, ^issue_id, "Auto Review"}
+  end
+
   test "retry for active completed PR moves issue to in review when the Auto Review state is missing" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
