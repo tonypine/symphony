@@ -69,14 +69,14 @@ jobs:
 
       - name: Check out the base branch
         if: ${{ steps.waiver.outputs.waived != 'true' }}
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
 
       - name: Fetch the pull request's commits
         if: ${{ steps.waiver.outputs.waived != 'true' }}
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: pull-request
@@ -85,14 +85,14 @@ jobs:
 
       - name: Set up mise tools
         if: ${{ steps.waiver.outputs.waived != 'true' }}
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           install: true
           cache: true
 
       - name: Cache deps and build
         if: ${{ steps.waiver.outputs.waived != 'true' }}
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             deps
