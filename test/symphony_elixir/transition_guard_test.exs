@@ -367,6 +367,27 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert_received {:moved, "issue-1", "Todo"}
     end
 
+    test "asks the PR poller to poll once the issue moved into Merging" do
+      test_pid = self()
+      opts = [tracker: FakeTracker, on_merging: fn -> send(test_pid, :polled) end]
+
+      assert :ok = TransitionGuard.perform("issue-4", :director_move, %{target: "Merging"}, opts)
+      assert_received {:moved, "issue-4", "Merging"}
+      assert_received :polled
+
+      assert :ok = TransitionGuard.perform("issue-5", :director_move, %{target: "Todo"}, opts)
+      refute_received :polled
+
+      Process.put(:transition_guard_tracker_result, {:error, :rate_limited})
+      assert {:error, :rate_limited} = TransitionGuard.perform("issue-6", :director_move, %{target: "Merging"}, opts)
+      refute_received :polled
+    end
+
+    test "polls the running PR poller by default after a move into Merging" do
+      assert :ok = TransitionGuard.perform("issue-7", :director_move, %{target: "Merging"}, tracker: FakeTracker)
+      assert_received {:moved, "issue-7", "Merging"}
+    end
+
     test "returns the tracker's error" do
       Process.put(:transition_guard_tracker_result, {:error, :rate_limited})
 

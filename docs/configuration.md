@@ -1124,6 +1124,9 @@ pull_requests:
   with auto-merge on and a green head for this long falls back to the landing agent.
 - `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
   auto-merge instead of a landing agent, so they take no agent slot:
+  - A ticket Symphony moves into `Merging` is looked at right away. A PR that is already `CLEAN`
+    with green checks (or none) is squash-merged at once, before the base branch can move on and
+    leave it behind; otherwise auto-merge takes it.
   - Symphony turns on auto-merge (squash, the PR title and body) once per PR head. GitHub merges it
     when the required checks pass, and Symphony moves the ticket to `Done`. When GitHub refuses
     auto-merge (the PR can already merge, no branch protection, or the repository doesn't allow
