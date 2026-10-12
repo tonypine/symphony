@@ -7,6 +7,7 @@ defmodule SymphonyElixir.QaVerificationTest do
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.QaVerification
   alias SymphonyElixir.RunStore
 
@@ -269,6 +270,88 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert [%{name: "qa", details: %{signal: "qa_pass", target: "Merging", reason: "every journey verified"}}] =
                Handoff.signals(@repo_key, @issue_id)
+    end
+
+    test "manual review on pauses a pass on a merge confirmation instead of moving to Merging" do
+      {workspace, head} = git_workspace!()
+
+      assert :ok = run(workspace, settings: settings!(%{"manual_review" => "on"}))
+
+      # The run still happened, and its report is still published: only the step into Merging waits.
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert job.sha == head
+      refute_received {:memory_tracker_state_update, @issue_id, _state}
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "## Symphony QA Report"
+
+      assert_received {:memory_tracker_comment, @issue_id, request}
+      assert request =~ "## Decision needed:"
+      assert request =~ "Merge TP-816 into its base branch?"
+      assert request =~ "Recommendation: every journey verified; ready to merge"
+      assert request =~ "the ticket stays in QA until the decision is recorded"
+
+      assert [%{kind: "qa", head_sha: ^head, outcome: "pass"}] = verdicts()
+
+      assert %{decision: %{confirm: "Merging"}} = hold = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert Hold.held_any?(@repo_key, @issue_id)
+      assert MergeConfirmation.confirm_target(hold) == "Merging"
+
+      assert [%{name: "qa", details: %{signal: "merge_confirmation", target: "Merging", reason: reason}}] =
+               Handoff.signals(@repo_key, @issue_id)
+
+      assert reason == "every journey verified; ready to merge"
+    end
+
+    test "a pass with no summary of its own carries its first finding instead" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(
+        :qa_agent_result,
+        {:ok, %{result: %{verdict: :pass, summary: nil, steps: [], findings: ["a deprecation warning shows"]}, tokens: %{}}}
+      )
+
+      assert :ok = run(workspace, settings: settings!(%{"manual_review" => "on"}))
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** pass"
+
+      assert_received {:memory_tracker_comment, @issue_id, request}
+      assert request =~ "## Decision needed:"
+      assert request =~ "QA: a deprecation warning shows"
+    end
+
+    test "a merge confirmation that cannot be posted is reported" do
+      {workspace, _head} = git_workspace!()
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :linear_down})
+
+      assert {:error, {:qa_merge_confirmation_failed, {:merge_confirmation_request_failed, :linear_down}}} =
+               run(workspace, settings: settings!(%{"manual_review" => "on"}))
+    end
+
+    test "manual review on pauses a skip the same way, and a fail still moves to Rework" do
+      {workspace, head} = git_workspace!()
+
+      assert :ok = run(workspace, qa_policy: SkipPolicy, settings: settings!(%{"manual_review" => "on"}))
+
+      refute_received {:memory_tracker_state_update, @issue_id, _state}
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert [%{name: "qa", details: %{signal: "merge_confirmation"}} | _] = Handoff.signals(@repo_key, @issue_id)
+
+      # A rework verdict never waits on a person, in either mode.
+      RunStore.delete_ticket_state(@repo_key, @issue_id)
+      {other_workspace, _head} = git_workspace!()
+
+      Process.put(
+        :qa_agent_result,
+        {:ok, %{result: %{verdict: :fail, summary: "The walkthrough fails.", steps: [], findings: []}, tokens: %{}}}
+      )
+
+      assert :ok = run(other_workspace, settings: settings!(%{"manual_review" => "on"}))
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      refute Hold.held_any?(@repo_key, @issue_id)
+      assert [%{name: "qa", details: %{signal: "qa_fail"}} | _] = Handoff.signals(@repo_key, @issue_id)
+      assert head != nil
     end
 
     test "a pass the CI Fix lane re-bound to this head carries the ticket on without a second run" do

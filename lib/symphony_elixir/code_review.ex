@@ -45,6 +45,7 @@ defmodule SymphonyElixir.CodeReview do
   alias SymphonyElixir.{
     Config,
     Handoff,
+    MergeConfirmation,
     QaPolicy,
     ReviewAgent,
     StateMachine,
@@ -376,7 +377,7 @@ defmodule SymphonyElixir.CodeReview do
   # previous run recorded. Every edge goes through the one writer.
   defp route_verdict(issue, workspace, opts, settings, verdict, reason) do
     case verdict do
-      :approve -> approve(issue, workspace, opts, settings)
+      :approve -> approve(issue, workspace, opts, settings, %{review_reason: reason})
       :request_changes -> move(issue, opts, settings, :code_review_rework, %{})
       # The real reviewer exits a block through `blocked/5` (an error result), never this clause; an
       # overridden reviewer that returns a `:block` verdict map escalates the same way, and so does a
@@ -390,18 +391,51 @@ defmodule SymphonyElixir.CodeReview do
   # diffs) skips QA and lands the ticket in `Merging`; everything else hands it to the QA state. The
   # decision and its reason are recorded with the verdict, so a skip is auditable wherever the
   # verdict is read. `extra` marks a verdict carried forward from an earlier review, which is
-  # recorded so the audit trail shows no reviewer ran a second time.
-  defp approve(issue, workspace, opts, settings, extra \\ %{}) do
+  # recorded so the audit trail shows no reviewer ran a second time, and carries the reviewer's own
+  # reason for the merge-confirmation summary.
+  defp approve(issue, workspace, opts, settings, extra) do
     policy = Keyword.get(opts, :qa_policy, QaPolicy)
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:run, _playbooks, reason} ->
         Logger.info("Code Review approved #{issue_label(issue)}; QA runs: #{reason}")
-        move(issue, opts, settings, :code_review_approve, Map.merge(%{qa_decision: "run", reason: reason}, extra))
+        move(issue, opts, settings, :code_review_approve, Map.merge(extra, %{qa_decision: "run", reason: reason}))
 
       {:skip, reason} ->
         Logger.info("Code Review approved #{issue_label(issue)}; QA skipped: #{reason}")
-        move(issue, opts, settings, :code_review_approve_skip, Map.merge(%{qa_decision: "skip", reason: reason}, extra))
+
+        skip_qa(issue, opts, settings, extra, reason)
+    end
+  end
+
+  # A skip lands the ticket in `Merging` with no QA run. With the repo's manual review `on` it
+  # pauses there on a person instead (`SymphonyElixir.MergeConfirmation`); the summary carries the
+  # reviewer's reasons and the skip decision's.
+  defp skip_qa(issue, opts, settings, extra, reason) do
+    extra = Map.merge(extra, %{qa_decision: "skip", reason: reason})
+
+    if TransitionGuard.confirmation_required?(:code_review_approve_skip, %{settings: settings}) do
+      confirm_merge(issue, opts, extra, reason)
+    else
+      move(issue, opts, settings, :code_review_approve_skip, extra)
+    end
+  end
+
+  defp confirm_merge(issue, opts, extra, reason) do
+    parts = %{
+      recommendation: "the reviewer approved and no QA run applies to this diff; ready to merge",
+      review: Map.get(extra, :review_reason) || reason,
+      qa: "QA skipped: #{reason}"
+    }
+
+    case MergeConfirmation.pause(issue, opts, MergeConfirmation.summary(issue, opts, parts)) do
+      :ok ->
+        # The verdict trail keeps the skip decision the paused move carried.
+        record_move_signal(issue, opts, :merge_confirmation, Map.put(extra, :target, "Merging"))
+        :ok
+
+      {:error, error} ->
+        {:error, {:code_review_merge_confirmation_failed, error}}
     end
   end
 
@@ -483,7 +517,7 @@ defmodule SymphonyElixir.CodeReview do
   defp record_move_signal(issue, opts, signal, extra) do
     details =
       extra
-      |> Map.take([:target, :reason, :qa_decision, :carried])
+      |> Map.take([:target, :reason, :qa_decision, :carried, :review_reason])
       |> Map.put(:signal, to_string(signal))
 
     TicketSignals.record(repo_key(issue, opts), issue.id, @verdict_kind, details)

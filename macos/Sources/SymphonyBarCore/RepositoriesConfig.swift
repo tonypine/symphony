@@ -75,6 +75,8 @@ public struct RepositoryEntry: Equatable {
     public var acceptanceGateMode: String?
     /// The repo's state-machine version, `legacy` or `designed`, as written; nil uses the default (`legacy`).
     public var stateMachine: String?
+    /// `manual_review`, the repo's manual review setting (`on`/`off`), as written; nil uses the default (`off`).
+    public var manualReview: String?
 
     public init(
         key: String,
@@ -84,7 +86,8 @@ public struct RepositoryEntry: Equatable {
         route: RepositoryRoute = RepositoryRoute(),
         workspace: RepositoryWorkspace = RepositoryWorkspace(),
         acceptanceGateMode: String? = nil,
-        stateMachine: String? = nil
+        stateMachine: String? = nil,
+        manualReview: String? = nil
     ) {
         self.key = key
         self.isDefault = isDefault
@@ -94,6 +97,7 @@ public struct RepositoryEntry: Equatable {
         self.workspace = workspace
         self.acceptanceGateMode = acceptanceGateMode
         self.stateMachine = stateMachine
+        self.manualReview = manualReview
     }
 }
 
@@ -204,7 +208,10 @@ public enum RepositoriesConfig {
     // MARK: Fields
 
     /// Keys of an entry in the order new ones are written.
-    static let entryOrder = ["key", "default", "base_branch", "workflow", "state_machine", "route", "workspace", "acceptance_gate"]
+    static let entryOrder = [
+        "key", "default", "base_branch", "workflow", "state_machine", "manual_review", "route", "workspace",
+        "acceptance_gate",
+    ]
     static let groups = ["route", "workspace", "acceptance_gate"]
 
     /// The fields the model knows, in the order they are written. Fields of one group stay together.
@@ -213,6 +220,7 @@ public enum RepositoriesConfig {
         .string(["base_branch"], \.baseBranch),
         .string(["workflow"], \.workflow),
         .string(["state_machine"], \.stateMachine),
+        .string(["manual_review"], \.manualReview),
         .string(["route", "team"], \.route.team),
         .list(["route", "projects"], \.route.projects),
         .list(["route", "labels"], \.route.labels),

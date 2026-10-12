@@ -344,6 +344,22 @@ repositories:
   rather than routing it — the run takes a second reviewer pass on the same head, records the
   verdict bound to it and moves nothing, and the next dispatch performs that verdict. See
   [`docs/design/state-machine.md`](design/state-machine.md).
+- `manual_review`: who decides that a verified ticket merges, `off` (the default) or `on`
+  ([`docs/design/state-machine.md`](design/state-machine.md), **Manual review**). It controls
+  decision authority on the ticket path, not verification: the machine verifies the same way either
+  way. `off` moves the ticket on its verdicts — Code Review approve → QA, QA pass → Merging. `on`
+  pauses the last step into Merging on a person: the verdict carries a **Needs Decision** hold whose
+  request is the summary to decide from (the recommendation, the Code Review reasons, the QA result
+  and the PR link), and confirming continues into Merging exactly as when `off`, while a redirect
+  (Send to Rework) directs a move instead. Rework verdicts, CI Fix and holds behave the same in both
+  modes, and the epic path is unaffected. The macOS Repos edit sheet sets it with a Manual review
+  picker.
+
+  The retired `auto_review.acceptance_gate.mode` (and a repo's `acceptance_gate.mode`) is deprecated
+  and maps onto this setting, with a warning logged once per config: `shadow` → `on`, and `off`,
+  `enforce` and `decide` → `off`; `watch` was operator monitoring, not a person stopping the ticket,
+  so it is `off` too. A repo's own `manual_review` wins over whichever mode applies to it, and a
+  repo that sets no `manual_review` keeps the mode's answer.
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not

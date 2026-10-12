@@ -2047,7 +2047,9 @@ not require recognizing or validating extension fields unless that extension is 
   `~/Library/Android/sdk`
 - `auto_review.android.boot_timeout_ms`: integer, default `180000`
 - `auto_review.android.idle_timeout_ms`: integer, default `600000`
-- `auto_review.acceptance_gate.mode`: `off`, `shadow` or `enforce`, default `off`
+- `auto_review.acceptance_gate.mode`: `off`, `shadow` or `enforce`, default `off`; deprecated — it
+  maps onto the per-repo `manual_review` setting (`shadow` → `on`; `off`, `enforce` and `decide` →
+  `off`), with a warning logged once per config
 - `auto_review.acceptance_gate.runtime` / `.command`: optional; `.model` / `.effort`: default
   `null`, else the `acceptance_gate` run profile
 - `auto_review.acceptance_gate.max_turns` / `.timeout_ms` / `.max_concurrent`: integers, defaults
@@ -2058,6 +2060,10 @@ not require recognizing or validating extension fields unless that extension is 
   `window_days` `14`, `max_lines` `300`), `inconclusive_limit` (default `2`)
 - `repositories[].acceptance_gate`: `mode`, `max_turns`, `timeout_ms` and `escalate` for that
   repository; scalars replace the global values, lists add to them. See `docs/acceptance_gate.md`.
+- `repositories[].manual_review`: `off` (default) or `on`, who decides that a verified ticket
+  merges. `on` pauses the step into `Merging` on a **Needs Decision** hold carrying the summary;
+  confirming continues into `Merging`, a redirect directs a move. It is a per-repo setting with no
+  global key: a repo that sets none takes the answer of the deprecated acceptance gate mode above.
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`

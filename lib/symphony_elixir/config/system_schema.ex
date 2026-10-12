@@ -54,6 +54,17 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @acceptance_gate_escalate_keys ~w(labels ticket_patterns paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
   @acceptance_gate_busy_files_keys ~w(top window_days max_lines)
 
+  # The deprecated acceptance-gate `mode` → the `manual_review` setting, per the design's review-modes
+  # table. The three modes a `symphony.yml` may carry today, and the design's names for them.
+  @gate_mode_manual_review %{
+    "off" => "off",
+    "shadow" => "on",
+    "enforce" => "off",
+    "decide" => "off",
+    "advise" => "on",
+    "watch" => "off"
+  }
+
   # The keys each section of symphony.yml accepts, by dotted path; `repositories[]` is an item of
   # the `repositories` list. A key that is itself a path here is a nested section. The parser
   # rejects any other key, and `operator_key_paths/0` lists the leaves.
@@ -64,7 +75,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issues.linear.scope" => ~w(project_slug team labels),
     "issues.states" => ~w(active terminal waiting_on_sub_issues human_review code_review qa plan_review epic_review ci_fix),
     "tickets" => ~w(priorities),
-    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate state_machine),
+    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate state_machine manual_review),
     "repositories[].route" => ~w(team projects labels assignee),
     "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
     "repositories[].agent" => ~w(provider model effort run_profiles),
@@ -299,7 +310,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       :default,
       :agent,
       :acceptance_gate,
-      :state_machine
+      :state_machine,
+      :manual_review
     ]
 
     defmodule Workspace do
@@ -347,6 +359,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
       field(:acceptance_gate, :map)
       # The repo's state-machine version: `legacy` (the default) or `designed`.
       field(:state_machine, :string, default: "legacy")
+      # The repo's manual review setting: `on` or `off`. Absent (nil) means "off", the default, unless
+      # the deprecated acceptance-gate mode sets it (`manual_review_for_gate_mode/1`).
+      field(:manual_review, :string)
       embeds_one(:workspace, Workspace, on_replace: :update)
     end
 
@@ -364,6 +379,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       |> validate_inclusion(:workflow_source, ["ref", "local"])
       |> validate_optional_string(:base_branch)
       |> validate_inclusion(:state_machine, ["legacy", "designed"])
+      |> validate_inclusion(:manual_review, ["on", "off"])
       |> validate_string(:team)
       |> normalize_string_list(:labels)
       |> normalize_string_list(:projects)
@@ -511,6 +527,25 @@ defmodule SymphonyElixir.Config.SystemSchema do
   def operator_key_paths do
     @allowed_keys |> Enum.flat_map(&operator_key_paths/1) |> Enum.sort()
   end
+
+  @doc """
+  The manual review value the deprecated acceptance-gate `mode` maps to, per the design's review-modes
+  table (`docs/design/state-machine.md`): the gate modes a `symphony.yml` may still carry — `off`,
+  `shadow` and `enforce` — and the design's own names for them.
+
+  `shadow` is `advise`: the gate ran and said what it thought, and a person decided, which is what
+  manual review `on` does. `enforce` is `decide` (the design's naming for it) and `off` is no review
+  at all, so both map to `off` — the machine moves the ticket on its verdict. `watch` is operator
+  monitoring, not a person stopping the ticket, so it is `off` too. An unknown value is `off`, the
+  setting's default.
+  """
+  @spec manual_review_for_gate_mode(String.t() | nil) :: String.t()
+  def manual_review_for_gate_mode(mode) do
+    @gate_mode_manual_review |> Map.get(normalize_gate_mode(mode), "off")
+  end
+
+  defp normalize_gate_mode(mode) when is_binary(mode), do: mode |> String.trim() |> String.downcase()
+  defp normalize_gate_mode(_mode), do: ""
 
   defp operator_key_paths(path) do
     cond do
@@ -788,6 +823,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("agent", agent)
         |> maybe_put("acceptance_gate", acceptance_gate)
         |> maybe_put("state_machine", Map.get(repo, "state_machine"))
+        |> maybe_put("manual_review", Map.get(repo, "manual_review"))
 
       {:ok, normalized}
     end
@@ -1017,6 +1053,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, busy_files} <- section_map(Map.get(escalate, "busy_files"), path <> ".escalate.busy_files"),
          :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
       warn_legacy_escalate_label(Map.get(escalate, "labels"), path)
+      warn_deprecated_gate_mode(Map.get(config, "mode"), path)
 
       {:ok,
        config
@@ -1038,6 +1075,19 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp warn_legacy_escalate_label(_labels, _path), do: :ok
+
+  # The acceptance gate is being retired in favour of the per-repo `manual_review` setting: a config
+  # that still sets a mode loads unchanged (a legacy repo keeps the gate exactly as it is today) and
+  # says once per config what its mode now means, and where the setting it maps to lives.
+  defp warn_deprecated_gate_mode(mode, path) when is_binary(mode) do
+    deprecation_warning(
+      "symphony.yml `#{path}.mode` is deprecated and will be removed: review authority is now the per-repo " <>
+        "`manual_review` setting. `#{mode}` maps to `manual_review: #{manual_review_for_gate_mode(mode)}` " <>
+        "(shadow/advise → on; off/enforce/decide → off; watch is operator monitoring)"
+    )
+  end
+
+  defp warn_deprecated_gate_mode(_mode, _path), do: :ok
 
   # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
   defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do

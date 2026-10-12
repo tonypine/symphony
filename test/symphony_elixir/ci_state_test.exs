@@ -118,7 +118,10 @@ defmodule SymphonyElixir.CiStateTest do
           assert :ok = CiState.record("repo-a", "issue-1", "abc", "red", @at, run_store: FakeStore, tracker: NotARealTracker)
         end)
 
-      assert log == ""
+      # capture_log sees every process's logs, so another async test's lines can land here.
+      refute log =~ "Failed to set_machine_label"
+      refute log =~ "Failed to clear_machine_label"
+      refute log =~ "Failed to record CI state"
     end
 
     test "a tracker failure is logged, and the other labels are still cleared" do

@@ -21,7 +21,8 @@ public enum EditRepo {
             project: entry.route.projects?.first,
             labels: entry.route.labels ?? [],
             acceptanceGate: AcceptanceGateChoice(override: entry.acceptanceGateMode),
-            stateMachine: StateMachineChoice(override: entry.stateMachine)
+            stateMachine: StateMachineChoice(override: entry.stateMachine),
+            manualReview: ManualReviewChoice(override: entry.manualReview)
         )
     }
 
@@ -89,6 +90,12 @@ public enum EditRepo {
         // value Symphony rejects stays until another one is picked; Legacy removes the key.
         if draft.stateMachine != StateMachineChoice(override: original.stateMachine) {
             entry.stateMachine = draft.stateMachine.override
+        }
+
+        // Manual review follows the same rule: it changes only when its picker moved, and Off removes the
+        // key, leaving the repo on the default (or on the mode its deprecated acceptance gate names).
+        if draft.manualReview != ManualReviewChoice(override: original.manualReview) {
+            entry.manualReview = draft.manualReview.override
         }
 
         let others = existing.filter { $0.key != original.key }

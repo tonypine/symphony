@@ -1,5 +1,11 @@
 # Acceptance gate
 
+**`mode` is deprecated** — global and per repo. Review authority is now the per-repo
+[`manual_review`](configuration.md) setting. The old value still loads, with a warning logged once
+per config, and maps onto it: `shadow` → `on`, and `off`, `enforce` and `decide` → `off` (`watch`
+was operator monitoring). A repo that sets its own `manual_review` wins over the mode. Everything
+else on this page — the gate's own run, its escalation rules, its report — is unchanged.
+
 The acceptance gate is a step in Auto Review, after QA. It decides whether a PR can merge without
 a human. A gate agent reads the ticket and the PR. Before the agent's verdict counts, fixed
 escalation rules check the ticket and the diff, and any rule that triggers sends the PR to a human.
