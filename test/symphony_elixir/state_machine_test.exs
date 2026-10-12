@@ -42,7 +42,7 @@ defmodule SymphonyElixir.StateMachineTest do
       assert StateMachine.active_states(settings) == ["Todo", "In Progress"]
     end
 
-    test "designed adds the designed phase states, deduplicated" do
+    test "designed adds its dispatchable phase states, deduplicated, but never Plan Review" do
       settings = %{
         state_machine: "designed",
         tracker: %{active_states: ["Todo", "In Progress", "Code Review"]},
@@ -54,7 +54,7 @@ defmodule SymphonyElixir.StateMachineTest do
       }
 
       assert StateMachine.active_states(settings) ==
-               ["Todo", "In Progress", "Code Review", "QA", "Plan Review", "Epic Review", "CI Fix"]
+               ["Todo", "In Progress", "Code Review", "QA", "Epic Review", "CI Fix"]
     end
 
     test "a settings without a tracker has no base active states" do
@@ -75,12 +75,12 @@ defmodule SymphonyElixir.StateMachineTest do
   end
 
   describe "designed_phase_states/1" do
-    test "reads the five phase states, dropping blank and missing ones" do
+    test "reads the dispatchable phase states, dropping blank and missing ones" do
       settings = %{
         code_review_state: "Code Review",
         qa_state: "QA",
-        plan_review_state: "  ",
-        epic_review_state: nil,
+        plan_review_state: "Plan Review",
+        epic_review_state: "  ",
         ci_fix_state: "CI Fix"
       }
 

@@ -57,32 +57,48 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.signals("sideways") == TransitionGuard.signals()
     end
 
-    test "the designed table is the legacy table plus the designed flow's own edges" do
+    test "the designed table replaces the legacy plan revise and adds the designed flow's own edges" do
       legacy = TransitionGuard.edges("legacy")
       designed = TransitionGuard.edges("designed")
 
-      assert Enum.take(designed, length(legacy)) == legacy
+      replaced = Enum.filter(legacy, &(&1.signal == :plan_revise))
+      kept = Enum.reject(legacy, &(&1.signal == :plan_revise))
 
-      designed_only = designed -- legacy
+      # Every other legacy row is kept, in its place; the one replaced row follows them, so the
+      # designed table is the legacy order with the redesigned flow's rows in designed-only tail.
+      assert Enum.take(designed, length(kept)) == kept
 
-      assert Enum.map(designed_only, & &1.signal) == [
-               :restart,
-               :handoff,
-               :code_review_approve,
-               :code_review_approve_skip,
-               :code_review_rework,
-               :code_review_escalate,
-               :qa_pass,
-               :qa_skip,
-               :qa_fail,
-               :ci_fix_enter_code_review,
-               :ci_fix_enter_qa,
-               :ci_fix_enter_merging,
-               :ci_fix_enter_rework,
-               :ci_fix_mechanical
-             ]
+      assert Enum.drop(designed, length(kept)) ==
+               [
+                 %{signal: :plan_revise, from: ["Plan Review"], to: "Rework"},
+                 %{signal: :restart, from: :any, to: "In Progress"},
+                 %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
+                 %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
+                 %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging"},
+                 %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
+                 %{signal: :code_review_escalate, from: ["Code Review"], to: :requested},
+                 %{signal: :qa_pass, from: ["QA"], to: "Merging"},
+                 %{signal: :qa_skip, from: ["QA"], to: "Merging"},
+                 %{signal: :qa_fail, from: ["QA"], to: "Rework"},
+                 %{signal: :ci_fix_enter_code_review, from: ["Code Review"], to: :ci_fix_state},
+                 %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
+                 %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
+                 %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
+                 %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested}
+               ]
 
-      assert TransitionGuard.signals("designed") == TransitionGuard.signals() ++ Enum.map(designed_only, & &1.signal)
+      # The signal vocabulary keeps every name, the replaced one included, in table order.
+      assert TransitionGuard.signals("designed") ==
+               (TransitionGuard.signals() -- Enum.map(replaced, & &1.signal)) ++
+                 Enum.map(Enum.drop(designed, length(kept)), & &1.signal)
+    end
+
+    test "the designed plan revise fires from Plan Review and moves through Rework" do
+      assert TransitionGuard.target(:plan_revise, %{settings: designed_settings()}) == "Rework"
+      assert TransitionGuard.legal?(:plan_revise, "Plan Review", "Rework", "designed")
+      # The legacy origins are gone with the replaced row: a designed parent is never revised there.
+      refute TransitionGuard.legal?(:plan_revise, "In Review", nil, "designed")
+      assert TransitionGuard.legal?(:plan_revise, "In Review", nil, "legacy")
     end
 
     test "legal?/4 reads the table for the given version" do
@@ -392,6 +408,48 @@ defmodule SymphonyElixir.TransitionGuardTest do
                  settings: settings,
                  states: [state("In Review")],
                  needs_person?: true
+               })
+    end
+
+    test "redirects a designed repo's plan parent to its Plan Review state" do
+      plan_review = state("Plan Review", "plan-review-id")
+
+      # The plan run hands over by asking for In Review, as it always has; the machine owns where it lands.
+      for asked <- ["In Review", " in review "] do
+        assert {:ok, ^plan_review} =
+                 TransitionGuard.resolve_request(state(asked), %{
+                   settings: designed_settings(),
+                   states: [state("In Review"), plan_review],
+                   plan_parent?: true
+                 })
+      end
+
+      # Not a plan parent, not a designed repo, or the state not on the team: the request stands.
+      for ctx <- [
+            %{settings: designed_settings(), states: [state("In Review"), plan_review], plan_parent?: false},
+            %{settings: memory_settings(), states: [state("In Review"), plan_review], plan_parent?: true},
+            %{settings: designed_settings(), states: [state("In Review")], plan_parent?: true}
+          ] do
+        assert {:ok, %{"name" => "In Review"}} = TransitionGuard.resolve_request(state("In Review"), ctx)
+      end
+    end
+
+    test "refuses an agent's hand move into Plan Review on a designed repo" do
+      assert {:error, {:plan_review_requires_handoff_signal, "Plan Review"}} =
+               TransitionGuard.resolve_request(state("Plan Review"), %{settings: designed_settings()})
+
+      # The refusal matches the name loosely, and a plan parent's hand move is refused too: the state
+      # belongs to the handoff, which enters it by asking for In Review.
+      assert {:error, {:plan_review_requires_handoff_signal, "plan review"}} =
+               TransitionGuard.resolve_request(state("plan review"), %{settings: designed_settings(), plan_parent?: true})
+
+      # A legacy repo has no such state, and neither has a designed repo that turned it off.
+      assert {:ok, %{"name" => "Plan Review"}} =
+               TransitionGuard.resolve_request(state("Plan Review"), %{settings: memory_settings()})
+
+      assert {:ok, %{"name" => "Plan Review"}} =
+               TransitionGuard.resolve_request(state("Plan Review"), %{
+                 settings: designed_settings(%{"tracker" => %{"kind" => "memory", "plan_review_state" => nil}})
                })
     end
 

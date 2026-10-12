@@ -2950,6 +2950,60 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:machine_label_set, _issue_id, _name}
     end
 
+    # A designed repo's plan parent: the plan run hands over by naming `In Review`, and the guard
+    # performs the move into the repo's configured `Plan Review` state.
+    defp plan_review_client(extra \\ []) do
+      states =
+        [%{"id" => "state-review", "name" => "In Review"}, %{"id" => "state-plan-review", "name" => "Plan Review"}] ++ extra
+
+      fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "state" => %{"name" => "In Progress", "type" => "started"},
+                 "labels" => %{"nodes" => [%{"name" => "plan"}]},
+                 "team" => %{"states" => %{"nodes" => states}}
+               }
+             }
+           }}
+        else
+          send(self(), {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+    end
+
+    test "a designed repo's plan parent hands over to Plan Review, whatever review state it names" do
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      for asked <- ["In Review", " in review "] do
+        assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+                 Linear.update_state(context, asked, linear_client: plan_review_client(), settings: designed_settings())
+
+        assert_received {:moved_to, "state-plan-review"}
+      end
+    end
+
+    test "a designed repo refuses an agent naming Plan Review itself" do
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          plan_review_client().(query, variables, [])
+        else
+          send(self(), {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:error, {:plan_review_requires_handoff_signal, "Plan Review"}} =
+               Linear.update_state(context, "Plan Review", linear_client: client, settings: designed_settings())
+
+      refute_received {:moved_to, _state_id}
+    end
+
     # The CI Fix lane's substantive exit: the fixing agent, finding the repair needs a real change,
     # sends its own ticket to `Rework`. That is an ordinary state request — the guard performs no
     # lane edge for it — so the only thing the lane does is record what the move meant.

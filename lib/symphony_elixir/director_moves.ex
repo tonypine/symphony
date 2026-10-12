@@ -360,13 +360,17 @@ defmodule SymphonyElixir.DirectorMoves do
   defp kind_phrase(:pr), do: "a pull request"
   defp kind_phrase(:final_verification), do: "a final verification"
 
+  # The Director answers a ticket a person is reviewing: `In Review` or the human review state, and
+  # a designed repo's `Plan Review`, where a plan parent waits for its plan's review.
   defp require_review(%Issue{state: state} = issue, settings) do
-    if HumanReview.review_state?(state, settings) do
+    if HumanReview.review_state?(state, settings) or HumanReview.plan_review_state?(state, settings) do
       :ok
     else
-      conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{Enum.join(HumanReview.review_states(settings), " or ")}")
+      conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{Enum.join(answerable_states(settings), " or ")}")
     end
   end
+
+  defp answerable_states(settings), do: Enum.uniq(HumanReview.review_states(settings) ++ HumanReview.plan_review_states(settings))
 
   defp conflict(message), do: {:error, {:conflict, message}}
 

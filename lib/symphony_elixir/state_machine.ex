@@ -9,15 +9,18 @@ defmodule SymphonyElixir.StateMachine do
 
   `active_states/1` is the dispatch half: the states the machine picks work up from for the repo's
   version. `legacy` uses the configured active states unchanged; `designed` adds the designed phase
-  states (`code_review`, `qa`, `plan_review`, `epic_review`, `ci_fix`), so the designed machine
-  dispatches from its new phases. Those additions are inert until a repo is switched: the guard's
-  designed edge table is still parity with legacy, so nothing enters those states yet.
+  states (`code_review`, `qa`, `epic_review`, `ci_fix`), so the designed machine dispatches from its
+  new phases. `Plan Review` is a designed phase state too, but no run starts there: it is
+  person-owned, the machine only watches it for a person's handoff (`HumanReview.plan_review_states/1`
+  and the orchestrator's watching refresh), so it is deliberately not in the dispatch list — an
+  issue in it is never picked up.
   """
 
   @legacy "legacy"
   @designed "designed"
   @versions [@legacy, @designed]
-  @designed_phase_fields [:code_review_state, :qa_state, :plan_review_state, :epic_review_state, :ci_fix_state]
+  # The designed phase states dispatch picks work up from.
+  @designed_phase_fields [:code_review_state, :qa_state, :epic_review_state, :ci_fix_state]
 
   @typedoc "The state-machine version a repo runs."
   @type version :: String.t()
@@ -62,7 +65,8 @@ defmodule SymphonyElixir.StateMachine do
   end
 
   @doc """
-  The configured designed phase state names that are present and non-empty.
+  The configured designed phase state names dispatch picks work up from, present and non-empty.
+  `Plan Review` is not one of them: it is person-owned and never dispatched.
 
   Accepts the runtime settings struct, whose phase states sit under `tracker`, or a bare tracker
   map, whose fields sit at its top level.
