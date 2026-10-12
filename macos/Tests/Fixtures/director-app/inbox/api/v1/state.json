@@ -36,7 +36,7 @@
     "retrying": 0,
     "running": 3,
     "shipped_today": 3,
-    "waiting_on_you": 5,
+    "waiting_on_you": 6,
     "watching": 5
   },
   "dispatch_state": {
@@ -388,6 +388,19 @@
       "url": "https://linear.app/acme/issue/SHOP-341",
       "waiting_seconds": 600,
       "waiting_since": "2026-10-07T14:10:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "The run reported a block",
+      "issue_id": "i-360",
+      "issue_identifier": "SHOP-360",
+      "kind": "blocked",
+      "repo_key": "web-shop",
+      "state": "In Progress",
+      "title": "Refund a gift card",
+      "url": "https://linear.app/acme/issue/SHOP-360",
+      "waiting_seconds": 300,
+      "waiting_since": "2026-10-07T14:15:00Z"
     }
   ],
   "watching": [

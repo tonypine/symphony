@@ -7,7 +7,7 @@ final class InboxTests: XCTestCase {
 
     func testTheInboxFixtureHasOneItemOfEachKindWithItsReview() throws {
         let inbox = try payload("inbox")
-        XCTAssertEqual(inbox.items.map(\.kind), [.plan, .pr, .finalVerification, .action, .clarify])
+        XCTAssertEqual(inbox.items.map(\.kind), [.plan, .pr, .finalVerification, .action, .clarify, .blocked])
 
         let plan = inbox.items[0]
         XCTAssertEqual(plan.identifier, "SHOP-330")
@@ -44,6 +44,12 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(clarify.scoreLine, "3 of 10, passes at 6")
         XCTAssertEqual(clarify.roundLine, "Round 1 of 2")
         XCTAssertEqual(clarify.questions.count, 2)
+
+        let blocked = try XCTUnwrap(inbox.items[5].review.blocked)
+        XCTAssertEqual(blocked.reason, "The run reported a block")
+        XCTAssertEqual(blocked.nextLine, "Clears when the block is resolved; a person clears an access hold.")
+        XCTAssertEqual(inbox.items[5].state, "In Progress")
+        XCTAssertEqual(InboxReview.Blocked(reason: "Needs a key").nextLine, "Symphony lifts the hold when what it waits on clears.")
     }
 
     func testTheBadgeTheMenuTheTileAndTheInboxAgreeOnTheCount() throws {
@@ -90,26 +96,27 @@ final class InboxTests: XCTestCase {
             item("A-3", .pr, repo: "api", seconds: nil),
             item("W-2", .clarify, repo: "web", seconds: 30),
             item("D-1", .action, repo: "docs", seconds: 10),
+            item("W-3", .blocked, repo: "web", seconds: 900),
         ]
         let all = InboxList(items: items)
-        XCTAssertEqual(all.groups.map(\.title), ["Plans", "Pull requests", "Actions", "Clarify"])
-        XCTAssertEqual(all.groups.map(\.id), ["plan", "pr", "action", "clarify"])
+        XCTAssertEqual(all.groups.map(\.title), ["Plans", "Pull requests", "Actions", "Clarify", "Blocked"])
+        XCTAssertEqual(all.groups.map(\.id), ["plan", "pr", "action", "clarify", "blocked"])
         XCTAssertEqual(all.groups[1].items.map(\.identifier), ["A-2", "A-1", "A-3"])
-        XCTAssertEqual(all.ordered.map(\.identifier), ["W-1", "A-2", "A-1", "A-3", "D-1", "W-2"])
+        XCTAssertEqual(all.ordered.map(\.identifier), ["W-1", "A-2", "A-1", "A-3", "D-1", "W-2", "W-3"])
         XCTAssertNil(all.hiddenLine)
-        XCTAssertEqual(all.totalCount, 6)
+        XCTAssertEqual(all.totalCount, 7)
 
         let api = InboxList(items: items, scope: .repo("api"))
         XCTAssertEqual(api.groups.map(\.kind), [.pr])
-        XCTAssertEqual(api.hiddenCount, 3)
-        XCTAssertEqual(api.hiddenLine, "3 more in other repos")
-        XCTAssertEqual(api.totalCount, 6)
-        XCTAssertEqual(InboxList(items: items, scope: .repo("docs")).hiddenLine, "5 more in other repos")
+        XCTAssertEqual(api.hiddenCount, 4)
+        XCTAssertEqual(api.hiddenLine, "4 more in other repos")
+        XCTAssertEqual(api.totalCount, 7)
+        XCTAssertEqual(InboxList(items: items, scope: .repo("docs")).hiddenLine, "6 more in other repos")
         XCTAssertEqual(InboxList(items: [items[0], items[5]], scope: .repo("api")).hiddenLine, "1 more in another repo")
 
         let none = InboxList(items: items, scope: .repo("ios"))
         XCTAssertTrue(none.isEmpty)
-        XCTAssertEqual(none.hiddenLine, "6 more in other repos")
+        XCTAssertEqual(none.hiddenLine, "7 more in other repos")
     }
 
     func testSelectionFallsBackToTheFirstAndMovesToTheNeighbor() {
@@ -158,6 +165,11 @@ final class InboxTests: XCTestCase {
         clarify.url = linear
         XCTAssertEqual(InboxAction.actions(for: clarify), [.editInLinear(linear)])
         XCTAssertEqual(InboxAction.actions(for: item("X-2", .clarify)), [])
+
+        var blocked = item("X-1", .blocked)
+        blocked.url = linear
+        XCTAssertEqual(InboxAction.actions(for: blocked), [.openInLinear(linear)])
+        XCTAssertEqual(InboxAction.actions(for: item("X-2", .blocked)), [])
 
         XCTAssertEqual([InboxAction.openInLinear(linear), .openPR(prURL), .copySteps(""), .editInLinear(linear)].map(\.title), [
             "Open in Linear", "Open PR", "Copy Steps", "Edit in Linear",
@@ -254,8 +266,25 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(older.inboxRead)
     }
 
-    func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {
-        var notifier = InboxNotifier(remembered: [])
+    func testABlockedTicketReadsAsItsOwnKindEverywhere() {
+        let blocked = waiting("SHOP-360", .blocked, headline: "The run reported a block")
+        XCTAssertEqual(blocked.kind.inboxKind, .blocked)
+        XCTAssertEqual(blocked.kind.symbol, "hand.raised.slash")
+        XCTAssertEqual(NoticeKind(blocked.kind)?.settingsTitle, "Blocked tickets to unblock")
+
+        let notice = InboxNotifier.notice(blocked)
+        XCTAssertEqual(notice?.key, "blocked:id-SHOP-360")
+        XCTAssertEqual(notice?.kind, .blocked)
+        XCTAssertEqual(notice?.body, "Blocked: The run reported a block")
+        XCTAssertEqual(notice?.offersApproveAndMerge, false)
+
+        XCTAssertEqual(StatusMenu.kindLabel(.blocked), "Blocked")
+        XCTAssertEqual(StatusMenu.waitingLine(blocked), "SHOP-360 · Blocked · The run reported a block")
+        XCTAssertEqual(InboxItem.Kind.blocked.groupTitle, "Blocked")
+        XCTAssertEqual(InboxItem.Kind.blocked.word, "Blocked")
+    }
+
+    func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {        var notifier = InboxNotifier(remembered: [])
         var preferences = NotificationPreferences()
         preferences.set(.clarify, on: false)
         preferences.set(.problem, on: false)
@@ -286,7 +315,7 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: NotificationPreferences.defaultsKey) as? [String], ["pr", "problem"])
         XCTAssertEqual(NotificationPreferences.load(from: defaults).off, [.pr, .problem])
 
-        XCTAssertEqual(NoticeKind.allCases.map(\.settingsTitle).count, 6)
+        XCTAssertEqual(NoticeKind.allCases.map(\.settingsTitle).count, 7)
     }
 
     func testKeepsOnlyTheNewestKeys() {
