@@ -17,8 +17,9 @@ defmodule SymphonyElixir.AgentProcessesTest do
   end
 
   test "tracking a closed port or a missing server is a no-op" do
+    # Wait for the exit rather than closing it: `Port.close/1` raises once the port is gone.
     port = open_agent("exit 0")
-    Port.close(port)
+    assert_receive {^port, {:exit_status, 0}}, 5_000
     assert :ok = AgentProcesses.track(port, server: unique_name())
 
     port = open_agent(@eof_ignoring_agent)
