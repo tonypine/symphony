@@ -2795,4 +2795,85 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     File.mkdir_p!(workspace)
     workspace
   end
+
+  describe "update_state/3 and the Blocked hold" do
+    defmodule HoldTracker do
+      def set_machine_label(issue_id, name) do
+        send(self(), {:machine_label_set, issue_id, name})
+        :ok
+      end
+
+      def clear_machine_label(issue_id, name) do
+        send(self(), {:machine_label_cleared, issue_id, name})
+        :ok
+      end
+    end
+
+    defp designed_settings do
+      assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+      settings
+    end
+
+    defp team_client(from_state) do
+      states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-progress", "name" => "In Progress"}]
+
+      fn query, _variables, _opts ->
+        assert query =~ "SymphonyAgentIssueTeamStates"
+
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "state" => %{"name" => from_state, "type" => "started"},
+               "team" => %{"states" => %{"nodes" => states}}
+             }
+           }
+         }}
+      end
+    end
+
+    test "a designed repo turns an agent's Backlog request into a Blocked hold, without a move" do
+      :ok = SymphonyElixir.RunStore.clear()
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, response} =
+               Linear.update_state(context, "Backlog",
+                 linear_client: team_client("In Progress"),
+                 settings: designed_settings(),
+                 store: SymphonyElixir.RunStore,
+                 tracker: HoldTracker
+               )
+
+      assert response["held"] == true
+      assert response["hold"] == "Blocked"
+      assert response["reason"] =~ "reported a block"
+      assert response["message"] =~ "Blocked"
+      assert_received {:machine_label_set, "issue-1", "Blocked"}
+
+      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access"}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+    end
+
+    test "a legacy repo still moves the issue to Backlog" do
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          team_client("In Progress").(query, variables, [])
+        else
+          send(test_pid, {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+               Linear.update_state(context, "Backlog", linear_client: client, settings: Config.settings!())
+
+      assert_received {:moved_to, "state-backlog"}
+      refute_received {:machine_label_set, _issue_id, _name}
+    end
+  end
 end

@@ -19,11 +19,19 @@ defmodule SymphonyElixir.TicketState do
 
   @hold_kinds [:blocked, :needs_decision]
 
+  @typedoc """
+  What a hold waits on, structured so the machine can clear it on its own: the dependency key(s)
+  it is blocked by (`type: "dependency"`), an access need (`type: "access"`) or the fix ticket a
+  self-heal filed (`type: "fix_ticket"`).
+  """
+  @type waits_on :: %{type: String.t(), keys: [String.t()]} | nil
+
   @typedoc "A hold pauses the ticket in its phase; the label is only its projection."
   @type hold :: %{
           kind: :blocked | :needs_decision,
           reason: String.t() | nil,
           clearing_condition: String.t() | nil,
+          waits_on: waits_on(),
           decision: map() | nil,
           set_at: DateTime.t() | nil
         }
@@ -133,6 +141,7 @@ defmodule SymphonyElixir.TicketState do
       kind: kind,
       reason: map_string(attrs, :reason),
       clearing_condition: map_string(attrs, :clearing_condition),
+      waits_on: map_waits_on(attrs),
       decision: map_decision(attrs),
       set_at: at
     }
@@ -150,6 +159,12 @@ defmodule SymphonyElixir.TicketState do
     |> normalize()
     |> Map.update!(:holds, &Enum.reject(&1, fn hold -> hold.kind == kind end))
     |> Map.put(:updated_at, at)
+  end
+
+  @doc "The hold of `kind` on the record, or nil."
+  @spec get_hold(t(), :blocked | :needs_decision) :: hold() | nil
+  def get_hold(record, kind) when kind in @hold_kinds do
+    record |> normalize() |> Map.fetch!(:holds) |> Enum.find(&(&1.kind == kind))
   end
 
   @doc "Whether a hold of `kind` is set."
@@ -255,6 +270,7 @@ defmodule SymphonyElixir.TicketState do
         kind: kind,
         reason: map_string(hold, :reason),
         clearing_condition: map_string(hold, :clearing_condition),
+        waits_on: map_waits_on(hold),
         decision: map_decision(hold),
         set_at: map_datetime(hold, :set_at)
       }
@@ -324,6 +340,28 @@ defmodule SymphonyElixir.TicketState do
       _decision -> nil
     end
   end
+
+  # `waits_on` keeps only its structured half: a non-empty string type and a list of string keys.
+  defp map_waits_on(attrs) do
+    case Map.get(attrs, :waits_on) do
+      %{type: type} = waits_on when is_binary(type) ->
+        case String.trim(type) do
+          "" -> nil
+          trimmed -> %{type: trimmed, keys: normalize_keys(Map.get(waits_on, :keys))}
+        end
+
+      _waits_on ->
+        nil
+    end
+  end
+
+  defp normalize_keys(keys) when is_list(keys) do
+    keys
+    |> Enum.map(&normalize_string/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_keys(_keys), do: []
 
   defp map_string(map, key), do: normalize_string(Map.get(map, key))
 
