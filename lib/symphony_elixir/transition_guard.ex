@@ -18,15 +18,15 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
-  `:waiting_on_sub_issues` and `:ci_escalation_state`.
+  `:code_review_state`, `:waiting_on_sub_issues` and `:ci_escalation_state`.
 
   The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`),
   taken from `ctx`: the repo's `:settings` when the caller has them, else resolved from
   `ctx[:repo_key]`, so a designed repo never runs the legacy table just because a caller omitted the
-  settings. `edges/1` returns the `legacy` table or the `designed` one. The `designed` table is in
-  parity with `legacy` today — this module adds the switch, not the redesigned flow; flow tickets
-  replace rows in the `designed` table, never the legacy one, so a repo left on `legacy` keeps
-  today's behavior exactly.
+  settings. `edges/1` returns the `legacy` table or the `designed` one. The `designed` table is the
+  legacy rows plus the redesigned flow's own edges — the explicit `:handoff` into `Code Review` and
+  the reviewer run's three verdict edges; flow tickets replace rows in the `designed` table, never
+  the legacy one, so a repo left on `legacy` keeps today's behavior exactly.
   """
 
   alias SymphonyElixir.{AutoReview, Config, HumanReview, StateMachine, SubIssueWait, Tracker}
@@ -95,10 +95,25 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :parent_walkthrough, from: :any, to: :requested}
   ]
 
-  # The designed machine's edge table. It is in parity with the legacy table today: this ticket adds
-  # the version switch, not the redesigned flow. Flow tickets replace rows here — never in `@edges`
-  # — so a repo left on `legacy` keeps today's behavior exactly.
-  @designed_edges @edges
+  # The designed machine's edge table: the legacy rows plus the edges the redesigned flow adds.
+  # Flow tickets replace rows here — never in `@edges` — so a repo left on `legacy` keeps today's
+  # behavior exactly.
+  #
+  # `:handoff` is the explicit handoff signal: `In Progress` (or `Rework`) enters `Code Review`
+  # only on it, never when a run merely goes quiet. Its target is the repo's configured Code
+  # Review state, so a repo that names it differently still lands there.
+  #
+  # The three `:code_review_*` rows are the reviewer run's verdicts. They bind to the head the
+  # reviewer judged (`SymphonyElixir.CodeReview` records the verdict against it): approve carries
+  # the ticket on to `Merging` (the QA-skipped policy path), a rework verdict returns it to
+  # `Rework`, and an escalation asks for a person through the request machinery.
+  @designed_edges @edges ++
+                    [
+                      %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
+                      %{signal: :code_review_approve, from: ["Code Review"], to: :requested},
+                      %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
+                      %{signal: :code_review_escalate, from: ["Code Review"], to: :requested}
+                    ]
 
   # States an agent's request may never set, with the refusal it gets. Moving to `Merging` is how a
   # person approves a merge, so an agent may not do it.
@@ -178,6 +193,7 @@ defmodule SymphonyElixir.TransitionGuard do
     with :ok <- refuse_handoff_state(state_name, Map.get(ctx, :pr_less?, false), settings),
          state = redirect_state(state, ctx, settings),
          :ok <- refuse_human_only(state),
+         :ok <- refuse_code_review_entry(state, settings),
          :ok <- refuse_waiting_state(state, settings) do
       {:ok, state}
     end
@@ -212,6 +228,15 @@ defmodule SymphonyElixir.TransitionGuard do
       nil -> :ok
       %{error: error} -> {:error, {error, state_name}}
     end
+  end
+
+  # Entering `Code Review` on a designed repo is the handoff signal's job, so an agent's request to
+  # set the state by hand is refused. The handoff is emitted mechanically by the push and PR tool
+  # hooks and performed by the runner, never by an agent asking for the state.
+  defp refuse_code_review_entry(%{"name" => state_name}, settings) do
+    if StateMachine.designed?(settings) and state_name_matches?(state_name, settings.tracker.code_review_state),
+      do: {:error, {:code_review_requires_handoff_signal, state_name}},
+      else: :ok
   end
 
   # Moving a `breakdown` parent to the waiting state approves its plan and promotes its sub-tickets,
@@ -258,6 +283,7 @@ defmodule SymphonyElixir.TransitionGuard do
   defp target_allowed?(_target, _to), do: true
 
   defp resolve(:requested, ctx), do: Map.fetch!(ctx, :target)
+  defp resolve(:code_review_state, ctx), do: settings!(ctx).tracker.code_review_state
   defp resolve(:waiting_on_sub_issues, ctx), do: SubIssueWait.state(settings!(ctx))
   defp resolve(:ci_escalation_state, ctx), do: settings!(ctx).ci.escalation_state || @in_review_state
   defp resolve(name, _ctx) when is_binary(name), do: name

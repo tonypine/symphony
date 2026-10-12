@@ -22,6 +22,10 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
   defp state(name, id \\ "state-id"), do: %{"id" => id, "name" => name}
 
+  defp designed_settings(extra \\ %{}) do
+    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"} |> Map.merge(extra))
+  end
+
   describe "edges/0 and signals/0" do
     test "every row names a signal, origins and a target, and signals are unique" do
       edges = TransitionGuard.edges()
@@ -53,9 +57,22 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.signals("sideways") == TransitionGuard.signals()
     end
 
-    test "the designed table is in parity with the legacy table" do
-      assert TransitionGuard.edges("designed") == TransitionGuard.edges("legacy")
-      assert TransitionGuard.signals("designed") == TransitionGuard.signals()
+    test "the designed table is the legacy table plus the designed flow's own edges" do
+      legacy = TransitionGuard.edges("legacy")
+      designed = TransitionGuard.edges("designed")
+
+      assert Enum.take(designed, length(legacy)) == legacy
+
+      designed_only = designed -- legacy
+
+      assert Enum.map(designed_only, & &1.signal) == [
+               :handoff,
+               :code_review_approve,
+               :code_review_rework,
+               :code_review_escalate
+             ]
+
+      assert TransitionGuard.signals("designed") == TransitionGuard.signals() ++ Enum.map(designed_only, & &1.signal)
     end
 
     test "legal?/4 reads the table for the given version" do
@@ -82,6 +99,41 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.target(:claim, %{repo_key: "designed-repo"}) == "In Progress"
       # An unknown repo key falls back to the default version.
       assert TransitionGuard.target(:claim, %{repo_key: "missing-repo"}) == "In Progress"
+    end
+  end
+
+  describe "the designed flow's edges" do
+    test "the handoff moves In Progress or Rework to the configured Code Review state" do
+      designed = designed_settings()
+
+      assert TransitionGuard.legal?(:handoff, "In Progress", nil, "designed")
+      assert TransitionGuard.legal?(:handoff, "Rework", nil, "designed")
+      refute TransitionGuard.legal?(:handoff, "Todo", nil, "designed")
+      # The edge is designed-only: a legacy repo cannot fire it.
+      refute TransitionGuard.legal?(:handoff, "In Progress", nil, "legacy")
+      refute TransitionGuard.legal?(:handoff, "In Progress")
+
+      assert TransitionGuard.target(:handoff, %{settings: designed}) == "Code Review"
+    end
+
+    test "the handoff target is the repo's configured Code Review state" do
+      settings =
+        settings!(%{
+          "tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"},
+          "state_machine" => "designed"
+        })
+
+      assert TransitionGuard.target(:handoff, %{settings: settings}) == "Peer Review"
+    end
+
+    test "the reviewer's verdicts are designed edges out of Code Review" do
+      assert TransitionGuard.legal?(:code_review_approve, "Code Review", nil, "designed")
+      assert TransitionGuard.legal?(:code_review_rework, "Code Review", nil, "designed")
+      assert TransitionGuard.legal?(:code_review_escalate, "Code Review", nil, "designed")
+      refute TransitionGuard.legal?(:code_review_approve, "In Progress", nil, "designed")
+
+      assert TransitionGuard.target(:code_review_approve, %{settings: designed_settings(), target: "Merging"}) == "Merging"
+      assert TransitionGuard.target(:code_review_rework, %{settings: designed_settings()}) == "Rework"
     end
   end
 
@@ -255,6 +307,17 @@ defmodule SymphonyElixir.TransitionGuardTest do
     test "refuses an agent's move to the waiting state" do
       assert {:error, {:waiting_on_sub_issues_state_requires_human_approval, "Waiting on sub-tickets"}} =
                TransitionGuard.resolve_request(state("Waiting on sub-tickets"), %{settings: memory_settings()})
+    end
+
+    test "refuses an agent's hand move into Code Review on a designed repo" do
+      assert {:error, {:code_review_requires_handoff_signal, "Code Review"}} =
+               TransitionGuard.resolve_request(state("Code Review"), %{settings: designed_settings()})
+    end
+
+    test "passes the Code Review state through on a legacy repo" do
+      state = state("Code Review")
+
+      assert {:ok, ^state} = TransitionGuard.resolve_request(state, %{settings: memory_settings()})
     end
 
     test "allows the waiting state when it is turned off in config" do

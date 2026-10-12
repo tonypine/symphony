@@ -90,8 +90,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     Application.put_env(:symphony_elixir, :progress_agent_recipient, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-rework", checks: []}})
+    RunStore.delete_ticket_state("default", "issue-progress")
 
     on_exit(fn ->
+      RunStore.delete_ticket_state("default", "issue-progress")
+
       for key <- [
             :progress_agent_recipient,
             :progress_agent_turns,
@@ -123,6 +126,40 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     assert turns() == 1
     assert_received {:memory_tracker_state_update, "issue-progress", "In Review"}
+  end
+
+  describe "the designed handoff signal" do
+    defp designed_repos do
+      [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    end
+
+    test "a run that ends quietly with a PR open does not advance" do
+      assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
+        run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+      end
+
+      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff_missing", %{to: "Code Review", reason: "after rework"})
+    end
+
+    test "the explicit handoff signal moves the ticket to Code Review" do
+      assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
+
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff", %{to: "Code Review", reason: "after rework"})
+    end
+
+    test "a signal for another head does not advance this run" do
+      assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-other", branch: "auto/TP-337"})
+
+      assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
+        run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+      end
+
+      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    end
   end
 
   test "a re-dispatched Rework run whose rework an earlier run pushed moves on after one empty turn" do
@@ -987,6 +1024,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       workspace_root: test_root,
       max_turns: Keyword.get(opts, :max_turns, 3),
       auto_review: Keyword.get(opts, :auto_review, %{enabled: true}),
+      repos: Keyword.get(opts, :repos),
       review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server", run_on: "always"})
     )
 

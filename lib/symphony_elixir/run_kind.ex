@@ -13,10 +13,12 @@ defmodule SymphonyElixir.RunKind do
        never-approved plan stopped midway, or one revising its plan from review comments.
     5. `landing`: the issue is in `Merging`.
     6. `rework`: the issue is in `Rework`.
-    7. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
-    8. `review_feedback`: the run continues after PR review comments
+    7. `code_review`: the issue is in the designed machine's `Code Review` state: the
+       poll-dispatched reviewer run, which judges the PR head and records a verdict.
+    8. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
+    9. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
-    9. `implementation`: everything else.
+    10. `implementation`: everything else.
 
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
@@ -35,6 +37,7 @@ defmodule SymphonyElixir.RunKind do
           | :final_verification
           | :rework
           | :landing
+          | :code_review
           | :ci_fix
           | :review_feedback
           | :pre_push_review
@@ -54,6 +57,7 @@ defmodule SymphonyElixir.RunKind do
     :final_verification,
     :rework,
     :landing,
+    :code_review,
     :ci_fix,
     :review_feedback,
     :pre_push_review,
@@ -64,6 +68,7 @@ defmodule SymphonyElixir.RunKind do
   @final_verification_prefix "Final verification:"
   @landing_state "merging"
   @rework_state "rework"
+  @code_review_state "code review"
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 
   @doc "Every run kind, in documentation order."
@@ -112,6 +117,7 @@ defmodule SymphonyElixir.RunKind do
       Issue.breakdown?(issue) -> parent_kind(issue, terminal_states)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
+      in_state?(issue, @code_review_state) -> :code_review
       present?(Keyword.get(signals, :ci_failure)) -> :ci_fix
       present?(Keyword.get(signals, :reviewer_comments)) -> :review_feedback
       true -> :implementation
