@@ -1698,7 +1698,9 @@ Fallback prompt behavior:
   back to a prompt.
 - If project guides are enabled and at least one configured guide is present, the runtime MAY append
   a `## Project conventions` section after the rendered workflow prompt. If no configured guide is
-  present, the section SHOULD be omitted rather than rendering an empty heading.
+  present, the section SHOULD be omitted rather than rendering an empty heading. A prompt whose last
+  section is a structured-output contract (such as the reviewer's JSON verdict) SHOULD get the section
+  inserted before that contract, so the contract stays the last thing the model reads.
 - When settings are known, the runtime SHOULD append a poller-aware PR-feedback/CI posture derived
   from config so repo `WORKFLOW.md` templates need not restate it. When the PR-review poller is
   active (`pr_review.mode == "polling"`), the agent is told PR review feedback arrives via Symphony
