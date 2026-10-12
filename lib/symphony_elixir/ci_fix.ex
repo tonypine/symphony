@@ -30,7 +30,17 @@ defmodule SymphonyElixir.CiFix do
   back to the edges they always used.
   """
 
-  alias SymphonyElixir.{CodeReview, Config, QaVerification, RunStore, StateMachine, TicketSignals, TicketState}
+  alias SymphonyElixir.{
+    CodeReview,
+    Config,
+    QaVerification,
+    RunStore,
+    StateMachine,
+    TicketSignals,
+    TicketState,
+    TransitionGuard
+  }
+
   alias SymphonyElixir.Linear.Issue
 
   @default_state "CI Fix"
