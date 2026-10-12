@@ -10,10 +10,11 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
+  alias SymphonyElixir.{StateMachine, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
 
   @in_review_state "In Review"
   @merging_state "Merging"
+  @rework_state "Rework"
   @done_state "Done"
   @active_state "In Progress"
   @changes_requested "CHANGES_REQUESTED"
@@ -91,7 +92,26 @@ defmodule SymphonyElixir.PrReviewPoller do
     {:ok, schedule_poll(state, 0)}
   end
 
+  @doc """
+  Polls now instead of waiting for the timer, which then restarts from this poll. The CI poller
+  calls it when a GitHub webhook says a PR merged, so `Merging` PRs that fell behind the base
+  branch are updated right away. A no-op when the poller isn't running.
+  """
+  @spec poll_now(GenServer.server()) :: :ok
+  def poll_now(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil ->
+        :ok
+
+      pid ->
+        send(pid, :poll_now)
+        :ok
+    end
+  end
+
   @impl true
+  def handle_info(:poll_now, %State{} = state), do: {:noreply, schedule_poll(state, 0)}
+
   def handle_info(:poll, %State{} = state) do
     {state, delay_ms} =
       case poll_cycle_result(state) do
@@ -504,9 +524,13 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered, merging_issue_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now, opts),
+    with {:ok, discovered, merging_issue_ids, designed_phase_issue_ids} <-
+           discover_reviews(settings, run_store, tracker, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
-      opts = Keyword.put(opts, :merging_issue_ids, merging_issue_ids)
+      opts =
+        opts
+        |> Keyword.put(:merging_issue_ids, merging_issue_ids)
+        |> Keyword.put(:designed_phase_issue_ids, designed_phase_issue_ids)
 
       actions =
         reviews
@@ -546,7 +570,6 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
   defp discover_reviews(settings, run_store, tracker, repo_key, now, opts) do
     with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
          {:ok, existing} <- list_pr_reviews(run_store, repo_key) do
@@ -558,10 +581,13 @@ defmodule SymphonyElixir.PrReviewPoller do
           do: issues |> Enum.filter(&(AutoMerge.merging?(&1) and issue_in_repo?(&1, repo_key))) |> MapSet.new(& &1.id),
           else: MapSet.new()
 
+      designed_phase_issue_ids =
+        issues |> Enum.filter(&issue_in_states?(&1, designed_phase_states(settings))) |> MapSet.new(& &1.id)
+
       discovered =
         Enum.count(issues, &persist_discovered_review?(&1, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
-      {:ok, discovered, merging_issue_ids}
+      {:ok, discovered, merging_issue_ids, designed_phase_issue_ids}
     end
   end
 
@@ -573,9 +599,31 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp issue_in_repo?(%Issue{}, repo_key), do: repo_key == Config.repo_key_or_nil()
 
+  # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
+  #
+  # A designed repo's `Code Review`, `QA` and `Rework` issues are watched as well, so a PR that
+  # conflicts with its base while the ticket sits there is polled and routed into the CI Fix lane
+  # (`SymphonyElixir.CiFix`); without them a conflicting PR in those phases has no detection path.
+  # Their review activity is not this poller's to act on — each phase's own machinery decides its
+  # verdicts and review comments — so `limited_to_conflicts?/3` keeps those records on
+  # `:watching`, and only a conflict, a merged PR or a closed one is acted on.
   defp watched_states(settings) do
     review_states = HumanReview.review_states(settings)
-    if AutoMerge.enabled?(settings), do: review_states ++ [@merging_state], else: review_states
+
+    base =
+      if AutoMerge.enabled?(settings),
+        do: review_states ++ [@merging_state],
+        else: review_states
+
+    base ++ designed_phase_states(settings)
+  end
+
+  # The phase states a designed repo's CI Fix lane serves. `Merging` is not one of them: it is
+  # watched separately, for auto-merge.
+  defp designed_phase_states(settings) do
+    if StateMachine.designed?(settings),
+      do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state],
+      else: []
   end
 
   defp fetch_watched_issues(settings, tracker, opts) do
@@ -773,6 +821,26 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp act_on_review(action, record, attrs, activity, settings, opts, now) do
+    if limited_to_conflicts?(action, record, opts) do
+      complete_review_update(opts, record, attrs, {:watching, Map.get(record, :issue_id)})
+    else
+      do_act_on_review(action, record, attrs, activity, settings, opts, now)
+    end
+  end
+
+  # A designed phase's review record is watched for conflicts only: its verdicts and review comments
+  # belong to the phase's own machinery, not this poller, so nothing but a conflict, a merged PR or a
+  # closed one is acted on. Treating the rest as `:watching` also keeps the record — and the conflict
+  # detection it carries — from being aged out as stale. Legacy repos and review-state tickets are
+  # untouched.
+  defp limited_to_conflicts?(action, record, opts),
+    do: designed_phase_issue?(record, opts) and action not in [:conflict, :merged, :closed]
+
+  defp designed_phase_issue?(record, opts) do
+    MapSet.member?(Keyword.get(opts, :designed_phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
+  end
+
+  defp do_act_on_review(action, record, attrs, activity, settings, opts, now) do
     case action do
       :merged ->
         with {:ok, record} <- finish_merged(record, settings, opts, now) do

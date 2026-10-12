@@ -970,6 +970,41 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, :enoent} = PullRequest.update_branch(pr_url, "head-1", gh_runner: unavailable)
       assert {:error, :invalid_pr_url} = PullRequest.update_branch("https://github.com/org/repo/issues/42", "head-1", gh_runner: ok)
     end
+
+    test "cancel_stale_runs cancels the head's unfinished workflow runs and names them" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      parent = self()
+
+      runs =
+        Jason.encode!(%{
+          "workflow_runs" => [
+            %{"id" => 1, "status" => "in_progress"},
+            %{"id" => 2, "status" => "queued"},
+            %{"id" => 3, "status" => "completed"}
+          ]
+        })
+
+      runner = fn
+        ["api", "repos/org/repo/actions/runs?head_sha=head-1&per_page=100"], _opts -> {runs, 0}
+        ["api", "repos/org/repo/actions/runs/" <> _ = endpoint, "--method", "POST"], _opts -> send(parent, {:cancel, endpoint}) && {"", 0}
+      end
+
+      assert {:ok, [1, 2]} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: runner)
+      assert_received {:cancel, "repos/org/repo/actions/runs/1/cancel"}
+      assert_received {:cancel, "repos/org/repo/actions/runs/2/cancel"}
+
+      refused = fn
+        ["api", "repos/org/repo/actions/runs?" <> _], _opts -> {runs, 0}
+        _cancel, _opts -> {"gh: Cannot cancel a workflow run that is completed. (HTTP 409)", 1}
+      end
+
+      assert {:error, {:gh_failed, _args, 1, "gh: Cannot cancel" <> _}} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: refused)
+      not_runs = fn _args, _opts -> {"[]", 0} end
+      unavailable = fn _args, _opts -> {:error, :enoent} end
+      assert {:error, :invalid_workflow_runs_payload} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: not_runs)
+      assert {:error, :enoent} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: unavailable)
+      assert {:error, :invalid_pr_url} = PullRequest.cancel_stale_runs("https://github.com/org/repo/issues/42", "head-1", gh_runner: runner)
+    end
   end
 
   describe "merge_commit_sha/2" do
