@@ -199,7 +199,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   defmodule FakeWorkspace do
-    def remove_issue_workspaces(_issue), do: :ok
+    def remove_issue_workspaces_checked(_issue), do: :ok
   end
 
   test "a missing identifier, reason, picks or request comment is a 422", %{moves: moves} do
