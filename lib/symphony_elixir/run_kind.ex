@@ -1,4 +1,10 @@
 defmodule SymphonyElixir.RunKind do
+  # The kinds `classify/2` never returns: they name the reviewer and acceptance gate runs,
+  # which Symphony starts itself. The moduledoc interpolates these names, so the documented
+  # set cannot drift from the code.
+  @reserved_kinds [:pre_push_review, :acceptance_gate]
+  @reserved_kind_names Enum.map_join(@reserved_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
+
   @moduledoc """
   Classifies what kind of agent run Symphony is about to start, so each kind can
   get its own model, effort and provider (`agent.run_profiles.<kind>`).
@@ -28,9 +34,9 @@ defmodule SymphonyElixir.RunKind do
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
 
-  `pre_push_review`, `qa` and `acceptance_gate` are never returned by `classify/2`;
-  they name the reviewer, QA agent and acceptance gate runs, which Symphony starts
-  itself.
+  #{@reserved_kind_names} are never returned by `classify/2`; they name the reviewer and
+  acceptance gate runs, which Symphony starts itself. The designed machine's configured
+  `code_review_state` and `qa_state` *are* returned, as `code_review` and `qa`.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -81,6 +87,13 @@ defmodule SymphonyElixir.RunKind do
   @doc "Every run kind, in documentation order."
   @spec kinds() :: [t()]
   def kinds, do: @kinds
+
+  @doc """
+  The kinds `classify/2` never returns; Symphony starts those runs itself. The moduledoc's
+  list of never-returned kinds is built from this list.
+  """
+  @spec reserved_kinds() :: [t()]
+  def reserved_kinds, do: @reserved_kinds
 
   @doc "Every run kind as the string used for `agent.run_profiles` keys."
   @spec names() :: [String.t()]
