@@ -1421,8 +1421,10 @@ When enabled:
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
-  links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
-  events sent to that app alone, and the tools MUST NOT return a secure field's value.
+  links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
+  root since the last call, read where the app runs, and MUST read nothing outside that QA root.
+  `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
+  sent to that app alone, and the tools MUST NOT return a secure field's value.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
@@ -1696,7 +1698,9 @@ Fallback prompt behavior:
   back to a prompt.
 - If project guides are enabled and at least one configured guide is present, the runtime MAY append
   a `## Project conventions` section after the rendered workflow prompt. If no configured guide is
-  present, the section SHOULD be omitted rather than rendering an empty heading.
+  present, the section SHOULD be omitted rather than rendering an empty heading. A prompt whose last
+  section is a structured-output contract (such as the reviewer's JSON verdict) SHOULD get the section
+  inserted before that contract, so the contract stays the last thing the model reads.
 - When settings are known, the runtime SHOULD append a poller-aware PR-feedback/CI posture derived
   from config so repo `WORKFLOW.md` templates need not restate it. When the PR-review poller is
   active (`pr_review.mode == "polling"`), the agent is told PR review feedback arrives via Symphony

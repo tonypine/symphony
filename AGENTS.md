@@ -45,7 +45,9 @@ before pushing: `mix cover.changed` runs the tests for the `lib/` modules change
 `origin/main` once with `--cover` and fails, naming the uncovered lines, when one of them is below
 100%. It skips `mix.exs`'s `ignore_modules`, as CI does. It picks the changed test files, the
 `test/<path>_test.exs` of each changed `lib/<path>.ex` and the test files that name a changed
-module; when the tests that cover a module don't name it, pass them:
+module. When the branch deletes a test file, it also checks every module that test named at the
+merge-base, since the deleted file may have been their only coverage. When the tests that cover a
+module don't name it, pass them:
 `mix cover.changed <test files>`. It cover-compiles every module, so it takes a few seconds more
 than the same `mix test`.
 

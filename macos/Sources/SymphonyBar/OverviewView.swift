@@ -347,8 +347,9 @@ private struct FixButton: View {
 // MARK: - C8: Now working and Next up
 
 extension View {
-    /// A ticket row: a double-click, or Return once it has focus, opens the ticket's page (D3, P10); VoiceOver gets
-    /// Open as an action. Nothing changes for a row that is not about a ticket.
+    /// A ticket row: a double-click, or Return once it has focus, opens the ticket's page (D3, P10). VoiceOver reads
+    /// the row as one element, its label and its own actions combined, with Open as its default and a named action.
+    /// Nothing changes for a row that is not about a ticket.
     @ViewBuilder func opensTicket(_ identifier: String?, open: @escaping (String) -> Void) -> some View {
         if let identifier {
             contentShape(Rectangle())
@@ -358,6 +359,9 @@ extension View {
                     open(identifier)
                     return .handled
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { open(identifier) }
                 .accessibilityAction(named: "Open") { open(identifier) }
         } else {
             self
