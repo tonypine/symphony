@@ -14,6 +14,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Orchestrator,
     Quality,
     RunKind,
+    Sessions,
     StrayProcesses,
     URLUtils,
     UsageLimit
@@ -59,6 +60,8 @@ defmodule SymphonyElixirWeb.Presenter do
         human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
         shipped_today = Map.get(snapshot, :shipped_today, [])
         waiting_on_you = Inbox.items(snapshot, inbox)
+        qa = normalize_qa(Map.get(snapshot, :qa))
+        acceptance_gate = acceptance_gate_payload(AcceptanceGate.Agreement.snapshot())
 
         %{
           generated_at: generated_at,
@@ -77,6 +80,7 @@ defmodule SymphonyElixirWeb.Presenter do
             waiting_on_you: length(waiting_on_you)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
+          sessions: sessions_payload(snapshot.running, qa.running, acceptance_gate.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
@@ -101,8 +105,8 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
-          qa: normalize_qa(Map.get(snapshot, :qa)),
-          acceptance_gate: acceptance_gate_payload(AcceptanceGate.Agreement.snapshot()),
+          qa: qa,
+          acceptance_gate: acceptance_gate,
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
@@ -617,6 +621,12 @@ defmodule SymphonyElixirWeb.Presenter do
       retry -> "retrying"
       true -> "watching"
     end
+  end
+
+  defp sessions_payload(running, qa_running, gate_running) do
+    running
+    |> Sessions.list(qa_running, gate_running)
+    |> Enum.map(&%{&1 | started_at: iso8601(&1.started_at)})
   end
 
   defp running_entry_payload(entry) do

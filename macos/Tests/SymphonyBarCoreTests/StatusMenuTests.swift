@@ -59,6 +59,23 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.statusTitle(.error("boom")), "Symphony has a problem")
     }
 
+    func testTheCountsLineNamesEverySessionKind() {
+        XCTAssertEqual(
+            StatusMenu.countsLine(StateSnapshot(running: 0, retrying: 2, sessionKinds: ["qa_pass"])),
+            "1 QA pass running · 2 retrying"
+        )
+        XCTAssertEqual(
+            StatusMenu.countsLine(
+                StateSnapshot(sessionKinds: ["code_review", "acceptance_gate", "code_review", "qa", "acceptance_gate", "qa_pass", "qa_pass"])
+            ),
+            "2 code review runs, 2 acceptance gate passes, 1 QA run, 2 QA passes running"
+        )
+        XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: ["implementation"])), "1 implementation run running")
+        XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: ["acceptance_gate", "qa"])), "1 acceptance gate pass, 1 QA run running")
+        XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: [])), "Nothing is running")
+        XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(retrying: 1, sessionKinds: [])), "Nothing is running · 1 retrying")
+    }
+
     func testDetailLines() {
         var paused = snapshot
         paused.pause = .init(reason: "deploy freeze", since: pausedAt)

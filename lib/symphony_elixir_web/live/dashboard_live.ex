@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.{Config, ForcedStatus, URLUtils, UsageLimit}
+  alias SymphonyElixir.{Config, ForcedStatus, Sessions, URLUtils, UsageLimit}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
   @dashboard_reload_task :dashboard_reload
@@ -459,6 +459,22 @@ defmodule SymphonyElixirWeb.DashboardLive do
               Waiting for a lane: <%= Enum.map_join(@payload.epic_lanes.queued_epics, ", ", & &1.identifier) %>
             </p>
           <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Auto Review passes</h2>
+              <p class="section-copy">
+                <%= case review_passes(@payload) do %>
+                  <% [] -> %>
+                    No QA or acceptance gate pass is running.
+                  <% passes -> %>
+                    Running: <%= Enum.map_join(passes, ", ", &"#{&1.issue_identifier} (#{Sessions.label(&1.kind)})") %>
+                <% end %>
+              </p>
+            </div>
+          </div>
         </section>
 
         <section class="section-card">
@@ -1115,6 +1131,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp lane_part_via(%{relation: "sub_ticket_of", identifier: identifier}), do: ", sub-ticket of #{identifier}"
   defp lane_part_via(_via), do: ""
 
+  # The sessions that aren't agent runs: Auto Review QA passes and acceptance gate passes.
+  defp review_passes(payload), do: payload |> Map.get(:sessions, []) |> Enum.filter(&Sessions.pass?/1)
+
   defp filter_payload(%{error: _} = payload, _repo_filter), do: payload
 
   defp filter_payload(payload, nil), do: refresh_visible_counts(payload)
@@ -1122,6 +1141,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp filter_payload(payload, repo_filter) when is_binary(repo_filter) do
     payload
     |> Map.update(:running, [], &filter_repo_rows(&1, repo_filter))
+    |> Map.update(:sessions, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:watching, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:human_review, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:retrying, [], &filter_repo_rows(&1, repo_filter))

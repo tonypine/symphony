@@ -16,7 +16,7 @@ defmodule SymphonyElixir.StatusDashboard do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.Config
+  alias SymphonyElixir.{AcceptanceGate, Config, Sessions}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -381,6 +381,7 @@ defmodule SymphonyElixir.StatusDashboard do
           {:ok,
            %{
              running: running,
+             sessions: Map.get(snapshot, :sessions, []),
              watching: Map.get(snapshot, :watching, []),
              forced: Map.get(snapshot, :forced, []),
              retrying: retrying,
@@ -443,6 +444,7 @@ defmodule SymphonyElixir.StatusDashboard do
         {:ok,
          %{
            running: running,
+           sessions: Sessions.list(running, qa_running(snapshot), gate_running()),
            watching: Map.get(snapshot, :watching, []),
            forced: Map.get(snapshot, :forced, []),
            retrying: retrying,
@@ -464,6 +466,15 @@ defmodule SymphonyElixir.StatusDashboard do
       _ ->
         :error
     end
+  end
+
+  defp qa_running(snapshot), do: get_in(snapshot, [:qa, :running]) || []
+
+  # The acceptance gate's passes aren't in the orchestrator snapshot: the runner reports them.
+  defp gate_running do
+    AcceptanceGate.Runner.snapshot().running
+  catch
+    :exit, _reason -> []
   end
 
   defp snapshot_stale_threshold_ms do
