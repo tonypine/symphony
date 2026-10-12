@@ -19,14 +19,14 @@ defmodule SymphonyElixir.RestartTest do
   end
 
   defmodule FakeWorkspace do
-    def remove_issue_workspaces(issue) do
+    def remove_issue_workspaces_checked(issue) do
       send(self(), {:remove_workspaces, issue.identifier})
       Application.get_env(:symphony_elixir, :restart_test_workspace, :ok)
     end
   end
 
   defmodule RaisingWorkspace do
-    def remove_issue_workspaces(_issue), do: raise("workspace store is down")
+    def remove_issue_workspaces_checked(_issue), do: raise("workspace store is down")
   end
 
   defp issue(fields) do
@@ -137,6 +137,42 @@ defmodule SymphonyElixir.RestartTest do
                Restart.perform(issue(pr_urls: [@pr_url]), opts(workspace: RaisingWorkspace))
 
       assert message == "couldn't remove the workspace of MT-RESTART (workspace store is down)"
+    end
+
+    test "a real workspace removal that fails stops the reset before the workpad" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-restart-remove-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        outside = Path.join(test_root, "outside")
+        File.mkdir_p!(outside)
+        escape_workspace = Path.join([workspace_root, "default", "MT-RESTART"])
+        File.mkdir_p!(Path.dirname(escape_workspace))
+        File.ln_s!(outside, escape_workspace)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          tracker_kind: "memory",
+          agent_kind: "claude",
+          workspace_root: workspace_root
+        )
+
+        opts = [
+          github: FakeGitHub,
+          workspace: Workspace,
+          settings: Config.settings!(),
+          linear_client: fn _query, _variables, _opts -> flunk("the workpad must not be superseded") end
+        ]
+
+        capture_log(fn ->
+          assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: []), opts)
+          assert message =~ "couldn't remove the workspace of MT-RESTART"
+          assert message =~ "workspace_outside_root"
+        end)
+
+        assert File.exists?(outside)
+      after
+        File.rm_rf(test_root)
+      end
     end
   end
 

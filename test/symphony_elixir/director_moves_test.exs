@@ -27,7 +27,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   defmodule FakeWorkspace do
-    def remove_issue_workspaces(issue) do
+    def remove_issue_workspaces_checked(issue) do
       send(self(), {:remove_workspaces, issue.identifier})
       Application.get_env(:symphony_elixir, :director_moves_test_workspace, :ok)
     end
