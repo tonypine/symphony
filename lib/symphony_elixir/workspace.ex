@@ -1277,45 +1277,58 @@ defmodule SymphonyElixir.Workspace do
   def remove_issue_workspaces(identifier), do: remove_issue_workspaces(identifier, nil)
 
   @spec remove_issue_workspaces(term(), worker_host()) :: :ok
-  def remove_issue_workspaces(%{identifier: identifier} = issue, worker_host)
+  def remove_issue_workspaces(issue_or_identifier, worker_host) do
+    _ = remove_issue_workspaces_checked(issue_or_identifier, worker_host)
+    :ok
+  end
+
+  @doc """
+  Removes the issue's workspaces like `remove_issue_workspaces/2`, but reports a removal that
+  failed instead of only logging it. A workspace that was never created is not a failure.
+  """
+  @spec remove_issue_workspaces_checked(term()) :: :ok | {:error, [term()]}
+  def remove_issue_workspaces_checked(issue_or_identifier), do: remove_issue_workspaces_checked(issue_or_identifier, nil)
+
+  @spec remove_issue_workspaces_checked(term(), worker_host()) :: :ok | {:error, [term()]}
+
+  def remove_issue_workspaces_checked(%{identifier: identifier} = issue, worker_host)
       when is_binary(identifier) and is_binary(worker_host) do
     remove_issue_workspace(identifier, issue_context(issue), worker_host)
   end
 
-  def remove_issue_workspaces(%{identifier: identifier} = issue, nil) when is_binary(identifier) do
-    issue_context = issue_context(issue)
-
-    case settings_for_issue_context(issue_context).worker.ssh_hosts do
-      [] ->
-        remove_issue_workspace(identifier, issue_context, nil)
-
-      worker_hosts ->
-        Enum.each(worker_hosts, &remove_issue_workspaces(issue, &1))
-    end
-
-    :ok
+  def remove_issue_workspaces_checked(%{identifier: identifier} = issue, nil) when is_binary(identifier) do
+    remove_from_worker_hosts(identifier, issue_context(issue))
   end
 
-  def remove_issue_workspaces(identifier, worker_host) when is_binary(identifier) and is_binary(worker_host) do
+  def remove_issue_workspaces_checked(identifier, worker_host) when is_binary(identifier) and is_binary(worker_host) do
     remove_issue_workspace(identifier, issue_context(identifier), worker_host)
   end
 
-  def remove_issue_workspaces(identifier, nil) when is_binary(identifier) do
-    issue_context = issue_context(identifier)
+  def remove_issue_workspaces_checked(identifier, nil) when is_binary(identifier) do
+    remove_from_worker_hosts(identifier, issue_context(identifier))
+  end
 
+  def remove_issue_workspaces_checked(_identifier, _worker_host) do
+    :ok
+  end
+
+  defp remove_from_worker_hosts(identifier, issue_context) do
     case settings_for_issue_context(issue_context).worker.ssh_hosts do
       [] ->
         remove_issue_workspace(identifier, issue_context, nil)
 
       worker_hosts ->
-        Enum.each(worker_hosts, &remove_issue_workspace(identifier, issue_context, &1))
+        worker_hosts
+        |> Enum.map(&remove_issue_workspace(identifier, issue_context, &1))
+        |> Enum.flat_map(fn
+          :ok -> []
+          {:error, reasons} -> reasons
+        end)
+        |> case do
+          [] -> :ok
+          reasons -> {:error, reasons}
+        end
     end
-
-    :ok
-  end
-
-  def remove_issue_workspaces(_identifier, _worker_host) do
-    :ok
   end
 
   @spec free_bytes() :: {:ok, non_neg_integer()} | {:error, term()}
@@ -1648,9 +1661,8 @@ defmodule SymphonyElixir.Workspace do
 
           {:error, reason, output} ->
             log_workspace_removal_failure(workspace, issue_context, worker_host, reason, output)
+            {:error, [reason]}
         end
-
-        :ok
 
       {:error, reason} ->
         Logger.warning("Workspace removal skipped #{issue_log_context(issue_context)} identifier=#{identifier} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}")
