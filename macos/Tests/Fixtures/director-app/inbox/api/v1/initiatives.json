@@ -1,0 +1,371 @@
+{
+  "generated_at": "2026-10-07T14:20:00Z",
+  "read": true,
+  "counts": {
+    "active": 2,
+    "in_review": 1,
+    "done": 1
+  },
+  "initiatives": [
+    {
+      "issue_id": "p-200",
+      "identifier": "BIL-200",
+      "title": "Usage-based billing",
+      "state": "Waiting on sub-tickets",
+      "repo_key": "api",
+      "url": "https://linear.app/acme/issue/BIL-200",
+      "group": "active",
+      "completed_at": null,
+      "counts": {
+        "done": 4,
+        "working": 1,
+        "you": 1,
+        "queued": 0,
+        "blocked": 2,
+        "total": 8
+      },
+      "slot": {
+        "status": "running",
+        "identifier": "BIL-205",
+        "reason": null
+      },
+      "sub_tickets": [
+        {
+          "issue_id": "i-201",
+          "identifier": "BIL-201",
+          "title": "Meter API calls per account",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/BIL-201",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-202",
+          "identifier": "BIL-202",
+          "title": "Store usage by billing period",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/BIL-202",
+          "blocked_by": [
+            "BIL-201"
+          ],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-203",
+          "identifier": "BIL-203",
+          "title": "Price tiers in the plan catalog",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/BIL-203",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-204",
+          "identifier": "BIL-204",
+          "title": "Invoice line items for usage",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/BIL-204",
+          "blocked_by": [
+            "BIL-202",
+            "BIL-203"
+          ],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-205",
+          "identifier": "BIL-205",
+          "title": "Usage dashboard for customers",
+          "state": "In Progress",
+          "url": "https://linear.app/acme/issue/BIL-205",
+          "blocked_by": [
+            "BIL-202"
+          ],
+          "waits_on": "working",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-206",
+          "identifier": "BIL-206",
+          "title": "Prorate plan changes mid-cycle",
+          "state": "Human Review",
+          "url": "https://linear.app/acme/issue/BIL-206",
+          "blocked_by": [
+            "BIL-204"
+          ],
+          "waits_on": "you",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-207",
+          "identifier": "BIL-207",
+          "title": "Credit notes for downgrades",
+          "state": "Todo",
+          "url": "https://linear.app/acme/issue/BIL-207",
+          "blocked_by": [
+            "BIL-206"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "BIL-206"
+          ]
+        },
+        {
+          "issue_id": "i-208",
+          "identifier": "BIL-208",
+          "title": "Email the prorated invoice",
+          "state": "Todo",
+          "url": "https://linear.app/acme/issue/BIL-208",
+          "blocked_by": [
+            "BIL-206"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "BIL-206"
+          ]
+        }
+      ],
+      "final_verification": {
+        "issue_id": "i-209",
+        "identifier": "BIL-209",
+        "title": "Final verification: Usage-based billing",
+        "state": "Todo",
+        "url": "https://linear.app/acme/issue/BIL-209",
+        "blocked_by": [
+          "BIL-207",
+          "BIL-208"
+        ],
+        "waits_on": "blocker",
+        "waiting_for": [
+          "BIL-207",
+          "BIL-208"
+        ],
+        "open_tickets": 4
+      }
+    },
+    {
+      "issue_id": "p-20",
+      "identifier": "DOCS-20",
+      "title": "Search the docs",
+      "state": "Waiting on sub-tickets",
+      "repo_key": "docs",
+      "url": "https://linear.app/acme/issue/DOCS-20",
+      "group": "active",
+      "completed_at": null,
+      "counts": {
+        "done": 2,
+        "working": 1,
+        "you": 0,
+        "queued": 2,
+        "blocked": 0,
+        "total": 5
+      },
+      "slot": {
+        "status": "queued",
+        "position": 1,
+        "identifier": null,
+        "reason": null
+      },
+      "sub_tickets": [
+        {
+          "issue_id": "i-21",
+          "identifier": "DOCS-21",
+          "title": "Index the docs on publish",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/DOCS-21",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-22",
+          "identifier": "DOCS-22",
+          "title": "Search API with typo tolerance",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/DOCS-22",
+          "blocked_by": [
+            "DOCS-21"
+          ],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-23",
+          "identifier": "DOCS-23",
+          "title": "Search box in the docs header",
+          "state": "Code Review",
+          "url": "https://linear.app/acme/issue/DOCS-23",
+          "blocked_by": [
+            "DOCS-22"
+          ],
+          "waits_on": "ci",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-24",
+          "identifier": "DOCS-24",
+          "title": "Rank by page views",
+          "state": "Todo",
+          "url": "https://linear.app/acme/issue/DOCS-24",
+          "blocked_by": [
+            "DOCS-22"
+          ],
+          "waits_on": "slot",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-25",
+          "identifier": "DOCS-25",
+          "title": "Search analytics",
+          "state": "Todo",
+          "url": "https://linear.app/acme/issue/DOCS-25",
+          "blocked_by": [],
+          "waits_on": "slot",
+          "waiting_for": []
+        }
+      ],
+      "final_verification": {
+        "issue_id": "i-26",
+        "identifier": "DOCS-26",
+        "title": "Final verification: Search the docs",
+        "state": "Todo",
+        "url": "https://linear.app/acme/issue/DOCS-26",
+        "blocked_by": [
+          "DOCS-24",
+          "DOCS-25"
+        ],
+        "waits_on": "blocker",
+        "waiting_for": [
+          "DOCS-24",
+          "DOCS-25"
+        ],
+        "open_tickets": 3
+      }
+    },
+    {
+      "issue_id": "i-330",
+      "identifier": "SHOP-330",
+      "title": "Gift cards at checkout",
+      "state": "Plan Review",
+      "repo_key": "web-shop",
+      "url": "https://linear.app/acme/issue/SHOP-330",
+      "group": "in_review",
+      "completed_at": null,
+      "counts": {
+        "done": 0,
+        "working": 0,
+        "you": 3,
+        "queued": 0,
+        "blocked": 0,
+        "total": 3
+      },
+      "slot": null,
+      "sub_tickets": [
+        {
+          "issue_id": "i-331",
+          "identifier": "SHOP-331",
+          "title": "Gift card balance lookup",
+          "state": "Backlog",
+          "url": "https://linear.app/acme/issue/SHOP-331",
+          "blocked_by": [],
+          "waits_on": "you",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-332",
+          "identifier": "SHOP-332",
+          "title": "Apply a gift card at checkout",
+          "state": "Backlog",
+          "url": "https://linear.app/acme/issue/SHOP-332",
+          "blocked_by": [
+            "SHOP-331"
+          ],
+          "waits_on": "you",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-333",
+          "identifier": "SHOP-333",
+          "title": "Gift card refunds",
+          "state": "Backlog",
+          "url": "https://linear.app/acme/issue/SHOP-333",
+          "blocked_by": [
+            "SHOP-332"
+          ],
+          "waits_on": "you",
+          "waiting_for": []
+        }
+      ],
+      "final_verification": null
+    },
+    {
+      "issue_id": "p-300",
+      "identifier": "SHOP-300",
+      "title": "Saved carts",
+      "state": "Done",
+      "repo_key": "web-shop",
+      "url": "https://linear.app/acme/issue/SHOP-300",
+      "group": "done",
+      "completed_at": "2026-10-05T16:00:00Z",
+      "counts": {
+        "done": 3,
+        "working": 0,
+        "you": 0,
+        "queued": 0,
+        "blocked": 0,
+        "total": 3
+      },
+      "slot": null,
+      "sub_tickets": [
+        {
+          "issue_id": "i-301",
+          "identifier": "SHOP-301",
+          "title": "Save a cart for later",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/SHOP-301",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-302",
+          "identifier": "SHOP-302",
+          "title": "Restore a saved cart",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/SHOP-302",
+          "blocked_by": [
+            "SHOP-301"
+          ],
+          "waits_on": "done",
+          "waiting_for": []
+        },
+        {
+          "issue_id": "i-303",
+          "identifier": "SHOP-303",
+          "title": "Expire saved carts after 30 days",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/SHOP-303",
+          "blocked_by": [
+            "SHOP-301"
+          ],
+          "waits_on": "done",
+          "waiting_for": []
+        }
+      ],
+      "final_verification": {
+        "issue_id": "i-304",
+        "identifier": "SHOP-304",
+        "title": "Final verification: Saved carts",
+        "state": "Done",
+        "url": "https://linear.app/acme/issue/SHOP-304",
+        "blocked_by": [],
+        "waits_on": "done",
+        "waiting_for": [],
+        "open_tickets": 0
+      }
+    }
+  ]
+}
