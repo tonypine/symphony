@@ -122,7 +122,8 @@ defmodule SymphonyElixir.GitHubWebhookTest do
                     head_sha: "abc123",
                     conclusion: "failure",
                     completed_at: ~U[2026-05-06 09:00:00Z],
-                    pr_urls: ["https://github.com/example/repo/pull/7"]
+                    pr_urls: ["https://github.com/example/repo/pull/7"],
+                    merged: false
                   }}
       end
     end
@@ -162,9 +163,22 @@ defmodule SymphonyElixir.GitHubWebhookTest do
                     head_sha: "def456",
                     conclusion: nil,
                     completed_at: nil,
-                    pr_urls: ["https://github.com/example/repo/pull/7"]
+                    pr_urls: ["https://github.com/example/repo/pull/7"],
+                    merged: false
                   }}
       end
+    end
+
+    test "a pull request closed by merging says so, since its base branch moved" do
+      pull_request = %{"html_url" => "https://github.com/example/repo/pull/7", "head" => %{"sha" => "def456"}, "merged" => true}
+
+      assert {:ci, %{action: "closed", merged: true}} =
+               Webhook.parse("pull_request", %{"action" => "closed", "repository" => @repository, "pull_request" => pull_request}, @events)
+
+      assert {:ci, %{action: "reopened", merged: false}} =
+               Webhook.parse("pull_request", %{"action" => "reopened", "repository" => @repository, "pull_request" => pull_request}, @events)
+
+      assert Webhook.parse("pull_request", %{"action" => "closed", "pull_request" => %{"merged" => true}}, @events) == :ignored
     end
 
     test "pings, other actions, other events and events left out of the config" do

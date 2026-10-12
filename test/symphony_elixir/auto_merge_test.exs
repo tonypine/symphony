@@ -65,6 +65,12 @@ defmodule SymphonyElixir.AutoMergeTest do
     @spec update_branch(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
     def update_branch(pr_url, head_sha, _opts), do: reply(:update_branch, {:update_branch, pr_url, head_sha})
 
+    @spec cancel_stale_runs(String.t(), String.t(), keyword()) :: {:ok, [integer()]} | {:error, term()}
+    def cancel_stale_runs(pr_url, head_sha, _opts) do
+      send(Application.fetch_env!(:symphony_elixir, :auto_merge_test_recipient), {:cancel_stale_runs, pr_url, head_sha})
+      :symphony_elixir |> Application.get_env(:auto_merge_test_replies, %{}) |> Map.get(:cancel_stale_runs, {:ok, []})
+    end
+
     @spec disable_auto_merge(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
     def disable_auto_merge(pr_url, pr_node_id, _opts), do: reply(:disable_auto_merge, {:disable_auto_merge, pr_url, pr_node_id})
 
@@ -343,6 +349,43 @@ defmodule SymphonyElixir.AutoMergeTest do
     activity(head: "head-2", state: "MERGED", auto_merge_enabled: true)
     assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 90))
     assert_received {:issue_state_update, @issue_id, "Done"}
+  end
+
+  test "once update-branch moves the head, the stale head's CI runs are cancelled, once" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BEHIND", auto_merge_enabled: true)
+
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "updating_branch"}]}} = poll(now)
+    assert_received {:update_branch, @pr_url, "head-1"}
+
+    # Still on head-1: its CI is the PR's own, so nothing is cancelled yet.
+    assert {:ok, _summary} = poll(DateTime.add(now, 30))
+    refute_received {:cancel_stale_runs, _url, _head}
+
+    replies(%{cancel_stale_runs: {:ok, [11, 12]}})
+    activity(head: "head-2", merge_state: "BLOCKED", auto_merge_enabled: true)
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 60)) end)
+    assert_received {:cancel_stale_runs, @pr_url, "head-1"}
+    assert log =~ "cancelled CI run(s) 11, 12 on `head-1`"
+
+    assert {:ok, _summary} = poll(DateTime.add(now, 90))
+    refute_received {:cancel_stale_runs, _url, _head}
+  end
+
+  test "a failed cancel of the stale head's runs is logged and changes nothing else" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BEHIND", auto_merge_enabled: true)
+    assert {:ok, _summary} = poll(now)
+
+    replies(%{cancel_stale_runs: {:error, :enoent}})
+    activity(head: "head-2", merge_state: "BLOCKED", auto_merge_enabled: true)
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 60)) end)
+    assert log =~ "could not cancel the CI runs on `head-1` after update-branch"
+    assert %{state: "enabled", head_sha: "head-2"} = PrReviewPoller.auto_merge(@issue_id)
   end
 
   test "a failed update-branch is retried on the next poll" do
@@ -889,7 +932,7 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = enforce_poll(DateTime.add(now, 30)) end)
 
-    assert [{:fingerprint, "merge-1"}] = mailbox()
+    assert [{:cancel_stale_runs, @pr_url, "head-1"}, {:fingerprint, "merge-1"}] = mailbox()
     assert log =~ "Auto-merge ACME-1780: `merge-1` keeps the approved diff of `head-1`; auto-merge stays on"
     assert %{state: "enabled", approved_head_sha: "merge-1", approved_fingerprint: "diff-a"} = PrReviewPoller.auto_merge(@issue_id)
     assert audit_events("acceptance_gate_rereview") == []
