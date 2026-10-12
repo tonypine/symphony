@@ -12,6 +12,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.CiFix
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
@@ -686,7 +687,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with {:ok, issue_id} <- current_issue_id(context),
          result <- resolve_state_id(issue_id, state_name_or_id, run_handoff(context), opts) do
       case result do
-        {:ok, {:state, state_id}} -> apply_state(issue_id, state_id, opts)
+        {:ok, {:state, state_id}, move} -> apply_state(context, issue_id, state_id, move, opts)
         {:hold, kind, attrs} -> apply_hold(context, issue_id, kind, attrs, opts)
         {:error, _reason} = error -> error
       end
@@ -695,11 +696,23 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   def update_state(_context, _state_name_or_id, _opts), do: {:error, :invalid_state}
 
-  defp apply_state(issue_id, state_id, opts) do
-    with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
-      check_mutation_success(response, "issueUpdate")
+  defp apply_state(context, issue_id, state_id, move, opts) do
+    with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts),
+         {:ok, result} <- check_mutation_success(response, "issueUpdate") do
+      record_fix_verdict(context, issue_id, move)
+      {:ok, result}
     end
   end
+
+  # A CI Fix ticket the fixing agent sends to Rework is the lane's substantive verdict: the repair
+  # needs a real change, so the ticket re-enters review instead of returning to its origin
+  # (`SymphonyElixir.CiFix`). The move itself is this tool's ordinary validated state request; only
+  # the verdict is recorded, and best-effort, like every other ledger write.
+  defp record_fix_verdict(context, issue_id, %{fix_verdict: verdict} = move) when is_binary(verdict) do
+    CiFix.record_verdict(issue_repo_key(context), issue_id, verdict, %{to: move.to})
+  end
+
+  defp record_fix_verdict(_context, _issue_id, _move), do: :ok
 
   # A designed repo retired the Backlog escape hatch: the guard turned the request into a Blocked
   # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
@@ -1315,7 +1328,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       open = open_request_titled(issue, request.title, settings)
 
       if StateMachine.designed?(settings),
-        do: hold_request(repo_key, issue, open, request, opts),
+        do: hold_request(repo_key, issue, open, request, settings, opts),
         else: move_request(issue, open, request, settings, opts)
     end
   end
@@ -1332,17 +1345,29 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # A designed repo: nothing moves. The comment goes first — a hold with no question on the board
   # would pause the ticket with nothing for the person to answer — then the hold is set from the
   # request, so the ticket keeps its phase and the person answers it there. A request the ticket
-  # already has is the one recorded, so the hold carries what the comment says.
-  defp hold_request(repo_key, issue, open, request, opts) do
+  # already has is the one recorded, so the hold carries what the comment says. A request raised from
+  # the CI Fix lane is the lane's `cannot_fix` verdict: the repair needs access or a secret, which no
+  # run can supply, so the ticket waits for a person in place.
+  defp hold_request(repo_key, issue, open, request, settings, opts) do
     state = get_in(issue, ["state", "name"])
 
     with {:ok, result} <- post_request(issue, open, request, {:hold, state}, opts),
          :ok <- set_decision_hold(repo_key, issue, recorded_request(open, request), opts) do
+      record_hold_verdict(repo_key, issue, state, settings)
+
       {:ok,
        result
        |> Map.put("state", state)
        |> Map.put("held", true)
        |> Map.put("hold", Hold.label(:needs_decision))}
+    end
+  end
+
+  # Best-effort, like every other ledger write: a hold is set either way.
+  defp record_hold_verdict(repo_key, issue, state, settings) do
+    case CiFix.hold_verdict(state, settings) do
+      nil -> :ok
+      verdict -> CiFix.record_verdict(repo_key, issue["id"], verdict, %{})
     end
   end
 
@@ -1907,19 +1932,31 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # The guard's answer decides what the tool does: a state the issue moves to, a hold that pauses it
-  # in place, or the refusal the tool passes back.
+  # in place, or the refusal the tool passes back. A resolved move carries what recording its signal
+  # needs: the state it came from, the state it goes to, the repo key and the lane verdict the move
+  # means (nil for every move but a CI Fix ticket's own request to `Rework`).
   defp guard_state(state, settings, states, issue, pr_less?, handoff) do
+    from_state = get_in(issue, ["state", "name"])
+
     case TransitionGuard.resolve_request(state, %{
            settings: settings,
            states: states,
-           from_state: get_in(issue, ["state", "name"]),
+           from_state: from_state,
            pr_less?: pr_less?,
            needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
          }) do
-      {:ok, resolved} -> {:ok, {:state, resolved["id"]}}
+      {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
       {:hold, _kind, _attrs} = hold -> hold
       {:error, _reason} = error -> error
     end
+  end
+
+  defp move_details(from_state, resolved, settings) do
+    %{
+      from: from_state,
+      to: resolved["name"],
+      fix_verdict: CiFix.verdict_for_move(from_state, resolved["name"], settings)
+    }
   end
 
   # UUIDs are resolved against the team states too, so the target's name is known before the

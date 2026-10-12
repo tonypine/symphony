@@ -12,6 +12,7 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools.Linear.CommentRegistry,
     AuditLog,
     AutoReview.ParentWalkthrough,
+    CiFix,
     CiPoller,
     CodeReview,
     Config,
@@ -30,6 +31,7 @@ defmodule SymphonyElixir.AgentRunner do
     ReviewAgent,
     RunKind,
     RunStore,
+    StateMachine,
     SubIssueWait,
     TicketSignals,
     Tracker,
@@ -1747,7 +1749,18 @@ defmodule SymphonyElixir.AgentRunner do
   # handoff signal, which the push and PR tool hooks emit into the ticket's ledger. Without it the
   # run does not advance: the ticket is left where it is with a `handoff_missing` event recorded,
   # and the run fails so the orchestrator's retry machinery picks it up.
-  defp move_to_post_pr_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
+  #
+  # A CI Fix ticket takes neither path: a mechanical repair goes back to the phase the red head or
+  # conflict found it in, which the poller recorded on the ticket (see `return_from_ci_fix/3`).
+  defp move_to_post_pr_state(%Issue{} = issue, post_pr_state, reason, run_context) do
+    if ci_fix_state?(issue, run_context) do
+      return_from_ci_fix(issue, reason, run_context)
+    else
+      hand_off_to_state(issue, post_pr_state, reason, run_context)
+    end
+  end
+
+  defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
 
     if Handoff.required?(issue.state, settings) and not handoff_emitted?(issue, run_context) do
@@ -1779,6 +1792,60 @@ defmodule SymphonyElixir.AgentRunner do
         error ->
           error
       end
+    end
+  end
+
+  defp ci_fix_state?(%Issue{} = issue, run_context),
+    do: CiFix.in_state?(issue.state, Keyword.fetch!(run_context.opts, :settings))
+
+  # A mechanical repair returns the ticket to the phase whose red head or conflict put it in the lane,
+  # which the poller recorded on the ticket. The prior verdict is not touched — only `Rework`
+  # invalidates one — so a phase that already holds a verdict on this head carries the ticket on
+  # without a second review or QA run.
+  defp return_from_ci_fix(%Issue{id: issue_id} = issue, reason, run_context) do
+    case CiFix.origin(run_repo_key(issue, run_context.opts), issue_id, run_context.opts) do
+      origin when is_binary(origin) ->
+        do_return_from_ci_fix(issue, origin, reason, run_context)
+
+      nil ->
+        # The origin is the whole point of the lane, so a ticket that lost it does not guess: it
+        # takes the ordinary post-PR handoff, where review judges its head, rather than returning to
+        # a phase nobody recorded.
+        post_pr_state = post_pr_state(run_context)
+
+        Logger.warning("No CI Fix origin recorded for #{issue_context(issue)}; moving it to #{post_pr_state} #{reason} instead")
+
+        hand_off_to_state(issue, post_pr_state, reason, run_context)
+    end
+  end
+
+  defp do_return_from_ci_fix(%Issue{id: issue_id} = issue, origin, reason, run_context) do
+    settings = Keyword.fetch!(run_context.opts, :settings)
+    head = run_context.progress.head
+
+    # `Merging` means a human approved the merge, so the repair's return must re-arm auto-merge:
+    # the lane's entry turned it off and held it (see `AutoMerge.disable_for_ci_fix/5`).
+    if merging_state?(origin) do
+      PrReviewPoller.release_auto_merge_hold(issue_id, pending_lookup_opts(issue, run_context.opts))
+    end
+
+    label = "returning #{issue_context(issue)} to #{origin} from CI Fix"
+    move = fn -> TransitionGuard.perform(issue_id, :ci_fix_mechanical, %{target: origin, settings: settings}) end
+
+    case with_linear_retry(move, label, run_context.opts) do
+      :ok ->
+        repo_key = run_repo_key(issue, run_context.opts)
+        # A repair that pushed a new head re-binds the origin's verdict to it, so the ticket carries
+        # forward rather than being reviewed or verified a second time; a repair that pushed nothing
+        # leaves the binding as it was.
+        CiFix.carry_verdict(repo_key, issue_id, origin, head, settings)
+        CiFix.record_origin(repo_key, issue_id, nil, run_context.opts)
+        CiFix.record_verdict(repo_key, issue_id, "mechanical", %{to: origin, carried: true, head: head, reason: reason})
+        record_move_signal(issue, "ci fix return", %{to: origin, kind: :ci_fix, head: head, move: true}, run_context.opts)
+        :ok
+
+      error ->
+        error
     end
   end
 
@@ -1862,6 +1929,18 @@ defmodule SymphonyElixir.AgentRunner do
   # still covers the PR's diff. Any other green fix, such as a run that started on a fix an earlier
   # run pushed, goes to the post-PR state, where review judges its head.
   defp hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, %{progress: %{head: head, start_head: start_head}} = run_context) do
+    if ci_fix_state?(issue, run_context) do
+      # A CI Fix ticket that pushed nothing returns to its recorded origin whatever the origin is —
+      # `Merging` included, where `return_from_ci_fix/3` releases the auto-merge hold.
+      Logger.info("CI is green on #{issue_context(issue)}'s PR head #{head} after a #{fix_run_name(kind)} with no new commit; returning it to its CI Fix origin")
+
+      return_from_ci_fix(issue, "with CI green on its PR head", run_context)
+    else
+      do_hand_off_green_fix(issue, {kind, approved, signal_head}, head, start_head, run_context)
+    end
+  end
+
+  defp do_hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, head, start_head, run_context) do
     if approved == true and head == start_head and head == signal_head do
       Logger.info("#{fix_run_name(kind)} for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
       PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
@@ -2024,10 +2103,14 @@ defmodule SymphonyElixir.AgentRunner do
     |> log_audit_error("record linear_state_change")
   end
 
+  # The machine's active states, not the raw `tracker.active_states`: a designed repo dispatches
+  # tickets from its phase states (`Code Review`, `QA`, `Rework`, the CI Fix lane) too, even though
+  # the config lists only the base states. `StateMachine.active_states/1` returns the config unchanged
+  # on a legacy repo, so this is the same set there.
   defp active_issue_state?(state_name) when is_binary(state_name) do
     normalized_state = normalize_issue_state(state_name)
 
-    Config.settings!().tracker.active_states
+    StateMachine.active_states(Config.settings!())
     |> Enum.any?(fn active_state -> normalize_issue_state(active_state) == normalized_state end)
   end
 

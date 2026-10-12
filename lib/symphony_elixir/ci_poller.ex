@@ -12,7 +12,7 @@ defmodule SymphonyElixir.CiPoller do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.Agreement
-  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiState, Config}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiFix, CiState, Config}
   alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
@@ -23,6 +23,7 @@ defmodule SymphonyElixir.CiPoller do
 
   @in_review_state "In Review"
   @merging_state "Merging"
+  @rework_state "Rework"
   @active_state "In Progress"
   @closed_pr_states ["CLOSED", "MERGED"]
   @github_error_backoff_threshold 3
@@ -607,6 +608,10 @@ defmodule SymphonyElixir.CiPoller do
   # green head, and a ticket enters Code Review straight from In Progress, so nothing else would ever
   # record CI for them. Watching those states here is what lets `green_head?/1` see their heads'
   # checks.
+  #
+  # `Rework` is watched on a designed repo because every phase whose head goes red routes to the CI
+  # Fix lane (`SymphonyElixir.CiFix`), and Rework is one of them: without it here, a rework's red head
+  # would go unnoticed until its run ended.
   defp watched_states(settings) do
     review_states = HumanReview.review_states(settings)
 
@@ -615,12 +620,12 @@ defmodule SymphonyElixir.CiPoller do
         do: review_states ++ [AutoReview.state(settings), @merging_state],
         else: review_states ++ [@merging_state]
 
-    base ++ designed_review_states(settings)
+    base ++ designed_phase_states(settings)
   end
 
-  defp designed_review_states(settings) do
+  defp designed_phase_states(settings) do
     if StateMachine.designed?(settings),
-      do: [settings.tracker.code_review_state, settings.tracker.qa_state],
+      do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state],
       else: []
   end
 
@@ -818,19 +823,27 @@ defmodule SymphonyElixir.CiPoller do
       {:parked, issue} ->
         await_human_action(record, issue, ci_status, failed_checks, opts, now)
 
-      :not_parked ->
+      result ->
+        origin = origin_state(result)
+
         cond do
           flaky_retry?(settings) and not rerun_attempted_for_sha?(record, commit_sha) ->
-            rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now)
+            rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now, origin)
 
           escalate_ci_failure?(record, settings, commit_sha, opts, now) ->
             escalate_ci_failure(record, ci_status, failed_checks, settings, opts, now)
 
           true ->
-            dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now)
+            dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now, origin)
         end
     end
   end
+
+  # The state the issue was in when its head went red, for the designed CI Fix lane to record as
+  # the origin it returns to. nil when this poll's read did not have the issue (`parked_for_person/3`
+  # could not find it), which keeps the legacy edge.
+  defp origin_state({:ok, %Issue{state: state}}), do: state
+  defp origin_state(_result), do: nil
 
   # An issue that waits on a person sits in the Human Review state, outside the active states
   # with a label that asks for one, or, with that state off, in `In Review` with an open request
@@ -855,15 +868,20 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   # This poll's read of the watched states has the issue when it sits in one; any other issue
-  # (`Backlog`, an active state) is read by id.
+  # (`Backlog`, an active state) is read by id. The issue itself comes back with a not-parked
+  # result, so the caller can read the state a red head routes the ticket out of.
   defp parked_for_person(record, settings, opts) do
     issue_id = Map.get(record, :issue_id)
 
     case read_issue(issue_id, opts) do
       {:ok, %Issue{} = issue} ->
-        case HumanReview.held_for_person(issue, settings, opts) do
+        # This poller's watched states include a designed repo's phase states and `Rework`, where a
+        # red head routes to the CI Fix lane; an issue in one of them is not waiting on a person.
+        held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
+
+        case HumanReview.held_for_person(issue, settings, held_opts) do
           {:ok, true} -> {:parked, issue}
-          {:ok, false} -> :not_parked
+          {:ok, false} -> {:ok, issue}
           {:error, reason} -> {:error, reason}
         end
 
@@ -944,7 +962,7 @@ defmodule SymphonyElixir.CiPoller do
   defp downgrade_status_for_new_sha("escalate_transition_pending"), do: "watching"
   defp downgrade_status_for_new_sha(status), do: status
 
-  defp rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now) do
+  defp rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now, origin_state) do
     github = Keyword.get(opts, :github, PullRequest)
     run_ids = failed_run_ids(failed_checks)
     rerun_run_ids = rerun_run_ids_for_record(record, run_ids)
@@ -980,7 +998,7 @@ defmodule SymphonyElixir.CiPoller do
 
       [] ->
         if run_ids == [] do
-          dispatch_ci_failure(record, ci_status, failed_checks, settings, Keyword.put(opts, :missing_run_id, true), now)
+          dispatch_ci_failure(record, ci_status, failed_checks, settings, Keyword.put(opts, :missing_run_id, true), now, origin_state)
         else
           attrs =
             ci_status_attrs(
@@ -1051,17 +1069,35 @@ defmodule SymphonyElixir.CiPoller do
   defp rerun_action_run_ids([run_id]), do: run_id
   defp rerun_action_run_ids(run_ids), do: run_ids
 
-  defp dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now) do
-    tracker = Keyword.get(opts, :tracker, Tracker)
-    issue_id = Map.get(record, :issue_id)
-
+  defp dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now, origin_state) do
     with {:ok, log_excerpt} <- failed_log_excerpt(record, failed_checks, settings, opts),
-         :ok <- hold_auto_merge_for_fix(record, ci_status, settings, opts, now) do
-      persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt)
+         :ok <- hold_auto_merge_for_fix(record, ci_status, settings, opts, now),
+         {:ok, entry} <- ci_fix_entry(record, settings, origin_state, opts) do
+      persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, log_excerpt, entry, settings)
     else
       {:error, reason} -> record_poll_error(record, reason, opts, now)
     end
   end
+
+  # Where a red head sends the ticket. On a designed repo sitting in one of the phases the CI Fix
+  # lane serves, the origin is recorded on the ticket *before* the edge is performed, so the repair
+  # has somewhere to return to; the origin is load-bearing, so failing to record it is a poll error
+  # the next pass retries rather than a move into a lane with no way out. Every other state — and
+  # every legacy repo — keeps the legacy `In Progress` edge exactly as it was.
+  defp ci_fix_entry(record, settings, origin_state, opts) do
+    case CiFix.entry(origin_state, settings) do
+      :none ->
+        {:ok, %{signal: :ci_fix_dispatch, target: @active_state, origin: nil}}
+
+      {:ok, signal, origin} ->
+        case CiFix.record_origin(repo_key_for(record, opts), Map.get(record, :issue_id), origin, opts) do
+          :ok -> {:ok, %{signal: signal, target: CiFix.state(settings), origin: origin}}
+          {:error, reason} -> {:error, {:ci_fix_origin_failed, reason}}
+        end
+    end
+  end
+
+  defp repo_key_for(record, opts), do: Map.get(record, :repo_key) || repo_key_from_opts(opts)
 
   # Before a CI-fix run of a `Merging` issue: the fix may push code the approval never covered,
   # so turn GitHub auto-merge off and hold it off until the issue is approved into `Merging`
@@ -1149,7 +1185,10 @@ defmodule SymphonyElixir.CiPoller do
 
   # A failure on an approved (`Merging`) PR is marked `approved`, so a fix run that finds a flake
   # and pushes nothing can hand the PR back to `Merging` once its head is green.
-  defp persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt) do
+  defp persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, log_excerpt, entry, settings) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    issue_id = Map.get(record, :issue_id)
+    %{signal: signal, target: target, origin: origin} = entry
     retry_count = ci_retry_count(record) + 1
     approved? = MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), issue_id)
     ci_failure = ci_status |> ci_failure_context(failed_checks, log_excerpt) |> Map.put(:approved, approved?)
@@ -1160,7 +1199,7 @@ defmodule SymphonyElixir.CiPoller do
         ci_status,
         %{
           status: "dispatch_requested",
-          target_issue_state: @active_state,
+          target_issue_state: target,
           ci_retry_count: retry_count,
           failed_checks: failed_checks,
           log_excerpt: log_excerpt,
@@ -1174,16 +1213,13 @@ defmodule SymphonyElixir.CiPoller do
 
     case complete_ci_update(opts, record, attrs, :ok) do
       :ok ->
-        case TransitionGuard.perform(issue_id, :ci_fix_dispatch, %{repo_key: Map.get(record, :repo_key)}, tracker: tracker) do
-          :ok ->
-            TicketSignals.record(Map.get(record, :repo_key), issue_id, "fix verdict", %{
-              outcome: "mechanical",
-              to: @active_state,
-              reason: "ci_failure"
-            })
+        context = %{repo_key: Map.get(record, :repo_key), settings: settings}
 
-            emit_ci_failed(record, ci_status, failed_checks, retry_count, @active_state)
-            {:state_transitioned, issue_id, :ci_failure, @active_state}
+        case TransitionGuard.perform(issue_id, signal, context, tracker: tracker) do
+          :ok ->
+            record_dispatched_fix_verdict(record, issue_id, origin, target)
+            emit_ci_failed(record, ci_status, failed_checks, retry_count, target)
+            {:state_transitioned, issue_id, :ci_failure, target}
 
           {:error, reason} ->
             record_transition_error(record, ci_status, failed_checks, opts, now, "dispatch", reason)
@@ -1192,6 +1228,25 @@ defmodule SymphonyElixir.CiPoller do
       {:update_error, _issue_id, _reason} = error ->
         error
     end
+  end
+
+  # The dispatch records the lane it went to as the ticket's `fix verdict`. A designed entry adds
+  # the phase the ticket left, which is what the repair reads back as its origin and what the audit
+  # trail shows. The legacy entry records exactly what it always did.
+  defp record_dispatched_fix_verdict(record, issue_id, nil, target) do
+    TicketSignals.record(Map.get(record, :repo_key), issue_id, "fix verdict", %{
+      outcome: "mechanical",
+      to: target,
+      reason: "ci_failure"
+    })
+  end
+
+  defp record_dispatched_fix_verdict(record, issue_id, origin, target) do
+    CiFix.record_verdict(Map.get(record, :repo_key), issue_id, "mechanical", %{
+      to: target,
+      origin: origin,
+      reason: "ci_failure"
+    })
   end
 
   defp escalate_ci_failure(record, ci_status, failed_checks, settings, opts, now) do

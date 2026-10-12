@@ -74,7 +74,12 @@ defmodule SymphonyElixir.TransitionGuardTest do
                :code_review_escalate,
                :qa_pass,
                :qa_skip,
-               :qa_fail
+               :qa_fail,
+               :ci_fix_enter_code_review,
+               :ci_fix_enter_qa,
+               :ci_fix_enter_merging,
+               :ci_fix_enter_rework,
+               :ci_fix_mechanical
              ]
 
       assert TransitionGuard.signals("designed") == TransitionGuard.signals() ++ Enum.map(designed_only, & &1.signal)
@@ -175,6 +180,51 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.target(:qa_pass, %{settings: designed}) == "Merging"
       assert TransitionGuard.target(:qa_skip, %{settings: designed}) == "Merging"
       assert TransitionGuard.target(:qa_fail, %{settings: designed}) == "Rework"
+    end
+
+    test "the CI Fix lane enters from each phase whose head can go red or conflict" do
+      designed = designed_settings()
+
+      assert TransitionGuard.legal?(:ci_fix_enter_code_review, "Code Review", nil, "designed")
+      assert TransitionGuard.legal?(:ci_fix_enter_qa, "QA", nil, "designed")
+      assert TransitionGuard.legal?(:ci_fix_enter_merging, "Merging", nil, "designed")
+      assert TransitionGuard.legal?(:ci_fix_enter_rework, "Rework", nil, "designed")
+
+      # Each entry names its own origin, so one phase's red head cannot enter the lane as another's.
+      refute TransitionGuard.legal?(:ci_fix_enter_code_review, "QA", nil, "designed")
+      refute TransitionGuard.legal?(:ci_fix_enter_qa, "Merging", nil, "designed")
+      refute TransitionGuard.legal?(:ci_fix_enter_rework, "In Progress", nil, "designed")
+
+      # The edges are designed-only: a legacy repo keeps its red -> In Progress loop.
+      refute TransitionGuard.legal?(:ci_fix_enter_code_review, "Code Review", nil, "legacy")
+      refute TransitionGuard.legal?(:ci_fix_enter_merging, "Merging", nil, "legacy")
+
+      for signal <- [:ci_fix_enter_code_review, :ci_fix_enter_qa, :ci_fix_enter_merging, :ci_fix_enter_rework] do
+        assert TransitionGuard.target(signal, %{settings: designed}) == "CI Fix"
+      end
+    end
+
+    test "the CI Fix entry target is the repo's configured CI Fix state" do
+      settings =
+        settings!(%{
+          "tracker" => %{"kind" => "memory", "ci_fix_state" => "Repair"},
+          "state_machine" => "designed"
+        })
+
+      assert TransitionGuard.target(:ci_fix_enter_qa, %{settings: settings}) == "Repair"
+    end
+
+    test "the mechanical return leaves CI Fix for the origin the caller read back from the ticket" do
+      designed = designed_settings()
+
+      assert TransitionGuard.legal?(:ci_fix_mechanical, "CI Fix", nil, "designed")
+      refute TransitionGuard.legal?(:ci_fix_mechanical, "Merging", nil, "designed")
+      # Designed-only, like the entry rows.
+      refute TransitionGuard.legal?(:ci_fix_mechanical, "CI Fix", nil, "legacy")
+
+      for origin <- ["Code Review", "QA", "Merging", "Rework"] do
+        assert TransitionGuard.target(:ci_fix_mechanical, %{target: origin, settings: designed}) == origin
+      end
     end
   end
 

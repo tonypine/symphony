@@ -783,6 +783,22 @@ defmodule SymphonyElixir.RunStore do
 
   def record_ci_state(_repo_key, _issue_id, _head_sha, _status, _at), do: {:error, :invalid_ci_state}
 
+  @doc """
+  Records the phase a ticket's CI Fix stay came from, creating the record when none exists. A
+  `nil` origin clears it (the mechanical repair has returned the ticket). The read-modify-write
+  runs in one durable transaction.
+  """
+  @spec set_ci_fix_origin(String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
+  def set_ci_fix_origin(repo_key, issue_id, origin) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ci_fix_origin(repo_key, issue_id, origin) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def set_ci_fix_origin(_repo_key, _issue_id, _origin), do: {:error, :invalid_issue_id}
+
   @spec put_verification_allocation(map()) :: :ok | {:error, term()}
   def put_verification_allocation(%{repo_key: repo_key, run_id: run_id, port: port} = record)
       when is_binary(run_id) and is_integer(port) do
@@ -1524,6 +1540,20 @@ defmodule SymphonyElixir.RunStore do
       [] ->
         :ok
     end
+  end
+
+  defp write_ci_fix_origin(repo_key, issue_id, origin) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.put_ci_fix_origin(record, origin)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
   end
 
   defp write_ci_state(repo_key, issue_id, head_sha, status, at) do

@@ -24,7 +24,8 @@ defmodule SymphonyElixir.TransitionGuard do
 
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
-  `:code_review_state`, `:qa_state`, `:waiting_on_sub_issues` and `:ci_escalation_state`.
+  `:code_review_state`, `:qa_state`, `:ci_fix_state`, `:waiting_on_sub_issues` and
+  `:ci_escalation_state`.
 
   The edge table is selected by the repo's resolved state-machine version (`StateMachine.version/1`),
   taken from `ctx`: the repo's `:settings` when the caller has them, else resolved from
@@ -132,6 +133,17 @@ defmodule SymphonyElixir.TransitionGuard do
   # The `:qa_*` rows are the QA run's verdicts (`SymphonyElixir.QaVerification`): pass carries the
   # ticket to `Merging`, fail returns it to `Rework`, and a skip — the same hybrid rule seen from the
   # QA state — carries it to `Merging` without a run.
+  #
+  # The `:ci_fix_enter_*` rows are the CI Fix lane's entries (`SymphonyElixir.CiFix`): one row per
+  # phase whose head can go red or conflict, so each origin is its own legal edge and the caller
+  # records that origin on the ticket. `:ci_fix_mechanical` is the return — the target is the origin
+  # the caller read back from the ticket, so the lane never has to name a state itself.
+  #
+  # The lane's other two exits have no row, because they are not machine moves: a repair the fixing
+  # agent judges substantive is the agent's own request to set `Rework` (an agent state request is
+  # validated by `resolve_request/2`, never performed through this table), and a repair it cannot
+  # make without access or a secret is a Needs Decision hold (`SymphonyElixir.Hold`), which never
+  # moves the ticket at all. Both are recorded as a `fix verdict`.
   @designed_edges @edges ++
                     [
                       %{signal: :restart, from: :any, to: "In Progress"},
@@ -142,7 +154,12 @@ defmodule SymphonyElixir.TransitionGuard do
                       %{signal: :code_review_escalate, from: ["Code Review"], to: :requested},
                       %{signal: :qa_pass, from: ["QA"], to: "Merging"},
                       %{signal: :qa_skip, from: ["QA"], to: "Merging"},
-                      %{signal: :qa_fail, from: ["QA"], to: "Rework"}
+                      %{signal: :qa_fail, from: ["QA"], to: "Rework"},
+                      %{signal: :ci_fix_enter_code_review, from: ["Code Review"], to: :ci_fix_state},
+                      %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
+                      %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
+                      %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
+                      %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested}
                     ]
 
   # States an agent's request may never set, with the refusal it gets. Moving to `Merging` is how a
@@ -389,6 +406,7 @@ defmodule SymphonyElixir.TransitionGuard do
   defp resolve(:requested, ctx), do: Map.fetch!(ctx, :target)
   defp resolve(:code_review_state, ctx), do: settings!(ctx).tracker.code_review_state
   defp resolve(:qa_state, ctx), do: settings!(ctx).tracker.qa_state
+  defp resolve(:ci_fix_state, ctx), do: settings!(ctx).tracker.ci_fix_state
   defp resolve(:waiting_on_sub_issues, ctx), do: SubIssueWait.state(settings!(ctx))
   defp resolve(:ci_escalation_state, ctx), do: settings!(ctx).ci.escalation_state || @in_review_state
   defp resolve(name, _ctx) when is_binary(name), do: name

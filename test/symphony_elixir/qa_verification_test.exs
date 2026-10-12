@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.QaVerificationTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.CiFix
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Hold
@@ -198,6 +199,26 @@ defmodule SymphonyElixir.QaVerificationTest do
                Handoff.signals(@repo_key, @issue_id)
     end
 
+    test "a pass the CI Fix lane re-bound to this head carries the ticket on without a second run" do
+      {workspace, head} = git_workspace!()
+
+      # A mechanical repair pushed this head; the lane re-binds the pass it carries to it.
+      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "the-repaired-head", "pass")
+      assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "QA", head, settings!())
+
+      assert :ok = run(workspace, [])
+
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** pass → Merging"
+
+      assert [%{kind: "qa", head_sha: ^head, outcome: "pass"} | _] = verdicts()
+
+      assert [%{name: "qa", details: %{signal: "qa_pass", target: "Merging", carried: true}} | _] =
+               Handoff.signals(@repo_key, @issue_id)
+    end
+
     test "a fail verdict carries the report and the ticket to Rework" do
       {workspace, head} = git_workspace!()
 
@@ -385,6 +406,20 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, [])
 
       assert {:error, {:qa_blocked_hold_failed, :disk_full}} = run(workspace, store: UnusedStore)
+    end
+  end
+
+  describe "carry_verdict/3" do
+    test "re-binds the newest pass to the new head, and carries nothing otherwise" do
+      assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
+
+      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "fail")
+      assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
+      assert [%{head_sha: "old-head", outcome: "fail"}] = verdicts()
+
+      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, nil)
+      assert [%{head_sha: "old-head", outcome: "pass"} | _] = verdicts()
     end
   end
 end

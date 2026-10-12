@@ -1494,6 +1494,41 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              conflict_key: "head-sha|base-sha",
              approved: false
            } = PrReviewPoller.pending_pr_conflict("issue-1780")
+
+    # The legacy conflict path records no CI Fix origin: the ticket went to In Progress as before.
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == nil
+  end
+
+  test "a conflict on a designed repo's Merging ticket enters CI Fix with Merging recorded as the origin" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    now = ~U[2026-05-01 09:00:00Z]
+    issue = %{in_review_issue(updated_at: now) | state: "Merging"}
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    :ok = put_review(now)
+
+    Application.put_env(
+      :symphony_elixir,
+      :pr_review_test_activity,
+      open_activity(now,
+        mergeable: "CONFLICTING",
+        merge_state_status: "DIRTY",
+        head_ref_name: "auto/ACME-1780",
+        head_ref_oid: "head-sha",
+        base_ref_name: "main",
+        base_ref_oid: "base-sha"
+      )
+    )
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "Merging"
   end
 
   test "deduplicates repeated polls of the same merge conflict" do

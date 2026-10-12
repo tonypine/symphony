@@ -16,6 +16,7 @@ defmodule SymphonyElixir.TicketStateTest do
                ci_states: [],
                verdicts: [],
                signals: [],
+               ci_fix_origin: nil,
                updated_at: nil
              }
     end
@@ -45,6 +46,7 @@ defmodule SymphonyElixir.TicketStateTest do
                ci_states: [],
                verdicts: [],
                signals: [],
+               ci_fix_origin: nil,
                updated_at: nil
              }
     end
