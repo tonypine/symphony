@@ -915,6 +915,27 @@ defmodule SymphonyElixir.AgentTools.Linear do
   """
   @spec create_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_subissue(context, attrs, opts \\ []) when is_map(attrs) do
+    create_child(context, attrs, @backlog_state, opts)
+  end
+
+  @doc """
+  Creates a child of the current issue in the state named `state_name`, scoped exactly like
+  `create_subissue/3`'s Backlog child (same team, project, assignee and parent) and with the same
+  validation, secret scan and per-run title deduplication.
+
+  This is the machine-side filing path, for a flow that files a child an agent must not: an epic
+  review files each gap it found as a follow-up in `Todo` (`SymphonyElixir.EpicReview`), because a
+  `Backlog` child does not hold its parent and the epic would sit unnoticed until a person promoted
+  it. Agents keep `linear_create_subissue` and its Backlog contract; no tool is registered for this
+  function.
+  """
+  @spec create_subissue_in_state(context(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def create_subissue_in_state(context, state_name, attrs, opts \\ [])
+      when is_binary(state_name) and is_map(attrs) do
+    create_child(context, attrs, state_name, opts)
+  end
+
+  defp create_child(context, attrs, state_name, opts) do
     registry = Map.get(context, :comment_registry)
 
     with {:ok, issue_id} <- current_issue_id(context),
@@ -927,7 +948,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
              opts
            ),
          :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
-      create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts)
+      create_child_issue(issue_id, {title, description, priority, blocked_by}, state_name, registry, opts)
     end
   end
 
@@ -1828,11 +1849,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
     identifiers |> Enum.map(&(&1 |> String.trim() |> String.upcase())) |> Enum.uniq()
   end
 
-  defp create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
+  defp create_child_issue(issue_id, {title, description, priority, blocked_by}, state_name, registry, opts) do
     with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
-         {:ok, state_id} <- backlog_state_id(states),
+         {:ok, state_id} <- child_state_id(states, state_name),
          {:ok, blockers} <- resolve_blockers(blocked_by, parent, registry),
          input = subissue_input(parent, state_id, title, description, priority),
          {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts),
@@ -1886,22 +1907,42 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp backlog_state_id(states) do
+  # The new child's initial state, by name (case-insensitively), the way the team names it. `Backlog`
+  # also matches the team's backlog-type state, so an agent's sub-issue lands in the column the
+  # tracker shows as Backlog even when the team renamed it. Any other `state_name` — an epic review's
+  # `Todo` follow-up (`SymphonyElixir.EpicReview`) — is matched by name alone.
+  defp child_state_id(states, state_name) do
     state =
-      Enum.find(states, &state_name_matches?(&1, @backlog_state)) ||
-        Enum.find(states, &(&1["type"] == "backlog"))
+      Enum.find(states, &state_name_matches?(&1, state_name)) ||
+        if(state_name_matches?(%{"name" => @backlog_state}, state_name),
+          do: Enum.find(states, &(&1["type"] == "backlog"))
+        )
 
     case state do
       %{"id" => state_id} -> {:ok, state_id}
-      _ -> {:error, {:backlog_state_not_found, states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)}}
+      _ -> {:error, child_state_error(state_name, states)}
+    end
+  end
+
+  # A team with no `Backlog` keeps the error the agent tool's mapping knows
+  # (`SymphonyElixir.Codex.DynamicTool`), and a machine-side filing names the state it asked for.
+  defp child_state_error(state_name, states) do
+    available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
+
+    if state_name_matches?(%{"name" => @backlog_state}, state_name) do
+      {:backlog_state_not_found, available}
+    else
+      {:child_state_not_found, state_name, available}
     end
   end
 
   # The one state write outside the guard is sub-issue creation's initial state: the guard resolves
   # a move of an existing issue (from-state to target), and an `issueCreate` has no from-state to
-  # move from. So sub-issue creation's initial state is outside TransitionGuard's scope, and this is
-  # the only stateId the Linear tool hands Linear without `TransitionGuard.resolve_request/2`; the
-  # state-scanning test in `agent_tools_linear_test.exs` keeps that list to the two known sites.
+  # move from. So sub-issue creation's initial state is outside TransitionGuard's scope: `create_subissue/3`'s
+  # Backlog child and `create_subissue_in_state/4`'s named one (an epic review's `Todo` follow-up)
+  # both come through here, and this is the only stateId the Linear tool hands Linear without
+  # `TransitionGuard.resolve_request/2`; the state-scanning test in `agent_tools_linear_test.exs`
+  # keeps that list to the two known sites.
   defp subissue_input(parent, state_id, title, description, priority) do
     %{
       "teamId" => get_in(parent, ["team", "id"]),
@@ -1943,6 +1984,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
            states: states,
            from_state: from_state,
            pr_less?: pr_less?,
+           plan_parent?: plan_parent?(issue),
            needs_person?: needs_person?(state, issue, handoff.human_action_requested?, settings)
          }) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
@@ -2012,8 +2054,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp supervisor_handoff?(_state, _issue, _handoff), do: false
 
   defp pr_less_issue?(issue) do
+    plan_parent?(issue) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
+  end
+
+  # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
+  # request, and on a designed repo it is the ticket whose handoff enters `Plan Review`.
+  defp plan_parent?(issue) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
-    Enum.any?(labels, &Issue.breakdown_label?/1) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
+    Enum.any?(labels, &Issue.breakdown_label?/1)
   end
 
   defp label_name(%{"name" => name}), do: name

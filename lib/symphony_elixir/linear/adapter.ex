@@ -87,6 +87,57 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # The team's states and projects, for a create that has a team key rather than an issue to read
+  # them from (the self-heal lane's fix tickets).
+  @team_scope_query """
+  query SymphonyCreateIssueScope($teamId: String!) {
+    team(id: $teamId) {
+      id
+      states(first: 250) {
+        nodes {
+          id
+          name
+        }
+      }
+      projects(first: 250) {
+        nodes {
+          id
+          name
+        }
+      }
+    }
+  }
+  """
+
+  @create_issue_mutation """
+  mutation SymphonyCreateIssue($input: IssueCreateInput!) {
+    issueCreate(input: $input) {
+      success
+      issue {
+        id
+        identifier
+        url
+      }
+    }
+  }
+  """
+
+  @create_issue_relation_mutation """
+  mutation SymphonyCreateIssueRelation($input: IssueRelationCreateInput!) {
+    issueRelationCreate(input: $input) {
+      success
+    }
+  }
+  """
+
+  @issue_id_query """
+  query SymphonyIssueId($id: String!) {
+    issue(id: $id) {
+      id
+    }
+  }
+  """
+
   @workflow_states_query """
   query SymphonyWorkflowStatesByName($stateName: String!) {
     workflowStates(filter: {name: {eq: $stateName}}, first: 250) {
@@ -309,6 +360,127 @@ defmodule SymphonyElixir.Linear.Adapter do
       false -> {:error, :issue_update_failed}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :issue_update_failed}
+    end
+  end
+
+  @doc """
+  Creates an issue from `attrs` — `title`, `description`, `priority`, `team` (a key or an id),
+  `state` (a state name, `Todo` by default) and an optional `project` name — and returns its
+  `%{id:, identifier:, url:}`. The team's state and project are resolved from the team, so a
+  machine that files work (the self-heal lane's fix tickets) does not need an issue to read them
+  from. Only a Linear tracker files issues.
+  """
+  @spec create_issue(map()) :: {:ok, map()} | {:error, term()}
+  def create_issue(attrs) when is_map(attrs) do
+    with {:ok, title, description, priority, team, state, project} <- validate_create_issue(attrs),
+         {:ok, team_id} <- resolve_team_id(team),
+         {:ok, scope} <- team_scope(team_id),
+         {:ok, state_id} <- team_state_id(scope, state),
+         {:ok, project_id} <- team_project_id(scope, project),
+         input = create_issue_input(team_id, state_id, project_id, title, description, priority),
+         {:ok, response} <- client_module().graphql(@create_issue_mutation, %{input: input}),
+         true <- get_in(response, ["data", "issueCreate", "success"]) == true,
+         %{"id" => id, "identifier" => identifier} <- get_in(response, ["data", "issueCreate", "issue"]) do
+      {:ok, %{id: id, identifier: identifier, url: get_in(response, ["data", "issueCreate", "issue", "url"])}}
+    else
+      {:error, reason} -> {:error, reason}
+      _failed -> {:error, :issue_create_failed}
+    end
+  end
+
+  def create_issue(_attrs), do: {:error, :invalid_issue_create}
+
+  @doc """
+  Records that the issue named `blocker` blocks `blocked_issue_id` (an issue id), so the blocked
+  issue cannot move until the blocker goes terminal. Used to tie an affected ticket to the fix
+  ticket self-heal filed for it.
+  """
+  @spec add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_blocked_by(blocker, blocked_issue_id) when is_binary(blocker) and is_binary(blocked_issue_id) do
+    with {:ok, blocker_id} <- issue_id(blocker),
+         {:ok, response} <-
+           client_module().graphql(@create_issue_relation_mutation, %{
+             input: %{"issueId" => blocker_id, "relatedIssueId" => blocked_issue_id, "type" => "blocks"}
+           }),
+         true <- get_in(response, ["data", "issueRelationCreate", "success"]) == true do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      _failed -> {:error, :issue_relation_failed}
+    end
+  end
+
+  def add_blocked_by(_blocker, _blocked_issue_id), do: {:error, :invalid_blocked_by}
+
+  defp validate_create_issue(attrs) do
+    title = attrs |> Map.get(:title) |> blank_nil()
+    description = Map.get(attrs, :description, "")
+    priority = Map.get(attrs, :priority)
+    team = attrs |> Map.get(:team) |> blank_nil()
+    state = attrs |> Map.get(:state, "Todo") |> blank_nil()
+    project = attrs |> Map.get(:project) |> blank_nil()
+
+    cond do
+      is_nil(title) -> {:error, :invalid_issue_title}
+      not is_binary(description) -> {:error, :invalid_issue_description}
+      not (is_nil(priority) or priority in 0..4) -> {:error, :invalid_issue_priority}
+      is_nil(team) -> {:error, :invalid_issue_team}
+      is_nil(state) -> {:error, :invalid_issue_state}
+      true -> {:ok, title, description, priority, team, state, project}
+    end
+  end
+
+  defp blank_nil(value) when is_binary(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
+  defp blank_nil(_value), do: nil
+
+  defp team_scope(team_id) do
+    with {:ok, response} <- client_module().graphql(@team_scope_query, %{teamId: team_id}),
+         %{} = team <- get_in(response, ["data", "team"]) do
+      {:ok, team}
+    else
+      {:error, reason} -> {:error, reason}
+      _missing -> {:error, :team_not_found}
+    end
+  end
+
+  defp team_state_id(team, state_name) do
+    states = team |> get_in(["states", "nodes"]) |> List.wrap()
+    wanted = String.downcase(state_name)
+
+    case Enum.find(states, &(is_binary(&1["name"]) and String.downcase(&1["name"]) == wanted)) do
+      %{"id" => id} -> {:ok, id}
+      _none -> {:error, {:state_not_found, state_name}}
+    end
+  end
+
+  defp team_project_id(_team, nil), do: {:ok, nil}
+
+  defp team_project_id(team, project_name) do
+    projects = team |> get_in(["projects", "nodes"]) |> List.wrap()
+    wanted = String.downcase(project_name)
+
+    case Enum.find(projects, &(is_binary(&1["name"]) and String.downcase(&1["name"]) == wanted)) do
+      %{"id" => id} -> {:ok, id}
+      _none -> {:error, {:project_not_found, project_name}}
+    end
+  end
+
+  defp create_issue_input(team_id, state_id, project_id, title, description, priority) do
+    %{"teamId" => team_id, "stateId" => state_id, "title" => title, "description" => description}
+    |> maybe_put("projectId", project_id)
+    |> maybe_put("priority", priority)
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp issue_id(identifier) do
+    with {:ok, response} <- client_module().graphql(@issue_id_query, %{id: identifier}),
+         %{"id" => id} <- get_in(response, ["data", "issue"]) do
+      {:ok, id}
+    else
+      {:error, reason} -> {:error, reason}
+      _missing -> {:error, {:issue_not_found, identifier}}
     end
   end
 

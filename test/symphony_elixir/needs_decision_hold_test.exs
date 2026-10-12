@@ -2,7 +2,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Hold, NeedsDecisionHold, RunStore, Workflow}
+  alias SymphonyElixir.{Hold, MergeConfirmation, NeedsDecisionHold, RunStore, Workflow}
   alias SymphonyElixir.HumanActions.{Collector, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -22,6 +22,14 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :boom}
     def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
     def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+  end
+
+  # The labels project fine; only the move a confirmation performs fails, so a clear reaches the
+  # continue and is driven into its failure path.
+  defmodule FailingMoveTracker do
+    def set_machine_label(_issue_id, _name), do: :ok
+    def clear_machine_label(_issue_id, _name), do: :ok
+    def update_issue_state(_issue_id, _state), do: {:error, :rate_limited}
   end
 
   setup do
@@ -154,6 +162,55 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
       assert stored_hold() == nil
       assert labels() == []
+    end
+
+    test "answering a merge confirmation's hold continues the ticket into Merging" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+      merge_request = MergeConfirmation.request(issue(), %{recommendation: "ready to merge", review: nil, qa: nil, pr: nil})
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, MergeConfirmation.attrs(merge_request))
+
+      node =
+        ticket_node(%{
+          "comments" => %{"nodes" => [request_comment(@comment_id, Request.render_hold(merge_request, "In Progress")), reply()]}
+        })
+
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert stored_hold() == nil
+      assert labels() == []
+    end
+
+    test "a confirmation whose move fails reports it and leaves the ticket where it is" do
+      merge_request = MergeConfirmation.request(issue(), %{recommendation: "ready to merge", review: nil, qa: nil, pr: nil})
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, MergeConfirmation.attrs(merge_request))
+
+      node =
+        ticket_node(%{
+          "comments" => %{"nodes" => [request_comment(@comment_id, Request.render_hold(merge_request, "In Progress")), reply()]}
+        })
+
+      log =
+        capture_log(fn ->
+          assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings(), tracker: FailingMoveTracker) == :clear
+        end)
+
+      assert log =~ "Failed to continue issue_id=#{@issue_id} to Merging after its decision"
+      assert stored_hold() == nil
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "an ordinary decision's hold continues in place, moving nothing" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
     end
 
     test "clears the hold when the run withdraws the request" do

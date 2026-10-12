@@ -232,10 +232,14 @@ issues:
   one in the configured teams and creates it as a started state when it is missing, logging what
   it created; a second start finds them all and creates nothing. A state renamed or deleted in
   Linear is reported at startup with its exact name and the `issues.states.*` key to point at the
-  new name, and is then recreated, so a name is never silently duplicated. These states land
-  inert: nothing dispatches on, enters or reads them yet. They sit in Linear's `started` group,
-  beside `In Progress`, so they read as active columns; do not add them to `states.active` until a
-  feature moves tickets into them.
+  new name, and is then recreated, so a name is never silently duplicated. On a `designed` repo the
+  machine enters them and dispatch picks them up — `Code Review` for the reviewer run, `QA` for the
+  QA pass, `CI Fix` for mechanical repair, and `Epic Review` for the automatic close of a plan
+  parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each one filed as a follow-up
+  sub-ticket in `Todo` under the same epic, with the parent back in `Waiting on sub-tickets`). They
+  sit in Linear's `started` group, beside `In Progress`, so they read as active columns;
+  `states.plan_review` is the one person-owned state of the five: it is never dispatched, and an
+  issue in it waits for the person reviewing the plan.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
@@ -325,9 +329,12 @@ repositories:
   `designed`. `legacy` is today's flow: dispatch from `states.active`, the legacy transition guard,
   and the legacy status-map prompt. `designed` moves this repo alone onto the designed machine of
   [`docs/design/state-machine.md`](design/state-machine.md): dispatch also picks up the designed
-  phase states (`states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review`,
-  `states.ci_fix`), the transition guard uses the designed machine's edge table, and prompts render
-  the designed status map. Unset reads as `legacy`. Every part of a run resolves the version through
+  phase states (`states.code_review`, `states.qa`, `states.epic_review`, `states.ci_fix`), the
+  transition guard uses the designed machine's edge table, and prompts render
+  the designed status map. `states.plan_review` is a designed state too, but dispatch never picks
+  it up: it is the epic path's person-owned plan review — where a plan parent's handoff lands, and
+  where the person reviewing the plan approves it or sends it back — so an issue in it is never
+  dispatched. Unset reads as `legacy`. Every part of a run resolves the version through
   the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
   a State machine picker. A `designed` repo reviews its work through the designed `Code Review`
   state, so it needs the reviewer on: with `review_agent.enabled` off, its `Code Review` tickets are
@@ -337,6 +344,22 @@ repositories:
   rather than routing it — the run takes a second reviewer pass on the same head, records the
   verdict bound to it and moves nothing, and the next dispatch performs that verdict. See
   [`docs/design/state-machine.md`](design/state-machine.md).
+- `manual_review`: who decides that a verified ticket merges, `off` (the default) or `on`
+  ([`docs/design/state-machine.md`](design/state-machine.md), **Manual review**). It controls
+  decision authority on the ticket path, not verification: the machine verifies the same way either
+  way. `off` moves the ticket on its verdicts — Code Review approve → QA, QA pass → Merging. `on`
+  pauses the last step into Merging on a person: the verdict carries a **Needs Decision** hold whose
+  request is the summary to decide from (the recommendation, the Code Review reasons, the QA result
+  and the PR link), and confirming continues into Merging exactly as when `off`, while a redirect
+  (Send to Rework) directs a move instead. Rework verdicts, CI Fix and holds behave the same in both
+  modes, and the epic path is unaffected. The macOS Repos edit sheet sets it with a Manual review
+  picker.
+
+  The retired `auto_review.acceptance_gate.mode` (and a repo's `acceptance_gate.mode`) is deprecated
+  and maps onto this setting, with a warning logged once per config: `shadow` → `on`, and `off`,
+  `enforce` and `decide` → `off`; `watch` was operator monitoring, not a person stopping the ticket,
+  so it is `off` too. A repo's own `manual_review` wins over whichever mode applies to it, and a
+  repo that sets no `manual_review` keeps the mode's answer.
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
@@ -667,8 +690,9 @@ agent:
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `final_verification` (title starts with `Final verification:`), `breakdown` (plan ticket in
-  `Rework`), `close_out` (plan ticket whose sub-issues are all terminal), `breakdown` (other
+  `final_verification` (title starts with `Final verification:`; a legacy repo only), `breakdown` (plan ticket in
+  `Rework`), `close_out` (a legacy repo's plan ticket whose sub-issues are all terminal), `epic_review`
+  (a designed repo's plan ticket whose sub-issues are all terminal: the epic review), `breakdown` (other
   plan ticket: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
@@ -740,7 +764,7 @@ agent:
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
   queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `auto_review`, `waiting_for_human`, `landing`,
-  `breakdown`, `close_out`, `final_verification`), whether an agent or QA pass is `running` for it,
+  `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent or QA pass is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan

@@ -137,12 +137,91 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
              {409, "move_not_allowed", "MOT-30 is a plan; approve_pr is for a pull request"}
   end
 
+  test "restart resets the ticket and moves it to In Progress", %{moves: moves} do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    pr_url = "https://github.com/example/repo/pull/40"
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url], repo_key: "designed"}
+    ])
+
+    conn =
+      post(
+        :restart,
+        %{"issue_identifier" => "MOT-40", "reason" => "The approach is wrong"},
+        [github: __MODULE__.OpenGitHub, workspace: __MODULE__.FakeWorkspace] ++ moves
+      )
+
+    assert conn.status == 200
+    assert %{"move" => "restart", "from_state" => "Rework", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
+    assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+  end
+
+  test "a restart on a legacy repo is a 409", %{moves: moves} do
+    assert error(post(:restart, %{"issue_identifier" => "MOT-40", "reason" => "No"}, moves)) ==
+             {409, "move_not_allowed", "MOT-40 is on the legacy state machine, where Rework already closes the pull request and starts over"}
+  end
+
+  test "a reset GitHub refuses is a 502 restart_incomplete", %{moves: moves} do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+    )
+
+    pr_url = "https://github.com/example/repo/pull/40"
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url]}
+    ])
+
+    assert error(
+             post(
+               :restart,
+               %{"issue_identifier" => "MOT-40", "reason" => "No"},
+               [github: __MODULE__.RefusingCloseGitHub, workspace: __MODULE__.FakeWorkspace] ++ moves
+             )
+           ) ==
+             {502, "restart_incomplete", "MOT-40 was not restarted: GitHub refused to close #{pr_url} (:forbidden)"}
+  end
+
+  defmodule OpenGitHub do
+    def fetch_activity(_pr_url, _opts), do: {:ok, %{state: "OPEN"}}
+    def close(_pr_url, _opts), do: :ok
+  end
+
+  defmodule RefusingCloseGitHub do
+    def fetch_activity(_pr_url, _opts), do: {:ok, %{state: "OPEN"}}
+    def close(_pr_url, _opts), do: {:error, :forbidden}
+  end
+
+  defmodule FakeWorkspace do
+    def remove_issue_workspaces(_issue), do: :ok
+  end
+
   test "a missing identifier, reason, picks or request comment is a 422", %{moves: moves} do
-    for action <- [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog, :unblock, :decide, :undo] do
+    actions = [
+      :approve_plan,
+      :approve_pr,
+      :rework,
+      :restart,
+      :decisions,
+      :sign_off,
+      :backlog,
+      :unblock,
+      :decide,
+      :undo
+    ]
+
+    for action <- actions do
       assert error(post(action, %{"issue_identifier" => " "}, moves)) == {422, "invalid_request", "issue_identifier is required"}
     end
 
     assert error(post(:rework, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "reason is required"}
+    assert error(post(:restart, %{"issue_identifier" => "MOT-40"}, moves)) == {422, "invalid_request", "reason is required"}
 
     for picks <- [nil, "B", [%{"question" => "Where?"}], ["B"]] do
       assert {422, "invalid_request", _message} = error(post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => picks}, moves))

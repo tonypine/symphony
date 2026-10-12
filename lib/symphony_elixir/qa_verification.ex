@@ -27,7 +27,17 @@ defmodule SymphonyElixir.QaVerification do
 
   require Logger
 
-  alias SymphonyElixir.{Handoff, Hold, QaPolicy, StateMachine, TicketSignals, TransitionGuard, WorkspaceHead}
+  alias SymphonyElixir.{
+    Handoff,
+    MergeConfirmation,
+    QaPolicy,
+    SelfHeal,
+    StateMachine,
+    TicketSignals,
+    TransitionGuard,
+    WorkspaceHead
+  }
+
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.Report
@@ -91,25 +101,31 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   @doc """
-  The journey context for `issue`: the ticket's `## User walkthrough` when it has one, else its
-  acceptance criteria, else nothing but the instruction to derive them. The QA prompt renders this,
-  so the run knows what to verify from the user's point of view.
+  The journey context for `issue`: its `## User walkthrough` when it has one, else its acceptance
+  criteria, else nothing but the instruction to derive them. The QA prompt renders this, so the run
+  knows what to verify from the user's point of view.
+
+  `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
+  state's own run (the default), and the epic for the epic review of a designed repo's plan parent
+  (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
-  @spec journey(Issue.t()) :: %{source: String.t(), text: String.t() | nil}
-  def journey(%Issue{description: description}) when is_binary(description) do
+  @spec journey(Issue.t(), String.t()) :: %{source: String.t(), text: String.t() | nil}
+  def journey(issue, label \\ "the ticket"), do: journey_for(issue, label)
+
+  defp journey_for(%Issue{description: description}, label) when is_binary(description) do
     cond do
       text = section(description, @walkthrough_heading) ->
-        %{source: "the ticket's `## User walkthrough`", text: text}
+        %{source: "#{label}'s `## User walkthrough`", text: text}
 
       text = section(description, @acceptance_heading) ->
-        %{source: "the ticket's acceptance criteria", text: text}
+        %{source: "#{label}'s acceptance criteria", text: text}
 
       true ->
-        %{source: "the ticket's walkthrough and acceptance criteria", text: nil}
+        %{source: "#{label}'s walkthrough and acceptance criteria", text: nil}
     end
   end
 
-  def journey(_issue), do: %{source: "the ticket's walkthrough and acceptance criteria", text: nil}
+  defp journey_for(_issue, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil}
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do
@@ -122,7 +138,7 @@ defmodule SymphonyElixir.QaVerification do
   # worker. There is no local head to read there either, so the run is blocked with the reason
   # (retried boundedly, then a Blocked hold) rather than parking on an unreadable head forever.
   defp remote_worker_unsupported(issue, opts, settings, host) do
-    blocked(issue, opts, settings, nil, blocked_outcome(error_reason({:remote_worker_unsupported, host}), %{}))
+    blocked(issue, opts, settings, nil, blocked_outcome({:remote_worker_unsupported, host}, %{}))
   end
 
   defp read_head(issue, workspace, opts, settings) do
@@ -183,7 +199,10 @@ defmodule SymphonyElixir.QaVerification do
     Logger.info("QA carried the earlier pass for #{issue_label(issue)} head=#{head}; not verifying again")
     publish_report(issue, opts, head, carried_outcome(), "Merging")
 
-    move(issue, opts, settings, :qa_pass, %{reason: "the earlier QA pass still covers this head", carried: true})
+    merge_entry(issue, opts, settings, :qa_pass, %{reason: "the earlier QA pass still covers this head", carried: true}, %{
+      recommendation: "the earlier QA pass still covers this head; ready to merge",
+      qa: "carried forward: QA already passed this change; the repair that followed was mechanical"
+    })
   end
 
   defp carried_outcome do
@@ -205,7 +224,10 @@ defmodule SymphonyElixir.QaVerification do
     publish_report(issue, opts, head, %{verdict: :skip, reason: reason, steps: [], findings: []}, "Merging")
     Logger.info("Skipping QA for #{issue_label(issue)} head=#{head}: #{reason}")
 
-    move(issue, opts, settings, :qa_skip, %{reason: reason})
+    merge_entry(issue, opts, settings, :qa_skip, %{reason: reason}, %{
+      recommendation: "no QA run applies to this diff; ready to merge",
+      qa: "QA skipped: #{reason}"
+    })
   end
 
   defp run_agent(issue, _workspace, opts, settings, head, []) do
@@ -222,7 +244,7 @@ defmodule SymphonyElixir.QaVerification do
 
       {:error, reason, tokens} ->
         extra = %{tokens: tokens, playbooks: playbook_kinds(playbooks)}
-        blocked(issue, opts, settings, head, blocked_outcome(error_reason(reason), extra))
+        blocked(issue, opts, settings, head, blocked_outcome(reason, extra))
     end
   end
 
@@ -247,7 +269,17 @@ defmodule SymphonyElixir.QaVerification do
     publish_report(issue, opts, head, outcome, "Merging")
     Logger.info("QA passed for #{issue_label(issue)} head=#{head}")
 
-    move(issue, opts, settings, :qa_pass, %{reason: "every journey verified"})
+    merge_entry(issue, opts, settings, :qa_pass, %{reason: "every journey verified"}, %{
+      recommendation: "every journey verified; ready to merge",
+      qa: qa_result(outcome)
+    })
+  end
+
+  defp qa_result(outcome) do
+    case Map.get(outcome, :summary) do
+      summary when is_binary(summary) and summary != "" -> summary
+      _none -> verdict_reason(outcome)
+    end
   end
 
   defp fail(issue, opts, settings, head, outcome) do
@@ -259,10 +291,11 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # A blocked run is retried boundedly on the same head: a transient environment failure says
-  # nothing about the change. Once the attempts are used up — or immediately when only a person can
-  # clear the block — the ticket takes a Blocked hold with the reason recorded, so it pauses in QA
-  # rather than failing silently. The self-heal lane files the fix ticket that clears it when that
-  # lands (TP-824); until then a person clears the hold.
+  # nothing about the change. Once the attempts are used up the block goes to the self-heal lane
+  # (`SymphonyElixir.SelfHeal`), which files or reuses the fix ticket for the broken component,
+  # holds the ticket on it, and resumes it by itself when the fix lands — or, for a block only a
+  # person can clear, takes the access hold a person lifts. Either way the ticket pauses in QA
+  # rather than failing silently.
   defp blocked(issue, opts, _settings, head, outcome) do
     record_verdict(issue, opts, head, "blocked")
     attempts = blocked_attempts(issue, opts, head)
@@ -272,7 +305,16 @@ defmodule SymphonyElixir.QaVerification do
       Logger.warning("QA blocked for #{issue_label(issue)} head=#{head} (attempt #{attempts}/#{@max_blocked_attempts}); retrying")
       :ok
     else
-      hold(issue, opts, attempts, outcome)
+      self_heal(issue, opts, attempts, outcome)
+    end
+  end
+
+  defp self_heal(issue, opts, attempts, outcome) do
+    heal_opts = [outcome: outcome, attempts: attempts, repo_key: repo_key(issue, opts)] ++ Keyword.take(opts, [:store, :tracker, :fixer, :symphony_repo_key])
+
+    case SelfHeal.heal(issue, heal_opts) do
+      {:error, reason} -> {:error, {:qa_self_heal_failed, reason}}
+      _action -> :ok
     end
   end
 
@@ -290,25 +332,6 @@ defmodule SymphonyElixir.QaVerification do
 
   defp needs_person?(%{needs_person: true}), do: true
   defp needs_person?(_outcome), do: false
-
-  defp hold(issue, opts, attempts, outcome) do
-    reason = "QA blocked after #{attempts} attempt(s): #{verdict_reason(outcome)}"
-
-    attrs = %{
-      reason: reason,
-      clearing_condition: "when the QA environment is repaired; a person clears this hold until self-heal files the fix ticket",
-      waits_on: %{type: "access", keys: []}
-    }
-
-    case Hold.set(repo_key(issue, opts), issue.id, :blocked, attrs, Keyword.take(opts, [:store, :tracker])) do
-      :ok ->
-        Logger.warning("QA for #{issue_label(issue)} is blocked; a Blocked hold is set: #{reason}")
-        :ok
-
-      {:error, reason} ->
-        {:error, {:qa_blocked_hold_failed, reason}}
-    end
-  end
 
   defp agent_job(issue, workspace, opts, settings, head, playbooks) do
     %{
@@ -339,11 +362,18 @@ defmodule SymphonyElixir.QaVerification do
     }
   end
 
-  defp blocked_outcome(reason, extra) do
-    Map.merge(
-      %{verdict: :blocked, reason: reason, summary: nil, steps: [], findings: [], needs_person: false},
-      extra
-    )
+  defp blocked_outcome(cause, extra) do
+    base = %{
+      verdict: :blocked,
+      reason: error_reason(cause),
+      cause: cause,
+      summary: nil,
+      steps: [],
+      findings: [],
+      needs_person: false
+    }
+
+    Map.merge(base, extra)
   end
 
   defp playbook_kinds(playbooks), do: Enum.map(playbooks, & &1.kind)
@@ -354,6 +384,31 @@ defmodule SymphonyElixir.QaVerification do
     case Report.publish(issue, report, Keyword.take(opts, [:linear_client, :settings])) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to publish the QA report for #{issue_label(issue)}: #{inspect(reason)}")
+    end
+  end
+
+  # The step into `Merging`. With the repo's manual review `on`, the verdict pauses the ticket where
+  # it is on a Needs Decision hold carrying the summary and waits for a person's confirmation
+  # (`SymphonyElixir.MergeConfirmation`); with it `off` — the default — the verdict moves the ticket
+  # as it always did. The gate itself is the guard's edge table, not a check here.
+  defp merge_entry(issue, opts, settings, signal, extra, parts) do
+    if TransitionGuard.confirmation_required?(signal, %{settings: settings}) do
+      confirm_merge(issue, opts, parts)
+    else
+      move(issue, opts, settings, signal, extra)
+    end
+  end
+
+  defp confirm_merge(issue, opts, parts) do
+    summary = MergeConfirmation.summary(issue, opts, parts)
+
+    case MergeConfirmation.pause(issue, opts, summary) do
+      :ok ->
+        record_move_signal(issue, opts, :merge_confirmation, %{target: "Merging", reason: parts[:recommendation]})
+        :ok
+
+      {:error, reason} ->
+        {:error, {:qa_merge_confirmation_failed, reason}}
     end
   end
 

@@ -2023,6 +2023,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:restart_requires_human_approval, state_name}) do
+    %{
+      "error" => %{
+        "code" => "restart_requires_human_approval",
+        "message" =>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo that phase's work " <>
+            "is on a pull request, so entering `In Progress` means the Director app's Restart — which closes the " <>
+            "pull request, starts a fresh branch from main and supersedes the workpad. A human has to do it."
+      }
+    }
+  end
+
   defp tool_error_payload({:in_review_set_by_auto_review, state_name, auto_review_state}) do
     %{
       "error" => %{
@@ -2052,6 +2064,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" =>
           "linear_update_state cannot move the issue to #{inspect(state_name)}. Entering #{inspect(state_name)} is the " <>
             "handoff signal's job: push the branch or open the pull request, and Symphony moves the issue there; do not name the state."
+      }
+    }
+  end
+
+  defp tool_error_payload({:plan_review_requires_handoff_signal, state_name}) do
+    %{
+      "error" => %{
+        "code" => "plan_review_requires_handoff_signal",
+        "message" =>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo a plan parent's handoff " <>
+            "enters #{inspect(state_name)}: leave the review brief and hand the plan over with `linear_update_state` " <>
+            "naming `In Review`, and Symphony performs the move; do not name this state."
       }
     }
   end

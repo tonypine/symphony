@@ -61,6 +61,7 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.route = RepositoryRoute(team: "OPS", projects: ["ops"], labels: ["infra"], assignee: "you")
         changed.workspace = RepositoryWorkspace(source: "acme/api", fetchBeforeDispatch: false)
         changed.stateMachine = "designed"
+        changed.manualReview = "on"
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
 
         yaml = try record("setting the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.shadow, in: $0) }, from: yaml)

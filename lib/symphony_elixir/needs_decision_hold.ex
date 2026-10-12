@@ -12,13 +12,14 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   A request stops being open when the person answers it — a reply under it, or the Director's
   Decide in the Inbox — or when the run withdraws it. The hold then clears and the ticket continues
-  from where it stopped. Legacy repos are untouched: a request still moves the ticket to the Human
-  Review state, and no hold is recorded.
+  from where it stopped; a merge confirmation's hold carries the move its confirmation performs, so
+  answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`). Legacy repos are
+  untouched: a request still moves the ticket to the Human Review state, and no hold is recorded.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, StateMachine}
+  alias SymphonyElixir.{Config, Hold, MergeConfirmation, StateMachine, TicketSignals, TransitionGuard}
   alias SymphonyElixir.HumanActions.{Collector, Request}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
@@ -92,10 +93,10 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
     case desired(Collector.newest_request(node, settings), current) do
       {:set, attrs} ->
-        apply_action(:set, repo_key, issue_id, attrs, opts)
+        apply_set(repo_key, issue_id, attrs, opts)
 
       :clear ->
-        apply_action(:clear, repo_key, issue_id, %{}, opts)
+        apply_clear(repo_key, issue_id, current, opts)
 
       :none ->
         :none
@@ -104,17 +105,44 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   defp sync_designed(_repo_key, _node, _settings, _opts), do: :none
 
-  defp apply_action(:set, repo_key, issue_id, attrs, opts) do
+  defp apply_set(repo_key, issue_id, attrs, opts) do
     case Hold.set(repo_key, issue_id, :needs_decision, attrs, opts) do
       :ok -> :set
       {:error, reason} -> log_failure("set", issue_id, reason)
     end
   end
 
-  defp apply_action(:clear, repo_key, issue_id, _attrs, opts) do
+  # Clearing the hold is what "the decision is recorded" does. A merge confirmation's hold carries
+  # the move its confirmation performs (`SymphonyElixir.MergeConfirmation`), so answering it by a
+  # reply under the request continues into `Merging` rather than leaving the ticket waiting in its
+  # phase; an ordinary decision carries none and continues in place, so the next poll dispatches it.
+  defp apply_clear(repo_key, issue_id, current, opts) do
     case Hold.clear(repo_key, issue_id, :needs_decision, opts) do
-      :ok -> :clear
-      {:error, reason} -> log_failure("clear", issue_id, reason)
+      :ok ->
+        resume(repo_key, issue_id, current, opts)
+        :clear
+
+      {:error, reason} ->
+        log_failure("clear", issue_id, reason)
+    end
+  end
+
+  defp resume(repo_key, issue_id, current, opts) do
+    case MergeConfirmation.confirm_target(current) do
+      nil -> :ok
+      target -> continue(repo_key, issue_id, target, opts)
+    end
+  end
+
+  defp continue(repo_key, issue_id, target, opts) do
+    case TransitionGuard.perform(issue_id, :director_move, %{target: target, repo_key: repo_key}, Keyword.take(opts, [:tracker])) do
+      :ok ->
+        TicketSignals.record(repo_key, issue_id, "decision returned", %{move: "confirm", to: target})
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to continue issue_id=#{issue_id} to #{target} after its decision: #{inspect(reason)}")
+        :ok
     end
   end
 

@@ -942,6 +942,20 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert "commitBody=" in fields
     end
 
+    test "close patches the pull request to the closed state" do
+      pr_url = "https://github.com/org/repo/pull/42"
+
+      runner = fn ["api", "repos/org/repo/pulls/42", "--method", "PATCH", "-f", "state=closed"], _opts ->
+        {~s({"state":"closed"}), 0}
+      end
+
+      assert :ok = PullRequest.close(pr_url, gh_runner: runner)
+      assert {:error, :invalid_pr_url} = PullRequest.close("https://example.com/nope", gh_runner: runner)
+
+      denied = fn _args, _opts -> {"gh: Resource not accessible by integration", 1} end
+      assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.close(pr_url, gh_runner: denied)
+    end
+
     test "update_branch asks GitHub to merge the base in for the expected head" do
       pr_url = "https://github.com/org/repo/pull/42"
 

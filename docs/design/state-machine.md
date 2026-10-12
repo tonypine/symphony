@@ -39,7 +39,7 @@ CI state is **not** a state: it is an attribute (`running` / `green` / `red`) tr
 | **In Progress** | Agent | First implementation (net-new work on this ticket) | Claim from Todo; Restart (fresh re-implementation) | Handoff → Code Review; blocked report → Blocked hold; decision request → Needs Decision hold |
 | **Code Review** | Agent (reviewer) | Implementation judgment on the PR: correctness, scope, criteria, intent | Handoff; Rework done (re-review); CI Fix return | Approve → QA (or → Merging when QA is skipped by policy); rework → Rework; escalate → Needs Decision hold; CI red or conflict → CI Fix |
 | **QA** | Agent (QA) | User-journey validation: the change exercised end to end from the user's point of view | Code Review approve | Pass → Merging; fail → Rework; blocked (tooling/env) → bounded retries, then fix ticket + Blocked hold; CI red or conflict → CI Fix |
-| **Merging** | Machine | The merge to land; deterministic, no agent on the happy path | QA pass, or review approve when QA is skipped (with manual review on, confirmed first via a Needs Decision hold) | Merged → Done; CI red or conflict → CI Fix |
+| **Merging** | Machine | The merge to land; deterministic, no agent on the happy path | QA pass, or review approve when QA is skipped (with manual review on, confirmed first via a Needs Decision hold) | Merged → Done; a merged parent whose started sub-tickets are still open waits in **Waiting on sub-tickets** until they finish; CI red or conflict → CI Fix |
 | **Done** | — | Terminal: merged. Epic parents: after the epic review | Merge settled; epic review pass; a no-op close decided via a Needs Decision hold | — |
 
 ## Phase states
@@ -125,7 +125,7 @@ Every duty the review skill performed has exactly one home. No state is added fo
 | Queue discipline ("a reviewed ticket never stays") | Machine routing: states are pass-through; holds are the only overlay; nothing rests in a queue |
 | Factory duties: error watching, config, restarts, Linear usage, runaway processes | Operator layer — outside this machine, unchanged |
 
-The active consequence: QA coverage absorbs the host and device checks the review skill used to run, driven by user journeys; each capability is either automated into CI, brought into a QA playbook, or consciously left out.
+The active consequence: QA coverage absorbs the host and device checks the review skill used to run, driven by user journeys; each capability is either automated into CI, brought into a QA playbook, or consciously left out. The capability-level inventory — every check that used to be handed over, and its home — is [`supervisor-checks.md`](supervisor-checks.md).
 
 ## Retired
 

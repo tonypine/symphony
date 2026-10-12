@@ -94,6 +94,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:dev_server_url) => String.t() | nil,
           optional(:host_ports) => [pos_integer()],
           optional(:verification_issue) => Issue.t(),
+          optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
           optional(:journey) => %{source: String.t(), text: String.t() | nil}
         }
@@ -173,7 +174,10 @@ defmodule SymphonyElixir.QaAgent do
   @doc """
   Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
   `:verification_issue` is a parent walkthrough: `job.issue` is the parent and the worktree is at
-  the base branch head (see `SymphonyElixir.AutoReview.ParentWalkthrough`).
+  the base branch head (see `SymphonyElixir.AutoReview.ParentWalkthrough`). A job with
+  `:epic_review` is the epic review of a designed repo's plan parent: `job.issue` is the epic
+  itself, its worktree is at the base branch head, and its own acceptance criteria and user
+  walkthrough are the checklist the review resolves (see `SymphonyElixir.EpicReview`).
   """
   @spec prompt(job(), map() | nil) :: String.t()
   def prompt(job, parent) do
@@ -201,7 +205,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{parent_section(parent)}#{verification_section(job)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -262,6 +266,21 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
+  # The epic review of a designed repo's plan parent: the epic has to close itself, so the pass
+  # judges the merged result against the epic's own plan, not against a PR.
+  defp intro(%{epic_review: true} = job) do
+    """
+    You are the QA agent in Symphony's epic review.
+
+    Every sub-ticket of this epic has merged, and the epic now has to close itself: verify that the
+    merged result on `#{Map.get(job, :base_ref)}` delivers what the epic's plan describes, judged
+    from the user's point of view, and report what happened. You are in a fresh, disposable worktree
+    checked out at `#{job.sha}`, the head of `#{Map.get(job, :base_ref)}`. Do not edit tracked files,
+    commit, push, open PRs, move issues, or post comments: Symphony writes the review report from
+    your answer, files every gap as a follow-up sub-ticket in `Todo`, and moves the epic itself.\
+    """
+  end
+
   defp intro(%{verification_issue: %Issue{identifier: identifier}} = job) do
     """
     You are the QA agent in Symphony's Auto Review step, running the parent walkthrough.
@@ -289,9 +308,21 @@ defmodule SymphonyElixir.QaAgent do
 
   # QA tests behaviour, not the code: CI already ran the full suite (Auto Review starts only on
   # green CI), and re-running it in the sandbox takes many times longer and loads the shared host.
-  # A parent walkthrough has no PR checks to lean on, so it cites CI's run on the base branch head
+  # A run with no PR checks to lean on — a parent walkthrough, or the epic review of a designed
+  # repo's plan parent (`SymphonyElixir.EpicReview`) — cites CI's runs on the head of the base branch
   # instead: a red default branch must fail the verification, not pass as `skipped`.
-  defp test_suite_rule(%{verification_issue: %Issue{}} = job) do
+  defp test_suite_rule(%{verification_issue: %Issue{}} = job), do: base_head_test_rule(job)
+  defp test_suite_rule(%{epic_review: true} = job), do: base_head_test_rule(job)
+
+  defp test_suite_rule(_job) do
+    """
+    Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI already
+    ran them green on this PR head. Build only what you need to use the change, and judge it by what
+    a user sees.\
+    """
+  end
+
+  defp base_head_test_rule(job) do
     base_ref = Map.get(job, :base_ref)
 
     """
@@ -316,18 +347,26 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  defp test_suite_rule(_job) do
-    """
-    Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI already
-    ran them green on this PR head. Build only what you need to use the change, and judge it by what
-    a user sees.\
-    """
-  end
-
   # The designed QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
   # stories and journeys the change delivers or updates, from the epic plan where one exists and
   # otherwise from the ticket's walkthrough and acceptance criteria. Only a run carrying a `journey`
   # (the QA state's) gets this section; Auto Review's jobs carry none, so their prompt is unchanged.
+  # The epic review has no parent to read the journeys from: they are the epic's own plan. The epic
+  # carries them in its description, its plan documents and its comments, and the review accounts for
+  # all of them, not only for the code.
+  defp journey_section(%{epic_review: true} = job) do
+    journey = Map.get(job, :journey, %{source: "the epic's acceptance criteria", text: nil})
+
+    """
+    You are verifying the epic itself, not running a script: the user stories and journeys its
+    sub-tickets were meant to deliver, end to end on the merged result, judged with critical
+    thinking — what a careful engineer does before closing an epic. Read the epic's plan documents
+    and its comments with your Linear tools (`linear_get_document`, `linear_get_comments`) and
+    verify against what they define.
+    #{epic_journey_text(journey)}
+    """
+  end
+
   defp journey_section(%{journey: %{source: source, text: text}}) do
     """
     You are verifying user journeys, not running a script. The user stories and journeys this change
@@ -343,6 +382,14 @@ defmodule SymphonyElixir.QaAgent do
 
   defp journey_section(_job), do: ""
 
+  defp epic_journey_text(%{source: source, text: text}) when is_binary(text) and text != "" do
+    "\nJourneys to verify, from #{source}:\n#{text}\n"
+  end
+
+  defp epic_journey_text(_journey) do
+    "\nJourneys to verify: derive them from the epic's description, its acceptance criteria and its plan documents.\n"
+  end
+
   defp journey_text(source, text) when is_binary(text) and text != "" do
     "\nJourneys to verify, from #{source}:\n#{text}\n"
   end
@@ -354,8 +401,10 @@ defmodule SymphonyElixir.QaAgent do
   # An agent cannot write these paths (the sandbox denies it and CI's `protected-paths` job fails
   # an `auto/*` PR that changes them), so the executor hands such a criterion to a person in a
   # follow-up ticket. Failing the PR on it only burns fix runs before an escalation (TP-522). A
-  # parent walkthrough tests the merged result, where a missing change is a real gap.
+  # parent walkthrough tests the merged result, where a missing change is a real gap, and so does the
+  # epic review of a designed repo's plan parent.
   defp protected_path_rule(%{verification_issue: %Issue{}}), do: ""
+  defp protected_path_rule(%{epic_review: true}), do: ""
 
   defp protected_path_rule(_job) do
     paths = Enum.map_join(AgentSandboxConfig.workspace_protected_paths(), ", ", &"`#{&1}`")
@@ -402,10 +451,37 @@ defmodule SymphonyElixir.QaAgent do
 
   defp verification_section(_job), do: ""
 
+  # The epic review's checklist is the epic's own: the acceptance criteria and user walkthrough the
+  # plan wrote into its description, which the review resolves row by row. Same contract as the
+  # verification ticket's above — `SymphonyElixir.EpicReview` counts the `checklist` steps and does
+  # not accept a `pass` that skipped them.
+  defp epic_section(%{epic_review: true} = job) do
+    """
+    Epic checklist (#{job.issue.identifier}, this epic's own acceptance criteria and user walkthrough):
+    Every row of the epic's checklist is a required step. Report each row as its own step with
+    `"checklist": true` and the status `pass` or `fail`, with the evidence in `details`. A row the
+    merged result on `#{Map.get(job, :base_ref)}` does not meet is a gap: mark it `fail` and put the
+    gap in `findings`, so Symphony can file it as a follow-up sub-ticket. Expand a row that groups
+    several IDs (such as "UC1 to UC8", or a range of sub-tickets) into one step per ID, named after
+    the ID, with its own verdict. Reuse the evidence that already exists: the merged sub-tickets
+    (`linear_get_subissues`) and their commits in `git log`, the tests that cover the row, the plan
+    documents and the comments, and the code. Mark a row `skipped` only for a reason you state in
+    `details` that this QA host cannot get past, such as a check only a person or a device this host
+    lacks can do, and set `needs_person` when that is why. The number of rows, or not having walked
+    them one by one, is not a reason. Symphony does not accept `pass` when no checklist row is
+    reported or most of them are skipped: it reports the review as `blocked` and hands it to a
+    person.
+    """
+  end
+
+  defp epic_section(_job), do: ""
+
   defp checklist_field(%{verification_issue: %Issue{}}), do: ~s(,\n      "checklist": true | false)
+  defp checklist_field(%{epic_review: true}), do: ~s(,\n      "checklist": true | false)
   defp checklist_field(_job), do: ""
 
   defp fixer(%{verification_issue: %Issue{}}), do: "a follow-up ticket"
+  defp fixer(%{epic_review: true}), do: "a follow-up ticket"
   defp fixer(_job), do: "the executor"
 
   defp parent_section(%{} = parent) do

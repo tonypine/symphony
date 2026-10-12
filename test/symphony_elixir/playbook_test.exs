@@ -83,6 +83,42 @@ defmodule SymphonyElixir.PlaybookTest do
       assert designed =~ "The tool sets the `Needs Decision` hold and the `Needs Decision` label\n  and leaves the ticket exactly where it is"
       assert designed =~ "Do not move the ticket"
       refute base =~ "a decision never moves a ticket"
+
+      # The designed machine leaves no `## Supervisor check` for a person to run: a check an agent
+      # can't run is a coverage gap (CI or a QA playbook), and the block that keeps it from running
+      # goes to the self-heal lane.
+      assert designed =~ "no `## Supervisor check` block and moves no ticket to a review state for a check"
+      assert designed =~ "the self-heal lane"
+      refute base =~ "no `## Supervisor check` block and moves no ticket"
+    end
+
+    test "parent_tickets' designed variant hands over to Plan Review and sends a change through Rework" do
+      assert {:ok, designed} = Playbook.fetch("parent_tickets", "designed")
+      assert {:ok, base} = Playbook.fetch("parent_tickets")
+
+      assert designed != base
+      assert {:ok, _template} = Solid.parse(designed)
+      assert designed =~ "name: parent_tickets\n"
+      assert designed =~ "naming `In Review`: Symphony\n  performs that move and the parent lands in `Plan Review`"
+      assert designed =~ "Never name `Plan Review` yourself"
+      assert designed =~ "Symphony moves the\n  parent to `Rework` itself, and the run revises the plan in place"
+      assert designed =~ "State: only `Plan Review`"
+      # The base body hands the plan to `In Review` and knows no `Plan Review` at all.
+      refute base =~ "Plan Review"
+    end
+
+    test "plan_pipeline's designed variant files no verification sub-ticket: the epic closes itself" do
+      assert {:ok, designed} = Playbook.fetch("plan_pipeline", "designed")
+      assert {:ok, base} = Playbook.fetch("plan_pipeline")
+
+      assert designed != base
+      assert {:ok, _template} = Solid.parse(designed)
+      assert designed =~ "name: plan_pipeline\n"
+      assert designed =~ "There is no `Final verification:` sub-ticket: the epic closes"
+
+      # The base body makes the verification ticket the last sub-ticket of the split.
+      assert base =~ "`blocked_by` links, the `Final verification:`\n   sub-ticket last)"
+      refute designed =~ "sub-ticket last)"
     end
 
     test "a partial with no variant for a version falls back to the base body" do
@@ -379,7 +415,10 @@ defmodule SymphonyElixir.PlaybookTest do
       assert slots["parent_tickets"] < slots["plan_pipeline"] and slots["plan_pipeline"] < slots["review_brief"]
 
       {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
-      assert body =~ "then execute end-to-end.\n\n" <> @plan_pipeline_tag <> ~s(\n\n{% render "review_brief" %})
+
+      # The repo's Step 4 closes with the `{% endif %}` of its state-machine branch, which
+      # `{%-` left-trims away in the render, leaving the blank line `plan_pipeline` expects.
+      assert body =~ "then execute end-to-end.\n{%- endif %}\n\n" <> @plan_pipeline_tag <> ~s(\n\n{% render "review_brief" %})
     end
 
     # A plan written before the templates (no `Artifacts wanted`) keeps today's plain split.

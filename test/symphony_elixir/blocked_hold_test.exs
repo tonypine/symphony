@@ -23,6 +23,21 @@ defmodule SymphonyElixir.BlockedHoldTest do
     def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
   end
 
+  # The hold clears, but the stale fix-ticket pointer it should drop cannot be cleared.
+  defmodule UnforgettableStore do
+    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: :ok
+    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: :ok
+    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def clear_ticket_fix_ticket(_repo_key, _issue_id), do: {:error, :boom}
+  end
+
+  # The tracker the fix-ticket hold reads the fix ticket's state from, and projects labels onto.
+  defmodule FixTicketTracker do
+    def fetch_issue_by_identifier(identifier), do: Process.get({:fix_ticket, identifier}, {:error, :not_found})
+    def set_machine_label(_issue_id, _label), do: :ok
+    def clear_machine_label(_issue_id, _label), do: :ok
+  end
+
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue()])
@@ -220,6 +235,91 @@ defmodule SymphonyElixir.BlockedHoldTest do
     test "a ticket with an unreadable state is not held" do
       open_issue = issue(%{state: nil, blocked_by: [blocker("TP-1", "In Progress")]})
       assert BlockedHold.sync(open_issue, @terminal, settings: designed_settings()) == :none
+    end
+  end
+
+  defp fix_hold_attrs do
+    %{
+      reason: "waiting on fix ticket TP-900 for the dev_server block",
+      clearing_condition: "when the fix ticket TP-900 is terminal",
+      waits_on: %{type: "fix_ticket", keys: ["TP-900"]}
+    }
+  end
+
+  describe "the fix-ticket hold" do
+    test "wants the clear only once the fix ticket is terminal" do
+      hold = %{waits_on: %{type: "fix_ticket", keys: ["TP-900"]}}
+
+      assert BlockedHold.fix_ticket_desired(hold, "Done", @terminal) == :clear
+      assert BlockedHold.fix_ticket_desired(hold, "In Progress", @terminal) == :none
+      assert BlockedHold.fix_ticket_desired(hold, nil, @terminal) == :none
+      assert BlockedHold.fix_ticket_desired(%{waits_on: %{type: "dependency", keys: ["TP-1"]}}, "Done", @terminal) == :none
+      assert BlockedHold.fix_ticket_desired(%{waits_on: %{type: "fix_ticket", keys: []}}, "Done", @terminal) == :none
+      assert BlockedHold.fix_ticket_desired(nil, "Done", @terminal) == :none
+    end
+
+    test "lifts the hold when the fix ticket goes terminal, keeping the failure signature" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
+
+      :ok =
+        RunStore.record_ticket_self_heal(@repo_key, @issue_id, %{
+          component: "dev_server",
+          scope: @repo_key,
+          signature: "s",
+          fix_ticket: "TP-900",
+          attempts: 2
+        })
+
+      Process.put({:fix_ticket, "TP-900"}, {:ok, %Issue{id: "fix-id", identifier: "TP-900", state: "Done"}})
+
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), tracker: FixTicketTracker) == :clear
+
+      assert stored_hold() == nil
+
+      # Only the stale fix-ticket pointer goes: the component, the signature and the retry count
+      # stay, so a break that comes back after the repair is compared against this failure.
+      assert %{component: "dev_server", signature: "s", fix_ticket: nil, attempts: 2} =
+               RunStore.get_ticket_state(@repo_key, @issue_id) |> SymphonyElixir.TicketState.self_heal()
+
+      assert labels() == []
+    end
+
+    test "leaves the hold alone while the fix ticket is still open, or its state is unreadable" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
+
+      Process.put({:fix_ticket, "TP-900"}, {:ok, %Issue{id: "fix-id", identifier: "TP-900", state: "In Progress"}})
+
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), tracker: FixTicketTracker) == :none
+      assert stored_hold() != nil
+
+      Process.delete({:fix_ticket, "TP-900"})
+
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), tracker: FixTicketTracker) == :none
+      assert stored_hold() != nil
+    end
+
+    test "a fix-ticket hold with no fix ticket named is left alone" do
+      :ok =
+        RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, %{
+          reason: "waiting on a fix ticket",
+          clearing_condition: "when it is terminal",
+          waits_on: %{type: "fix_ticket", keys: []}
+        })
+
+      assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), tracker: FixTicketTracker) == :none
+      assert stored_hold() != nil
+    end
+
+    test "a stale fix-ticket pointer that cannot be dropped is logged and the hold still lifts" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
+      Process.put({:fix_ticket, "TP-900"}, {:ok, %Issue{id: "fix-id", identifier: "TP-900", state: "Done"}})
+
+      log =
+        capture_log(fn ->
+          assert BlockedHold.sync(issue(), @terminal, settings: designed_settings(), store: UnforgettableStore, tracker: FixTicketTracker) == :clear
+        end)
+
+      assert log =~ "Failed to drop the stale fix ticket"
     end
   end
 

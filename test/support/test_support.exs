@@ -1105,6 +1105,7 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:agent, repo_field(repo, :agent))
     |> maybe_put(:acceptance_gate, repo_field(repo, :acceptance_gate))
     |> maybe_put(:state_machine, repo_field(repo, :state_machine))
+    |> maybe_put(:manual_review, repo_field(repo, :manual_review))
   end
 
   defp repo_field(repo, key), do: Map.get(repo, key) || Map.get(repo, Atom.to_string(key))

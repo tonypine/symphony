@@ -234,6 +234,42 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  test "update_state refuses In Progress from a phase past implementation on a designed repo" do
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+    states = [%{"id" => "state-progress", "name" => "In Progress", "type" => "started"}]
+
+    # The issue's current phase is Rework, so its work is on a pull request: In Progress can only
+    # mean the Director app's Restart, which is a person's move.
+    linear_client = fn query, variables, _opts ->
+      send(self(), {:linear_client_called, query, variables})
+
+      {:ok,
+       %{
+         "data" => %{
+           "issue" => %{"state" => %{"name" => "Rework"}, "team" => %{"states" => %{"nodes" => states}}}
+         }
+       }}
+    end
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Progress"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: linear_client,
+        settings: settings
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "restart_requires_human_approval", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "the Director app's Restart"
+    assert message =~ "A human has to do it."
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+  end
+
   test "update_state refuses In Review while Auto Review is on and allows other states" do
     write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
 
@@ -406,6 +442,30 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert message =~ "cannot move the issue to \"Code Review\""
     assert message =~ "push the branch or open the pull request"
     assert message =~ "do not name the state"
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+  end
+
+  test "update_state refuses Plan Review on a designed repo: the handoff enters it by asking for In Review" do
+    settings = Config.settings!()
+    designed = %{settings | state_machine: "designed"}
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "Plan Review"},
+        issue: %Issue{id: "issue-current"},
+        settings: designed,
+        linear_client: update_state_client(self(), [%{"id" => "state-plan-review", "name" => "Plan Review", "type" => "started"}])
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "plan_review_requires_handoff_signal", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "cannot move the issue to \"Plan Review\""
+    assert message =~ "naming `In Review`, and Symphony performs the move"
+    assert message =~ "do not name this state"
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 

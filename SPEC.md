@@ -2047,7 +2047,9 @@ not require recognizing or validating extension fields unless that extension is 
   `~/Library/Android/sdk`
 - `auto_review.android.boot_timeout_ms`: integer, default `180000`
 - `auto_review.android.idle_timeout_ms`: integer, default `600000`
-- `auto_review.acceptance_gate.mode`: `off`, `shadow` or `enforce`, default `off`
+- `auto_review.acceptance_gate.mode`: `off`, `shadow` or `enforce`, default `off`; deprecated — it
+  maps onto the per-repo `manual_review` setting (`shadow` → `on`; `off`, `enforce` and `decide` →
+  `off`), with a warning logged once per config
 - `auto_review.acceptance_gate.runtime` / `.command`: optional; `.model` / `.effort`: default
   `null`, else the `acceptance_gate` run profile
 - `auto_review.acceptance_gate.max_turns` / `.timeout_ms` / `.max_concurrent`: integers, defaults
@@ -2058,6 +2060,10 @@ not require recognizing or validating extension fields unless that extension is 
   `window_days` `14`, `max_lines` `300`), `inconclusive_limit` (default `2`)
 - `repositories[].acceptance_gate`: `mode`, `max_turns`, `timeout_ms` and `escalate` for that
   repository; scalars replace the global values, lists add to them. See `docs/acceptance_gate.md`.
+- `repositories[].manual_review`: `off` (default) or `on`, who decides that a verified ticket
+  merges. `on` pauses the step into `Merging` on a **Needs Decision** hold carrying the summary;
+  confirming continues into `Merging`, a redirect directs a move. It is a per-repo setting with no
+  global key: a repo that sets none takes the answer of the deprecated acceptance gate mode above.
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`
@@ -2106,6 +2112,25 @@ Important nuance:
   from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
+
+  `Rework` continues the current attempt. Its run MUST NOT close the pull request, cut a branch
+  from scratch or supersede the workpad: those belong to `Restart` (below). On a repo running the
+  designed machine the post-PR state is the configured Code Review state, so the new head is
+  reviewed again — the review or QA verdict that sent the issue to `Rework` bound to the head it
+  judged and does not carry over to a new one.
+- `Restart` is a person's move, made from the Director app's Inbox through the control API, and
+  never by an agent. It performs the full reset in this order: close every open pull request of the
+  issue; remove the issue's workspaces, which deletes the worktree and its branch, so the next
+  dispatch creates the branch again from the repo's configured base branch; supersede the workpad
+  comment, moving the prior `Plan`, `Acceptance Criteria` and `Validation` under a
+  `### Superseded — attempt <n>` heading and writing a fresh set below it; then move the issue to
+  `In Progress`. Each step is idempotent, so a second `Restart` with nothing left to do still
+  succeeds, and the move is made only after the reset has succeeded — a reset that GitHub or Linear
+  refuses leaves the issue where it is and reports which step failed. On the designed machine the
+  guard refuses an agent's request to enter `In Progress` from `Rework`, the Code Review state, the
+  QA state or `Merging`: on those phases the request can only mean a full reset, which is not the
+  agent's to make. `Restart` is offered on designed repos only — a legacy repo's `Rework` is
+  already the full reset.
 - Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
   that `HEAD` differs from the one the run started on and has checks that are still running or
   have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
@@ -4675,6 +4700,7 @@ Minimum endpoints:
     | `approve_plan` | a plan in `In Review` or the Human Review state | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
     | `approve_pr` | a pull request in a review state | `Merging` | none |
     | `rework` | any ticket in a review state | `Rework` | `reason` (required), posted before the move |
+    | `restart` | any open ticket of a designed repo (409 on a legacy one) | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
     | `decisions` | a plan in a review state | `In Review` from the Human Review state, else no move | one comment with `picks` (required, `[{"question", "answer"}]`), posted after the move |
     | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
@@ -4687,7 +4713,9 @@ Minimum endpoints:
     plan.
   - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
     still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
-    otherwise it answers `409`. A comment the move posted stays.
+    otherwise it answers `409`. A comment the move posted stays. A `restart` is never undoable: it
+    closed the pull request, removed the workspace and superseded the workpad, none of which comes
+    back, so `undo` answers `409` and the ticket stays in `In Progress`.
   - `undo` of `approve_pr` reads the ticket's pull request first. One already merged answers `409`
     (`BIL-206 already merged; move it in Linear instead`). When GitHub shows auto-merge on, `undo`
     turns it off (GraphQL `disablePullRequestAutoMerge`) before it moves the ticket back, so the PR

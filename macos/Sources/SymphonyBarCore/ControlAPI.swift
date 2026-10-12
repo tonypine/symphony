@@ -14,6 +14,9 @@ public enum ControlAction: Equatable {
     case approvePlan(String)
     case approvePR(String)
     case rework(String, reason: String)
+    /// The full reset (design doc D7): close the pull request, branch fresh from main, supersede the
+    /// workpad, back to In Progress. A person's move; agents cannot ask for it.
+    case restart(String, reason: String)
     case decisions(String, picks: [DecisionPick])
     case signOff(String)
     case backlog(String, note: String?)
@@ -55,6 +58,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/approve_pr"
         case .rework:
             return "api/v1/control/rework"
+        case .restart:
+            return "api/v1/control/restart"
         case .decisions:
             return "api/v1/control/decisions"
         case .signOff:
@@ -74,6 +79,7 @@ public enum ControlAction: Equatable {
     public var moveIdentifier: String? {
         switch self {
         case let .approvePlan(identifier), let .approvePR(identifier), let .rework(identifier, _),
+             let .restart(identifier, _),
              let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
@@ -96,6 +102,8 @@ public enum ControlAction: Equatable {
              let .unblock(identifier), let .undo(identifier):
             return ["issue_identifier": identifier]
         case let .rework(identifier, reason):
+            return ["issue_identifier": identifier, "reason": reason]
+        case let .restart(identifier, reason):
             return ["issue_identifier": identifier, "reason": reason]
         case let .decisions(identifier, picks):
             return ["issue_identifier": identifier, "picks": picks.map { ["question": $0.question, "answer": $0.answer] }]
@@ -131,6 +139,8 @@ public enum ControlAction: Equatable {
             return "Couldn't move \(identifier) to Merging"
         case let .rework(identifier, _):
             return "Couldn't send \(identifier) to Rework"
+        case let .restart(identifier, _):
+            return "Couldn't restart \(identifier)"
         case let .decisions(identifier, _):
             return "Couldn't send the decisions on \(identifier)"
         case let .signOff(identifier):

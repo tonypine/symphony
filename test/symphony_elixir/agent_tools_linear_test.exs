@@ -1119,6 +1119,49 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "create_subissue_in_state/4" do
+    test "files the child in the named state, not Backlog, and records it like any sub-issue" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      states = [
+        %{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"},
+        %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}
+      ]
+
+      assert {:ok, response} =
+               Linear.create_subissue_in_state(
+                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 "Todo",
+                 %{"title" => "Epic review fails: the export button is missing", "description" => "What the review found."},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert get_in(response, ["data", "issueCreate", "issue", "identifier"]) == "TP-999"
+      assert_received {:linear_called, mutation, %{input: input}}
+      assert mutation =~ "SymphonyAgentCreateSubissue"
+      assert input["stateId"] == "state-todo"
+      assert input["parentId"] == "issue-parent-uuid"
+      assert input["title"] == "Epic review fails: the export button is missing"
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "a state the team does not have names the state it asked for, and does not fall back to Backlog" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      states = [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]
+
+      assert {:error, {:child_state_not_found, "Todo", ["Backlog"]}} =
+               Linear.create_subissue_in_state(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 "Todo",
+                 %{"title" => "Epic review finding: no export button", "description" => "body"},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
+    end
+  end
+
   describe "create_subissue/3" do
     test "creates a Backlog child of the current issue in its team, project and assignee" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
@@ -2948,6 +2991,60 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert_received {:moved_to, "state-backlog"}
       refute_received {:machine_label_set, _issue_id, _name}
+    end
+
+    # A designed repo's plan parent: the plan run hands over by naming `In Review`, and the guard
+    # performs the move into the repo's configured `Plan Review` state.
+    defp plan_review_client(extra \\ []) do
+      states =
+        [%{"id" => "state-review", "name" => "In Review"}, %{"id" => "state-plan-review", "name" => "Plan Review"}] ++ extra
+
+      fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "state" => %{"name" => "In Progress", "type" => "started"},
+                 "labels" => %{"nodes" => [%{"name" => "plan"}]},
+                 "team" => %{"states" => %{"nodes" => states}}
+               }
+             }
+           }}
+        else
+          send(self(), {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+    end
+
+    test "a designed repo's plan parent hands over to Plan Review, whatever review state it names" do
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      for asked <- ["In Review", " in review "] do
+        assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+                 Linear.update_state(context, asked, linear_client: plan_review_client(), settings: designed_settings())
+
+        assert_received {:moved_to, "state-plan-review"}
+      end
+    end
+
+    test "a designed repo refuses an agent naming Plan Review itself" do
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          plan_review_client().(query, variables, [])
+        else
+          send(self(), {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:error, {:plan_review_requires_handoff_signal, "Plan Review"}} =
+               Linear.update_state(context, "Plan Review", linear_client: client, settings: designed_settings())
+
+      refute_received {:moved_to, _state_id}
     end
 
     # The CI Fix lane's substantive exit: the fixing agent, finding the repair needs a real change,

@@ -1,0 +1,191 @@
+{% comment %}
+name: parent_tickets
+description: Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned) runs never open a PR. Designed version: the plan handoff waits in Plan Review, a change goes back through Rework, and the epic closes itself in Epic Review.
+vars: []
+{% endcomment %}## Parent tickets (tickets with sub-tickets)
+
+The `plan` label is a human's signal that a ticket is a plan ticket: too large for
+one PR, it does plan work and must be groomed into sub-tickets before any work
+starts. `breakdown` is the label's older name and is still accepted; read it as
+`plan` everywhere below. The label stays on the parent while its sub-tickets are
+worked. Follow this section instead of the normal implementation steps when the
+ticket has the `plan` label.
+
+Rules for every plan ticket run:
+
+- Never create commits, push a branch, open a PR, or attach any other artifact for
+  the parent. Its deliverables are its sub-tickets, and the Linear documents and
+  the one HTML screens file the `Plan pipeline` asks for when the ticket has an
+  `Artifacts wanted` section.
+- The plan is reviewed before any sub-ticket is worked, and on this repo it is
+  reviewed in `Plan Review`. The plan run leaves its sub-tickets in `Backlog` and
+  hands the parent over with `linear_update_state` naming `In Review`: Symphony
+  performs that move and the parent lands in `Plan Review`, which is where the
+  reviewer finds it. Never name `Plan Review` yourself — `linear_update_state`
+  refuses it, because that state is the handoff's to enter, not the run's. The
+  review brief is what the person reads.
+- A person approves the plan by moving the parent from `Plan Review` to
+  `Waiting on sub-tickets`, or with the same move from the Inbox's approve action.
+  Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch;
+  blocked-by links keep the order. Never move the parent to
+  `Waiting on sub-tickets` yourself: `linear_update_state` refuses it because that
+  move is the approval.
+- A person rejects the plan by moving the parent to `Rework`. Symphony cancels the
+  rejected plan's sub-tickets still in `Backlog`, lists them in one comment starting
+  `Cancelled for re-plan:`, and starts a re-plan run. Each batch Symphony promotes
+  or cancels is listed in one comment on the parent.
+- A person comments on the plan under review to ask for a change: Symphony moves the
+  parent to `Rework` itself, and the run revises the plan in place and hands it back
+  to `Plan Review`. That is a revision, not a rejection: the plan's sub-tickets stay,
+  and Symphony posts no `Cancelled for re-plan:` comment.
+- A plan is approved once a sub-ticket left `Backlog`. Symphony does not dispatch or
+  continue a plan ticket outside `Rework` whose approved plan has a sub-issue
+  outside a terminal state, and it closes the epic itself once every sub-issue is
+  terminal: the parent moves to `Epic Review` and the epic review runs (see
+  `The epic close` below). A parent whose open sub-tickets are all still in
+  `Backlog` was never approved: in `Todo` or `In Progress` it gets a plan run, never
+  the waiting state.
+- There is no `Final verification:` sub-ticket and no close-out run on this repo:
+  never file one, and never expect one. `The epic close` says what replaces them.
+- Never promote a sub-ticket, and never edit or cancel one outside `Backlog`:
+  `linear_update_subissue` refuses it, because a person already promoted it.
+- Keep the workpad as the single progress record, as for any ticket.
+
+Which plan run this is:
+
+- **New plan:** the parent has no sub-tickets yet. Follow the plan run below.
+- **Resume:** the parent is in `Todo` or `In Progress`, has sub-tickets in `Backlog`
+  only, and no person commented since the plan was last handed over for review. A
+  previous run stopped midway (a usage limit, a crash, a person moving it back).
+  Read the workpad and the newest comments, keep every artifact document, comment
+  and sub-ticket already made, do only what is left of the plan run below (never
+  file a sub-ticket a second time), leave the review brief (see `Review brief`), and
+  hand the parent over as the plan run's last step says.
+- **Revise:** the parent is in `Rework` because Symphony moved it there when a person
+  commented on the plan under review, and its plan's sub-tickets are all still there
+  (no `Cancelled for re-plan:` comment). Follow the plan revision run below: the plan
+  is revised in place, not rebuilt.
+- **Re-plan:** the parent is in `Rework` because a person rejected the plan.
+  Symphony's comment starting `Cancelled for re-plan:` lists the sub-tickets it took
+  out of `Backlog`. Follow the re-plan run below.
+
+### Plan run (a new plan: no `Sub-issues` in the issue context, or the parent is in `Rework` after a rejection)
+
+1. Read the description and comments, and write the planned split in the workpad.
+2. Create each sub-ticket with `linear_create_subissue`, in the order they should
+   land. Each one must be deliverable as a single PR, with its own acceptance
+   criteria and a line naming any earlier sub-ticket it depends on. For every
+   sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
+   records the blocked-by link and Symphony's dependency gate holds it back.
+3. Keep the parent's own description the definition of done the epic review resolves:
+   its requirement rows and, when it has one, its `## User walkthrough`. The review
+   reads them off the parent, so a requirement no sub-ticket delivers is a plan gap —
+   fix the plan, not the checklist. Do not file a `Final verification:` sub-ticket:
+   the epic closes itself (`The epic close`).
+4. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
+   review brief (see `Review brief`): one brief for the whole plan, linking every
+   artifact, listing every sub-ticket and every decision needed, with the moves that
+   approve, change or reject it. Then move the parent to `In Review` with
+   `linear_update_state` — Symphony performs the move into `Plan Review` — and end
+   the turn. The person reviewing the plan reads the brief, not the workpad.
+
+When the parent is in `Rework` because a person rejected the plan (Symphony's
+`Cancelled for re-plan:` comment is on it):
+
+- Read every review comment and write in the workpad what the new plan changes.
+- Symphony has cancelled the rejected plan's sub-tickets that were still in
+  `Backlog`, and listed them in a comment on the parent. A `Backlog` sub-ticket a
+  person added outside the plan run (a follow-up idea) stays; leave it alone and
+  fold it into the new plan. Do not create a replacement for a sub-ticket outside
+  `Backlog` and `Canceled` (a human already promoted it), and do not create one
+  twice: a sub-ticket in `Backlog` that was created after the parent moved to
+  `Rework` belongs to this re-plan.
+- Then follow steps 2-4 for the new plan. Edit the existing review brief in place
+  with `linear_update_comment`, with what the new plan changes under
+  `What changed since the last brief`, and hand the parent over again as step 4
+  says.
+
+### Plan revision run (a person commented on the plan under review)
+
+When a person comments on a plan ticket in `Plan Review` whose plan is not
+approved yet, Symphony moves it to `Rework` and starts this run. It changes the
+plan in place; it is not a re-plan, and the plan's sub-tickets stay as they are.
+
+What triggers it:
+
+- State: only `Plan Review`. A comment on a parent in `Human Review` starts nothing,
+  because Symphony never moves a ticket out of it; to have that plan revised, a
+  person moves the parent to `Rework` or back to `Plan Review`.
+- Openers: a comment starting with `Supervisor review:` or `Supervisor note:` never
+  triggers a run, in any state, like Symphony's own comments (the workpad, the
+  review brief, QA reports, `Action needed` requests, the promote and cancel lists,
+  and notes starting `Symphony stopped`, `Symphony parked`, `Symphony couldn't`,
+  `Symphony turned off` or `Symphony quality gate`). The supervisor posts as the operator, and plan
+  approval stays the operator's call.
+
+1. Read every comment since the plan was handed over for review (newest first with
+   `linear_get_comments`). Only people's comments count: skip the workpad, the
+   review brief, QA reports, `Action needed` requests, Symphony's promote and cancel
+   lists, supervisor notes (`Supervisor review:`, `Supervisor note:`), and integration
+   bots. List in the workpad what each comment asks.
+2. Edit the existing artifacts in place instead of posting new copies: documents
+   with `linear_update_document`, the HTML screens as the `Plan pipeline` says, and
+   artifact comments (use cases, features, journeys and so on) with
+   `linear_update_comment`. Start each edited artifact with a short note of what
+   changed.
+3. Bring the sub-tickets in line with `linear_update_subissue` and
+   `linear_create_subissue`: update the description, title and blocked-by links of
+   `Backlog` sub-tickets, file new ones, and cancel the ones the change drops with a
+   `cancel_reason` saying why. Leave every sub-ticket outside `Backlog` as it is.
+4. The parent's own description is the definition of done the epic review resolves, so
+   a change that adds or drops a requirement belongs in its rows and its
+   `## User walkthrough`. You cannot edit the description with your tools: state the
+   new wording in the review brief's `What changed since the last brief` and in your
+   reply under the comment, so the person approving the plan can set it.
+5. Reply under each comment with `linear_add_comment` and its `parent_id`: what
+   changed, or why nothing did for a question or a pushback.
+6. Record the changes in the workpad `Notes`. Edit the existing review brief in place
+   with `linear_update_comment` (never post a second one): bring every part up to date
+   and list under `What changed since the last brief` one line per change and the
+   comment it answers. Then move the parent to `In Review` with `linear_update_state`
+   — Symphony performs the move back into `Plan Review` — and end the turn. Never
+   move it to `Waiting on sub-tickets` and never promote a sub-ticket: approval stays
+   a person's move.
+
+A comment on an approved plan (the parent in `Waiting on sub-tickets`, or back in
+`Plan Review` with sub-tickets promoted) changes nothing. Under a new top-level
+comment Symphony replies once that, if it asks for a plan change, moving the parent
+to `Rework` re-plans it while keeping the sub-tickets already promoted.
+
+### The epic close (`Epic Review`; no run of yours)
+
+There is no close-out run on this repo and no `Final verification:` sub-ticket. The
+epic closes itself:
+
+- The moment every sub-ticket is terminal (or deliberately cancelled), Symphony moves
+  the parent from `Waiting on sub-tickets` to `Epic Review` by itself and starts the
+  epic review there — no event, no person's move, no sign-off.
+- The review is machine-owned: Symphony runs the deterministic pre-checks and then a
+  QA agent against the **default branch**, at its head commit, and the agent never
+  moves the ticket. It walks the parent's `## User walkthrough` and its requirement
+  rows against what actually shipped, and it resolves each checklist row it finds.
+- A clean epic passes and lands in `Done`: on the board the path reads Plan Review ->
+  Waiting on sub-tickets -> Epic Review -> Done.
+- An epic with a gap comes back: the review files what it found as a sub-ticket in
+  `Todo` under this epic — never `Backlog`, which would not hold the parent — and the
+  parent returns to `Waiting on sub-tickets`, where those follow-ups hold it. The
+  review runs again when they land, and the epic closes itself at the first pass.
+- A review that cannot run (tooling, environment, a usage limit) is retried boundedly
+  and then goes to the self-heal lane, which files or reuses the fix ticket and holds
+  the epic on it. A person is asked only for what only a person can clear.
+
+What that asks of a plan run:
+
+- Keep the parent's description the definition of done: the review resolves its
+  requirement rows and its `## User walkthrough`, so a requirement no sub-ticket
+  delivers belongs in the plan.
+- Never file a `Final verification:` sub-ticket, and never move a parent into
+  `Epic Review` or out of it: `linear_update_state` refuses both, because those moves
+  are Symphony's.
+- Never plan a ticket for the close either: the epic needs no agent to close it, and a
+  follow-up the review files is the only sub-ticket that appears after the plan.
