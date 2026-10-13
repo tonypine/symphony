@@ -81,13 +81,29 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(health.phase, .passed)
     }
 
-    func testNoAnswerWithin120SecondsOfStartingRollsBack() {
+    func testNoAnswerWithin120SecondsOfStartingRestartsOnceThenRollsBack() {
         XCTAssertEqual(Health.answerTimeout, 120)
         var health = started(at: 5)
 
         XCTAssertEqual(health.handle(.polled(.unreachable), now: at(124)), [])
-        XCTAssertEqual(health.handle(.polled(.failed("HTTP 500")), now: at(125)), [.rollBack(.noAnswer)])
+        XCTAssertEqual(health.handle(.polled(.failed("HTTP 500")), now: at(125)), [.restart])
+        XCTAssertEqual(health.phase, .starting)
+        XCTAssertEqual(health.handle(.exited(requested: true), now: at(127)), [], "the retry's own stop isn't an answer")
+        XCTAssertEqual(health.handle(.started, now: at(130)), [])
+
+        XCTAssertEqual(health.handle(.polled(.unreachable), now: at(249)), [])
+        XCTAssertEqual(health.handle(.polled(.unreachable), now: at(250)), [.rollBack(.noAnswer)])
         XCTAssertEqual(health.phase, .failed(.noAnswer))
+    }
+
+    /// TP-893: a child that exits at boot, every time, ends in a rollback rather than silence.
+    func testAChildThatExitsAtBootRollsBack() {
+        var health = started(at: 5)
+        XCTAssertEqual(health.handle(.exited(requested: false), now: at(6)), [.start])
+        XCTAssertEqual(health.handle(.started, now: at(8)), [])
+        XCTAssertEqual(health.handle(.exited(requested: false), now: at(9)), [.start])
+        XCTAssertEqual(health.handle(.started, now: at(11)), [])
+        XCTAssertEqual(health.handle(.exited(requested: false), now: at(12)), [.rollBack(.crashLoop)])
     }
 
     func testThreeUnexpectedExitsWithinTenMinutesRollBack() {
@@ -114,7 +130,7 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(health.handle(.started, now: at(310)), [])
 
         XCTAssertEqual(health.handle(.polled(.unreachable), now: at(429)), [])
-        XCTAssertEqual(health.handle(.polled(.unreachable), now: at(430)), [.rollBack(.noAnswer)])
+        XCTAssertEqual(health.handle(.polled(.unreachable), now: at(430)), [.restart])
     }
 
     func testAnUnexpectedExitAfterTheWindowIsLeftAlone() {
@@ -141,7 +157,7 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(stopped.handle(.polled(.unreachable), now: at(200)), [])
     }
 
-    func testASymphonyTheAppDidNotStartIsNotWaitedFor() {
+    func testAFailedStartIsNotWaitedFor() {
         var health = Health()
         _ = health.begin(version: "0.0.1.43", startsSymphony: true, now: updated)
         XCTAssertEqual(health.handle(.configChecked(.passed), now: at(2)), [.start])
@@ -149,6 +165,31 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(health.handle(.notStarted, now: at(5)), [.healthy])
         XCTAssertEqual(health.phase, .watching)
         XCTAssertEqual(health.handle(.polled(.unreachable), now: at(300)), [])
+    }
+
+    /// TP-893: the Symphony the update stopped may still answer when the new build starts; it waits for it to go.
+    func testTheStoppedSymphonyIsWaitedForBeforeTheNewOneStarts() {
+        var health = Health()
+        _ = health.begin(version: "0.0.1.43", startsSymphony: true, now: updated)
+        XCTAssertEqual(health.handle(.configChecked(.passed), now: at(2)), [.start])
+
+        XCTAssertEqual(health.handle(.otherRunning, now: at(3)), [.start], "tries again on the next poll")
+        XCTAssertEqual(health.phase, .starting)
+        XCTAssertEqual(health.handle(.otherRunning, now: at(18)), [.start])
+        XCTAssertEqual(health.handle(.started, now: at(20)), [])
+        XCTAssertEqual(health.phase, .waitingForAnswer)
+    }
+
+    func testASymphonyThatOutlastsTheHandoverIsLeftRunning() {
+        XCTAssertEqual(Health.handoverTimeout, 60)
+        var health = Health()
+        _ = health.begin(version: "0.0.1.43", startsSymphony: true, now: updated)
+        _ = health.handle(.configChecked(.passed), now: at(2))
+
+        XCTAssertEqual(health.handle(.otherRunning, now: at(3)), [.start])
+        XCTAssertEqual(health.handle(.otherRunning, now: at(62)), [.start])
+        XCTAssertEqual(health.handle(.otherRunning, now: at(63)), [.healthy])
+        XCTAssertEqual(health.phase, .watching)
     }
 
     func testEventsOutsideTheirStepChangeNothing() {
