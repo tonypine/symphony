@@ -457,10 +457,11 @@ defmodule SymphonyElixir.DirectorMoves do
   # directs one — goes through the guard after it.
   #
   # A merge confirmation's hold carries the move confirming performs (`SymphonyElixir.MergeConfirmation`),
-  # so confirming from the Inbox moves the ticket exactly as it would with manual review off; an
-  # explicit `:move` (the Inbox's Send to Rework) directs its own move instead.
+  # so an answer that picks that option moves the ticket exactly as it would with manual review off,
+  # and one that picks nothing moves nothing; an explicit `:move` (the Inbox's Send to Rework)
+  # directs its own move instead.
   defp decide(%Issue{} = issue, input, opts) do
-    case carried_move(issue, opts) do
+    case carried_move(issue, input.picks, opts) do
       {:ok, carried} ->
         comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
 
@@ -482,14 +483,21 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # The move the ticket's open Needs Decision hold carries, if any. A ticket with no hold has a
+  # The move the answers pick from the ticket's open Needs Decision hold, if any. A ticket with no hold has a
   # request to answer only when the request parked it in the Human Review state (a legacy repo, or
   # a request made before the repo moved to the designed machine): `:parked`, and answering it
   # moves the ticket to `Todo`, as the request's review brief says, so the next run carries it out.
-  defp carried_move(%Issue{repo_key: repo_key, id: issue_id} = issue, opts) do
+  defp carried_move(%Issue{repo_key: repo_key, id: issue_id} = issue, picks, opts) do
     case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
       nil -> if HumanReview.in_state?(issue, Config.settings!()), do: :parked, else: :error
-      hold -> {:ok, MergeConfirmation.confirm_target(hold)}
+      hold -> {:ok, picked_move(hold, picks)}
+    end
+  end
+
+  defp picked_move(hold, picks) do
+    case MergeConfirmation.confirm_target(hold) && MergeConfirmation.picked(hold, Enum.map(picks, & &1.answer)) do
+      {:ok, target} -> target
+      _none -> nil
     end
   end
 

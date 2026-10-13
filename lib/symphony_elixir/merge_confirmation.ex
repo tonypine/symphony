@@ -37,6 +37,7 @@ defmodule SymphonyElixir.MergeConfirmation do
   @rework_state "Rework"
   @confirm_target @merging_state
   @rework_label "Send to Rework"
+  @change_state "In Progress"
   @review_signal "code_review"
   @part_max 240
 
@@ -122,19 +123,106 @@ defmodule SymphonyElixir.MergeConfirmation do
   def confirm_target(_hold), do: nil
 
   @doc """
-  The move a reply under the request performs: `Rework` when a reply names the request's
-  `Send to Rework` option, else the carried confirmation (`confirm_target/1`). An ordinary
-  decision's hold carries none, so its reply moves nothing.
+  The move a reply under the request performs. A reply continues to the carried confirmation
+  (`confirm_target/1`) only when it picks that option, and goes to `Rework` only when it picks the
+  option that moves there (`picked/2`). Any other reply — free text, "neither", a question — is a
+  change request: the ticket goes to `In Progress`, where the run addresses it on the same PR. A
+  reply that picks an option moving nothing (CI's `Leave it`) moves nothing, and an ordinary
+  decision's hold carries no confirmation, so its reply moves nothing either.
   """
   @spec reply_target(map() | nil, [String.t()]) :: String.t() | nil
   def reply_target(hold, replies) do
     case confirm_target(hold) do
-      nil -> nil
-      carried -> if Enum.any?(replies, &names_rework?/1), do: TransitionGuard.target(:director_move, %{target: @rework_state}), else: carried
+      nil ->
+        nil
+
+      _carried ->
+        case picked(hold, replies) do
+          {:ok, target} -> target
+          :none -> @change_state
+        end
     end
   end
 
-  defp names_rework?(body), do: body |> String.downcase() |> String.contains?(String.downcase(@rework_label))
+  @doc """
+  The move the answers to a confirmation hold pick: `{:ok, target}` when they pick exactly one of
+  its options — by number (`1`, `option 1`) or by label, alone, set off by punctuation, or followed only by confirming
+  words such as `please` — where `target`
+  is the carried confirmation, `Rework`, or nil for an option that moves nothing; `:none` when no
+  answer picks an option, or the answers pick options that disagree.
+  """
+  @spec picked(map() | nil, [String.t()]) :: {:ok, String.t() | nil} | :none
+  def picked(hold, answers) do
+    carried = confirm_target(hold)
+    options = hold |> get_in([:decision, :options]) |> List.wrap() |> Enum.map(&option/1)
+
+    answers
+    |> Enum.flat_map(&picks(&1, options))
+    |> Enum.map(&option_target(&1, carried))
+    |> Enum.uniq()
+    |> case do
+      [target] -> {:ok, target}
+      _none_or_ambiguous -> :none
+    end
+  end
+
+  # The options an answer picks: the one its number or label opens with.
+  defp picks(answer, options) when is_binary(answer) do
+    head = answer |> String.replace(~r/[*_`>#]/, "") |> String.trim() |> String.downcase()
+
+    options
+    |> Enum.with_index(1)
+    |> Enum.filter(fn {{label, _effect}, index} -> opens_with?(head, "#{index}") or opens_with?(head, "option #{index}") or opens_with?(head, label) end)
+    |> Enum.map(fn {option, _index} -> option end)
+    |> Enum.take(1)
+  end
+
+  defp picks(_answer, _options), do: []
+
+  defp opens_with?(_head, ""), do: false
+
+  defp opens_with?(head, word) do
+    case String.split_at(head, String.length(word)) do
+      {^word, rest} -> confirming_tail?(rest)
+      _other -> false
+    end
+  end
+
+  # What may follow a pick: nothing, punctuation that sets it off (`Merge.`, `2. the tests are
+  # thin`), or a few confirming words. A sentence that merely opens with an option's number or label
+  # (`Merge conflicts remain`, `1 change needed`) is free text.
+  @confirming_words ~w(please thanks thank you ok okay yes go ahead do it confirmed sounds good lgtm)
+
+  defp confirming_tail?(rest) do
+    Regex.match?(~r/^\s*([[:punct:]]|$)/u, rest) or
+      rest |> String.split(~r/\s+/u, trim: true) |> Enum.all?(&(&1 in @confirming_words))
+  end
+
+  # An option as the hold records it: the tool's map, or the line Linear's comment reads back.
+  defp option(%{} = option), do: {normalize(Map.get(option, :label) || Map.get(option, "label")), Map.get(option, :effect) || Map.get(option, "effect") || ""}
+
+  defp option(line) when is_binary(line) do
+    case Regex.run(~r/^\*\*(.+?)\*\*(?:\s*\(recommended\))?:\s*(.*)$/, String.trim(line)) do
+      [_, label, effect] -> {normalize(label), effect}
+      nil -> {"", line}
+    end
+  end
+
+  defp option(_other), do: {"", ""}
+
+  defp normalize(label) when is_binary(label), do: label |> String.replace(~r/[*_`]/, "") |> String.trim() |> String.downcase()
+  defp normalize(_label), do: ""
+
+  # What an option does, read from its effect: the carried move, Rework, or nothing.
+  defp option_target({_label, effect}, carried) do
+    effect = String.downcase(effect)
+
+    cond do
+      is_binary(carried) and String.contains?(effect, "moves to " <> String.downcase(carried)) -> carried
+      String.contains?(effect, "moves to " <> String.downcase(@rework_state)) -> TransitionGuard.target(:director_move, %{target: @rework_state})
+      true -> nil
+    end
+  end
 
   defp post_request(issue, opts, request) do
     case tracker(opts).create_comment(issue.id, Request.render_hold(request, issue.state)) do
@@ -144,7 +232,10 @@ defmodule SymphonyElixir.MergeConfirmation do
   end
 
   defp set_hold(issue, opts, request) do
-    case Hold.set(repo_key(issue, opts), issue.id, :needs_decision, attrs(request), store_opts(opts)) do
+    attrs = attrs(request)
+    attrs = %{attrs | decision: Map.put(attrs.decision, :state, issue.state)}
+
+    case Hold.set(repo_key(issue, opts), issue.id, :needs_decision, attrs, store_opts(opts)) do
       :ok ->
         Logger.info("Merge confirmation for #{label(issue)}: manual review is on, so the step into Merging waits")
         :ok
