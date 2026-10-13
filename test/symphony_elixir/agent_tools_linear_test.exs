@@ -1983,12 +1983,18 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       "decision" => %{
         "question" => "Add the signing secrets, or ship unsigned builds?",
         "options" => [
-          %{"label" => "Add the secrets", "effect" => "Releases are signed again.", "recommended" => true},
-          %{"label" => "Ship unsigned", "effect" => "The agent drops the signing step."}
-        ]
+          %{
+            "label" => "Add the secrets",
+            "effect" => "Releases are signed again.",
+            "recommended" => true,
+            "tradeoffs" => [%{"kind" => "good", "text" => "Gatekeeper stops warning."}, %{"kind" => "cost", "text" => "Someone exports the certificate once."}]
+          },
+          %{"label" => "Ship unsigned", "effect" => "The agent drops the signing step.", "tradeoffs" => [%{"kind" => "risk", "text" => "Users see a warning on first launch."}]}
+        ],
+        "recommendation_reason" => "Signing is a one-time setup."
       },
       "unblocks" => "the Release workflow on main",
-      "est_minutes" => 10
+      "if_unanswered" => "Every Release run on main keeps failing."
     }
 
     @team_states [
@@ -2076,16 +2082,33 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:machine_label_set, "issue-24", "Needs Decision"}
       assert_received :refreshed
       assert body =~ "## Decision needed: Add the release signing secrets"
-      assert body =~ "1. **Add the secrets** (recommended): Releases are signed again.\n2. **Ship unsigned**: The agent drops the signing step."
+      assert body =~ "**If unanswered:** Every Release run on main keeps failing."
+
+      assert body =~ """
+             1. **Add the secrets** (recommended): Releases are signed again.
+                - Good: Gatekeeper stops warning.
+                - Cost: Someone exports the certificate once.
+             2. **Ship unsigned**: The agent drops the signing step.
+                - Risk: Users see a warning on first launch.
+
+             **Why recommended:** Signing is a one-time setup.
+             """
+
       refute body =~ "Steps:"
+      refute body =~ "**Time:**"
 
       assert %{
                title: "Add the release signing secrets",
                question: "Add the signing secrets, or ship unsigned builds?",
                why: "Every Release run on main fails without them.",
+               if_unanswered: "Every Release run on main keeps failing.",
+               recommendation_reason: "Signing is a one-time setup.",
                unblocks: "the Release workflow on main",
-               est_minutes: 10,
                options: ["**Add the secrets** (recommended): Releases are signed again.", "**Ship unsigned**: The agent drops the signing step."],
+               tradeoffs: [
+                 [%{kind: "good", text: "Gatekeeper stops warning."}, %{kind: "cost", text: "Someone exports the certificate once."}],
+                 [%{kind: "risk", text: "Users see a warning on first launch."}]
+               ],
                steps: []
              } = Request.parse(body)
 
@@ -2135,8 +2158,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
           {"title", "Add " <> openai_fixture()},
           {"why", openai_fixture()},
           {"unblocks", openai_fixture()},
+          {"if_unanswered", openai_fixture()},
           {"decision", put_in(@human_action["decision"], ["question"], "Paste " <> openai_fixture() <> "?")},
-          {"decision", put_in(@human_action["decision"], ["options", Access.at(1), "effect"], "Paste " <> openai_fixture())}
+          {"decision", put_in(@human_action["decision"], ["recommendation_reason"], "Paste " <> openai_fixture())},
+          {"decision", put_in(@human_action["decision"], ["options", Access.at(1), "effect"], "Paste " <> openai_fixture())},
+          {"decision", put_in(@human_action["decision"], ["options", Access.at(1), "tradeoffs"], [%{"kind" => "risk", "text" => openai_fixture()}])}
         ]
 
         for {field, value} <- secret_fields do
@@ -2156,6 +2182,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         options_count =
           "`decision.options` must list 2 to 4 options, each with a `label` and an `effect`; with no real choice to make, there is nothing to ask a person."
 
+        tradeoffs = "Each option's `tradeoffs` lists at most 3, each with a `kind` (good, cost, risk) and a non-blank `text`."
+        four_tradeoffs = List.duplicate(%{"kind" => "good", "text" => "x"}, 4)
+
         for {attrs, message} <- [
               {%{"title" => " "}, "`title` must be a non-blank string."},
               {%{"title" => String.duplicate("a", 121)}, "`title` must be at most 120 characters."},
@@ -2171,9 +2200,14 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
               {decision.(%{"options" => [option.(%{"recommended" => true}), "Keep it"]}), "Each of `decision.options` needs a non-blank `label` and `effect`."},
               {decision.(%{"options" => [option.(%{}), option.(%{})]}), "Exactly one of `decision.options` must be `recommended`."},
               {decision.(%{"options" => [option.(%{"recommended" => true}), option.(%{"recommended" => true})]}), "Exactly one of `decision.options` must be `recommended`."},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => "cheap"}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => four_tradeoffs}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => [%{"kind" => "nice", "text" => "x"}]}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => [%{"kind" => "good", "text" => " "}]}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => ["cheap"]}), option.(%{})]}), tradeoffs},
+              {decision.(%{"recommendation_reason" => 3}), "`decision.recommendation_reason` must be a string."},
               {%{"unblocks" => 3}, "`unblocks` must be a string."},
-              {%{"est_minutes" => 0}, "`est_minutes` must be an integer from 1 to 480."},
-              {%{"est_minutes" => 1.5}, "`est_minutes` must be an integer from 1 to 480."}
+              {%{"if_unanswered" => 3}, "`if_unanswered` must be a string."}
             ] do
           assert {:error, {:invalid_human_action, ^message}} = Linear.request_human_action(context, Map.merge(@human_action, attrs), opts)
         end
@@ -2191,6 +2225,38 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       after
         File.rm_rf(workspace)
       end
+    end
+
+    test "refuses code in a request, naming each token and its field, and posts nothing" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
+      opts = human_action_opts(fn _query, _variables, _opts -> flunk("Linear should not be called") end)
+      option = &put_in(@human_action, ["decision", "options", Access.at(0) | &1], &2)
+
+      for {attrs, field, token} <- [
+            {put_in(@human_action, ["decision", "question"], "How should TP-892 handle the partials?`"), "decision.question", "`"},
+            {Map.put(@human_action, "why", "It still has the legacy {% else %} branch."), "why", "{% else %}"},
+            {Map.put(@human_action, "if_unanswered", "The review keeps flagging lib/symphony_elixir."), "if_unanswered", "lib/symphony_elixir"},
+            {option.(["effect"], "The next run edits plan_pipeline.liquid."), "decision.options[0].effect", "plan_pipeline.liquid"},
+            {option.(["label"], "Hand back 2f5af5ab"), "decision.options[0].label", "2f5af5ab"},
+            {option.(["tradeoffs"], [%{"kind" => "risk", "text" => "It conflicts with auto/TP-891."}]), "decision.options[0].tradeoffs[0].text", "auto/TP-891"}
+          ] do
+        assert {:error, {:invalid_human_action, message}} = Linear.request_human_action(context, attrs, opts)
+        assert message =~ "`#{field}` has "
+        assert message =~ inspect(token)
+        assert message =~ "Rewrite it in plain words"
+      end
+
+      refute Linear.CommentRegistry.human_action_requested?(registry)
+    end
+
+    test "ignores an older caller's time estimate" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
+
+      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope(), %{}, Map.put(@human_action, "est_minutes", 10))
+      assert_received {:linear_called, "SymphonyAgentAddComment", %{body: body}}
+      refute body =~ "**Time:**"
     end
 
     test "reads the settings of the issue's repository when none are given" do
@@ -3080,7 +3146,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
             question: "Add the signing secrets, or ship unsigned builds?",
             why: "Every Release run on main fails without them.",
             unblocks: nil,
-            est_minutes: nil,
             options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}]
           },
           "In Progress"
@@ -3153,7 +3218,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
             question: "Add the signing secrets, or ship unsigned builds?",
             why: "Every Release run on main fails without them.",
             unblocks: nil,
-            est_minutes: nil,
             options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}]
           },
           "In Progress"

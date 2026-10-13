@@ -5,8 +5,8 @@ defmodule SymphonyElixir.Inbox.Item do
   `kind` says what waits:
 
   - `:action`: an open `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`),
-    whatever else the ticket is; its review is the request: why, the steps or the options, about
-    how long, what it unblocks;
+    whatever else the ticket is; its review is the request: why, what waits until it is answered,
+    the steps or the options (each with its trade-offs), why the recommended one, what it unblocks;
   - `:plan`: a plan parent (label `plan` or `breakdown`) in `Plan Review` whose plan waits for
     approval, with its sub-tickets in landing order;
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
@@ -118,10 +118,11 @@ defmodule SymphonyElixir.Inbox.Item do
       title: request.title,
       question: request.question,
       why: request.why,
+      if_unanswered: request.if_unanswered,
       unblocks: request.unblocks,
-      est_minutes: request.est_minutes,
       steps: request.steps,
-      options: Enum.map(request.options, &option/1),
+      options: request.options |> Enum.zip(request.tradeoffs) |> Enum.map(fn {text, tradeoffs} -> Map.put(option(text), :tradeoffs, tradeoffs) end),
+      recommendation_reason: request.recommendation_reason,
       requested_at: request.created_at,
       confirm: MergeConfirmation.confirm_target(store_hold(repo_key, node["id"], lookups))
     }

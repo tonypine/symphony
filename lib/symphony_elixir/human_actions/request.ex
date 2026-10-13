@@ -10,13 +10,20 @@ defmodule SymphonyElixir.HumanActions.Request do
 
       ## Decision needed: Close TP-612 as a duplicate of TP-668
 
-      **Question:** TP-668 already shipped this work on `main`. Close TP-612 as its duplicate?
-      **Why:** Nothing is left to build; the ticket only waits on this call.
-      **Time:** about 2 min
+      **Question:** TP-668 (Company search) already shipped what TP-612 (Search companies by name) asks for. Close TP-612 as its duplicate?
+      **Why:** Nothing is left to build. The ticket only waits on this call.
+      **If unanswered:** TP-612 stays open and holds a slot on the board.
 
       **Options:**
       1. **Close as duplicate** (recommended): TP-612 moves to Done, linked to TP-668.
+         - Good: The board shows only work that is left.
       2. **Keep it open**: the next run looks for what TP-668 missed.
+         - Cost: A run spends time on work that is likely done.
+
+      **Why recommended:** TP-668 covers every line of TP-612's description.
+
+  The fields are written in the Director's words (`docs/standards/decision-writing.md`). Each option
+  carries up to three trade-offs, indented under it as `- Good:`, `- Cost:` or `- Risk:` lines.
 
   Symphony finds the request again on every poll and after a restart. It also reads the older
   `## Action needed:` comment, with its `**Steps:**` list, which a supervisor or a person may still
@@ -32,30 +39,50 @@ defmodule SymphonyElixir.HumanActions.Request do
   @decision_heading "## Decision needed:"
   @action_heading "## Action needed:"
   @withdrawn_heading "## Action withdrawn"
-  @field_pattern ~r/^\*\*(Question|Why|Unblocks|Time):\*\*\s*(.*)$/i
+  # `**Time:**` is an older comment's estimate: it still reads as a field, so it never reads as a
+  # step, and is ignored.
+  @field_pattern ~r/^\*\*(Question|Why|If unanswered|Why recommended|Unblocks|Time):\*\*\s*(.*)$/i
   @steps_marker ~r/^\*\*Steps:\*\*\s*$/i
   @options_marker ~r/^\*\*Options:\*\*\s*$/i
   @list_item ~r/^\s*(?:\d+[.)]|[-*])\s+(?:\[[ xX]\]\s+)?(.+)$/
-  @minutes ~r/(\d+)\s*min/i
+  @tradeoff_item ~r/^\s+[-*]\s+(Good|Cost|Risk):\s*(.+)$/i
+  @tradeoff_kinds ~w(good cost risk)
 
-  @typedoc "One option of a decision: what it is called, what it does, and whether it is the recommended one."
-  @type option :: %{label: String.t(), effect: String.t(), recommended: boolean()}
+  @typedoc "What picking an option gains (`good`), costs (`cost`) or risks (`risk`), in one line."
+  @type tradeoff :: %{kind: String.t(), text: String.t()}
+
+  @typedoc """
+  One option of a decision: what it is called, what it does, whether it is the recommended one, and
+  up to three trade-offs.
+  """
+  @type option :: %{
+          required(:label) => String.t(),
+          required(:effect) => String.t(),
+          optional(:recommended) => boolean(),
+          optional(:tradeoffs) => [tradeoff()]
+        }
 
   @typedoc """
   A parsed request. `created_at` is the comment's creation time. A decision has its `question`
-  and its `options`, one rendered line each; a hand-written `## Action needed:` request has
-  `steps` instead.
+  and its `options`, one rendered line each, with each option's trade-offs at the same index of
+  `tradeoffs`; a hand-written `## Action needed:` request has `steps` instead.
   """
   @type t :: %{
           title: String.t(),
           question: String.t() | nil,
           options: [String.t()],
+          tradeoffs: [[tradeoff()]],
           why: String.t() | nil,
+          if_unanswered: String.t() | nil,
+          recommendation_reason: String.t() | nil,
           unblocks: String.t() | nil,
-          est_minutes: pos_integer() | nil,
           steps: [String.t()],
           created_at: DateTime.t() | nil
         }
+
+  @doc "The trade-off kinds an option may carry: `good`, `cost` and `risk`."
+  @spec tradeoff_kinds() :: [String.t()]
+  def tradeoff_kinds, do: @tradeoff_kinds
 
   @doc "The headings that start a request comment: the decision Symphony posts, and the older hand-written action."
   @spec headings() :: [String.t()]
@@ -82,33 +109,52 @@ defmodule SymphonyElixir.HumanActions.Request do
       [
         {"Question", question},
         {"Why", why},
-        {"Unblocks", Map.get(request, :unblocks)},
-        {"Time", minutes_text(Map.get(request, :est_minutes))}
+        {"If unanswered", Map.get(request, :if_unanswered)},
+        {"Unblocks", Map.get(request, :unblocks)}
       ]
-      |> Enum.reject(fn {_name, value} -> blank?(value) end)
-      |> Enum.map(fn {name, value} -> "**#{name}:** #{one_line(value)}" end)
+      |> fields()
 
     option_lines = options |> Enum.with_index(1) |> Enum.map(fn {option, index} -> "#{index}. #{option_text(option)}" end)
 
-    Enum.join(
-      [
-        "#{@decision_heading} #{one_line(title)}",
-        "",
-        Enum.join(fields, "\n"),
-        "",
-        "**Options:**",
-        Enum.join(option_lines, "\n"),
-        "",
-        closing
-      ],
-      "\n"
-    )
+    [
+      "#{@decision_heading} #{one_line(title)}",
+      "",
+      Enum.join(fields, "\n"),
+      "",
+      "**Options:**",
+      Enum.join(option_lines, "\n"),
+      "",
+      recommendation_line(request),
+      closing
+    ]
+    |> List.flatten()
+    |> Enum.join("\n")
+  end
+
+  defp fields(fields) do
+    fields
+    |> Enum.reject(fn {_name, value} -> blank?(value) end)
+    |> Enum.map(fn {name, value} -> "**#{name}:** #{one_line(value)}" end)
+  end
+
+  defp recommendation_line(request) do
+    case fields([{"Why recommended", Map.get(request, :recommendation_reason)}]) do
+      [] -> []
+      [line] -> [line, ""]
+    end
   end
 
   defp option_text(%{label: label, effect: effect} = option) do
     marker = if Map.get(option, :recommended), do: " (recommended)"
-    "**#{option_label(label)}**#{marker}: #{one_line(effect)}"
+    Enum.join(["**#{option_label(label)}**#{marker}: #{one_line(effect)}" | tradeoff_lines(Map.get(option, :tradeoffs))], "\n")
   end
+
+  # Each trade-off is a sub-item of its option, so the option list still reads as one numbered list.
+  defp tradeoff_lines(tradeoffs) when is_list(tradeoffs) do
+    for %{kind: kind, text: text} <- tradeoffs, not blank?(text), do: "   - #{String.capitalize(kind)}: #{one_line(text)}"
+  end
+
+  defp tradeoff_lines(_tradeoffs), do: []
 
   # A label stays plain text inside the bold markers.
   defp option_label(label), do: label |> one_line() |> String.replace("*", "")
@@ -153,19 +199,41 @@ defmodule SymphonyElixir.HumanActions.Request do
     %{
       title: title,
       question: present(fields["question"]),
-      options: options,
+      options: Enum.map(options, &elem(&1, 0)),
+      tradeoffs: Enum.map(options, &elem(&1, 1)),
       why: present(fields["why"]),
+      if_unanswered: present(fields["if unanswered"]),
+      recommendation_reason: present(fields["why recommended"]),
       unblocks: present(fields["unblocks"]),
-      est_minutes: minutes(fields["time"]),
       steps: steps,
       created_at: created_at
     }
   end
 
-  # The list items after `**Options:**`, as rendered.
+  # The list items after `**Options:**`, as rendered, each with the trade-offs indented under it.
   defp options(lines) do
-    after_marker = lines |> Enum.drop_while(&(not Regex.match?(@options_marker, &1))) |> Enum.drop(1)
-    for line <- after_marker, [_, item] <- [Regex.run(@list_item, line)], do: String.trim(item)
+    lines
+    |> Enum.drop_while(&(not Regex.match?(@options_marker, &1)))
+    |> Enum.drop(1)
+    |> Enum.reduce([], &option_line/2)
+    |> Enum.reverse()
+    |> Enum.map(fn {option, tradeoffs} -> {option, Enum.reverse(tradeoffs)} end)
+  end
+
+  defp option_line(line, [{option, tradeoffs} | rest] = acc) do
+    case Regex.run(@tradeoff_item, line) do
+      [_, kind, text] -> [{option, [%{kind: String.downcase(kind), text: String.trim(text)} | tradeoffs]} | rest]
+      nil -> option_item(line, acc)
+    end
+  end
+
+  defp option_line(line, []), do: option_item(line, [])
+
+  defp option_item(line, acc) do
+    case Regex.run(@list_item, line) do
+      [_, item] -> [{String.trim(item), []} | acc]
+      nil -> acc
+    end
   end
 
   @doc "The steps in free text, such as a human task's description, read as in a request."
@@ -210,6 +278,17 @@ defmodule SymphonyElixir.HumanActions.Request do
     end)
   end
 
+  @doc "A pull request as a request names it, `PR #448`; nil for anything but a pull request URL."
+  @spec pull_request(String.t() | nil) :: String.t() | nil
+  def pull_request(url) when is_binary(url) do
+    case Regex.run(~r{/pull/(\d+)}, url) do
+      [_, number] -> "PR ##{number}"
+      nil -> nil
+    end
+  end
+
+  def pull_request(_url), do: nil
+
   @doc "The title as compared for duplicates: trimmed, lower case, single spaces."
   @spec normalize_title(String.t()) :: String.t()
   def normalize_title(title), do: title |> one_line() |> String.downcase()
@@ -220,18 +299,6 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   defp after?(%DateTime{} = at, %DateTime{} = created_at), do: DateTime.compare(at, created_at) == :gt
   defp after?(_at, _created_at), do: true
-
-  defp minutes_text(minutes) when is_integer(minutes), do: "about #{minutes} min"
-  defp minutes_text(_minutes), do: nil
-
-  defp minutes(text) when is_binary(text) do
-    case Regex.run(@minutes, text) do
-      [_, digits] -> String.to_integer(digits)
-      nil -> nil
-    end
-  end
-
-  defp minutes(_text), do: nil
 
   defp present(""), do: nil
   defp present(value), do: value

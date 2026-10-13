@@ -5,6 +5,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.CiPoller
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Notifications
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -1545,7 +1546,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:issue_comment, "issue-2401", body}
     assert body =~ "## Decision needed: CI still fails on ACME-2401"
     assert body =~ "after 1 fix runs"
-    assert body =~ "on https://github.com/example/repo/pull/2401"
+    assert body =~ "on PR #2401"
+    assert body =~ "**If unanswered:** ACME-2401 stays where it is with failing checks"
+    assert PlainWords.tokens(body) == []
     assert body =~ "the ticket stays in Code Review until the decision is recorded"
 
     hold = SymphonyElixir.Hold.get(@repo_key, "issue-2401", :needs_decision)

@@ -2204,9 +2204,13 @@ lists:
 
 - each open `## Decision needed:` comment. Agents post one with `linear_request_human_action`
   (`title`, `why`, a `decision` with one `question` and 2 to 4 `options`, each with a `label`
-  and an `effect` and exactly one `recommended`, optional `unblocks` and `est_minutes`) when only a
+  and an `effect`, up to three `tradeoffs` and exactly one `recommended`, an optional
+  `decision.recommendation_reason`, and optional `if_unanswered` and `unblocks`) when only a
   person can decide: a product call, a missing secret or permission (add it, or drop what needs
-  it), an account to set up. A request without options is refused, and a person never gets a check
+  it), an account to set up. Every field is written in the Director's words
+  ([the decision writing standard](standards/decision-writing.md)): a request holding backticks,
+  template syntax, a path or file name, a commit hash or an `auto/` or `origin/` branch is refused,
+  with each token and its field named. A request without options is refused, and a person never gets a check
   to run: a check an agent can't run (launching the app, a host crash check, a check on a device)
   belongs to CI or a QA playbook. The update lists the question and the options, the recommended
   one marked. The tool leaves the issue in its phase and sets the **Needs Decision** hold; the hold
@@ -2245,17 +2249,24 @@ a comment in the request format:
 ## Decision needed: Turn on the pre-push hook
 
 **Question:** Turn on the pre-push hook on your laptop?
-**Why:** Pushes skip the format and credo checks without it.
+**Why:** Pushes from your laptop skip the format and lint checks without it.
+**If unanswered:** CI keeps catching what the hook would, a few minutes later.
 **Unblocks:** clean pushes from your laptop
-**Time:** about 2 min
 
 **Options:**
-1. **Turn it on** (recommended): you run `git config core.hooksPath .githooks` in your checkout.
+1. **Turn it on** (recommended): pushes from your laptop run the checks first.
+   - Good: A broken push never reaches CI.
+   - Cost: Each push takes a few seconds longer.
 2. **Leave it off**: CI keeps catching what the hook would.
+
+**Why recommended:** It catches the mistake before anyone waits on CI.
 ```
 
-The older `## Action needed: <title>` heading, with a `**Steps:**` list, is still read. Only the
-heading is required.
+Write it in the Director's words ([the decision writing standard](standards/decision-writing.md)).
+`**If unanswered:**`, `**Why recommended:**` and an option's indented `- Good:`, `- Cost:` and
+`- Risk:` lines are optional. The older `## Action needed: <title>` heading, with a `**Steps:**`
+list, is still read, and so is an older `**Time:**` line, which is ignored. Only the heading is
+required.
 
 **When an action closes.** A request closes when a person replies under it (or answers it in the
 Inbox), when the agent withdraws it, or when its issue reaches a terminal state. A blocked QA
@@ -2274,11 +2285,11 @@ closed while Symphony was stopped keeps its last update until a new action opens
 **The update.** It is written to be read on a phone and acted on without opening anything else:
 
 - one numbered heading per action, so the list scans on a narrow screen;
-- under it, how long it takes and what it unblocks, so the reader can pick what to do first;
-- the why, then the steps as a numbered list, one instruction per line (no tables, which scroll
-  sideways on a phone);
+- under it, what it unblocks, so the reader can pick what to do first;
+- the why and what waits until it is answered, then the steps as a numbered list, one instruction
+  per line (no tables, which scroll sideways on a phone);
 - a closing **Done when** line, saying how the action leaves the list;
-- quickest first, so a short session clears the small ones;
+- ordered by issue, so the list stays put between updates;
 - a footer with the list id, which is how Symphony recognises its own last update.
 
 The update sets the project health: `atRisk` while any action is open, `onTrack` when none is.
@@ -2291,17 +2302,19 @@ A rendered example, for a mix of a decision on release signing and a task labell
 deprecated `human_actions.label`:
 
 ```md
-**2 actions need you.** Quickest first.
+**2 actions need you.**
 
 ### 1. Add the release signing secrets
 
-**~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
+Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on main
 
-**Why:** Every Release run on `main` fails at the signing step without them.
+**Why:** Every Release run on main fails at the signing step without them.
+
+**If unanswered:** Every Release run on main keeps failing, so no build ships.
 
 **Decide:** Add the signing secrets, or ship unsigned builds?
 
-1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
+1. **Add the secrets** (recommended): you add the signing certificate and its password to the repository's Actions secrets; releases are signed again.
 2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
 **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.

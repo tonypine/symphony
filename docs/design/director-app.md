@@ -103,7 +103,10 @@ Done when:
 
 - a plan shows its artifacts, the decisions it needs (options, with the recommended one marked) and its sub-tickets;
 - a PR shows its summary, CI, the Auto Review QA result, the acceptance gate's verdict and the size of the change;
-- Approve, Send Decisions and Send to Rework each say what will happen before they act, and leave a record in Linear.
+- Approve, Send Decisions and Send to Rework each say what will happen before they act, and leave a record in Linear;
+- a decision is written in the Director's words: a question that stands alone, no file names, hashes or code, each
+  option's effect on the work and its trade-offs, and what waits if nobody answers
+  ([the decision writing standard](../standards/decision-writing.md)).
 
 ### US3. Know the factory is flowing (Must)
 
