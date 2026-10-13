@@ -163,6 +163,52 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              state.dispatch_skipped["gone"]
   end
 
+  test "a pause lists every candidate it holds back, with the gate that would hold it anyway first", ctx do
+    write_skipped_workflow!(ctx, max_tokens_per_day: 10)
+    tracked([])
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :PausedOrchestrator))
+    on_exit(fn -> stop_process(pid) end)
+    wait_until(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress))
+
+    runnable = issue("runnable", "MT-RUNNABLE", "Todo")
+    blocked = issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-B", state: "In Progress"}])
+    waiting = issue("waiting", "MT-WAITING", "Todo")
+    slot_waiting = %{"waiting" => %{identifier: "MT-WAITING", reason: "work slots full", since: DateTime.utc_now()}}
+    readiness = %{kind: :poll, issues: [runnable, blocked, waiting]}
+
+    skipped_after = fn pause ->
+      ref = make_ref()
+      replace = Map.merge(%{dispatch_readiness_tasks: %{ref => readiness}, slot_waiting: slot_waiting}, pause)
+      :sys.replace_state(pid, &Map.merge(&1, replace))
+      result = %{now_ms: System.monotonic_time(:millisecond), age_gc_result: :skipped, quota: nil}
+      send(pid, {ref, {:dispatch_readiness_result, result}})
+      state = :sys.get_state(pid)
+      assert state.running == %{}
+      Map.new(state.dispatch_skipped, fn {issue_id, entry} -> {issue_id, entry.reason} end)
+    end
+
+    assert skipped_after.(%{pause: %{paused: true, reason: "operator", paused_at: DateTime.utc_now()}}) == %{
+             "runnable" => "dispatch is paused by the operator",
+             "blocked" => "blocked by MT-B"
+           }
+
+    unpaused = %{paused: false, reason: nil, paused_at: nil}
+    quota = %{paused: true, reason: "workspace free space is low"}
+
+    assert %{"runnable" => "new dispatch is paused: workspace free space is low"} =
+             skipped_after.(%{pause: unpaused, workspace_lifecycle_quota: quota})
+
+    today = Date.utc_today()
+    budget = %{workspace_lifecycle_quota: %{paused: false}, budget_daily_used: 10, budget_day_started_on: today}
+    assert %{"runnable" => "the daily token budget is spent (agent.max_tokens_per_day)"} = skipped_after.(budget)
+  end
+
+  defp wait_until(pid, predicate) do
+    Enum.reduce_while(1..200, nil, fn _attempt, _acc ->
+      if predicate.(:sys.get_state(pid)), do: {:halt, :ok}, else: Process.sleep(10) && {:cont, nil}
+    end)
+  end
+
   defp write_skipped_workflow!(ctx, overrides \\ []) do
     write_workflow_file!(
       Workflow.workflow_file_path(),

@@ -2981,13 +2981,16 @@ defmodule SymphonyElixir.Orchestrator do
     state =
       cond do
         operator_paused?(state) ->
-          log_operator_pause(state)
+          state |> log_operator_pause() |> skip_paused_pass(issues, "dispatch is paused by the operator")
 
         workspace_quota_paused?(state) ->
-          log_workspace_quota_pause(state)
+          state |> log_workspace_quota_pause() |> skip_paused_pass(issues, "new dispatch is paused: #{workspace_quota_error(state)}")
 
         daily_budget_paused?(state) ->
-          state |> log_daily_budget_pause() |> dispatch_forced_over_daily_budget(issues)
+          state
+          |> log_daily_budget_pause()
+          |> skip_paused_pass(issues, "the daily token budget is spent (agent.max_tokens_per_day)")
+          |> dispatch_forced_over_daily_budget(issues)
 
         true ->
           dispatch_chosen_issues(issues, state)
@@ -3464,6 +3467,22 @@ defmodule SymphonyElixir.Orchestrator do
     if Enum.any?([state.running, state.slot_waiting, state.retry_attempts], &Map.has_key?(&1, issue_id)),
       do: state,
       else: put_dispatch_skipped(state, issue, "not started: the issue read again before dispatch was no longer dispatchable, or no worker was free")
+  end
+
+  # A pause starts no dispatch pass, so its candidates are listed here: each with the gate that
+  # would hold it anyway, else the pause. Issues waiting for a slot keep their `slot_waiting` entry.
+  defp skip_paused_pass(%State{} = state, issues, pause_reason) do
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    issues
+    |> Enum.filter(&match?(%Issue{}, &1))
+    |> Enum.reject(&Map.has_key?(state.slot_waiting, &1.id))
+    |> Enum.reduce(%{state | dispatch_skipped: %{}}, fn issue, acc ->
+      reason = dispatch_gate_closed_reason(issue, acc, active_states, terminal_states) || pause_reason
+      put_dispatch_skipped(acc, issue, reason)
+    end)
+    |> settle_dispatch_skipped(state.dispatch_skipped || %{})
   end
 
   defp put_dispatch_skipped(%State{} = state, %Issue{} = issue, reason) do
