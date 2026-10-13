@@ -602,20 +602,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{"move" => "decide", "to_state" => "Rework"}, %{"to_state" => "Done"}] = audit_records()
     end
 
-    test "a merge confirmation's hold is what Decide does with no move picked: into Merging", %{opts: opts} do
+    test "a merge confirmation's hold is what Decide does when the pick is Merge: into Merging", %{opts: opts} do
       put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_merge_hold()
 
-      :ok =
-        Hold.set("repo-director", "pr", :needs_decision, %{
-          reason: "Merge MOT-40 into its base branch?",
-          clearing_condition: "when the decision is recorded",
-          decision: %{title: "Merge MOT-40", question: "Merge MOT-40 into its base branch?", confirm: "Merging"}
-        })
-
-      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+      merge = [%{question: "Merge MOT-40 into its base branch?", answer: "**Merge** (recommended): the ticket moves to Merging"}]
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: merge, request_comment_id: "comment-1"}, opts)
       assert %{moved: true, to_state: "Merging", undo_window_ms: 10_000} = result
       assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
       assert_received {:memory_tracker_state_update, "pr", "Merging"}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "a merge confirmation answered with anything but an option moves nothing", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_merge_hold()
+
+      neither = [%{question: "Merge MOT-40 into its base branch?", answer: "Neither: fix the flaky test first"}]
+      assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: neither, request_comment_id: "comment-1"}, opts)
+      refute_received {:memory_tracker_state_update, "pr", _state}
       refute Hold.held?("repo-director", "pr", :needs_decision)
     end
 
@@ -966,6 +971,20 @@ defmodule SymphonyElixir.DirectorMovesTest do
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
 
   defp picks, do: [%{question: "Add the signing secrets, or ship unsigned builds?", answer: "Add the secrets"}]
+
+  defp set_merge_hold do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "Merge MOT-40 into its base branch?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{
+          title: "Merge MOT-40",
+          question: "Merge MOT-40 into its base branch?",
+          options: [%{label: "Merge", effect: "the ticket moves to Merging"}, %{label: "Send to Rework", effect: "the ticket moves to Rework"}],
+          confirm: "Merging"
+        }
+      })
+  end
 
   defp set_decision_hold do
     :ok =

@@ -79,7 +79,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
     # The hold first: a hold that can't be set posts nothing, so the caller's retry never posts a
     # second `## Decision needed:` comment. A comment that can't be posted takes the hold back.
-    with {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, confirming(attrs(request), confirm), hold_opts)},
+    with {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, confirming(attrs(request), confirm, Map.get(issue, :state)), hold_opts)},
          {:post, :ok} <- {:post, tracker.create_comment(issue_id, Request.render_hold(request, Map.get(issue, :state)))} do
       :ok
     else
@@ -92,8 +92,10 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     end
   end
 
-  defp confirming(attrs, nil), do: attrs
-  defp confirming(attrs, confirm), do: %{attrs | decision: Map.put(attrs.decision, :confirm, confirm)}
+  # A confirmation also records the state the ticket waits in, so a person's move made after the
+  # request wins over the move the answer would perform (`resume/5`).
+  defp confirming(attrs, nil, _state), do: attrs
+  defp confirming(attrs, confirm, state), do: %{attrs | decision: attrs.decision |> Map.put(:confirm, confirm) |> Map.put(:state, state)}
 
   @doc """
   Reconciles the Needs Decision hold of one ticket against the decision requests Linear still reads
@@ -132,7 +134,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         apply_set(repo_key, issue_id, attrs, opts)
 
       :clear ->
-        apply_clear(repo_key, issue_id, current, replies(node, current), opts)
+        apply_clear(repo_key, issue_id, current, node, opts)
 
       :none ->
         :none
@@ -148,15 +150,18 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     end
   end
 
-  # Clearing the hold is what "the decision is recorded" does. A merge confirmation's hold carries
-  # the move its confirmation performs (`SymphonyElixir.MergeConfirmation`), so answering it by a
-  # reply under the request continues into `Merging` rather than leaving the ticket waiting in its
-  # phase, or into `Rework` when the reply names that option; an ordinary decision carries none and
-  # continues in place, so the next poll dispatches it.
-  defp apply_clear(repo_key, issue_id, current, replies, opts) do
+  # Clearing the hold is what "the decision is recorded" does. A confirmation hold carries the move
+  # its confirmation performs (`SymphonyElixir.MergeConfirmation`), so a reply under the request
+  # that picks that option continues there, one that picks `Send to Rework` goes to `Rework`, and
+  # any other reply is a change request sent to `In Progress` (`MergeConfirmation.reply_target/2`).
+  # An ordinary decision carries none and continues in place, so the next poll dispatches it.
+  defp apply_clear(repo_key, issue_id, current, node, opts) do
     case Hold.clear(repo_key, issue_id, :needs_decision, opts) do
       :ok ->
-        resume(repo_key, issue_id, current, replies, opts)
+        if moved_since_request?(current, node),
+          do: Logger.info("Leaving issue_id=#{issue_id} where a person moved it after its decision request"),
+          else: resume(repo_key, issue_id, current, replies(node, current), opts)
+
         :clear
 
       {:error, reason} ->
@@ -169,6 +174,14 @@ defmodule SymphonyElixir.NeedsDecisionHold do
       nil -> :ok
       target -> continue(repo_key, issue_id, target, opts)
     end
+  end
+
+  # Whether the ticket left the state it waited in since the request was posted: a person's move
+  # wins over the answer's. A hold that recorded no state, or a node read without one, can't tell.
+  defp moved_since_request?(current, node) do
+    waiting = get_in(current, [:decision, :state])
+    now = get_in(node, ["state", "name"])
+    is_binary(waiting) and is_binary(now) and String.downcase(String.trim(waiting)) != String.downcase(String.trim(now))
   end
 
   defp continue(repo_key, issue_id, target, opts) do

@@ -173,7 +173,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
 
       node =
         ticket_node(%{
-          "comments" => %{"nodes" => [request_comment(@comment_id, Request.render_hold(merge_request, "In Progress")), reply()]}
+          "comments" => %{"nodes" => [request_comment(@comment_id, Request.render_hold(merge_request, "In Progress")), reply(@comment_id, "1")]}
         })
 
       assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
@@ -202,13 +202,62 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       end
     end
 
+    test "a Code Review escalation continues to QA only on a reply that picks it" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+      escalation =
+        request(%{
+          title: "Code Review escalated TP-818",
+          question: "How should TP-818 continue after Code Review escalated it?",
+          options: [
+            %{label: "Continue to QA", effect: "the ticket moves to QA and its QA run starts", recommended: true},
+            %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: false}
+          ]
+        })
+
+      body = Request.render_hold(escalation, "Code Review")
+
+      for {answer, state} <- [
+            {"1", "QA"},
+            {"Option 1, go ahead", "QA"},
+            {"**Continue to QA**", "QA"},
+            {"Send to Rework", "Rework"},
+            {"2. the tests are thin", "Rework"},
+            {"**Neither option**: one change on the same PR, then continue to QA", "In Progress"},
+            {"Can you check the reviewer's reason first?", "In Progress"}
+          ] do
+        :ok = NeedsDecisionHold.pause(issue(%{state: "Code Review"}), escalation, [tracker: SymphonyElixir.Tracker.Memory], "QA")
+        comments = [request_comment(@comment_id, body), reply(@comment_id, answer)]
+        node = ticket_node(%{"state" => %{"name" => "Code Review"}, "comments" => %{"nodes" => comments}})
+
+        assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear
+        assert_received {:memory_tracker_state_update, @issue_id, ^state}, "#{answer} should move to #{state}"
+        assert stored_hold() == nil
+      end
+    end
+
+    test "a ticket a person moved after the request stays where they put it" do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+      :ok = NeedsDecisionHold.pause(issue(%{state: "Code Review"}), request(), [tracker: SymphonyElixir.Tracker.Memory], "QA")
+      node = ticket_node(%{"state" => %{"name" => "In Progress"}, "comments" => %{"nodes" => [request_comment(), reply(@comment_id, "1")]}})
+
+      log = capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :clear end)
+
+      assert log =~ "where a person moved it after its decision request"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert stored_hold() == nil
+    end
+
     test "a confirmation whose move fails reports it and leaves the ticket where it is" do
       merge_request = MergeConfirmation.request(issue(), %{recommendation: "ready to merge", review: nil, qa: nil, pr: nil})
       :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, MergeConfirmation.attrs(merge_request))
 
       node =
         ticket_node(%{
-          "comments" => %{"nodes" => [request_comment(@comment_id, Request.render_hold(merge_request, "In Progress")), reply()]}
+          "comments" => %{"nodes" => [request_comment(@comment_id, Request.render_hold(merge_request, "In Progress")), reply(@comment_id, "Merge")]}
         })
 
       log =
