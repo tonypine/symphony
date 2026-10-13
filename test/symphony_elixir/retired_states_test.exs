@@ -60,6 +60,8 @@ defmodule SymphonyElixir.RetiredStatesTest do
     assert log =~ "TP-3 is still in the draining In Review state, waiting on an open decision for a person: move it by hand into its phase with a Needs Decision hold"
     assert log =~ "TP-4 is still in the draining In Review state, waiting on blocked QA"
     assert log =~ "TP-5 is still in the draining In Review state, waiting on a supervisor check of its PR"
+    assert log =~ "[warning]"
+    refute log =~ "[error]"
 
     assert Enum.map(RetiredStates.drain_report().stragglers, & &1.wait) ==
              [:parked_plan, :open_decision, :open_decision, :blocked_qa, :supervisor_check]
@@ -101,6 +103,22 @@ defmodule SymphonyElixir.RetiredStatesTest do
 
     capture_log(fn -> assert RetiredStates.refresh_if_due(tracker: FakeTracker, now_ms: 5 * 60 * 1000) == :ok end)
     assert_received {:fetched, _states}
+  end
+
+  test "a refresh logs only the stragglers that are new since the last report" do
+    known = %Issue{id: "k", identifier: "TP-10", state: "In Review", labels: []}
+    Process.put(:retired_states_result, {:ok, [known]})
+    capture_log(fn -> RetiredStates.report(tracker: FakeTracker, now_ms: 0) end)
+
+    assert capture_log(fn -> RetiredStates.refresh_if_due(tracker: FakeTracker, now_ms: 5 * 60 * 1000) end) == ""
+
+    fresh = %Issue{id: "f", identifier: "TP-11", state: "Auto Review", labels: []}
+    Process.put(:retired_states_result, {:ok, [known, fresh]})
+    log = capture_log(fn -> RetiredStates.refresh_if_due(tracker: FakeTracker, now_ms: 10 * 60 * 1000) end)
+
+    assert log =~ "[error]"
+    assert log =~ "TP-11 is still in the retired Auto Review state"
+    refute log =~ "TP-10"
   end
 
   test "refresh_if_due reads the clock when none is given" do

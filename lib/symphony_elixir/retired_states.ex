@@ -10,8 +10,10 @@ defmodule SymphonyElixir.RetiredStates do
   straggler is moved on by a person's hand — a parked plan into `Plan Review`, an open decision into
   its phase with a `Needs Decision` hold.
 
-  `report/1` runs at startup and logs each straggler loudly. The poll task refreshes it at most
-  every `@refresh_interval_ms` (`refresh_if_due/1`), and the dashboard reads the last result
+  `report/1` runs at startup and logs each straggler loudly: an error for a retired state, which
+  nothing dispatches, and a warning for a draining one, which waits on a person. The poll task
+  refreshes it at most every `@refresh_interval_ms` (`refresh_if_due/1`), logging only the
+  stragglers that are new since the last report, and the dashboard reads the last result
   (`drain_report/0`). A ticket that leaves the report is looked up and logged with the state it
   landed in, so none vanishes from it without landing somewhere visible. The removal of the
   draining states waits on this report being empty.
@@ -44,9 +46,10 @@ defmodule SymphonyElixir.RetiredStates do
   def states, do: TransitionGuard.retired_states() ++ @draining_states
 
   @doc """
-  Logs an error for each ticket in a retired or draining state, records the report for the
-  dashboard and returns the tickets. `opts[:tracker]` overrides the tracker (tests, a fake);
-  `opts[:now_ms]` the clock. A tracker that can't be read is logged as a warning, reports nothing
+  Logs each ticket in a retired or draining state, records the report for the dashboard and
+  returns the tickets. `opts[:log]` is `:all` (the default, at startup) or `:new` (a refresh: only
+  the tickets the last report did not list). `opts[:tracker]` overrides the tracker (tests, a
+  fake); `opts[:now_ms]` the clock. A tracker that can't be read is logged as a warning, reports nothing
   and keeps the last report's tickets, but counts as a check so the next one waits the interval.
   """
   @spec report(keyword()) :: [map()]
@@ -56,7 +59,7 @@ defmodule SymphonyElixir.RetiredStates do
 
     case tracker.fetch_issues_by_states(states()) do
       {:ok, issues} ->
-        Enum.each(issues, &log_straggler/1)
+        issues |> to_log(Keyword.get(opts, :log, :all)) |> Enum.each(&log_straggler/1)
         record(issues, tracker, now_ms)
         issues
 
@@ -77,7 +80,7 @@ defmodule SymphonyElixir.RetiredStates do
         :ok
 
       _ ->
-        _ = report(Keyword.put(opts, :now_ms, now_ms))
+        _ = report(opts |> Keyword.put(:now_ms, now_ms) |> Keyword.put(:log, :new))
         :ok
     end
   end
@@ -115,6 +118,13 @@ defmodule SymphonyElixir.RetiredStates do
       true ->
         {:supervisor_check, "a supervisor check of its PR", "move it by hand to Code Review (its PR is open) or In Progress"}
     end
+  end
+
+  defp to_log(issues, :all), do: issues
+
+  defp to_log(issues, :new) do
+    known = MapSet.new(drain_report().stragglers, & &1.id)
+    Enum.reject(issues, &MapSet.member?(known, Map.get(&1, :id)))
   end
 
   defp record(issues, tracker, now_ms) do
@@ -164,9 +174,10 @@ defmodule SymphonyElixir.RetiredStates do
   defp log_straggler(issue) do
     {_wait, waits_on, move} = wait(issue)
     state = Map.get(issue, :state)
-    kind = if Enum.any?(TransitionGuard.retired_states(), &(normalize(&1) == normalize(state))), do: "retired", else: "draining"
+    retired? = Enum.any?(TransitionGuard.retired_states(), &(normalize(&1) == normalize(state)))
+    {level, kind} = if retired?, do: {:error, "retired"}, else: {:warning, "draining"}
 
-    Logger.error("#{Map.get(issue, :identifier) || Map.get(issue, :id)} is still in the #{kind} #{state} state, waiting on #{waits_on}: #{move}")
+    Logger.log(level, "#{Map.get(issue, :identifier) || Map.get(issue, :id)} is still in the #{kind} #{state} state, waiting on #{waits_on}: #{move}")
   end
 
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
