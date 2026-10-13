@@ -572,6 +572,55 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_ax_select",
+      "description" =>
+        "Select a table or outline row (an AXRow, or a cell inside one) of the launched app, the accessible way: rows answer no AXPress. The app comes to the front and the table takes keyboard focus, so qa_key can act on the selection (Return, arrows).",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "path"],
+        "properties" => %{"pid" => @pid_property, "path" => @element_path_property}
+      }
+    },
+    %{
+      "name" => "qa_click",
+      "description" =>
+        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app's window covers it. The click goes to the app alone.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "path"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => @element_path_property,
+          "clicks" => %{"type" => "integer", "minimum" => 1, "maximum" => 2, "default" => 1, "description" => "2 for a double click."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_key",
+      "description" =>
+        "Press a key, with modifiers, in the launched app's focused window (the app comes to the front first; the key goes to the app alone). Returns the focused window and element. For a keyboard shortcut such as ⌘[ pass key `[` and modifiers [\"command\"].",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "key"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "key" => %{
+            "type" => "string",
+            "description" =>
+              "return, enter, tab, space, escape, delete, forward_delete, up, down, left, right, home, end, page_up, page_down, or one lowercase letter, digit or one of [ ] , . / ; ' - = ` \\"
+          },
+          "modifiers" => %{
+            "type" => "array",
+            "items" => %{"type" => "string", "enum" => ~w(command shift option control)},
+            "uniqueItems" => true
+          }
+        }
+      }
+    },
+    %{
       "name" => "qa_resize_window",
       "description" =>
         "Wide pass: move the launched app's main window (or the AXWindow at `path`) to the top left of the screen and resize it to width x height points (default 1400 x 900), or the screen's usable area when that is smaller. Returns the window frame it reached, the screen and its usable area, and `limited` when the screen is under 1400 x 900 pt.",
@@ -826,6 +875,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_ax_select" => ["pid", "path"],
+    "qa_click" => ["pid", "path", "clicks"],
+    "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],

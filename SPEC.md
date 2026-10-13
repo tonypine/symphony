@@ -1389,6 +1389,10 @@ The QA agent:
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
   `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
   sent to that app alone, and the tools MUST NOT return a secure field's value.
+  `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an
+  element's frame centre and `qa_key` presses a key with modifiers in the app's focused window; their
+  mouse and key events MUST go to that app alone, and `qa_click` MUST refuse a point where the
+  window in front is not the app's own.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10

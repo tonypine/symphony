@@ -61,7 +61,10 @@ defmodule SymphonyElixir.QaDriverTest do
            }), 0},
         "ax-tree" => {~s({"root":{"path":"","role":"AXApplication"},"nodes":1,"truncated":false}), 0},
         "ax-press" => {~s({"ok":true,"element":{"path":"0.1","role":"AXButton"}}), 0},
-        "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0}
+        "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0},
+        "ax-select" => {~s({"ok":true,"selected":true,"element":{"path":"0.3.1","role":"AXRow","selected":true}}), 0},
+        "click" => {~s({"ok":true,"clicked":{"x":120,"y":200},"clicks":1,"element":{"path":"0.4","role":"AXButton"}}), 0},
+        "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0}
       },
       Map.get(overrides, :helper_replies, %{})
     )
@@ -758,7 +761,10 @@ defmodule SymphonyElixir.QaDriverTest do
             {"qa_screenshot", %{"name" => "x"}},
             {"qa_ax_tree", %{}},
             {"qa_ax_press", %{"path" => "0"}},
-            {"qa_ax_set_value", %{"path" => "0", "value" => "v"}}
+            {"qa_ax_set_value", %{"path" => "0", "value" => "v"}},
+            {"qa_ax_select", %{"path" => "0"}},
+            {"qa_click", %{"path" => "0"}},
+            {"qa_key", %{"key" => "return"}}
           ] do
         assert {:error, {:qa_tool, "qa_pid_not_launched", message}} = QaDriver.call_tool(driver, tool, Map.put(args, "pid", stranger))
         assert message =~ "not launched by qa_launch_app"
@@ -859,6 +865,72 @@ defmodule SymphonyElixir.QaDriverTest do
       for value <- [nil, 5, "a\0b", String.duplicate("v", 10_001)] do
         assert error_code(QaDriver.call_tool(driver, "qa_ax_set_value", %{"pid" => pid, "path" => "0", "value" => value})) == "invalid_arguments"
       end
+    end
+
+    test "selects a table row, clicks an element and presses keys through the helper", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      pid_arg = Integer.to_string(pid)
+
+      assert {:ok, %{"selected" => true, "element" => %{"role" => "AXRow"}}} =
+               QaDriver.call_tool(driver, "qa_ax_select", %{"pid" => pid, "path" => "0.3.1"})
+
+      assert_received {:cmd, @helper, ["ax-select", ^pid_arg, "0.3.1"], _opts}
+
+      assert {:ok, %{"clicked" => %{"x" => 120}}} = QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "path" => "0.4"})
+      assert_received {:cmd, @helper, ["click", ^pid_arg, "0.4", "1"], _opts}
+
+      assert {:ok, %{"ok" => true}} = QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "path" => "0.3.1", "clicks" => 2})
+      assert_received {:cmd, @helper, ["click", ^pid_arg, "0.3.1", "2"], _opts}
+
+      assert {:ok, %{"focused" => %{"role" => "AXOutline"}}} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "return"})
+      assert_received {:cmd, @helper, ["key", ^pid_arg, "return", ""], _opts}
+
+      assert {:ok, _reply} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "[", "modifiers" => ["command"]})
+      assert_received {:cmd, @helper, ["key", ^pid_arg, "[", "command"], _opts}
+
+      assert {:ok, _reply} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "\\", "modifiers" => ["shift", "option", "control"]})
+      assert_received {:cmd, @helper, ["key", ^pid_arg, "\\", "shift,option,control"], _opts}
+    end
+
+    test "validates select, click and key arguments before calling the helper", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+
+      for args <- [%{}, %{"path" => "0..1"}, %{"path" => 3}] do
+        assert error_code(QaDriver.call_tool(driver, "qa_ax_select", Map.put(args, "pid", pid))) == "invalid_arguments"
+        assert error_code(QaDriver.call_tool(driver, "qa_click", Map.put(args, "pid", pid))) == "invalid_arguments"
+      end
+
+      for clicks <- [0, 3, "2"] do
+        assert error_code(QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "path" => "0", "clicks" => clicks})) == "invalid_arguments"
+      end
+
+      for key <- [nil, "", "A", "F1", "cmd+q", "ab", 36] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => key})
+        assert message =~ "`key` must be one of return, enter"
+      end
+
+      for modifiers <- ["command", ["cmd"], ["shift", "shift"], [1]] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} =
+                 QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "q", "modifiers" => modifiers})
+
+        assert message =~ "`modifiers`"
+      end
+
+      for command <- ["ax-select", "click", "key"], do: refute_received({:cmd, @helper, [^command | _rest], _opts})
+    end
+
+    test "passes the helper's row, click and key errors on to the agent", %{worktree: worktree} do
+      replies = %{
+        "ax-select" => {~s({"error":{"code":"not_a_row","message":"The element at 0.1 is not a table or outline row."}}), 1},
+        "click" => {~s({"error":{"code":"covered","message":"Another app's window covers the element at 0.4"}}), 1},
+        "key" => {~s({"error":{"code":"no_window","message":"The app has no focused window to send the key to."}}), 1}
+      }
+
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: replies}))
+
+      assert {:error, {:qa_tool, "qa_not_a_row", _message}} = QaDriver.call_tool(driver, "qa_ax_select", %{"pid" => pid, "path" => "0.1"})
+      assert {:error, {:qa_tool, "qa_covered", _message}} = QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "path" => "0.4"})
+      assert {:error, {:qa_tool, "qa_no_window", _message}} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "escape"})
     end
 
     test "captures each on-screen window or one window id into qa-evidence", %{worktree: worktree} do
