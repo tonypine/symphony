@@ -11,7 +11,7 @@ public struct OverviewState: Equatable {
     /// The repos Symphony has tickets in, for the scope pop-up.
     public var repos: [String]
     public var running: [Run]
-    /// Tickets Symphony ran and now watches in Linear: In Review, Auto Review, Human Review, Merging.
+    /// Tickets Symphony ran and now watches in Linear: Code Review, QA, In Review, Human Review, Merging.
     public var watching: [Ticket]
     /// Tickets in Human Review, which wait on the Director.
     public var humanReview: [Ticket]

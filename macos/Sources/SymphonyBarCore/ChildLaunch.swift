@@ -49,7 +49,7 @@ public enum EmbeddedSymphony {
 }
 
 /// The QA driver helper app shipped in the bundle. It holds the Screen Recording and Accessibility grants for
-/// Auto Review QA, so that Symphony.app, and the agents Symphony spawns, never hold them.
+/// QA, so that Symphony.app, and the agents Symphony spawns, never hold them.
 public enum QADriverApp {
     /// Tells Symphony where the helper is.
     public static let environmentKey = "SYMPHONY_QA_DRIVER_APP"

@@ -138,7 +138,7 @@ request. That is safe because Symphony never reads them from a run's workspace: 
 `workflow_source: ref` (the default) it reads them, like `WORKFLOW.md`, from the fetched base
 branch, `origin/<base_branch>`, and runs from a snapshot of the expanded text. An agent can propose
 an instruction change on its branch, but the change reaches a prompt only after its pull request
-passes CI, the acceptance gate and review and is merged, and it never changes the prompt of the run
+passes CI and review and is merged, and it never changes the prompt of the run
 that made it. The files hold prompt text only: nothing in them runs on the host. The config (hooks,
 push check, `playbook` settings) is read from `WORKFLOW.md`'s own front matter before the playbook
 line expands, never from the expanded text, and the snapshot keeps that front matter first, an empty
@@ -273,13 +273,13 @@ the command runs on. Every host-side git call:
   blanks each filter driver with `-c` and sets its `required` to `false`, so git writes and reads
   files as the repo stores them. In a repo that uses Git LFS the worktree gets the pointer files,
   and an agent that needs the content runs `git lfs pull` in its sandbox. It replaces each merge
-  driver with `git merge-file`, so `merge` (the acceptance gate, `github_sync_base`) merges those
+  driver with `git merge-file`, so `merge` (`github_sync_base`) merges those
   files as git does when no driver is set, conflict markers included;
 - doesn't run, and returns an error, when that config can't be read or names a driver with `=` in
   its name, which `-c` can't address;
 - runs `diff`, `log`, `show`, `whatchanged`, `blame` and `format-patch` with
-  `--no-ext-diff --no-textconv`, so the diffs of reviews, the acceptance gate and the auto-merge
-  fingerprint run no `diff.external`, `diff.<name>.command` or `diff.<name>.textconv`, and show
+  `--no-ext-diff --no-textconv`, so the diffs of reviews and the escalation rules
+  run no `diff.external`, `diff.<name>.command` or `diff.<name>.textconv`, and show
   the files as the repo stores them. `diff-tree`, `diff-index` and `diff-files` run a diff driver
   only when asked to. It refuses `range-diff`, which runs the textconv drivers whatever options it
   gets. A test fails when code under `lib/` starts git without these options;
@@ -369,7 +369,7 @@ provider calls.
 Symphony starts `verification.dev_server.start_cmd` itself, from the checkout under test:
 
 - in an agent run, from the agent's own workspace, before the first turn and for the whole run;
-- in an Auto Review `web` pass, from a second worktree at the PR head.
+- in a QA `web` pass, from a second worktree at the PR head.
 
 The command usually runs files from that checkout: a script such as Symphony's own
 `scripts/qa-dashboard-server.sh`, and the repo's build or runtime tool (`npm`, `pnpm`, or an
@@ -458,7 +458,7 @@ GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote add
   and the other way round.
 - A server that can only listen on a TCP port can't start under the profile. When its health
   check times out and nothing is at the socket, the error says so
-  (`dev_server_not_on_socket`), and an Auto Review `web` pass is `blocked` with that reason. It
+  (`dev_server_not_on_socket`), and a QA `web` pass is `blocked` with that reason. It
   never runs without the sandbox.
 
 Connections out stay open to the host's loopback, so the server can still reach other services
@@ -495,7 +495,7 @@ The dev server does not start on other systems; on macOS when `/usr/bin/sandbox-
 and on Linux when `bwrap` or `socat` is not on `PATH`, or `bwrap` can't make its namespaces (no
 unprivileged user namespaces, or Docker's default seccomp profile, see
 [docker/README.md](../docker/README.md#verification-dev-server)). An agent run then fails with
-`verification_failed` before its first turn, and an Auto Review `web` pass is `blocked`.
+`verification_failed` before its first turn, and a QA `web` pass is `blocked`.
 
 Before the first dev server starts on macOS, Symphony checks the profile on this Mac with
 `/usr/bin/perl`: a process under it must be refused a TCP bind on `0.0.0.0` and on `127.0.0.1`,
@@ -508,7 +508,7 @@ The dev server is off by default. It starts only when `verification.enabled` is 
 `verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
 override `symphony.yml`. To turn it off, leave `verification.enabled` unset (or `false`) in
 `symphony.yml` and in every repo's `WORKFLOW.md`, or remove `start_cmd` from them. Without a dev
-server, Auto Review skips the `web` playbook ("needs `verification.dev_server`").
+server, QA skips the `web` playbook ("needs `verification.dev_server`").
 
 ### Tamper-evident audit log
 

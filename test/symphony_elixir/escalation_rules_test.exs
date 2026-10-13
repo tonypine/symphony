@@ -1,9 +1,9 @@
-defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
+defmodule SymphonyElixir.EscalationRulesTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.AcceptanceGate.Escalation
-  alias SymphonyElixir.AcceptanceGate.Settings.Escalate
+  alias SymphonyElixir.Config.Escalate
   alias SymphonyElixir.DependencyAudit.MixParser
+  alias SymphonyElixir.EscalationRules
   alias SymphonyElixir.Linear.Issue
 
   @rules %Escalate{}
@@ -19,7 +19,7 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
   defp diff(files), do: %{files: files}
 
   defp check(opts) do
-    Escalation.check(
+    EscalationRules.check(
       Keyword.get(opts, :issue, issue()),
       diff(Keyword.get(opts, :files, [file("lib/app/button.ex")])),
       Keyword.get(opts, :busy_files, []),
@@ -36,17 +36,17 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
   defp package_json(deps), do: Jason.encode!(%{"name" => "web", "dependencies" => deps})
 
   test "ticket_reasons/2 checks only the ticket's label and pattern rules" do
-    assert Escalation.ticket_reasons(issue(), @rules) == []
+    assert EscalationRules.ticket_reasons(issue(), @rules) == []
 
     assert [%{rule: :label}, %{rule: :ticket_pattern, detail: detail}] =
-             Escalation.ticket_reasons(issue(labels: ["needs-human"], description: "Needs a manual review."), @rules)
+             EscalationRules.ticket_reasons(issue(labels: ["needs-human"], description: "Needs a manual review."), @rules)
 
     assert detail =~ "manual"
   end
 
   test "a clean diff returns no reasons" do
     assert check([]) == []
-    assert Escalation.check(issue(), diff([]), [], @rules) == []
+    assert EscalationRules.check(issue(), diff([]), [], @rules) == []
   end
 
   test "label" do
@@ -74,15 +74,15 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
 
   test "ticket pattern skips the review states' names, but not a request for a human review" do
     opts = [review_states: ["In Review", "Human Review"]]
-    reasons = fn text, opts -> Escalation.ticket_reasons(issue(description: text, labels: []), @rules, opts) end
+    reasons = fn text, opts -> EscalationRules.ticket_reasons(issue(description: text, labels: []), @rules, opts) end
 
     names_state =
       "It moves it to Human Review, for a parent in `Human Review`, from **Human Review** into Human Review. " <>
         ~s(Human Review tickets wait on a person; "Human Review" and In Review / Human Review hold them. ) <>
         "Tickets in the human review state, the in review state or the `human review` states come first."
 
-    assert Escalation.ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: []), @rules, opts) == []
-    assert Escalation.check(issue(description: names_state), diff([]), [], @rules, opts) == []
+    assert EscalationRules.ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: []), @rules, opts) == []
+    assert EscalationRules.check(issue(description: names_state), diff([]), [], @rules, opts) == []
 
     for request <- [
           "This needs human review before merge.",
@@ -117,7 +117,7 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
     opts = [review_states: ["In Review", "Human Review"]]
     description = File.read!("test/fixtures/acceptance_gate/tp_617_description.md")
 
-    assert Escalation.ticket_reasons(issue(title: ~s(Show a "Waiting on you" list in SymphonyBar and the dashboard), description: description, labels: []), @rules, opts) ==
+    assert EscalationRules.ticket_reasons(issue(title: ~s(Show a "Waiting on you" list in SymphonyBar and the dashboard), description: description, labels: []), @rules, opts) ==
              []
   end
 
@@ -257,46 +257,26 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
     assert check(files: [file("lib/app/router.ex", additions: 300, deletions: 0)], busy_files: ["lib/app/router.ex"]) == []
   end
 
-  describe "a new symphony.yml setting" do
-    @schema "lib/symphony_elixir/config/schema.ex"
-    @system_schema "lib/symphony_elixir/config/system_schema.ex"
-    @manifest "macos/Sources/SymphonyBarCore/SettingsUIManifest.swift"
+  test "a new symphony.yml setting is not an escalation: CI's settings UI coverage check owns it" do
+    files = [file("lib/symphony_elixir/config/schema.ex", added_lines: ["      field(:max_widgets, :integer, default: 3)"])]
 
-    test "escalates a schema field or key list the macOS app's manifest doesn't follow" do
-      files = [
-        file(@schema, added_lines: ["# A new cap.", "      field(:max_widgets, :integer, default: 3)"]),
-        file(@system_schema, added_lines: [~s|    "agent.limits" => ~w(max_turns max_widgets),|])
-      ]
-
-      assert check(files: files) == [
-               %{
-                 rule: :settings_ui,
-                 detail:
-                   "#{@schema} declares a setting without a change to #{@manifest}: field(:max_widgets, :integer, default: 3); " <>
-                     ~s|#{@system_schema} declares a setting without a change to #{@manifest}: "agent.limits" => ~w(max_turns max_widgets),|
-               }
-             ]
-
-      assert check(files: [file(@schema, added_lines: ["      embeds_many(:widgets, Widget)"])]) |> Enum.map(& &1.rule) == [:settings_ui]
-    end
-
-    test "passes when the manifest changes too, or the schema change declares no setting" do
-      assert check(files: [file(@schema, added_lines: ["field(:max_widgets, :integer)"]), file(@manifest)]) == []
-      assert check(files: [file(@schema, added_lines: ["    |> validate_number(:max_widgets, greater_than: 0)"])]) == []
-      assert check(files: [file(@schema), file("lib/app/schema.ex", added_lines: ["field(:name, :string)"])]) == []
-    end
+    assert check(files: files) == []
   end
 
   test "returns one reason per triggered rule, in rule order" do
     files = [
       file("lib/app/auth/session.ex", additions: 1600, added_lines: ["rm -rf build"]),
-      file("mix.lock", additions: 1, deletions: 1, base: lock(jason: "1.4.4"), head: lock(jason: "2.0.0")),
-      file("lib/symphony_elixir/config/schema.ex", added_lines: ["field(:max_widgets, :integer)"])
+      file("mix.lock", additions: 1, deletions: 1, base: lock(jason: "1.4.4"), head: lock(jason: "2.0.0"))
     ]
 
     reasons = check(issue: issue(labels: ["needs-human"], description: "Needs human review."), files: files, busy_files: ["lib/app/auth/session.ex"])
 
-    assert Enum.map(reasons, & &1.rule) == [:label, :ticket_pattern, :path, :diff_pattern, :dependency, :size, :busy_file, :settings_ui]
+    assert Enum.map(reasons, & &1.rule) == [:label, :ticket_pattern, :path, :diff_pattern, :dependency, :size, :busy_file]
+  end
+
+  test "person rules and risk rules split every rule" do
+    assert EscalationRules.person_rules() == [:label, :ticket_pattern]
+    assert EscalationRules.risk_rules() == [:path, :diff_pattern, :dependency, :size, :busy_file]
   end
 
   describe "MixParser.parse_lock/1" do

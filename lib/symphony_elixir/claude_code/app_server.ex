@@ -185,7 +185,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # The `settings.json` a Claude session starts with: the sandbox, and the permission rules that
   # deny pushing, the `gh` CLI, the file tools on the write-protected paths the sandbox keeps
   # from the shell, and reading the cloud-synced folders. A read-only session (`read_only: true`
-  # in `start_session/2`, the acceptance gate) also gets no file-editing tool and can't write its
+  # in `start_session/2`) also gets no file-editing tool and can't write its
   # working directory from the shell.
   @doc false
   @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], boolean()) :: map()

@@ -236,11 +236,11 @@ defmodule SymphonyElixir.HumanReviewTest do
       settings = Config.settings!()
       held? = &HumanReview.held_for_person(%Issue{id: "issue-1", state: &1, labels: &2}, settings, [])
 
-      for state <- ["Backlog", " backlog ", "Done", "Canceled", nil] do
+      for state <- ["Backlog", " backlog ", "Done", "Canceled", "Auto Review", nil] do
         assert held?.(state, []) == {:ok, true}, inspect(state)
       end
 
-      for state <- ["Todo", " in progress ", "In Review", "Auto Review", "Merging"] do
+      for state <- ["Todo", " in progress ", "In Review", "Merging"] do
         assert held?.(state, []) == {:ok, false}, state
       end
 

@@ -27,7 +27,7 @@ defmodule SymphonyElixir.QaAgent.Report do
   `:summary`, `:steps`, `:findings`, `:reason`, `:playbooks`, `:tokens`,
   `:runtime_seconds`, `:follow_ups`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
 
-  A parent walkthrough also passes `:ref` (the branch the commit heads, in place of a PR),
+  A run on the head of a branch also passes `:ref` (the branch the commit heads, in place of a PR),
   `:target_issue` (the identifier of the verification ticket `:target_state` applies to) and
   `:filed` (the tickets filed for failing steps, as `%{identifier, title}`).
 
@@ -154,7 +154,7 @@ defmodule SymphonyElixir.QaAgent.Report do
   @doc """
   Creates the QA report comment, or rewrites the existing one in place on Linear.
   Other trackers get a new comment. `opts[:heading]` names another Symphony-written comment
-  to rewrite the same way (the acceptance gate's).
+  to rewrite the same way.
   """
   @spec publish(Issue.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def publish(%Issue{id: issue_id} = issue, body, opts \\ []) when is_binary(issue_id) and is_binary(body) do
@@ -173,22 +173,8 @@ defmodule SymphonyElixir.QaAgent.Report do
     end)
   end
 
-  @doc """
-  Deletes the Symphony-written Linear comment that starts with `opts[:heading]`. No such
-  comment is fine.
-  """
-  @spec withdraw(Issue.t(), keyword()) :: :ok | {:error, term()}
-  def withdraw(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    linear_opts = Keyword.take(opts, [:linear_client, :settings])
-
-    with_linear_comment(issue, Keyword.fetch!(opts, :heading), linear_opts, fn
-      _context, nil -> :ok
-      context, comment_id -> ok(AgentTools.Linear.delete_comment(context, comment_id, linear_opts))
-    end)
-  end
-
   # Calls `fun` with the comment that starts with `heading`, or `nil` when there is none. The
-  # comment is recorded as this caller's own, so it may be edited or deleted.
+  # comment is recorded as this caller's own, so it may be edited.
   defp with_linear_comment(issue, heading, opts, fun) do
     {:ok, registry} = CommentRegistry.start_link()
 

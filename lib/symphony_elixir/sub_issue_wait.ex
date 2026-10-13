@@ -15,8 +15,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   Any other issue whose pull request merges with a sub-issue still open outside `Backlog` waits there
   too, instead of closing (`wait_on_merge?/3`), and Symphony moves it to `Done` itself, with no run,
-  once every sub-issue outside `Backlog` is terminal (`close?/3`). Its `Backlog` sub-issues, such as
-  the acceptance gate's follow-ups, wait for a person to promote them and never hold it: with only
+  once every sub-issue outside `Backlog` is terminal (`close?/3`). Its `Backlog` sub-issues wait for a person to promote them and never hold it: with only
   those open, the merge closes it as if it had none. A sub-issue filed or canceled meanwhile just
   counts in that check. The RunStore records each issue the merge put there,
   so one a person moved there, with its pull request still open, waits for a human as before.

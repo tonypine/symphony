@@ -5,26 +5,21 @@ defmodule SymphonyElixir.ForcedStatusTest do
 
   describe "describe/1" do
     test "a running agent gives its run kind as the phase and waits on nothing" do
-      kinds = [:implementation, :rework, :review_feedback, :ci_fix, :landing, :breakdown, :close_out, :epic_review]
+      kinds = [:implementation, :rework, :review_feedback, :ci_fix, :landing, :code_review, :qa]
+      kinds = kinds ++ [:breakdown, :close_out, :epic_review]
 
       for kind <- [:final_verification | kinds] do
         assert %{phase: ^kind, running: true, waiting_on: nil, blockers: []} =
                  ForcedStatus.describe(%{running_kind: kind, blockers: ["MT-1"]})
       end
 
-      assert %{phase: :auto_review, running: true} = ForcedStatus.describe(%{running_kind: :qa})
       assert %{phase: :implementation, running: true} = ForcedStatus.describe(%{running_kind: :pre_push_review})
     end
 
-    test "a running QA pass is Auto Review, and a queued one waits on a slot" do
-      assert %{phase: :auto_review, running: true, waiting_on: nil} =
-               ForcedStatus.describe(%{qa: :running, state: "Auto Review"})
-
-      assert %{phase: :auto_review, running: false, waiting_on: :slot} =
-               ForcedStatus.describe(%{qa: :queued, state: "Auto Review", auto_review_state: "Auto Review"})
-
-      assert %{phase: :auto_review, waiting_on: nil} =
-               ForcedStatus.describe(%{state: " auto review ", auto_review_state: "Auto Review"})
+    test "the designed Code Review and QA runs print as their phases" do
+      assert ForcedStatus.phase_label(:code_review) == "Code Review"
+      assert ForcedStatus.phase_label("qa") == "QA"
+      assert ForcedStatus.summary(ForcedStatus.describe(%{running_kind: :qa})) == "QA · running"
     end
 
     test "human gates: In Review and Human Review wait on a human, Backlog and Triage on the backlog" do
@@ -32,7 +27,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
                ForcedStatus.describe(%{state: "In Review", kind: :implementation})
 
       assert %{phase: :waiting_for_human, waiting_on: :human} =
-               ForcedStatus.describe(%{state: " human review", human_review_state: "Human Review", auto_review_state: "Auto Review"})
+               ForcedStatus.describe(%{state: " human review", human_review_state: "Human Review"})
 
       # With the state turned off, a ticket in a state of that name is not held for a human.
       assert %{phase: :implementation, waiting_on: nil} =
@@ -53,7 +48,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
     end
 
     test "otherwise the next run's kind, waiting on blockers, the Pause, a usage limit or a slot, in that order" do
-      base = %{state: "Todo", kind: :implementation, auto_review_state: "Auto Review"}
+      base = %{state: "Todo", kind: :implementation}
 
       assert %{phase: :implementation, waiting_on: :blocker, blockers: ["MT-1"]} =
                ForcedStatus.describe(Map.merge(base, %{blockers: ["MT-1"], paused?: true, usage_limit?: true, slot_waiting?: true}))

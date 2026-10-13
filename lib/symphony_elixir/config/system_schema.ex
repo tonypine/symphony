@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   require Logger
 
-  alias SymphonyElixir.AcceptanceGate
+  alias SymphonyElixir.Config.DeprecatedGateSettings
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.ManagedClone
   alias SymphonyElixir.Workflow
@@ -806,6 +806,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
          :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
+         agent = drop_repo_gate_run_profile(agent, repo_agent_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
            normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", section_keys("repositories[].acceptance_gate")) do
       normalized =
@@ -967,7 +968,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("effort", Map.get(config, "effort"))
         |> maybe_put("provider", Map.get(config, "provider"))
         |> maybe_put("small_model", Map.get(config, "small_model"))
-        |> maybe_put("run_profiles", Map.get(config, "run_profiles"))
+        |> maybe_put("run_profiles", drop_gate_run_profile(Map.get(config, "run_profiles"), "agent.run_profiles"))
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))
         |> maybe_put("epic_lanes", Map.get(concurrency, "epic_lanes"))
@@ -1034,6 +1035,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, android} <- section_map(Map.get(config, "android"), "auto_review.android"),
          :ok <- reject_unknown_section_keys(android, section_keys("auto_review.android"), "auto_review.android"),
          {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", section_keys("auto_review.acceptance_gate")) do
+      warn_retired_auto_review_keys(config)
+
       {:ok,
        config
        |> Map.drop(["runtime", "acceptance_gate"])
@@ -1054,6 +1057,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
       warn_legacy_escalate_label(Map.get(escalate, "labels"), path)
       warn_deprecated_gate_mode(Map.get(config, "mode"), path)
+      warn_retired_gate_keys(config, escalate, path)
 
       {:ok,
        config
@@ -1088,6 +1092,84 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp warn_deprecated_gate_mode(_mode, _path), do: :ok
+
+  # Auto Review is retired (`docs/design/state-machine.md` §Retired): its own flow settings load
+  # unchanged during the deprecation window and say once per config that they do nothing now, and
+  # what replaced them. The QA settings that moved with the QA state (`runtime`, `command`, `model`,
+  # `effort`, `max_turns`, `timeout_ms`, `skip_globs`, `playbooks`, `worker_host`, `android`) still
+  # act and do not warn.
+  @retired_auto_review_keys [
+    {"enabled", "a designed repo runs QA in its QA state (`repositories[].state_machine: designed`)"},
+    {"state", "`issues.states.qa` names the QA state"},
+    {"max_fix_attempts", "a QA fail returns the ticket to Rework on the same pull request"},
+    {"run_on", "QA runs on every head that reaches the QA state"},
+    {"max_concurrent", "QA runs take agent slots (`agent.concurrency`)"}
+  ]
+
+  defp warn_retired_auto_review_keys(config) do
+    for {key, replacement} <- @retired_auto_review_keys, Map.has_key?(config, key) do
+      deprecation_warning("symphony.yml `auto_review.#{key}` is deprecated and has no effect: Auto Review is retired; #{replacement}. Remove it")
+    end
+
+    :ok
+  end
+
+  # The acceptance gate is retired too. Its agent's run settings do nothing now; its `escalate`
+  # rules act in Code Review, read from the same block until the block is removed.
+  @retired_gate_keys ~w(runtime command model effort max_turns timeout_ms max_concurrent)
+
+  defp warn_retired_gate_keys(config, escalate, path) do
+    for key <- @retired_gate_keys, Map.has_key?(config, key) do
+      deprecation_warning(
+        "symphony.yml `#{path}.#{key}` is deprecated and has no effect: the acceptance gate is retired, and Code Review judges the " <>
+          "pull request with the `pre_push_review` reviewer. Remove it"
+      )
+    end
+
+    if Map.has_key?(config, "escalate") do
+      deprecation_warning(
+        "symphony.yml `#{path}.escalate` is deprecated and will move when the acceptance gate's block is removed: its rules now act in " <>
+          "Code Review (`labels` and `ticket_patterns` pause the ticket on a Needs Decision hold; `paths`, `diff_patterns`, " <>
+          "`dependencies`, `max_changed_lines` and `busy_files` deepen the review)"
+      )
+    end
+
+    if Map.has_key?(escalate, "inconclusive_limit") do
+      deprecation_warning(
+        "symphony.yml `#{path}.escalate.inconclusive_limit` is deprecated and has no effect: Code Review retries an inconclusive " <>
+          "review twice on the same head, then asks a person. Remove it"
+      )
+    end
+
+    :ok
+  end
+
+  # The gate's run profile goes with the gate: the key still loads, says so, and is dropped before
+  # the run kinds are checked.
+  defp drop_gate_run_profile(%{"acceptance_gate" => _profile} = profiles, path) do
+    deprecation_warning("symphony.yml `#{path}.acceptance_gate` is deprecated and has no effect: the acceptance gate is retired. Remove it")
+    Map.delete(profiles, "acceptance_gate")
+  end
+
+  defp drop_gate_run_profile(profiles, _path), do: profiles
+
+  defp drop_repo_gate_run_profile(%{"run_profiles" => profiles} = agent, path) when is_map(profiles),
+    do: Map.put(agent, "run_profiles", drop_gate_run_profile(profiles, path <> ".run_profiles"))
+
+  defp drop_repo_gate_run_profile(agent, _path), do: agent
+
+  # CI the fix runs could not make green no longer moves to a configured state: a designed repo
+  # pauses the ticket on a Needs Decision hold, and a legacy repo moves it to In Review.
+  defp warn_retired_escalation_state(nil), do: nil
+
+  defp warn_retired_escalation_state(state) do
+    deprecation_warning(
+      "symphony.yml `pull_requests.checks.escalate_to_state` is deprecated and has no effect: CI the fix runs could not make green " <>
+        "pauses the ticket on a Needs Decision hold (a legacy repo moves it to In Review). Remove it"
+    )
+
+    state
+  end
 
   # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
   defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do
@@ -1130,7 +1212,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("log_excerpt_lines", Map.get(checks, "log_excerpt_lines"))
         |> maybe_put("flaky_retry", Map.get(checks, "retry_failed_once"))
         |> maybe_put("max_retries", Map.get(checks, "max_fix_attempts"))
-        |> maybe_put("escalation_state", Map.get(checks, "escalate_to_state"))
+        |> maybe_put("escalation_state", warn_retired_escalation_state(Map.get(checks, "escalate_to_state")))
         |> maybe_put("merging_wait_timeout_ms", Map.get(checks, "landing_wait_timeout_ms"))
 
       {:ok,
@@ -1344,7 +1426,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   # Each repository with an `acceptance_gate` override gets its effective block: the global one
-  # with the override merged on top (`AcceptanceGate.Settings.merge_override/2`), validated again so an
+  # with the override merged on top (`DeprecatedGateSettings.merge_override/2`), validated again so an
   # error names the repository's key.
   defp merge_repo_acceptance_gates(%__MODULE__{} = system_config) do
     global = struct_to_map(system_config.auto_review.acceptance_gate)
@@ -1355,9 +1437,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
           {repo, errors}
 
         %Repo{acceptance_gate: override, name: name} = repo, errors ->
-          merged = AcceptanceGate.Settings.merge_override(global, override)
+          merged = DeprecatedGateSettings.merge_override(global, override)
 
-          case %AcceptanceGate.Settings{} |> AcceptanceGate.Settings.changeset(merged) |> apply_action(:validate) do
+          case %DeprecatedGateSettings{} |> DeprecatedGateSettings.changeset(merged) |> apply_action(:validate) do
             {:ok, settings} -> {%{repo | acceptance_gate: struct_to_map(settings)}, errors}
             {:error, changeset} -> {repo, errors ++ acceptance_gate_errors(changeset, repo_path(name, nil) <> ".acceptance_gate")}
           end

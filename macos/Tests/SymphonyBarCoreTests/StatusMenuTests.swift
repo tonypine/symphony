@@ -66,12 +66,12 @@ final class StatusMenuTests: XCTestCase {
         )
         XCTAssertEqual(
             StatusMenu.countsLine(
-                StateSnapshot(sessionKinds: ["code_review", "acceptance_gate", "code_review", "qa", "acceptance_gate", "qa_pass", "qa_pass"])
+                StateSnapshot(sessionKinds: ["code_review", "code_review", "qa", "qa_pass", "qa_pass"])
             ),
-            "2 code review runs, 2 acceptance gate passes, 1 QA run, 2 QA passes running"
+            "2 code review runs, 1 QA run, 2 QA passes running"
         )
         XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: ["implementation"])), "1 implementation run running")
-        XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: ["acceptance_gate", "qa"])), "1 acceptance gate pass, 1 QA run running")
+        XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: ["code_review", "qa"])), "1 code review run, 1 QA run running")
         XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(sessionKinds: [])), "Nothing is running")
         XCTAssertEqual(StatusMenu.countsLine(StateSnapshot(retrying: 1, sessionKinds: [])), "Nothing is running · 1 retrying")
     }

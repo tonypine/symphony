@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.OrchestratorForcedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Notifications, QaRunner, UsageLimit}
+  alias SymphonyElixir.{Notifications, UsageLimit}
 
-  @active_states ["Todo", "In Progress", "Merging", "Rework", "Auto Review", "Waiting on sub-tickets"]
+  @active_states ["Todo", "In Progress", "Merging", "Rework", "Waiting on sub-tickets"]
   @waiting "Waiting on sub-tickets"
   @anthropic {"anthropic", :all}
 
@@ -271,37 +271,6 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       assert [%{issue_id: "epic-1", sub_issue: %{issue_id: "part-1", identifier: "MT-P1"}, waiting_on_human: false}] =
                snapshot_of(state).forced
-    end
-
-    test "keeps a sub-ticket in Auto Review as its part, from its link when Auto Review is not active, and forces no other meanwhile", ctx do
-      write_forced_workflow!(ctx, max_concurrent_agents: 1, forced_max: 2)
-      in_review = issue("part-1", "MT-P1", "Auto Review", priority: 4)
-      next = issue("part-2", "MT-P2", "Todo", priority: 1)
-      parent = parent([in_review, next])
-      candidates = [parent, next, in_review]
-      tracked(candidates)
-
-      # Its run opened the PR, so it does not dispatch from Auto Review.
-      state =
-        %{
-          orchestrator_state(1)
-          | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])},
-            completed_run_metadata: %{"part-1" => %{pr_url: "https://github.com/example/repo/pull/7"}}
-        }
-        |> run(issue("impl-1", "MT-1", "In Progress"), :implementation)
-        |> plan_poll(candidates)
-
-      assert %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Auto Review"}} = state.forced_parts
-
-      state = Orchestrator.dispatch_chosen_issues_for_test(candidates, state)
-      refute Map.has_key?(state.running, "part-1")
-      refute Map.has_key?(state.running, "part-2")
-      assert [%{issue_id: "part-2", reason: "work slots full", forced: false}] = snapshot_of(state).slot_waiting
-      assert [%{issue_id: "epic-1", sub_issue: %{issue_id: "part-1", state: "Auto Review"}}] = snapshot_of(state).forced
-
-      # Without Auto Review among the active states, its sub-issue link still names it.
-      state = plan_poll(state, [parent, next])
-      assert %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Auto Review"}} = state.forced_parts
     end
 
     test "follows blocked-by order between sub-tickets, then forces the Final verification sub-ticket", ctx do
@@ -605,8 +574,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       backlog = issue("backlog-1", "MT-BL", "Backlog", forced: true)
       waiting = issue("slot-1", "MT-S1", "Todo", forced: true)
       merging = issue("merge-1", "MT-M1", "Merging", forced: true)
-      reviewing = issue("qa-1", "MT-Q1", "Auto Review", forced: true)
-      issues = [blocked, backlog, waiting, merging, reviewing]
+      issues = [blocked, backlog, waiting, merging]
       tracked(issues)
 
       queue = issues |> Enum.with_index() |> Map.new(fn {issue, index} -> {issue.id, queue_entry(issue, DateTime.add(~U[2026-10-04 06:00:00Z], index))} end)
@@ -635,8 +603,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
                %{issue_id: "blocked-1", phase: :implementation, waiting_on: :blocker, blockers: ["MT-X", "an unknown issue"]},
                %{issue_id: "backlog-1", phase: :implementation, waiting_on: :backlog, waiting_on_human: true},
                %{issue_id: "slot-1", phase: :implementation, waiting_on: :slot},
-               %{issue_id: "merge-1", phase: :waiting_on_ci, waiting_on: :ci},
-               %{issue_id: "qa-1", phase: :auto_review, waiting_on: nil}
+               %{issue_id: "merge-1", phase: :waiting_on_ci, waiting_on: :ci}
              ] = snapshot_of(state).forced
 
       paused = %{state | pause: %{paused: true, reason: "maintenance", paused_at: DateTime.utc_now()}}
@@ -725,122 +692,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
     end
   end
 
-  describe "Auto Review QA passes" do
-    test "a forced QA pass holds the forced allowance, shows as forced, and a forced ticket waits behind it", ctx do
-      write_forced_workflow!(ctx, max_concurrent_agents: 1)
-      start_supervised!({QaRunner, run_fun: fn _job, _opts -> Process.sleep(:infinity) end, forced_runs_fun: fn -> 0 end})
-      settings = Config.settings!()
-      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}}
-
-      qa_job = fn id, identifier, forced? ->
-        %{issue: %{id: id, identifier: identifier}, record: %{}, sha: "abc", settings: settings, forced: forced?}
-      end
-
-      assert :started = QaRunner.request(qa_job.("qa-1", "MT-QA1", false))
-      assert :started = QaRunner.request(qa_job.("qa-forced", "MT-QAF", true))
-
-      forced = issue("forced-1", "MT-F1", "Todo", forced: true)
-      tracked([forced])
-      state = run(orchestrator_state(1), issue("impl-1", "MT-1", "In Progress"), :implementation)
-
-      {state, log} = dispatch_with_log([forced], state)
-
-      refute Map.has_key?(state.running, "forced-1")
-      assert %{reason: "forced slot taken by MT-QAF (QA)"} = state.slot_waiting["forced-1"]
-      assert log =~ "Forced ticket waiting: issue_id=forced-1 issue_identifier=MT-F1 forced=true forced_max=1 held_by=MT-QAF (QA)"
-
-      assert %{
-               qa: %{
-                 running: [%{issue_id: "qa-1", forced: false}, %{issue_id: "qa-forced", identifier: "MT-QAF", sha: "abc", forced: true}],
-                 queued: []
-               }
-             } = snapshot_of(state)
-
-      # In the forced section the running pass is Auto Review, running; a queued one waits on a slot.
-      assert :busy = QaRunner.request(qa_job.("qa-2", "MT-QA2", false))
-      in_auto_review = fn id, identifier -> queue_entry(issue(id, identifier, "Auto Review"), ~U[2026-10-04 06:00:00Z]) end
-      state = %{state | forced: %{"qa-forced" => in_auto_review.("qa-forced", "MT-QAF"), "qa-2" => in_auto_review.("qa-2", "MT-QA2")}}
-
-      assert [
-               %{issue_id: "qa-2", phase: :auto_review, running: false, waiting_on: :slot},
-               %{issue_id: "qa-forced", phase: :auto_review, running: true}
-             ] = Enum.sort_by(snapshot_of(state).forced, & &1.issue_id)
-    end
-
-    test "a cleared ticket's QA pass gives the allowance back, and a ticket still forced takes it", ctx do
-      write_forced_workflow!(ctx, max_concurrent_agents: 1)
-      start_supervised!({QaRunner, run_fun: fn _job, _opts -> Process.sleep(:infinity) end, forced_runs_fun: fn -> 0 end})
-      settings = Config.settings!()
-      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}}
-      in_review = issue("qa-forced", "MT-QAF", "Auto Review", forced: true)
-      waiting = issue("forced-1", "MT-F1", "Todo", forced: true)
-      tracked([in_review, waiting])
-
-      qa_job = fn issue, forced? -> %{issue: issue, record: %{}, sha: "abc", settings: settings, forced: forced?} end
-
-      assert :started = QaRunner.request(qa_job.(%{id: "qa-1", identifier: "MT-QA1"}, false))
-      assert :started = QaRunner.request(qa_job.(in_review, true))
-
-      queue = %{
-        "qa-forced" => queue_entry(in_review, ~U[2026-10-04 06:00:00Z]),
-        "forced-1" => queue_entry(waiting, ~U[2026-10-04 07:00:00Z])
-      }
-
-      state = run(%{orchestrator_state(1) | forced: queue}, issue("impl-1", "MT-1", "In Progress"), :implementation)
-
-      # `symphony force --clear MT-QAF` while its QA pass is going.
-      clear = {:force_issue, %{in_review | labels: []}}
-
-      log =
-        capture_log(fn ->
-          send(self(), {:reply, Orchestrator.handle_call(clear, {self(), make_ref()}, state)})
-          QaRunner.snapshot()
-        end)
-
-      assert_received {:reply, {:reply, {:ok, %{forced: false}}, state}}
-      assert log =~ "QA pass released the forced allowance issue_id=qa-forced issue_identifier=MT-QAF sha=abc"
-      assert %{qa: %{running: [%{issue_id: "qa-1", forced: false}, %{issue_id: "qa-forced", forced: false}]}} = snapshot_of(state)
-
-      {state, log} = dispatch_with_log([waiting], state)
-
-      assert %{forced: true} = state.running["forced-1"]
-      assert log =~ ~r/issue_id=forced-1 .* slot=forced forced=true/
-      refute log =~ "Forced ticket waiting"
-    end
-
-    test "a forced parent's part leaving gives its QA pass's allowance back; a pass the queue never had keeps it", ctx do
-      write_forced_workflow!(ctx, forced_max: 2)
-      start_supervised!({QaRunner, run_fun: fn _job, _opts -> Process.sleep(:infinity) end, forced_runs_fun: fn -> 0 end})
-      settings = Config.settings!()
-      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}}
-
-      qa_job = fn id, identifier, forced? ->
-        %{issue: %{id: id, identifier: identifier}, record: %{}, sha: "abc", settings: settings, forced: forced?}
-      end
-
-      assert :started = QaRunner.request(qa_job.("qa-1", "MT-QA1", false))
-      assert :started = QaRunner.request(qa_job.("part-1", "MT-P1", true))
-      # Labelled while in Auto Review: the poll never put it in the forced queue.
-      assert :started = QaRunner.request(qa_job.("qa-labelled", "MT-QAL", true))
-
-      state = %{orchestrator_state(1) | forced_parts: %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Auto Review"}}}
-
-      # The parent left the poll, so it has no part any more.
-      state = Orchestrator.put_forced_parts_for_test(state, [])
-      assert state.forced_parts == %{}
-
-      assert %{running: running} = QaRunner.snapshot()
-      assert [%{issue_id: "part-1", forced: false}, %{issue_id: "qa-1", forced: false}, %{issue_id: "qa-labelled", forced: true}] = running
-    end
-
-    test "an unreachable QA runner counts no forced passes" do
-      dying = spawn(fn -> receive do: (_message -> exit(:boom)) end)
-      Process.register(dying, QaRunner)
-
-      assert %{qa: %{running: [], queued: []}} = snapshot_of(orchestrator_state(1))
-      refute Process.alive?(dying)
-    end
-
+  describe "a forced Final verification" do
     test "a forced Final verification walkthrough starts on the forced allowance with the slots full", ctx do
       write_forced_workflow!(ctx, max_concurrent_agents: 1)
       verify = issue("verify-1", "MT-V", "Todo", forced: true, title: "Final verification: Export")

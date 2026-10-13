@@ -13,7 +13,7 @@ defmodule SymphonyElixir.InboxConfigTest do
     refute SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
   end
 
-  test "reads every Linear repository route in the scope it polls, on the poll interval, with Symphony's own CI and gate records" do
+  test "reads every Linear repository route in the scope it polls, on the poll interval, with Symphony's own CI records" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: "token",
       tracker_project_slug: "cycle",
@@ -46,7 +46,7 @@ defmodule SymphonyElixir.InboxConfigTest do
     assert {:noreply, state} = Inbox.handle_info(:tick, server_state)
 
     assert_received {:filter, %{"and" => [%{"project" => %{"slugId" => %{"eq" => "cycle"}}}, %{"or" => _states}]}}
-    assert [%{identifier: "MT-1", kind: :pr, review: %{pull_request: %{ci: nil, gate: nil}}}] = Inbox.cached(name)
+    assert [%{identifier: "MT-1", kind: :pr, review: %{pull_request: %{ci: nil, qa: nil}}}] = Inbox.cached(name)
     assert Process.read_timer(state.timer) in 12_000..12_345
   end
 
