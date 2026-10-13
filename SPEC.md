@@ -4188,6 +4188,13 @@ Minimum endpoints:
     ticket, and after a restart from the time it noted that event on the ticket's run record. The
     Mac app's Overview shows the count as its Shipped today stage.
   - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
+  - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
+    for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
+    MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,
+    a usage limit, ...; while the operator pause, the workspace free-space pause or the daily token
+    budget stops the pass, the pause) and `since`, when that reason was first seen. A candidate is
+    never passed over in silence; the orchestrator also logs `Skipping dispatch:` at debug level once
+    per new or changed reason.
   - `waiting_on_you` lists what waits on the operator, as `GET /api/v1/inbox` does, in short, and
     `counts.waiting_on_you` is its length: the Mac app's menu bar badge, its Waiting on you menu
     items and the Overview's Waiting on you stage read them. `checks_green` is true for a pull
