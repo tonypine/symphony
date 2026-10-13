@@ -4,8 +4,9 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   adapter (`SymphonyElixir.Linear.Adapter`).
 
   A fix ticket is created in **Todo** — not Backlog: it is work the machine is already waiting on —
-  at high priority, in the team and project that own the broken component: the repo the scope rule
-  names (`SymphonyElixir.SelfHeal.scope/3`), read from the configured repositories. The affected
+  at high priority, in the affected ticket's Linear team (else the team configured on the repo the
+  scope rule names, `SymphonyElixir.SelfHeal.scope/3`) and in the affected ticket's project when
+  the fix belongs to its own repo, else the scope repo's first routed project. The affected
   ticket is linked to it as blocked-by, and a recurring failure attaches its evidence as a comment
   on the fix ticket it already has.
 
@@ -24,8 +25,8 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
 
   @doc "Files the fix ticket `attrs` (a `scope`, a `component`, a `title` and a `description`)."
   @spec create(map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def create(%{scope: scope} = attrs, opts) do
-    with {:ok, team, project} <- target(scope, opts) do
+  def create(%{scope: _scope} = attrs, opts) do
+    with {:ok, team, project} <- target(attrs, opts) do
       Linear.Adapter.create_issue(%{
         title: attrs.title,
         description: attrs.description,
@@ -56,20 +57,31 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
 
   def block(_issue, _ticket, _opts), do: {:error, :invalid_blocked_by}
 
-  # The team and project the scope repo routes its work to. A repo with no team configured cannot
-  # own a fix ticket, so the lane reports it rather than filing somewhere arbitrary.
-  defp target(scope, opts) do
-    case repo(scope, opts) do
-      {:ok, %{team: team, projects: projects}} when is_binary(team) and team != "" ->
-        {:ok, team, List.first(projects || [])}
+  # The team and project the fix ticket goes to. The team is the affected ticket's own Linear team,
+  # else the scope repo's configured team: a repo routed only by project sets no team. The project
+  # is the affected ticket's when the fix belongs to its own repo, so Symphony picks it up there,
+  # else the scope repo's first routed project. With no team at all the lane reports it rather than
+  # filing somewhere arbitrary.
+  defp target(%{scope: scope} = attrs, opts) do
+    with {:ok, repo} <- repo(scope, opts) do
+      issue = Map.get(attrs, :issue)
+      own_repo? = scope == Map.get(attrs, :repo_key)
 
-      {:ok, _repo} ->
-        {:error, {:self_heal_team_unknown, scope}}
-
-      {:error, reason} ->
-        {:error, reason}
+      case present(issue_team(issue)) || present(Map.get(repo, :team)) do
+        nil -> {:error, {:self_heal_team_unknown, scope}}
+        team -> {:ok, team, (own_repo? && present(issue_project(issue))) || List.first(Map.get(repo, :projects) || [])}
+      end
     end
   end
+
+  defp issue_team(%Issue{team: %{key: key}}), do: key
+  defp issue_team(_issue), do: nil
+
+  defp issue_project(%Issue{project: %{name: name}}), do: name
+  defp issue_project(_issue), do: nil
+
+  defp present(value) when is_binary(value) and value != "", do: value
+  defp present(_value), do: nil
 
   defp repo(scope, opts) do
     case Keyword.get(opts, :repo, &Config.repo/1).(scope) do

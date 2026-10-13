@@ -103,6 +103,7 @@ defmodule SymphonyElixir.Linear.Adapter do
         nodes {
           id
           name
+          slugId
         }
       }
     }
@@ -365,7 +366,7 @@ defmodule SymphonyElixir.Linear.Adapter do
 
   @doc """
   Creates an issue from `attrs` — `title`, `description`, `priority`, `team` (a key or an id),
-  `state` (a state name, `Todo` by default) and an optional `project` name — and returns its
+  `state` (a state name, `Todo` by default) and an optional `project` (a name, slug id or id) — and returns its
   `%{id:, identifier:, url:}`. The team's state and project are resolved from the team, so a
   machine that files work (the self-heal lane's fix tickets) does not need an issue to read them
   from. Only a Linear tracker files issues.
@@ -459,10 +460,15 @@ defmodule SymphonyElixir.Linear.Adapter do
     projects = team |> get_in(["projects", "nodes"]) |> List.wrap()
     wanted = String.downcase(project_name)
 
-    case Enum.find(projects, &(is_binary(&1["name"]) and String.downcase(&1["name"]) == wanted)) do
+    case Enum.find(projects, &project_named?(&1, wanted)) do
       %{"id" => id} -> {:ok, id}
       _none -> {:error, {:project_not_found, project_name}}
     end
+  end
+
+  # A routed project is configured by its slug id (`route.projects`), a fix ticket's by its name.
+  defp project_named?(project, wanted) do
+    Enum.any?([project["name"], project["slugId"], project["id"]], &(is_binary(&1) and String.downcase(&1) == wanted))
   end
 
   defp create_issue_input(team_id, state_id, project_id, title, description, priority) do

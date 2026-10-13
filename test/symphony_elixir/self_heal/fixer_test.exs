@@ -37,7 +37,12 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
           "team" => %{
             "id" => "t1",
             "states" => %{"nodes" => [%{"id" => "s-todo", "name" => "Todo"}]},
-            "projects" => %{"nodes" => [%{"id" => "p1", "name" => "Fix Project"}]}
+            "projects" => %{
+              "nodes" => [
+                %{"id" => "p1", "name" => "Fix Project", "slugId" => "a1abb875ac02"},
+                %{"id" => "p2", "name" => "Symphony", "slugId" => "b2"}
+              ]
+            }
           }
         }
       }
@@ -89,11 +94,32 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
     end
 
     test "an explicit priority and a repo with no project are carried through" do
-      assert {:ok, %{identifier: "TP-900"}} = Fixer.create(create_attrs(), repo("TP", []) ++ [priority: 1])
+      assert {:ok, %{identifier: "TP-900"}} = Fixer.create(Map.merge(create_attrs(), %{issue: %Issue{project: nil}, repo_key: @scope}), repo("TP", []) ++ [priority: 1])
 
       {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
       assert input["priority"] == 1
       refute Map.has_key?(input, "projectId")
+    end
+
+    test "a repo routed only by project files in the affected ticket's team and project" do
+      issue = %Issue{id: "affected-id", team: %{key: "TP", name: "Tony"}, project: %{id: "p2", name: "Symphony"}}
+
+      assert {:ok, %{identifier: "TP-900"}} =
+               Fixer.create(Map.merge(create_attrs(), %{issue: issue, repo_key: @scope}), repo(nil, ["a1abb875ac02"]))
+
+      {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
+      assert input["teamId"] == "t1"
+      assert input["projectId"] == "p2"
+    end
+
+    test "a fix for another repo files in that repo's routed project, matched by its slug id" do
+      issue = %Issue{id: "affected-id", team: %{key: "TP", name: "Tony"}, project: %{id: "p2", name: "Symphony"}}
+
+      assert {:ok, %{identifier: "TP-900"}} =
+               Fixer.create(Map.merge(create_attrs(), %{issue: issue, repo_key: "repo-other"}), repo("", ["a1abb875ac02"]))
+
+      {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
+      assert input["projectId"] == "p1"
     end
 
     test "reports a repo that cannot own a fix ticket, or one that cannot be resolved" do
