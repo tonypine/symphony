@@ -516,9 +516,9 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
-  # A long tool-using review can end in prose instead of the JSON verdict. The same session gets
-  # one short turn asking for the verdict alone before the run counts as inconclusive, so the
-  # review it already did is kept.
+  # A long tool-using review, or a follow-up turn (self-check, re-quote), can end in prose
+  # instead of the JSON verdict. The same session gets one short turn asking for the verdict
+  # alone before the run counts as inconclusive, so the review it already did is kept.
   defp review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts) do
     case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
       {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, _reason}}} = malformed ->
@@ -538,7 +538,7 @@ defmodule SymphonyElixir.ReviewAgent do
   defp json_nudge_prompt do
     """
     #{ProjectGuides.output_contract_marker()}
-    Return only the JSON verdict for the review you just did: one JSON object in the shape the review prompt asked for, with no other text.
+    Return only the JSON verdict for the review you just did, with any corrections you were asked for: one JSON object in the shape the review prompt asked for, with no other text.
     """
   end
 
@@ -565,7 +565,7 @@ defmodule SymphonyElixir.ReviewAgent do
     prompt = self_check_prompt(result)
     turn_opts = Keyword.put(turn_opts, :max_iterations, @self_check_max_iterations)
 
-    case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
+    case review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts) do
       {:ok, %{verdict: :block} = checked} ->
         if Map.get(checked, :findings, []) == [] do
           {:error, {:review_agent_inconclusive, :self_check_retracted_all_findings}}
@@ -611,7 +611,7 @@ defmodule SymphonyElixir.ReviewAgent do
     prompt = requote_prompt(result, payload)
     turn_opts = Keyword.put(turn_opts, :max_iterations, @self_check_max_iterations)
 
-    case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
+    case review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts) do
       {:ok, requoted} ->
         validate_findings(requoted, source)
 
@@ -626,15 +626,16 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp requote_prompt(result, %{failures: failures}) do
     """
-    #{ProjectGuides.output_contract_marker()}
-    Symphony could not find the quoted snippet of these findings in the diff or the changed files:
+    Symphony could not find the quoted snippet of these findings in the diff or the files at the reviewed head:
 
     #{Enum.map_join(failures, "\n\n", &requote_failure/1)}
 
-    For each finding, fix `quoted_snippet` and `line_range` so the snippet is copied exactly from the cited lines, or remove the finding from `findings` if it does not hold. Return the corrected JSON object.
+    For each finding, fix `quoted_snippet` and `line_range` so the snippet is copied exactly from the cited lines, or remove the finding from `findings` if it does not hold.
 
     Previous JSON:
     #{Jason.encode!(review_json(result))}
+
+    #{follow_up_json_rule()}
     """
   end
 
@@ -652,7 +653,7 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp cited_text(%{evidence: %{text: text}}), do: text
-  defp cited_text(%{reason: {:file_not_in_review_context, _path}}), do: "(file is not in the diff or the review context)"
+  defp cited_text(%{reason: {:file_not_in_review_context, _path}}), do: "(file does not exist at the reviewed head)"
   defp cited_text(_failure), do: "(no lines at this range in the diff or the changed file)"
 
   defp indent_block(text) do
@@ -663,11 +664,21 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp self_check_prompt(result) do
     """
-    #{ProjectGuides.output_contract_marker()}
-    For each finding, paste the exact lines from the diff or file that prove it (use the read-only tools if necessary). If you cannot paste the lines, retract the finding by removing it from `findings`. Return the corrected JSON object.
+    For each finding, paste the exact lines from the diff or file that prove it (use the read-only tools if necessary). If you cannot paste the lines, retract the finding by removing it from `findings`.
 
     Previous JSON:
     #{Jason.encode!(review_json(result))}
+
+    #{follow_up_json_rule()}
+    """
+  end
+
+  # The JSON rule goes last, after the previous JSON, so a reply that explains itself
+  # still ends in the object.
+  defp follow_up_json_rule do
+    """
+    #{ProjectGuides.output_contract_marker()}
+    Return the corrected JSON object in the same shape as the previous JSON. Your final message must be only this JSON object, with no prose before or after it.\
     """
   end
 

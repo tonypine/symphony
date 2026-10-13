@@ -296,6 +296,48 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
+    test "verifies a finding on a file the diff did not change but that exists at the reviewed head" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-unchanged-file")
+      repo = git_repo_with_change!(test_root)
+
+      try do
+        source = source_for_repo!(repo)
+        result = %{verdict: :request_changes, comments: [], findings: [finding("# review stream", "README.md")]}
+
+        assert {:ok, %{verdict: :request_changes, findings: [%{file: "README.md", line_range: {1, 1}}]}} =
+                 ReviewAgent.validate_findings(result, source)
+
+        mismatch = %{result | findings: [finding("not in the readme", "README.md")]}
+
+        assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}} =
+                 ReviewAgent.validate_findings(mismatch, source)
+
+        assert %{failures: [%{reason: :quoted_snippet_not_found}]} = payload
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "drops a finding on a missing file and keeps the verdict with the rest" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-partial")
+      repo = git_repo_with_change!(test_root)
+
+      try do
+        source = source_for_repo!(repo)
+
+        result = %{
+          verdict: :request_changes,
+          comments: [],
+          findings: [finding("grounded evidence line", "missing.txt"), finding("# review stream", "README.md")]
+        }
+
+        assert {:ok, %{verdict: :request_changes, findings: [%{file: "README.md"}]}} =
+                 ReviewAgent.validate_findings(result, source)
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "relocates a finding whose snippet is cited 1 to 10 lines off" do
       test_root = unique_tmp("symphony-elixir-review-agent-validate-relocate")
       repo = git_repo_with_file_change!(test_root, numbered_lines(1..40), changed_line(numbered_lines(1..40), 20))
@@ -806,10 +848,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert requote_prompt =~ "- feature.txt:1-1: Handle remote guides.\n  Quoted snippet:\n    a misremembered line"
       assert requote_prompt =~ "  Text at the cited lines:\n    grounded evidence line"
       assert requote_prompt =~ "- other.txt:1-1: Outside the diff."
-      assert requote_prompt =~ "(file is not in the diff or the review context)"
+      assert requote_prompt =~ "(file does not exist at the reviewed head)"
       assert requote_prompt =~ "- feature.txt:40-41: Past the end."
       assert requote_prompt =~ "(no lines at this range in the diff or the changed file)"
       assert requote_prompt =~ "Previous JSON:"
+      assert requote_prompt =~ ~r/Your final message must be only this JSON object, with no prose before or after it.\n\z/
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)
@@ -946,6 +989,41 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert_receive {:review_agent_sequence_call, 2, nudge, nudge_opts}
       assert nudge =~ "Return only the JSON verdict for the review you just did"
       assert nudge_opts[:max_iterations] == 4
+    end
+
+    test "a prose self-check reply gets one JSON nudge and its findings stand", %{repo: repo} do
+      readme = finding_json(%{"file" => "README.md", "quoted_snippet" => "# review stream", "summary" => "Missed file."})
+      response = block_response([readme])
+      put_sequence_responses!([response, "The finding holds, so I kept it.", response])
+
+      assert {:error, {:review_agent_blocked, %{findings: [%{file: "README.md"}]}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 2, self_check_prompt, _opts}
+      assert self_check_prompt =~ ~r/Your final message must be only this JSON object, with no prose before or after it.\n\z/
+      assert_receive {:review_agent_sequence_call, 3, nudge, nudge_opts}
+      assert nudge =~ "Return only the JSON verdict for the review you just did"
+      assert nudge_opts[:max_iterations] == 4
+    end
+
+    test "a prose re-quote reply gets one JSON nudge", %{repo: repo} do
+      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      put_sequence_responses!([unverifiable, unverifiable, "The finding holds, so I kept it.", block_response([finding_json()])])
+
+      assert {:error, {:review_agent_blocked, %{findings: [%{quoted_snippet: "grounded evidence line"}]}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 4, nudge, _opts}
+      assert nudge =~ "Return only the JSON verdict"
+    end
+
+    test "a self-check that stays prose after the nudge is inconclusive", %{repo: repo} do
+      put_sequence_responses!([block_response([finding_json()]), "Prose.", "Still prose."])
+
+      assert {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, :no_json_object}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      refute_receive {:review_agent_sequence_call, 4, _prompt, _opts}
     end
 
     test "stays inconclusive when the nudge is prose too", %{repo: repo} do
