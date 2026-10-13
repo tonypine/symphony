@@ -296,6 +296,9 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert log =~ "`auto_review.max_concurrent` is deprecated"
       # The QA settings that moved with the QA state still act and say nothing.
       refute log =~ "`auto_review.playbooks`"
+
+      {{:ok, system}, _log} = with_log(fn -> SystemSchema.parse(symphony(%{"auto_review" => %{"state" => "Auto Review"}})) end)
+      refute Map.has_key?(system.auto_review, :state)
     end
 
     test "the gate agent's settings, its escalate block and inconclusive_limit warn; the block still loads" do

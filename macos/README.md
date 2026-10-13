@@ -835,7 +835,8 @@ state. The window opens on the Inbox the first time.
   landing order; a PR's checks (CI, and QA with its report), with **Open PR**; an action's why, numbered steps, time and what it
   unblocks, with **Copy Steps**; what the quality gate found in a ticket it holds, its score and round, with
   **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
-  the ticket in Linear; the review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
+  the ticket in Linear: in the Linear desktop app when it is installed (its `linear://` link, without starting the
+  browser), else in the browser. Every Linear link in the app opens the same way. The review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
   items says how many ("2 more in other repos").
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send

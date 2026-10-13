@@ -2098,7 +2098,6 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @fields [
       :enabled,
-      :state,
       :kind,
       :command,
       :model,
@@ -2115,7 +2114,6 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
-      field(:state, :string, default: "Auto Review")
       field(:kind, :string)
       field(:command, :string)
       field(:model, :string)
@@ -2138,7 +2136,6 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast(attrs, @fields, empty_values: [])
       |> cast_embed(:android, with: &Android.changeset/2)
       |> cast_embed(:acceptance_gate, with: &DeprecatedGateSettings.changeset/2)
-      |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
