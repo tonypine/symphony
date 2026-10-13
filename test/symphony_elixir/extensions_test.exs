@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses}
+  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketState}
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -738,6 +738,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "forced" => false
                }
              ],
+             "dispatch_skipped" => [
+               %{
+                 "issue_id" => "skip-http",
+                 "issue_identifier" => "MT-SKIP",
+                 "repo_key" => "default",
+                 "title" => "Skipped",
+                 "state" => "Todo",
+                 "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+                 "since" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "shipped_today" => [
                %{
                  "issue_id" => "shipped-http",
@@ -861,7 +872,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
-             "tracked" => %{}
+             "tracked" => %{},
+             "verdicts" => []
            }
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
@@ -892,7 +904,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
-             "tracked" => %{}
+             "tracked" => %{},
+             "verdicts" => []
            }
 
     conn = get(build_conn(), "/api/v1/MT-MISSING")
@@ -1082,6 +1095,61 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(conn, 202)
 
     assert_received :request_refresh_called
+  end
+
+  test "phoenix observability api serves a ticket's code review and qa verdicts, newest first" do
+    reviewed = ~U[2026-10-12 09:00:00Z]
+    passed = ~U[2026-10-12 10:00:00Z]
+
+    record =
+      "default"
+      |> TicketState.new("issue-http", %{issue_identifier: "MT-HTTP"})
+      |> TicketState.record_verdict("code_review", "abc123", "approve", reviewed)
+      |> TicketState.record_verdict("ci_fix", "abc123", "mechanical", reviewed)
+      |> TicketState.record_verdict("qa", "abc123", "fail", passed)
+
+    gone =
+      "default"
+      |> TicketState.new("issue-gone", %{issue_identifier: "MT-GONE"})
+      |> TicketState.record_verdict("code_review", nil, "rework", reviewed)
+
+    retry = TicketState.new("other", "retry-elsewhere", %{issue_identifier: "MT-RETRY"})
+    retry = TicketState.record_verdict(retry, "qa", "def456", "pass", passed)
+
+    for ticket <- [record, gone, retry], do: assert(:ok = RunStore.put_ticket_state(ticket))
+
+    on_exit(fn ->
+      RunStore.delete_ticket_state("default", "issue-http")
+      RunStore.delete_ticket_state("default", "issue-gone")
+      RunStore.delete_ticket_state("other", "retry-elsewhere")
+    end)
+
+    snapshot = Map.update!(static_snapshot(), :retrying, fn entries -> Enum.map(entries, &Map.delete(&1, :repo_key)) end)
+    orchestrator_name = Module.concat(__MODULE__, :VerdictsApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot, refresh: :unavailable)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"verdicts" => verdicts} = json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+
+    assert verdicts == [
+             %{"kind" => "qa", "outcome" => "fail", "head_sha" => "abc123", "recorded_at" => "2026-10-12T10:00:00Z"},
+             %{"kind" => "code_review", "outcome" => "approve", "head_sha" => "abc123", "recorded_at" => "2026-10-12T09:00:00Z"}
+           ]
+
+    assert %{"status" => "retrying", "verdicts" => [%{"kind" => "qa", "outcome" => "pass"}]} =
+             json_response(get(build_conn(), "/api/v1/MT-RETRY"), 200)
+
+    assert %{"verdicts" => []} = json_response(get(build_conn(), "/api/v1/MT-WATCH"), 200)
+
+    assert %{
+             "status" => "untracked",
+             "repo_key" => "default",
+             "issue_id" => "issue-gone",
+             "running" => nil,
+             "verdicts" => [%{"kind" => "code_review", "outcome" => "rework", "head_sha" => nil}]
+           } = json_response(get(build_conn(), "/api/v1/MT-GONE"), 200)
+
+    assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
   end
 
   test "phoenix observability api exposes filtered quality runs and session reports" do
@@ -1631,6 +1699,19 @@ defmodule SymphonyElixir.ExtensionsTest do
                "generated_at" => timeout_payload["generated_at"],
                "error" => %{"code" => "snapshot_timeout", "message" => "Snapshot timed out"}
              }
+  end
+
+  test "every web dashboard page shows the Mac app banner once" do
+    orchestrator_name = Module.concat(__MODULE__, :BannerOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot(), refresh: %{})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    for path <- ["/", "/quality", "/learnings", "/audit", "/repos/default/issues/MT-HTTP/transcript", "/issues/MT-HTTP/transcript"] do
+      html = html_response(get(build_conn(), path), 200)
+      banner = "Symphony for Mac is now where you direct the factory. This dashboard stays for Linux and remote use and gets no new features."
+
+      assert length(String.split(html, banner)) == 2, "expected one banner on #{path}"
+    end
   end
 
   test "dashboard bootstraps liveview from embedded static assets" do
@@ -4084,6 +4165,17 @@ defmodule SymphonyElixir.ExtensionsTest do
           attempt: nil,
           since: ~U[2026-10-03 06:00:00Z],
           repo_key: "default"
+        }
+      ],
+      dispatch_skipped: [
+        %{
+          issue_id: "skip-http",
+          identifier: "MT-SKIP",
+          title: "Skipped",
+          state: "Todo",
+          repo_key: "default",
+          reason: "priority medium is not in tickets.priorities (urgent, high)",
+          since: ~U[2026-10-03 06:00:00Z]
         }
       ],
       shipped_today: [

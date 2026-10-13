@@ -1,0 +1,279 @@
+{
+  "daily_budget": 5000000,
+  "days": 14,
+  "from": "2026-09-24",
+  "merged_per_day": [
+    {
+      "date": "2026-09-24",
+      "merged": 2
+    },
+    {
+      "date": "2026-09-25",
+      "merged": 3
+    },
+    {
+      "date": "2026-09-26",
+      "merged": 1
+    },
+    {
+      "date": "2026-09-27",
+      "merged": 4
+    },
+    {
+      "date": "2026-09-28",
+      "merged": 3
+    },
+    {
+      "date": "2026-09-29",
+      "merged": 0
+    },
+    {
+      "date": "2026-09-30",
+      "merged": 0
+    },
+    {
+      "date": "2026-10-01",
+      "merged": 4
+    },
+    {
+      "date": "2026-10-02",
+      "merged": 5
+    },
+    {
+      "date": "2026-10-03",
+      "merged": 3
+    },
+    {
+      "date": "2026-10-04",
+      "merged": 4
+    },
+    {
+      "date": "2026-10-05",
+      "merged": 4
+    },
+    {
+      "date": "2026-10-06",
+      "merged": 3
+    },
+    {
+      "date": "2026-10-07",
+      "merged": 2
+    }
+  ],
+  "per_ticket_cap": 2000000,
+  "review": {
+    "agreement": {
+      "agreed": 11,
+      "disagreed": 1,
+      "pending": 1,
+      "rate": 0.9167
+    },
+    "by_repo": [
+      {
+        "agreed": 5,
+        "disagreed": 0,
+        "manual_review": "off",
+        "pending": 0,
+        "rate": 1.0,
+        "repo_key": "api"
+      },
+      {
+        "agreed": 6,
+        "disagreed": 1,
+        "manual_review": "on",
+        "pending": 1,
+        "rate": 0.8571,
+        "repo_key": "shop"
+      }
+    ],
+    "disagreements": [
+      {
+        "decided_at": "2026-10-05T16:20:00Z",
+        "decided_by": "Director",
+        "decision": "Sent to Rework",
+        "identifier": "SHOP-298",
+        "issue_id": "i-298",
+        "repo_key": "shop",
+        "review": "Approved"
+      }
+    ],
+    "qa_first_pass": {
+      "judged": 11,
+      "passed": 9,
+      "rate": 0.8182
+    },
+    "sent_to_rework": {
+      "rate": 0.2308,
+      "reviewed": 13,
+      "sent": 3
+    }
+  },
+  "tickets": [
+    {
+      "attempts": 4,
+      "cap": 2000000,
+      "identifier": "SHOP-305",
+      "issue_id": "i-305",
+      "repo_key": "shop",
+      "title": "Checkout retries",
+      "total_tokens": 1850000
+    },
+    {
+      "attempts": 3,
+      "cap": 2000000,
+      "identifier": "API-131",
+      "issue_id": "i-131",
+      "repo_key": "api",
+      "title": "Rate limit headers",
+      "total_tokens": 1420000
+    },
+    {
+      "attempts": 2,
+      "cap": 2000000,
+      "identifier": "DOCS-40",
+      "issue_id": "i-40",
+      "repo_key": "docs",
+      "title": "Quick start rewrite",
+      "total_tokens": 960000
+    },
+    {
+      "attempts": 1,
+      "cap": 2000000,
+      "identifier": "SHOP-298",
+      "issue_id": "i-298",
+      "repo_key": "shop",
+      "title": "Cart badge count",
+      "total_tokens": 610000
+    },
+    {
+      "attempts": 1,
+      "cap": 2000000,
+      "identifier": "WEB-88",
+      "issue_id": "i-88",
+      "repo_key": "web",
+      "title": "Pricing page",
+      "total_tokens": 420000
+    },
+    {
+      "attempts": 1,
+      "cap": 2000000,
+      "identifier": "API-120",
+      "issue_id": "i-120",
+      "repo_key": "api",
+      "title": "Webhook retries",
+      "total_tokens": 180000
+    }
+  ],
+  "to": "2026-10-07",
+  "tokens_per_day": [
+    {
+      "date": "2026-09-24",
+      "providers": {
+        "anthropic": 2100000,
+        "openai": 400000
+      },
+      "total_tokens": 2500000
+    },
+    {
+      "date": "2026-09-25",
+      "providers": {
+        "anthropic": 2600000
+      },
+      "total_tokens": 2600000
+    },
+    {
+      "date": "2026-09-26",
+      "providers": {
+        "anthropic": 1800000,
+        "openai": 600000
+      },
+      "total_tokens": 2400000
+    },
+    {
+      "date": "2026-09-27",
+      "providers": {
+        "anthropic": 3200000,
+        "openai": 800000
+      },
+      "total_tokens": 4000000
+    },
+    {
+      "date": "2026-09-28",
+      "providers": {
+        "anthropic": 2900000,
+        "openai": 500000
+      },
+      "total_tokens": 3400000
+    },
+    {
+      "date": "2026-09-29",
+      "providers": {
+        "anthropic": 900000
+      },
+      "total_tokens": 900000
+    },
+    {
+      "date": "2026-09-30",
+      "providers": {
+        "anthropic": 700000
+      },
+      "total_tokens": 700000
+    },
+    {
+      "date": "2026-10-01",
+      "providers": {
+        "anthropic": 3400000,
+        "openai": 700000
+      },
+      "total_tokens": 4100000
+    },
+    {
+      "date": "2026-10-02",
+      "providers": {
+        "anthropic": 3100000,
+        "openai": 900000
+      },
+      "total_tokens": 4000000
+    },
+    {
+      "date": "2026-10-03",
+      "providers": {
+        "anthropic": 2800000,
+        "openai": 1100000
+      },
+      "total_tokens": 3900000
+    },
+    {
+      "date": "2026-10-04",
+      "providers": {
+        "anthropic": 3600000,
+        "openai": 600000
+      },
+      "total_tokens": 4200000
+    },
+    {
+      "date": "2026-10-05",
+      "providers": {
+        "anthropic": 3300000,
+        "openai": 800000
+      },
+      "total_tokens": 4100000
+    },
+    {
+      "date": "2026-10-06",
+      "providers": {
+        "anthropic": 2500000,
+        "openai": 1000000
+      },
+      "total_tokens": 3500000
+    },
+    {
+      "date": "2026-10-07",
+      "providers": {
+        "anthropic": 2900000,
+        "openai": 1200000
+      },
+      "total_tokens": 4100000
+    }
+  ]
+}

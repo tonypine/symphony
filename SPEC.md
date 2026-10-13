@@ -2039,6 +2039,10 @@ Important nuance:
   the one the run started on or has passed the reviewer. Otherwise it MUST log why and continue, so
   the reviewer runs and the agent pushes. When the workspace `HEAD` or the PR head cannot be read,
   the run ends as before and the post-PR transition's workspace check applies.
+- A run whose ticket waits on a hold (a `Needs Decision` hold from its decision request, a
+  `Blocked` hold from a block report), or that posted a decision request itself, MUST end after
+  that turn, without the idle park below and without a handoff: the hold, not another turn, says
+  when the ticket continues.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
@@ -2380,7 +2384,9 @@ Rules:
   quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
   the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
-  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head.
+  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
+  ticket on a hold is not counted: it waits on the hold alone. Recording a decision also lifts a
+  `handoff_missing` hold on the same ticket, so the ticket resumes with no other hold to clear.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
@@ -2685,7 +2691,7 @@ Forced allowance:
 - A usage-limit headroom hold (Section 8.4.2) does not hold a forced issue's run. A `paused` or
   `canary` hold still does, and when a hold resumes a held forced retry is chosen as the canary.
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
-  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
+  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff,
   and the auto-merge / `Merging` CI waits.
 - A forced plan parent is one forced unit; its plan, re-plan and close-out runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
@@ -4181,6 +4187,13 @@ Minimum endpoints:
     ticket, and after a restart from the time it noted that event on the ticket's run record. The
     Mac app's Overview shows the count as its Shipped today stage.
   - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
+  - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
+    for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
+    MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,
+    a usage limit, ...; while the operator pause, the workspace free-space pause or the daily token
+    budget stops the pass, the pause) and `since`, when that reason was first seen. A candidate is
+    never passed over in silence; the orchestrator also logs `Skipping dispatch:` at debug level once
+    per new or changed reason.
   - `waiting_on_you` lists what waits on the operator, as `GET /api/v1/inbox` does, in short, and
     `counts.waiting_on_you` is its length: the Mac app's menu bar badge, its Waiting on you menu
     items and the Overview's Waiting on you stage read them. `checks_green` is true for a pull
@@ -4594,12 +4607,41 @@ Minimum endpoints:
     out or is unavailable, return `200` with an `error` object in place of the list, as
     `/api/v1/state` does.
 
+- `GET /api/v1/history?days=N`
+  - Token use and merges over the last `N` UTC days ending today (default 14, at most 90; any
+    other value returns `400` `invalid_days`), for the Mac app's Usage and Quality. Read from the
+    run records only; it MUST make no Linear request.
+  - `tokens_per_day` has one entry per day (`date`, `total_tokens`, `providers`: tokens by
+    provider). A run counts on the day it started, with its pre-push reviewer's tokens. The
+    provider is the one the run recorded, else the one its model names (`unknown` when neither).
+  - `tickets` lists each ticket that ran in the period, most tokens first: `issue_id`,
+    `identifier`, `title`, `repo_key`, `total_tokens`, `attempts` (its runs in the period) and
+    `cap` (`agent.max_tokens_per_issue`, null when unset).
+  - `merged_per_day` has one entry per day (`date`, `merged`): the tickets whose completion
+    Symphony noted that day.
+  - `review` is how far the Code Review agent can be trusted, from the tickets' verdicts and
+    signals ledger. A Code Review approval is upheld when QA passes or skips it or the Director
+    confirms the merge, overturned when QA fails it or the Director sends it to Rework, and pending
+    until one of them judges it. `agreement` and each `by_repo` entry (with the repo's
+    `manual_review`) carry `agreed`, `disagreed`, `pending` and `rate` (agreed over judged, null
+    when none). `qa_first_pass` (`passed`, `judged`, `rate`) counts tickets whose first QA pass or
+    fail was a pass; `sent_to_rework` (`sent`, `reviewed`, `rate`) counts reviewed tickets that a
+    Code Review rework, a QA fail or the Director sent back. `disagreements` lists each overturned
+    approval, newest first: `issue_id`, `identifier`, `repo_key`, `review`, `decision`,
+    `decided_by` (`QA` or `Director`) and `decided_at`.
+  - The response also has `days`, `from`, `to`, `daily_budget` (`agent.max_tokens_per_day`) and
+    `per_ticket_cap`.
+
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
     the implementation tracks that is useful for debugging.
   - Issues in the `watching` list SHOULD resolve here with `status: "watching"` and a lightweight
     `watching` object containing `state`, `url`, and `last_ran_at`; they do not have active session
     fields.
+  - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
+    first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
+    reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with
+    `status: "untracked"`, while its ticket state record holds it.
   - Suggested response shape:
 
     ```json

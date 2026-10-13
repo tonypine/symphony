@@ -72,6 +72,7 @@ defmodule SymphonyElixir.DirectorMoves do
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrReviewPoller
+  alias SymphonyElixir.Routing.Resolver
 
   @undo_window_ms 10_000
   @review_state "In Review"
@@ -276,11 +277,15 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp fetch_issue(identifier) do
     case Tracker.fetch_issue_by_identifier(identifier) do
-      {:ok, %Issue{} = issue} -> {:ok, issue}
+      {:ok, %Issue{} = issue} -> {:ok, with_repo_key(issue)}
       {:error, :issue_not_found} -> {:error, :issue_not_found}
       {:error, reason} -> if not_found?(reason), do: {:error, :issue_not_found}, else: {:error, {:linear, reason}}
     end
   end
+
+  # A fetched issue carries no repo key; its holds, signals and guard moves live under the repo it
+  # routes to. The tracker fetch has just read the same config, so it is readable here.
+  defp with_repo_key(%Issue{} = issue), do: Resolver.with_repo_key(issue, Config.system!().repos)
 
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error.
   defp not_found?({:linear_graphql_errors, errors}), do: Enum.any?(List.wrap(errors), &(is_map(&1) and is_binary(&1["message"]) and &1["message"] =~ ~r/not found/i))

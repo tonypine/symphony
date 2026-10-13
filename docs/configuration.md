@@ -247,7 +247,8 @@ tickets:
   when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
   example on `[urgent, high]` only. It never stops a forced ticket (`agent.concurrency.force_label`)
   or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
-  `null` turns the filter off.
+  `null` turns the filter off. `/api/v1/state` lists each ticket it holds back under
+  `dispatch_skipped` (`priority medium is not in tickets.priorities (urgent, high)`).
 
 ### `repositories`
 
@@ -785,9 +786,8 @@ agent:
   The daily token budget and a usage-limit headroom hold don't stop a forced ticket (a warning is
   logged when the budget would have); the per-issue token cap still does. The operator Pause, the
   Linear rate-limit pause, the workspace quota pause, `max_concurrent_agents_per_host`, blocked-by
-  links, a failed setup, retry backoff, the post-PR quiet period, auto-merge and `Merging` CI waits,
-  and a usage-limit pause still hold it; when a usage-limit pause resumes, a held forced ticket
-  goes out first.
+  links, a failed setup, retry backoff, auto-merge and `Merging` CI waits, and a usage-limit pause
+  still hold it; when a usage-limit pause resumes, a held forced ticket goes out first.
   A forced plan ticket is one forced unit. Its plan, re-plan and close-out runs use the
   allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
@@ -813,7 +813,10 @@ agent:
   and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
   `waiting for CI on <sha>`; it doesn't count as waiting for a slot, so it doesn't hold back `Todo`.
   `/api/v1/state` also lists the issue ids Symphony holds a claim on (`claimed`); a claim with no
-  running agent, retry or slot wait is released at the end of the next poll.
+  running agent, retry or slot wait is released at the end of the next poll. Every other candidate
+  the last poll passed over is listed under `dispatch_skipped` with the gate that held it (`blocked
+  by MT-2`, `on a Needs Decision hold`, a usage limit, the `tickets.priorities` filter, ...) and
+  since when.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker

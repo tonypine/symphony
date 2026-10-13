@@ -148,9 +148,8 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
       %{
         state
         | retry_attempts: %{refreshing.id => %{attempt: 1, retry_token: token, identifier: refreshing.identifier, repo_key: Config.repo_key!()}},
-          claimed: MapSet.new([refreshing.id, "issue-moving", "issue-blocking", "issue-commenting", "issue-orphan"]),
+          claimed: MapSet.new([refreshing.id, "issue-blocking", "issue-commenting", "issue-orphan"]),
           tracker_tasks: %{
-            make_ref() => %{kind: :post_pr_transition, issue_ids: ["issue-moving"]},
             make_ref() => %{kind: :blocked_transition, issue_ids: ["issue-blocking"]},
             make_ref() => %{kind: :comment, issue_ids: ["issue-commenting"]}
           }
@@ -174,9 +173,8 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
     assert log =~ "Releasing orphaned claim with no running agent, retry or slot wait: issue_id=issue-orphan"
     assert log =~ "Releasing orphaned claim with no running agent, retry or slot wait: issue_id=issue-commenting"
     refute log =~ "issue_id=issue-refreshing"
-    refute log =~ "issue_id=issue-moving"
     refute log =~ "issue_id=issue-blocking"
-    assert :sys.get_state(pid).claimed == MapSet.new([refreshing.id, "issue-moving", "issue-blocking"])
+    assert :sys.get_state(pid).claimed == MapSet.new([refreshing.id, "issue-blocking"])
   end
 
   defp wait_until(fun, attempts \\ 100) do

@@ -193,7 +193,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.appVersion = updates.current.version ?? ""
         symphonyWindow.stateRoot = poller.stateRoot
         symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
-        symphonyWindow.openRepos = { [weak self] in self?.openRepos(nil) }
+        symphonyWindow.openRepos = { [weak self] key in
+            guard let self else { return }
+            reposWindow.show(status: machine.status, editing: key)
+        }
         symphonyWindow.openWebDashboard = { [weak self] in self?.openWebDashboard(nil) }
         symphonyWindow.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard ?? false }
         symphonyWindow.canOpenLogs = { [weak self] in self?.canOpenLogs ?? false }

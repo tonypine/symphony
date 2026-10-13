@@ -370,6 +370,7 @@ public struct TicketPage: Equatable {
         }
 
         steps += Self.eventSteps(audit: audit, stops: sources.stops.filter { $0.identifier == identifier }, clock: clock)
+        steps += (issue?.verdicts ?? []).compactMap { Self.verdictStep($0, clock: clock) }
 
         if let shipped, let merged = shipped.completedAt.flatMap(Self.date) {
             steps.append(Step(
@@ -441,6 +442,31 @@ public struct TicketPage: Equatable {
             id: id, time: at, timeText: clock(at), title: stoppedByYou + (moved ? ", \(movedToBacklog)" : ""),
             result: .stopped, resultWord: nil, durationSeconds: nil, tokens: nil, detail: note?.nonEmpty
         )
+    }
+
+    /// A Code Review or QA verdict as a timeline step: "Approved by Code Review", "QA failed".
+    private static func verdictStep(_ verdict: IssuePayload.Verdict, clock: (Date) -> String) -> Step? {
+        guard let at = verdict.recordedAt.flatMap(date), let (title, result) = verdictTitle(verdict) else { return nil }
+        return Step(
+            id: "verdict-\(verdict.kind ?? "")-\(at.timeIntervalSince1970)", time: at, timeText: clock(at),
+            title: title, result: result, resultWord: nil, durationSeconds: nil, tokens: nil,
+            detail: verdict.headSha.map { "on \($0.prefix(7))" }
+        )
+    }
+
+    private static func verdictTitle(_ verdict: IssuePayload.Verdict) -> (String, Step.Result)? {
+        let outcome = verdict.outcome ?? ""
+        switch (verdict.kind, outcome) {
+        case ("code_review", "approve"): return ("Approved by Code Review", .done)
+        case ("code_review", "rework"): return ("Sent to Rework by Code Review", .failed)
+        case ("code_review", "block"): return ("Blocked by Code Review", .failed)
+        case ("code_review", _): return ("Code Review \(outcome.replacingOccurrences(of: "_", with: " "))", .done)
+        case ("qa", "pass"): return ("QA passed", .done)
+        case ("qa", "fail"): return ("QA failed", .failed)
+        case ("qa", "skip"): return ("QA skipped", .done)
+        case ("qa", _): return ("QA \(outcome.replacingOccurrences(of: "_", with: " "))", .done)
+        default: return nil
+        }
     }
 
     /// The Director's move as a timeline step: "Moved to Backlog by you".
@@ -617,6 +643,14 @@ public struct TicketPage: Equatable {
     }
 
     private struct IssuePayload: Decodable {
+        /// A Code Review or QA verdict from the ticket's state record.
+        struct Verdict: Decodable, Equatable {
+            let kind: String?
+            let outcome: String?
+            let headSha: String?
+            let recordedAt: String?
+        }
+
         struct Workspace: Decodable {
             let path: String?
         }
@@ -635,6 +669,7 @@ public struct TicketPage: Equatable {
         let running: Running?
         let watching: Watching?
         let lastError: String?
+        let verdicts: [Verdict]?
     }
 
     private struct RunsPayload: Decodable {

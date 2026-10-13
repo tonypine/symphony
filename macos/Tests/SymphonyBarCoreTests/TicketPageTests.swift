@@ -132,6 +132,40 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.badges, [])
     }
 
+    func testTheCodeReviewApprovalShowsBeforeTheMoveThatOverturnedIt() throws {
+        let page = try fixturePage("SHOP-298")
+        let events = page.timeline.filter { $0.id.hasPrefix("verdict-") || $0.id.hasPrefix("move-") }
+
+        XCTAssertEqual(events.map(\.title), ["Approved by Code Review", "Sent to Rework by you"])
+        XCTAssertEqual(events.first?.result, .done)
+        XCTAssertEqual(events.first?.detail, "on 9c41d27")
+        XCTAssertEqual(events.first?.timeText, "12:31")
+    }
+
+    func testEachVerdictReadsAsAStepInTimeOrder() {
+        let issue = json(["verdicts": [
+            ["kind": "qa", "outcome": "blocked", "recorded_at": "2026-10-07T12:00:00Z"],
+            ["kind": "qa", "outcome": "skip", "recorded_at": "2026-10-07T11:50:00Z"],
+            ["kind": "qa", "outcome": "fail", "head_sha": "abc", "recorded_at": "2026-10-07T11:40:00Z"],
+            ["kind": "qa", "outcome": "pass", "recorded_at": "2026-10-07T11:30:00Z"],
+            ["kind": "code_review", "outcome": "inconclusive_escalated", "recorded_at": "2026-10-07T11:20:00Z"],
+            ["kind": "code_review", "outcome": "block", "recorded_at": "2026-10-07T11:10:00Z"],
+            ["kind": "code_review", "outcome": "rework", "recorded_at": "2026-10-07T11:00:00Z"],
+            ["kind": "ci_fix", "outcome": "mechanical", "recorded_at": "2026-10-07T10:55:00Z"],
+            ["kind": "qa", "outcome": "pass"],
+        ]])
+        let audit = ndjson([["event_type": "director_move", "move": "rework", "issue_identifier": "SHOP-1", "timestamp": "2026-10-07T11:45:00Z"]])
+        let page = TicketPage(identifier: "SHOP-1", sources: TicketPage.Sources(issue: issue, audit: [audit]), now: date("2026-10-07T13:00:00Z"), timeZone: utc)
+
+        XCTAssertEqual(page.timeline.map(\.title), [
+            "Sent to Rework by Code Review", "Blocked by Code Review", "Code Review inconclusive escalated", "QA passed",
+            "QA failed", "Sent to Rework by you", "QA skipped", "QA blocked",
+        ])
+        XCTAssertEqual(page.timeline.map(\.result), [.failed, .failed, .done, .done, .failed, .done, .done, .done])
+        XCTAssertNil(page.timeline[0].detail)
+        XCTAssertEqual(page.timeline[4].detail, "on abc")
+    }
+
     func testAStopMadeInTheAppShowsUntilItsRecordArrives() {
         let at = date("2026-10-07T14:22:00Z")
         let stop = TicketPage.LocalStop(identifier: "SHOP-1", at: at, movedToBacklog: true, note: "Hangs")

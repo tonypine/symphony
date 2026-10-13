@@ -76,7 +76,8 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :plan_revise, from: ["In Review", "Waiting on sub-tickets"], to: "In Progress"},
     # A person approved the plan: the parent waits on its sub-tickets.
     %{signal: :plan_approve, from: ["In Review"], to: :waiting_on_sub_issues},
-    # A run's PR is open and quiet: hand the issue off to the post-PR state.
+    # A legacy run pushed its head to its open PR: hand the issue off to the post-PR state. A run
+    # that merely goes quiet never takes this row.
     %{signal: :post_pr_handoff, from: ["In Progress", "Rework"], to: :requested},
     # A reviewer blocked the run: park the issue in the configured blocked state.
     %{signal: :review_agent_blocked, from: :any, to: :requested},

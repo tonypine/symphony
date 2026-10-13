@@ -19,7 +19,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     /// Symphony's state directory, for the control URL Diagnostics shows.
     var stateRoot: () -> URL = { StateRoot.locate(environment: AppStores.current.environment) }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    var openRepos: () -> Void = {}
+    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    var openRepos: (String?) -> Void = { _ in }
     var openWebDashboard: () -> Void = {}
     var canOpenWebDashboard: () -> Bool = { false }
     var canOpenLogs: () -> Bool = { false }
@@ -99,7 +100,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard() ?? false }
             model.onSelect = { view in AppStores.current.defaults.set(view.rawValue, forKey: Self.viewKey) }
             model.onAction = { [weak self] action in self?.onAction(action) }
-            model.onOpenRepos = { [weak self] in self?.openRepos() }
+            model.onOpenRepos = { [weak self] key in self?.openRepos(key) }
             model.onOpenWebDashboard = { [weak self] in self?.openWebDashboard() }
             model.scope = OverviewScope.load(from: AppStores.current.defaults)
             model.onScopeChange = { scope in scope.save(to: AppStores.current.defaults) }
