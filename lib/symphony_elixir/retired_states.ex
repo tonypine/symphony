@@ -47,7 +47,7 @@ defmodule SymphonyElixir.RetiredStates do
   Logs an error for each ticket in a retired or draining state, records the report for the
   dashboard and returns the tickets. `opts[:tracker]` overrides the tracker (tests, a fake);
   `opts[:now_ms]` the clock. A tracker that can't be read is logged as a warning, reports nothing
-  and keeps the last report.
+  and keeps the last report's tickets, but counts as a check so the next one waits the interval.
   """
   @spec report(keyword()) :: [map()]
   def report(opts \\ []) do
@@ -62,6 +62,7 @@ defmodule SymphonyElixir.RetiredStates do
 
       {:error, reason} ->
         Logger.warning("Could not check for tickets left in a retired state (#{Enum.join(states(), ", ")}): #{inspect(reason)}")
+        :persistent_term.put(@cache_key, %{drain_report() | checked_at_ms: now_ms})
         []
     end
   end

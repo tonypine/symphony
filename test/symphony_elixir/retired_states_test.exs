@@ -118,7 +118,22 @@ defmodule SymphonyElixir.RetiredStatesTest do
     log = capture_log(fn -> assert RetiredStates.report(tracker: FakeTracker) == [] end)
 
     assert log =~ "Could not check for tickets left in a retired state (Auto Review, In Review, Human Review): :rate_limited"
-    assert RetiredStates.drain_report() == %{stragglers: [], landed: [], checked_at_ms: nil}
+    assert %{stragglers: [], landed: [], checked_at_ms: checked} = RetiredStates.drain_report()
+    assert is_integer(checked)
+  end
+
+  test "a failed read waits the full interval before the next one" do
+    Process.put(:retired_states_result, {:ok, [%Issue{id: "issue-1", identifier: "TP-1", state: "In Review"}]})
+    capture_log(fn -> RetiredStates.report(tracker: FakeTracker, now_ms: 0) end)
+    assert_received {:fetched, _states}
+
+    Process.put(:retired_states_result, {:error, :rate_limited})
+    capture_log(fn -> RetiredStates.refresh_if_due(tracker: FakeTracker, now_ms: 5 * 60 * 1000) end)
+    assert_received {:fetched, _states}
+    assert %{stragglers: [%{identifier: "TP-1"}], checked_at_ms: 300_000} = RetiredStates.drain_report()
+
+    assert RetiredStates.refresh_if_due(tracker: FakeTracker, now_ms: 5 * 60 * 1000 + 1_000) == :ok
+    refute_received {:fetched, _states}
   end
 
   test "a ticket without an identifier is named by its id" do
