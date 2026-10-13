@@ -185,22 +185,31 @@ defmodule SymphonyElixir.MixProject do
         applications: [
           symphony_elixir: :permanent
         ],
-        steps: release_steps(),
-        burrito: [
-          targets: [
-            macos_arm64: [os: :darwin, cpu: :aarch64],
-            macos_x86_64: [os: :darwin, cpu: :x86_64]
-          ]
-        ]
+        steps: [:assemble, &prune_release/1]
       ]
     ]
   end
 
-  # SYMPHONY_PLAIN_RELEASE=1 assembles the plain release only, for the launcher's boot test.
-  defp release_steps do
-    if System.get_env("SYMPHONY_PLAIN_RELEASE") == "1",
-      do: [:assemble],
-      else: [:assemble, &Burrito.wrap/1]
+  # Files the assembled release never uses at runtime, removed so Symphony.app's
+  # zip stays small: ERTS's developer tools, OpenSSL's test engine, JavaScript
+  # source maps, and the priv/ assets that are read only at compile time (the
+  # dashboard embeds Phoenix's JavaScript; date_time_parser embeds its tzdata) or
+  # by mix generators (Phoenix's templates).
+  @release_bin_unused ~w(ct_run dialyzer dyn_erl erl_call erlc escript run_erl to_erl typer yielding_c_fun)
+  @release_lib_unused ~w(
+    crypto-*/priv/lib/otp_test_engine.so
+    date_time_parser-*/priv
+    phoenix-*/priv
+    phoenix_html-*/priv
+    phoenix_live_view-*/priv
+    */priv/**/*.map
+  )
+
+  defp prune_release(%Mix.Release{path: path} = release) do
+    bins = for name <- @release_bin_unused, do: Path.join([path, "erts-*", "bin", name])
+    libs = for pattern <- @release_lib_unused, do: Path.join([path, "lib", pattern])
+    Enum.each(bins ++ libs, fn pattern -> pattern |> Path.wildcard() |> Enum.each(&File.rm_rf!/1) end)
+    release
   end
 
   # Burrito unpacks into a directory named after the release version and reuses

@@ -28,8 +28,7 @@ lacks it; it never falls back to another version.
 To bump it when the image adds an Xcode, read the Xcode table in the
 [runner-images `macos-26` readme](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md),
 write the newest version exactly as its `/Applications/Xcode_<version>.app` name spells it, and
-fix any new Swift errors in `macos/` in the same pull request. The release workflows still run on
-`macos-15` with `scripts/ci/macos15-xcode-developer-dir.sh` until they move to `macos-26`.
+fix any new Swift errors in `macos/` in the same pull request. The release workflows use it too.
 
 ## Pre-push hook
 
@@ -169,15 +168,15 @@ itself changed.
 
 ## Packaging
 
-Packaged macOS binaries are built with Burrito and include the Erlang runtime:
+The packaged build is the plain `mix release`, Erlang runtime included:
 
 ```bash
-make package
+make release
 ```
 
-Release artifacts are written to `burrito_out/` such as `burrito_out/symphony-macos-arm64`. Set
-`BURRITO_TARGET=macos_arm64` to build only that one. Releases ship it inside `Symphony.app`; see
-[Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
+It writes `_build/prod/rel/symphony`. Releases ship it inside `Symphony.app`, in
+`Contents/Resources/symphony-release`, and run it in place through the launcher at
+`Contents/Resources/symphony`; see [Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
 
 ## Why Elixir?
 
