@@ -41,7 +41,11 @@ auto_review:
     escalate:
       labels: [needs-human, plan, breakdown]
       ticket_patterns:
-        - '(?i)\b(human|manual(ly)?)\s+review'
+        # a ticket that asks for a person's review, not one that names the state
+        - '(?i)\b(requires?|needs?|wants?|asks?\s+for|asking\s+for|requests?|gets?|getting|send\s+(it|this)\s+for|after)\s+(an?\s+)?(human|manual)\s+review\b'
+        - '(?i)\b(human|manual)\s+review\s+(is\s+)?(required|needed)\b'
+        - '(?i)\b(must|should|has\s+to|needs?\s+to)\s+be\s+(manually\s+reviewed|reviewed\s+by\s+an?\s+(human|person))\b'
+        - '(?i)\b(please\s+manually|(want|need)s?\s+to\s+manually|have\s+an?\s+(human|person)|an?\s+(human|person)\s+(must|should|needs?\s+to))\s+review\b'
         - '(?i)must not (auto-?approve|auto-?merge)'
         - '(?i)\bneeds?[- ]human\b'
       ticket_patterns_builtin: true  # false: only the ticket_patterns listed here
@@ -61,7 +65,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `escalate.labels` | `needs-human`, `plan`, `breakdown` | An issue with one of these labels needs a person. Matching ignores case and surrounding spaces. |
-| `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description, after the review states' names are blanked (see [What escalates](#what-escalates)). |
+| `escalate.ticket_patterns` | the six above | Regular expressions matched against the issue title and description, after code and the review states' names are blanked (see [What escalates](#what-escalates)). |
 | `escalate.ticket_patterns_builtin` | `true` | `false` drops the built-in `ticket_patterns`, so only the ones you list apply (none when you list none). List a built-in pattern to keep it. |
 | `escalate.paths` | the built-in paths below | Globs matched against each changed path outside docs and tests. `**` spans directories, `*` and `?` don't. |
 | `escalate.diff_patterns` | the four above | Regular expressions matched against each added line of the diff, in every file. Removed lines don't count. |
@@ -112,14 +116,18 @@ order:
 | `:size` | risk | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | risk | more than `escalate.busy_files.max_lines` lines change in one busy file. |
 
-A ticket that only names a review state doesn't escalate. Before `ticket_patterns` match, the
-gate blanks `In Review` and `issues.states.human_review` (`Human Review` by default) wherever the
-text names them: bare, in backticks (`` `Human Review` ``), in bold or in quotes. The names match
-case-sensitively, so "Have a human review this before merging" still escalates; before `state` or
-`states` they match in any case ("the human review state"). A name right after `need`, `require`
-or `want` ("Needs Human Review") stays, since it asks for one. With
-`issues.states.human_review: null` only `In Review` is blanked. The same applies when Symphony
-checks whether a plan's ticket asks for a human review.
+A ticket that asks for a person's review escalates; one that only names a review state, or
+discusses manual review as a topic, doesn't. The built-in `ticket_patterns` match request
+phrasing only ("needs a human review", "human review required", "must be manually reviewed",
+"have a human review this", "must not auto-approve"), not "human review" on its own. Before
+`ticket_patterns` match, the rule blanks fenced code blocks and backticked spans, then
+`In Review`, `Human Review` and `issues.states.human_review` wherever the text names them: bare,
+in bold or in quotes. The names match case-sensitively, so "Merge it after a human review" still
+escalates; before `state` or `states` they match in any case ("the human review state"). A name
+right after `need`, `require` or `want` ("Needs Human Review") stays, since it asks for one.
+`In Review` and `Human Review` are blanked even with `issues.states.human_review: null`. The same
+applies in Code Review and when Symphony checks whether a plan's ticket asks for a human review.
+The Symphony summary block at the end of a description is never read.
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,

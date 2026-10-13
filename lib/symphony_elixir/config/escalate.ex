@@ -50,8 +50,13 @@ defmodule SymphonyElixir.Config.Escalate do
 
   @built_in %{
     labels: ["needs-human", "plan", "breakdown"],
+    # A ticket that asks for a person's review, not one that names the `Human Review` state or
+    # discusses manual review as a topic.
     ticket_patterns: [
-      "(?i)\\b(human|manual(ly)?)\\s+review",
+      "(?i)\\b(requires?|needs?|wants?|asks?\\s+for|asking\\s+for|requests?|gets?|getting|send\\s+(it|this)\\s+for|after)\\s+(an?\\s+)?(human|manual)\\s+review\\b",
+      "(?i)\\b(human|manual)\\s+review\\s+(is\\s+)?(required|needed)\\b",
+      "(?i)\\b(must|should|has\\s+to|needs?\\s+to)\\s+be\\s+(manually\\s+reviewed|reviewed\\s+by\\s+an?\\s+(human|person))\\b",
+      "(?i)\\b(please\\s+manually|(want|need)s?\\s+to\\s+manually|have\\s+an?\\s+(human|person)|an?\\s+(human|person)\\s+(must|should|needs?\\s+to))\\s+review\\b",
       "(?i)must not (auto-?approve|auto-?merge)",
       "(?i)\\bneeds?[- ]human\\b"
     ],

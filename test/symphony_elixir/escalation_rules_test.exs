@@ -60,10 +60,10 @@ defmodule SymphonyElixir.EscalationRulesTest do
     assert [
              %{
                rule: :ticket_pattern,
-               detail: "the ticket matches `(?i)\\b(human|manual(ly)?)\\s+review`"
+               detail: "the ticket matches `(?i)\\b(human|manual)\\s+review\\s+(is\\s+)?(required|needed)\\b`"
              }
            ] =
-             check(issue: issue(description: "Ship it after a Manual review of the copy."))
+             check(issue: issue(description: "Manual review required for the copy."))
 
     assert [%{rule: :ticket_pattern, detail: detail}] = check(issue: issue(title: "Needs human sign-off", description: nil))
     assert detail =~ "needs?[- ]human"
@@ -94,13 +94,31 @@ defmodule SymphonyElixir.EscalationRulesTest do
           "Needs Human Review before it ships.",
           "This requires a Human Review.",
           "Human review required for the copy.",
-          "Human review: check the migration.",
           "Have a human review this before merging.",
           "This should get a human review.",
           "Merge it after a human review.",
-          "Count the tickets waiting on human review."
+          "This needs a human review before merging.",
+          "Manual review needed before release.",
+          "It must be reviewed by a person.",
+          "A human must review the copy.",
+          "I want to manually review the plan.",
+          "This asks for a manual review."
         ] do
       assert [%{rule: :ticket_pattern}] = reasons.(request, opts), request
+      assert [%{rule: :ticket_pattern}] = reasons.(request, []), request
+    end
+
+    # Naming the state, or manual review as a topic, isn't asking for one.
+    for topic <- [
+          "Human review: check the migration.",
+          "Count the tickets waiting on human review.",
+          "Remove the human review flow and its manual review prompts.",
+          "Agents move tickets to In Review / Human Review.",
+          "Remove the Human Review state.",
+          "`Human Review`",
+          "A run that calls `request_human_review` needs `manual review` copy."
+        ] do
+      assert reasons.(topic, []) == [], topic
     end
 
     assert reasons.("It moves to `Human Review`.", opts) == []
@@ -111,6 +129,36 @@ defmodule SymphonyElixir.EscalationRulesTest do
     assert [%{rule: :ticket_pattern}] = reasons.("It moves it to Needs Human Review.", [])
     assert reasons.("It moves it to Needs Human Review.", review_states: ["Needs Human Review"]) == []
     assert [%{rule: :ticket_pattern}] = reasons.("It needs Human Review.", review_states: [nil, " ", "Human Review"])
+  end
+
+  test "TP-886's ticket doesn't match the ticket patterns, in Code Review or with the human review state off" do
+    tp_886 =
+      issue(
+        title: "Remove In Review and Human Review once the drain report is empty",
+        description: """
+        Remove In Review and Human Review from the workflow once the drain report is empty: agents
+        no longer move tickets to In Review / Human Review, and a ticket waiting on a person
+        carries a Needs Decision hold. The human review state and the `human_review_state` setting go.
+
+        ```text
+        In Review: 0 tickets
+        Human Review: 0 tickets, needs human review: 0
+        ```
+        """,
+        labels: []
+      )
+
+    assert EscalationRules.check(tp_886, diff([]), [], @rules) == []
+    assert EscalationRules.ticket_reasons(tp_886, @rules, review_states: ["In Review"]) == []
+
+    asks = %{tp_886 | description: tp_886.description <> "\nThis needs a human review before merging."}
+    assert [%{rule: :ticket_pattern}] = EscalationRules.check(asks, diff([]), [], @rules)
+    assert [%{rule: :ticket_pattern}] = EscalationRules.ticket_reasons(%{tp_886 | description: "Claude must not auto-approve this."}, @rules)
+  end
+
+  test "an unclosed code fence blanks the rest of the description" do
+    assert EscalationRules.ticket_reasons(issue(description: "Output:\n~~~\nneeds a human review\n", labels: []), @rules) == []
+    assert [%{rule: :ticket_pattern}] = EscalationRules.ticket_reasons(issue(description: "~~~\nlog\n~~~\nThis needs a human review.", labels: []), @rules)
   end
 
   test "TP-617's description doesn't match the ticket patterns" do
