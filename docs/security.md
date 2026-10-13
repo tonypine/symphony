@@ -231,8 +231,13 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   sandbox gets no window server connection and can't draw. Offscreen `ImageRenderer` snapshots
   still work.
 - The profiles still allow LaunchServices (`com.apple.coreservices.launchservicesd`), which the
-  runtimes don't let Symphony turn off. An AppKit program that crashes without a window server
-  may still produce a crash dialog, so the prompt rule is what keeps agents from starting one.
+  runtimes don't let Symphony turn off. So the `appkit-dialog` workflow checks, on a disposable
+  macOS runner, that a minimal `NSApplication` + `NSWindow` program started under the agent
+  profile with Symphony's settings puts no window and no "quit unexpectedly" dialog on screen.
+  Two runs outside the sandbox first show that the runner draws the window and shows the dialog.
+  The job summary records what each run showed. The workflow runs weekly, to catch an SRT or
+  macOS release, and on pull requests that change the probe or the agent's SRT settings. The
+  prompt rule still applies.
 
 ### Optional outer sandbox (Codex + SRT)
 

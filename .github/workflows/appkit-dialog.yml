@@ -1,0 +1,93 @@
+name: appkit-dialog
+
+# Runs the `:appkit_dialog` test, which starts a minimal `NSApplication` + `NSWindow` program under
+# the agent profile (the one the latest `@anthropic-ai/sandbox-runtime` generates from Symphony's SRT
+# settings; Claude Code runs SRT's profile too) and checks that it puts no window and no "quit
+# unexpectedly" dialog on screen. Two control runs outside the sandbox first show that this runner
+# draws the window and shows the dialog. The job summary records what each run showed, and the
+# screenshots are uploaded.
+#
+# The runner is a disposable Mac with a desktop session, so a window or dialog lands on nobody's
+# screen. `test/test_helper.exs` excludes the test everywhere else, and it never runs on the host.
+#
+# Not a required check: it runs weekly, to catch an SRT or macOS release, and on pull requests that
+# change the probe, the test or the agent's SRT settings.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 1"
+  pull_request:
+    paths:
+      - "lib/symphony_elixir/agent_sandbox_config.ex"
+      - "test/support/appkit_probe/**"
+      - "test/symphony_elixir/agent_sandbox_appkit_test.exs"
+      - "test/test_helper.exs"
+      - ".github/workflows/appkit-dialog.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appkit-dialog-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  appkit-dialog:
+    name: appkit dialog
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install: true
+          cache: true
+
+      - name: Cache deps and build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.arch }}-appkit-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-appkit-mix-
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          node --version
+          swiftc --version
+          defaults read com.apple.CrashReporter DialogType || echo "DialogType unset"
+
+      # `basic`, the macOS default an operator's Mac has: a crashed app shows the dialog.
+      - name: Turn on crash dialogs
+        run: defaults write com.apple.CrashReporter DialogType basic
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      # Only the package's files are read: no install scripts run.
+      - name: Install the latest SRT
+        run: |
+          npm install --prefix "$RUNNER_TEMP/srt" --ignore-scripts --no-audit --no-fund @anthropic-ai/sandbox-runtime@latest
+          npm ls --prefix "$RUNNER_TEMP/srt" @anthropic-ai/sandbox-runtime
+          echo "SRT_PACKAGE_DIR=$RUNNER_TEMP/srt/node_modules/@anthropic-ai/sandbox-runtime" >> "$GITHUB_ENV"
+          echo "APPKIT_PROBE_ARTIFACTS=$RUNNER_TEMP/appkit-probe" >> "$GITHUB_ENV"
+
+      - name: Run the AppKit probe
+        run: mix test test/symphony_elixir/agent_sandbox_appkit_test.exs --only appkit_dialog
+
+      - name: Upload the screenshots and report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: appkit-probe
+          path: ${{ env.APPKIT_PROBE_ARTIFACTS }}
+          if-no-files-found: ignore

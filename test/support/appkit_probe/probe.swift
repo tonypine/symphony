@@ -1,0 +1,33 @@
+// A minimal AppKit program: an `NSApplication` with one `NSWindow` titled "TP-479 probe", which
+// quits after 5 seconds. `probe crash` traps (`fatalError`) once the window is up instead, so a
+// control run shows what a crash looks like. A background timer exits after 10 seconds in case
+// AppKit hangs without a window server.
+//
+// The `appkit_dialog` test runs it on a disposable macOS runner only. Never run it on the host: its
+// window, and its "quit unexpectedly" dialog when it crashes, land on the operator's screen.
+import AppKit
+
+let crash = CommandLine.arguments.dropFirst().first == "crash"
+
+DispatchQueue.global().asyncAfter(deadline: .now() + 10) { exit(3) }
+
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+
+let window = NSWindow(
+  contentRect: NSRect(x: 200, y: 200, width: 320, height: 200),
+  styleMask: [.titled, .closable],
+  backing: .buffered,
+  defer: false
+)
+window.title = "TP-479 probe"
+window.makeKeyAndOrderFront(nil)
+app.activate(ignoringOtherApps: true)
+
+DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+  if crash { fatalError("TP-479 control crash") }
+
+  app.terminate(nil)
+}
+
+app.run()
