@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, DirectorMoves, Hold, PlanComments, PrReviewPoller, RunStore, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, DirectorMoves, Hold, PlanComments, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -13,11 +13,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     def fetch_activity(pr_url, _opts) do
       send(self(), {:fetch_activity, pr_url})
       Application.fetch_env!(:symphony_elixir, :director_moves_test_activity)
-    end
-
-    def disable_auto_merge(pr_url, pr_node_id, _opts) do
-      send(self(), {:disable_auto_merge, pr_url, pr_node_id})
-      Application.get_env(:symphony_elixir, :director_moves_test_disable, :ok)
     end
 
     def close(pr_url, _opts) do
@@ -57,7 +52,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :director_moves_test_activity)
-      Application.delete_env(:symphony_elixir, :director_moves_test_disable)
       Application.delete_env(:symphony_elixir, :director_moves_test_close)
       Application.delete_env(:symphony_elixir, :director_moves_test_workspace)
       SubIssueWait.reset_for_test(@waiting)
@@ -107,7 +101,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     test "refuses a plan outside the review states, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
       put_issues([plan("In Progress"), pr("In Review")])
       assert {:error, {:conflict, message}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
-      assert message == "MOT-30 is In Progress; the Director answers it only from In Review or Human Review"
+      assert message == "MOT-30 is In Progress; the Director answers it only from In Review or Human Review or Plan Review"
       assert {:error, {:conflict, "MOT-40 is a pull request; approve_plan is for a plan"}} = DirectorMoves.move(:approve_plan, "MOT-40", %{}, opts)
 
       put_issues([plan("In Review")])
@@ -269,15 +263,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_state_update, "pr", "Rework"}
     end
 
-    test "a legacy repo is refused: its Rework already is the full reset", %{opts: opts} do
-      put_issues([restart_issue()])
-
-      assert {:error, {:conflict, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
-      assert message == "MOT-40 is on the legacy state machine, where Rework already closes the pull request and starts over"
-      refute_received {:memory_tracker_state_update, _id, _state}
-      refute_received {:memory_tracker_comment, _id, _body}
-    end
-
     test "a terminal ticket is refused", %{opts: opts} do
       designed_workflow!()
       put_issues([%{restart_issue() | state: "Done"}])
@@ -359,16 +344,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "there is no move on MOT-30 to undo"}} = DirectorMoves.undo("MOT-30", opts)
     end
 
-    test "moves a plan in Human Review to In Review before posting the comment", %{opts: opts} do
-      put_issues([plan("Human Review")])
-
-      assert {:ok, %{moved: true, from_state: "Human Review", to_state: "In Review"}} =
-               DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
-
-      assert {:messages, [{:memory_tracker_state_update, "plan", "In Review"}, {:memory_tracker_comment, "plan", _body}]} =
-               Process.info(self(), :messages)
-    end
-
     test "needs picks, on a plan in review", %{opts: opts} do
       put_issues([plan("In Review"), pr("In Review")])
 
@@ -380,15 +355,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.move(:decisions, "MOT-40", %{picks: [%{question: "Q", answer: "B"}]}, opts)
     end
 
-    test "fails when Linear refuses the move, before posting anything", %{opts: opts} do
+    test "a refused comment is Linear's error alone: nothing moves, from any review state", %{opts: opts} do
       put_issues([plan("Human Review")])
-      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
-
-      assert {:error, {:linear, :boom}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
-      refute_received {:memory_tracker_comment, _id, _body}
-
-      # On a plan in In Review nothing moved, so a refused comment is Linear's error alone.
-      put_issues([plan("In Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
       assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
       assert audit_records() == []
@@ -396,28 +364,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "a move Linear takes only half of" do
-    test "decisions moved to In Review whose comment Linear refuses keep the move, its audit record and its undo", %{opts: opts} do
-      put_issues([plan("Human Review")])
-      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
-      picks = %{picks: [%{question: "Q", answer: "B"}]}
-
-      assert {:error, {:partial, message}} = DirectorMoves.move(:decisions, "MOT-30", picks, opts)
-      assert message == "moved MOT-30 to In Review, but Linear refused the decisions comment (:comment_failed); send the decisions again"
-      assert_received {:memory_tracker_state_update, "plan", "In Review"}
-      refute_received {:memory_tracker_comment, _id, _body}
-
-      assert [%{"move" => "decisions", "from_state" => "Human Review", "to_state" => "In Review", "failed" => "comment"}] =
-               audit_records()
-
-      # Sent again, the plan is in In Review: the comment goes, with no second move.
-      put_issues([plan("In Review")])
-      assert {:ok, %{moved: false, commented: true}} = DirectorMoves.move(:decisions, "MOT-30", picks, opts)
-      assert_received {:memory_tracker_comment, "plan", _body}
-      refute_received {:memory_tracker_state_update, _id, _state}
-
-      assert {:ok, %{undone: "decisions", to_state: "Human Review"}} = DirectorMoves.undo("MOT-30", opts)
-    end
-
     test "a rework comment whose move Linear refuses is recorded, and not posted twice when sent again", %{opts: opts} do
       put_issues([pr("In Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
@@ -789,41 +735,51 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   describe "undo" do
     test "moves the ticket back within 10 s, once", %{opts: opts, clock: clock} do
-      put_issues([pr("In Review")])
-      assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      assert_received {:memory_tracker_state_update, "pr", "Merging"}
+      put_issues([plan("Plan Review")])
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
 
-      put_issues([pr("Merging")])
+      put_issues([plan("Rework")])
       :counters.put(clock, 1, 10_000)
 
-      assert {:ok, %{move: "undo", undone: "approve_pr", from_state: "Merging", to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts)
-      assert_received {:memory_tracker_state_update, "pr", "In Review"}
-      assert [%{"move" => "approve_pr"}, %{"move" => "undo", "from_state" => "Merging", "to_state" => "In Review"}] = audit_records()
+      assert {:ok, %{move: "undo", undone: "rework", from_state: "Rework", to_state: "Plan Review"}} = DirectorMoves.undo("MOT-30", opts)
+      assert_received {:memory_tracker_state_update, "plan", "Plan Review"}
+      assert [%{"move" => "rework"}, %{"move" => "undo", "from_state" => "Rework", "to_state" => "Plan Review"}] = audit_records()
 
-      assert {:error, {:conflict, "there is no move on MOT-40 to undo"}} = DirectorMoves.undo("MOT-40", opts)
+      assert {:error, {:conflict, "there is no move on MOT-30 to undo"}} = DirectorMoves.undo("MOT-30", opts)
     end
 
     test "refuses after 10 s", %{opts: opts, clock: clock} do
-      put_issues([pr("In Review")])
-      assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      put_issues([pr("Merging")])
+      put_issues([plan("Plan Review")])
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
+      put_issues([plan("Rework")])
       :counters.put(clock, 1, 10_001)
 
-      assert {:error, {:conflict, "the move on MOT-40 is more than 10 s old; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
-      refute_received {:memory_tracker_state_update, "pr", "In Review"}
+      assert {:error, {:conflict, "the move on MOT-30 is more than 10 s old; move it in Linear instead"}} = DirectorMoves.undo("MOT-30", opts)
+      refute_received {:memory_tracker_state_update, "plan", "Plan Review"}
     end
 
     test "refuses once the ticket moved on", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
+      put_issues([plan("Done")])
+
+      assert {:error, {:conflict, "MOT-30 moved on to Done since; move it in Linear instead"}} = DirectorMoves.undo("MOT-30", opts)
+    end
+
+    test "refuses a move out of a draining state: no move may enter one again", %{opts: opts} do
       put_issues([pr("In Review")])
       assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      put_issues([pr("Done")])
+      put_issues([pr("Merging")])
+      mailbox()
 
-      assert {:error, {:conflict, "MOT-40 moved on to Done since; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+      assert {:error, {:conflict, "MOT-40 came from In Review, a retired state, so it can't go back there"}} = DirectorMoves.undo("MOT-40", opts)
+      assert [] = mailbox()
     end
 
     test "refuses an approved plan once Symphony promoted its sub-tickets", %{opts: opts} do
       backlog = [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}]
-      put_issues([%{plan("In Review") | sub_issues: backlog}])
+      put_issues([%{plan("Plan Review") | sub_issues: backlog}])
       assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
 
       put_issues([%{plan(@waiting) | sub_issues: [%{hd(backlog) | state: "Todo"}]}])
@@ -832,82 +788,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.undo("MOT-30", opts)
 
       put_issues([%{plan(@waiting) | sub_issues: backlog}])
-      assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-30", opts)
+      assert {:ok, %{to_state: "Plan Review"}} = DirectorMoves.undo("MOT-30", opts)
     end
 
     test "fails when Linear refuses the move back, and keeps the move to undo", %{opts: opts} do
-      put_issues([pr("In Review")])
-      assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      put_issues([pr("Merging")])
+      put_issues([plan("Plan Review")])
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
+      put_issues([plan("Rework")])
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :boom}])
 
-      assert {:error, {:linear, :boom}} = DirectorMoves.undo("MOT-40", opts)
-      assert {:ok, _result} = DirectorMoves.undo("MOT-40", opts)
-    end
-  end
-
-  describe "undo of approve_pr" do
-    @pr_url "https://github.com/example/repo/pull/40"
-
-    test "turns GitHub auto-merge off before moving the ticket back, and forgets the poller's auto-merge state", %{opts: opts} do
-      auto_merge = %{state: "enabled", head_sha: "head-1", enabled_head_sha: "head-1"}
-      :ok = RunStore.put_pr_review(%{repo_key: "default", issue_id: "pr", pr_url: @pr_url, auto_merge: auto_merge})
-      approve_then_merging(opts, repo_key: "default")
-      github_activity(state: "OPEN", auto_merge_enabled: true)
-
-      log = capture_log(fn -> assert {:ok, %{undone: "approve_pr", to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts) end)
-
-      assert [{:fetch_activity, @pr_url}, {:disable_auto_merge, @pr_url, "PR_node"}, {:memory_tracker_state_update, "pr", "In Review"}] =
-               mailbox()
-
-      assert log =~ "Director undo turned GitHub auto-merge off issue_id=pr issue_identifier=MOT-40"
-      assert PrReviewPoller.auto_merge("pr", repo_key: "default") == nil
-    end
-
-    test "with auto-merge off, or no pull request on the ticket, just moves it back", %{opts: opts} do
-      approve_then_merging(opts)
-      github_activity(state: "OPEN", auto_merge_enabled: false)
-      assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts)
-      assert [{:fetch_activity, @pr_url}, {:memory_tracker_state_update, "pr", "In Review"}] = mailbox()
-
-      put_issues([pr("In Review")])
-      assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      put_issues([pr("Merging")])
-      mailbox()
-      assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts)
-      assert [{:memory_tracker_state_update, "pr", "In Review"}] = mailbox()
-    end
-
-    test "refuses a pull request that already merged", %{opts: opts} do
-      approve_then_merging(opts)
-      github_activity(state: "MERGED", auto_merge_enabled: true)
-
-      assert {:error, {:conflict, "MOT-40 already merged; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
-      assert [{:fetch_activity, @pr_url}] = mailbox()
-    end
-
-    test "answers GitHub's error and leaves the ticket in Merging when GitHub refuses or can't be read", %{opts: opts} do
-      approve_then_merging(opts)
-      github_activity(state: "OPEN", auto_merge_enabled: true)
-      Application.put_env(:symphony_elixir, :director_moves_test_disable, {:error, :forbidden})
-
-      assert {:error, {:github, message}} = DirectorMoves.undo("MOT-40", opts)
-      assert message == "GitHub refused to turn auto-merge off on #{@pr_url} (:forbidden); MOT-40 stays in Merging"
-      assert [{:fetch_activity, @pr_url}, {:disable_auto_merge, @pr_url, "PR_node"}] = mailbox()
-
-      github_activity(state: "OPEN", auto_merge_enabled: true, pr_node_id: nil)
-      assert {:error, {:github, "GitHub refused to turn auto-merge off on " <> rest}} = DirectorMoves.undo("MOT-40", opts)
-      assert rest =~ "(:missing_pr_node_id)"
-
-      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:error, :gh_down})
-      assert {:error, {:github, "couldn't read #{@pr_url} (:gh_down); MOT-40 stays in Merging"}} == DirectorMoves.undo("MOT-40", opts)
-      refute_received {:memory_tracker_state_update, "pr", "In Review"}
-
-      # The move is still there to undo once GitHub answers.
-      github_activity(state: "OPEN", auto_merge_enabled: true)
-      Application.put_env(:symphony_elixir, :director_moves_test_disable, :ok)
-      capture_log(fn -> assert {:ok, %{to_state: "In Review"}} = DirectorMoves.undo("MOT-40", opts) end)
-      assert_received {:memory_tracker_state_update, "pr", "In Review"}
+      assert {:error, {:linear, :boom}} = DirectorMoves.undo("MOT-30", opts)
+      assert {:ok, _result} = DirectorMoves.undo("MOT-30", opts)
     end
   end
 
@@ -950,16 +841,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
     Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(System.tmp_dir!(), "unused"))
   end
 
-  defp approve_then_merging(opts, fields \\ []) do
-    issue = struct(pr("In Review"), [pr_urls: [@pr_url]] ++ fields)
-    put_issues([issue])
-    assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, Keyword.put(opts, :github, FakeGitHub))
-    put_issues([%{issue | state: "Merging"}])
-    mailbox()
-  end
-
   defp github_activity(fields) do
-    Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
+    Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @restart_pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
   end
 
   defp mailbox do

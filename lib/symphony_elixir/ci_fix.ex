@@ -78,7 +78,7 @@ defmodule SymphonyElixir.CiFix do
   dispatch a fix run in place.
   """
   @spec entry(String.t() | nil, map() | nil) :: {:ok, TransitionGuard.signal(), origin()} | :none
-  def entry(origin_state, settings) when is_binary(origin_state) do
+  def entry(origin_state, settings) when is_binary(origin_state) and is_map(settings) do
     tracker = Map.get(settings, :tracker) || %{}
 
     cond do

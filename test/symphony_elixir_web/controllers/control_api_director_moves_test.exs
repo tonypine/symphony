@@ -33,7 +33,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
           {:approve_plan, %{}, "MOT-30", "Waiting on sub-tickets"},
           {:approve_pr, %{}, "MOT-40", "Merging"},
           {:rework, %{"reason" => "Totals are wrong"}, "MOT-40", "Rework"},
-          {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "In Review"},
+          {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Human Review"},
           {:sign_off, %{}, "MOT-50", "Done"},
           {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"}
         ] do
@@ -102,34 +102,16 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   test "undo takes the last move back", %{moves: moves} do
-    assert post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves).status == 200
-    merging = %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Merging"}
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [merging])
+    plan = %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Plan Review", labels: ["plan"]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [plan])
+    assert post(:rework, %{"issue_identifier" => "MOT-30", "reason" => "Split it"}, moves).status == 200
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{plan | state: "Rework"}])
 
-    conn = post(:undo, %{"issue_identifier" => "MOT-40"}, moves)
+    conn = post(:undo, %{"issue_identifier" => "MOT-30"}, moves)
 
     assert conn.status == 200
-    assert %{"move" => "undo", "undone" => "approve_pr", "to_state" => "In Review"} = Jason.decode!(conn.resp_body)
-    assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) == {409, "move_not_allowed", "there is no move on MOT-40 to undo"}
-  end
-
-  test "undo of an approval GitHub won't turn auto-merge off for is a 502 that leaves the ticket in Merging", %{moves: moves} do
-    pr_url = "https://github.com/example/repo/pull/40"
-    in_review = %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Review", pr_urls: [pr_url]}
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [in_review])
-    moves = [github: __MODULE__.RefusingGitHub] ++ moves
-    assert post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves).status == 200
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{in_review | state: "Merging"}])
-
-    assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) ==
-             {502, "github_error", "GitHub refused to turn auto-merge off on #{pr_url} (:forbidden); MOT-40 stays in Merging"}
-
-    refute_received {:memory_tracker_state_update, "pr", "In Review"}
-  end
-
-  defmodule RefusingGitHub do
-    def fetch_activity(_pr_url, _opts), do: {:ok, %{state: "OPEN", auto_merge_enabled: true, pr_node_id: "PR_node"}}
-    def disable_auto_merge(_pr_url, _pr_node_id, _opts), do: {:error, :forbidden}
+    assert %{"move" => "undo", "undone" => "rework", "to_state" => "Plan Review"} = Jason.decode!(conn.resp_body)
+    assert error(post(:undo, %{"issue_identifier" => "MOT-30"}, moves)) == {409, "move_not_allowed", "there is no move on MOT-30 to undo"}
   end
 
   test "a move the ticket's state doesn't allow is a 409", %{moves: moves} do
@@ -159,11 +141,6 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert conn.status == 200
     assert %{"move" => "restart", "from_state" => "Rework", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
     assert_received {:memory_tracker_state_update, "pr", "In Progress"}
-  end
-
-  test "a restart on a legacy repo is a 409", %{moves: moves} do
-    assert error(post(:restart, %{"issue_identifier" => "MOT-40", "reason" => "No"}, moves)) ==
-             {409, "move_not_allowed", "MOT-40 is on the legacy state machine, where Rework already closes the pull request and starts over"}
   end
 
   test "a reset GitHub refuses is a 502 restart_incomplete", %{moves: moves} do
@@ -242,10 +219,10 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   test "a move Linear took only half of is a 502 that says what was done", %{moves: moves} do
-    Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :boom}])
+    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
 
-    assert error(post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => [%{"question" => "Where?", "answer" => "B"}]}, moves)) ==
-             {502, "move_incomplete", "moved MOT-30 to In Review, but Linear refused the decisions comment (:boom); send the decisions again"}
+    assert error(post(:rework, %{"issue_identifier" => "MOT-40", "reason" => "No"}, moves)) ==
+             {502, "move_incomplete", "posted the comment on MOT-40, but Linear refused the move to Rework (:boom); send it again to make the move without posting the comment twice"}
   end
 
   defp post(action, params, moves) do

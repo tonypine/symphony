@@ -156,7 +156,6 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   defp respond_move(conn, _identifier, {:error, {:partial, message}}), do: error_response(conn, 502, "move_incomplete", message)
   defp respond_move(conn, _identifier, {:error, {:restart, message}}), do: error_response(conn, 502, "restart_incomplete", message)
-  defp respond_move(conn, _identifier, {:error, {:github, message}}), do: error_response(conn, 502, "github_error", message)
   defp respond_move(conn, _identifier, {:error, {:store, message}}), do: error_response(conn, 502, "store_error", message)
 
   defp respond_move(conn, identifier, {:error, :issue_not_found}),

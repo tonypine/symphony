@@ -166,7 +166,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       "id" => "issue-#{index}",
       "identifier" => "TEAM-#{index}",
       "title" => "Watched #{index}",
-      "state" => %{"name" => "In Review"},
+      "state" => %{"name" => "Code Review"},
       "url" => "https://linear.test/TEAM-#{index}",
       "assignee" => %{"id" => "viewer-1"},
       "labels" => %{"nodes" => []},
