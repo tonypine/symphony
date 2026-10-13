@@ -1468,7 +1468,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}}} = option
       assert description =~ "a request without options is refused"
-      assert description =~ "goes to the supervisor as a `## Supervisor check` block with the ticket moved to In Review"
+      assert description =~ "a check an agent can't run (launching the app, a host crash check, a check on a device) is a coverage gap for CI or a QA playbook"
+      refute description =~ "Supervisor check"
       refute "linear_request_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
       response =

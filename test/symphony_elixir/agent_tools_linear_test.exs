@@ -2217,8 +2217,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         option = &Map.merge(%{"label" => "Keep it", "effect" => "Nothing changes."}, &1)
 
         decision_required =
-          "`decision` is required: one `question` and 2 to 4 `options`. A person only makes decisions; a check an agent can't run goes to " <>
-            "the supervisor as a `## Supervisor check` in In Review, and a manual check that could be a test becomes a test."
+          "`decision` is required: one `question` and 2 to 4 `options`. A person only makes decisions; a check an agent can't run is a " <>
+            "coverage gap for CI or a QA playbook, and a manual check that could be a test becomes a test."
 
         options_count =
           "`decision.options` must list 2 to 4 options, each with a `label` and an `effect`; with no real choice to make, there is nothing to ask a person."

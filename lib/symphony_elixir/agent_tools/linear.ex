@@ -1277,7 +1277,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       {fn -> non_blank?(why) end, "`why` must be a non-blank string."},
       {fn -> is_map(decision) end,
        "`decision` is required: one `question` and #{@human_action_options.first} to #{@human_action_options.last} `options`. " <>
-         "A person only makes decisions; a check an agent can't run goes to the supervisor as a `## Supervisor check` in In Review, " <>
+         "A person only makes decisions; a check an agent can't run is a coverage gap for CI or a QA playbook, " <>
          "and a manual check that could be a test becomes a test."},
       {fn -> non_blank?(decision["question"]) end, "`decision.question` must be a non-blank string."},
       {fn -> is_list(decision["options"]) and length(decision["options"]) in @human_action_options end,
