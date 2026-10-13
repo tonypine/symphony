@@ -173,9 +173,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
              snapshot.epic_lanes
   end
 
-  test "a designed repo's Plan Review is a human-gated state, where a legacy repo's is not" do
-    refute EpicLanes.human_gated_state?("Plan Review")
-
+  test "Plan Review and the draining review states are human-gated states" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test"]]
@@ -183,7 +181,10 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
 
     assert EpicLanes.human_gated_state?(" plan review ")
     assert EpicLanes.human_gated_state?("In Review")
+    assert EpicLanes.human_gated_state?("Human Review")
+    assert EpicLanes.human_gated_state?("Backlog")
     refute EpicLanes.human_gated_state?("Todo")
+    refute EpicLanes.human_gated_state?(nil)
   end
 
   defp epic(id, identifier, sub_issues) do

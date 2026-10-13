@@ -19,11 +19,7 @@ defmodule SymphonyElixir.HandoffTest do
     settings
   end
 
-  defp designed_settings(extra \\ %{}) do
-    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
-  end
-
-  defp legacy_settings(extra \\ %{}) do
+  defp settings(extra \\ %{}) do
     settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
   end
 
@@ -34,25 +30,19 @@ defmodule SymphonyElixir.HandoffTest do
     end
   end
 
-  describe "designed?/1 and target_state/1" do
-    test "a designed repo hands off to its configured Code Review state" do
-      assert Handoff.designed?(designed_settings())
-      assert Handoff.target_state(designed_settings()) == "Code Review"
+  describe "target_state/1" do
+    test "hands off to the configured Code Review state, whatever the retired Auto Review settings say" do
+      assert Handoff.target_state(settings()) == "Code Review"
 
-      configured = designed_settings(%{"tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"}})
+      configured = settings(%{"tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"}})
       assert Handoff.target_state(configured) == "Peer Review"
-    end
 
-    test "a legacy repo hands off to In Review, whatever its retired Auto Review settings say" do
-      refute Handoff.designed?(legacy_settings())
-      assert Handoff.target_state(legacy_settings()) == "In Review"
-
-      auto_review = legacy_settings(%{"auto_review" => %{"enabled" => true, "state" => "QA"}})
-      assert Handoff.target_state(auto_review) == "In Review"
+      auto_review = settings(%{"auto_review" => %{"enabled" => true}})
+      assert Handoff.target_state(auto_review) == "Code Review"
     end
   end
 
-  describe "origin?/1 and required?/2" do
+  describe "origin?/1 and required?/1" do
     test "only In Progress and Rework are origins, case- and space-insensitively" do
       assert Handoff.origin?("In Progress")
       assert Handoff.origin?(" rework ")
@@ -62,11 +52,10 @@ defmodule SymphonyElixir.HandoffTest do
       refute Handoff.origin?(5)
     end
 
-    test "the signal is required only for a designed repo's origin states" do
-      assert Handoff.required?("In Progress", designed_settings())
-      assert Handoff.required?("Rework", designed_settings())
-      refute Handoff.required?("Todo", designed_settings())
-      refute Handoff.required?("In Progress", legacy_settings())
+    test "the signal is required only from the origin states" do
+      assert Handoff.required?("In Progress")
+      assert Handoff.required?("Rework")
+      refute Handoff.required?("Todo")
     end
   end
 

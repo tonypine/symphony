@@ -690,7 +690,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ ~s("id":44)
       assert trace =~ ~s("decision":"deny")
 
-      assert_receive {:memory_tracker_state_update, "issue-pr-gate", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-pr-gate", "Blocked"}, 500
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{
@@ -776,7 +776,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ ~s("id":44)
       assert trace =~ ~s("decision":"deny")
 
-      assert_receive {:memory_tracker_state_update, "issue-audit-err", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-audit-err", "Blocked"}, 500
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{
@@ -881,7 +881,7 @@ defmodule SymphonyElixir.AppServerTest do
                end
              end)
 
-      assert_receive {:memory_tracker_state_update, "issue-dynamic-pr-gate", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-dynamic-pr-gate", "Blocked"}, 500
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

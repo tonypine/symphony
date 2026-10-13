@@ -22,16 +22,18 @@ defmodule SymphonyElixir.ForcedStatusTest do
       assert ForcedStatus.summary(ForcedStatus.describe(%{running_kind: :qa})) == "QA · running"
     end
 
-    test "human gates: In Review and Human Review wait on a human, Backlog and Triage on the backlog" do
-      assert %{phase: :waiting_for_human, waiting_on: :human} =
-               ForcedStatus.describe(%{state: "In Review", kind: :implementation})
+    test "human gates: the states a person moves on wait on a human, Backlog and Triage on the backlog" do
+      human_states = ["In Review", "Human Review", "Plan Review"]
 
       assert %{phase: :waiting_for_human, waiting_on: :human} =
-               ForcedStatus.describe(%{state: " human review", human_review_state: "Human Review"})
+               ForcedStatus.describe(%{state: "In Review", kind: :implementation, human_states: human_states})
 
-      # With the state turned off, a ticket in a state of that name is not held for a human.
+      assert %{phase: :waiting_for_human, waiting_on: :human} =
+               ForcedStatus.describe(%{state: " plan review", human_states: human_states})
+
+      # Without the signal, a ticket in a state of that name is not held for a human.
       assert %{phase: :implementation, waiting_on: nil} =
-               ForcedStatus.describe(%{state: "Human Review", human_review_state: nil, kind: :implementation})
+               ForcedStatus.describe(%{state: "Human Review", kind: :implementation})
 
       assert %{phase: :breakdown, waiting_on: :backlog} = ForcedStatus.describe(%{state: "Backlog", kind: :breakdown})
 

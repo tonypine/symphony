@@ -908,7 +908,7 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:git_called, _args, _opts}, 100
       refute_receive {:gh_called, _args, _opts}, 100
 
-      assert_receive {:memory_tracker_state_update, "issue-mcp-hold", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-mcp-hold", "Blocked"}, 500
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{
@@ -997,7 +997,7 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:git_called, _args, _opts}, 100
       refute_receive {:gh_called, _args, _opts}, 100
 
-      assert_receive {:memory_tracker_state_update, "issue-mcp-audit-error", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-mcp-audit-error", "Blocked"}, 500
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

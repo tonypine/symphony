@@ -25,11 +25,12 @@ defmodule SymphonyElixir.DependencyGateTest do
       id: "issue-dependency-gate-failure",
       identifier: "ACME-GATE-FAILURE",
       title: "Dependency gate failure",
-      description: "Exercise tracker update failure branch",
-      state: "In Progress"
+      description: "Exercise the hold failure branch",
+      state: "In Progress",
+      # A blank repo key the store refuses to record the hold under.
+      repo_key: "  "
     }
 
-    # No repo key to record the hold under: the store refuses it.
     gate = DependencyGate.build("/tmp/workspace", issue, nil)
 
     assert capture_log(fn ->

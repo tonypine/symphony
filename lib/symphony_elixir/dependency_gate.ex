@@ -204,7 +204,8 @@ defmodule SymphonyElixir.DependencyGate do
     if issue_terminal?(issue) do
       Logger.info("Skipping dependency hold for terminal issue issue_id=#{issue_id}")
     else
-      set_hold(issue, Map.get(issue, :repo_key) || Map.get(gate, :repo_key))
+      # A missing repo key means the primary repository, as in `Config.settings_for_repo/1`.
+      set_hold(issue, Map.get(issue, :repo_key) || Map.get(gate, :repo_key) || Config.repo_key_or_nil())
     end
   end
 

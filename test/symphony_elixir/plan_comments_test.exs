@@ -34,29 +34,6 @@ defmodule SymphonyElixir.PlanCommentsTest do
   end
 
   describe "action/3" do
-    test "revises a plan under review and answers comments on an approved one" do
-      settings = Config.settings!()
-      backlog = [%{id: "c1", identifier: "MT-2", state: "Backlog"}]
-      parent = %Issue{id: "p", identifier: "MT-1", state: "In Review", labels: ["breakdown"], sub_issues: backlog}
-
-      assert PlanComments.action(parent, @terminal, settings) == :revise
-      assert PlanComments.action(%{parent | sub_issues: []}, @terminal, settings) == :revise
-      assert PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Todo"}]}, @terminal, settings) == :answer
-      assert PlanComments.action(%{parent | state: @waiting}, @terminal, settings) == :answer
-      # Human Review waits for the operator: a comment there revises nothing, and an approved plan still gets its reply.
-      refute PlanComments.action(%{parent | state: "Human Review"}, @terminal, settings)
-      refute PlanComments.action(%{parent | state: "Human Review"}, @terminal, %{settings | tracker: %{settings.tracker | human_review_state: nil}})
-      assert PlanComments.action(%{parent | state: "Human Review", sub_issues: [%{id: "c1", identifier: "MT-2", state: "Todo"}]}, @terminal, settings) == :answer
-
-      # Close-out, other states, other issues: nothing.
-      refute PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}, @terminal, settings)
-      refute PlanComments.action(%{parent | state: "In Progress"}, @terminal, settings)
-      refute PlanComments.action(%{parent | state: "Rework"}, @terminal, settings)
-      refute PlanComments.action(%{parent | labels: ["feature"]}, @terminal, settings)
-      refute PlanComments.action(%{parent | state: nil}, @terminal, settings)
-      refute PlanComments.action(nil, @terminal, settings)
-    end
-
     test "a designed repo reviews its plans in Plan Review, so that is where a comment starts a revision" do
       settings = designed_settings!()
       backlog = [%{id: "c1", identifier: "MT-2", state: "Backlog"}]
@@ -128,7 +105,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
 
     test "a review brief on a plan under review is Symphony's own, so it never starts a revision" do
       backlog = [%{id: "c1", identifier: "MT-2", state: "Backlog"}]
-      parent = %Issue{id: "p", identifier: "MT-1", state: "In Review", labels: ["breakdown"], sub_issues: backlog}
+      parent = %Issue{id: "p", identifier: "MT-1", state: "Plan Review", labels: ["breakdown"], sub_issues: backlog}
       assert PlanComments.action(parent, @terminal, Config.settings!()) == :revise
 
       brief = "## Review brief\n\n**What to review:** the plan for MT-1\n\n**What changed since the last brief:**\n\n- Split MT-2"

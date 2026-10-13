@@ -50,11 +50,6 @@ defmodule SymphonyElixir.BlockedHoldTest do
     settings
   end
 
-  defp legacy_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
-    settings
-  end
-
   defp issue(attrs \\ %{}) do
     struct!(
       %Issue{id: @issue_id, identifier: "TP-817", title: "T", state: "Todo", repo_key: @repo_key},
@@ -150,14 +145,6 @@ defmodule SymphonyElixir.BlockedHoldTest do
       :set = BlockedHold.sync(open_issue, @terminal, settings: designed_settings())
 
       assert BlockedHold.sync(open_issue, @terminal, settings: designed_settings()) == :none
-    end
-
-    test "leaves a legacy repo untouched" do
-      open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
-
-      assert BlockedHold.sync(open_issue, @terminal, settings: legacy_settings()) == :skipped
-      assert stored_hold() == nil
-      assert labels() == []
     end
 
     test "resolves the repo's settings from its key when the caller passes none" do
@@ -334,10 +321,9 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert BlockedHold.sweep([unblocked, other], @terminal, settings: designed_settings()) == 1
     end
 
-    test "counts nothing on a legacy repo or without a list" do
+    test "counts nothing without a list, or for a repo whose settings can't be resolved" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
 
-      assert BlockedHold.sweep([open_issue], @terminal, settings: legacy_settings()) == 0
       assert BlockedHold.sweep(:not_a_list, @terminal, settings: designed_settings()) == 0
       # Without the caller's settings the repo is resolved from the issue's key.
       assert BlockedHold.sweep([open_issue], @terminal) == 0
