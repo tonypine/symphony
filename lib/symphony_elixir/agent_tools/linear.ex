@@ -1223,7 +1223,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- reject_human_action_secrets(request, context, opts),
          {:ok, settings} <- human_actions_settings(context, opts),
          :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
-      case post_human_action(issue_id, issue_repo_key(context), request, settings, opts) do
+      case post_human_action(issue_id, hold_repo_key(context), request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
           CommentRegistry.record_human_action_request(registry)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
@@ -1308,6 +1308,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
   defp issue_repo_key(_context), do: nil
+
+  # The repo a decision hold is recorded under: the issue's own, or the primary repository when the
+  # run's issue carries none, as in `Config.settings_for_repo/1`.
+  defp hold_repo_key(context), do: issue_repo_key(context) || Config.repo_key_or_nil()
 
   @doc """
   The open human-action requests on the current issue (`SymphonyElixir.HumanActions.Request`),
@@ -1428,7 +1432,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # first, then the label, and the ticket continues in place. Another request still open means the
   # ticket still waits, so the hold stays.
   defp release_decision_hold(_context, _issue_id, %{"remaining" => remaining}, _opts) when remaining != 0, do: :ok
-  defp release_decision_hold(context, issue_id, _withdrawal, opts), do: Hold.clear(issue_repo_key(context), issue_id, :needs_decision, opts)
+  defp release_decision_hold(context, issue_id, _withdrawal, opts), do: Hold.clear(hold_repo_key(context), issue_id, :needs_decision, opts)
 
   # With no open request left on the issue, the run's issue no longer waits on a person.
   defp forget_human_action_request(context, %{"remaining" => 0}),
