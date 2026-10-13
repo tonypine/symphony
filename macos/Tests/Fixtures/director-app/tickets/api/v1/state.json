@@ -76,6 +76,17 @@
     "waiting_on_you": 2,
     "watching": 5
   },
+  "dispatch_skipped": [
+    {
+      "issue_id": "i-140",
+      "issue_identifier": "API-140",
+      "reason": "priority medium is not in tickets.priorities (urgent, high)",
+      "repo_key": "api",
+      "since": "2026-10-07T14:13:00Z",
+      "state": "Todo",
+      "title": "Webhook delivery log"
+    }
+  ],
   "dispatch_state": {
     "active?": true,
     "blockers": []

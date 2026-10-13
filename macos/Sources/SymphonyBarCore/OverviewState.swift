@@ -17,6 +17,8 @@ public struct OverviewState: Equatable {
     public var humanReview: [Ticket]
     public var retrying: [Retry]
     public var slotWaiting: [Waiting]
+    /// Tickets the last dispatch pass passed over, each with the gate that held it (`reason`) and since when.
+    public var dispatchSkipped: [Waiting]
     public var conflicts: [Conflict]
     /// Tickets Symphony saw reach Done today, newest first.
     public var shippedToday: [Ticket]
@@ -228,6 +230,7 @@ public struct OverviewState: Equatable {
         humanReview: [Ticket] = [],
         retrying: [Retry] = [],
         slotWaiting: [Waiting] = [],
+        dispatchSkipped: [Waiting] = [],
         conflicts: [Conflict] = [],
         shippedToday: [Ticket] = [],
         shippedTodayCount: Int? = nil,
@@ -246,6 +249,7 @@ public struct OverviewState: Equatable {
         self.humanReview = humanReview
         self.retrying = retrying
         self.slotWaiting = slotWaiting
+        self.dispatchSkipped = dispatchSkipped
         self.conflicts = conflicts
         self.shippedToday = shippedToday
         self.shippedTodayCount = shippedTodayCount
@@ -297,18 +301,8 @@ public struct OverviewState: Equatable {
                     error: retry.error
                 )
             },
-            slotWaiting: (payload.slotWaiting ?? []).compactMap { waiting in
-                guard let identifier = waiting.issueIdentifier ?? waiting.issueId else { return nil }
-                return Waiting(
-                    issueID: waiting.issueId,
-                    identifier: identifier,
-                    title: waiting.title,
-                    repoKey: waiting.repoKey,
-                    state: waiting.state,
-                    reason: waiting.reason,
-                    since: waiting.since.flatMap(SymphonyState.parseDate)
-                )
-            },
+            slotWaiting: (payload.slotWaiting ?? []).compactMap(waiting),
+            dispatchSkipped: (payload.dispatchSkipped ?? []).compactMap(waiting),
             conflicts: (payload.conflicts ?? []).compactMap { conflict in
                 guard let identifier = conflict.issueIdentifier ?? conflict.issueId else { return nil }
                 return Conflict(
@@ -359,6 +353,19 @@ public struct OverviewState: Equatable {
             url: entry.url.flatMap(URL.init(string:)),
             secondsSinceLastRun: entry.secondsSinceLastRun,
             completedAt: entry.completedAt.flatMap(SymphonyState.parseDate)
+        )
+    }
+
+    private static func waiting(_ entry: Payload.Waiting) -> Waiting? {
+        guard let identifier = entry.issueIdentifier ?? entry.issueId else { return nil }
+        return Waiting(
+            issueID: entry.issueId,
+            identifier: identifier,
+            title: entry.title,
+            repoKey: entry.repoKey,
+            state: entry.state,
+            reason: entry.reason,
+            since: entry.since.flatMap(SymphonyState.parseDate)
         )
     }
 
@@ -475,6 +482,7 @@ public struct OverviewState: Equatable {
         let humanReview: [Ticket]?
         let retrying: [Retry]?
         let slotWaiting: [Waiting]?
+        let dispatchSkipped: [Waiting]?
         let conflicts: [Conflict]?
         let shippedToday: [Ticket]?
         let qa: Passes?

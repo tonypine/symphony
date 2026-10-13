@@ -234,6 +234,14 @@ public struct TicketList: Equatable {
                 facts: blocked.reason.map { [Fact(label: "Why", value: $0)] } ?? []
             ))
         }
+        // Passed over by a dispatch gate: it waits on that gate, since the pass first saw it.
+        for skipped in state.dispatchSkipped {
+            builder.add(Row(
+                identifier: skipped.identifier, issueID: skipped.issueID, title: skipped.title, repoKey: skipped.repoKey,
+                state: skipped.state, stage: .queued, waitsOn: skipped.reason ?? "a dispatch gate",
+                since: skipped.since, forced: false, needsAttention: false, url: nil, facts: []
+            ))
+        }
         for forced in state.snapshot.forced {
             let running = forced.summary?.contains("running") == true
             builder.add(Row(

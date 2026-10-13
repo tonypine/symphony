@@ -1115,6 +1115,43 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_received :request_refresh_called
   end
 
+  test "phoenix observability api serves a ticket waiting for a slot or passed over by a dispatch gate" do
+    orchestrator_name = Module.concat(__MODULE__, :WaitingIssueApiOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot(), refresh: :unavailable)
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{
+             "status" => "dispatch_skipped",
+             "issue_id" => "skip-http",
+             "repo_key" => "default",
+             "running" => nil,
+             "retry" => nil,
+             "dispatch_skipped" => %{
+               "state" => "Todo",
+               "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+               "since" => "2026-10-03T06:00:00Z"
+             },
+             "verdicts" => []
+           } = skipped = json_response(get(build_conn(), "/api/v1/MT-SKIP"), 200)
+
+    refute Map.has_key?(skipped, "slot_waiting")
+
+    assert %{
+             "status" => "slot_waiting",
+             "issue_id" => "wait-http",
+             "slot_waiting" => %{
+               "state" => "Todo",
+               "reason" => "a Merging issue is waiting for a slot",
+               "since" => "2026-10-03T06:00:00Z"
+             }
+           } = json_response(get(build_conn(), "/api/v1/MT-WAIT"), 200)
+
+    assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
+  end
+
   test "phoenix observability api serves a ticket's code review and qa verdicts, newest first" do
     reviewed = ~U[2026-10-12 09:00:00Z]
     passed = ~U[2026-10-12 10:00:00Z]
