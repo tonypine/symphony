@@ -226,6 +226,31 @@ defmodule SymphonyElixir.Routing.ResolverTest do
     end
   end
 
+  describe "with_repo_key/2" do
+    test "gives a fetched issue the key of the repo its project routes to" do
+      repos = [repo("symphony", team: "TP", projects: ["Symphony"]), repo("site", team: "TP", projects: ["Site"])]
+      issue = issue(team: %{key: "TP"}, project: %{name: "Symphony"})
+
+      assert Resolver.with_repo_key(issue, repos).repo_key == "symphony"
+    end
+
+    test "keeps the key an issue already has" do
+      issue = issue(team: %{key: "TP"}, repo_key: "polled")
+
+      assert Resolver.with_repo_key(issue, [repo("symphony", team: "TP")]).repo_key == "polled"
+    end
+
+    test "prefers the one scoped repo over the team's default, and leaves an ambiguous or unrouted issue alone" do
+      default = repo("catch-all", team: "TP", default: true)
+      scoped = repo("symphony", team: "TP", projects: ["Symphony"])
+      issue = issue(team: %{key: "TP"}, project: %{name: "Symphony"}, repo_key: "")
+
+      assert Resolver.with_repo_key(issue, [default, scoped]).repo_key == "symphony"
+      assert Resolver.with_repo_key(issue, [scoped, repo("other", team: "TP", labels: [])]).repo_key == ""
+      assert Resolver.with_repo_key(issue, [repo("api", team: "API")]).repo_key == ""
+    end
+  end
+
   defp repo(name, attrs \\ []) do
     attrs
     |> Map.new()
