@@ -1899,7 +1899,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert second =~ "**Status:** Merged"
       refute second =~ "PR open"
       refute second =~ "pull/12"
-      assert second =~ "- 2026-10-07: Merged the PR\n- 2026-10-06: Opened the PR\n<!-- symphony:summary:end -->"
+      assert second =~ "- 2026-10-07: Merged the PR\n- 2026-10-06: Opened the PR\n\n<!-- symphony:summary:end -->"
       assert SymphonyElixir.IssueSummary.strip(second) == "## Goal\n\nShip it, and test it.\n\nAdded by a person."
     end
 

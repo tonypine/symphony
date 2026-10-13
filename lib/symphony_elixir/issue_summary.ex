@@ -6,7 +6,8 @@ defmodule SymphonyElixir.IssueSummary do
   shows where the ticket stands: a one-line status, a link to the review brief, the artifacts and a
   dated changelog, newest first and capped at 20 entries. `put/3` replaces the block, or appends
   it when the description has none, and leaves every byte outside it unchanged, so a person's edits
-  to the rest of the description survive. `strip/1` removes it, so a description read as
+  to the rest of the description survive; only an empty heading Linear left right before it goes
+  (`drop_empty_heading/1`). `strip/1` removes it, so a description read as
   requirements never carries Symphony's own summary.
   """
 
@@ -18,6 +19,11 @@ defmodule SymphonyElixir.IssueSummary do
   @field_max_length 300
   @artifact_cap 20
   @url_pattern ~r{\Ahttps?://[^\s()<>]+\z}
+  # Linear stores a list item written `- ` as `* `.
+  @list_item ~r/^[-*+] /
+  # A heading with nothing in it at the end of a text: what Linear made of a marker line written
+  # right above `---` (a setext heading), never a person's text.
+  @empty_heading ~r/(^|\n)#+[ \t]*\s*\z/
 
   @type artifact :: %{label: String.t(), url: String.t()}
   @type t :: %{status: String.t(), review_brief: String.t() | nil, artifacts: [artifact()], entry: String.t()}
@@ -72,7 +78,21 @@ defmodule SymphonyElixir.IssueSummary do
         {:error, :summary_block_unterminated}
 
       {:block, before, block, rest} ->
-        {:ok, before <> render(summary, Enum.take([entry | changelog(block)], @changelog_cap)) <> rest}
+        {:ok, drop_empty_heading(before) <> render(summary, Enum.take([entry | changelog(block)], @changelog_cap)) <> rest}
+    end
+  end
+
+  @doc """
+  `text` without the empty heading it ends with, if any, and with one blank line left before what
+  follows it. Linear reads a Symphony marker written right above `---` as a setext heading and
+  stores it as `## <marker>`; this drops that `## ` when the block is written again.
+  """
+  @spec drop_empty_heading(String.t()) :: String.t()
+  def drop_empty_heading(text) when is_binary(text) do
+    case Regex.replace(@empty_heading, text, "") do
+      ^text -> text
+      "" -> ""
+      rest -> String.trim_trailing(rest) <> "\n\n"
     end
   end
 
@@ -129,6 +149,7 @@ defmodule SymphonyElixir.IssueSummary do
     Enum.join(
       [
         @start_marker,
+        "",
         "---",
         "",
         @heading,
@@ -144,6 +165,7 @@ defmodule SymphonyElixir.IssueSummary do
         @changelog_label,
         "",
         Enum.join(entries, "\n"),
+        "",
         @end_marker
       ],
       "\n"
@@ -156,7 +178,7 @@ defmodule SymphonyElixir.IssueSummary do
   defp artifact_lines([]), do: "- None yet."
   defp artifact_lines(artifacts), do: Enum.map_join(artifacts, "\n", &"- [#{&1.label}](#{&1.url})")
 
-  # The entries already in the block: the list items after its changelog label.
+  # The entries already in the block: the list items after its changelog label, written `- `.
   defp changelog(block) do
     case :binary.split(block, @changelog_label) do
       [_block] ->
@@ -164,8 +186,10 @@ defmodule SymphonyElixir.IssueSummary do
 
       [_head, entries] ->
         entries
+        |> String.replace_suffix(@end_marker, "")
         |> String.split("\n")
-        |> Enum.filter(&String.starts_with?(&1, "- "))
+        |> Enum.filter(&Regex.match?(@list_item, &1))
+        |> Enum.map(&(@list_item |> Regex.replace(&1, "- ") |> String.trim_trailing()))
     end
   end
 
