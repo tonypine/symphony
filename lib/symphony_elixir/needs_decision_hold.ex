@@ -19,7 +19,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, MergeConfirmation, StateMachine, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{Config, Handoff, Hold, MergeConfirmation, StateMachine, TicketSignals, TransitionGuard}
   alias SymphonyElixir.HumanActions.{Collector, Request}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
@@ -158,6 +158,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   defp apply_clear(repo_key, issue_id, current, node, opts) do
     case Hold.clear(repo_key, issue_id, :needs_decision, opts) do
       :ok ->
+        clear_quiet_handoff_hold(repo_key, issue_id, opts)
+
         if moved_since_request?(current, node),
           do: Logger.info("Leaving issue_id=#{issue_id} where a person moved it after its decision request"),
           else: resume(repo_key, issue_id, current, replies(node, current), opts)
@@ -168,6 +170,22 @@ defmodule SymphonyElixir.NeedsDecisionHold do
         log_failure("clear", issue_id, reason)
     end
   end
+
+  # Runs that went quiet while the ticket waited on its question are what a `handoff_missing` Blocked
+  # hold counts (`SymphonyElixir.Orchestrator`), so the answer lifts that hold too: the ticket
+  # resumes with no second hold to clear. A Blocked hold on anything else stays.
+  defp clear_quiet_handoff_hold(repo_key, issue_id, opts) do
+    blocked = Hold.get(repo_key, issue_id, :blocked, opts)
+
+    if get_in(blocked, [:waits_on, :type]) == Handoff.missing_signal(),
+      do: log_clear_result(Hold.clear(repo_key, issue_id, :blocked, opts), issue_id),
+      else: :ok
+  end
+
+  defp log_clear_result(:ok, issue_id), do: Logger.info("Cleared the #{Handoff.missing_signal()} Blocked hold on issue_id=#{issue_id} with its decision")
+
+  defp log_clear_result({:error, reason}, issue_id),
+    do: Logger.warning("Failed to clear the #{Handoff.missing_signal()} Blocked hold on issue_id=#{issue_id}: #{inspect(reason)}")
 
   defp resume(repo_key, issue_id, current, replies, opts) do
     case MergeConfirmation.reply_target(current, replies) do

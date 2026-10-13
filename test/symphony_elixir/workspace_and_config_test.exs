@@ -2505,7 +2505,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       raw_linear_issue("issue-1", "MT-1", "user-1")
       |> Map.merge(%{
         "team" => %{"key" => "ACME", "name" => "Acme Team"},
-        "project" => %{"id" => "project-1", "name" => "Multi-repo support"}
+        "project" => %{"id" => "project-1", "name" => "Multi-repo support", "slugId" => "a1b2c3d4e5f6"}
       })
 
     graphql_fun = fn query, variables ->
@@ -2517,11 +2517,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert {:ok, [issue]} = Client.fetch_candidate_issues_for_test(graphql_fun)
 
     assert issue.team == %{key: "ACME", name: "Acme Team"}
-    assert issue.project == %{id: "project-1", name: "Multi-repo support"}
+    assert issue.project == %{id: "project-1", name: "Multi-repo support", slug_id: "a1b2c3d4e5f6"}
 
     assert_receive {:candidate_query, query, _variables}
     assert query =~ ~r/team\s*\{\s*key\s*name\s*\}/
-    assert query =~ ~r/project\s*\{\s*id\s*name\s*\}/
+    assert query =~ ~r/project\s*\{\s*id\s*name\s*slugId\s*\}/
   end
 
   test "linear client resolves assignee me before sending candidate filter" do
@@ -2901,7 +2901,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:fetch_issue_states_page, query, %{ids: ^first_batch_ids, first: 50, relationFirst: 50}}
     assert query =~ "SymphonyLinearIssuesById"
     assert query =~ ~r/team\s*\{\s*key\s*name\s*\}/
-    assert query =~ ~r/project\s*\{\s*id\s*name\s*\}/
+    assert query =~ ~r/project\s*\{\s*id\s*name\s*slugId\s*\}/
 
     assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5, relationFirst: 50}}
   end
