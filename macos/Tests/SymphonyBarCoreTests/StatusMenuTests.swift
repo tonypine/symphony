@@ -227,7 +227,7 @@ final class StatusMenuTests: XCTestCase {
     }
 
     func testForcePrompt() {
-        XCTAssertEqual(StatusMenu.forceTitle, "Force a ticket…")
+        XCTAssertEqual(StatusMenu.forceTitle, "Force a Ticket…")
         XCTAssertEqual(StatusMenu.forcingTitle("TP-123"), "Forcing TP-123…")
         XCTAssertEqual(StatusMenu.forceIdentifier(" TP-123\n"), "TP-123")
         XCTAssertNil(StatusMenu.forceIdentifier(""))
@@ -319,8 +319,11 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertTrue(StatusMenu.canResume(.paused(snapshot, external: true)))
     }
 
-    func testPauseTitleSaysActiveRunsContinue() {
-        XCTAssertEqual(StatusMenu.pauseTitle, "Pause Dispatch (active runs continue)")
+    func testPauseTitleOpensTheSheet() {
+        XCTAssertEqual(StatusMenu.pauseTitle, "Pause Dispatch…")
+        XCTAssertTrue(StatusMenu.isPause(.pause))
+        XCTAssertTrue(StatusMenu.isPause(.pauseWithReason("Deploy freeze")))
+        XCTAssertFalse(StatusMenu.isPause(.resume))
         XCTAssertEqual(StatusMenu.pausingTitle, "Pausing Dispatch…")
         XCTAssertEqual(StatusMenu.resumeTitle, "Resume Dispatch")
         XCTAssertEqual(StatusMenu.resumingTitle, "Resuming Dispatch…")

@@ -28,6 +28,10 @@ public struct OverviewState: Equatable {
     /// Issue ids of the landing runs.
     public var landing: [String]
     public var strayProcesses: [StrayProcess]
+    /// Tickets held by their blockers or by an app update.
+    public var blocked: [Blocked]
+    /// Pull requests Symphony set to merge on their own once CI passes.
+    public var autoMerge: [AutoMerge]
 
     public struct Run: Equatable {
         public var issueID: String?
@@ -82,6 +86,8 @@ public struct OverviewState: Equatable {
         public var url: URL?
         /// Since its last run ended, for a watched ticket.
         public var secondsSinceLastRun: Int?
+        /// When it reached Done, for a shipped ticket.
+        public var completedAt: Date?
 
         public init(
             issueID: String? = nil,
@@ -90,7 +96,8 @@ public struct OverviewState: Equatable {
             repoKey: String? = nil,
             state: String? = nil,
             url: URL? = nil,
-            secondsSinceLastRun: Int? = nil
+            secondsSinceLastRun: Int? = nil,
+            completedAt: Date? = nil
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -99,6 +106,46 @@ public struct OverviewState: Equatable {
             self.state = state
             self.url = url
             self.secondsSinceLastRun = secondsSinceLastRun
+            self.completedAt = completedAt
+        }
+    }
+
+    /// A ticket Symphony won't start yet: its blockers aren't done, or it waits for an app update.
+    public struct Blocked: Equatable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var state: String?
+        /// What holds it when it isn't its blockers, for example "waits for the app update that includes TP-12".
+        public var reason: String?
+        /// The identifiers of the tickets it waits on.
+        public var blockers: [String]
+
+        public init(issueID: String? = nil, identifier: String, title: String? = nil, state: String? = nil, reason: String? = nil, blockers: [String] = []) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.state = state
+            self.reason = reason
+            self.blockers = blockers
+        }
+    }
+
+    /// A pull request GitHub merges by itself once its checks pass.
+    public struct AutoMerge: Equatable {
+        public var issueID: String?
+        public var identifier: String
+        public var state: String?
+        /// For example `enabled` or `waiting_on_checks`.
+        public var status: String?
+        public var updatedAt: Date?
+
+        public init(issueID: String? = nil, identifier: String, state: String? = nil, status: String? = nil, updatedAt: Date? = nil) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.state = state
+            self.status = status
+            self.updatedAt = updatedAt
         }
     }
 
@@ -187,7 +234,9 @@ public struct OverviewState: Equatable {
         qaRunning: [String] = [],
         qaQueued: [String] = [],
         landing: [String] = [],
-        strayProcesses: [StrayProcess] = []
+        strayProcesses: [StrayProcess] = [],
+        blocked: [Blocked] = [],
+        autoMerge: [AutoMerge] = []
     ) {
         self.snapshot = snapshot
         self.generatedAt = generatedAt
@@ -204,6 +253,8 @@ public struct OverviewState: Equatable {
         self.qaQueued = qaQueued
         self.landing = landing
         self.strayProcesses = strayProcesses
+        self.blocked = blocked
+        self.autoMerge = autoMerge
     }
 
     /// The Overview's state in a state payload, nil when it isn't one (an error, or not JSON).
@@ -272,7 +323,28 @@ public struct OverviewState: Equatable {
             qaRunning: (payload.qa?.running ?? []).compactMap(\.issueId),
             qaQueued: (payload.qa?.queued ?? []).compactMap(\.issueId),
             landing: (payload.finishing?.running ?? []).compactMap(\.issueId),
-            strayProcesses: (payload.strayProcesses ?? []).map { StrayProcess(pid: $0.pid, command: $0.command, cwd: $0.cwd) }
+            strayProcesses: (payload.strayProcesses ?? []).map { StrayProcess(pid: $0.pid, command: $0.command, cwd: $0.cwd) },
+            blocked: (payload.blocked ?? []).compactMap { entry in
+                guard let identifier = entry.issueIdentifier ?? entry.issueId else { return nil }
+                return Blocked(
+                    issueID: entry.issueId,
+                    identifier: identifier,
+                    title: entry.title,
+                    state: entry.state,
+                    reason: entry.reason,
+                    blockers: (entry.blockedBy ?? []).compactMap(\.issueIdentifier)
+                )
+            },
+            autoMerge: (payload.autoMerge ?? []).compactMap { entry in
+                guard let identifier = entry.issueIdentifier ?? entry.issueId else { return nil }
+                return AutoMerge(
+                    issueID: entry.issueId,
+                    identifier: identifier,
+                    state: entry.state,
+                    status: entry.status,
+                    updatedAt: entry.updatedAt.flatMap(SymphonyState.parseDate)
+                )
+            }
         )
     }
 
@@ -285,7 +357,8 @@ public struct OverviewState: Equatable {
             repoKey: entry.repoKey,
             state: entry.state,
             url: entry.url.flatMap(URL.init(string:)),
-            secondsSinceLastRun: entry.secondsSinceLastRun
+            secondsSinceLastRun: entry.secondsSinceLastRun,
+            completedAt: entry.completedAt.flatMap(SymphonyState.parseDate)
         )
     }
 
@@ -327,6 +400,28 @@ public struct OverviewState: Equatable {
             let state: String?
             let url: String?
             let secondsSinceLastRun: Int?
+            let completedAt: String?
+        }
+
+        struct Blocker: Decodable {
+            let issueIdentifier: String?
+        }
+
+        struct Blocked: Decodable {
+            let issueId: String?
+            let issueIdentifier: String?
+            let title: String?
+            let state: String?
+            let reason: String?
+            let blockedBy: [Blocker]?
+        }
+
+        struct AutoMerge: Decodable {
+            let issueId: String?
+            let issueIdentifier: String?
+            let state: String?
+            let status: String?
+            let updatedAt: String?
         }
 
         struct Retry: Decodable {
@@ -385,5 +480,7 @@ public struct OverviewState: Equatable {
         let qa: Passes?
         let finishing: Passes?
         let strayProcesses: [Stray]?
+        let blocked: [Blocked]?
+        let autoMerge: [AutoMerge]?
     }
 }

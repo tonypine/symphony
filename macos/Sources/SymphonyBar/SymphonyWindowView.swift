@@ -67,6 +67,23 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var stopError: String?
     /// Stops made from the app, shown on the timeline until their audit record arrives.
     @Published var localStops: [TicketPage.LocalStop] = []
+    /// Tickets' scope bar choice, search and selected row (D6).
+    @Published var ticketFilter: TicketList.Filter = .all
+    @Published var ticketSearch = ""
+    @Published var ticketSelection: String?
+    /// Tickets' inspector (⌥⌘I, Space).
+    @Published var inspectorShown = true
+    /// Set by ⌘F to put the focus in Tickets' search field.
+    @Published var searchRequested = false
+    /// The dispatch control's popover (D12a).
+    @Published var dispatchPopoverShown = false
+    /// The Pause Dispatch sheet (D12a) and the Force a Ticket sheet (D12b); nothing is sent until their button is pressed.
+    @Published var pauseSheetShown = false
+    @Published var forceSheet: ForceSheetRequest?
+    /// True while the sheets' or the popover's request is on its way to Symphony.
+    @Published var dispatchInFlight = false
+    /// What went wrong with it, shown in the sheet or the popover.
+    @Published var dispatchError: String?
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -329,7 +346,7 @@ final class SymphonyWindowModel: ObservableObject {
         case .openDiagnostics:
             show(.diagnostics)
         case let .stopForcing(identifier):
-            send(.stopForcing(identifier))
+            stopForcing(identifier)
         }
     }
 
@@ -404,6 +421,7 @@ struct SymphonyWindowView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DesignTokens.Surface.window.color)
                 .modifier(StopRunSheetPresenter(model: model))
+                .modifier(DispatchSheetsPresenter(model: model))
                 .toolbar {
                     ToolbarItemGroup(placement: .navigation) {
                         // P10: ⌘[ and ⌘] between the views and the ticket pages shown.
@@ -426,6 +444,19 @@ struct SymphonyWindowView: View {
                     }
                     ToolbarItem(placement: .automatic) {
                         ScopePicker(model: model)
+                    }
+                    ToolbarItem(placement: .automatic) {
+                        DispatchControlButton(model: model, client: client)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                    if model.selection == .tickets, model.shownTicket == nil {
+                        ToolbarItem(placement: .automatic) {
+                            Button { model.openForceSheet() } label: {
+                                Label(DispatchControl.forceTitle, systemImage: DesignTokens.Status.forced.symbol)
+                            }
+                            .help("Force a ticket (⇧⌘F)")
+                            .disabled(!model.dispatchControl.canForce)
+                        }
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
@@ -586,6 +617,8 @@ struct SymphonyDetail: View {
                 OverviewContent(model: model, client: client)
             case .initiatives:
                 InitiativesContent(model: model, client: client)
+            case .tickets:
+                TicketsContent(model: model, client: client)
             case .diagnostics:
                 DiagnosticsContent(model: model, client: client)
             default:
@@ -610,6 +643,7 @@ struct OverviewContent: View {
                     controlInFlight: model.controlInFlight,
                     openInbox: { model.showInbox() },
                     openTicket: model.openTicket,
+                    openTickets: model.showTickets,
                     openInitiative: model.showInitiative
                 ),
                 initiatives: model.initiativesList?.active ?? []

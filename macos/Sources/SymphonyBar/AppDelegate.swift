@@ -423,7 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(cancelRestart(_:)):
             return restarter.machine.canCancel
         case #selector(pauseDispatch(_:)):
-            menuItem.title = controlInFlight == .pause ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
+            menuItem.title = controlInFlight.map(StatusMenu.isPause) == true ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
             return controlInFlight == nil && !restarting && StatusMenu.canPause(machine.status)
         case #selector(resumeDispatch(_:)):
             menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
@@ -501,8 +501,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private var restarting: Bool { restarter.machine.isRestarting }
 
+    /// Opens the window's Pause Dispatch sheet (D12a). Scripted QA mode can't press the sheet's button, so it answers
+    /// the sheet the way it answers a prompt: the rest of the command file is the reason, none for the menu's.
     @objc private func pauseDispatch(_ sender: Any?) {
-        send(.pause)
+        if let script = QAScriptDriver.shared {
+            let reason = script.answer(promptTitle: PauseSheet.title, message: PauseSheet.happens) ?? ""
+            send(PauseSheet.action(reason: reason))
+            return
+        }
+        symphonyWindow.showPauseSheet()
     }
 
     @objc private func resumeDispatch(_ sender: Any?) {
@@ -526,19 +533,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// Asks for a ticket and forces it past the dispatch limits.
+    /// Opens the window's Force a Ticket sheet (D12b). Scripted QA mode answers it as a prompt: the rest of the command
+    /// file is the identifier, and nothing is sent when there is none.
     @objc private func forceTicket(_ sender: Any?) {
         guard forceInFlight == nil else { return }
-        let alert = NSAlert()
-        alert.messageText = StatusMenu.forcePromptTitle
-        alert.informativeText = StatusMenu.forcePromptMessage
-        alert.addButton(withTitle: StatusMenu.forcePromptButton)
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.placeholderString = StatusMenu.forcePromptPlaceholder
-        guard let input = SymphonyRunner.prompt(alert, field: field), let identifier = StatusMenu.forceIdentifier(input)
-        else { return }
-        sendForce(.force(identifier))
+        if let script = QAScriptDriver.shared {
+            guard let input = script.answer(promptTitle: ForceSheet.title, message: ForceSheet.skips + " " + ForceSheet.keeps),
+                  let identifier = ForceSheet.identifier(input)
+            else { return }
+            sendForce(.force(identifier))
+            return
+        }
+        symphonyWindow.showForceSheet()
     }
 
     @objc private func stopForcing(_ sender: NSMenuItem) {

@@ -17,6 +17,7 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.url, URL(string: "https://linear.app/acme/issue/SHOP-305"))
         XCTAssertEqual(page.phase, .working(stuck: true))
         XCTAssertEqual(page.badges, [TicketPage.Badge(status: .problem, word: "Needs attention"), TicketPage.Badge(status: .forced, word: "Forced")])
+        XCTAssertTrue(page.isForced)
         XCTAssertTrue(page.isRunning)
         XCTAssertTrue(page.isTracked)
         XCTAssertEqual(page.sessionID, "session-SHOP-305")
@@ -74,6 +75,7 @@ final class TicketPageTests: XCTestCase {
             TicketPage.Fact(label: "Merged", value: "13:40"),
             TicketPage.Fact(label: "Forced", value: "No"),
         ])
+        XCTAssertFalse(page.isForced)
         // The approve move shows once although both audit queries returned it.
         XCTAssertEqual(page.timeline.map(\.title), ["Implementation run 1", "Rework run 1", "Moved to Merging by you", "Merged"])
         XCTAssertEqual(page.timeline.map(\.timeText), ["10:02", "12:10", "13:12", "13:40"])
