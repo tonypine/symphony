@@ -93,6 +93,11 @@ public struct InboxItem: Equatable, Identifiable {
     public var waitingSeconds: Int?
     public var url: URL?
     public var review: InboxReview
+    /// What each ticket or pull request the item's text mentions is, keyed by the mention as written; empty from a
+    /// Symphony that doesn't resolve them.
+    public var references: [String: Reference]
+    /// Where the item's ticket sits; nil from a Symphony that doesn't say.
+    public var context: TicketContext?
 
     public init(
         id: String,
@@ -104,7 +109,9 @@ public struct InboxItem: Equatable, Identifiable {
         ask: String,
         waitingSeconds: Int? = nil,
         url: URL? = nil,
-        review: InboxReview = InboxReview()
+        review: InboxReview = InboxReview(),
+        references: [String: Reference] = [:],
+        context: TicketContext? = nil
     ) {
         self.id = id
         self.identifier = identifier
@@ -116,6 +123,8 @@ public struct InboxItem: Equatable, Identifiable {
         self.waitingSeconds = waitingSeconds
         self.url = url
         self.review = review
+        self.references = references
+        self.context = context
     }
 
     /// The row's age: "3 h 12 min"; nil when unknown.
@@ -139,6 +148,8 @@ public struct InboxItem: Equatable, Identifiable {
         let waitingSeconds: Int?
         let url: String?
         let review: InboxReview.Payload?
+        let references: [String: Reference.Payload]?
+        let context: TicketContext.Payload?
     }
 
     init?(_ payload: Payload) {
@@ -155,7 +166,9 @@ public struct InboxItem: Equatable, Identifiable {
             ask: payload.ask ?? payload.title ?? identifier,
             waitingSeconds: payload.waitingSeconds,
             url: payload.url.flatMap(URL.init(string:)),
-            review: payload.review.map(InboxReview.init) ?? InboxReview()
+            review: payload.review.map(InboxReview.init) ?? InboxReview(),
+            references: (payload.references ?? [:]).mapValues(Reference.init),
+            context: payload.context.map(TicketContext.init)
         )
     }
 }

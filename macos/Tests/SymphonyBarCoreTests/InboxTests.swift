@@ -46,8 +46,103 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(InboxReview.Blocked(reason: "Needs a key").nextLine, "Symphony lifts the hold when what it waits on clears.")
     }
 
+    func testTheDecisionFixtureResolvesEveryMentionAndWhereTheTicketSits() throws {
+        let inbox = try payload("inbox-decision")
+        XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892"])
+
+        let decision = inbox.items[1]
+        XCTAssertEqual(Set(decision.references.keys), ["TP-891", "TP-892", "TP-880", "TP-893", "#448"])
+        let action = try XCTUnwrap(decision.review.action)
+        let text = [action.title, action.question, action.why, action.ifUnanswered, action.unblocks].compactMap { $0 }.joined(separator: " ")
+        for mention in decision.references.keys {
+            XCTAssertTrue(text.contains(mention), "\(mention) isn't in the request's text")
+        }
+
+        guard case let .ticket(ticket)? = decision.references["TP-891"] else { return XCTFail("TP-891 isn't a ticket") }
+        XCTAssertEqual(ticket.title, "Remove the retired review states")
+        XCTAssertEqual(ticket.state, "In Progress")
+        XCTAssertEqual(ticket.parent?.identifier, "TP-870")
+        XCTAssertEqual(ticket.pullRequest, .init(number: 446, url: URL(string: "https://github.com/tonypine/symphony/pull/446"), checks: .pending))
+        XCTAssertNil(ticket.waitingOn)
+        guard case let .ticket(blocked)? = decision.references["TP-893"] else { return XCTFail("TP-893 isn't a ticket") }
+        XCTAssertEqual(blocked.waitingOn, "a blocker: TP-892")
+
+        guard case let .pullRequest(pr)? = decision.references["#448"] else { return XCTFail("#448 isn't a pull request") }
+        XCTAssertEqual(pr.number, 448)
+        XCTAssertEqual(pr.reviewState, .changesRequested)
+        XCTAssertEqual(pr.reviewRounds, 2)
+        XCTAssertEqual([pr.files, pr.additions, pr.deletions], [14, 120, 610])
+        XCTAssertEqual(pr.checks, .passed)
+        XCTAssertEqual(pr.ticket, "TP-892")
+        XCTAssertEqual(decision.references["#448"]?.url?.absoluteString, "https://github.com/tonypine/symphony/pull/448")
+
+        let context = try XCTUnwrap(decision.context)
+        XCTAssertEqual(context.parent?.identifier, "TP-870")
+        XCTAssertEqual(context.parent?.done, 4)
+        XCTAssertEqual(context.parent?.total, 7)
+        XCTAssertEqual(context.parent?.children.count, 7)
+        XCTAssertEqual(context.pullRequest?.number, 448)
+        XCTAssertEqual(context.pullRequest?.sentBack, 2)
+        XCTAssertEqual(context.pullRequest?.checks, .passed)
+        XCTAssertEqual(context.blocks.map(\.identifier), ["TP-893"])
+        XCTAssertEqual(context.related.map(\.identifier), ["TP-891"])
+        XCTAssertEqual(context.related.first?.state, "In Progress")
+        XCTAssertTrue(context.blockedBy.isEmpty)
+        XCTAssertEqual(context.earlierDecisions.count, 1)
+        XCTAssertEqual(context.earlierDecisions.first?.at, ISO8601DateFormatter().date(from: "2026-10-07T05:48:00Z"))
+        XCTAssertEqual(context.earlierDecisions.first?.answer, "Remove it with the rest")
+
+        let plan = inbox.items[0]
+        guard case let .parsed(brief)? = plan.review.brief else { return XCTFail("the plan's brief didn't parse") }
+        XCTAssertTrue(brief.whatToReview.first?.text.contains("TP-947") ?? false)
+        guard case let .ticket(tp947)? = plan.references["TP-947"] else { return XCTFail("TP-947 isn't a ticket") }
+        XCTAssertEqual(tp947.waitingOn, "you")
+        XCTAssertEqual(plan.context, TicketContext())
+    }
+
+    func testAnItemFromAnOlderSymphonyOrWithAnUnknownReferenceStillDecodes() throws {
+        let json = """
+        {"items": [
+          {"issue_id": "i-1", "identifier": "TP-1", "kind": "action", "ask": "Decide"},
+          {"issue_id": "i-2", "identifier": "TP-2", "kind": "action", "ask": "Decide",
+           "references": {
+             "TP-3": {"kind": "epic", "url": "https://linear.app/x/issue/TP-3"},
+             "TP-4": {"kind": "missing", "url": null},
+             "TP-5": {"kind": "ticket"},
+             "#6": {"kind": "pull_request", "number": 6, "review_state": "reverted"},
+             "TP-7": {"kind": "ticket", "identifier": "TP-7", "parent": {"title": "No id"}, "pull_request": {"url": "u"}}
+           },
+           "context": {"parent": {"title": "No id"}, "pull_request": {"url": "u"}, "related": [{"title": "No id"}],
+                       "earlier_decisions": [{"at": "yesterday", "title": "T", "answer": "A"}]}}
+        ]}
+        """
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(json.utf8)))
+
+        XCTAssertEqual(inbox.items[0].references, [:])
+        XCTAssertNil(inbox.items[0].context)
+
+        let references = inbox.items[1].references
+        XCTAssertEqual(references["TP-3"], .missing(url: URL(string: "https://linear.app/x/issue/TP-3")))
+        XCTAssertEqual(references["TP-4"], .missing(url: nil))
+        XCTAssertEqual(references["TP-5"], .missing(url: nil))
+        guard case let .pullRequest(pr)? = references["#6"] else { return XCTFail("#6 isn't a pull request") }
+        XCTAssertEqual(pr.reviewState, .open)
+        XCTAssertEqual(pr.reviewRounds, 0)
+        XCTAssertNil(pr.checks)
+        guard case let .ticket(ticket)? = references["TP-7"] else { return XCTFail("TP-7 isn't a ticket") }
+        XCTAssertNil(ticket.parent)
+        XCTAssertNil(ticket.pullRequest)
+
+        let context = try XCTUnwrap(inbox.items[1].context)
+        XCTAssertNil(context.parent)
+        XCTAssertNil(context.pullRequest)
+        XCTAssertTrue(context.related.isEmpty)
+        XCTAssertNil(context.earlierDecisions.first?.at)
+        XCTAssertEqual(context.earlierDecisions.first?.answer, "A")
+    }
+
     func testTheBadgeTheMenuTheTileAndTheInboxAgreeOnTheCount() throws {
-        for name in ["inbox", "inbox-empty"] {
+        for name in ["inbox", "inbox-empty", "inbox-decision"] {
             let inbox = try payload(name)
             let stateData = try Data(contentsOf: fixture(name).appendingPathComponent("state.json"))
             let state = try XCTUnwrap(OverviewState.decode(stateData))
