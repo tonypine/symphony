@@ -1,0 +1,63 @@
+{
+  "from": "2026-10-01",
+  "to": "2026-10-07",
+  "days": [
+    {
+      "date": "2026-10-01",
+      "verified": true,
+      "broken": null
+    },
+    {
+      "date": "2026-10-02",
+      "verified": true,
+      "broken": null
+    },
+    {
+      "date": "2026-10-03",
+      "verified": true,
+      "broken": null
+    },
+    {
+      "date": "2026-10-04",
+      "verified": true,
+      "broken": null
+    },
+    {
+      "date": "2026-10-05",
+      "verified": true,
+      "broken": null
+    },
+    {
+      "date": "2026-10-06",
+      "verified": false,
+      "broken": {
+        "line": 5,
+        "record_hash": "b3c76a365e676309",
+        "reason": "chain_break",
+        "record": {
+          "timestamp": "2026-10-06T11:48:52Z",
+          "event_type": "pr_opened",
+          "issue_id": "i-298",
+          "issue_identifier": "SHOP-298",
+          "repo_key": "web-shop",
+          "run_id": "run-298-1",
+          "action": "opened",
+          "url": "https://github.com/acme/web-shop/pull/482",
+          "pr": {
+            "owner": "acme",
+            "repo": "web-shop",
+            "number": 482
+          },
+          "date": "2026-10-06",
+          "previous_hash": "0000tampered0000",
+          "record_hash": "b3c76a365e676309"
+        }
+      }
+    },
+    {
+      "date": "2026-10-07",
+      "verified": true,
+      "broken": null
+    }
+  ]
+}

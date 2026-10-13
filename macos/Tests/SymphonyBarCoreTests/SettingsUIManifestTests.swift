@@ -61,6 +61,7 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.route = RepositoryRoute(team: "OPS", projects: ["ops"], labels: ["infra"], assignee: "you")
         changed.workspace = RepositoryWorkspace(source: "acme/api", fetchBeforeDispatch: false)
         changed.manualReview = "on"
+        changed.ticketPatternsBuiltIn = false
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
 
         let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic")
@@ -85,6 +86,7 @@ final class SettingsUIManifestTests: XCTestCase {
                 to: WorkflowStates(codeReview: "Review", qa: "Quality", planReview: "Planning", epicReview: "Epic", ciFix: "Fixing")
             )
         }, from: yaml)
+        yaml = try record("turning off the built-in ticket patterns", { try BuiltInTicketPatterns.setting(false, in: $0) }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops

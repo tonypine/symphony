@@ -8,6 +8,9 @@
   specimen, then every screen below, journey by journey, at the window's real size, with a Light/Dark switch. Open it
   in any browser, offline.
 - **Data:** every repo, ticket and number is made up.
+- **Since approval:** the acceptance gate, `In Review`, `Human Review` and `Final verification:` sign-offs were
+  retired while the app was built. The screens below keep the approved wording; how the app on `main` reads them is
+  in [Stories and journeys](director-app.md) (**Since approval**).
 
 ## 0. The window
 
@@ -320,7 +323,8 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Shows:** the local audit records (today's `/audit`): kind and date filters, search, chain verification,
   **Export…** (NDJSON). Moves made from the app are recorded like any other.
-- **Data:** `/api/v1/audit` (exists).
+- **Data:** `/api/v1/audit` (exists; `last=N` reads the newest records) and `/api/v1/audit/verify` (each day's chain:
+  verified, or the first broken record).
 
 ### J9. Mac routines (platform baseline)
 

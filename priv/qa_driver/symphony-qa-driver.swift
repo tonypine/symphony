@@ -35,12 +35,17 @@
 //   ax-set-value <pid> <path> <value>
 //   ax-resize <pid> <window path or ""> <width> <height>
 //   ax-ping <pid>
+//   ax-select <pid> <path>
+//   click <pid> <path> <clicks>
+//   key <pid> <key> <modifiers, comma-separated, or "">
 //
 // `ax-set-value` types into a text field the way a person does (see
 // `enterText`), and sets `AXValue` directly only on other controls.
 // `ax-resize` sizes a window for the playbook's wide pass (see `resizeWindow`)
 // and `ax-ping` tells a hung app from a busy one; both use the Accessibility
-// grant like the other `ax-` commands.
+// grant like the other `ax-` commands. `ax-select` selects a table or outline
+// row, which answers no AXPress, and `click` and `key` send mouse and key
+// events to the app's PID alone (see `selectRow`, `click` and `pressKey`).
 //
 // Opened with no arguments (by hand, from Finder or `open`), it asks for both
 // permissions, so that it is listed in System Settings.
@@ -126,6 +131,10 @@ func describe(_ element: AXUIElement, path: String) -> [String: Any] {
 
     if let focused = attribute(element, kAXFocusedAttribute as String) as? Bool, focused {
         node["focused"] = true
+    }
+
+    if let selected = attribute(element, kAXSelectedAttribute as String) as? Bool, selected {
+        node["selected"] = true
     }
 
     node["frame"] = frame(element)
@@ -520,9 +529,192 @@ func ping(_ pid: pid_t) {
     }
 }
 
+// -- rows, clicks and keys ----------------------------------------------------------
+
+// Key events reach only the key window of the active app, and a click on a
+// window behind another lands on the one in front, so both bring the app and the
+// element's window forward first.
+func bringForward(_ app: AXUIElement, _ target: AXUIElement?) {
+    if (attribute(app, kAXFrontmostAttribute as String) as? Bool) != true { _ = setFlag(app, kAXFrontmostAttribute as String) }
+    if let target, let window = windowOf(target) {
+        _ = setFlag(window, kAXMainAttribute as String)
+        _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    }
+    _ = waitUntil(2) { (attribute(app, kAXFrontmostAttribute as String) as? Bool) == true }
+}
+
+func windowOf(_ target: AXUIElement) -> AXUIElement? {
+    if (attribute(target, kAXRoleAttribute as String) as? String) == kAXWindowRole as String { return target }
+    return element(attribute(target, kAXWindowAttribute as String))
+}
+
+let tableRoles: Set<String> = [kAXTableRole as String, kAXOutlineRole as String]
+
+// The row itself, or the row a cell or its text sits in.
+func enclosingRow(_ start: AXUIElement) -> AXUIElement? {
+    var current: AXUIElement? = start
+
+    for _ in 0..<6 {
+        guard let candidate = current else { return nil }
+        if (attribute(candidate, kAXRoleAttribute as String) as? String) == kAXRowRole as String { return candidate }
+        current = element(attribute(candidate, kAXParentAttribute as String))
+    }
+
+    return nil
+}
+
+func isSelected(_ row: AXUIElement, in table: AXUIElement?) -> Bool {
+    if (attribute(row, kAXSelectedAttribute as String) as? Bool) == true { return true }
+    let selected = table.flatMap { attribute($0, kAXSelectedRowsAttribute as String) as? [AXUIElement] } ?? []
+    return selected.contains { CFEqual($0, row) }
+}
+
+// A SwiftUI `Table` row (an `AXRow` of an `AXOutline` or `AXTable`) answers no
+// AXPress, so it is selected the accessible way: the table's `AXSelectedRows`
+// set to just this row, or else the row's `AXSelected`. The table then takes
+// keyboard focus, so a following `key` (Return, an arrow) acts on the selection.
+func selectRow(_ pid: pid_t, _ path: String) {
+    let app = application(pid)
+    guard let row = enclosingRow(resolve(app, path)) else {
+        fail("not_a_row", "The element at \(path) is not a table or outline row (AXRow) or inside one.")
+    }
+
+    let parent = element(attribute(row, kAXParentAttribute as String))
+    let table = parent.flatMap { tableRoles.contains(attribute($0, kAXRoleAttribute as String) as? String ?? "") ? $0 : nil }
+    bringForward(app, row)
+
+    var result = AXError.attributeUnsupported
+    if let table, settable(table, kAXSelectedRowsAttribute as String) {
+        result = AXUIElementSetAttributeValue(table, kAXSelectedRowsAttribute as CFString, [row] as CFArray)
+    }
+    if result != .success { result = setFlag(row, kAXSelectedAttribute as String) }
+    if result != .success { axFailure(result, "selecting the row") }
+
+    guard waitUntil(2, { isSelected(row, in: table) }) else {
+        fail("not_selected", "The row did not report itself selected. Try qa_click on it instead.")
+    }
+
+    if let table { _ = setFlag(table, kAXFocusedAttribute as String) }
+    emit(["ok": true, "selected": true, "element": describe(row, path: path)])
+}
+
+func windowNumber(_ window: [String: Any]) -> Int? { window[kCGWindowNumber as String] as? Int }
+
+// The front-most on-screen window under the point, skipping fully transparent ones.
+func frontWindow(at point: CGPoint) -> [String: Any]? {
+    let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+
+    return list.first { info in
+        guard let bounds = info[kCGWindowBounds as String] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
+        return (info[kCGWindowAlpha as String] as? Double ?? 1) > 0 && rect.contains(point)
+    }
+}
+
+let clickPause: useconds_t = 50_000
+
+// Clicks the centre of the element's frame. The click goes only to the app's
+// PID, and only when the window in front at that point is the app's own, so a
+// covered or off-screen element fails rather than clicking something else.
+func click(_ pid: pid_t, _ path: String, clicks: Int) {
+    let app = application(pid)
+    let target = resolve(app, path)
+    guard let origin = point(attribute(target, kAXPositionAttribute as String)),
+          let extent = size(attribute(target, kAXSizeAttribute as String)), extent.width >= 1, extent.height >= 1 else {
+        fail("no_frame", "The element at \(path) has no frame to click.")
+    }
+
+    let centre = CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2)
+    bringForward(app, target)
+
+    guard let window = frontWindow(at: centre), let number = windowNumber(window) else {
+        fail("not_on_screen", "The element at \(path) is not on screen; scroll it into view or raise its window.")
+    }
+    guard (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid else {
+        fail("covered", "Another app's window covers the element at \(path); QA clicks only inside the app's own windows.")
+    }
+
+    for count in 1...clicks {
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            guard let event = CGEvent(mouseEventSource: keySource, mouseType: type, mouseCursorPosition: centre, mouseButton: .left) else {
+                fail("click_failed", "Could not create a mouse event.")
+            }
+            event.setIntegerValueField(.mouseEventClickState, value: Int64(count))
+            event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(number))
+            event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(number))
+            event.postToPid(pid)
+            usleep(keyPause)
+        }
+    }
+
+    usleep(clickPause)
+    emit(["ok": true, "clicked": ["x": Int(centre.x), "y": Int(centre.y)], "clicks": clicks, "element": describe(target, path: path)])
+}
+
+// US-layout virtual key codes; the event also carries the character, so a key
+// equivalent such as ⌘[ matches on any layout.
+let namedKeys: [String: CGKeyCode] = [
+    "return": 36, "enter": 76, "tab": 48, "space": 49, "escape": 53, "delete": 51, "forward_delete": 117,
+    "left": 123, "right": 124, "down": 125, "up": 126, "home": 115, "end": 119, "page_up": 116, "page_down": 121
+]
+let characterKeys: [Character: CGKeyCode] = [
+    "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12, "w": 13,
+    "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25,
+    "7": 26, "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32, "[": 33, "i": 34, "p": 35, "l": 37, "j": 38,
+    "'": 39, "k": 40, ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45, "m": 46, ".": 47, "`": 50
+]
+let keyText: [String: String] = ["return": "\r", "enter": "\u{3}", "tab": "\t", "space": " ", "escape": "\u{1b}", "delete": "\u{7f}"]
+let modifierFlags: [String: CGEventFlags] = ["command": .maskCommand, "shift": .maskShift, "option": .maskAlternate, "control": .maskControl]
+
+func focusedDescription(_ app: AXUIElement, _ name: String) -> [String: Any]? {
+    guard let focused = element(attribute(app, name)) else { return nil }
+    var node = describe(focused, path: "")
+    node.removeValue(forKey: "path")
+    return node
+}
+
+// Presses one key with its modifiers in the app's focused window: the app comes
+// to the front, and the events go to its PID alone.
+func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
+    var flags: CGEventFlags = []
+    for modifier in modifiers.split(separator: ",") {
+        guard let flag = modifierFlags[String(modifier)] else { fail("invalid_key", "Unknown modifier \(modifier).") }
+        flags.insert(flag)
+    }
+
+    let code: CGKeyCode
+    var text = keyText[name] ?? ""
+    if let named = namedKeys[name] {
+        code = named
+        if ["left", "right", "down", "up"].contains(name) { flags.formUnion([.maskSecondaryFn, .maskNumericPad]) }
+        if ["home", "end", "page_up", "page_down", "forward_delete"].contains(name) { flags.insert(.maskSecondaryFn) }
+    } else if name.count == 1, let character = name.first, let typed = characterKeys[character] {
+        code = typed
+        text = flags.contains(.maskShift) ? name.uppercased() : name
+    } else {
+        fail("invalid_key", "Unknown key \(name).")
+    }
+
+    let app = application(pid)
+    bringForward(app, nil)
+    guard element(attribute(app, kAXFocusedWindowAttribute as String)) != nil else {
+        fail("no_window", "The app has no focused window to send the key to. Raise one with qa_ax_press and AXRaise first.")
+    }
+
+    postKey(pid, code, flags: flags, text: Array(text.utf16))
+    usleep(clickPause)
+    emit([
+        "ok": true,
+        "key": name,
+        "modifiers": modifiers.split(separator: ",").map(String.init),
+        "window": focusedDescription(app, kAXFocusedWindowAttribute as String) ?? [:],
+        "focused": focusedDescription(app, kAXFocusedUIElementAttribute as String) ?? [:]
+    ])
+}
+
 // -- server ---------------------------------------------------------------------
 
-let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping"]
+let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping", "ax-select", "click", "key"]
 let requestLimit = 64 * 1024
 let commandTimeout: TimeInterval = 60
 // Symphony waits 15 s for the helper it opens, so an older owner file was left
@@ -808,6 +1000,19 @@ case "ax-resize" where args.count == 5:
 case "ax-ping" where args.count == 2:
     requireAccessibility()
     ping(pidArgument(args[1]))
+
+case "ax-select" where args.count == 3:
+    requireAccessibility()
+    selectRow(pidArgument(args[1]), args[2])
+
+case "click" where args.count == 4:
+    requireAccessibility()
+    guard let clicks = Int(args[3]), (1...2).contains(clicks) else { fail("invalid_clicks", "Clicks must be 1 or 2.") }
+    click(pidArgument(args[1]), args[2], clicks: clicks)
+
+case "key" where args.count == 4:
+    requireAccessibility()
+    pressKey(pidArgument(args[1]), args[2], args[3])
 
 default:
     fail("usage", "Unknown command or wrong number of arguments.")

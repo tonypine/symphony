@@ -450,8 +450,9 @@ defmodule SymphonyElixir.EpicReview do
   # steps when there are any, else the findings. They are filed through the machine-side child
   # creator (`SymphonyElixir.AgentTools.Linear.create_subissue_in_state/4`), the one the executor's
   # `linear_create_subissue` tool is built on, so a follow-up is scoped exactly like any other
-  # sub-ticket of the epic — same team, project, assignee and parent — and never lands in
-  # `Backlog`, where it would not hold the epic.
+  # sub-ticket of the epic — same team, project, assignee, parent and priority, so
+  # `tickets.priorities` dispatches it like the epic — and never lands in `Backlog`, where it would
+  # not hold the epic.
   defp create_gaps(issue, outcome, opts) do
     {:ok, registry} = CommentRegistry.start_link()
     context = %{issue: issue, comment_registry: registry}
