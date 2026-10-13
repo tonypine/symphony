@@ -2243,25 +2243,13 @@ health set by the project's previous update. No secret value reaches an update:
 `linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
-A rendered example, for a mix of a missing secret, a decision on release signing and a task
-labelled with the deprecated `human_actions.label`:
+A rendered example, for a mix of a decision on release signing and a task labelled with the
+deprecated `human_actions.label`:
 
 ```md
-**3 actions need you.** Quickest first.
+**2 actions need you.** Quickest first.
 
-### 1. Add the `NPM_TOKEN` secret
-
-**~5 min** · Unblocks the `Publish` workflow on `main` in acme/cycle
-
-**Why:** The `Publish` workflow has failed on `main` 2 times in a row, and the log of its latest run says the `NPM_TOKEN` secret is not set.
-
-1. Open https://github.com/acme/cycle/settings/secrets/actions (the repository's Settings → Secrets and variables → Actions).
-2. Click New repository secret, name it `NPM_TOKEN`, and paste its value.
-3. Re-run the failed run: https://github.com/acme/cycle/actions/runs/123
-
-**Done when:** the next run of `Publish` on `main` is green.
-
-### 2. Add the release signing secrets
+### 1. Add the release signing secrets
 
 **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
 
@@ -2274,7 +2262,7 @@ labelled with the deprecated `human_actions.label`:
 
 **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
-### 3. Turn on the pre-push hook on your laptop
+### 2. Turn on the pre-push hook on your laptop
 
 Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
@@ -2283,7 +2271,7 @@ Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 **Done when:** you close MOT-31, or move it on.
 
 ---
-_Symphony posts a new update when this list changes · list `ee2f8fda`_
+_Symphony posts a new update when this list changes · list `024ee477`_
 ```
 
 ## `WORKFLOW.md`
