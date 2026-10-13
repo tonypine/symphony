@@ -458,6 +458,30 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_repo_key} = RunStore.clear_ticket_hold(nil, "issue-1", :blocked)
   end
 
+  test "records a ticket's dispatched runs and how they ended, and a lifted hold ends the count" do
+    assert :ok = RunStore.record_ticket_dispatch(@repo_key, "issue-1", %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"})
+    assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})
+
+    assert %{dispatches: [%{kind: "rework", run_id: "run-1", state: "Rework", head: "a", outcome: %{exit: "ended normally", head: "a"}}]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert %{dispatches: [%{run_id: "run-1"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "dispatch_loop"})
+    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-1", :blocked)
+    assert %{dispatches: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # An issue with no record lists no run, and recording an end does not create the record.
+    assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-missing", "run-1", %{exit: "ended normally"})
+    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch(@repo_key, nil, %{})
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch_outcome(@repo_key, nil, "run-1", %{})
+    assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch(nil, "issue-1", %{})
+    assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch_outcome(nil, "issue-1", "run-1", %{})
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 

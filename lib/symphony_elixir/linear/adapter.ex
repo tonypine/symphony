@@ -24,6 +24,22 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  @issue_description_query """
+  query SymphonyIssueDescription($issueId: String!) {
+    issue(id: $issueId) {
+      description
+    }
+  }
+  """
+
+  @update_description_mutation """
+  mutation SymphonyUpdateIssueDescription($issueId: String!, $description: String!) {
+    issueUpdate(id: $issueId, input: {description: $description}) {
+      success
+    }
+  }
+  """
+
   @update_state_mutation """
   mutation SymphonyUpdateIssueState($issueId: String!, $stateId: String!) {
     issueUpdate(id: $issueId, input: {stateId: $stateId}) {
@@ -346,6 +362,28 @@ defmodule SymphonyElixir.Linear.Adapter do
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :comment_create_failed}
+    end
+  end
+
+  @spec fetch_issue_description(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def fetch_issue_description(issue_id) when is_binary(issue_id) do
+    case client_module().graphql(@issue_description_query, %{issueId: issue_id}) do
+      {:ok, %{"data" => %{"issue" => %{} = issue}}} -> {:ok, issue["description"]}
+      {:ok, _response} -> {:error, :issue_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec update_issue_description(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_description(issue_id, description) when is_binary(issue_id) and is_binary(description) do
+    variables = %{issueId: issue_id, description: description}
+
+    with {:ok, response} <- client_module().graphql(@update_description_mutation, variables),
+         true <- get_in(response, ["data", "issueUpdate", "success"]) == true do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :issue_update_failed}
     end
   end
 

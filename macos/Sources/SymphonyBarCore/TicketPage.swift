@@ -219,6 +219,10 @@ public struct TicketPage: Equatable {
         let blocked = state?.blocked?.first(where: matches)
         let shipped = state?.shippedToday?.first(where: matches)
         let forced = state?.forced?.first(where: matches)
+        // Its pull request shares files with one that lands first: Symphony keeps it off the base branch until then.
+        let landing = state?.landingWaits?.first(where: matches)
+        let landingLeader = landing.map { $0.waitsFor?.issueIdentifier ?? "another pull request" }
+        let sharedFiles = landing.flatMap(\.sharedFiles).map { " (shares \($0) \($0 == 1 ? "file" : "files"))" } ?? ""
         let history = (state?.runHistory ?? []).filter(matches)
         let records = runs.filter { $0.issueIdentifier == identifier }
         let entries: [Entry?] = [running, retry, watching, waitingOnYou, slot, blocked, shipped, forced] + history.map { $0 }
@@ -259,7 +263,7 @@ public struct TicketPage: Equatable {
         } else if waitingOnYou != nil || Self.isState(watching?.state, "Human Review") {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
-            phase = .waiting(on: "CI")
+            phase = .waiting(on: landingLeader.map { "\($0) to land\(sharedFiles)" } ?? "CI")
         } else if let watching, ["In Review", "Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
             phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
@@ -384,6 +388,7 @@ public struct TicketPage: Equatable {
         facts.append(Fact(label: "Type", value: Self.type(title: title, inboxKind: waitingOnYou?.kind)))
         if let initiative { facts.append(Fact(label: "Initiative", value: initiative)) }
         if let pullRequest { facts.append(Fact(label: "Pull request", value: Self.pullRequestName(pullRequest), url: pullRequest)) }
+        if let landingLeader { facts.append(Fact(label: "Lands after", value: landingLeader + sharedFiles)) }
         if case let .done(_, mergedAt?) = phase {
             mergedText = clock(mergedAt)
             facts.append(Fact(label: "Merged", value: clock(mergedAt)))
@@ -584,6 +589,9 @@ public struct TicketPage: Equatable {
         let error: String?
         let reason: String?
         let blockedBy: [Blocker]?
+        // A landing_waits entry.
+        let waitsFor: Blocker?
+        let sharedFiles: Int?
         let kind: String?
         let completedAt: String?
         // A run_history entry.
@@ -631,6 +639,7 @@ public struct TicketPage: Equatable {
         let blocked: [Entry]?
         let shippedToday: [Entry]?
         let forced: [Entry]?
+        let landingWaits: [Entry]?
         let runHistory: [Entry]?
         let budget: Budget?
         let qa: Passes?

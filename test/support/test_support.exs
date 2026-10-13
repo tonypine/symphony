@@ -1043,6 +1043,13 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:enable_weaker_network_isolation, Map.get(sandbox_runtime, :enable_weaker_network_isolation))
   end
 
+  @dispatch_loop_keys [
+    :dispatch_loop_runs,
+    :dispatch_loop_window_ms,
+    :dispatch_loop_long_runs,
+    :dispatch_loop_long_window_ms
+  ]
+
   defp watchdog_yaml(nil), do: nil
 
   defp watchdog_yaml(opts) when is_list(opts) or is_map(opts) do
@@ -1060,6 +1067,10 @@ defmodule SymphonyElixir.TestSupport do
         do: "  pending_tool_report_after_ms: #{yaml_value(config.pending_tool_report_after_ms)}"
       )
     ]
+    |> Enum.concat(
+      for {key, value} <- Map.take(config, @dispatch_loop_keys),
+          do: "  #{key}: #{yaml_value(value)}"
+    )
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end

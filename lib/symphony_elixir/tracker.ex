@@ -55,6 +55,8 @@ defmodule SymphonyElixir.Tracker do
               {:ok, [term()], [{String.t(), term()}]} | {:error, term()}
   @callback fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   @callback enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
+  @callback fetch_issue_description(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  @callback update_issue_description(String.t(), String.t()) :: :ok | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   @callback add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
@@ -179,6 +181,15 @@ defmodule SymphonyElixir.Tracker do
   def fetch_plan_comments(issue_id) when is_binary(issue_id) do
     adapter().fetch_plan_comments(issue_id)
   end
+
+  @doc "The issue's description as Linear stores it, with Symphony's own blocks in it."
+  @spec fetch_issue_description(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def fetch_issue_description(issue_id) when is_binary(issue_id), do: adapter().fetch_issue_description(issue_id)
+
+  @doc "Replaces the issue's description with `description`."
+  @spec update_issue_description(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_description(issue_id, description) when is_binary(issue_id) and is_binary(description),
+    do: adapter().update_issue_description(issue_id, description)
 
   @doc "Posts `body` on the issue as a reply under the comment `parent_comment_id`."
   @spec create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}

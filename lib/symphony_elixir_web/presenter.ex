@@ -104,6 +104,7 @@ defmodule SymphonyElixirWeb.Presenter do
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
+          landing_waits: snapshot |> Map.get(:landing_waits, []) |> Enum.map(&landing_wait_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&dispatch_skipped_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
@@ -1093,6 +1094,25 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_finishing(%{slots: slots, used: used, running: running}), do: %{slots: slots, used: used, running: running}
   defp normalize_finishing(_finishing), do: %{slots: nil, used: 0, running: []}
+
+  defp landing_wait_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.issue_identifier,
+      pull_request_url: entry.pr_url,
+      state: entry.state,
+      waits_for: %{
+        issue_id: entry.waits_for.issue_id,
+        issue_identifier: entry.waits_for.issue_identifier,
+        pull_request_url: entry.waits_for.pr_url,
+        state: entry.waits_for.state
+      },
+      shared_files: entry.shared_files,
+      files: entry.files,
+      reason: entry.reason,
+      since: iso8601(entry.since)
+    }
+  end
 
   defp auto_merge_payload(entry) do
     %{

@@ -3012,6 +3012,63 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received :refreshed
     end
 
+    test "a question the person already answered in the Decisions section is not asked again, and the run gets the answer" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+
+      decision =
+        SymphonyElixir.Decisions.entry(
+          "comment-0",
+          ~D[2026-10-13],
+          "Sign the release builds",
+          "Add the signing secrets, or ship unsigned builds?",
+          "Ship unsigned builds for now"
+        )
+
+      {:ok, description} = SymphonyElixir.Decisions.put("Fix the release.", [decision])
+      client = human_action_client(self(), human_action_scope(%{issue: %{"description" => description}}))
+
+      assert {:ok,
+              %{
+                "requested" => false,
+                "reason" => "already_decided",
+                "decision" => %{"question" => "Add the signing secrets, or ship unsigned builds?", "answer" => "Ship unsigned builds for now", "scope" => "As answered"},
+                "message" => "A person already decided this question. Apply the recorded answer" <> _rest
+              }} = Linear.request_human_action(context, @human_action, designed_opts(client))
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      refute Linear.CommentRegistry.human_action_requested?(context.comment_registry)
+    end
+
+    test "an answered request the Inbox has not written into the description yet is not asked again either" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+
+      body =
+        Request.render_hold(
+          %{
+            title: "Add the release signing secrets",
+            question: "Add the signing secrets, or ship unsigned builds?",
+            why: "Every Release run on main fails without them.",
+            options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}, %{label: "Ship unsigned", effect: "No signing."}]
+          },
+          "In Progress"
+        )
+
+      comments = [
+        %{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"},
+        %{"id" => "reply-1", "body" => "Add the secrets", "createdAt" => "2026-10-04T11:00:00.000Z", "parent" => %{"id" => "comment-1"}}
+      ]
+
+      scope = human_action_scope(%{issue: %{"comments" => %{"nodes" => comments}}})
+
+      assert {:ok, %{"reason" => "already_decided", "decision" => %{"answer" => "Add the secrets (option: **Add the secrets** (recommended): Releases are signed again.)"}}} =
+               Linear.request_human_action(context, @human_action, designed_opts(human_action_client(self(), scope)))
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+    end
+
     test "a request the ticket already has is the one the hold records, and nothing is posted again" do
       :ok = SymphonyElixir.RunStore.clear()
       context = designed_context()

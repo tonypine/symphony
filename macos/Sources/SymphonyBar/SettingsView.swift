@@ -248,6 +248,30 @@ struct SettingsView: View {
                 .disabled(!model.canEditTimeouts)
 
                 Section {
+                    DispatchLoopRow(title: "Hold a ticket after", runs: $model.dispatchLoopRuns, minutes: $model.dispatchLoopWindowMinutes)
+                    DispatchLoopRow(title: "Or after", runs: $model.dispatchLoopLongRuns, minutes: $model.dispatchLoopLongWindowMinutes)
+                    Text(
+                        "Once a ticket got this many runs of one kind in that time with no state change, new PR head or "
+                            + "decision, Symphony starts no more and puts it on a Blocked hold that says why. Unblock it "
+                            + "from the Inbox."
+                    )
+                    .foregroundStyle(.secondary)
+                    if let error = model.dispatchLoopError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Dispatch loops (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "watchdog.dispatch_loop_runs in watchdog.dispatch_loop_window_ms (default 4 runs in 10 minutes) "
+                            + "and watchdog.dispatch_loop_long_runs in watchdog.dispatch_loop_long_window_ms (default 8 "
+                            + "runs in 60 minutes). Save checks symphony.yml with symphony check first; Symphony reads "
+                            + "them on its next dispatch, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditDispatchLoop)
+
+                Section {
                     Picker("Scope", selection: $model.runProfilesScope) {
                         Text("All repositories").tag(RunProfilesScope.global)
                         ForEach(model.repositoryKeys, id: \.self) { key in
@@ -418,6 +442,9 @@ struct SettingsView: View {
                 }
                 if model.timeoutsError != nil {
                     Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)
+                }
+                if model.dispatchLoopError != nil {
+                    Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
                 }
                 if model.ticketPrioritiesError != nil {
                     Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
@@ -737,6 +764,28 @@ private struct TimeoutRow: View {
                 Text(minutes == 1 ? "1 minute" : "\(minutes) minutes")
                     .monospacedDigit()
                 Stepper(title, value: $minutes, in: OperationTimeouts.minuteRange)
+                    .labelsHidden()
+            }
+        }
+    }
+}
+
+/// A dispatch-loop limit: a number of runs and a window in whole minutes, each with a stepper.
+private struct DispatchLoopRow: View {
+    let title: String
+    @Binding var runs: Int
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text(runs == 1 ? "1 run" : "\(runs) runs")
+                    .monospacedDigit()
+                Stepper("\(title) runs", value: $runs, in: DispatchLoopLimits.runRange)
+                    .labelsHidden()
+                Text(minutes == 1 ? "in 1 minute" : "in \(minutes) minutes")
+                    .monospacedDigit()
+                Stepper("\(title) minutes", value: $minutes, in: DispatchLoopLimits.minuteRange)
                     .labelsHidden()
             }
         }
