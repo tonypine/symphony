@@ -44,6 +44,7 @@ auto_review:
         - '(?i)\b(human|manual(ly)?)\s+review'
         - '(?i)must not (auto-?approve|auto-?merge)'
         - '(?i)\bneeds?[- ]human\b'
+      ticket_patterns_builtin: true  # false: only the ticket_patterns listed here
       paths: []            # added to the built-in paths below
       diff_patterns:
         - '(?i)\bdrop\s+(table|column|index)\b'
@@ -61,6 +62,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | --- | --- | --- |
 | `escalate.labels` | `needs-human`, `plan`, `breakdown` | An issue with one of these labels needs a person. Matching ignores case and surrounding spaces. |
 | `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description, after the review states' names are blanked (see [What escalates](#what-escalates)). |
+| `escalate.ticket_patterns_builtin` | `true` | `false` drops the built-in `ticket_patterns`, so only the ones you list apply (none when you list none). List a built-in pattern to keep it. |
 | `escalate.paths` | the built-in paths below | Globs matched against each changed path outside docs and tests. `**` spans directories, `*` and `?` don't. |
 | `escalate.diff_patterns` | the four above | Regular expressions matched against each added line of the diff, in every file. Removed lines don't count. |
 | `escalate.dependencies` | `major` | `off`: dependency changes don't count. `major`: a new dependency or a major version change in `mix.lock` or `package.json` counts. `any`: any added, changed or removed dependency counts. |
@@ -69,9 +71,12 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | `escalate.busy_files.window_days` | `14` | How many days of the base branch's history pick the busy files. |
 | `escalate.busy_files.max_lines` | `300` | More changed lines than this in one busy file counts. |
 
-The built-in `labels`, `ticket_patterns`, `paths` and `diff_patterns` always apply. A list you
-configure adds to them, and a `repositories[].acceptance_gate.escalate` override adds to the
-global lists and replaces its numbers for that repository. A run on an SSH worker reads no
+The built-in `labels`, `ticket_patterns`, `paths` and `diff_patterns` always apply, except the
+`ticket_patterns` with `ticket_patterns_builtin: false`. A list you configure adds to them, and a
+`repositories[].acceptance_gate.escalate` override adds to the global lists and replaces its
+numbers and `ticket_patterns_builtin` for that repository. A repository that sets
+`ticket_patterns_builtin: false` keeps the global `ticket_patterns` you configured, without the
+built-in ones; one that sets `true` gets them back. A run on an SSH worker reads no
 dependency manifests and no busy files, since both come from git in the local workspace.
 
 ### Built-in paths
