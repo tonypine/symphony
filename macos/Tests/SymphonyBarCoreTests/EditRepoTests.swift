@@ -115,6 +115,27 @@ final class EditRepoTests: XCTestCase {
                        "maybe")
     }
 
+    func testTheBuiltInTicketPatternsPickerWritesTheReposOverride() throws {
+        let yaml = config.replacingOccurrences(
+            of: "  - key: web\n",
+            with: "  - key: web\n    acceptance_gate:\n      escalate:\n        ticket_patterns_builtin: false\n"
+        )
+        let off = try XCTUnwrap(RepositoriesConfig.entries(in: yaml).first { $0.key == "web" })
+        XCTAssertEqual(EditRepo.draft(for: off).ticketPatternsBuiltIn, .off)
+        XCTAssertEqual(try EditRepo.entry(for: EditRepo.draft(for: off), editing: off, existing: entries).get(), off)
+
+        // Same as Settings removes the key; the setting is read from symphony.yml while Symphony runs.
+        var draft = EditRepo.draft(for: off)
+        draft.ticketPatternsBuiltIn = .inherit
+        let inherit = try EditRepo.entry(for: draft, editing: off, existing: entries).get()
+        XCTAssertNil(inherit.ticketPatternsBuiltIn)
+        XCTAssertFalse(EditRepo.needsRestart(from: off, to: inherit))
+        XCTAssertEqual(try EditRepo.updating(off, to: inherit, in: yaml), config)
+
+        draft.ticketPatternsBuiltIn = .on
+        XCTAssertEqual(try EditRepo.entry(for: draft, editing: off, existing: entries).get().ticketPatternsBuiltIn, true)
+    }
+
     func testTheDetailShowsTheReposManualReview() throws {
         let yaml = config.replacingOccurrences(of: "  - key: web\n", with: "  - key: web\n    manual_review: on\n")
         let entry = try XCTUnwrap(RepositoriesConfig.entries(in: yaml).first { $0.key == "web" })

@@ -6,9 +6,11 @@ defmodule SymphonyElixir.Inbox do
   The server reads Linear on Symphony's poll (`polling.interval_ms`) and caches what it read, so a
   GET makes no Linear request:
 
-  1. one light query per repository route lists the issues in its scope that sit in `In Review`
-     or the Human Review state (`SymphonyElixir.HumanReview.review_states/1`) or carry the
-     `Blocked` label, each with its `updatedAt` and the time its newest comment was last edited;
+  1. one light query per repository route lists the issues in its scope that sit in `In Review`,
+     the Human Review state (`SymphonyElixir.HumanReview.review_states/1`) or the Plan Review state
+     (`SymphonyElixir.HumanReview.plan_review_states/1`, where a designed repo's plan waits for
+     approval) or carry the `Blocked` label, each with its `updatedAt` and the time its newest
+     comment was last edited;
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
      their comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
@@ -18,8 +20,9 @@ defmodule SymphonyElixir.Inbox do
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
   `clarify`), drops an issue that is running or that the orchestrator saw leave the review states
-  since, and sorts the list oldest first. A held ticket is kept whatever state the orchestrator
-  reports: the hold is what waits on the Director. A failed read keeps the last list.
+  (for a plan, the state the read listed it in) since, and sorts the list oldest first. A held
+  ticket is kept whatever state the orchestrator reports: the hold is what waits on the Director.
+  A failed read keeps the last list.
 
   Each read also reconciles the read tickets' `Needs Decision` holds
   (`SymphonyElixir.NeedsDecisionHold`): a designed repo's decision request pauses its ticket in
@@ -131,15 +134,29 @@ defmodule SymphonyElixir.Inbox do
 
     server
     |> cached()
-    |> Enum.reject(fn item ->
-      MapSet.member?(running_ids, item.issue_id) or
-        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not HumanReview.review_state?(watched_states[item.issue_id]))
-    end)
+    |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states)))
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> Enum.concat(clarify)
     |> Enum.uniq_by(& &1.issue_id)
     |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
   end
+
+  # Whether the orchestrator saw the ticket leave what the read listed it for. A plan waits in its
+  # repo's own plan review state, so it stays while the orchestrator still sees it where the read
+  # found it. A hold is what waits on the Director, whatever the state.
+  defp left_review?(%{kind: :blocked}, _watched_states), do: false
+
+  defp left_review?(item, watched_states) do
+    case Map.fetch(watched_states, item.issue_id) do
+      {:ok, state} -> not (HumanReview.review_state?(state) or (item.kind == :plan and same_state?(state, item.state)))
+      :error -> false
+    end
+  end
+
+  defp same_state?(state, other) when is_binary(state) and is_binary(other),
+    do: String.downcase(String.trim(state)) == String.downcase(String.trim(other))
+
+  defp same_state?(_state, _other), do: false
 
   defp sort_key(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
   defp sort_key(_at), do: 0
@@ -235,12 +252,16 @@ defmodule SymphonyElixir.Inbox do
     end
   end
 
-  # The issues a review covers, plus the ones carrying a `Blocked` or `Needs Decision` label: a hold
-  # pauses a ticket in its phase, so it need not sit in a review state to wait on the Director.
-  # `Item.from_node/4` reads each one's store record and keeps only the holds a person lifts; a
-  # designed repo's decision request is listed by the hold's label wherever in the workflow it sits.
+  # The issues a review covers (a designed repo's plan in its `Plan Review` too), plus the ones
+  # carrying a `Blocked` or `Needs Decision` label: a hold pauses a ticket in its phase, so it need
+  # not sit in a review state to wait on the Director. `Item.from_node/4` reads each one's store
+  # record and keeps only the holds a person lifts; a designed repo's decision request is listed by
+  # the hold's label wherever in the workflow it sits.
   defp list_conditions(settings) do
-    reviews = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+    reviews =
+      (HumanReview.review_states(settings) ++ HumanReview.plan_review_states(settings))
+      |> Enum.uniq()
+      |> Enum.map(&%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
 
     reviews ++
       Enum.map(

@@ -1944,7 +1944,8 @@ not require recognizing or validating extension fields unless that extension is 
   `off`), with a warning logged once per config
 - `auto_review.acceptance_gate.escalate`: deprecated, still read by Code Review (7.6, **Escalation
   rules**): `labels`, `ticket_patterns`, `paths`, `diff_patterns` (lists added to built-in defaults
-  that can't be removed), `dependencies` (`off`, `major` or `any`, default `major`),
+  that can't be removed, except the `ticket_patterns` that `ticket_patterns_builtin: false`, default
+  `true`, drops), `dependencies` (`off`, `major` or `any`, default `major`),
   `max_changed_lines` (default `1500`), `busy_files` (`top` `10`, `window_days` `14`, `max_lines`
   `300`)
 - `repositories[].acceptance_gate`: `mode` and `escalate` for that repository (`max_turns` and
@@ -2388,7 +2389,9 @@ Rules:
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded. A repo with the reviewer off parks its `Code Review` tickets with
+  origin recorded. A `Code Review` or `QA` ticket back from `CI Fix` on the same red head (a repair
+  that pushed nothing) MUST enter `CI Fix` again, until the fix attempts run out and the failure
+  escalates to a `Needs Decision` hold. A repo with the reviewer off parks its `Code Review` tickets with
   `code_review_reviewer_disabled` recorded and never approves without a reviewer.
 - **Verdicts bind to a head.** Code Review and QA verdicts are recorded against the head SHA they
   judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
@@ -3987,7 +3990,8 @@ SHOULD return:
 - running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
   runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
   forced parent's current part
-- `forced` rows SHOULD include `sub_issue` (a forced plan parent's current part, or null)
+- `forced` rows SHOULD include `title`, `repo_key` (null when Symphony hasn't routed the issue yet),
+  `sub_issue` (a forced plan parent's current part, or null)
   and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
 - `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
   `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
@@ -4323,6 +4327,7 @@ Minimum endpoints:
           "issue_id": "vwx234",
           "issue_identifier": "MT-657",
           "title": "Fix the release build",
+          "repo_key": "web",
           "state": "In Progress",
           "forced_since": "2026-02-24T19:00:00Z",
           "forced_for_seconds": 7380,
@@ -4510,17 +4515,18 @@ Minimum endpoints:
     last), for the Mac app's Inbox. Read-only, served like `/api/v1/state`, and it MUST make no
     tracker request: the implementation reads the tracker on its own poll and serves what it cached.
   - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
-    one query per repository route lists the issues in its scope in `In Review` or the human review
-    state with their `updatedAt` and the last edit of their newest comment; only an issue whose
-    pair changed since the last read is read again in full (comments, state history, labels,
-    attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
+    one query per repository route lists the issues in its scope in `In Review`, the human review
+    state or the Plan Review state (`issues.states.plan_review`, where a designed repo's plan waits
+    for approval; not queried when it is `null`) with their `updatedAt` and the last edit of their
+    newest comment; only an issue whose pair changed since the last read is read again in full
+    (comments, state history, labels, attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
     `inbox`.
-  - One item per issue in a review state, with `kind` `action` (an open
-    `linear_request_human_action` request, whatever else it is), else `final_verification` (title
-    starts `Final verification:`), else `plan` (label `plan` or `breakdown`), else `pr`; and one
-    item per quality-gate hold or skip (`awaiting_clarification`, `skipped`), with `kind`
-    `clarify`. An issue the orchestrator sees running, or watches outside the review states, is
-    dropped.
+  - One item per issue in a review state, and per plan parent (label `plan` or `breakdown`) in the
+    Plan Review state, with `kind` `action` (an open `linear_request_human_action` request,
+    whatever else it is), else `final_verification` (title starts `Final verification:`), else
+    `plan` (label `plan` or `breakdown`), else `pr`; and one item per quality-gate hold or skip
+    (`awaiting_clarification`, `skipped`), with `kind` `clarify`. An issue the orchestrator sees running, or watches outside the review states (for a
+    plan, outside the Plan Review state it was listed in), is dropped.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
     asks), `waiting_since` (the later of the latest move into its state and its newest open

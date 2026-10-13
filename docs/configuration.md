@@ -199,7 +199,7 @@ issues:
   - an agent moves a plan ticket to `In Review` and its ticket says a human reviews the plan:
     an `escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
-    "human review"; naming the `Human Review` state doesn't count, see
+    "needs a human review"; naming the `Human Review` state doesn't count, see
     [What escalates](acceptance_gate.md#what-escalates)), or a description in which its author
     says they review it ("I only want to review and validate the artifacts", "we'll approve the
     plan");
@@ -754,7 +754,7 @@ agent:
   restarts); a ticket labelled in another state, such as `Backlog` or `In Review`, joins once it
   moves into an active state. Once queued it stays listed in any non-terminal state (`In Review`,
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
-  queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
+  `title`, `repo_key`, queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
   `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
@@ -1131,8 +1131,12 @@ pull_requests:
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
   - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
-    context (an agent run). The approval covered the diff before the conflict, so the fix goes
-    back through review, and moving the ticket to `Merging` again turns auto-merge back on. The
+    context (an agent run; a `designed` repo's ticket enters `CI Fix`, which returns it to
+    `Merging`). The approval covered the diff before the conflict, so the fix goes back through
+    review, and moving the ticket to `Merging` again turns auto-merge back on. Auto-merge stays off
+    on the conflicting head meanwhile, even when GitHub briefly stops reporting the conflict after
+    the base branch moves. A ticket the conflict leaves in `Merging` (an agent run still marked
+    running, or the conflict retries spent) goes to the landing agent rather than waiting. The
     audit log (`auto_merge_disabled`, `reason: conflict`) and a ticket comment record it.
   - A red head first gets one flaky rerun of the same commit (`ci.flaky_retry`), with auto-merge
     left on. The CI-fix run after that turns auto-merge off before it starts, like a conflict: the
@@ -1384,7 +1388,8 @@ still read, by Code Review, until the block is removed. Each rule's new home:
 | `inconclusive_limit` | dropped: Code Review retries an inconclusive review twice, then asks a person |
 | the gate's `settings_ui` rule | dropped: CI's `mix settings.ui_coverage` fails such a PR |
 
-The built-in lists stay in force, and a configured list adds to them. See
+The built-in lists stay in force, and a configured list adds to them; only
+`escalate.ticket_patterns_builtin: false` drops the built-in `ticket_patterns`. See
 [`docs/acceptance_gate.md`](acceptance_gate.md) for the rules' syntax.
 
 #### Android settings
@@ -2176,9 +2181,11 @@ human_actions:
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
 its own poll, not on this read: every `polling.interval_ms` it lists the tickets in `In Review` or
-the `issues.states.human_review` state in each route's scope plus the ones carrying the `Blocked`
-label (a hold pauses a ticket in its phase, so it need not sit in a review state), reads a ticket's
-comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
+the `issues.states.human_review` state in each route's scope, the plan parents waiting for approval
+in the `issues.states.plan_review` state (a designed repo's `Plan Review`; none when it is `null`),
+plus the ones carrying the `Blocked` label (a hold pauses a ticket in its phase, so it need not sit
+in a review state), reads a ticket's comments again only when the ticket changed, and adds the
+quality gate's holds and skips. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request, else
 `final_verification`, `plan` for a `plan` or `breakdown` parent, or `pr`; `clarify` for a quality
 gate hold or skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
@@ -2186,7 +2193,8 @@ recorded and what clears it), `headline` (its one-line ask: the text after `**Wh
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
 or watches outside those states, is dropped — unless a hold pauses it, which is what waits on the
-Director. It doesn't depend on `human_actions.enabled`.
+Director. A plan that leaves `Plan Review` (approved, or sent to `Rework`) drops out on the next
+read. It doesn't depend on `human_actions.enabled`.
 `inbox_read` is false while Symphony has not yet read Linear for the list (the first read starts a
 second after startup), and true from its first successful read on, or when the tracker isn't Linear.
 The Mac app waits for it before it remembers what already waits, so nothing that was there notifies.

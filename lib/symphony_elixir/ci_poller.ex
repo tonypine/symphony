@@ -745,7 +745,30 @@ defmodule SymphonyElixir.CiPoller do
   defp acts_on_failure?(record, commit_sha, settings, opts, now) do
     (flaky_retry?(settings) and not rerun_attempted_for_sha?(record, commit_sha)) or
       escalate_ci_failure?(record, settings, commit_sha, opts, now) or
-      not (Map.get(record, :status) == "escalated" or dispatched_for_sha?(record, commit_sha))
+      not (Map.get(record, :status) == "escalated" or dispatched_for_sha?(record, commit_sha)) or
+      back_from_ci_fix_on_red_head?(record, commit_sha, settings, opts, now)
+  end
+
+  # A head CI Fix already took counts as handled only while the ticket is still in the lane. A repair
+  # that pushed nothing (it reran a flake, say) returns the ticket to `Code Review` or `QA` on the
+  # same red head, where nothing else would ever move it: their runs wait for a green head. Such a
+  # ticket is acted on again, entering CI Fix once more or escalating once the fix attempts run out.
+  # `Rework` is left alone, since a substantive repair returns the ticket there on the same head for
+  # its rework run, and so is a head just dispatched, which this poll's read may still show in its
+  # old phase. The issue comes from this poll's watched read, so the check costs no Linear request.
+  defp back_from_ci_fix_on_red_head?(record, commit_sha, settings, opts, now) do
+    Map.get(record, :status) != "escalated" and
+      dispatched_for_sha?(record, commit_sha) and
+      not recently_dispatched?(record, commit_sha, now) and
+      verdict_phase_issue?(record, settings, opts) and
+      not rework_in_progress?(record, opts)
+  end
+
+  defp verdict_phase_issue?(record, settings, opts) do
+    case Map.fetch(Keyword.get(opts, :watched_issues_by_id, %{}), Map.get(record, :issue_id)) do
+      {:ok, %Issue{state: state}} -> match?({:ok, signal, _origin} when signal in [:ci_fix_enter_code_review, :ci_fix_enter_qa], CiFix.entry(state, settings))
+      _none -> false
+    end
   end
 
   defp act_on_failure(record, ci_status, failed_checks, settings, opts, now) do

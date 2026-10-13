@@ -60,7 +60,7 @@ defmodule SymphonyElixir.ForcedQueue do
     |> Enum.with_index(1)
     |> Enum.map(fn {{issue_id, entry}, position} ->
       entry
-      |> Map.take([:identifier, :title, :state, :forced_since])
+      |> Map.take([:identifier, :title, :state, :repo_key, :forced_since])
       |> Map.merge(%{issue_id: issue_id, position: position})
     end)
   end

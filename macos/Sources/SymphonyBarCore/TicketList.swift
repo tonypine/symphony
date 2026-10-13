@@ -237,7 +237,7 @@ public struct TicketList: Equatable {
         for forced in state.snapshot.forced {
             let running = forced.summary?.contains("running") == true
             builder.add(Row(
-                identifier: forced.identifier, title: nil, repoKey: nil, state: forced.state,
+                identifier: forced.identifier, issueID: forced.issueID, title: forced.title, repoKey: forced.repoKey, state: forced.state,
                 stage: running ? .working : .queued, waitsOn: forced.summary.map(Self.forcedWaitsOn) ?? "a forced slot",
                 since: forced.forcedForSeconds.map { reference.addingTimeInterval(-Double($0)) }, forced: true,
                 needsAttention: forced.stale, url: nil, facts: []

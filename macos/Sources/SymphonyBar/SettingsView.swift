@@ -199,6 +199,30 @@ struct SettingsView: View {
                 .disabled(!model.canEditWorkflowStates)
 
                 Section {
+                    Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
+                    Text(
+                        model.ticketPatternsBuiltIn
+                            ? BuiltInTicketPatternsChoice.on.explanation
+                            : BuiltInTicketPatternsChoice.off.explanation
+                    )
+                    .foregroundStyle(.secondary)
+                    if model.ticketPatternsBuiltInError != nil {
+                        CheckErrorPointer(subject: "this setting")
+                    }
+                } header: {
+                    Text("Code Review (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
+                            + "match a title or description asking for a human or manual review, saying it must not be "
+                            + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
+                            + "a repo can override this in its Edit sheet. Save checks symphony.yml with symphony check "
+                            + "first; Symphony reads it on its next poll, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditTicketPatternsBuiltIn)
+
+                Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
                     Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
                         .foregroundStyle(.secondary)
@@ -397,6 +421,9 @@ struct SettingsView: View {
                 }
                 if model.ticketPrioritiesError != nil {
                     Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
+                }
+                if let error = model.ticketPatternsBuiltInError {
+                    CheckErrorText(message: error)
                 }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)

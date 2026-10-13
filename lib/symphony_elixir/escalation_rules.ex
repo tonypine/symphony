@@ -17,12 +17,14 @@ defmodule SymphonyElixir.EscalationRules do
     * `:size` - more than `escalate.max_changed_lines` lines change outside docs and tests;
     * `:busy_file` - more than `escalate.busy_files.max_lines` lines change in one busy file.
 
-  Before `:ticket_pattern` matches, each name in the `:review_states` option (`In Review` and
-  `issues.states.human_review`, e.g. `Human Review`) is blanked wherever the text names the
-  state: bare, backticked, bolded or quoted. The name matches case-sensitively, so a ticket about
-  the state doesn't match `human review`, while "needs a human review" still does. Before `state`
-  or `states` it matches in any case ("the human review state"). A name right after a request
-  ("Needs Human Review", "requires a Human Review") stays, since that asks for one.
+  `:ticket_pattern` matches the ticket's prose only: fenced code blocks and backticked spans are
+  blanked first (the Symphony summary block is already left out of `Issue.description`). Then
+  each name in the `:review_states` option (`In Review` and `issues.states.human_review`), and
+  `In Review` and `Human Review` even when that state is off, is blanked wherever the text names
+  the state: bare, bolded or quoted. The name matches case-sensitively, so a ticket about the
+  state doesn't match, while "needs a human review" still does. Before `state` or `states` it
+  matches in any case ("the human review state"). A name right after a request ("Needs Human
+  Review", "requires a Human Review") stays, since that asks for one.
 
   Docs and tests are the globs QA selection skips (`QaAgent.Selection.docs_or_test?/1`).
   A version's major is its first number, or its first two when the first is `0`, so `0.4` to
@@ -37,6 +39,7 @@ defmodule SymphonyElixir.EscalationRules do
   alias SymphonyElixir.QaAgent.Selection
 
   @manifests ["mix.lock", "package.json"]
+  @state_names ["In Review", "Human Review"]
   @person_rules [:label, :ticket_pattern]
   @risk_rules [:path, :diff_pattern, :dependency, :size, :busy_file]
 
@@ -115,11 +118,23 @@ defmodule SymphonyElixir.EscalationRules do
   end
 
   defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns, review_states) do
-    text = [title || "", description || ""] |> Enum.join("\n") |> blank_state_names(review_states)
+    text =
+      [title || "", description || ""]
+      |> Enum.join("\n")
+      |> blank_code()
+      |> blank_state_names(Enum.uniq(review_states ++ @state_names))
 
     patterns
     |> Enum.filter(&Regex.match?(Regex.compile!(&1), text))
     |> join_or_nil(&"the ticket matches `#{&1}`")
+  end
+
+  # Code quotes identifiers and output, never asks for anything: a fenced block (to its closing
+  # fence, or the end of an unclosed one) and a backticked span.
+  defp blank_code(text) do
+    text
+    |> then(&Regex.replace(~r/^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[^\n]*$|\z)/ms, &1, " "))
+    |> then(&Regex.replace(~r/`+[^`\n]*`+/, &1, " "))
   end
 
   # The ticket naming a review state (`Human Review`) isn't a request for a human review, unless
