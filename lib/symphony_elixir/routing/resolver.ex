@@ -192,9 +192,10 @@ defmodule SymphonyElixir.Routing.Resolver do
 
   defp project_matches?(_issue, []), do: true
 
+  # `route.projects` names a project by its slug id, its name or its id, as the poll filter reads it.
   defp project_matches?(issue, projects) do
     issue
-    |> candidate_values([:project], [:id, :key, :name])
+    |> candidate_values([:project], [:id, :key, :name, :slug_id, :slugId])
     |> has_any?(projects)
   end
 

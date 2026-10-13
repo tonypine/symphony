@@ -45,6 +45,7 @@ defmodule SymphonyElixir.Linear.Client do
         project {
           id
           name
+          slugId
         }
         branchName
         url
@@ -128,6 +129,7 @@ defmodule SymphonyElixir.Linear.Client do
         project {
           id
           name
+          slugId
         }
         branchName
         url
@@ -206,6 +208,7 @@ defmodule SymphonyElixir.Linear.Client do
       project {
         id
         name
+        slugId
       }
       branchName
       url
@@ -1323,7 +1326,8 @@ defmodule SymphonyElixir.Linear.Client do
   defp extract_project(%{"project" => %{} = project}) do
     %{
       id: project["id"],
-      name: project["name"]
+      name: project["name"],
+      slug_id: project["slugId"]
     }
   end
 
