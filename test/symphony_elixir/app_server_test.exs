@@ -678,6 +678,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       issue = %Issue{
         id: "issue-pr-gate",
+        repo_key: "default",
         identifier: "MT-PR-GATE",
         title: "PR gate",
         description: "Block risky dependency PR",
@@ -690,7 +691,8 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ ~s("id":44)
       assert trace =~ ~s("decision":"deny")
 
-      assert_receive {:memory_tracker_state_update, "issue-pr-gate", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-pr-gate", "Needs Decision"}, 500
+      refute_received {:memory_tracker_state_update, "issue-pr-gate", _state}
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{
@@ -763,6 +765,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       issue = %Issue{
         id: "issue-audit-err",
+        repo_key: "default",
         identifier: "MT-AUDIT-ERR",
         title: "Audit error",
         description: "Fail closed when audit errors",
@@ -776,7 +779,8 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ ~s("id":44)
       assert trace =~ ~s("decision":"deny")
 
-      assert_receive {:memory_tracker_state_update, "issue-audit-err", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-audit-err", "Needs Decision"}, 500
+      refute_received {:memory_tracker_state_update, "issue-audit-err", _state}
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{
@@ -851,6 +855,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       issue = %Issue{
         id: "issue-dynamic-pr-gate",
+        repo_key: "default",
         identifier: "MT-DYN-PR-GATE",
         title: "Dynamic PR gate",
         description: "Block risky dependency PR from dynamic tool",
@@ -881,7 +886,8 @@ defmodule SymphonyElixir.AppServerTest do
                end
              end)
 
-      assert_receive {:memory_tracker_state_update, "issue-dynamic-pr-gate", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-dynamic-pr-gate", "Needs Decision"}, 500
+      refute_received {:memory_tracker_state_update, "issue-dynamic-pr-gate", _state}
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

@@ -11,8 +11,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   - the why, then the question and its options for a decision, or the steps of any other action,
     as a numbered list, one per line (no tables, which scroll sideways on a phone);
   - a closing **Done when** line, so it is clear how the action leaves the list;
-  - actions on issues in the Human Review state first, since those issues wait on nobody else, then
-    quickest first, so a short session clears the small ones;
+  - quickest first, so a short session clears the small ones;
   - a footer with the list id (a hash of the action keys), which lets Symphony recognise its own
     last update after a restart instead of posting the same list again.
 
@@ -23,6 +22,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   """
 
   alias SymphonyElixir.AgentTools.SecretScanner
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request}
 
   @max_actions 25
@@ -52,12 +52,10 @@ defmodule SymphonyElixir.HumanActions.Update do
   def health(_actions), do: "atRisk"
 
   @doc """
-  Renders the update body and the secret patterns redacted from it. `states` are the states a
-  person reviews in (`SymphonyElixir.HumanReview.review_states/1`), named where the update has
-  more actions than it lists.
+  Renders the update body and the secret patterns redacted from it.
   """
-  @spec render([Action.t()], [String.t()]) :: {String.t(), [atom()]}
-  def render(actions, states) do
+  @spec render([Action.t()]) :: {String.t(), [atom()]}
+  def render(actions) do
     sorted = sort(actions)
     {shown, hidden} = Enum.split(sorted, @max_actions)
 
@@ -66,24 +64,20 @@ defmodule SymphonyElixir.HumanActions.Update do
       |> Enum.with_index(1)
       |> Enum.map(fn {action, index} -> action_section(action, index) end)
 
-    [header(sorted), sections, more(hidden, states), footer(list_id(actions))]
+    [header(sorted), sections, more(hidden), footer(list_id(actions))]
     |> List.flatten()
     |> Enum.join("\n\n")
     |> SecretScanner.redact()
   end
 
-  @doc "Actions in the order an update lists them: Human Review issues first, then quickest first, then by issue."
+  @doc "Actions in the order an update lists them: quickest first, then by issue."
   @spec sort([Action.t()]) :: [Action.t()]
-  def sort(actions), do: Enum.sort_by(actions, &{not &1.human_review, &1.est_minutes || 1_000_000, &1.issue[:identifier], &1.key})
+  def sort(actions), do: Enum.sort_by(actions, &{&1.est_minutes || 1_000_000, &1.issue[:identifier], &1.key})
 
   defp header([]), do: "**Nothing needs you.** Every action from the last update is closed."
   defp header([_action]), do: "**1 action needs you.**"
 
-  defp header(actions) do
-    if Enum.any?(actions, & &1.human_review),
-      do: "**#{length(actions)} actions need you.** Human Review tickets first, then quickest first.",
-      else: "**#{length(actions)} actions need you.** Quickest first."
-  end
+  defp header(actions), do: "**#{length(actions)} actions need you.** Quickest first."
 
   defp action_section(%Action{} = action, index) do
     [
@@ -100,9 +94,8 @@ defmodule SymphonyElixir.HumanActions.Update do
   end
 
   defp meta_line(%Action{} = action) do
-    review = if action.human_review, do: "**#{action.issue.state}** · "
     time = if is_integer(action.est_minutes), do: "**~#{action.est_minutes} min** · "
-    "#{review}#{time}#{issue_relation(action)}"
+    "#{time}#{issue_relation(action)}"
   end
 
   defp issue_relation(%Action{issue: nil} = action), do: "Unblocks #{Request.one_line(action.unblocks)}"
@@ -132,8 +125,8 @@ defmodule SymphonyElixir.HumanActions.Update do
   defp done_line(done_when) when is_binary(done_when), do: "**Done when:** #{done_when}"
   defp done_line(_done_when), do: nil
 
-  defp more([], _states), do: []
-  defp more(hidden, states), do: "_…and #{length(hidden)} more: see the issues in #{Enum.map_join(states, " and ", &"`#{&1}`")}._"
+  defp more([]), do: []
+  defp more(hidden), do: "_…and #{length(hidden)} more: see the issues labelled `#{Hold.label(:needs_decision)}`._"
 
   defp footer(list_id), do: "---\n_Symphony posts a new update when this list changes · list `#{list_id}`_"
 end

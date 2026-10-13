@@ -108,46 +108,32 @@ like an edit to `WORKFLOW.md`. See [security](security.md#workflow-and-instructi
 `symphony workflow preview` shows the assembled prompt, instruction files included,
 read from the disk next to the `WORKFLOW.md` it renders.
 
-### One playbook, two state machines
+### One playbook, one state machine
 
-A repo's `repositories[].state_machine` (`legacy` by default, or `designed`) picks
-the prompt it gets. Partials that differ on the designed machine (`status_map`,
-`escape_hatches`, `parent_tickets`, `plan_pipeline`, `pr_feedback_sweep`,
-`ci_triage`, `review_brief`, `completion_bar`, `guardrails`) have a `designed`
-variant, `priv/playbook/<name>.designed.liquid`, served in place of the base body;
-every other partial renders the same on both. Instruction files branch on the
-`state_machine` variable:
-
-```liquid
-{% if state_machine == "designed" -%}
-designed text
-{%- else -%}
-legacy text
-{%- endif %}
-```
-
-A `-%}` trims the indentation of the line after it, so wrap an indented list item
-with untrimmed tags at the end of the line before it. `symphony workflow preview
---repo <key>` renders the prompt for that repo's machine.
+Every repo runs the one ticket state machine (`docs/design/state-machine.md`), so every
+partial renders the same for every repo. The `repositories[].state_machine` switch and the
+`<name>.designed.liquid` partial variants are gone with the legacy machine; a `symphony.yml`
+that still sets the key loads with a deprecation warning. Instruction files still get a
+`state_machine` variable, always `designed`, so one that branches on it keeps rendering.
 
 ## Available partials
 
 | Partial | Vars | Description |
 | --- | --- | --- |
-| `ci_triage` | — | Triage protocol for red CI checks at any push gate. |
-| `completion_bar` | — | Baseline bar that must be satisfied before moving an issue to In Review; repos append their own criteria after the render. |
+| `ci_triage` | — | Triage protocol for red CI checks at any push gate, and the CI Fix lane. |
+| `completion_bar` | — | Baseline bar that must be satisfied before the handoff to Code Review; repos append their own criteria after the render. |
 | `continuation_context` | `attempt` | Retry-attempt guidance shown when Symphony re-activates an issue that is still in an active state. |
 | `default_posture` | — | General operating posture for an unattended issue run: autonomy, status-first routing, single workpad, planning rigor, and when to stop. |
 | `dependency_guardrail` | `lockfile` | Justify dependency changes and keep the lock file diff scoped to the current ticket. |
-| `escape_hatches` | — | What goes to a person (decisions with options) and what goes to the supervisor (checks an agent can't run), then the blocked-access and in-execution clarification escape hatches. |
+| `escape_hatches` | — | What goes to a person (decisions with options) and where a check an agent can't run goes (CI or a QA playbook), then the blocked-access and in-execution clarification escape hatches. A decision request holds the ticket in its phase, which never moves. |
 | `guardrails` | — | Cross-cutting safety and process guardrails for an issue run; repos append repo-specific guardrails after the render. |
 | `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on. |
 | `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
-| `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
-| `plan_pipeline` | `issue` | The stages a plan ticket with an Artifacts wanted section produces before its split (domain brief, journeys, Kano map, screens, decisions, implementation plan), one Linear document each, checked against a rubric per stage and handed over in one review; renders nothing for any other ticket. |
-| `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
+| `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned) runs never open a PR. The plan handoff waits in Plan Review, a change goes back through Rework, and the epic closes itself in Epic Review. |
+| `plan_pipeline` | `issue` | The stages a plan ticket with an Artifacts wanted section produces before its split (domain brief, journeys, Kano map, screens, decisions, implementation plan), one Linear document each, checked against a rubric per stage and handed over in one review; renders nothing for any other ticket. The split files no Final verification sub-ticket, because the epic closes itself in Epic Review. |
+| `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before the handoff to Code Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
-| `review_brief` | — | One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
+| `review_brief` | — | One review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
 | `status_map` | — | Canonical Symphony issue state machine and what each state means for the agent. |
 | `ticket_types` | `issue` | Per-type steps for a ticket labelled type:bug, type:feature or plan, with a readiness check that sends a bug or feature missing a required section back to Backlog; renders nothing for an untyped ticket. |
@@ -155,7 +141,7 @@ with untrimmed tags at the end of the line before it. `symphony workflow preview
 | `workpad_template` | `agent` | Canonical structure for the persistent workpad comment. |
 
 The plan flow in `parent_tickets` (plan run, single plan review, approval
-through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
+through `Waiting on sub-tickets`, epic review) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.
 

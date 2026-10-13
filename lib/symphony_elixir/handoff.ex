@@ -3,8 +3,8 @@ defmodule SymphonyElixir.Handoff do
   The explicit handoff signal: how a session says its implementation is done and its PR is ready
   for review.
 
-  A `designed` repo advances `In Progress` (or `Rework`) to `Code Review` only on this signal —
-  never when a run merely goes quiet. The signal is emitted mechanically by the push and
+  The machine advances `In Progress` (or `Rework`) to `Code Review` only on this signal — never
+  when a run merely goes quiet. The signal is emitted mechanically by the push and
   pull-request tool hooks (`SymphonyElixir.AgentTools.GitHub`), recorded in the ticket's signals
   ledger bound to the head it handed off, and read back by the runner before it performs any move
   into `Code Review`. A run that stops quiet with its PR already on its workspace HEAD has nothing
@@ -13,19 +13,15 @@ defmodule SymphonyElixir.Handoff do
   to pick up; its quiet successors back off and, after two on the same head, the ticket is held
   `Blocked` with `handoff_missing`.
 
-  A `legacy` repo neither emits nor consults the signal, so its behavior is unchanged. This module
-  is the one place that decides the handoff's target state, so the guard table, the runner and the
-  GitHub tool hooks all read the same answer.
+  This module is the one place that decides the handoff's target state, so the guard table, the
+  runner and the GitHub tool hooks all read the same answer.
   """
 
-  alias SymphonyElixir.{RunStore, StateMachine, TicketSignals, TicketState}
+  alias SymphonyElixir.{RunStore, TicketSignals, TicketState}
 
   @signal "handoff"
   @missing_signal "handoff_missing"
   @origins ["In Progress", "Rework"]
-  # A legacy repo hands a PR off to In Review: Auto Review is retired, and In Review retires with
-  # the legacy machine once its tickets drain.
-  @legacy_target "In Review"
 
   @doc "The ledger signal name a session's handoff is recorded under."
   @spec signal() :: String.t()
@@ -35,26 +31,14 @@ defmodule SymphonyElixir.Handoff do
   @spec missing_signal() :: String.t()
   def missing_signal, do: @missing_signal
 
-  @doc "Whether the repo runs the designed machine, and so emits and consults the handoff signal."
-  @spec designed?(map()) :: boolean()
-  def designed?(settings), do: StateMachine.designed?(settings)
-
-  @doc "The state a repo hands a finished implementation off to."
+  @doc "The state a repo hands a finished implementation off to: its `Code Review` state."
   @spec target_state(map()) :: String.t()
-  def target_state(settings) do
-    if designed?(settings), do: settings.tracker.code_review_state, else: @legacy_target
-  end
+  def target_state(settings), do: settings.tracker.code_review_state
 
   @doc """
-  Whether a move out of `state` needs the handoff signal first: a designed repo's move from an
-  origin state (`In Progress`, `Rework`) into `Code Review`.
+  Whether `state` is an origin the handoff signal may fire from (`In Progress`, `Rework`): a move
+  out of it into `Code Review` needs the signal first.
   """
-  @spec required?(String.t() | nil, map()) :: boolean()
-  def required?(state, settings) do
-    designed?(settings) and origin?(state)
-  end
-
-  @doc "Whether `state` is an origin the handoff signal may fire from."
   @spec origin?(String.t() | nil) :: boolean()
   def origin?(state) when is_binary(state), do: Enum.any?(@origins, &matches?(state, &1))
   def origin?(_state), do: false

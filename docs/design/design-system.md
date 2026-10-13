@@ -329,7 +329,7 @@ Each component names its SwiftUI base, its parts, its states and what VoiceOver 
 
 ## 7. Content
 
-- Use the workflow's words: Todo, In Progress, In Review, Human Review, Merging, Done, Rework, Backlog; and the
+- Use the workflow's words: Todo, In Progress, Code Review, QA, Plan Review, Merging, Done, Rework, Backlog; and the
   Director's words for stages: Queued, Working, Auto Review, Waiting on you, Merging, Shipped.
 - A ticket is always its identifier and its title together.
 - Durations are short and exact: "14 min", "3 h 12 min", "2 days". Times: relative in rows ("12 min ago"), absolute on

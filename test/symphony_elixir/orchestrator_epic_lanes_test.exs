@@ -17,7 +17,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
   end
 
   test "an epic whose next part waits on a review yields its lane, and takes it back once the part can run" do
-    part_1 = %{id: "p1", identifier: "MT-11", state: "In Review"}
+    part_1 = %{id: "p1", identifier: "MT-11", state: "Plan Review"}
     part_2 = %Issue{id: "p2", identifier: "MT-12", title: "Part 2", state: "Todo", blocked_by: [part_1]}
     standalone = %Issue{id: "s1", identifier: "MT-20", title: "Standalone", state: "Todo"}
     other = %Issue{id: "s2", identifier: "MT-21", title: "Other", state: "Todo"}
@@ -35,12 +35,12 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
     # The slot the lane would have held goes to a second standalone ticket.
     assert Orchestrator.should_dispatch_issue_for_test(other, state)
 
-    reason = "Nothing on its path can run: MT-11 (In Review), MT-12 (Todo, blocked by MT-11)"
+    reason = "Nothing on its path can run: MT-11 (Plan Review), MT-12 (Todo, blocked by MT-11)"
 
     assert %{lanes: [lane], shared: %{slots: 2, used: 1}} = snapshot_of(state).epic_lanes
     assert %{identifier: "MT-10", status: "yielded", reason: ^reason, sub_issue: sub_issue} = lane
 
-    assert %{identifier: "MT-11", state: "In Review"} = sub_issue
+    assert %{identifier: "MT-11", state: "Plan Review"} = sub_issue
 
     # Review sends part 1 back to Todo: at the next poll the epic has its lane again, so part 1
     # starts there while the shared slot left is taken.
@@ -173,16 +173,9 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
              snapshot.epic_lanes
   end
 
-  test "a designed repo's Plan Review is a human-gated state, where a legacy repo's is not" do
-    refute EpicLanes.human_gated_state?("Plan Review")
-
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
-    )
-
+  test "Plan Review is a human-gated state, read from the settings" do
     assert EpicLanes.human_gated_state?(" plan review ")
-    assert EpicLanes.human_gated_state?("In Review")
+    refute EpicLanes.human_gated_state?("Code Review")
     refute EpicLanes.human_gated_state?("Todo")
   end
 

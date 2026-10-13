@@ -24,7 +24,7 @@ defmodule SymphonyElixir.RetiredStatesTest do
     on_exit(&RetiredStates.reset_for_test/0)
   end
 
-  test "reads the retired and the draining states" do
+  test "reads the retired states" do
     assert RetiredStates.states() == ["Auto Review", "In Review", "Human Review"]
   end
 
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.RetiredStatesTest do
              RetiredStates.drain_report()
   end
 
-  test "names each draining ticket with what it waits on" do
+  test "names each ticket left in In Review or Human Review loudly, with what it waits on" do
     issues = [
       %Issue{id: "p", identifier: "TP-1", state: "Human Review", labels: ["Plan"]},
       %Issue{id: "d", identifier: "TP-2", state: "Human Review", labels: []},
@@ -55,13 +55,13 @@ defmodule SymphonyElixir.RetiredStatesTest do
     Process.put(:retired_states_result, {:ok, issues})
     log = capture_log(fn -> RetiredStates.report(tracker: FakeTracker) end)
 
-    assert log =~ "TP-1 is still in the draining Human Review state, waiting on a parked plan waiting on its review: move it by hand to Plan Review"
-    assert log =~ "TP-2 is still in the draining Human Review state, waiting on an open decision for a person"
-    assert log =~ "TP-3 is still in the draining In Review state, waiting on an open decision for a person: move it by hand into its phase with a Needs Decision hold"
-    assert log =~ "TP-4 is still in the draining In Review state, waiting on blocked QA"
-    assert log =~ "TP-5 is still in the draining In Review state, waiting on a supervisor check of its PR"
-    assert log =~ "[warning]"
-    refute log =~ "[error]"
+    assert log =~ "TP-1 is still in the retired Human Review state, waiting on a parked plan waiting on its review: move it by hand to Plan Review"
+    assert log =~ "TP-2 is still in the retired Human Review state, waiting on an open decision for a person"
+    assert log =~ "TP-3 is still in the retired In Review state, waiting on an open decision for a person: move it by hand into its phase with a Needs Decision hold"
+    assert log =~ "TP-4 is still in the retired In Review state, waiting on blocked QA"
+    assert log =~ "TP-5 is still in the retired In Review state, waiting on a supervisor check of its PR"
+    assert log =~ "[error]"
+    refute log =~ "[warning]"
 
     assert Enum.map(RetiredStates.drain_report().stragglers, & &1.wait) ==
              [:parked_plan, :open_decision, :open_decision, :blocked_qa, :supervisor_check]
