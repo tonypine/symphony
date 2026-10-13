@@ -176,8 +176,10 @@ defmodule SymphonyElixir.HumanReviewTest do
       refute HumanReview.requested_by_ticket?(%{plan | labels: ["Plan"]}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | labels: ["plan", "needs-human"]}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | description: "The plan must not auto-approve."}, settings)
-      assert HumanReview.requested_by_ticket?(%{plan | title: "Human review: split the importer"}, settings)
+      assert HumanReview.requested_by_ticket?(%{plan | title: "Split the importer; it needs a human review"}, settings)
+      refute HumanReview.requested_by_ticket?(%{plan | title: "Human review: split the importer"}, settings)
       refute HumanReview.requested_by_ticket?(%{plan | description: "Keep parents in `Human Review` until approved."}, settings)
+      refute HumanReview.requested_by_ticket?(%{plan | description: "Remove In Review and Human Review once the drain report is empty."}, settings)
     end
 
     test "is true when the plan's author says they review it" do

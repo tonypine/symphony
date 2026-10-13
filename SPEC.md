@@ -2387,7 +2387,9 @@ Rules:
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded. A repo with the reviewer off parks its `Code Review` tickets with
+  origin recorded. A `Code Review` or `QA` ticket back from `CI Fix` on the same red head (a repair
+  that pushed nothing) MUST enter `CI Fix` again, until the fix attempts run out and the failure
+  escalates to a `Needs Decision` hold. A repo with the reviewer off parks its `Code Review` tickets with
   `code_review_reviewer_disabled` recorded and never approves without a reviewer.
 - **Verdicts bind to a head.** Code Review and QA verdicts are recorded against the head SHA they
   judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
@@ -3981,7 +3983,8 @@ SHOULD return:
 - running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
   runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
   forced parent's current part
-- `forced` rows SHOULD include `sub_issue` (a forced plan parent's current part, or null)
+- `forced` rows SHOULD include `title`, `repo_key` (null when Symphony hasn't routed the issue yet),
+  `sub_issue` (a forced plan parent's current part, or null)
   and `waiting_on_human` (the issue is in `Backlog`, `Triage`, the Plan Review state or a draining
   review state)
 - `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
@@ -4318,6 +4321,7 @@ Minimum endpoints:
           "issue_id": "vwx234",
           "issue_identifier": "MT-657",
           "title": "Fix the release build",
+          "repo_key": "web",
           "state": "In Progress",
           "forced_since": "2026-02-24T19:00:00Z",
           "forced_for_seconds": 7380,
@@ -4506,18 +4510,20 @@ Minimum endpoints:
     tracker request: the implementation reads the tracker on its own poll and serves what it cached.
   - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
     one query per repository route lists the issues in its scope that carry the `Needs Decision`
-    or `Blocked` label, or are stragglers in a draining review state (Section 7.6), with their
-    `updatedAt` and the last edit of their newest comment; only an issue whose
+    or `Blocked` label, are plan parents in the Plan Review state (`issues.states.plan_review`), or
+    are stragglers in a draining review state (Section 7.6), with their `updatedAt` and the last
+    edit of their newest comment; only an issue whose
     pair changed since the last read is read again in full (comments, state history, labels,
     attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
     `inbox`.
   - One item per listed issue, with `kind` `action` (an open `linear_request_human_action`
-    request, whatever else it is); for a straggler in a draining state, else `final_verification`
-    (a `Final verification:` ticket left from before the drain), else `plan` (label `plan` or
-    `breakdown`), else `pr`; else `blocked` for an access hold a person lifts with `Unblock`, with
-    the reason the hold recorded and what clears it; and one item per quality-gate hold or skip
-    (`awaiting_clarification`, `skipped`), with `kind` `clarify`. An issue the orchestrator sees
-    running, or saw leave the draining states, is dropped unless a hold pauses it.
+    request, whatever else it is); for a plan parent in the Plan Review state, else `plan`; for a
+    straggler in a draining state, else `final_verification` (a `Final verification:` ticket left
+    from before the drain), else `plan` (label `plan` or `breakdown`), else `pr`; else `blocked`
+    for an access hold a person lifts with `Unblock`, with the reason the hold recorded and what
+    clears it; and one item per quality-gate hold or skip (`awaiting_clarification`, `skipped`),
+    with `kind` `clarify`. An issue the orchestrator sees running, or saw leave the draining states
+    (for a plan, the Plan Review state it was listed in), is dropped unless a hold pauses it.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
     asks), `waiting_since` (the later of the latest move into its state and its newest open
