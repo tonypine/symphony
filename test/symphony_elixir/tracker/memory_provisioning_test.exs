@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
   alias SymphonyElixir.Tracker.Memory
 
   @keys [
+    :memory_tracker_workflow_states,
     :memory_tracker_workflow_states_list,
     :memory_tracker_labels_list,
     :memory_tracker_create_workflow_state_result,
@@ -25,6 +26,21 @@ defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
     end)
 
     :ok
+  end
+
+  describe "workflow_state_exists?/2" do
+    test "assumes every state exists unless states are configured" do
+      assert {:ok, true} = Memory.workflow_state_exists?("QA", [])
+
+      Application.put_env(:symphony_elixir, :memory_tracker_workflow_states, ["qa "])
+      assert {:ok, true} = Memory.workflow_state_exists?("QA", ["TP"])
+      assert {:ok, false} = Memory.workflow_state_exists?("Merging", ["TP"])
+    end
+
+    test "returns a configured error" do
+      Application.put_env(:symphony_elixir, :memory_tracker_workflow_states, {:error, :down})
+      assert {:error, :down} = Memory.workflow_state_exists?("QA", [])
+    end
   end
 
   describe "workflow_states/0 and labels/0" do

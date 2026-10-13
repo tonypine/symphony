@@ -18,7 +18,7 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
 
   require Logger
 
-  alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.Config
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.{Action, Collector}
   alias SymphonyElixir.Linear.Client
@@ -96,7 +96,7 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
     # A repository routed to no project has no update to list its actions in: GitHub is not read.
     with {:ok, project_filter} <- Client.repo_project_filter(repo, Keyword.fetch!(opts, :settings).tracker),
          gh_repo when is_binary(gh_repo) <- Keyword.get(opts, :github_repo, &RepoStatus.github_repo/1).(repo),
-         branch = Keyword.get(opts, :base_branch, &AutoReview.base_branch/1).(repo_key),
+         branch = Keyword.get(opts, :base_branch, &Config.base_branch/1).(repo_key),
          {:ok, runs} <- github.list_branch_runs(gh_repo, branch, []),
          {:ok, read} <- read_logs(failing_workflows(runs), gh_repo, previous.logs, github),
          failing = Enum.reject(read, fn {_workflow, secrets} -> secrets == [] end),

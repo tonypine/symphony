@@ -46,6 +46,14 @@ defmodule SymphonyElixir.StateProvisioning do
 
   def machine_states(_settings), do: []
 
+  @doc "The Linear team keys or ids Symphony is scoped to, from `issues` and `repositories`."
+  @spec configured_teams(Schema.t(), [map()]) :: [String.t()]
+  def configured_teams(%Schema{} = settings, repos) when is_list(repos) do
+    [settings.tracker.team | Enum.map(repos, &Map.get(&1, :team))]
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.uniq()
+  end
+
   @doc """
   Finds or creates the machine-owned states and labels in each team: the configured `teams` (keys
   or ids), or every team the tracker already has states in when none is configured. With no team to

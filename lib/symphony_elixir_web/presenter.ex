@@ -4,7 +4,6 @@ defmodule SymphonyElixirWeb.Presenter do
   """
 
   alias SymphonyElixir.{
-    AcceptanceGate,
     AuditLog,
     BuildInfo,
     Config,
@@ -61,8 +60,6 @@ defmodule SymphonyElixirWeb.Presenter do
         human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
         shipped_today = Map.get(snapshot, :shipped_today, [])
         waiting_on_you = Inbox.items(snapshot, inbox)
-        qa = normalize_qa(Map.get(snapshot, :qa))
-        acceptance_gate = acceptance_gate_payload(AcceptanceGate.Agreement.snapshot())
 
         %{
           generated_at: generated_at,
@@ -81,7 +78,7 @@ defmodule SymphonyElixirWeb.Presenter do
             waiting_on_you: length(waiting_on_you)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
-          sessions: sessions_payload(snapshot.running, qa.running, acceptance_gate.running),
+          sessions: sessions_payload(snapshot.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
@@ -106,8 +103,6 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
-          qa: qa,
-          acceptance_gate: acceptance_gate,
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
@@ -679,9 +674,6 @@ defmodule SymphonyElixirWeb.Presenter do
       },
       recent_events: (running && recent_events_payload(running)) || [],
       last_error: retry && retry.error,
-      acceptance_gate:
-        AcceptanceGate.Agreement.latest(repo_key_from_entries(running, retry, watching), issue_id_from_entries(running, retry, watching))
-        |> gate_verdict_payload(),
       tracked: %{}
     }
 
@@ -710,9 +702,9 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp sessions_payload(running, qa_running, gate_running) do
+  defp sessions_payload(running) do
     running
-    |> Sessions.list(qa_running, gate_running)
+    |> Sessions.list()
     |> Enum.map(&%{&1 | started_at: iso8601(&1.started_at)})
   end
 
@@ -1034,39 +1026,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_finishing(%{slots: slots, used: used, running: running}), do: %{slots: slots, used: used, running: running}
   defp normalize_finishing(_finishing), do: %{slots: nil, used: 0, running: []}
-
-  defp normalize_qa(%{running: running, queued: queued}), do: %{running: running, queued: queued}
-  defp normalize_qa(_qa), do: %{running: [], queued: []}
-
-  defp acceptance_gate_payload(gate) do
-    %{
-      running: gate.running,
-      queued: gate.queued,
-      recent: Enum.map(gate.recent, &gate_verdict_payload/1),
-      agreement: gate.agreement
-    }
-  end
-
-  defp gate_verdict_payload(nil), do: nil
-
-  defp gate_verdict_payload(run) do
-    %{
-      repo_key: Map.get(run, :repo_key),
-      issue_id: Map.get(run, :issue_id),
-      issue_identifier: Map.get(run, :issue_identifier),
-      pr_url: Map.get(run, :pr_url),
-      head_sha: Map.get(run, :head_sha),
-      mode: Map.get(run, :mode),
-      verdict: run.verdict,
-      agent_verdict: Map.get(run, :agent_verdict),
-      reasons: Map.get(run, :reasons) || [],
-      criteria: Map.get(run, :criteria) || %{met: 0, unmet: 0, unclear: 0},
-      judged_at: iso8601(Map.get(run, :judged_at)),
-      run_id: Map.get(run, :run_id),
-      human_decision: Map.get(run, :human_decision),
-      human_decided_at: iso8601(Map.get(run, :human_decided_at))
-    }
-  end
 
   defp auto_merge_payload(entry) do
     %{

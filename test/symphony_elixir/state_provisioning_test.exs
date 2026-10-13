@@ -83,6 +83,14 @@ defmodule SymphonyElixir.StateProvisioningTest do
     end
   end
 
+  describe "configured_teams/2" do
+    test "the issues team and each repository's team, once each, skipping blank ones" do
+      {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory", "team" => "TP"}})
+
+      assert StateProvisioning.configured_teams(settings, [%{team: "TP"}, %{team: "APP"}, %{team: " "}, %{}]) == ["TP", "APP"]
+    end
+  end
+
   describe "provision/3" do
     test "creates the five states and five labels in a team, and a second run creates nothing" do
       settings = Config.settings!()

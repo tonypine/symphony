@@ -129,6 +129,15 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @doc "The branch PRs for `repo_key` merge into (`main` when the repository names none)."
+  @spec base_branch(String.t() | nil) :: String.t()
+  def base_branch(repo_key) do
+    case repo_base_branch(repo_key) do
+      {:ok, branch} when is_binary(branch) and branch != "" -> branch
+      _other -> "main"
+    end
+  end
+
   @spec system() :: {:ok, SystemSchema.t()} | {:error, term()}
   def system do
     with {:ok, config} <- unwrap_cache_result(Cache.get()),
@@ -263,20 +272,11 @@ defmodule SymphonyElixir.Config do
   def pre_push_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :pre_push_review, config)
 
   @doc """
-  The profile the Auto Review QA agent starts with: `auto_review.model` / `.effort`, else the
-  `qa` run profile as resolved by `run_profile/2`. The provider resolves as in `run_profile/2`.
+  The profile the QA agent starts with: `auto_review.model` / `.effort`, else the `qa` run profile
+  as resolved by `run_profile/2`. The provider resolves as in `run_profile/2`.
   """
   @spec qa_profile(Schema.t()) :: RunKind.profile()
   def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
-
-  @doc """
-  The profile the acceptance gate agent starts with: `auto_review.acceptance_gate.model` /
-  `.effort`, else the `acceptance_gate` run profile as resolved by `run_profile/2`. The
-  provider resolves as in `run_profile/2`.
-  """
-  @spec acceptance_gate_profile(Schema.t()) :: RunKind.profile()
-  def acceptance_gate_profile(%Schema{auto_review: %{acceptance_gate: config}} = settings),
-    do: own_run_profile(settings, :acceptance_gate, config)
 
   @doc """
   The host's `auto_review.android` settings for Android QA. `sdk_root` falls back to
@@ -458,7 +458,6 @@ defmodule SymphonyElixir.Config do
 
   defp effective_run_profile(settings, "pre_push_review"), do: pre_push_review_profile(settings)
   defp effective_run_profile(settings, "qa"), do: qa_profile(settings)
-  defp effective_run_profile(settings, "acceptance_gate"), do: acceptance_gate_profile(settings)
   defp effective_run_profile(settings, kind), do: run_profile(settings, kind)
 
   @doc """
@@ -516,15 +515,15 @@ defmodule SymphonyElixir.Config do
   defp own_profile_setting(settings, "pre_push_review", field), do: {"pre_push_review", Map.get(settings.review_agent, field)}
   defp own_profile_setting(settings, "qa", field), do: {"auto_review", Map.get(settings.auto_review, field)}
 
-  defp own_profile_setting(settings, "acceptance_gate", field),
-    do: {"auto_review.acceptance_gate", Map.get(settings.auto_review.acceptance_gate, field)}
-
   defp own_profile_setting(_settings, _kind, _field), do: nil
 
+  @doc """
+  The state a run whose pre-push reviewer blocked it is parked in: `In Review`. The deprecated
+  `pull_requests.checks.escalate_to_state` no longer moves it; the state retires with the legacy
+  machine.
+  """
   @spec review_agent_blocked_state(String.t()) :: String.t()
-  def review_agent_blocked_state(repo_key) when is_binary(repo_key) do
-    settings_for_repo!(repo_key).ci.escalation_state
-  end
+  def review_agent_blocked_state(repo_key) when is_binary(repo_key), do: "In Review"
 
   @spec codex_turn_sandbox_policy(Path.t() | nil) :: map()
   def codex_turn_sandbox_policy(workspace \\ nil) do

@@ -1,5 +1,4 @@
 {
-  "acceptance_gate": null,
   "attempts": {
     "current_retry_attempt": 0,
     "restart_count": 1

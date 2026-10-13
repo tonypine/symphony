@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     # they also contain.
     @operations [
       {"SymphonyTeams", :teams},
+      {"SymphonyWorkflowStatesByName", :workflow_states_by_name},
       {"SymphonyAllWorkflowStates", :workflow_states},
       {"SymphonyAllLabels", :labels},
       {"SymphonyCreateWorkflowState", :create_workflow_state},
@@ -28,6 +29,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     end
 
     defp default(:teams), do: %{"data" => %{"teams" => %{"nodes" => []}}}
+    defp default(:workflow_states_by_name), do: %{"data" => %{"workflowStates" => %{"nodes" => []}}}
     defp default(:workflow_states), do: %{"data" => %{"workflowStates" => %{"nodes" => []}}}
     defp default(:labels), do: %{"data" => %{"issueLabels" => %{"nodes" => []}}}
     defp default(:create_workflow_state), do: created_state()
@@ -107,6 +109,36 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
         }
       }
     }
+  end
+
+  describe "workflow_state_exists?/2" do
+    defp put_states(nodes), do: put(:workflow_states_by_name, {:ok, %{"data" => %{"workflowStates" => %{"nodes" => nodes}}}})
+
+    test "checks the state exists in every team, by key or id" do
+      put_states([%{"team" => %{"id" => "team-uuid", "key" => "TP"}}, %{"team" => %{"id" => "other", "key" => "ENG"}}])
+
+      assert {:ok, true} = Adapter.workflow_state_exists?("QA", ["tp", "OTHER"])
+      assert {:ok, true} = Adapter.workflow_state_exists?("QA", [])
+      assert {:ok, false} = Adapter.workflow_state_exists?("QA", ["TP", "OPS"])
+    end
+
+    test "reports a missing state when no team has it" do
+      put_states([])
+      assert {:ok, false} = Adapter.workflow_state_exists?("QA", [])
+    end
+
+    test "treats a state without a team as not matching any team" do
+      put_states([%{"id" => "state-1"}])
+      assert {:ok, false} = Adapter.workflow_state_exists?("QA", ["TP"])
+    end
+
+    test "returns client errors and malformed responses as errors" do
+      put(:workflow_states_by_name, {:error, :unauthorized})
+      assert {:error, :unauthorized} = Adapter.workflow_state_exists?("QA", [])
+
+      put(:workflow_states_by_name, {:ok, %{"errors" => [%{"message" => "bad"}]}})
+      assert {:error, :workflow_states_unavailable} = Adapter.workflow_state_exists?("QA", [])
+    end
   end
 
   describe "workflow_states/0" do

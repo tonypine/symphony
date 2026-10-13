@@ -325,15 +325,12 @@ public struct ReposConfig: Equatable {
 
     public var path: String
     public var repos: Repos
-    /// `auto_review.acceptance_gate.mode`, nil when it can't be read.
-    public var globalGate: AcceptanceGateMode?
     /// Where Symphony keeps its own clones.
     public var clonesRoot: URL
 
-    public init(path: String, repos: Repos, globalGate: AcceptanceGateMode? = nil, clonesRoot: URL? = nil) {
+    public init(path: String, repos: Repos, clonesRoot: URL? = nil) {
         self.path = path
         self.repos = repos
-        self.globalGate = globalGate
         self.clonesRoot = clonesRoot ?? ManagedClones.root(in: "", configPath: path)
     }
 
@@ -351,7 +348,6 @@ public struct ReposConfig: Equatable {
         return ReposConfig(
             path: path,
             repos: repos,
-            globalGate: try? file.readAcceptanceGateMode(),
             clonesRoot: try? file.readClonesRoot()
         )
     }
@@ -538,17 +534,6 @@ public struct RepoDetail: Equatable, Identifiable {
         case folded(line: String, canStart: Bool)
     }
 
-    /// The repo's acceptance gate.
-    public struct Gate: Equatable {
-        public var mode: RepoField
-        public var record: String
-
-        public init(mode: RepoField, record: String) {
-            self.mode = mode
-            self.record = record
-        }
-    }
-
     public var id: String { key }
     public var key: String
     public var isDefault: Bool
@@ -559,8 +544,6 @@ public struct RepoDetail: Equatable, Identifiable {
     public var source: Source
     public var routing: Routing
     public var live: Live
-    /// Nil for a repo `symphony.yml` doesn't have.
-    public var gate: Gate?
     /// `manual_review`, nil for a repo `symphony.yml` doesn't have.
     public var manualReview: RepoField?
     public var actions: RepoActions
@@ -574,7 +557,6 @@ public struct RepoDetail: Equatable, Identifiable {
         source: Source,
         routing: Routing,
         live: Live,
-        gate: Gate? = nil,
         manualReview: RepoField? = nil,
         actions: RepoActions = RepoActions(),
         health: RepoHealth = .notChecked(status: .stopped, poll: nil)
@@ -586,7 +568,6 @@ public struct RepoDetail: Equatable, Identifiable {
         self.source = source
         self.routing = routing
         self.live = live
-        self.gate = gate
         self.manualReview = manualReview
         self.actions = actions
         self.health = health
@@ -679,7 +660,7 @@ public enum ReposList {
             let runs = snapshot?.runs ?? []
             details = repos.map { repo in
                 detail(repo, warning: warning, runs: runs, pending: pending(repo.key), now: now)
-                    .withGate(entries, config.globalGate, snapshot)
+                    .withManualReview(entries)
             }
         } else {
             switch config.repos {
@@ -692,7 +673,7 @@ public enum ReposList {
                 let health = RepoHealth.notChecked(status: status, poll: poll)
                 details = entries.map { entry in
                     detail(entry, live: live, health: health, config: config, isDirectory: isDirectory)
-                        .withGate(entries, config.globalGate, snapshot)
+                        .withManualReview(entries)
                 }
             }
         }
@@ -979,12 +960,10 @@ public enum ReposList {
 }
 
 private extension RepoDetail {
-    /// The detail with its gate and manual review from `symphony.yml`'s `entries` and the global mode, and the
-    /// gate's record in `snapshot`.
-    func withGate(_ entries: [RepositoryEntry], _ global: AcceptanceGateMode?, _ snapshot: StateSnapshot?) -> RepoDetail {
+    /// The detail with its manual review from `symphony.yml`'s `entries`.
+    func withManualReview(_ entries: [RepositoryEntry]) -> RepoDetail {
         var detail = self
         let entry = entries.first { $0.key == key }
-        detail.gate = entry.map { AcceptanceGate.repoGate($0, global: global, in: snapshot) }
         detail.manualReview = entry.map { ManualReview.repoField($0) }
         return detail
     }

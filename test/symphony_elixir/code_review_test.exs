@@ -133,6 +133,11 @@ defmodule SymphonyElixir.CodeReviewTest do
   defp signals, do: SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
 
   # A reviewer result carrying the diff it judged, the way `ReviewAgent.evaluate/4` returns one.
+  defp approve_from(range, inventory) do
+    source = %{git_range: range, changed_file_inventory: inventory}
+    {:ok, %{verdict: :approve, comments: [], reason: "ok", source: source}}
+  end
+
   defp approve_result(inventory) do
     {:ok, %{verdict: :approve, comments: [], reason: "looks good", source: %{changed_file_inventory: inventory}}}
   end
@@ -155,6 +160,20 @@ defmodule SymphonyElixir.CodeReviewTest do
       deletions: 1,
       patch: "+++ b/lib/app/widget.ex\n@@ -1 +1,3 @@\n-def widget, do: :old\n+def widget, do: :ok\n"
     }
+  end
+
+  # An escalation pauses the ticket in Code Review on a Needs Decision hold whose confirmation
+  # continues into QA: it posts the decision request and moves nothing.
+  defp assert_escalated(recommended) do
+    assert_received {:commented, @issue_id, body}
+    assert body =~ "## Decision needed: Code Review escalated TP-815"
+    assert body =~ "the ticket stays in Code Review until the decision is recorded"
+    assert body =~ "#{recommended}** (recommended)"
+    refute_received {:moved, @issue_id, _state}
+
+    hold = Hold.get(@repo_key, @issue_id, :needs_decision)
+    assert MergeConfirmation.confirm_target(hold) == "QA"
+    body
   end
 
   describe "reviewer_run?/2" do
@@ -317,11 +336,11 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{outcome: "request_changes"}] = SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
     end
 
-    test "a block verdict escalates through the configured escalation state" do
+    test "a block verdict pauses the ticket on a Needs Decision hold, recommending Rework" do
       Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}})
 
       assert :ok = run("/tmp/workspace", settings: designed_settings())
-      assert_received {:moved, @issue_id, "In Review"}
+      assert assert_escalated("Send to Rework") =~ "**Why:** touches protected files"
 
       assert [%{outcome: "block"}] = SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
 
@@ -329,14 +348,14 @@ defmodule SymphonyElixir.CodeReviewTest do
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
-    test "a reviewer block error escalates through the configured escalation state" do
+    test "a reviewer block error pauses the ticket on a Needs Decision hold" do
       Process.put(
         :fake_review_result,
         {:error, {:review_agent_blocked, %{reason: "touches protected files", findings: [], comments: []}}}
       )
 
       assert :ok = run("/tmp/workspace", settings: designed_settings())
-      assert_received {:moved, @issue_id, "In Review"}
+      assert_escalated("Send to Rework")
 
       assert [%{outcome: "block"}] = SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
 
@@ -460,7 +479,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       # The third attempt has run out of retries, so it escalates instead of failing again.
       assert :ok = run("/tmp/workspace", settings: designed_settings())
-      assert_received {:moved, @issue_id, "In Review"}
+      assert_escalated("Send to Rework")
 
       outcomes = @repo_key |> SymphonyElixir.Handoff.verdicts(@issue_id, "code_review") |> Enum.map(& &1.outcome)
 
@@ -590,7 +609,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       refute_received {:moved, _, _}
 
       assert :ok = run(workspace, settings: designed_settings())
-      assert_received {:moved, @issue_id, "In Review"}
+      assert_escalated("Send to Rework")
 
       assert [%{outcome: "block"}] = verdicts()
 
@@ -637,7 +656,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert :ok = run_with(SequencedReviewAgent, workspace, settings: designed_settings())
 
-      assert_received {:moved, @issue_id, "In Review"}
+      assert_escalated("Send to Rework")
       refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
     end
 
@@ -688,6 +707,133 @@ defmodule SymphonyElixir.CodeReviewTest do
       # The stale deepening is ignored: the reviewer ran and the verdict routed as usual.
       assert_received {:reviewed, @issue_id, "Code Review"}
       assert_received {:moved, @issue_id, "QA"}
+    end
+  end
+
+  describe "the escalation rules (D12)" do
+    test "a person rule on an approved ticket pauses it for a person, recommending QA" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      labelled = %{issue() | labels: ["needs-human"], description: "Adds a widget."}
+
+      assert :ok =
+               CodeReview.run(labelled, "/tmp/workspace",
+                 settings: designed_settings(),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
+               )
+
+      body = assert_escalated("Continue to QA")
+      assert body =~ "the reviewer approved; label: the issue is labelled `needs-human`"
+      assert [%{outcome: "approve"}] = verdicts()
+      assert [%{details: %{signal: "code_review_escalate"}}] = signals() |> Enum.filter(&(&1.name == "code_review"))
+    end
+
+    test "a ticket pattern is a person rule too, and wins over a risk rule" do
+      Process.put(:fake_review_result, approve_result([risky_file()]))
+      asked = %{issue() | description: "This must not auto-merge."}
+
+      assert :ok = CodeReview.run(asked, "/tmp/workspace", settings: designed_settings(), review_agent: FakeReviewAgent, tracker: FakeTracker)
+
+      assert_escalated("Continue to QA")
+      refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
+    end
+
+    test "a failed decision request is reported and nothing moves" do
+      Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "no"}})
+      Process.put(:fake_tracker_comment_result, {:error, :rate_limited})
+
+      assert {:error, {:code_review_escalation_failed, {:decision_request_failed, :rate_limited}}} =
+               run("/tmp/workspace", settings: designed_settings())
+
+      refute_received {:moved, _, _}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+    end
+
+    test "a dependency manifest's major bump deepens the review, read from git in the workspace" do
+      lock = fn version -> ~s(%{"jason": {:hex, :jason, "#{version}", "abc", [:mix], [], "hexpm", "def"}}\n) end
+      manifest = %{path: "mix.lock", additions: 1, deletions: 1, patch: ""}
+
+      git = fn
+        ["show", "base123:mix.lock"] -> {:ok, lock.("1.4.4")}
+        ["show", "HEAD:mix.lock"] -> {:ok, lock.("2.0.0")}
+        ["log" | _args] -> {:ok, ""}
+      end
+
+      Process.put(:fake_review_results, [
+        approve_from("base123..HEAD", [manifest]),
+        approve_result([])
+      ])
+
+      assert :ok = run_with(SequencedReviewAgent, "/tmp/workspace", settings: designed_settings(), git: git)
+
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      refute_received {:moved, _, _}
+    end
+
+    test "a large change to one of the base branch's busy files deepens the review" do
+      busy = %{path: "lib/app/router.ex", additions: 400, deletions: 0, patch: ""}
+
+      git = fn ["log", "--since=14.days.ago", "--no-renames", "--name-only", "--format=", "base123"] ->
+        {:ok, "lib/app/router.ex\nlib/app/router.ex\nREADME.md\n"}
+      end
+
+      Process.put(:fake_review_results, [
+        approve_from("base123..HEAD", [busy]),
+        approve_result([])
+      ])
+
+      assert :ok = run_with(SequencedReviewAgent, "/tmp/workspace", settings: designed_settings(), git: git)
+
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert [%{name: "code_review_deepened"}] = signals() |> Enum.filter(&(&1.name == "code_review_deepened"))
+    end
+
+    test "git that cannot be read, or an unreadable range, adds no manifest content and no busy files" do
+      manifest = %{path: "package.json", additions: 1, deletions: 0, patch: ""}
+      Process.put(:fake_review_result, approve_from("base123..HEAD", [manifest]))
+
+      assert :ok = run("/tmp/workspace", settings: designed_settings(), git: fn _args -> :error end)
+      assert_received {:moved, @issue_id, "QA"}
+
+      Process.put(:fake_review_result, approve_from("no-range", [manifest]))
+      # Without a base only the head's manifest is read, and no busy files are.
+      git = fn
+        ["show", "HEAD:package.json"] -> :error
+        args -> flunk("git runs without a base: #{inspect(args)}")
+      end
+
+      assert :ok = run("/tmp/workspace", settings: designed_settings(), git: git)
+      assert_received {:moved, @issue_id, "QA"}
+    end
+
+    test "a run on an SSH worker reads no git, and a local run reads the real workspace" do
+      manifest = %{path: "mix.lock", additions: 1, deletions: 0, patch: ""}
+      Process.put(:fake_review_result, approve_from("base123..HEAD", [manifest]))
+
+      assert :ok = run("/tmp/workspace", settings: designed_settings(), worker_host: "worker-1")
+      assert_received {:moved, @issue_id, "QA"}
+
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_review_result, approve_from("#{head}..HEAD", [plain_file()]))
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:moved, @issue_id, "QA"}
+
+      # A manifest that git can't show in the workspace (it isn't in the commit) is read as absent.
+      Process.put(:fake_review_result, approve_from("#{head}..HEAD", [manifest]))
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:moved, @issue_id, "QA"}
+    end
+
+    test "Code Review asks the reviewer to judge the ticket's acceptance criteria and scope" do
+      assert :ok = CodeReview.run(issue(), "/tmp/workspace", settings: designed_settings(), review_agent: OptsReviewAgent, tracker: FakeTracker)
+
+      assert_received {:review_opts, opts}
+      assert opts[:review_scope] == :code_review
     end
   end
 end

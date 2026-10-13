@@ -3,9 +3,8 @@ defmodule SymphonyElixir.Repo.Fetcher do
   Runs every `git fetch` Symphony makes, one per repo at a time: the full
   `git fetch origin` before a dispatch (a worktree source checkout, a
   `workspace.source` clone, or the checkout a `WORKFLOW.md` is read from), and
-  the targeted fetches of one branch or commit that run inside a worktree (the
-  acceptance gate, a QA pass, the parent walkthrough, the `github_fetch_origin`
-  agent tool).
+  the targeted fetches of one branch or commit that run inside a worktree (a QA
+  pass, the epic review, the `github_fetch_origin` agent tool).
 
   Two fetches of the same `.git` at once fail with `cannot lock ref`. A repo is
   keyed by its git common dir, so a worktree and the checkout it was added

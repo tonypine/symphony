@@ -25,9 +25,6 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(pr.ci, .passed)
         XCTAssertEqual(pr.qaVerdict, "pass")
         XCTAssertEqual(pr.qaReport?.absoluteString, "https://linear.app/acme/issue/BIL-206#comment-5d1e0a2c")
-        XCTAssertEqual(pr.gateVerdict, "escalate")
-        XCTAssertEqual(pr.gateMode, "shadow")
-        XCTAssertEqual(pr.changeLine, "9 files, +412 −38")
         XCTAssertFalse(pr.hasRedCheck)
 
         guard case let .raw(text)? = inbox.items[2].review.brief else { return XCTFail("the final verification's brief should be raw") }
@@ -180,7 +177,7 @@ final class InboxTests: XCTestCase {
         let json = """
         {"items": [
           {"issue_id": "i-1", "identifier": "X-1", "kind": "pr", "review": {"brief": {"format": "raw", "markdown": "Just read it."},
-            "pull_request": {"ci": "failed", "qa": {"verdict": "blocked"}, "gate": {"verdict": "rework"}}}},
+            "pull_request": {"ci": "failed", "qa": {"verdict": "blocked"}}}},
           {"issue_id": "i-2", "kind": "pr"},
           {"identifier": "X-3", "kind": "audit"},
           {"identifier": "X-4", "kind": "clarify", "review": {"held": false, "found": "Empty."}},
@@ -195,7 +192,6 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(inbox.items[4].review.action?.commentID, "c-6")
         XCTAssertEqual(inbox.items[0].review.brief, .raw("Just read it."))
         XCTAssertEqual(inbox.items[0].review.pullRequest?.ci, .failed)
-        XCTAssertNil(inbox.items[0].review.pullRequest?.changeLine)
         XCTAssertEqual(inbox.items[1].ask, "i-2")
         XCTAssertNil(inbox.items[0].age)
         let clarify = try XCTUnwrap(inbox.items[2].review.clarify)
@@ -212,10 +208,6 @@ final class InboxTests: XCTestCase {
 
         XCTAssertNil(InboxPayload.decode(Data(#"{"error": {"code": "snapshot_timeout"}}"#.utf8)))
         XCTAssertNil(InboxPayload.decode(Data("not json".utf8)))
-        XCTAssertEqual(
-            InboxReview.PullRequest(files: 1, additions: nil, deletions: 2).changeLine,
-            "1 file, +0 −2"
-        )
     }
 
     // MARK: - Notifications

@@ -19,7 +19,7 @@ public enum StateMachineChoice: String, CaseIterable, Identifiable {
     public var explanation: String {
         switch self {
         case .legacy:
-            return "Today's machine: Auto Review, In Review and Human Review."
+            return "Today's machine: In Review and Human Review."
         case .designed:
             return "The redesigned machine: Code Review, QA and holds, as docs/design/state-machine.md describes."
         }

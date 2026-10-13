@@ -270,28 +270,23 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 
-  test "update_state refuses In Review while Auto Review is on and allows other states" do
-    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
-
+  test "update_state refuses the retired Auto Review state and allows other states" do
     states = [
-      %{"id" => "state-review", "name" => "In Review", "type" => "started"},
+      %{"id" => "state-auto-review", "name" => "Auto Review", "type" => "started"},
       %{"id" => "state-progress", "name" => "In Progress", "type" => "started"}
     ]
 
     response =
       DynamicTool.execute(
         "linear_update_state",
-        %{"state_name_or_id" => "in review"},
+        %{"state_name_or_id" => "auto review"},
         issue: %Issue{id: "issue-current"},
         linear_client: update_state_client(self(), states)
       )
 
     assert response["success"] == false
-
-    assert %{"error" => %{"code" => "in_review_set_by_auto_review", "message" => message}} =
-             Jason.decode!(response["output"])
-
-    assert message =~ "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
+    assert %{"error" => %{"code" => "retired_state", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "that state is retired. A PR hands off to Code Review when it is pushed"
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
 
     response =
@@ -306,28 +301,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-progress"}}
   end
 
-  test "update_state allows In Review when the startup check turned Auto Review off" do
-    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true, state: "QA Missing"})
-    on_exit(fn -> SymphonyElixir.AutoReview.reset_for_test("QA Missing") end)
-
-    tracker = SymphonyElixir.Tracker.Memory
-    assert :disabled = SymphonyElixir.AutoReview.check_tracker_state(Config.settings!(), [], tracker: tracker)
-
-    response =
-      DynamicTool.execute(
-        "linear_update_state",
-        %{"state_name_or_id" => "In Review"},
-        issue: %Issue{id: "issue-current"},
-        linear_client: update_state_client(self(), [%{"id" => "state-review", "name" => "In Review", "type" => "started"}])
-      )
-
-    assert response["success"] == true
-    assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
-  end
-
-  test "update_state lets a breakdown parent hand its plan to In Review while Auto Review is on" do
-    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
-
+  test "update_state lets a breakdown parent hand its plan to In Review" do
     response =
       DynamicTool.execute(
         "linear_update_state",
@@ -343,8 +317,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
   end
 
-  test "update_state lets a final verification hand its result to In Review while Auto Review is on" do
-    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+  test "update_state lets a final verification hand its result to In Review" do
     states = [%{"id" => "state-review", "name" => "In Review", "type" => "started"}]
     test_pid = self()
 
@@ -547,66 +520,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert move("Backlog", %{}, comment_registry: registry, settings: off) == "state-backlog"
     end
 
-    test "with Auto Review off, an agent can move its issue to Human Review itself" do
+    test "an agent can move its issue to Human Review itself" do
       assert move("Human Review", %{}) == "state-human"
     end
 
-    test "with Auto Review on, an issue with a PR cannot reach Human Review through the tool" do
-      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+    test "the comment registry tracks a run's `## Supervisor check` block as it is posted, edited and deleted" do
       {:ok, registry} = CommentRegistry.start_link()
-      CommentRegistry.record_human_action_request(registry)
-      implementation = %{"title" => "Fix the importer", "labels" => %{"nodes" => []}}
-      test_pid = self()
-
-      for target <- ["In Review", "Human Review", "human review"] do
-        response =
-          DynamicTool.execute(
-            "linear_update_state",
-            %{"state_name_or_id" => target},
-            issue: %Issue{id: "issue-current"},
-            comment_registry: registry,
-            linear_client: fn query, variables, client_opts ->
-              if query =~ "SymphonyAgentIssueTeamStates",
-                do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(@review_states, []), implementation)}}},
-                else: update_state_client(test_pid, @review_states).(query, variables, client_opts)
-            end
-          )
-
-        assert response["success"] == false
-        assert %{"error" => %{"code" => "in_review_set_by_auto_review"}} = Jason.decode!(response["output"])
-        refute_received {:linear_client_called, _query, %{stateId: _state_id}}
-      end
-
-      # The move to Backlog after a request has no PR to review, so it still goes to Human Review,
-      # and a PR-less breakdown plan can still be moved there.
-      assert move("Backlog", implementation, comment_registry: registry) == "state-human"
-      assert move("Human Review", %{"labels" => %{"nodes" => [%{"name" => "breakdown"}]}}) == "state-human"
-    end
-
-    # TP-612: the work was already on `main`, so there is no PR, and only a host crash check is left.
-    test "with Auto Review on, a ticket with no PR goes to In Review once its run left a supervisor check" do
-      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
-      {:ok, registry} = CommentRegistry.start_link()
-      no_pr = %{"title" => "Keep the toolbars off the inspector", "attachments" => %{"nodes" => [%{"url" => "https://linear.app/acme/document/brief"}, %{}]}}
-      with_pr = %{no_pr | "attachments" => %{"nodes" => [%{"url" => "https://github.com/acme/app/pull/12"}]}}
-      test_pid = self()
-
-      refused? = fn target, issue_fields ->
-        response =
-          DynamicTool.execute(
-            "linear_update_state",
-            %{"state_name_or_id" => target},
-            issue: %Issue{id: "issue-current"},
-            comment_registry: registry,
-            linear_client: fn query, variables, client_opts ->
-              if query =~ "SymphonyAgentIssueTeamStates",
-                do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(@review_states, []), issue_fields)}}},
-                else: update_state_client(test_pid, @review_states).(query, variables, client_opts)
-            end
-          )
-
-        match?(%{"error" => %{"code" => "in_review_set_by_auto_review"}}, Jason.decode!(response["output"]))
-      end
 
       comment = fn tool, args ->
         response =
@@ -630,33 +549,19 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       # A brief without the block, or naming it only in passing, changes nothing.
       comment.("linear_add_comment", %{"body" => "## Review brief\n\nSee the `## Supervisor check` below."})
-      assert refused?.("In Review", no_pr)
       refute CommentRegistry.supervisor_check?(registry)
 
       comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\n  ## Supervisor check\n\n**Verify:** no crash on `main`."})
       assert CommentRegistry.supervisor_check?(registry)
 
-      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
-      assert refused?.("Human Review", no_pr)
-      assert refused?.("In Review", with_pr)
-
-      # Editing the block away, or deleting the comment that holds it, takes the exemption back.
-      check = "## Supervisor check\n\n**Verify:** no crash on `main`."
       comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\nNothing left to check."})
-      assert refused?.("In Review", no_pr)
+      refute CommentRegistry.supervisor_check?(registry)
 
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => check})
-      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Supervisor check\n\n**Verify:** no crash on `main`."})
+      assert CommentRegistry.supervisor_check?(registry)
 
       comment.("linear_delete_comment", %{"comment_id" => "brief-1"})
       refute CommentRegistry.supervisor_check?(registry)
-      assert refused?.("In Review", no_pr)
-
-      # A PR the run opened counts before Linear lists it among the issue's attachments.
-      comment.("linear_add_comment", %{"body" => check})
-      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
-      CommentRegistry.record_pull_request(registry)
-      assert refused?.("In Review", no_pr)
     end
   end
 

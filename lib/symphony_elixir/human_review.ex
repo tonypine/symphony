@@ -8,19 +8,14 @@ defmodule SymphonyElixir.HumanReview do
   `Rework`, the waiting state (a plan approval) or `Done`. Symphony puts an issue there instead of
   `In Review` when the next step needs a person:
 
-  - an Auto Review QA verdict `blocked` that the QA agent says needs a person (a missing secret or
-    key, a check on a real device), as opposed to a tooling gap the factory can fix;
-  - a parent walkthrough (`Final verification:`) whose remaining steps are manual;
   - a plan whose ticket says a human reviews it (`requested_by_ticket?/2`) — a legacy repo only: a
     designed repo's plan handoff waits in the epic path's own `Plan Review` state, not here
     (`plan_review_states/1`);
   - an issue whose run posted a `linear_request_human_action` request: the tool moves it there,
-    and the request stays open until a person moves the issue out or the agent withdraws it;
-  - an acceptance gate escalation only a person can clear (see
-    `SymphonyElixir.AcceptanceGate.enforced_target/4`).
+    and the request stays open until a person moves the issue out or the agent withdraws it.
 
   It is the one way to say a person needs to act. The `human-action` label that used to say it is
-  retired: a config that still sets `human_actions.label`, or lists `human-action` in the gate's
+  retired: a config that still sets `human_actions.label`, or lists `human-action` in the
   `escalate.labels`, loads with a deprecation warning, and an issue carrying that label counts as
   one with an open request (`legacy_request_labels/1`).
 
@@ -31,17 +26,17 @@ defmodule SymphonyElixir.HumanReview do
 
   require Logger
 
-  alias SymphonyElixir.AcceptanceGate.Escalation
   alias SymphonyElixir.AgentTools.Linear, as: AgentLinear
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.EscalationRules
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.StateMachine
   alias SymphonyElixir.Tracker
 
   @review_state "In Review"
   @merging_state "Merging"
-  # Asks for a person whatever the acceptance gate's `escalate.labels` say (see `parked_for_person?/2`).
+  # Asks for a person whatever the `escalate.labels` say (see `parked_for_person?/2`).
   @needs_human_label "needs-human"
   # The retired label that marked an open human-action request (see `legacy_request_labels/1`).
   @legacy_request_label "human-action"
@@ -165,7 +160,7 @@ defmodule SymphonyElixir.HumanReview do
   True when the ticket says a person reviews it: an `auto_review.acceptance_gate.escalate` label
   other than `plan` and `breakdown` (every plan has one), a title or description matching one of its
   `ticket_patterns` ("must not auto-approve", "needs human", "human review"), where naming this
-  state doesn't count (`Escalation.ticket_reasons/3`), or a description in which its author says
+  state doesn't count (`EscalationRules.ticket_reasons/3`), or a description in which its author says
   they review it ("I only want to review and validate the artifacts").
   """
   @spec requested_by_ticket?(Issue.t(), Schema.t()) :: boolean()
@@ -173,7 +168,7 @@ defmodule SymphonyElixir.HumanReview do
     rules = settings.auto_review.acceptance_gate.escalate
     rules = %{rules | labels: Enum.reject(rules.labels, &Issue.breakdown_label?/1)}
 
-    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, review_states: review_states(settings)) != [] or
+    EscalationRules.ticket_reasons(%{issue | labels: issue.labels || []}, rules, review_states: review_states(settings)) != [] or
       author_reviews?(issue)
   end
 
@@ -227,7 +222,7 @@ defmodule SymphonyElixir.HumanReview do
   @doc """
   `parked_for_person/3` for the CI and PR review pollers, which also leave an issue where it is
   when it sits outside every state they move issues on from: the machine's active states,
-  `review_states/1`, the Auto Review state and `Merging`, plus any `:watched_states` a poller adds
+  `review_states/1` and `Merging`, plus any `:watched_states` a poller adds
   (a designed repo's `Rework`, say, whose red head routes to the CI Fix lane). Such an issue
   (`Backlog`, a terminal state) waits for a person to promote it, so a red head or a merge conflict
   starts no fix run and spends no retry.
@@ -248,10 +243,11 @@ defmodule SymphonyElixir.HumanReview do
 
   # The states an issue is not waiting on a person in, whatever a caller adds: the machine's active
   # states — not `tracker.active_states`, so a designed repo's phase states (`Code Review`, `QA`)
-  # count even though the config lists only the base states — the human review states, the Auto
-  # Review state and `Merging`.
+  # count even though the config lists only the base states — the human review states and
+  # `Merging`. The retired Auto Review state is not one: a ticket left there needs moving by hand
+  # (`SymphonyElixir.RetiredStates`).
   defp default_poller_states(settings) do
-    StateMachine.active_states(settings) ++ review_states(settings) ++ [settings.auto_review.state, @merging_state]
+    StateMachine.active_states(settings) ++ review_states(settings) ++ [@merging_state]
   end
 
   defp request_parks_in_review?(%Issue{state: issue_state}, settings) do
