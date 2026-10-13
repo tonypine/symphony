@@ -3,10 +3,15 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
   # the desktop. It runs a minimal `NSApplication` + `NSWindow` program (`test/support/appkit_probe`)
   # under the agent profile: the one an SRT install generates from Symphony's SRT settings. Claude
   # Code runs SRT's profile too, and neither runtime gets extra mach services from Symphony, so both
-  # allow LaunchServices and deny the window server. Two control runs outside the sandbox first show
-  # that this machine draws the probe's window and shows a crash dialog. Then the probe runs twice in
-  # the sandbox: a plain run for the window, and a `crash` run for the dialog. Clean sandboxed runs
-  # mean the sandbox stopped them.
+  # allow LaunchServices and deny the window server. Two control runs outside the sandbox first
+  # show that this machine draws the probe's window and sees the probe check in with
+  # LaunchServices. Then the probe runs twice in the sandbox: a plain run for the window, and a
+  # `crash` run for the dialog.
+  #
+  # The check-in is what makes ReportCrash treat a crashed process as an app and show its "quit
+  # unexpectedly" dialog. The GitHub runner showed no crash dialog even outside the sandbox, so the
+  # check-in stands in for the dialog: a sandboxed probe that never checks in can't get one. The
+  # dialogs on screen are still watched and recorded.
   #
   # It puts windows and dialogs on screen, so it runs only with `--only appkit_dialog`, on the
   # `appkit-dialog` workflow's disposable macOS runner. Never on the host: they would land on the
@@ -25,6 +30,8 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
   @reports_dir Path.expand("~/Library/Logs/DiagnosticReports")
   # What the probe prints to stderr before it touches AppKit.
   @started "TP-479 probe started"
+  # An app name in `lsappinfo list` and in `lsappinfo listen` notifications.
+  @app_name ~r/"([^"]+)"/
 
   setup do
     root = Path.join(System.tmp_dir!(), "appkit-probe-#{System.unique_integer([:positive])}")
@@ -60,12 +67,9 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     assert "control-probe" in window_control.owners,
            "the control run showed no window, so this machine can't answer the check: #{inspect(window_control.owners)}"
 
-    crash_control = observe(windows, 30_000, fn -> System.cmd(control, ["crash"], stderr_to_stdout: true) end, &dialog?/1)
+    crash_control = observe(windows, 60_000, fn -> System.cmd(control, ["crash"], stderr_to_stdout: true) end, &dialog?/1)
     screenshot(artifacts, "control-dialog.png")
     dismiss_dialogs(windows)
-
-    assert Enum.any?(crash_control.owners, &dialog?/1),
-           "the control crash showed no dialog, so this machine can't answer the check: #{inspect(crash_control.owners)}"
 
     sandboxed = observe(windows, 30_000, fn -> srt_run(srt, settings, root, probe) end)
     screenshot(artifacts, "sandboxed-window.png")
@@ -81,11 +85,15 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     {crash_output, crash_status} = crashed.result
     window? = "probe" in sandboxed.owners or "probe" in crashed.owners
     dialog? = Enum.any?(sandboxed.owners ++ crashed.owners, &dialog?/1)
+    checked_in? = "probe" in sandboxed.apps or "probe" in crashed.apps
+    File.write!(Path.join(artifacts, "lsappinfo-listen.txt"), Enum.join([sandboxed.notices, crashed.notices], "\n"))
 
     report(artifacts, [
       {"Control: window outside the sandbox", yes_no("control-probe" in window_control.owners)},
+      {"Control: LaunchServices check-in outside the sandbox", yes_no("control-probe" in crash_control.apps)},
       {"Control: crash dialog outside the sandbox", yes_no(Enum.any?(crash_control.owners, &dialog?/1))},
       {"Sandboxed: probe window", yes_no(window?)},
+      {"Sandboxed: LaunchServices check-in", yes_no(checked_in?)},
       {"Sandboxed: crash dialog", yes_no(dialog?)},
       {"Sandboxed: probe started", yes_no(output =~ @started)},
       {"Sandboxed crash: probe started", yes_no(crash_output =~ @started)},
@@ -97,12 +105,17 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
       {"Sandboxed crash: output (tail)", tail(crash_output)}
     ])
 
+    # A check-in the control never shows can't be seen in the sandbox either.
+    assert "control-probe" in crash_control.apps,
+           "the control run never checked in with LaunchServices, so this machine can't answer the check: #{inspect(crash_control.apps)}"
+
     # A run that never reached AppKit shows neither, which would answer nothing.
     assert output =~ @started, "the sandboxed probe never started (exit #{status}): #{output}"
     assert crash_output =~ @started, "the sandboxed crash probe never started (exit #{crash_status}): #{crash_output}"
     assert crash_status != 0, "the sandboxed crash probe exited 0, so it never crashed: #{crash_output}"
 
     refute window?, "the sandboxed probe drew a window: #{output} / #{crash_output}"
+    refute checked_in?, "the sandboxed probe checked in with LaunchServices, so a crash can show a dialog"
     refute dialog?, "the sandboxed probe's crash showed a dialog: #{inspect(Enum.uniq(sandboxed.owners ++ crashed.owners))}"
   end
 
@@ -135,29 +148,50 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     "python3 -c '#{python}'"
   end
 
-  # Runs `fun` and lists the owners of the windows on screen every 250 ms, for `duration_ms` and
-  # until `fun` returns, or until an owner matches `stop?`.
+  # Runs `fun` and lists the owners of the windows on screen and the apps LaunchServices knows every
+  # 250 ms, for `duration_ms` and until `fun` returns, or until an owner matches `stop?`. A
+  # LaunchServices listener catches an app too short-lived for the polls.
   defp observe(windows, duration_ms, fun, stop? \\ fn _owner -> false end) do
     baseline = window_owners(windows)
+    apps_before = MapSet.new(apps())
+    listen_seconds = div(duration_ms, 1000) + 5
+    listener = Task.async(fn -> System.cmd("lsappinfo", ["listen", "+all", "wait", "#{listen_seconds}"], stderr_to_stdout: true) end)
+    Process.sleep(1_000)
     task = Task.async(fun)
     deadline = System.monotonic_time(:millisecond) + duration_ms
-    owners = poll(windows, task, deadline, stop?, MapSet.new())
+    {owners, apps} = poll(windows, task, deadline, stop?, {MapSet.new(), MapSet.new()})
     result = Task.await(task, 60_000)
+    {notices, _status} = Task.await(listener, (listen_seconds + 30) * 1_000)
+    apps = MapSet.union(apps, MapSet.new(app_names(notices)))
 
-    %{baseline: baseline, owners: Enum.sort(MapSet.to_list(owners)), result: result}
+    %{
+      baseline: baseline,
+      owners: Enum.sort(MapSet.to_list(owners)),
+      apps: Enum.sort(MapSet.to_list(MapSet.difference(apps, apps_before))),
+      notices: notices,
+      result: result
+    }
   end
 
-  defp poll(windows, task, deadline, stop?, seen) do
-    seen = MapSet.union(seen, MapSet.new(window_owners(windows)))
+  defp poll(windows, task, deadline, stop?, {owners, apps}) do
+    owners = MapSet.union(owners, MapSet.new(window_owners(windows)))
+    apps = MapSet.union(apps, MapSet.new(apps()))
     done? = System.monotonic_time(:millisecond) >= deadline and not Process.alive?(task.pid)
 
-    if done? or Enum.any?(seen, stop?) do
-      seen
+    if done? or Enum.any?(owners, stop?) do
+      {owners, apps}
     else
       Process.sleep(250)
-      poll(windows, task, deadline, stop?, seen)
+      poll(windows, task, deadline, stop?, {owners, apps})
     end
   end
+
+  defp apps do
+    {output, 0} = System.cmd("lsappinfo", ["list"])
+    app_names(output)
+  end
+
+  defp app_names(output), do: @app_name |> Regex.scan(output, capture: :all_but_first) |> List.flatten() |> Enum.uniq()
 
   defp window_owners(windows), do: windows |> windows!() |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
 
