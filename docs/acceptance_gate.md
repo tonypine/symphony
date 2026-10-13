@@ -76,7 +76,9 @@ The built-in `labels`, `ticket_patterns`, `paths` and `diff_patterns` always app
 `repositories[].acceptance_gate.escalate` override adds to the global lists and replaces its
 numbers and `ticket_patterns_builtin` for that repository. A repository that sets
 `ticket_patterns_builtin: false` keeps the global `ticket_patterns` you configured, without the
-built-in ones; one that sets `true` gets them back. A run on an SSH worker reads no
+built-in ones; one that sets `true` gets them back. In the macOS app, Settings → Code Review →
+Built-in ticket patterns sets the global key, and a repository's Edit sheet sets its override
+(Same as Settings, On or Off). A run on an SSH worker reads no
 dependency manifests and no busy files, since both come from git in the local workspace.
 
 ### Built-in paths
