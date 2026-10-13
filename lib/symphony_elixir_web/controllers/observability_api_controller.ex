@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, Quality, StatusDashboard}
+  alias SymphonyElixir.{Config, History, Quality, StatusDashboard}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   # The frame is padded to the requested width inside StatusDashboard; cap it.
@@ -71,6 +71,14 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
       {:error, reason} ->
         error_response(conn, 400, "invalid_runs_filter", inspect(reason))
+    end
+  end
+
+  @spec history(Conn.t(), map()) :: Conn.t()
+  def history(conn, params) do
+    case History.payload(params) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :invalid_days} -> error_response(conn, 400, "invalid_days", "days must be an integer from 1 to 90")
     end
   end
 

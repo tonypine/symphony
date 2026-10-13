@@ -1685,6 +1685,19 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
+  test "every web dashboard page shows the Mac app banner once" do
+    orchestrator_name = Module.concat(__MODULE__, :BannerOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot(), refresh: %{})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    for path <- ["/", "/quality", "/learnings", "/audit", "/repos/default/issues/MT-HTTP/transcript", "/issues/MT-HTTP/transcript"] do
+      html = html_response(get(build_conn(), path), 200)
+      banner = "Symphony for Mac is now where you direct the factory. This dashboard stays for Linux and remote use and gets no new features."
+
+      assert length(String.split(html, banner)) == 2, "expected one banner on #{path}"
+    end
+  end
+
   test "dashboard bootstraps liveview from embedded static assets" do
     orchestrator_name = Module.concat(__MODULE__, :AssetOrchestrator)
 

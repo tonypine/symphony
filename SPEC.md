@@ -2033,6 +2033,10 @@ Important nuance:
   the one the run started on or has passed the reviewer. Otherwise it MUST log why and continue, so
   the reviewer runs and the agent pushes. When the workspace `HEAD` or the PR head cannot be read,
   the run ends as before and the post-PR transition's workspace check applies.
+- A run whose ticket waits on a hold (a `Needs Decision` hold from its decision request, a
+  `Blocked` hold from a block report), or that posted a decision request itself, MUST end after
+  that turn, without the idle park below and without a handoff: the hold, not another turn, says
+  when the ticket continues.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
@@ -2370,7 +2374,9 @@ Rules:
   quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
   the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
-  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head.
+  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
+  ticket on a hold is not counted: it waits on the hold alone. Recording a decision also lifts a
+  `handoff_missing` hold on the same ticket, so the ticket resumes with no other hold to clear.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
@@ -2656,7 +2662,7 @@ Forced allowance:
 - A usage-limit headroom hold (Section 8.4.2) does not hold a forced issue's run. A `paused` or
   `canary` hold still does, and when a hold resumes a held forced retry is chosen as the canary.
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
-  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
+  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff,
   and the auto-merge / `Merging` CI waits.
 - A forced plan parent is one forced unit; its plan, re-plan and epic review runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
@@ -4561,6 +4567,31 @@ Minimum endpoints:
     `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
     out or is unavailable, return `200` with an `error` object in place of the list, as
     `/api/v1/state` does.
+
+- `GET /api/v1/history?days=N`
+  - Token use and merges over the last `N` UTC days ending today (default 14, at most 90; any
+    other value returns `400` `invalid_days`), for the Mac app's Usage and Quality. Read from the
+    run records only; it MUST make no Linear request.
+  - `tokens_per_day` has one entry per day (`date`, `total_tokens`, `providers`: tokens by
+    provider). A run counts on the day it started, with its pre-push reviewer's tokens. The
+    provider is the one the run recorded, else the one its model names (`unknown` when neither).
+  - `tickets` lists each ticket that ran in the period, most tokens first: `issue_id`,
+    `identifier`, `title`, `repo_key`, `total_tokens`, `attempts` (its runs in the period) and
+    `cap` (`agent.max_tokens_per_issue`, null when unset).
+  - `merged_per_day` has one entry per day (`date`, `merged`): the tickets whose completion
+    Symphony noted that day.
+  - `review` is how far the Code Review agent can be trusted, from the tickets' verdicts and
+    signals ledger. A Code Review approval is upheld when QA passes or skips it or the Director
+    confirms the merge, overturned when QA fails it or the Director sends it to Rework, and pending
+    until one of them judges it. `agreement` and each `by_repo` entry (with the repo's
+    `manual_review`) carry `agreed`, `disagreed`, `pending` and `rate` (agreed over judged, null
+    when none). `qa_first_pass` (`passed`, `judged`, `rate`) counts tickets whose first QA pass or
+    fail was a pass; `sent_to_rework` (`sent`, `reviewed`, `rate`) counts reviewed tickets that a
+    Code Review rework, a QA fail or the Director sent back. `disagreements` lists each overturned
+    approval, newest first: `issue_id`, `identifier`, `repo_key`, `review`, `decision`,
+    `decided_by` (`QA` or `Director`) and `decided_at`.
+  - The response also has `days`, `from`, `to`, `daily_budget` (`agent.max_tokens_per_day`) and
+    `per_ticket_cap`.
 
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information

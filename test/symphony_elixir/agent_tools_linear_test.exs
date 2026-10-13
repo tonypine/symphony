@@ -2069,6 +2069,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              } = Request.parse(body)
 
       assert Agent.get(registry, & &1.human_actions) == 1
+      assert Linear.CommentRegistry.human_action_requested?(registry)
     end
 
     test "gives the slot back when Linear refuses any step, or the hold can't be set" do
@@ -2097,6 +2098,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       refute_received :refreshed
       assert Agent.get(registry, & &1.human_actions) == 0
+      refute Linear.CommentRegistry.human_action_requested?(registry)
     end
 
     test "refuses secrets in any field, invalid input, a run past its cap, and a repository that turned it off" do
@@ -3016,6 +3018,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
       refute_received {:tracker_moved, _issue_id, _state}
+      # The open request still waits on a person, so the run does not count it as idle.
+      assert Linear.CommentRegistry.human_action_requested?(context.comment_registry)
 
       assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets"}}]} =
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")

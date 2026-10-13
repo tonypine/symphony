@@ -234,6 +234,13 @@ defmodule SymphonyElixir.Routing.ResolverTest do
       assert Resolver.with_repo_key(issue, repos).repo_key == "symphony"
     end
 
+    test "routes a fetched issue by its project's slug id, as route.projects names it" do
+      repos = [repo("symphony", team: "TP", projects: ["0c2a9b1d7e3f"]), repo("site", team: "TP", projects: ["9f8e7d6c5b4a"])]
+      issue = issue(team: %{key: "TP"}, project: %{id: "project-uuid", name: "Symphony", slug_id: "0c2a9b1d7e3f"})
+
+      assert Resolver.with_repo_key(issue, repos).repo_key == "symphony"
+    end
+
     test "keeps the key an issue already has" do
       issue = issue(team: %{key: "TP"}, repo_key: "polled")
 

@@ -4892,9 +4892,12 @@ defmodule SymphonyElixir.Orchestrator do
   # a run whose PR is on its workspace HEAD, so one left here could not show that; each successor
   # would stop the same way, so instead of continuing every second its runs back off and, after
   # `@max_quiet_handoff_runs` on the same head, it is held with `handoff_missing` until a person
-  # unblocks it. A new commit starts the count again.
+  # unblocks it. A new commit starts the count again. A ticket on a hold, such as one waiting on its
+  # decision request, went quiet because it waits, not because a handoff is missing: it is not
+  # counted, and the claim is released below so the hold alone says when it runs again.
   defp quiet_continuation?(%Issue{} = issue, %State{} = state, metadata) do
-    metadata[:continuation] == true and Handoff.origin?(issue.state) and quiet_post_pr_issue?(issue, state)
+    metadata[:continuation] == true and Handoff.origin?(issue.state) and quiet_post_pr_issue?(issue, state) and
+      not hold?(issue)
   end
 
   defp handle_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, attempt, metadata) do
@@ -6662,8 +6665,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp reviewer_profile_record(nil), do: %{}
   defp reviewer_profile_record(profile), do: %{reviewer_profile: run_profile_record(profile)}
 
-  defp run_profile_record(%{kind: kind, model: model, effort: effort}),
-    do: %{run_kind: Atom.to_string(kind), model: model, effort: effort}
+  defp run_profile_record(%{kind: kind, model: model, effort: effort} = profile),
+    do: %{run_kind: Atom.to_string(kind), model: model, effort: effort, provider: Map.get(profile, :provider)}
 
   defp run_profile_record(nil), do: %{}
 
@@ -8809,10 +8812,9 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A run that went quiet with a PR open. The run that opens the PR was dispatched without one, so
-  # the PR attached to the refetched issue counts too. Its handoff is the session's explicit signal,
-  # performed by the run itself (`SymphonyElixir.Handoff`), so a run that goes quiet without it
-  # leaves the ticket where it is instead of advancing it.
+  # A run that went quiet on its PR. The run that opens the PR was dispatched without one, so the
+  # PR attached to the refetched issue counts too. Quiet never advances a ticket: a move takes the
+  # session's explicit handoff signal (`SymphonyElixir.Handoff`).
   defp quiet_post_pr_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
     completed_metadata = Map.get(state.completed_run_metadata, issue_id)

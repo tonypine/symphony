@@ -1224,11 +1224,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
       case post_human_action(issue_id, issue_repo_key(context), request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
+          CommentRegistry.record_human_action_request(registry)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
           result
 
         {:ok, %{"reason" => "already_open"}} = result ->
           CommentRegistry.release_human_action(registry)
+          CommentRegistry.record_human_action_request(registry)
           result
 
         other ->

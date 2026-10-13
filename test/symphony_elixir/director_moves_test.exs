@@ -467,6 +467,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute Hold.held?("repo-director", "pr", :blocked)
     end
 
+    test "a ticket whose repo routes its project by slug id is answered and sent to Rework under that repo", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [
+          [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["c0ffee12ab34"]],
+          [key: "repo-other", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["5ea4c4ab12cd"]]
+        ]
+      )
+
+      project = %{id: "0b9d7c1e-project", name: "Checkout", slug_id: "c0ffee12ab34"}
+      put_issues([%{pr("In Progress") | team: %{key: "MOT"}, project: project}])
+      set_decision_hold()
+
+      assert {:ok, %{moved: true, to_state: "Rework"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
+
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
     test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()

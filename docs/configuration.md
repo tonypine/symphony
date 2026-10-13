@@ -757,9 +757,8 @@ agent:
   The daily token budget and a usage-limit headroom hold don't stop a forced ticket (a warning is
   logged when the budget would have); the per-issue token cap still does. The operator Pause, the
   Linear rate-limit pause, the workspace quota pause, `max_concurrent_agents_per_host`, blocked-by
-  links, a failed setup, retry backoff, the post-PR quiet period, auto-merge and `Merging` CI waits,
-  and a usage-limit pause still hold it; when a usage-limit pause resumes, a held forced ticket
-  goes out first.
+  links, a failed setup, retry backoff, auto-merge and `Merging` CI waits, and a usage-limit pause
+  still hold it; when a usage-limit pause resumes, a held forced ticket goes out first.
   A forced plan ticket is one forced unit. Its plan, re-plan and epic review runs use the
   allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
