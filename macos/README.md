@@ -1044,7 +1044,9 @@ Four more variables, read only in QA mode:
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and
   `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one and a
-  conflict), and of the dispatch control's limit hold: `holding` (a Claude 5-hour limit). Ages in them count from the payload's `generated_at`, so they read the same
+  conflict), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
+  merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
+  shipped today, and learnings in both repos with tags). Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

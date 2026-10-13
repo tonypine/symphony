@@ -446,29 +446,37 @@ defmodule SymphonyElixir.DirectorMoves do
   # directs one — goes through the guard after it.
   #
   # A merge confirmation's hold carries the move confirming performs (`SymphonyElixir.MergeConfirmation`),
-  # so an answer that picks that option moves the ticket exactly as it would with manual review off,
-  # and one that picks nothing moves nothing; an explicit `:move` (the Inbox's Send to Rework)
-  # directs its own move instead.
+  # as a Code Review escalation's carries its QA state, so an answer that picks that option moves
+  # the ticket exactly as it would with manual review off, and one that picks nothing moves nothing;
+  # an explicit `:move` (the Inbox's Send to Rework) directs its own move instead.
   defp decide(%Issue{} = issue, input, opts) do
     case carried_move(issue, input.picks, opts) do
-      {:ok, carried} ->
-        comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
+      {:ok, carried} -> answer(issue, input, decide_target(input[:move], carried), :held, opts)
+      :parked -> answer(issue, input, decide_target(input[:move], @todo_state), :parked, opts)
+      :error -> conflict("#{issue.identifier} is not waiting on a decision")
+    end
+  end
 
-        case reply_to_request(issue, input.request_comment_id, comment) do
-          :ok -> clear_decision_hold(issue, input, comment, carried, opts)
-          {:error, reason} -> {:error, {:linear, reason}}
-        end
+  # The state a decision moves the ticket to: the Director's explicit move, else the one the hold
+  # carries (a merge confirmation's `Merging`, a Code Review escalation's QA state), which is
+  # already a state name. nil when the decision moves nothing.
+  defp decide_target(nil, carried), do: carried
+  defp decide_target(move, _carried), do: Map.fetch!(@decide_targets, String.downcase(String.trim(move)))
 
-      :parked ->
-        comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
+  # The target is resolved before anything is written: a decision directing a move into a state the
+  # repo has not configured is refused while the request is still open and the hold still set,
+  # rather than recorded, the hold cleared, and the move left to fail with the ticket in place.
+  defp answer(issue, input, to_state, held, opts) do
+    if is_binary(to_state) and String.trim(to_state) == "" do
+      {:error, {:invalid, "#{issue.identifier}'s decision moves it to a state not configured for repo #{issue.repo_key}; the hold stays"}}
+    else
+      comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
 
-        case reply_to_request(issue, input.request_comment_id, comment) do
-          :ok -> decision_finish(issue, input[:move] || @todo_state, comment, opts)
-          {:error, reason} -> {:error, {:linear, reason}}
-        end
-
-      :error ->
-        conflict("#{issue.identifier} is not waiting on a decision")
+      case reply_to_request(issue, input.request_comment_id, comment) do
+        :ok when held == :held -> clear_decision_hold(issue, to_state, comment, opts)
+        :ok -> decision_finish(issue, to_state, comment, opts)
+        {:error, reason} -> {:error, {:linear, reason}}
+      end
     end
   end
 
@@ -497,16 +505,14 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp clear_decision_hold(issue, input, comment, carried, opts) do
+  defp clear_decision_hold(issue, to_state, comment, opts) do
     case Hold.clear(issue.repo_key, issue.id, :needs_decision, store_opts(opts)) do
-      :ok -> decision_finish(issue, input[:move] || carried, comment, opts)
+      :ok -> decision_finish(issue, to_state, comment, opts)
       {:error, reason} -> {:error, {:store, "couldn't clear the hold on #{issue.identifier}: #{inspect(reason)}"}}
     end
   end
 
-  defp decision_finish(issue, move, comment, opts) when is_binary(move) and move != "" do
-    to_state = @decide_targets[String.downcase(String.trim(move))]
-
+  defp decision_finish(issue, to_state, comment, opts) when is_binary(to_state) do
     case update_state(issue, to_state, :decide) do
       :ok -> finish(:decide, issue, to_state, comment, opts)
       {:error, {:linear, reason}} -> decision_move_refused(issue, to_state, reason, comment, opts)
@@ -515,7 +521,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # With nothing to move, the ticket continues in its phase: the decision is recorded and the hold
   # is gone, so the next poll dispatches it again.
-  defp decision_finish(issue, _move, comment, opts) do
+  defp decision_finish(issue, nil, comment, opts) do
     TicketSignals.record(issue.repo_key, issue.id, "decision returned", %{move: "decide", from: issue.state, to: issue.state})
     finish(:decide, issue, nil, comment, opts)
   end
@@ -757,10 +763,19 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # The orchestrator polls again at once, so the Inbox and the dashboard follow the move.
+  # The orchestrator polls again at once, so the Inbox and the dashboard follow the move. The move is
+  # already made, so the request goes from a task: an orchestrator busy past the call's timeout
+  # delays the refresh instead of turning the move's answer into an error.
   defp request_refresh(opts) do
-    opts |> Keyword.get(:orchestrator, Orchestrator) |> Orchestrator.request_refresh()
+    orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
+    {:ok, _pid} = Task.start(fn -> refresh(orchestrator) end)
     :ok
+  end
+
+  defp refresh(orchestrator) do
+    Orchestrator.request_refresh(orchestrator)
+  catch
+    :exit, reason -> Logger.warning("Director move couldn't ask the orchestrator to poll again: #{inspect(reason)}")
   end
 
   defp server(opts), do: Keyword.get(opts, :server, __MODULE__)

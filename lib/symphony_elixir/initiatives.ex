@@ -72,6 +72,20 @@ defmodule SymphonyElixir.Initiatives do
   @spec cached(GenServer.name()) :: [Initiative.t()]
   def cached(server \\ __MODULE__), do: :persistent_term.get(cache_key(server), [])
 
+  @doc """
+  The plan ticket (`identifier` and `title`) that has `issue_id` among its sub-tickets in
+  `initiatives` (default: the cached ones), or nil when no cached plan has it.
+  """
+  @spec parent_of(String.t(), [Initiative.t()]) :: %{identifier: String.t() | nil, title: String.t() | nil} | nil
+  def parent_of(issue_id, initiatives \\ cached()) when is_binary(issue_id) do
+    Enum.find_value(initiatives, fn initiative ->
+      children = [initiative.final_verification | initiative.sub_tickets]
+
+      if Enum.any?(children, &(is_map(&1) and &1.id == issue_id)),
+        do: %{identifier: initiative.identifier, title: initiative.title}
+    end)
+  end
+
   @doc "Whether `cached/1` holds a read from Linear, or no server by that name runs."
   @spec read?(GenServer.name()) :: boolean()
   def read?(server \\ __MODULE__), do: :persistent_term.get(read_key(server), false) or not running?(server)

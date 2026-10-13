@@ -30,7 +30,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
     def update_issue_state(issue_id, state_name) do
       if take_failure(:pr_review_test_state_update_failures, issue_id) do
-        {:error, :linear_unavailable}
+        reason = Application.get_env(:symphony_elixir, :pr_review_test_state_update_failure_reason, :linear_unavailable)
+        {:error, reason}
       else
         recipient = Application.fetch_env!(:symphony_elixir, :pr_review_test_recipient)
         maybe_send_pending_context_at_transition(recipient, issue_id)
@@ -350,6 +351,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       Application.delete_env(:symphony_elixir, :pr_review_test_update_status_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_update_attr_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_state_update_failures)
+      Application.delete_env(:symphony_elixir, :pr_review_test_state_update_failure_reason)
       Application.delete_env(:symphony_elixir, :pr_review_test_capture_pending_at_transition)
       Application.delete_env(:symphony_elixir, :pr_review_test_delete_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_github_error)
@@ -3339,6 +3341,23 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert [%{status: "state_transition_error", error: ":linear_unavailable", last_action: "merge"}] =
              RunStore.list_pr_reviews()
+  end
+
+  test "a state the team doesn't have is named in the transition error" do
+    now = ~U[2026-05-01 09:00:00Z]
+    latest_review_at = DateTime.add(now, -31, :minute)
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    activity = open_activity(latest_review_at, review_decision: "APPROVED")
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, activity)
+    :ok = put_review(now)
+
+    Application.put_env(:symphony_elixir, :pr_review_test_state_update_failures, ["issue-1780"])
+    Application.put_env(:symphony_elixir, :pr_review_test_state_update_failure_reason, :state_not_found)
+
+    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :merge, {:state_not_found, "In Progress"}}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert [%{status: "state_transition_error", error: ~s({:state_not_found, "In Progress"})}] = RunStore.list_pr_reviews()
   end
 
   test "cleans up workspace and tracking when PR is merged or stale" do

@@ -41,6 +41,28 @@ final class InitiativesTests: XCTestCase {
         let inbox = try XCTUnwrap(InboxPayload.decode(try Data(contentsOf: fixture().appendingPathComponent("inbox.json"))))
         let waiting = try XCTUnwrap(initiative.subTickets.first { $0.waits == .you })
         XCTAssertTrue(inbox.items.contains { $0.id == waiting.issueID })
+        XCTAssertEqual(waiting.reviewIssueID(inbox: Set(inbox.items.map(\.id))), "i-206")
+    }
+
+    func testANotYetPromotedSubTicketOffersNoReviewAndOpensItsTicketPage() throws {
+        let plan = try XCTUnwrap(try payload().initiatives.first { $0.identifier == "SHOP-330" })
+        let inbox = try XCTUnwrap(InboxPayload.decode(try Data(contentsOf: fixture().appendingPathComponent("inbox.json"))))
+        let backlog = try XCTUnwrap(plan.subTickets.first)
+        XCTAssertEqual(backlog.identifier, "SHOP-331")
+        XCTAssertEqual(backlog.state, "Backlog")
+        XCTAssertEqual(backlog.waits, .you)
+        // It waits on the Director, but only its plan, SHOP-330, is in the Inbox.
+        XCTAssertFalse(inbox.items.contains { $0.id == backlog.issueID })
+        XCTAssertNil(backlog.reviewIssueID(inbox: Set(inbox.items.map(\.id))))
+    }
+
+    func testReviewNeedsATicketThatWaitsOnYouAndThatTheInboxLists() {
+        let inbox: Set<String> = ["i-1"]
+        XCTAssertEqual(Initiative.SubTicket(issueID: "i-1", identifier: "T-1", waits: .you).reviewIssueID(inbox: inbox), "i-1")
+        XCTAssertNil(Initiative.SubTicket(issueID: "i-2", identifier: "T-2", waits: .you).reviewIssueID(inbox: inbox))
+        XCTAssertNil(Initiative.SubTicket(identifier: "T-3", waits: .you).reviewIssueID(inbox: inbox))
+        XCTAssertNil(Initiative.SubTicket(issueID: "i-1", identifier: "T-1", waits: .slot).reviewIssueID(inbox: inbox))
+        XCTAssertNil(Initiative.SubTicket(issueID: "i-1", identifier: "T-1", waits: .you).reviewIssueID(inbox: []))
     }
 
     func testTheOtherInitiativesReadAsTheyShould() throws {

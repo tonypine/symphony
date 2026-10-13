@@ -12,6 +12,7 @@ struct InitiativesContent: View {
                 list: list,
                 selection: $model.initiativeSelection,
                 actions: InitiativeActions(
+                    inbox: Set(model.inbox?.items.map(\.id) ?? []),
                     review: { model.showInbox(selecting: $0) },
                     openTicket: model.openTicket,
                     openURL: model.onOpenURL
@@ -26,6 +27,8 @@ struct InitiativesContent: View {
 }
 
 struct InitiativeActions {
+    /// The issue ids the Inbox lists; Review is offered only on these.
+    var inbox: Set<String> = []
     /// Review on a sub-ticket that waits on the Director opens its Inbox item, by issue id.
     var review: (String) -> Void = { _ in }
     /// Any other row opens the ticket's page, by identifier.
@@ -238,7 +241,7 @@ struct InitiativeDetail: View {
 }
 
 /// A sub-ticket: its stage symbol, identifier and title, what it waits on and its blocked-by links; Review when it
-/// waits on the Director, else the row opens the ticket page.
+/// waits on the Director in the Inbox, else the row opens the ticket page.
 private struct SubTicketRow: View {
     let ticket: Initiative.SubTicket
     let actions: InitiativeActions
@@ -268,7 +271,7 @@ private struct SubTicketRow: View {
                 .font(DesignTokens.TypeStyle.callout.font)
             }
             Spacer(minLength: DesignTokens.Space.s2)
-            if ticket.waits == .you, let issueID = ticket.issueID {
+            if let issueID = reviewIssueID {
                 Button("Review") { actions.review(issueID) }
                     .buttonStyle(.borderedProminent)
                     .help("Open it in the Inbox")
@@ -300,7 +303,7 @@ private struct SubTicketRow: View {
         }
     }
 
-    private var reviewIssueID: String? { ticket.waits == .you ? ticket.issueID : nil }
+    private var reviewIssueID: String? { ticket.reviewIssueID(inbox: actions.inbox) }
 
     private func primaryAction() {
         if let issueID = reviewIssueID { actions.review(issueID) } else { actions.openTicket(ticket.identifier) }

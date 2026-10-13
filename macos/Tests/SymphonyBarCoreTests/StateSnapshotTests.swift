@@ -188,7 +188,7 @@ final class StateSnapshotTests: XCTestCase {
     func testDecodesTheForcedTickets() throws {
         let data = try recordedState(replacing: "forced", with: [
             [
-                "issue_id": "issue-123", "issue_identifier": "TP-123", "title": "Ship it", "state": "In Progress",
+                "issue_id": "issue-123", "issue_identifier": "TP-123", "title": "Ship it", "repo_key": "web", "state": "In Progress",
                 "forced_since": "2026-10-02T12:16:02Z", "forced_for_seconds": 300, "stale": false, "position": 1,
                 "waiting_on_human": false, "sub_issue": NSNull(), "phase": "implementation", "running": true,
                 "waiting_on": NSNull(), "blockers": [String](), "summary": "implementation · running",
@@ -210,16 +210,25 @@ final class StateSnapshotTests: XCTestCase {
                     running: 1,
                     budget: recordedBudget,
                     forced: [
-                        .init(identifier: "TP-123", summary: "implementation · running", state: "In Progress", forcedForSeconds: 300),
+                        .init(
+                            identifier: "TP-123",
+                            issueID: "issue-123",
+                            title: "Ship it",
+                            repoKey: "web",
+                            summary: "implementation · running",
+                            state: "In Progress",
+                            forcedForSeconds: 300
+                        ),
                         .init(
                             identifier: "TP-100",
+                            issueID: "issue-100",
                             summary: "waiting for a human",
                             state: "Todo",
                             forcedForSeconds: 270_000,
                             stale: true,
                             part: "TP-101"
                         ),
-                        .init(identifier: "issue-7", state: "Todo"),
+                        .init(identifier: "issue-7", issueID: "issue-7", state: "Todo"),
                     ],
                     runs: recordedRuns
                 )

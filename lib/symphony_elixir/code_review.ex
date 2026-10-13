@@ -12,7 +12,8 @@ defmodule SymphonyElixir.CodeReview do
   through the one writer, `SymphonyElixir.TransitionGuard`:
 
     * `approve` -> `QA`, or straight to `Merging` when the QA state's skip rule applies
-    * `request_changes` -> `Rework`
+    * `request_changes` -> `Rework`, with the reason and findings posted on the ticket first, so the
+      operator reads them and the rework run finds them in its prompt
     * `block` -> a Needs Decision hold: the ticket stays in Code Review and a person decides
 
   An approve carries the QA run/skip decision: `SymphonyElixir.QaPolicy` decides it deterministically
@@ -26,7 +27,8 @@ defmodule SymphonyElixir.CodeReview do
 
   An escalation never moves the ticket: it posts a `## Decision needed:` request and sets a Needs
   Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`), whose confirmation continues into the
-  QA state and whose redirect sends the ticket to `Rework`.
+  QA state and whose redirect sends the ticket to `Rework`. A head whose escalation a person decided
+  is never reviewed again: a dispatch on it performs the continue move into QA instead.
 
   The repo's escalation rules (`SymphonyElixir.EscalationRules`, the retired acceptance gate's
   deterministic rules) act on an approval, per the design's "escalation rules route or deepen — they
@@ -52,12 +54,14 @@ defmodule SymphonyElixir.CodeReview do
     Config,
     EscalationRules,
     Handoff,
+    HumanReview,
     MergeConfirmation,
     NeedsDecisionHold,
     QaPolicy,
     ReviewAgent,
     StateMachine,
     TicketSignals,
+    Tracker,
     TransitionGuard,
     Workspace,
     WorkspaceHead
@@ -70,6 +74,9 @@ defmodule SymphonyElixir.CodeReview do
   @carried_signal "code_review_carried"
   @deepening_signal "code_review_deepened"
   @deepening_applied_signal "code_review_deepening_applied"
+  @escalate_signal "code_review_escalate"
+  @decision_signal "decision returned"
+  @findings_heading "## Symphony Code Review"
   @max_inconclusive_retries 2
 
   # The verdict strings a deepening records, back to the atoms `route_verdict/5` routes on. A string
@@ -133,10 +140,49 @@ defmodule SymphonyElixir.CodeReview do
   # — a mechanical CI Fix re-bound it to the head the repair left — is applied without a review
   # (`carried_approval/3`). Only when neither holds does the reviewer run.
   defp review(issue, workspace, opts, settings) do
-    case pending_deepening(issue, workspace, opts) do
-      nil -> review_afresh(issue, workspace, opts, settings)
-      deepening -> apply_deepened(issue, workspace, opts, settings, deepening)
+    cond do
+      decided_escalation?(issue, workspace, opts, settings) ->
+        continue_decided(issue, opts, settings)
+
+      deepening = pending_deepening(issue, workspace, opts) ->
+        apply_deepened(issue, workspace, opts, settings, deepening)
+
+      true ->
+        review_afresh(issue, workspace, opts, settings)
     end
+  end
+
+  # A head a person already decided on is not reviewed again. An escalation pauses the ticket on a
+  # Needs Decision hold whose answer moves it on (into QA, or to Rework) and clears the hold. A
+  # ticket dispatched here on the head it escalated, with no newer Code Review signal and no decision
+  # that moved it elsewhere since, is one whose decided move did not land (Linear refused it, or the
+  # answer picked neither option): the run performs the escalation's continue move into QA rather than
+  # a second review that could reverse the person's decision. That move records its own signal, so it
+  # is performed once.
+  defp decided_escalation?(issue, workspace, opts, settings) do
+    head = workspace_head(workspace, opts)
+
+    is_binary(head) and
+      issue
+      |> signals(opts)
+      |> Enum.find(&(&1.name == @verdict_kind or moved_by_decision?(&1, settings)))
+      |> escalation_for_head?(head)
+  end
+
+  defp moved_by_decision?(%{name: @decision_signal} = signal, settings),
+    do: normalize_state(signal_detail(signal, :to) || "") != normalize_state(settings.tracker.code_review_state)
+
+  defp moved_by_decision?(_signal, _settings), do: false
+
+  defp escalation_for_head?(%{name: @verdict_kind} = signal, head),
+    do: signal_detail(signal, :signal) == @escalate_signal and signal_head(signal) == head
+
+  defp escalation_for_head?(_signal, _head), do: false
+
+  defp continue_decided(issue, opts, settings) do
+    Logger.info("Code Review for #{issue_label(issue)} continues into QA as its escalation was decided; not reviewing the same head again")
+
+    move(issue, opts, settings, :code_review_approve, %{qa_decision: "run", reason: "a person decided its Code Review escalation", carried: true})
   end
 
   defp review_afresh(issue, workspace, opts, settings) do
@@ -204,8 +250,9 @@ defmodule SymphonyElixir.CodeReview do
 
     cond do
       person != [] ->
-        record_verdict(issue, opts, workspace_head(workspace, opts), "approve")
-        escalate(issue, opts, settings, "the reviewer approved; " <> reasons_text(person), :continue)
+        head = workspace_head(workspace, opts)
+        record_verdict(issue, opts, head, "approve")
+        escalate(issue, opts, settings, head, "the reviewer approved; " <> reasons_text(person), :continue)
 
       risk != [] ->
         deepen(issue, workspace, opts, settings)
@@ -233,7 +280,7 @@ defmodule SymphonyElixir.CodeReview do
       {:ok, %{verdict: verdict} = result} ->
         head = workspace_head(workspace, opts)
         record_verdict(issue, opts, head, to_string(verdict))
-        record_deepening(issue, opts, head, verdict, verdict_reason(result))
+        record_deepening(issue, opts, head, verdict, result)
 
         Logger.info("Code Review for #{issue_label(issue)} head=#{head || "unknown"} deepened with a second reviewer pass verdict=#{inspect(verdict)}; not routing")
 
@@ -254,7 +301,7 @@ defmodule SymphonyElixir.CodeReview do
 
     Logger.info("Code Review for #{issue_label(issue)} head=#{head || "unknown"} performs its deepened verdict=#{inspect(verdict)}")
 
-    case route_verdict(issue, workspace, opts, settings, verdict, deepening.details[:reason]) do
+    case route_verdict(issue, workspace, opts, settings, verdict, %{reason: deepening.details[:reason], findings: List.wrap(deepening.details[:findings])}) do
       :ok ->
         record_deepening_applied(issue, opts, head)
         :ok
@@ -280,11 +327,12 @@ defmodule SymphonyElixir.CodeReview do
   # A change the repo's risk rules match is deepened, not approved: the run records the verdict the
   # second pass made against the same head, and the deepening it just took. It fires no routing edge
   # — no move — so the ticket stays in Code Review for the next dispatch to route `pending_deepening/3`.
-  defp record_deepening(issue, opts, head, verdict, reason) do
+  defp record_deepening(issue, opts, head, verdict, result) do
     TicketSignals.record(repo_key(issue, opts), issue.id, @deepening_signal, %{
       head: head,
       verdict: to_string(verdict),
-      reason: reason
+      reason: verdict_reason(result),
+      findings: findings(result)
     })
   end
 
@@ -301,7 +349,7 @@ defmodule SymphonyElixir.CodeReview do
     {diff, busy_files} = diff_summary(result, workspace, opts, rules)
 
     issue
-    |> EscalationRules.check(diff, busy_files, rules)
+    |> EscalationRules.check(diff, busy_files, rules, review_states: HumanReview.review_states(settings))
     |> Enum.split_with(&(&1.rule in EscalationRules.person_rules()))
   end
 
@@ -397,7 +445,9 @@ defmodule SymphonyElixir.CodeReview do
 
   # Every normalized signal carries a `details` map, but not always with atom keys (a tool hook's
   # emission is normalized from JSON), so both keyings are read, as `Handoff` reads them.
-  defp signal_head(%{details: details}), do: Map.get(details, :head) || Map.get(details, "head")
+  defp signal_head(signal), do: signal_detail(signal, :head)
+
+  defp signal_detail(%{details: details}, key), do: Map.get(details, key) || Map.get(details, Atom.to_string(key))
 
   defp signals(issue, opts), do: Handoff.signals(repo_key(issue, opts), issue.id)
 
@@ -456,22 +506,60 @@ defmodule SymphonyElixir.CodeReview do
     record_verdict(issue, opts, head, to_string(verdict))
     Logger.info("Code Review verdict for #{issue_label(issue)} head=#{head || "unknown"} verdict=#{inspect(verdict)}")
 
-    route_verdict(issue, workspace, opts, settings, verdict, verdict_reason(result))
+    judged = %{reason: verdict_reason(result), findings: findings(result)}
+    route_verdict(issue, workspace, opts, settings, verdict, judged)
   end
 
   # The routing half of a decided verdict, shared by a verdict this run just made and a deepening a
   # previous run recorded. Every edge goes through the one writer.
-  defp route_verdict(issue, workspace, opts, settings, verdict, reason) do
+  defp route_verdict(issue, workspace, opts, settings, verdict, %{reason: reason} = judged) do
     case verdict do
-      :approve -> approve(issue, workspace, opts, settings, %{review_reason: reason})
-      :request_changes -> move(issue, opts, settings, :code_review_rework, %{})
+      :approve ->
+        approve(issue, workspace, opts, settings, %{review_reason: reason})
+
+      :request_changes ->
+        post_findings(issue, opts, workspace_head(workspace, opts), judged)
+        move(issue, opts, settings, :code_review_rework, %{reason: reason})
+
       # The real reviewer exits a block through `blocked/5` (an error result), never this clause; an
       # overridden reviewer that returns a `:block` verdict map escalates the same way, and so does a
       # deepened block performed on a later dispatch.
-      :block -> escalate(issue, opts, settings, reason, :rework)
-      other -> {:error, {:code_review_unknown_verdict, other}}
+      :block ->
+        escalate(issue, opts, settings, workspace_head(workspace, opts), reason, :rework)
+
+      other ->
+        {:error, {:code_review_unknown_verdict, other}}
     end
   end
+
+  # A rework verdict's findings go on the ticket before the move, so the operator reads them and the
+  # rework run finds them among the ticket's recent comments in its prompt. Best-effort: a comment
+  # Linear refuses is logged with the findings, and the verdict still routes.
+  defp post_findings(issue, opts, head, judged) do
+    case tracker(opts).create_comment(issue.id, findings_comment(head, judged)) do
+      :ok ->
+        :ok
+
+      {:error, error} ->
+        Logger.warning("Failed to post the Code Review findings for #{issue_label(issue)}: #{inspect(error)}; reason=#{inspect(judged.reason)} findings=#{inspect(judged.findings)}")
+    end
+  end
+
+  defp findings_comment(head, %{reason: reason, findings: findings}) do
+    on_head = if is_binary(head), do: " on head `#{String.slice(head, 0, 12)}`", else: ""
+    listed = Enum.map(findings, &"- #{&1}")
+
+    Enum.join(
+      [
+        @findings_heading,
+        "Code Review requested changes#{on_head}. The ticket moves to Rework, and the rework run addresses these on the same pull request.",
+        "**Reason:** #{reason}" | if(listed == [], do: [], else: ["**Findings:**\n\n" <> Enum.join(listed, "\n")])
+      ],
+      "\n\n"
+    )
+  end
+
+  defp findings(result), do: result |> Map.get(:comments) |> List.wrap() |> Enum.filter(&is_binary/1)
 
   # An approve carries the QA run/skip decision. The deterministic rule (docs-only/internal-only
   # diffs) skips QA and lands the ticket in `Merging`; everything else hands it to the QA state. The
@@ -539,7 +627,7 @@ defmodule SymphonyElixir.CodeReview do
       {:error, {:code_review_inconclusive, reason}}
     else
       record_verdict(issue, opts, head, "inconclusive_escalated")
-      escalate(issue, opts, settings, "inconclusive after #{retries} retries: #{inspect(reason)}", :rework)
+      escalate(issue, opts, settings, head, "inconclusive after #{retries} retries: #{inspect(reason)}", :rework)
     end
   end
 
@@ -552,7 +640,7 @@ defmodule SymphonyElixir.CodeReview do
     record_verdict(issue, opts, head, "block")
     Logger.warning("Code Review blocked for #{issue_label(issue)} head=#{head || "unknown"} verdict=block")
 
-    escalate(issue, opts, settings, verdict_reason(payload), :rework)
+    escalate(issue, opts, settings, head, verdict_reason(payload), :rework)
   end
 
   defp inconclusive_retries(issue, opts, head) do
@@ -564,13 +652,13 @@ defmodule SymphonyElixir.CodeReview do
   # An escalation pauses the ticket where it is on a Needs Decision hold: the person continues it
   # into QA (the hold's confirmation) or sends it to Rework. `recommend` is the option the machine
   # recommends: `:continue` when the reviewer approved, `:rework` when it did not.
-  defp escalate(issue, opts, settings, reason, recommend) do
+  defp escalate(issue, opts, settings, head, reason, recommend) do
     Logger.warning("Escalating Code Review for #{issue_label(issue)} to a person: #{reason}")
     qa_state = settings.tracker.qa_state
 
     case NeedsDecisionHold.pause(issue, escalation_request(issue, reason, qa_state, recommend), hold_opts(issue, opts), qa_state) do
       :ok ->
-        record_move_signal(issue, opts, :code_review_escalate, %{reason: reason})
+        record_move_signal(issue, opts, @escalate_signal, %{reason: reason, head: head})
         :ok
 
       {:error, error} ->
@@ -614,6 +702,8 @@ defmodule SymphonyElixir.CodeReview do
     end
   end
 
+  defp tracker(opts), do: Keyword.get(opts, :tracker, Tracker)
+
   defp tracker_opts(opts) do
     case Keyword.get(opts, :tracker) do
       nil -> []
@@ -628,7 +718,7 @@ defmodule SymphonyElixir.CodeReview do
   defp record_move_signal(issue, opts, signal, extra) do
     details =
       extra
-      |> Map.take([:target, :reason, :qa_decision, :carried, :review_reason])
+      |> Map.take([:target, :reason, :qa_decision, :carried, :review_reason, :head])
       |> Map.put(:signal, to_string(signal))
 
     TicketSignals.record(repo_key(issue, opts), issue.id, @verdict_kind, details)
