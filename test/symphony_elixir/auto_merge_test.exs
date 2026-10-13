@@ -673,6 +673,31 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:issue_state_update, @issue_id, "Done"}
   end
 
+  test "a red head whose CI-fix move fails leaves Merging to the landing agent, not to auto-merge" do
+    now = ~U[2026-10-03 12:00:00Z]
+    write_auto_merge_workflow!(ci: %{enabled: true, flaky_retry: false})
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+    assert AutoMerge.owns_issue?(merging)
+
+    Application.put_env(:symphony_elixir, :auto_merge_test_state_result, {:error, :linear_down})
+    red_ci_status(auto_merge_enabled: true)
+
+    capture_log(fn ->
+      assert {:ok, %{actions: [{:state_transition_error, @issue_id, :dispatch, :linear_down}]}} = ci_poll(DateTime.add(now, 10))
+    end)
+
+    # GitHub auto-merge is off and the issue is still in Merging: nothing would land it, so the
+    # orchestrator no longer skips it as landing.
+    assert %{state: "ci_failure", enabled_head_sha: nil} = PrReviewPoller.auto_merge(@issue_id)
+    refute AutoMerge.owns_issue?(merging)
+  after
+    Application.delete_env(:symphony_elixir, :auto_merge_test_state_result)
+  end
+
   test "a CI fix on an approved PR is marked approved, and dropping its hold turns auto-merge on again at the same head" do
     now = ~U[2026-10-03 12:00:00Z]
     write_auto_merge_workflow!(ci: %{enabled: true, flaky_retry: false})
