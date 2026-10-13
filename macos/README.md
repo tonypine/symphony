@@ -907,8 +907,9 @@ state. The window opens on the Inbox the first time.
 
 - **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
   under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
-  moves from the app (approve, merge, rework, decisions, sign-off, Backlog, Stop Run) are recorded like any
-  other. The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  moves from the app (approve, merge, rework, decisions, Backlog, Stop Run) are recorded like any
+  other; older records may still show a sign-off, a move retired with `Final verification:` tickets.
+  The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
   it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
   whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
   that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the
