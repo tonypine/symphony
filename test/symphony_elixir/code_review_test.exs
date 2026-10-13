@@ -739,6 +739,17 @@ defmodule SymphonyElixir.CodeReviewTest do
       refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
     end
 
+    test "a ticket that only names the human review state isn't escalated" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      settings = designed_settings(%{"tracker" => %{"kind" => "memory", "human_review_state" => "Needs Human Review"}})
+      named = %{issue() | title: "Remove In Review and Human Review", description: "Tickets wait in Needs Human Review until a person moves them."}
+
+      assert :ok = CodeReview.run(named, "/tmp/workspace", settings: settings, review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy)
+
+      assert_received {:moved, @issue_id, "QA"}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+    end
+
     test "a failed decision request is reported and nothing moves" do
       Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "no"}})
       Process.put(:fake_tracker_comment_result, {:error, :rate_limited})
