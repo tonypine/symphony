@@ -40,6 +40,16 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       end
     end
 
+    @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
+    def create_comment(issue_id, body) do
+      if take_failure(:pr_review_test_comment_failures, issue_id) do
+        {:error, :linear_unavailable}
+      else
+        send(Application.fetch_env!(:symphony_elixir, :pr_review_test_recipient), {:issue_comment, issue_id, body})
+        :ok
+      end
+    end
+
     defp maybe_send_pending_context_at_transition(recipient, issue_id) do
       if Application.get_env(:symphony_elixir, :pr_review_test_capture_pending_at_transition, false) do
         comments = SymphonyElixir.PrReviewPoller.pending_reviewer_comments(issue_id)
@@ -370,6 +380,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       Application.delete_env(:symphony_elixir, :pr_review_test_update_attr_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_state_update_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_state_update_failure_reason)
+      Application.delete_env(:symphony_elixir, :pr_review_test_comment_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_capture_pending_at_transition)
       Application.delete_env(:symphony_elixir, :pr_review_test_delete_failures)
       Application.delete_env(:symphony_elixir, :pr_review_test_github_error)
@@ -1773,6 +1784,96 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert_receive {:issue_state_update, "issue-cr", "CI Fix"}
     assert_receive {:issue_state_update, "issue-qa", "CI Fix"}
     assert_receive {:issue_state_update, "issue-rw", "CI Fix"}
+  end
+
+  test "a Code Review ticket back from CI Fix on the same conflict enters CI Fix again, then waits on a Needs Decision hold" do
+    now = ~U[2026-05-01 09:00:00Z]
+    conflicting_pr!("Code Review", now)
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} = poll_conflict(now)
+    assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
+
+    # A minute later the read may still show the ticket in Code Review: the dispatch stands.
+    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} = poll_conflict(DateTime.add(now, 1, :minute))
+    refute_receive {:issue_state_update, "issue-1780", _state}, 50
+
+    # The repair pushed nothing and returned the ticket to Code Review on the same head. The base
+    # branch moved on, but the conflict's key did not, and the reviewer waits for a clean head.
+    for minutes <- [5, 10] do
+      assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} =
+               poll_conflict(DateTime.add(now, minutes, :minute))
+
+      assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
+    end
+
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "Code Review"
+    assert [%{conflict_retry_count: 3}] = RunStore.list_pr_reviews()
+
+    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} = poll_conflict(DateTime.add(now, 15, :minute))
+
+    refute_receive {:issue_state_update, "issue-1780", _state}, 50
+    assert_receive {:issue_comment, "issue-1780", body}
+    assert body =~ "## Decision needed: Merge conflict persists on ACME-1780"
+    assert body =~ "after 3 conflict fixes"
+    assert body =~ "on https://github.com/example/repo/pull/1780"
+
+    hold = SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision)
+    assert SymphonyElixir.MergeConfirmation.confirm_target(hold) == "Rework"
+
+    assert [%{status: "conflict_escalated", target_issue_state: "Code Review", escalated_conflict_key: "head-sha|base-sha"}] =
+             RunStore.list_pr_reviews()
+
+    # The conflict waits for the answer: no second request, no move.
+    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} = poll_conflict(DateTime.add(now, 20, :minute))
+    refute_receive {:issue_comment, "issue-1780", _body}, 50
+    refute_receive {:issue_state_update, "issue-1780", _state}, 50
+  end
+
+  test "a QA ticket back from CI Fix on the same conflict enters CI Fix again" do
+    now = ~U[2026-05-01 09:00:00Z]
+    conflicting_pr!("QA", now, conflict_dispatched(now))
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} =
+             poll_conflict(DateTime.add(now, 5, :minute))
+
+    assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
+    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "QA"
+    assert [%{conflict_retry_count: 2}] = RunStore.list_pr_reviews()
+  end
+
+  test "a Rework ticket on a conflict CI Fix already took stays with its rework run" do
+    now = ~U[2026-05-01 09:00:00Z]
+    conflicting_pr!("Rework", now, conflict_dispatched(now))
+
+    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} = poll_conflict(DateTime.add(now, 5, :minute))
+    refute_receive {:issue_state_update, "issue-1780", _state}, 50
+  end
+
+  test "a conflict hold that cannot be posted is retried on the next poll" do
+    now = ~U[2026-05-01 09:00:00Z]
+    conflicting_pr!("Code Review", now, %{conflict_retry_count: 3, dispatched_conflict_keys: ["old-head|base-sha"]})
+    Application.put_env(:symphony_elixir, :pr_review_test_comment_failures, ["issue-1780"])
+
+    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :conflict, reason}]}} = poll_conflict(now)
+    assert reason == {:decision_request_failed, :linear_unavailable}
+
+    assert SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision) == nil
+    assert [%{status: "state_transition_error"} = review] = RunStore.list_pr_reviews()
+    refute review[:escalated_conflict_key]
+
+    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} = poll_conflict(DateTime.add(now, 1, :minute))
+    assert_receive {:issue_comment, "issue-1780", _body}
+  end
+
+  test "a Merging ticket with its conflict retries spent is left to the landing agent" do
+    now = ~U[2026-05-01 09:00:00Z]
+    conflicting_pr!("Merging", now, %{conflict_retry_count: 3, dispatched_conflict_keys: ["old-head|base-sha"]})
+
+    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} = poll_conflict(now)
+
+    refute_receive {:issue_comment, "issue-1780", _body}, 50
+    assert SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision) == nil
+    assert [%{status: "conflict_escalated", target_issue_state: "Merging"}] = RunStore.list_pr_reviews()
   end
 
   test "review activity on a designed repo's Code Review ticket does not move it" do
@@ -4357,6 +4458,38 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert_received {:landing_poll, result}
     result
   end
+
+  # A ticket in `state` whose PR conflicts with its base on `head-sha|base-sha`.
+  defp conflicting_pr!(state, now, review_attrs \\ %{}) do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
+    )
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{in_review_issue(updated_at: now) | state: state}])
+    :ok = put_review(now, review_attrs)
+
+    Application.put_env(
+      :symphony_elixir,
+      :pr_review_test_activity,
+      open_activity(now,
+        mergeable: "CONFLICTING",
+        merge_state_status: "DIRTY",
+        head_ref_name: "auto/ACME-1780",
+        head_ref_oid: "head-sha",
+        base_ref_name: "main",
+        base_ref_oid: "base-sha"
+      )
+    )
+  end
+
+  # A conflict CI Fix took at `now` on `head-sha|base-sha`.
+  defp conflict_dispatched(now) do
+    %{conflict_retry_count: 1, dispatched_conflict_keys: ["head-sha|base-sha"], last_action: "conflict", last_action_at: now}
+  end
+
+  defp poll_conflict(now), do: PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
   defp put_review(now, attrs \\ %{}) do
     now

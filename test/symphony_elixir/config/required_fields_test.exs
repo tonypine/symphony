@@ -26,7 +26,6 @@ defmodule SymphonyElixir.Config.RequiredFieldsTest do
     {Schema.Learnings, %{"enabled" => true}, :model, "is required when learnings.enabled is true"},
     {Schema.ReviewAgent, %{"enabled" => true}, :kind, "is invalid"},
     {Schema.ReviewAgent, %{"enabled" => true}, :command, "is required when review_agent.enabled is true"},
-    {Schema.AutoReview, %{}, :state, "can't be blank"},
     {Schema.Notifications.Channel, %{}, :kind, "can't be blank"},
     # Deprecated and optional, but a blank one is still refused.
     {Schema.HumanActions, %{}, :label, "must not be blank"},

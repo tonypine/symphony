@@ -665,7 +665,7 @@ defmodule SymphonyElixir.CiPoller do
         cleanup_ci(record, opts, now, "closed")
 
       :success ->
-        mark_ci_green(record, ci_status, opts, now)
+        mark_ci_green(record, ci_status, settings, opts, now)
 
       :pending ->
         issue_id = Map.get(record, :issue_id)
@@ -751,7 +751,7 @@ defmodule SymphonyElixir.CiPoller do
       dispatched_for_sha?(record, commit_sha) and
       not recently_dispatched?(record, commit_sha, now) and
       verdict_phase_issue?(record, settings, opts) and
-      not rework_in_progress?(record, opts)
+      not rework_in_progress?(record, settings, opts)
   end
 
   defp verdict_phase_issue?(record, settings, opts) do
@@ -1330,10 +1330,10 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp mark_ci_green(record, ci_status, opts, now) do
+  defp mark_ci_green(record, ci_status, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
 
-    if rework_in_progress?(record, opts) do
+    if rework_in_progress?(record, settings, opts) do
       attrs =
         ci_status_attrs(
           record,
@@ -1970,13 +1970,13 @@ defmodule SymphonyElixir.CiPoller do
   defp escalate_ci_failure?(record, settings, commit_sha, opts, now) do
     ci_retry_count(record) >= settings.ci.max_retries and
       Map.get(record, :status) != "escalated" and
-      not rework_in_progress?(record, opts) and
+      not rework_in_progress?(record, settings, opts) and
       not recently_dispatched?(record, commit_sha, now)
   end
 
   # A dispatch for this SHA landed within the start-grace window, so the rework
   # agent may not have reached "running" yet. Hold off escalation until either it
-  # does (covered by rework_in_progress?/2) or the grace window lapses, so the
+  # does (covered by rework_in_progress?/3) or the grace window lapses, so the
   # final retry's just-dispatched agent is not escalated out from under itself.
   defp recently_dispatched?(record, commit_sha, now) do
     dispatched_for_sha?(record, commit_sha) and
@@ -1995,16 +1995,21 @@ defmodule SymphonyElixir.CiPoller do
       Map.get(record, :status) in ["dispatch_requested", "escalated", "escalate_transition_pending", "state_transition_error"]
   end
 
-  defp rework_in_progress?(record, opts) do
+  # A run on the issue, or a rework the PR-review poller has yet to dispatch for reviewer comments.
+  # In `Code Review` and `QA` only the run counts: that poller watches those phases for conflicts
+  # only, so the comments it keeps on their records never become a rework, and reading them as one
+  # would hold the red head back from CI Fix and from escalation for good.
+  defp rework_in_progress?(record, settings, opts) do
     issue_id = Map.get(record, :issue_id)
     repo_key = Map.get(record, :repo_key) || repo_key_from_opts(opts)
 
-    active_agent_run?(issue_id, repo_key, opts) or pending_rework_review?(issue_id, repo_key, opts)
+    active_agent_run?(issue_id, repo_key, opts) or
+      (not verdict_phase_issue?(record, settings, opts) and pending_rework_review?(issue_id, repo_key, opts))
   end
 
   # PR reviews are prefetched once per poll cycle so the green-deferral and
   # escalation paths do not rescan storage for every CI check (see
-  # rework_in_progress?/2). Runs are read per issue through the run index.
+  # rework_in_progress?/3). Runs are read per issue through the run index.
   defp put_prefetched_rework_sources(opts, _run_store, _repo_key, []), do: opts
 
   defp put_prefetched_rework_sources(opts, run_store, repo_key, _checks) do
