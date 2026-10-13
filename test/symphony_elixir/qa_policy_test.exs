@@ -10,7 +10,7 @@ defmodule SymphonyElixir.QaPolicyTest do
 
   defp settings!(extra \\ %{}) do
     assert {:ok, settings} =
-             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"}, extra))
+             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
 
     settings
   end

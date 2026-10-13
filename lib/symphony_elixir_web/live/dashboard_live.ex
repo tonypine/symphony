@@ -245,12 +245,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
-            <p class="metric-label">Human Review</p>
-            <p class="metric-value numeric"><%= @visible_payload.counts.human_review %></p>
-            <p class="metric-detail">needs you</p>
-          </article>
-
-          <article class="metric-card">
             <p class="metric-label">Retrying</p>
             <p class="metric-value numeric"><%= @visible_payload.counts.retrying %></p>
             <p class="metric-detail">backoff</p>
@@ -912,7 +906,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <div class="section-header">
             <div>
               <h2 class="section-title">Drain report</h2>
-              <p class="section-copy">Tickets still in a retired or draining state (Auto Review, In Review, Human Review), with what each waits on and the move that frees it.</p>
+              <p class="section-copy">Tickets still in a retired state (Auto Review, In Review, Human Review), with what each waits on and the move that frees it.</p>
             </div>
           </div>
 
@@ -1122,7 +1116,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> Map.update(:running, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:sessions, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:watching, [], &filter_repo_rows(&1, repo_filter))
-    |> Map.update(:human_review, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:retrying, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:awaiting_clarification, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:skipped, [], &filter_repo_rows(&1, repo_filter))
@@ -1135,7 +1128,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Map.put(payload, :counts, %{
       running: payload |> Map.get(:running, []) |> length(),
       watching: payload |> Map.get(:watching, []) |> length(),
-      human_review: payload |> Map.get(:human_review, []) |> length(),
       conflicts: payload |> Map.get(:conflicts, []) |> length(),
       retrying: payload |> Map.get(:retrying, []) |> length()
     })
@@ -1289,10 +1281,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp format_ago(_seconds), do: "n/a"
 
   defp waiting_kind_label("plan"), do: "Plan"
-  defp waiting_kind_label("pr"), do: "PR"
-  defp waiting_kind_label("final_verification"), do: "Final verification"
   defp waiting_kind_label("action"), do: "Decision"
   defp waiting_kind_label("clarify"), do: "Clarify"
+  defp waiting_kind_label("blocked"), do: "Blocked"
 
   defp github_webhooks(%{pollers: %{ci: %{webhooks: %{} = webhooks}}}), do: webhooks
   defp github_webhooks(_payload), do: nil

@@ -19,8 +19,8 @@ defmodule SymphonyElixir.WorkflowPreview do
   Renders the base-issue prompt for the workflow at `:file` (default `WORKFLOW.md`).
 
   Pass `[]` to render the default file. `:repo_key` names the configured repo the preview is for,
-  so its resolved state-machine version selects the status map the prompt renders; omitted, the
-  preview renders the default version. Returns `{:ok, prompt}` or `{:error, human_readable_message}`.
+  so the prompt renders with that repo's settings. Returns `{:ok, prompt}` or
+  `{:error, human_readable_message}`.
   """
   @spec render(render_opts()) :: {:ok, String.t()} | {:error, String.t()}
   def render(opts) when is_list(opts) do

@@ -2,7 +2,7 @@ defmodule SymphonyElixir.QaVerification do
   @moduledoc """
   The `QA` state's verification run.
 
-  A designed repo's `QA` ticket is dispatched by the poll loop like any other active ticket; this
+  A `QA` ticket is dispatched by the poll loop like any other active ticket; this
   module turns that dispatch into a QA pass instead of an executor run: the QA agent
   (`SymphonyElixir.QaAgent` and its playbook selection, `SymphonyElixir.Verification`'s dev server)
   runs on the change's own worktree, from the user's point of view.
@@ -20,8 +20,7 @@ defmodule SymphonyElixir.QaVerification do
   QA is journey-driven: the prompt carries the ticket's user walkthrough and acceptance criteria
   (the epic plan, where one exists, is the parent the QA agent reads with its Linear tools), and the
   agent judges the outcome as a careful engineer testing their own feature, not by executing a
-  script. A legacy repo never reaches this module: `run/3` returns `:skip` for anything but a
-  designed repo's `QA` ticket.
+  script. `run/3` returns `:skip` for anything but a `QA` ticket.
   """
 
   require Logger
@@ -31,7 +30,6 @@ defmodule SymphonyElixir.QaVerification do
     MergeConfirmation,
     QaPolicy,
     SelfHeal,
-    StateMachine,
     TicketSignals,
     TransitionGuard,
     WorkspaceHead
@@ -49,7 +47,7 @@ defmodule SymphonyElixir.QaVerification do
   @any_heading ~r/^\s*\#{1,6}\s+\S/
 
   @doc """
-  Runs the QA agent for `issue` when it is a designed repo's `QA` ticket, else `:skip` so the
+  Runs the QA agent for `issue` when it is a `QA` ticket, else `:skip` so the
   caller falls through to the executor run. `opts[:qa_agent]`, `opts[:qa_policy]` and
   `opts[:tracker]` override the agent, the skip policy and the tracker (tests, a fake).
   """
@@ -67,13 +65,12 @@ defmodule SymphonyElixir.QaVerification do
   def run(_issue, _workspace, _opts), do: :skip
 
   @doc """
-  Whether `issue` is the ticket this module verifies: a designed repo's configured QA state. Every
+  Whether `issue` is the ticket this module verifies: one in the configured QA state. Every
   other ticket belongs to the executor run (or another state's own run).
   """
   @spec qa_run?(Issue.t(), map()) :: boolean()
   def qa_run?(%Issue{state: state}, settings) when is_binary(state) do
-    StateMachine.designed?(settings) and
-      normalize_state(state) == normalize_state(settings.tracker.qa_state)
+    normalize_state(state) == normalize_state(settings.tracker.qa_state)
   end
 
   def qa_run?(_issue, _settings), do: false
@@ -105,7 +102,7 @@ defmodule SymphonyElixir.QaVerification do
   knows what to verify from the user's point of view.
 
   `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
-  state's own run (the default), and the epic for the epic review of a designed repo's plan parent
+  state's own run (the default), and the epic for the epic review of a plan parent
   (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
   @spec journey(Issue.t(), String.t()) :: %{source: String.t(), text: String.t() | nil}
@@ -133,7 +130,7 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  # The QA agent runs where the workspace lives, and the designed flow never runs it on an SSH
+  # The QA agent runs where the workspace lives, and the flow never runs it on an SSH
   # worker. There is no local head to read there either, so the run is blocked with the reason
   # (retried boundedly, then a Blocked hold) rather than parking on an unreadable head forever.
   defp remote_worker_unsupported(issue, opts, settings, host) do
@@ -412,8 +409,8 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # Every move goes through the one writer. `run/3` only ever gets here for a ticket already in the
-  # configured QA state (`qa_run?/2`), which is the origin of each of these edges in the designed
-  # table; the table itself is what defines them, and is tested directly.
+  # configured QA state (`qa_run?/2`), which is the origin of each of these edges in the table;
+  # the table itself is what defines them, and is tested directly.
   defp move(issue, opts, settings, signal, extra) do
     ctx = Map.merge(%{settings: settings}, extra)
     target = TransitionGuard.target(signal, ctx)

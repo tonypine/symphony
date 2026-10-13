@@ -3560,12 +3560,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
-  test "active state set includes the designed phase states when a repo runs the designed machine, but never Plan Review" do
+  test "active state set includes the phase states, but never Plan Review" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       repos: [
-        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]
       ]
     )
 
@@ -3579,37 +3579,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute MapSet.member?(active_states, "plan review")
     assert MapSet.member?(active_states, "epic review")
     assert MapSet.member?(active_states, "ci fix")
-  end
-
-  test "a legacy repo keeps Plan Review active while a designed repo's Plan Review issue stays out" do
-    workflow = Workflow.workflow_file_path()
-
-    write_workflow_file!(workflow,
-      tracker_kind: "memory",
-      tracker_active_states: ["Todo", "Plan Review"],
-      repos: [
-        [key: "legacy-repo", workflow: workflow, team: "Legacy"],
-        [key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]
-      ]
-    )
-
-    assert MapSet.member?(Orchestrator.active_state_set_for_test(), "plan review")
-    assert MapSet.member?(Orchestrator.active_state_set_for_test(), "code review")
 
     state = %Orchestrator.State{poll_interval_ms: 5_000, max_concurrent_agents: 5}
-    issue = %Issue{id: "issue-plan-review", identifier: "MT-PR", title: "Plan", state: "Plan Review"}
-
-    assert Orchestrator.should_dispatch_issue_for_test(%{issue | repo_key: "legacy-repo"}, state)
-    refute Orchestrator.should_dispatch_issue_for_test(%{issue | repo_key: "designed-repo"}, state)
-  end
-
-  test "active state set is the configured active states when every repo runs the legacy machine" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_active_states: ["Todo", "In Progress"]
-    )
-
-    assert Orchestrator.active_state_set_for_test() == MapSet.new(["todo", "in progress", "waiting on sub-tickets"])
+    issue = %Issue{id: "issue-plan-review", identifier: "MT-PR", title: "Plan", state: "Plan Review", repo_key: "default"}
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
   test "orchestrator hydrates budget state from runs across every repo partition" do
@@ -4199,7 +4172,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       id: issue_id,
       identifier: issue_identifier,
       title: "Watch on restart",
-      state: "In Review",
+      state: "Plan Review",
       url: issue_url
     }
 
@@ -4225,7 +4198,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              %{
                issue_id: ^issue_id,
                identifier: ^issue_identifier,
-               state: "In Review",
+               state: "Plan Review",
                url: ^issue_url,
                pull_request_url: ^pull_request_url,
                session_id: "thread-watch-restart-turn-1",
@@ -6804,12 +6777,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     send(worker_pid, :finish)
   end
 
-  test "review-agent blocked exit comments, moves to In Review whatever the retired escalation state says, and does not schedule retry" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_api_token: nil,
-      ci: %{escalation_state: "In Review"}
-    )
+  test "review-agent blocked exit comments, holds the ticket in place on a Blocked hold, and does not schedule retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -6859,31 +6828,34 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:DOWN, worker_ref, :process, worker_pid, reason})
 
-    # One tracker task posts the comment, then moves the issue; once it is done both messages are here.
+    # One tracker task posts the comment, then sets the hold; once it is done both messages are here.
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
 
     assert_received {:memory_tracker_comment, "issue-review-agent-blocked", body}
     assert body =~ "reviewer agent returned a verified blocking verdict"
     assert body =~ "Reason: Unsafe to continue."
     assert body =~ "Breaks the retry contract. (lib/example.ex:10-12)"
-    assert body =~ "Target human-review state: In Review."
+    assert body =~ "The ticket stays where it is on a Blocked hold until a person unblocks it."
 
-    assert_received {:memory_tracker_state_update, "issue-review-agent-blocked", "In Review"}
+    assert_received {:memory_tracker_label_added, "issue-review-agent-blocked", "Blocked"}
+    refute_received {:memory_tracker_state_update, "issue-review-agent-blocked", _state}
 
-    assert [%{name: "blocked", details: %{to: "In Review"}}] =
+    assert [%{name: "blocked", details: %{held: true, reason: "the reviewer agent blocked the run: Unsafe to continue."}}] =
              RunStore.get_ticket_state(Config.repo_key!(), issue.id).signals
+
+    assert %{reason: "the reviewer agent blocked the run: Unsafe to continue."} =
+             SymphonyElixir.Hold.get(Config.repo_key!(), issue.id, :blocked)
 
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
-    assert %{state: "In Review"} = completed_state.watching[issue.id]
 
     send(worker_pid, :finish)
   end
 
-  test "review-agent blocked exit releases claim when escalation state transition fails" do
+  test "review-agent blocked exit releases claim when the hold's label can't be set" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_not_found})
+    Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, {:error, :label_not_found})
 
     issue = %Issue{
       id: "issue-review-agent-blocked-transition-fails",
@@ -6916,11 +6888,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {:DOWN, worker_ref, :process, worker_pid, {:review_agent_blocked, %{reason: "Unsafe to continue.", findings: [%{summary: "Verified block."}]}}}
     )
 
-    # The tracker task posts the comment before its failed state move; once it is done the comment is here.
+    # The tracker task posts the comment before its failed label write; once it is done the comment is here.
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
 
     assert_received {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}
-    assert body =~ "Target human-review state: In Review."
+    assert body =~ "on a Blocked hold"
+    refute_received {:memory_tracker_state_update, "issue-review-agent-blocked-transition-fails", _state}
 
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
@@ -6928,12 +6901,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     send(worker_pid, :finish)
   end
 
-  test "tool failure circuit breaker exit escalates without scheduling retry" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_api_token: nil,
-      ci: %{escalation_state: "In Review"}
-    )
+  test "tool failure circuit breaker exit holds the ticket in place without scheduling retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -6978,14 +6947,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "kind=dynamic_tool name=\"github_get_pull_request\" args_hash=abc123"
     assert body =~ "Consecutive failures: 5"
     assert body =~ "Configured threshold: 5"
-    assert body =~ "Target human-review state: In Review."
+    assert body =~ "on a Blocked hold"
 
-    assert_receive {:memory_tracker_state_update, "issue-tool-failure-breaker", "In Review"}, 1_000
+    assert_receive {:memory_tracker_label_added, "issue-tool-failure-breaker", "Blocked"}, 1_000
 
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+    refute_received {:memory_tracker_state_update, "issue-tool-failure-breaker", _state}
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
-    assert %{state: "In Review"} = completed_state.watching[issue.id]
 
     send(worker_pid, :finish)
   end

@@ -2,7 +2,7 @@
 
 The acceptance gate is retired (`docs/design/state-machine.md` §Retired). It ran after the
 retired `Auto Review` QA pass, judged each PR against its ticket with its own agent, and approved,
-reworked or escalated it. Its duties now live in the designed machine: the `Code Review` run
+reworked or escalated it. Its duties now live in the ticket state machine: the `Code Review` run
 judges the PR against the ticket's acceptance criteria, scope and intent; the `QA` state tests it
 from the user's point of view; and its deterministic **escalation rules** were migrated per
 decision D12 of the state-machine plan:
@@ -104,15 +104,6 @@ order:
 | `:dependency` | risk | `mix.lock` or a `package.json` adds a dependency or changes a major version (`major`), or changes any dependency (`any`). A manifest that can't be parsed also counts. |
 | `:size` | risk | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | risk | more than `escalate.busy_files.max_lines` lines change in one busy file. |
-
-A ticket that only names a review state doesn't escalate. Before `ticket_patterns` match, the
-gate blanks `In Review` and `issues.states.human_review` (`Human Review` by default) wherever the
-text names them: bare, in backticks (`` `Human Review` ``), in bold or in quotes. The names match
-case-sensitively, so "Have a human review this before merging" still escalates; before `state` or
-`states` they match in any case ("the human review state"). A name right after `need`, `require`
-or `want` ("Needs Human Review") stays, since it asks for one. With
-`issues.states.human_review: null` only `In Review` is blanked. The same applies when Symphony
-checks whether a plan's ticket asks for a human review.
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,

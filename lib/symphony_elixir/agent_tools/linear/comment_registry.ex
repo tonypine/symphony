@@ -5,9 +5,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   # edit its own comments), the sub-issues it created by identifier (so a later sub-issue may be
   # blocked by an earlier one) and by parent and title (so a looping run can't file one twice), the
   # documents it created (so it may edit them before Linear lists their attachments, and stays
-  # under the cap), and
-  # whether it asked a person for something (so its issue waits for that person in the Human Review
-  # state), the comments of its that hold a `## Supervisor check`, and whether it opened a PR.
+  # under the cap), the comments of its that hold a `## Supervisor check`, and whether it opened a
+  # PR.
 
   use Agent
 
@@ -27,7 +26,6 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       project_updates: 0,
       documents: 0,
       created_documents: MapSet.new(),
-      human_action_requested: false,
       supervisor_check_comments: MapSet.new(),
       pull_request_created: false
     }
@@ -147,20 +145,6 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @doc "Gives back a slot claimed by `reserve_human_action/2` when no request was posted."
   @spec release_human_action(pid()) :: :ok
   def release_human_action(pid) when is_pid(pid), do: release(pid, :human_actions)
-
-  @doc "Records that the run's issue has an open human-action request, posted now or earlier."
-  @spec record_human_action_request(pid()) :: :ok
-  def record_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, true))
-
-  @doc "True once `record_human_action_request/1` ran for this run."
-  @spec human_action_requested?(pid() | nil) :: boolean()
-  def human_action_requested?(pid) when is_pid(pid), do: Agent.get(pid, &Map.get(&1, :human_action_requested, false))
-  def human_action_requested?(_pid), do: false
-
-  @doc "Records that the run withdrew its issue's last open human-action request."
-  @spec clear_human_action_request(pid() | nil) :: :ok
-  def clear_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, false))
-  def clear_human_action_request(_pid), do: :ok
 
   @doc """
   Records whether the run's comment `comment_id` holds a `## Supervisor check` block

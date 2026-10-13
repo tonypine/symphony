@@ -127,7 +127,7 @@ defmodule SymphonyElixir.Linear.Issue do
 
   @doc """
   The issue's blockers still outside `terminal_states`. A blocker counts as resolved only once it
-  is terminal (`Done`, `Canceled`, ...): `Merging`, `In Review`, `Code Review`, `QA` and `Rework` still
+  is terminal (`Done`, `Canceled`, ...): `Merging`, `Code Review`, `QA`, `CI Fix` and `Rework` still
   block, since the blocker's code is not on the default branch yet. A blocker without a known state
   counts as open.
   """

@@ -95,8 +95,6 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)
           Application.delete_env(:symphony_elixir, :config_cache_file_reader)
           Application.delete_env(:symphony_elixir, :config_cache_watch)
-          # An orchestrator started against a tracker without the state turns it off for the VM.
-          SymphonyElixir.HumanReview.reset_for_test("Human Review")
           Cache.clear()
           File.rm_rf(workflow_root)
         end)
@@ -742,7 +740,7 @@ defmodule SymphonyElixir.TestSupport do
       [
         "---",
         issues_yaml(%{
-          human_review: Keyword.fetch(config, :tracker_human_review_state),
+          plan_review: Keyword.fetch(config, :tracker_plan_review_state),
           kind: tracker_kind,
           endpoint: tracker_endpoint,
           memory_issues_file: tracker_memory_issues_file,
@@ -889,8 +887,8 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp human_review_yaml({:ok, state}), do: "    human_review: #{yaml_value(state)}"
-  defp human_review_yaml(:error), do: nil
+  defp plan_review_yaml({:ok, state}), do: "    plan_review: #{yaml_value(state)}"
+  defp plan_review_yaml(:error), do: nil
 
   defp issues_yaml(config) do
     [
@@ -909,7 +907,7 @@ defmodule SymphonyElixir.TestSupport do
       "  states:",
       "    active: #{yaml_value(config.active_states)}",
       "    terminal: #{yaml_value(config.terminal_states)}",
-      human_review_yaml(config.human_review)
+      plan_review_yaml(config.plan_review)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
@@ -1141,7 +1139,6 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:workspace, workspace)
     |> maybe_put(:agent, repo_field(repo, :agent))
     |> maybe_put(:acceptance_gate, repo_field(repo, :acceptance_gate))
-    |> maybe_put(:state_machine, repo_field(repo, :state_machine))
     |> maybe_put(:manual_review, repo_field(repo, :manual_review))
   end
 

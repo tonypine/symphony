@@ -172,7 +172,7 @@ defmodule SymphonyElixir.QaAgent do
 
   @doc """
   Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
-  `:epic_review` is the epic review of a designed repo's plan parent: `job.issue` is the epic
+  `:epic_review` is the epic review of a plan parent: `job.issue` is the epic
   itself, its worktree is at the base branch head, and its own acceptance criteria and user
   walkthrough are the checklist the review resolves (see `SymphonyElixir.EpicReview`).
   """
@@ -263,7 +263,7 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # The epic review of a designed repo's plan parent: the epic has to close itself, so the pass
+  # The epic review of a plan parent: the epic has to close itself, so the pass
   # judges the merged result against the epic's own plan, not against a PR.
   defp intro(%{epic_review: true} = job) do
     """
@@ -291,7 +291,7 @@ defmodule SymphonyElixir.QaAgent do
 
   # QA tests behaviour, not the code: CI already ran the full suite (QA starts only on green CI),
   # and re-running it in the sandbox takes many times longer and loads the shared host. A run with
-  # no PR checks to lean on — the epic review of a designed repo's plan parent
+  # no PR checks to lean on — the epic review of a plan parent
   # (`SymphonyElixir.EpicReview`) — cites CI's runs on the head of the base branch instead: a red
   # default branch must fail the verification, not pass as `skipped`.
   defp test_suite_rule(%{epic_review: true} = job), do: base_head_test_rule(job)
@@ -329,7 +329,7 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # The designed QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
+  # The QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
   # stories and journeys the change delivers or updates, from the epic plan where one exists and
   # otherwise from the ticket's walkthrough and acceptance criteria. Only a run carrying a `journey`
   # (the QA state's) gets this section.
@@ -395,7 +395,7 @@ defmodule SymphonyElixir.QaAgent do
   # An agent cannot write these paths (the sandbox denies it and CI's `protected-paths` job fails
   # an `auto/*` PR that changes them), so the executor hands such a criterion to a person in a
   # follow-up ticket. Failing the PR on it only burns fix runs before an escalation (TP-522). The
-  # epic review of a designed repo's plan parent tests the merged result, where a missing change is
+  # epic review of a plan parent tests the merged result, where a missing change is
   # a real gap.
   defp protected_path_rule(%{epic_review: true}), do: ""
 

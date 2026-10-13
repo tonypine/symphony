@@ -18,7 +18,7 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
       ]
     }
 
-    body = Request.render(request, "Human Review")
+    body = Request.render_hold(request, "Code Review")
 
     assert body == """
            ## Decision needed: Close TP-612 as a duplicate of TP-668
@@ -32,7 +32,7 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
            1. **Close as duplicate** (recommended): TP-612 moves to Done, linked to TP-668.
            2. **Keep it open**: The next run looks for what TP-668 missed.
 
-           _Reply with the option you pick, then move the issue out of Human Review. Symphony lists this in the project update until the issue moves on._\
+           _Reply with the option you pick, or answer it in the Symphony Inbox: the ticket stays in Code Review until the decision is recorded. Symphony lists this in the project update until then._\
            """
 
     refute body =~ "Steps:"
@@ -54,12 +54,12 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
 
   test "renders only the fields that are given" do
     options = [%{label: "A", effect: "Ship A."}, %{label: "B", effect: "Ship B.", recommended: true}]
-    body = Request.render(%{title: "Decide the pricing", question: "Which price?", why: "The page needs a price.", options: options}, "In Review")
+    body = Request.render_hold(%{title: "Decide the pricing", question: "Which price?", why: "The page needs a price.", options: options}, nil)
 
     refute body =~ "**Unblocks:**"
     refute body =~ "**Time:**"
     assert body =~ "1. **A**: Ship A.\n2. **B** (recommended): Ship B."
-    assert body =~ "move the issue out of In Review."
+    assert body =~ "the ticket stays in its phase until the decision is recorded."
     refute body =~ "label"
     assert %{unblocks: nil, est_minutes: nil, options: ["**A**: Ship A.", "**B** (recommended): Ship B."]} = Request.parse(body)
   end

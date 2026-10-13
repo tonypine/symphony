@@ -7,47 +7,39 @@ defmodule SymphonyElixir.DirectorMoves do
   (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
   move, writes a `director_move` audit record and answers with the states it moved between:
 
-  - `:approve_plan`: a plan (label `plan` or `breakdown`) in a review state — `In Review`, the
-    Human Review state, or a designed repo's `Plan Review` — moves to the waiting state (`Waiting on sub-tickets`). It is a person's move, so Symphony
-    promotes the plan's `Backlog` sub-tickets as it does today (`SymphonyElixir.BreakdownReview`);
-  - `:approve_pr`: a pull request in a review state moves to `Merging`;
-  - `:rework`: a ticket in a review state (a designed repo's `Plan Review` included) gets the reason as a comment, then moves to `Rework`.
-    On a designed repo that continues the existing pull request; the full reset is `:restart`;
-  - `:restart`: the full reset, and only a person makes it (design doc D7). A designed repo closes
-    the ticket's pull requests, removes its workspaces — so the next dispatch branches fresh from
-    the configured base branch — and supersedes the workpad, then moves the ticket to `In Progress`
-    (`SymphonyElixir.Restart`). A legacy repo is refused: its `Rework` already closes the pull
-    request and starts over, so a second full reset would only be ambiguous;
-  - `:decisions`: a plan in a review state (a designed repo's `Plan Review` included) gets one
-    comment with the picked options. A plan in the Human Review state first moves to `In Review`,
-    so the comment, posted after the move, starts Symphony's plan revision run
-    (`SymphonyElixir.PlanComments`); a plan in `In Review` or `Plan Review` gets the comment in place;
-  - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
+  - `:approve_plan`: a plan (label `plan` or `breakdown`) in `Plan Review` moves to the waiting
+    state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
+    `Backlog` sub-tickets (`SymphonyElixir.BreakdownReview`);
+  - `:rework`: a plan in `Plan Review` gets the reason as a comment, then moves to `Rework`, which
+    rejects the plan; the full reset is `:restart`;
+  - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
+    pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
+    base branch — and supersedes the workpad, then moves the ticket to `In Progress`
+    (`SymphonyElixir.Restart`);
+  - `:decisions`: a plan in `Plan Review` gets one comment with the picked options, in place, which
+    starts Symphony's plan revision run (`SymphonyElixir.PlanComments`);
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
     cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
     clears on its own, so it is refused;
-  - `:decide`: a designed repo's ticket waiting on a `Needs Decision` hold gets the Director's
-    answer as a reply under the request comment, and the hold is cleared so the ticket continues in
-    its phase. The optional `:move` names a state the decision directs — `rework` or `done` — and
-    the move goes through `SymphonyElixir.TransitionGuard`. A ticket with no such hold that a
-    request parked in the Human Review state gets the reply too, then moves to `Todo` (or the
-    directed state). Any other ticket with no hold is refused.
+  - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's answer as a reply
+    under the request comment, and the hold is cleared so the ticket continues in its phase. The
+    optional `:move` names a state the decision directs — `rework` or `done` — and the move goes
+    through `SymphonyElixir.TransitionGuard`. A ticket with no such hold is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
 
   When Linear takes the first of a move's two writes and refuses the second, the move answers
   `{:error, {:partial, message}}` saying what was already done, and still writes the audit record of
-  what changed (with `failed` naming the write that didn't happen). Decisions moved to `In Review`
-  without their comment keep their undo; a rework or backlog comment posted without its move is
-  remembered, so sending the move again makes the move without posting the comment twice.
+  what changed (with `failed` naming the write that didn't happen). A rework or backlog comment
+  posted without its move is remembered, so sending the move again makes the move without posting
+  the comment twice.
 
   `undo/2` takes back the last move on a ticket within 10 s of it, and only while
   the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
-  promoted its sub-tickets. Undoing `:approve_pr` turns GitHub auto-merge off first, and refuses a
-  pull request that already merged. The last move per ticket is kept in this
-  module's Agent, so a restart forgets it.
+  promoted its sub-tickets. The last move per ticket is kept in this module's Agent, so a restart
+  forgets it.
   """
 
   use Agent
@@ -59,25 +51,20 @@ defmodule SymphonyElixir.DirectorMoves do
     BreakdownReview,
     Config,
     Hold,
-    HumanReview,
     MergeConfirmation,
     Orchestrator,
+    PlanReview,
     Restart,
-    RunKind,
-    StateMachine,
     SubIssueWait,
     TicketSignals,
     Tracker,
     TransitionGuard
   }
 
-  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.PrReviewPoller
   alias SymphonyElixir.Routing.Resolver
 
   @undo_window_ms 10_000
-  @review_state "In Review"
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
@@ -88,11 +75,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @type move ::
           :approve_plan
-          | :approve_pr
           | :rework
           | :restart
           | :decisions
-          | :sign_off
           | :backlog
           | :unblock
           | :decide
@@ -107,7 +92,6 @@ defmodule SymphonyElixir.DirectorMoves do
   @type error ::
           {:invalid, String.t()}
           | {:conflict, String.t()}
-          | {:github, String.t()}
           | {:restart, String.t()}
           | {:store, String.t()}
           | :issue_not_found
@@ -115,7 +99,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
+  @moves [:approve_plan, :rework, :restart, :decisions, :backlog, :unblock, :decide]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -172,18 +156,11 @@ defmodule SymphonyElixir.DirectorMoves do
 
   `:restart` is never taken back: it closed the pull request and removed the workspace, so the
   ticket stays in `In Progress`.
-
-  Undoing `:approve_pr` reads the pull request first: a merged one can't be taken back (a 409), and
-  GitHub auto-merge on it (which Symphony turns on for a `Merging` ticket) is turned off before the
-  ticket moves back, so the PR doesn't merge anyway. When GitHub can't be read or refuses, the ticket stays in
-  `Merging` and the undo answers `{:error, {:github, message}}`. Option `:github` replaces
-  `SymphonyElixir.GitHub.PullRequest`.
   """
   @spec undo(String.t(), keyword()) :: result()
   def undo(identifier, opts \\ []) when is_binary(identifier) do
     with {:ok, issue} <- fetch_issue(identifier),
          {:ok, last} <- undoable(issue, opts),
-         :ok <- release_pr(last.move, issue, opts),
          :ok <- update_state(issue, last.from_state, :undo) do
       Agent.update(server(opts), &Map.delete(&1, issue.id))
       record_audit("undo", issue, issue.state, last.from_state, nil)
@@ -296,8 +273,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The state a move takes the ticket to (nil when it stays), or why the workflow doesn't allow it.
   defp target(:approve_plan, issue, settings) do
-    with :ok <- require_kind(issue, :plan, "approve_plan"),
-         :ok <- require_review(issue, settings) do
+    with :ok <- require_plan(issue, "approve_plan"),
+         :ok <- require_plan_review(issue, settings) do
       case SubIssueWait.enabled?(settings) && SubIssueWait.state(settings) do
         state when is_binary(state) -> {:ok, state}
         _off -> conflict("the waiting state is turned off, so a plan can't be approved from the app")
@@ -305,42 +282,21 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp target(:approve_pr, issue, settings) do
-    with :ok <- require_kind(issue, :pr, "approve_pr"),
-         :ok <- require_review(issue, settings),
-         do: {:ok, @merging_state}
-  end
-
   defp target(:rework, issue, settings) do
-    with :ok <- require_review(issue, settings), do: {:ok, @rework_state}
+    with :ok <- require_plan_review(issue, settings), do: {:ok, @rework_state}
   end
 
-  # The full reset (design doc D7) is a designed-repo move: a legacy repo's `Rework` is already
-  # the full reset, so offering a second one there would only be ambiguous.
   defp target(:restart, %Issue{state: state} = issue, settings) do
-    cond do
-      not StateMachine.designed?(settings) ->
-        conflict("#{issue.identifier} is on the legacy state machine, where Rework already closes the pull request and starts over")
-
-      Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)) ->
-        conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted")
-
-      true ->
-        {:ok, @in_progress_state}
-    end
+    if Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)),
+      do: conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted"),
+      else: {:ok, @in_progress_state}
   end
 
+  # The comment goes in place: a person's comment on a plan under review starts its revision run.
   defp target(:decisions, issue, settings) do
-    with :ok <- require_kind(issue, :plan, "decisions"),
-         :ok <- require_review(issue, settings) do
-      {:ok, if(HumanReview.in_state?(issue, settings), do: @review_state)}
-    end
-  end
-
-  defp target(:sign_off, issue, settings) do
-    with :ok <- require_kind(issue, :final_verification, "sign_off"),
-         :ok <- require_review(issue, settings),
-         do: {:ok, @done_state}
+    with :ok <- require_plan(issue, "decisions"),
+         :ok <- require_plan_review(issue, settings),
+         do: {:ok, nil}
   end
 
   defp target(:backlog, %Issue{state: state} = issue, settings) do
@@ -351,41 +307,26 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp require_kind(issue, kind, move) do
-    case kind(issue) do
-      ^kind -> :ok
-      other -> conflict("#{issue.identifier} is #{kind_phrase(other)}; #{move} is for #{kind_phrase(kind)}")
-    end
+  defp require_plan(issue, move) do
+    if Issue.breakdown?(issue), do: :ok, else: conflict("#{issue.identifier} is not a plan; #{move} is for a plan")
   end
 
-  defp kind(issue) do
-    cond do
-      RunKind.classify(issue) == :final_verification -> :final_verification
-      Issue.breakdown?(issue) -> :plan
-      true -> :pr
+  # The Director answers a plan a person is reviewing: one in `Plan Review`.
+  defp require_plan_review(%Issue{state: state} = issue, settings) do
+    case PlanReview.state(settings) do
+      plan_review when is_binary(plan_review) ->
+        if PlanReview.in_state?(state, settings),
+          do: :ok,
+          else: conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{plan_review}")
+
+      nil ->
+        conflict("the Plan Review state is turned off, so the Director can't answer #{issue.identifier} from the app")
     end
   end
-
-  defp kind_phrase(:plan), do: "a plan"
-  defp kind_phrase(:pr), do: "a pull request"
-  defp kind_phrase(:final_verification), do: "a final verification"
-
-  # The Director answers a ticket a person is reviewing: `In Review` or the human review state, and
-  # a designed repo's `Plan Review`, where a plan parent waits for its plan's review.
-  defp require_review(%Issue{state: state} = issue, settings) do
-    if HumanReview.review_state?(state, settings) or HumanReview.plan_review_state?(state, settings) do
-      :ok
-    else
-      conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{Enum.join(answerable_states(settings), " or ")}")
-    end
-  end
-
-  defp answerable_states(settings), do: Enum.uniq(HumanReview.review_states(settings) ++ HumanReview.plan_review_states(settings))
 
   defp conflict(message), do: {:error, {:conflict, message}}
 
-  # The comment goes before the move, so the run the move starts reads it; the decisions comment
-  # goes after the move to In Review, so the plan revision trigger counts it.
+  # The comment goes before the move, so the run the move starts reads it.
   defp apply_move(:rework, issue, to_state, %{reason: reason}, opts),
     do: comment_then_move(:rework, issue, rework_comment(String.trim(reason)), to_state, opts)
 
@@ -404,16 +345,10 @@ defmodule SymphonyElixir.DirectorMoves do
       else: comment_then_move(:backlog, issue, nil, to_state, opts)
   end
 
-  defp apply_move(:decisions, issue, to_state, %{picks: picks}, opts) do
+  defp apply_move(:decisions, issue, nil, %{picks: picks}, _opts) do
     comment = picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decisions_comment()
 
-    with :ok <- maybe_update_state(issue, to_state, :decisions) do
-      case post_comment(issue, comment) do
-        :ok -> {:ok, comment}
-        {:error, {:linear, reason}} when is_binary(to_state) -> moved_without_comment(issue, to_state, reason, opts)
-        error -> error
-      end
-    end
+    with :ok <- post_comment(issue, comment), do: {:ok, comment}
   end
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
@@ -475,26 +410,16 @@ defmodule SymphonyElixir.DirectorMoves do
           {:error, reason} -> {:error, {:linear, reason}}
         end
 
-      :parked ->
-        comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
-
-        case reply_to_request(issue, input.request_comment_id, comment) do
-          :ok -> decision_finish(issue, input[:move] || @todo_state, comment, opts)
-          {:error, reason} -> {:error, {:linear, reason}}
-        end
-
       :error ->
         conflict("#{issue.identifier} is not waiting on a decision")
     end
   end
 
-  # The move the answers pick from the ticket's open Needs Decision hold, if any. A ticket with no hold has a
-  # request to answer only when the request parked it in the Human Review state (a legacy repo, or
-  # a request made before the repo moved to the designed machine): `:parked`, and answering it
-  # moves the ticket to `Todo`, as the request's review brief says, so the next run carries it out.
-  defp carried_move(%Issue{repo_key: repo_key, id: issue_id} = issue, picks, opts) do
+  # The move the answers pick from the ticket's open Needs Decision hold; a ticket with no hold has
+  # no decision to answer.
+  defp carried_move(%Issue{repo_key: repo_key, id: issue_id}, picks, opts) do
     case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
-      nil -> if HumanReview.in_state?(issue, Config.settings!()), do: :parked, else: :error
+      nil -> :error
       hold -> {:ok, picked_move(hold, picks)}
     end
   end
@@ -574,16 +499,6 @@ defmodule SymphonyElixir.DirectorMoves do
       else: post_comment(issue, comment)
   end
 
-  # Decisions moved the plan to In Review, then Linear refused their comment: the move stays, with
-  # its audit record and its undo, and sending the decisions again posts the comment.
-  defp moved_without_comment(issue, to_state, reason, opts) do
-    record_audit("decisions", issue, issue.state, to_state, nil, %{failed: "comment"})
-    remember_move(:decisions, issue, to_state, opts)
-    request_refresh(opts)
-
-    partial("moved #{issue.identifier} to #{to_state}, but Linear refused the decisions comment (#{inspect(reason)}); send the decisions again")
-  end
-
   # Linear took the comment and refused the move: the comment is remembered, so sending the move
   # again doesn't post it twice.
   defp commented_without_move(move, issue, comment, to_state, reason, opts) do
@@ -605,16 +520,12 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp maybe_update_state(_issue, nil, _move), do: :ok
-  defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
-
-  # The Blocked hold in the store — the truth, whatever the board shows. Only a designed repo ever
-  # records one, so a legacy ticket always has none here.
+  # The Blocked hold in the store — the truth, whatever the board shows.
   defp access_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
 
   defp store_opts(opts), do: Keyword.take(opts, [:store])
 
-  # Restart moves through its own signal, whose target the designed edge table owns (`In Progress`),
+  # Restart moves through its own signal, whose target the edge table owns (`In Progress`),
   # rather than a requested one: the ledger then names the move `restart`, as the design doc's
   # signal vocabulary does.
   defp update_state(issue, to_state, :restart) do
@@ -707,52 +618,6 @@ defmodule SymphonyElixir.DirectorMoves do
         end
     end
   end
-
-  # An approval's auto-merge would still merge the PR once its checks pass, after the ticket moved back.
-  defp release_pr(:approve_pr, %Issue{pr_urls: [pr_url | _]} = issue, opts) when is_binary(pr_url) do
-    github = Keyword.get(opts, :github, PullRequest)
-
-    case github.fetch_activity(pr_url, []) do
-      {:ok, activity} ->
-        cond do
-          String.upcase(to_string(activity[:state])) == "MERGED" ->
-            conflict("#{issue.identifier} already merged; move it in Linear instead")
-
-          activity[:auto_merge_enabled] == true ->
-            turn_off_auto_merge(issue, pr_url, activity[:pr_node_id], github, opts)
-
-          true ->
-            :ok
-        end
-
-      {:error, reason} ->
-        github_error("couldn't read #{pr_url} (#{inspect(reason)}); #{issue.identifier} stays in Merging")
-    end
-  end
-
-  defp release_pr(_move, _issue, _opts), do: :ok
-
-  defp turn_off_auto_merge(issue, pr_url, node_id, github, opts) do
-    case disable_auto_merge(github, pr_url, node_id) do
-      :ok ->
-        Logger.info("Director undo turned GitHub auto-merge off issue_id=#{issue.id} issue_identifier=#{issue.identifier} pr_url=#{pr_url}")
-        # Should Linear refuse the move back, the ticket stays in Merging: the next poll turns auto-merge on again.
-        PrReviewPoller.forget_auto_merge(issue.id, poller_opts(issue, opts))
-
-      {:error, reason} ->
-        github_error("GitHub refused to turn auto-merge off on #{pr_url} (#{inspect(reason)}); #{issue.identifier} stays in Merging")
-    end
-  end
-
-  defp disable_auto_merge(github, pr_url, node_id) when is_binary(node_id), do: github.disable_auto_merge(pr_url, node_id, [])
-  defp disable_auto_merge(_github, _pr_url, _node_id), do: {:error, :missing_pr_node_id}
-
-  defp poller_opts(%Issue{repo_key: repo_key}, opts) when is_binary(repo_key) and repo_key != "",
-    do: [repo_key: repo_key] ++ Keyword.take(opts, [:run_store])
-
-  defp poller_opts(_issue, opts), do: Keyword.take(opts, [:run_store])
-
-  defp github_error(message), do: {:error, {:github, message}}
 
   defp record_audit(move, issue, from_state, to_state, comment, extra \\ %{}) do
     %{

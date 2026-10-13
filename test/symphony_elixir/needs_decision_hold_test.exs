@@ -40,11 +40,6 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   end
 
   defp designed_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
-    settings
-  end
-
-  defp legacy_settings do
     assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
@@ -314,18 +309,10 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :none
     end
 
-    test "leaves a legacy repo untouched: a request there moves the ticket" do
-      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
-
-      assert NeedsDecisionHold.sync(@repo_key, node, settings: legacy_settings()) == :skipped
-      assert stored_hold() == nil
-      assert labels() == []
-    end
-
     test "resolves the repo's settings from its key when the caller passes none" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
-        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
       )
 
       node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
@@ -406,10 +393,9 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert NeedsDecisionHold.sweep(@repo_key, [answered, other], settings: designed_settings()) == 1
     end
 
-    test "counts nothing on a legacy repo or without a list" do
+    test "counts nothing without a list" do
       open = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
 
-      assert NeedsDecisionHold.sweep(@repo_key, [open], settings: legacy_settings()) == 0
       assert NeedsDecisionHold.sweep(@repo_key, :not_a_list, settings: designed_settings()) == 0
       # Without the caller's settings the repo is resolved from the key.
       assert NeedsDecisionHold.sweep(@repo_key, [open]) == 0
@@ -436,10 +422,6 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
       assert Collector.newest_open_request(answered, designed_settings()) == nil
       assert Collector.newest_request(answered, designed_settings()) == nil
-
-      # On a legacy repo a reply under the request is not the answer: the move is.
-      assert {@comment_id, _request} = Collector.newest_open_request(answered, legacy_settings())
-      assert %{title: "Add the release signing secrets"} = Collector.newest_request(answered, legacy_settings())
     end
   end
 

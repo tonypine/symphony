@@ -20,7 +20,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
           "**Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.",
           "**Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch."
         ],
-        done_when: "you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.",
+        done_when: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.",
         issue: issue("MOT-24", "Make the Release workflow green"),
         project: @project
       },
@@ -31,22 +31,6 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         steps: ["Run `git config core.hooksPath .githooks` in your cycle checkout."],
         done_when: "you close MOT-31, or move it on.",
         issue: issue("MOT-31", "Turn on the pre-push hook on your laptop"),
-        project: @project
-      },
-      %Action{
-        key: "plan:id-MOT-40",
-        kind: :plan_review,
-        title: "Approve the plan for MOT-40",
-        why: "MOT-40 is split into sub-tickets, and none of them starts before you approve the plan.",
-        unblocks: "its sub-tickets, waiting in Backlog",
-        est_minutes: 10,
-        steps: [
-          "Read the plan in the `## Symphony Workpad` comment on MOT-40.",
-          "To approve, move MOT-40 to `Waiting on sub-tickets`; Symphony moves its sub-tickets to Todo.",
-          "To reject it, comment what to change and move MOT-40 to `Rework`."
-        ],
-        done_when: "MOT-40 leaves In Review.",
-        issue: issue("MOT-40", "Offline mode"),
         project: @project
       },
       %Action{
@@ -67,10 +51,10 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
   end
 
   test "renders the documented format, quickest first" do
-    {body, []} = Update.render(example_actions(), ["In Review", "Human Review"])
+    {body, []} = Update.render(example_actions())
 
     assert body == """
-           **4 actions need you.** Quickest first.
+           **3 actions need you.** Quickest first.
 
            ### 1. Update the Symphony app
 
@@ -93,21 +77,9 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
            1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
            2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
-           **Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
+           **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
-           ### 3. Approve the plan for MOT-40
-
-           **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
-
-           **Why:** MOT-40 is split into sub-tickets, and none of them starts before you approve the plan.
-
-           1. Read the plan in the `## Symphony Workpad` comment on MOT-40.
-           2. To approve, move MOT-40 to `Waiting on sub-tickets`; Symphony moves its sub-tickets to Todo.
-           3. To reject it, comment what to change and move MOT-40 to `Rework`.
-
-           **Done when:** MOT-40 leaves In Review.
-
-           ### 4. Turn on the pre-push hook on your laptop
+           ### 3. Turn on the pre-push hook on your laptop
 
            Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
@@ -122,43 +94,24 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.health(example_actions()) == "atRisk"
   end
 
-  test "lists actions on Human Review issues first, and says so" do
-    review = %Action{
-      key: "review:id-MOT-63",
-      kind: :human_review,
-      title: "Review MOT-63",
-      est_minutes: 30,
-      steps: ["Move MOT-63 to `Merging` to approve its PR."],
-      issue: %{issue("MOT-63", "Final verification: OpenRouter") | state: "Human Review"},
-      project: @project,
-      human_review: true
-    }
-
-    {body, []} = Update.render(example_actions() ++ [review], ["In Review", "Human Review"])
-
-    assert body =~ "**5 actions need you.** Human Review tickets first, then quickest first.\n\n### 1. Review MOT-63\n\n**Human Review** · **~30 min** · Unblocks"
-    assert body =~ "### 2. Update the Symphony app"
-    assert [%Action{key: "review:id-MOT-63"} | _rest] = Update.sort(example_actions() ++ [review])
-  end
-
   test "renders exactly the example docs/configuration.md shows" do
     docs = File.read!(Path.expand("../../../docs/configuration.md", __DIR__))
     [_before, after_intro] = String.split(docs, "A rendered example, for a mix of", parts: 2)
     [_intro, example | _rest] = String.split(after_intro, ["```md\n", "\n```\n"], parts: 3)
 
-    assert {^example, []} = Update.render(example_actions(), ["In Review", "Human Review"])
+    assert {^example, []} = Update.render(example_actions())
   end
 
   test "renders a single action and the empty list" do
     [request | _rest] = example_actions()
-    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, question: nil, options: [], done_when: nil}], ["In Review", "Human Review"])
+    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, question: nil, options: [], done_when: nil}])
 
     assert single =~ "**1 action needs you.**\n\n### 1. Add the release signing secrets\n\nUnblocks [MOT-24](https://linear.app/acme/issue/MOT-24) Make the Release workflow green\n\n---"
 
-    {no_url, []} = Update.render([%{request | issue: %{request.issue | url: nil}}], ["In Review", "Human Review"])
+    {no_url, []} = Update.render([%{request | issue: %{request.issue | url: nil}}])
     assert no_url =~ "Unblocks MOT-24: the Release workflow"
 
-    {empty, []} = Update.render([], ["In Review", "Human Review"])
+    {empty, []} = Update.render([])
     assert empty == "**Nothing needs you.** Every action from the last update is closed.\n\n---\n_Symphony posts a new update when this list changes · list `#{Update.list_id([])}`_"
     assert Update.health([]) == "onTrack"
   end
@@ -176,7 +129,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
       project: @project
     }
 
-    {body, []} = Update.render(example_actions() ++ [ci_secret], ["In Review", "Human Review"])
+    {body, []} = Update.render(example_actions() ++ [ci_secret])
 
     assert body =~ """
            ### 1. Add the `SIGNING_KEY` secret
@@ -191,23 +144,23 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
            """
   end
 
-  test "lists at most 25 actions and points to the review states for the rest" do
+  test "lists at most 25 actions and points to the held issues for the rest" do
     [request | _rest] = example_actions()
     actions = for index <- 1..27, do: %{request | key: "request:#{index}", title: "Action #{index}"}
 
-    {body, []} = Update.render(actions, ["In Review", "Human Review"])
+    {body, []} = Update.render(actions)
 
     assert body =~ "**27 actions need you.**"
     assert body =~ "### 25. "
     refute body =~ "### 26. "
-    assert body =~ "_…and 2 more: see the issues in `In Review` and `Human Review`._"
+    assert body =~ "_…and 2 more: see the issues labelled `Needs Decision`._"
   end
 
   test "never renders a secret value from any field" do
     [request | _rest] = example_actions()
     secret = "ghp_" <> String.duplicate("a", 36)
 
-    {body, patterns} = Update.render([%{request | why: "Use #{secret}", steps: ["Paste #{secret}"]}], ["In Review", "Human Review"])
+    {body, patterns} = Update.render([%{request | why: "Use #{secret}", steps: ["Paste #{secret}"]}])
 
     refute body =~ secret
     assert body =~ "[REDACTED:github_token]"
@@ -222,7 +175,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.list_id(Enum.reverse(actions)) == list_id
     refute Update.list_id(tl(actions)) == list_id
 
-    {body, []} = Update.render(actions, ["In Review", "Human Review"])
+    {body, []} = Update.render(actions)
     assert Update.list_id_from_body(body) == list_id
     assert Update.list_id_from_body("Shipped the wrapper.") == nil
     assert Update.list_id_from_body(nil) == nil

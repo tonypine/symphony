@@ -337,17 +337,13 @@ defmodule SymphonyElixir.Linear.Client do
   @spec fetch_candidate_issues_for_repo(term()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues_for_repo(repo) do
     with {:ok, context} <- repo_poll_context() do
-      do_fetch_repo_by_states(repo, dispatch_state_names(repo, context.tracker), context.tracker)
+      do_fetch_repo_by_states(repo, StateMachine.tracker_active_states(context.tracker), context.tracker)
     end
   end
 
-  # Dispatch picks work up from a repo's version-dependent active states: the tracker's configured
-  # active states, plus the designed phase states for a repo on the `designed` machine.
-  defp dispatch_states_for(tracker), do: &dispatch_state_names(&1, tracker)
-
-  defp dispatch_state_names(repo, tracker) do
-    StateMachine.tracker_active_states(StateMachine.version(repo), tracker)
-  end
+  # Dispatch picks work up from the machine's active states: the tracker's configured active states
+  # plus the phase states.
+  defp dispatch_states_for(tracker), do: fn _repo -> StateMachine.tracker_active_states(tracker) end
 
   @spec fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
   def fetch_issue_by_identifier(identifier) when is_binary(identifier) do

@@ -218,7 +218,7 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
           }
         })
 
-      assert log =~ "`auto_review.enabled` is deprecated and has no effect: Auto Review is retired; a designed repo runs QA in its QA state"
+      assert log =~ "`auto_review.enabled` is deprecated and has no effect: Auto Review is retired; QA runs in the QA state"
       assert log =~ "`auto_review.state` is deprecated and has no effect: Auto Review is retired; `issues.states.qa` names the QA state"
       assert log =~ "`auto_review.max_fix_attempts` is deprecated"
       assert log =~ "`auto_review.run_on` is deprecated"

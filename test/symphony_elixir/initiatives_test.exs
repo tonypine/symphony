@@ -60,7 +60,7 @@ defmodule SymphonyElixir.InitiativesTest do
 
   @done {"Done", "completed"}
   @todo {"Todo", "unstarted"}
-  @in_review {"In Review", "started"}
+  @in_review {"Plan Review", "started"}
   @in_progress {"In Progress", "started"}
 
   describe "from_node/4" do
@@ -135,7 +135,7 @@ defmodule SymphonyElixir.InitiativesTest do
       children = [
         child("BIL-2", @done),
         child("BIL-3", {"In Progress", "started"}),
-        child("BIL-4", {"Human Review", "started"}),
+        child("BIL-4", {"QA", "started"}),
         child("BIL-5", @todo, blocked_by([{"BIL-4", "started"}, {"BIL-2", "completed"}])),
         child("BIL-6", {"Code Review", "started"}),
         child("BIL-7", @todo),
@@ -145,7 +145,7 @@ defmodule SymphonyElixir.InitiativesTest do
         child("BIL-9", {"Todo", "unstarted"}, Map.merge(%{"title" => "Final verification: billing"}, blocked_by([{"BIL-7", "unstarted"}])))
       ]
 
-      settings = %Schema{tracker: %{kind: "memory", human_review_state: "Human Review"}}
+      settings = %Schema{tracker: %{kind: "memory", plan_review_state: "Plan Review"}}
 
       initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings, @now)
       live = Initiative.live(initiative, %{running: MapSet.new(["id-BIL-3"]), you: MapSet.new(["id-BIL-4"]), settings: settings})

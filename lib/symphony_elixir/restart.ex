@@ -6,7 +6,7 @@ defmodule SymphonyElixir.Restart do
   `Rework` continues the existing pull request (see `docs/design/state-machine.md`); a person who
   means the old full reset says so with this move instead. It is human-only — the control API
   performs it, and `SymphonyElixir.TransitionGuard` refuses an agent's request that would amount
-  to one (asking for `In Progress` from a post-implementation phase on a designed repo).
+  to one (asking for `In Progress` from a post-implementation phase).
 
   `perform/2` runs the reset:
 

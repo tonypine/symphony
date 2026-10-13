@@ -281,9 +281,6 @@ struct AddRepoView: View {
                     linear
                 }
                 if model.editing != nil {
-                    Section(StateMachine.pickerTitle) {
-                        StateMachinePicker(choice: $model.draft.stateMachine)
-                    }
                     Section(ManualReview.pickerTitle) {
                         ManualReviewPicker(choice: $model.draft.manualReview)
                     }

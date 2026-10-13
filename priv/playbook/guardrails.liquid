@@ -8,8 +8,8 @@ vars: []
 - Do not edit the issue body/description except through `linear_update_issue_summary`, which writes only Symphony's summary block at its end; plan and track progress in the workpad.
 - If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.
 - Temporary proof edits are allowed only for local verification and must be reverted before commit.
-- Do not move to `In Review` unless the `Completion bar before In Review` is satisfied.
-- In `In Review`, do not make changes; wait and poll.
+- Do not push the handoff unless the `Completion bar before the handoff` is satisfied.
+- In `Code Review`, `QA`, `Plan Review`, `Waiting on sub-tickets`, `Epic Review` and `Merging`, and while a `Blocked` or `Needs Decision` hold is set, do not make changes; the machine moves the ticket on.
 - If state is terminal (`Done`), do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.
-- If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action, move the issue to `Backlog`, and stop.
+- If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action, and stop; do not move the issue (see the blocked-access escape hatch).

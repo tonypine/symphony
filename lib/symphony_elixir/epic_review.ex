@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.EpicReview do
   @moduledoc """
-  The `Epic Review` run: the automatic close of the designed machine's epic path.
+  The `Epic Review` run: the automatic close of the epic path.
 
   `docs/design/state-machine.md`: an epic parent waits in `Waiting on sub-tickets` while its
   sub-tickets are worked, and enters `Epic Review` by itself once every one of them is terminal.
@@ -36,8 +36,8 @@ defmodule SymphonyElixir.EpicReview do
            again when it does, so the epic closes itself once it is whole; the loop ends at the
            first pass.
          * `blocked` (tooling, environment, an answer that did not resolve the checklist, gaps none
-           of which could be filed, or a run dispatched to a remote worker, where the designed flow
-           does not run the QA agent) -> retried boundedly on the same commit, then handed to the
+           of which could be filed, or a run dispatched to a remote worker, where the flow does
+           not run the QA agent) -> retried boundedly on the same commit, then handed to the
            self-heal lane (`SymphonyElixir.SelfHeal`), which classifies the block by its cause,
            files or reuses the fix ticket and holds the parent on it — no check and no decision for
            a person. A block only a person can clear keeps the access hold a person lifts.
@@ -45,8 +45,7 @@ defmodule SymphonyElixir.EpicReview do
        the tickets filed and the reason, so the epic's history says what the review checked and why
        it ended where it did.
 
-  A legacy repo never reaches this module: `run/3` returns `:skip` for anything but a designed
-  repo's epic parent, so the close-out run and the `Final verification:` flow are untouched.
+  `run/3` returns `:skip` for anything but an epic parent.
 
   Every effect is injectable: `opts[:qa_agent]`, `opts[:tracker]`, `opts[:git]`,
   `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]` default to the real ones and are fakes
@@ -61,7 +60,6 @@ defmodule SymphonyElixir.EpicReview do
     Handoff,
     QaVerification,
     SelfHeal,
-    StateMachine,
     SubIssueWait,
     TicketSignals,
     TransitionGuard,
@@ -122,15 +120,15 @@ defmodule SymphonyElixir.EpicReview do
   def run(_issue, _workspace, _opts), do: :skip
 
   @doc """
-  Whether `issue` is the ticket this module reviews: a designed repo's epic parent. That is a
+  Whether `issue` is the ticket this module reviews: an epic parent. That is a
   `breakdown` parent in the configured `Epic Review` state (the run that moved it there stopped),
   or one whose sub-issues are all terminal — the state the poll dispatches it from the moment its
   plan's children land. A parent in `Rework` is planning again, not closing out, and one with no
   sub-issues (or children still open) belongs to the executor run.
   """
   @spec epic_review_run?(Issue.t(), map()) :: boolean()
-  def epic_review_run?(%Issue{} = issue, settings) do
-    StateMachine.designed?(settings) and Issue.breakdown?(issue) and not Issue.replanning?(issue) and
+  def epic_review_run?(%Issue{} = issue, settings) when is_map(settings) do
+    Issue.breakdown?(issue) and not Issue.replanning?(issue) and
       (in_state?(issue, state(settings)) or Issue.close_out_ready?(issue, terminal_states(settings)))
   end
 

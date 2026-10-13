@@ -6,24 +6,23 @@ defmodule SymphonyElixir.Inbox do
   The server reads Linear on Symphony's poll (`polling.interval_ms`) and caches what it read, so a
   GET makes no Linear request:
 
-  1. one light query per repository route lists the issues in its scope that sit in `In Review`
-     or the Human Review state (`SymphonyElixir.HumanReview.review_states/1`) or carry the
-     `Blocked` label, each with its `updatedAt` and the time its newest comment was last edited;
+  1. one light query per repository route lists the issues in its scope that sit in `Plan Review`
+     (`SymphonyElixir.PlanReview`) or carry the `Blocked` or `Needs Decision` label, each with its
+     `updatedAt` and the time its newest comment was last edited;
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
      their comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
-  3. each becomes an `SymphonyElixir.Inbox.Item`, with what Symphony knows locally about its PR
-     (the CI poller's last conclusion) and, for a ticket no
-     review covers, the access hold its store record carries.
+  3. each becomes an `SymphonyElixir.Inbox.Item`, with, for a ticket no request or plan review
+     covers, the access hold its store record carries.
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
-  `clarify`), drops an issue that is running or that the orchestrator saw leave the review states
+  `clarify`), drops an issue that is running or that the orchestrator saw leave `Plan Review`
   since, and sorts the list oldest first. A held ticket is kept whatever state the orchestrator
   reports: the hold is what waits on the Director. A failed read keeps the last list.
 
   Each read also reconciles the read tickets' `Needs Decision` holds
-  (`SymphonyElixir.NeedsDecisionHold`): a designed repo's decision request pauses its ticket in
-  place, and the person's answer — or the run's withdrawal — clears the hold so the ticket
+  (`SymphonyElixir.NeedsDecisionHold`): a decision request pauses its ticket in place, and the
+  person's answer — or the run's withdrawal — clears the hold so the ticket
   continues. Those tickets are listed by the hold's label wherever in the workflow they sit.
 
   The server tags itself `inbox` in `SymphonyElixir.Linear.Usage`.
@@ -33,7 +32,7 @@ defmodule SymphonyElixir.Inbox do
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, Config, Hold, HumanReview, NeedsDecisionHold}
+  alias SymphonyElixir.{Config, Hold, NeedsDecisionHold, PlanReview}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.Item
@@ -114,8 +113,8 @@ defmodule SymphonyElixir.Inbox do
 
   @doc """
   What waits on the Director now: the cached items and the quality gate's holds and skips in
-  `snapshot`, without an issue that is running or that the orchestrator saw leave the review
-  states, oldest first (an item with no known wait last). A ticket a hold pauses in place is kept
+  `snapshot`, without an issue that is running or that the orchestrator saw leave `Plan Review`,
+  oldest first (an item with no known wait last). A ticket a hold pauses in place is kept
   whatever state the orchestrator saw it in: the hold itself is what waits on the Director.
   """
   @spec items(map(), GenServer.name()) :: [Item.t()]
@@ -133,7 +132,7 @@ defmodule SymphonyElixir.Inbox do
     |> cached()
     |> Enum.reject(fn item ->
       MapSet.member?(running_ids, item.issue_id) or
-        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not HumanReview.review_state?(watched_states[item.issue_id]))
+        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not PlanReview.in_state?(watched_states[item.issue_id]))
     end)
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> Enum.concat(clarify)
@@ -198,11 +197,10 @@ defmodule SymphonyElixir.Inbox do
     end
   end
 
-  # A designed repo's decision requests are read here, with their comments and history, so the read
-  # that lists them is also the one that reconciles their hold: a request an agent posted sets the
-  # `Needs Decision` hold, and one the person answered (or the run withdrew) clears it, so the
-  # ticket continues in place. The tickets are swept a repo at a time, so each route resolves its
-  # settings once. `sweep/3` is a no-op on a legacy repo, whose requests move the ticket instead.
+  # Decision requests are read here, with their comments and history, so the read that lists them
+  # is also the one that reconciles their hold: a request an agent posted sets the `Needs Decision`
+  # hold, and one the person answered (or the run withdrew) clears it, so the ticket continues in
+  # place. The tickets are swept a repo at a time, so each route resolves its settings once.
   defp sweep_holds(listed, nodes, state) do
     listed
     |> Enum.group_by(&elem(&1, 0), &Map.get(nodes, elem(&1, 1)["id"]))
@@ -235,12 +233,11 @@ defmodule SymphonyElixir.Inbox do
     end
   end
 
-  # The issues a review covers, plus the ones carrying a `Blocked` or `Needs Decision` label: a hold
-  # pauses a ticket in its phase, so it need not sit in a review state to wait on the Director.
-  # `Item.from_node/4` reads each one's store record and keeps only the holds a person lifts; a
-  # designed repo's decision request is listed by the hold's label wherever in the workflow it sits.
+  # The plans under review, plus the issues carrying a `Blocked` or `Needs Decision` label: a hold
+  # pauses a ticket in its phase, so it is listed by the hold's label wherever in the workflow it
+  # sits. `Item.from_node/4` reads each one's store record and keeps only the holds a person lifts.
   defp list_conditions(settings) do
-    reviews = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+    reviews = for plan_review when is_binary(plan_review) <- [PlanReview.state(settings)], do: %{"state" => %{"name" => %{"eqIgnoreCase" => plan_review}}}
 
     reviews ++
       Enum.map(
@@ -309,14 +306,7 @@ defmodule SymphonyElixir.Inbox do
     end
   end
 
-  defp lookups(state) do
-    %{
-      ci: Keyword.get(state.opts, :ci, &ci_conclusion/2),
-      hold: Keyword.get(state.opts, :hold, &Hold.get(&1, &2, :blocked))
-    }
-  end
-
-  defp ci_conclusion(issue_id, repo_key), do: issue_id |> CiPoller.observed_head(repo_key: repo_key) |> then(&(&1 && &1.conclusion))
+  defp lookups(state), do: %{hold: Keyword.get(state.opts, :hold, &Hold.get(&1, &2, :blocked))}
 
   defp repos(state) do
     case Keyword.fetch(state.opts, :repos) do
