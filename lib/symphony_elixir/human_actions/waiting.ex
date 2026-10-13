@@ -23,8 +23,9 @@ defmodule SymphonyElixir.HumanActions.Waiting do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Collector, Request}
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{HumanReview, RunKind, TransitionGuard}
+  alias SymphonyElixir.{RunKind, TransitionGuard}
 
   @brief_heading "## Review brief"
   @what_to_review ~r/^\s*\*\*What to review:\*\*(.*)$/
