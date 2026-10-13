@@ -30,9 +30,14 @@ defmodule SymphonyElixir.QaDriver do
     `SYMPHONY_BAR_QA_API_FIXTURES` to that copy, so the app reads Symphony's
     local API from those JSON files;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
-    `qa_ax_set_value` and `qa_resize_window` accept only a PID this driver
-    launched and that is still running; `qa_check_app` also reports on one that
-    has exited;
+    `qa_ax_set_value`, `qa_ax_select`, `qa_click`, `qa_key` and
+    `qa_resize_window` accept only a PID this driver launched and that is still
+    running; `qa_check_app` also reports on one that has exited;
+  - `qa_ax_select` selects a table or outline row (which answers no AXPress)
+    through `AXSelectedRows` or `AXSelected`; `qa_click` clicks an element's
+    frame centre only when the window in front at that point is the app's own,
+    and `qa_key` presses a named key with modifiers in the app's focused window.
+    The helper posts their mouse and key events to the app's PID alone;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
     followed or replaced;
@@ -137,6 +142,11 @@ defmodule SymphonyElixir.QaDriver do
   @max_screenshots 8
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
+  # The keys `qa_key` presses: named keys, then single characters the helper
+  # maps to US-layout key codes.
+  @named_keys ~w(return enter tab space escape delete forward_delete up down left right home end page_up page_down)
+  @character_keys String.graphemes("abcdefghijklmnopqrstuvwxyz0123456789[],./;'-=`\\")
+  @modifiers ~w(command shift option control)
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
   # The wide pass needs a window at least this size (points).
   @wide_width 1400
@@ -166,7 +176,8 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file qa_api_requests)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
+           ~w(qa_resize_window qa_check_app qa_put_file qa_api_requests)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -343,6 +354,32 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, value} <- set_value(Map.get(args, "value")),
          {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["ax-set-value", Integer.to_string(pid), path, value])
+    end
+  end
+
+  defp run_tool("qa_ax_select", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, path} <- element_path(Map.get(args, "path")),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["ax-select", Integer.to_string(pid), path])
+    end
+  end
+
+  defp run_tool("qa_click", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, path} <- element_path(Map.get(args, "path")),
+         {:ok, clicks} <- optional_integer(args, "clicks", 1, 2),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["click", Integer.to_string(pid), path, Integer.to_string(clicks || 1)])
+    end
+  end
+
+  defp run_tool("qa_key", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, key} <- key_name(Map.get(args, "key")),
+         {:ok, modifiers} <- modifiers(Map.get(args, "modifiers")),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["key", Integer.to_string(pid), key, Enum.join(modifiers, ",")])
     end
   end
 
@@ -825,6 +862,25 @@ defmodule SymphonyElixir.QaDriver do
   defp press_action(nil), do: {:ok, "AXPress"}
   defp press_action(action) when action in @press_actions, do: {:ok, action}
   defp press_action(_action), do: tool_error("invalid_arguments", "`action` must be one of #{Enum.join(@press_actions, ", ")}.")
+
+  defp key_name(key) when key in @named_keys or key in @character_keys, do: {:ok, key}
+
+  defp key_name(_key) do
+    tool_error(
+      "invalid_arguments",
+      "`key` must be one of #{Enum.join(@named_keys, ", ")}, or one lowercase letter, digit or one of #{Enum.join(Enum.drop(@character_keys, 36), " ")}."
+    )
+  end
+
+  defp modifiers(nil), do: {:ok, []}
+
+  defp modifiers(list) when is_list(list) do
+    if Enum.all?(list, &(&1 in @modifiers)) and Enum.uniq(list) == list,
+      do: {:ok, list},
+      else: tool_error("invalid_arguments", "`modifiers` must list each of #{Enum.join(@modifiers, ", ")} at most once.")
+  end
+
+  defp modifiers(_list), do: tool_error("invalid_arguments", "`modifiers` must be a list such as [\"command\"].")
 
   defp set_value(value) when is_binary(value) and byte_size(value) <= @value_limit do
     if String.contains?(value, <<0>>), do: tool_error("invalid_arguments", "`value` must not contain NUL bytes."), else: {:ok, value}
