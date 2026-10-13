@@ -46,6 +46,8 @@ defmodule SymphonyElixir.PlanCommentsTest do
       # `In Review` and the human review state are not this repo's plan review state.
       refute PlanComments.action(%{parent | state: "In Review"}, @terminal, settings)
       refute PlanComments.action(%{parent | state: @human_review}, @terminal, settings)
+      # Neither does an issue with no state.
+      refute PlanComments.action(%{parent | state: nil}, @terminal, settings)
     end
   end
 

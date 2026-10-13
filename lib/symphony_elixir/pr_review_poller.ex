@@ -1404,16 +1404,16 @@ defmodule SymphonyElixir.PrReviewPoller do
     issue_id = Map.get(record, :issue_id)
 
     with {:ok, issues} <- watched_or_fetched_issue(issue_id, Keyword.get(opts, :tracker, Tracker), opts) do
-      case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
-        %Issue{} = issue ->
-          held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
-          if HumanReview.held_for_person?(issue, settings, held_opts), do: {:parked, issue}, else: {:ok, issue}
-
-        nil ->
-          :not_parked
-      end
+      issues |> Enum.find(&match?(%Issue{id: ^issue_id}, &1)) |> parked_result(settings, opts)
     end
   end
+
+  defp parked_result(%Issue{} = issue, settings, opts) do
+    held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
+    if HumanReview.held_for_person?(issue, settings, held_opts), do: {:parked, issue}, else: {:ok, issue}
+  end
+
+  defp parked_result(nil, _settings, _opts), do: :not_parked
 
   # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
   # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer

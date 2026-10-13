@@ -125,7 +125,8 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       approved = history([change("In Progress", "Plan Review", @reviewed), change("Plan Review", @waiting, @approved)], subs)
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
       # Symphony parking an In Progress parent approves nothing.
-      assert BreakdownReview.sub_issues_to_move(:promote, history([change("In Progress", @waiting, @approved)], subs), settings) == []
+      parked = history([change("In Progress", @waiting, @approved)], subs)
+      assert BreakdownReview.sub_issues_to_move(:promote, parked, settings) == []
 
       # A person's move from `Plan Review` to `Rework` rejects the plan.
       rejected =

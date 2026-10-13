@@ -386,14 +386,13 @@ final class RepositoriesConfigTests: XCTestCase {
         )
     }
 
-    func testManualReviewSitsAfterTheStateMachine() throws {
+    func testManualReviewSitsAfterTheBaseBranch() throws {
         let yaml = "repositories:\n  - key: a\n    base_branch: main\n"
         var entry = RepositoryEntry(key: "a", baseBranch: "main")
-        entry.stateMachine = "designed"
         entry.manualReview = "on"
         XCTAssertEqual(
             try RepositoriesConfig.updating("a", to: entry, in: yaml),
-            "repositories:\n  - key: a\n    base_branch: main\n    state_machine: designed\n    manual_review: \"on\"\n"
+            "repositories:\n  - key: a\n    base_branch: main\n    manual_review: \"on\"\n"
         )
     }
 

@@ -1896,7 +1896,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp guard_state(state, settings, issue) do
     from_state = get_in(issue, ["state", "name"])
 
-    case TransitionGuard.resolve_request(state, %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}) do
+    request = %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}
+
+    case TransitionGuard.resolve_request(state, request) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
       {:hold, _kind, _attrs} = hold -> hold
       {:error, _reason} = error -> error

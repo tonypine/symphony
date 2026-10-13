@@ -440,7 +440,11 @@ defmodule SymphonyElixir.TransitionGuardTest do
       # review states only drain, from whichever phase the request comes.
       for {name, from, plan_parent?} <- [{"In Review", "In Progress", false}, {"in review", "Rework", false}, {"Human Review", "In Progress", true}] do
         assert {:error, {:retired_state, ^name}} =
-                 TransitionGuard.resolve_request(state(name), %{settings: designed_settings(), from_state: from, plan_parent?: plan_parent?})
+                 TransitionGuard.resolve_request(state(name), %{
+                   settings: designed_settings(),
+                   from_state: from,
+                   plan_parent?: plan_parent?
+                 })
       end
     end
 

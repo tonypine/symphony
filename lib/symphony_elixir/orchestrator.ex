@@ -1308,8 +1308,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp resolve_update_holds(_repo_result, cache), do: cache
 
   # Runs in the poll task: reconciles each polled issue's Blocked hold against its blockers — a
-  # Todo ticket with an open blocker gains the hold (and pauses), and one whose blockers all went
-  # terminal loses it and dispatches, with no state move and no person involved. Resolving the repo's settings once here keeps it off the per-issue config read.
+  # `Todo` ticket with an open blocker gains the hold (and pauses), and one whose blockers all went
+  # terminal loses it and dispatches, with no state move and no person involved. Resolving the
+  # repo's settings once here keeps it off the per-issue config read.
   defp sweep_blocked_holds(repo_name, issues, terminal_states) do
     case Config.settings_for_repo(repo_name) do
       {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings)
@@ -3193,9 +3194,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A person's new comment on a `breakdown` parent's plan (see `PlanComments`): a plan under review
-  # goes back to `Rework`, where the plan is revised in place, and an approved plan gets a reply. Parents waiting for review come
-  # from the watching refresh (which watches the review state, `Plan Review` included, like any
-  # non-active state), approved ones from the candidates.
+  # goes back to `Rework`, where the plan is revised in place, and an approved plan gets a reply.
+  # Parents waiting for review come from the watching refresh (which watches the review state,
+  # `Plan Review` included, like any non-active state), approved ones from the candidates.
   # `plan_comment_checks` keeps the newest comment each parent's poll showed once it was acted on,
   # so Linear is read again only when a newer comment shows up. `plan_comments_since` is when this
   # orchestrator started: comments on an approved plan from before it get no reply.

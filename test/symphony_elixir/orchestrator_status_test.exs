@@ -6905,7 +6905,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     # The tracker task posts the comment before its failed hold; once it is done the comment is here.
     {completed_state, log} =
-      with_log(fn -> wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000) end)
+      with_log(fn ->
+        wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+      end)
 
     assert_received {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}
     assert body =~ "on a `Blocked` hold"

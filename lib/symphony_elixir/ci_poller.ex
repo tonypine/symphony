@@ -553,8 +553,8 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # Merging issues have an open PR waiting on CI: the orchestrator holds a landing agent that ended its turn on pending checks
-  # until this poller sees the head settle.
+  # Merging issues have an open PR waiting on CI: the orchestrator holds a landing agent that ended
+  # its turn on pending checks until this poller sees the head settle.
   #
   # Code Review and QA issues are watched too: their agent runs only dispatch on a
   # green head, and a ticket enters Code Review straight from In Progress, so nothing else would ever
@@ -1006,10 +1006,11 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # Where a red head sends the ticket. In one of the phases the CI Fix lane serves, the origin is recorded on the ticket *before* the edge is performed, so the repair
-  # has somewhere to return to; the origin is load-bearing, so failing to record it is a poll error
-  # the next pass retries rather than a move into a lane with no way out. Every other state keeps
-  # the `In Progress` fix-run edge.
+  # Where a red head sends the ticket. In one of the phases the CI Fix lane serves, the origin is
+  # recorded on the ticket *before* the edge is performed, so the repair has somewhere to return
+  # to; the origin is load-bearing, so failing to record it is a poll error the next pass retries
+  # rather than a move into a lane with no way out. Every other state keeps the `In Progress`
+  # fix-run edge.
   defp ci_fix_entry(record, settings, origin_state, opts) do
     case CiFix.entry(origin_state, settings) do
       :none ->

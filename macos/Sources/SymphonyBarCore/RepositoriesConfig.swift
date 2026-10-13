@@ -71,8 +71,6 @@ public struct RepositoryEntry: Equatable {
     public var workflow: String?
     public var route: RepositoryRoute
     public var workspace: RepositoryWorkspace
-    /// The repo's state-machine version, `legacy` or `designed`, as written; nil uses the default (`legacy`).
-    public var stateMachine: String?
     /// `manual_review`, the repo's manual review setting (`on`/`off`), as written; nil uses the default (`off`).
     public var manualReview: String?
 
@@ -83,7 +81,6 @@ public struct RepositoryEntry: Equatable {
         workflow: String? = nil,
         route: RepositoryRoute = RepositoryRoute(),
         workspace: RepositoryWorkspace = RepositoryWorkspace(),
-        stateMachine: String? = nil,
         manualReview: String? = nil
     ) {
         self.key = key
@@ -92,7 +89,6 @@ public struct RepositoryEntry: Equatable {
         self.workflow = workflow
         self.route = route
         self.workspace = workspace
-        self.stateMachine = stateMachine
         self.manualReview = manualReview
     }
 }
@@ -205,7 +201,7 @@ public enum RepositoriesConfig {
 
     /// Keys of an entry in the order new ones are written.
     static let entryOrder = [
-        "key", "default", "base_branch", "workflow", "state_machine", "manual_review", "route", "workspace",
+        "key", "default", "base_branch", "workflow", "manual_review", "route", "workspace",
     ]
     static let groups = ["route", "workspace"]
 
@@ -214,7 +210,6 @@ public enum RepositoriesConfig {
         .bool(["default"], \.isDefault),
         .string(["base_branch"], \.baseBranch),
         .string(["workflow"], \.workflow),
-        .string(["state_machine"], \.stateMachine),
         .string(["manual_review"], \.manualReview),
         .string(["route", "team"], \.route.team),
         .list(["route", "projects"], \.route.projects),

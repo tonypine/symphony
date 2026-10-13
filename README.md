@@ -83,52 +83,40 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   (`nice -n 10`) than Symphony, so one run's busy loop can't starve Symphony, QA passes, or other runs.
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
-- **Designed state machine** — a repo with `state_machine: designed` runs the redesigned ticket
-  flow instead of the default (`legacy`) one described below: `In Progress` → `Code Review` (a
+- **Ticket state machine** — every repo runs one ticket flow: `In Progress` → `Code Review` (a
   reviewer agent, on a green head) → `QA` (a journey-driven QA agent) → `Merging` → `Done`, with
   `Rework` continuing the same PR, `CI Fix` repairing red heads and conflicts, and epic parents
   going `Plan Review` → `Waiting on sub-tickets` → `Epic Review`. `Blocked` and `Needs Decision`
   are labels that pause a ticket in place; a person only decides, and `Restart` from the Director
-  app is the full reset. `In Review`, `Human Review`, supervisor checks and
-  `Final verification:` tickets do not apply. The `Auto Review` state and the acceptance gate are
-  retired for every repo: their QA moved to the `QA` state, their judgment to `Code Review`, and
-  their escalation rules to a Needs Decision hold or a deeper Code Review. See [docs/design/state-machine.md](docs/design/state-machine.md)
-  and SPEC §7.6.
-- **Human Review** — tickets only the operator can move on (a plan the ticket says a human reviews,
-  a `linear_request_human_action` request) wait in `Human Review` instead of `In Review`, so the board,
-  the dashboard and the menu bar show what waits on you apart from the supervisor's queue. Set
-  `issues.states.human_review: null` to keep them in `In Review`.
+  app is the full reset. The `In Review`, `Human Review` and `Auto Review` states are retired, and
+  the per-repo `state_machine` setting with them (a config that still sets it, or
+  `issues.states.human_review`, loads with a deprecation warning). See
+  [docs/design/state-machine.md](docs/design/state-machine.md) and SPEC §7.6.
 - **Parent tickets** — label a large ticket `plan` (`breakdown`, the label's older name, still works)
-  and the agent splits this plan ticket into sub-tickets plus a final verification ticket instead of
-  opening a PR, then moves the parent to `In Review`. Approve the
-  plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
-  sub-ticket to `Todo`; comment on the plan while it is `In Review` to have it revised in place
-  (artifact comments edited, `Backlog` sub-tickets updated, each comment answered); move it to
-  `Rework` to have the plan made again. A plan run that stopped midway resumes from its workpad
-  when the parent is moved to `In Progress`, keeping the sub-tickets already filed. The approved
-  parent waits without being re-dispatched until every sub-ticket is closed, then closes out with
-  a Linear project update. Any other ticket whose PR merges with a sub-ticket still open outside
-  `Backlog` waits in `Waiting on sub-tickets` too instead of closing, and Symphony moves it to `Done`
-  once every such sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each
-  ended. Its `Backlog` sub-tickets (ones an agent filed) stay
-  there for a person to promote and never hold it: with only those open it goes to `Done` on merge.
-  The design this flow
-  is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
-  Linear documents) is recorded in
+  and the agent splits this plan ticket into sub-tickets instead of opening a PR, then hands the
+  parent to `Plan Review`. Approve the plan by moving the parent to `Waiting on sub-tickets` and
+  Symphony promotes every `Backlog` sub-ticket to `Todo`; comment on the plan while it is in
+  `Plan Review` to have it revised in place (artifact comments edited, `Backlog` sub-tickets
+  updated, each comment answered); move it to `Rework` to have the plan made again. Once every
+  sub-ticket is terminal the parent moves to `Epic Review`, which checks the epic against what
+  shipped and closes it or files follow-ups. Any other ticket whose PR merges with a sub-ticket
+  still open outside `Backlog` waits in `Waiting on sub-tickets` too instead of closing, and
+  Symphony moves it to `Done` once every such sub-ticket is `Done`, `Canceled` or `Duplicate`, with
+  a comment listing how each ended. Its `Backlog` sub-tickets (ones an agent filed) stay there for
+  a person to promote and never hold it. The design is recorded in
   [ADR 0001: the Director workflow](docs/adr/0001-director-workflow.md).
 
   To move a workspace from `breakdown` to `plan`, rename the `breakdown` label to `plan` in Linear
   (Settings → Labels). Linear renames it on every ticket, so parents already in flight keep their
   state and Symphony starts no new run for them.
-- **Actions for a human** — when work waits on something only a person can do (a missing secret, a
-  plan to approve, a QA pass or a final verification blocked on a permission), the ticket waits in
-  `Human Review`, and Symphony posts a Linear project update listing each one with its steps, and
-  posts again only when that list changes. Agents add requests with `linear_request_human_action`,
-  which moves the ticket to `Human Review`, and withdraw them with `linear_withdraw_human_action`;
-  see `human_actions` in
-  [docs/configuration.md](docs/configuration.md).
+- **Decisions for a person** — when work waits on something only a person can decide (a missing
+  secret, a product call), the agent asks with `linear_request_human_action`, which sets the
+  `Needs Decision` hold and leaves the ticket in its state; Symphony posts a Linear project update
+  listing each open decision and posts again only when that list changes. A reply under the
+  request, or the Symphony Inbox, answers it; `linear_withdraw_human_action` withdraws it. See
+  `human_actions` in [docs/configuration.md](docs/configuration.md).
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
-- **QA** — on a designed repo, the `QA` state's agent uses each PR the way a user would, with
+- **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
   [`auto_review`](docs/configuration.md#auto_review), which keeps the QA settings. The `Auto Review`
@@ -383,12 +371,11 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | Transition | Who |
 | --- | --- |
 | `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
-| `In Review` or `Human Review` → `Merging` | a person approves the PR |
-| `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a plan |
-| any state → `Rework` | a person rejects the approach |
-| `Final verification:` `In Review` or `Human Review` → `Done` | a person signs it off |
+| `Plan Review` → `Waiting on sub-tickets` | a person approves a plan |
+| a `Needs Decision` hold | a person records the decision |
+| `Restart` | a person starts the ticket over |
 
-The review-agent verdict, and on a designed repo the Code Review and QA verdicts, are still
+The review-agent verdict and the Code Review and QA verdicts are still
 required: forcing never skips or changes them.
 
 ### Preview the assembled prompt
@@ -404,12 +391,8 @@ instruction files next to that `WORKFLOW.md` (`.symphony/instructions/` by defau
 ./bin/symphony workflow preview                       # renders ./WORKFLOW.md
 ./bin/symphony workflow preview --file path/to/WORKFLOW.md
 ./bin/symphony workflow preview --agent claude        # default: codex
-./bin/symphony workflow preview --repo my-repo        # that repo's state machine and settings
+./bin/symphony workflow preview --repo my-repo        # that repo's settings
 ```
-
-With `--repo`, the preview renders the prompt for that configured repo's state machine: a
-`designed` repo gets the designed playbook partials and instruction branches, a `legacy` repo
-today's prompt. Without it the preview renders the `legacy` prompt.
 
 An unknown `{% render %}` partial or undefined variable is reported as an error, so the command
 doubles as a quick workflow lint.
@@ -432,8 +415,7 @@ records it as `stopped` without changing the Linear issue state.
 
 **Waiting on you.** The Mac app's Inbox (`/api/v1/inbox`), the dashboard's `Waiting on you`
 section, `/api/v1/state`'s `waiting_on_you` list and the menu bar app list everything only you can
-move on, oldest first: a plan or a PR in `In Review` or `Human Review`, a `Final verification:`
-ticket to sign off, a ticket with an open `linear_request_human_action` decision, and a ticket the
+move on, oldest first: a plan in `Plan Review`, a ticket with an open `linear_request_human_action` decision, and a ticket the
 quality gate holds or skipped. Each entry shows its kind, its one-line ask (the `**What to
 review:**` line of its `## Review brief`) and how long it has waited; the Inbox also shows the brief
 in its parts, the PR's checks and size, the request's steps or what the quality gate found. The
@@ -470,19 +452,17 @@ you".
 A run that reports an external block leaves its ticket in place with the `Blocked` machine label and
 what it waits on recorded. The machine lifts a dependency hold on its own; an access hold is a
 person's to lift, and `POST /api/v1/control/unblock` clears it by hand: no Linear state moves and
-the ticket continues where it stopped. A legacy repo is unaffected — it keeps today's Backlog escape
-hatch.
+the ticket continues where it stopped.
 
 A run that needs a person's call asks for it as a decision — one question, 2 to 4 options, one
 recommended — and the ticket keeps its phase with the `Needs Decision` machine label: no state
 moves, and Symphony dispatches it again the moment the decision is recorded. Answer it in the Inbox
 (**Send Decision…**) or with a reply under the request in Linear; either clears the label and the
 run continues from where it stopped, and **Send to Rework…** answers it as a redirect that moves the
-ticket through the guard. A legacy repo is unaffected — there a request still parks the ticket in
-`Human Review`.
+ticket through the guard.
 
 Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
-**Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is
+**Views → New view**, filter **Status** is `Plan Review` or **Labels** include `Needs Decision`, and **Assignee** is
 `Me`, order it by **Updated**, and save it as `Waiting on me`. It shows on the phone app
 too. It does not show the brief headline; open the ticket and read its `## Review brief` comment.
 
