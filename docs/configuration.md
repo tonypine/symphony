@@ -141,8 +141,9 @@ issues:
 - `states.waiting_on_sub_issues`: the state a plan ticket (label `plan`, or `breakdown`, its older
   name) waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
-  listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
-  a plan ticket whose sub-tickets are all terminal. Any other ticket whose PR merges with a
+  listed in `states.active`, but an issue in it is dispatched only for the epic review, once it is
+  a plan ticket whose sub-tickets are all terminal: Symphony moves it to `states.epic_review` and
+  runs the review there. Any other ticket whose PR merges with a
   sub-ticket still open outside `Backlog` moves here instead of `Done`; Symphony moves it to `Done`
   itself, with no run and a comment listing how each sub-ticket ended, once every sub-ticket outside
   `Backlog` is terminal; one a person moves here waits for them. `Backlog` sub-tickets stay there for a person to promote and hold nothing: with only those
@@ -728,7 +729,7 @@ agent:
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
   `title`, `repo_key`, queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
-  `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
+  `breakdown`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
@@ -2252,23 +2253,13 @@ health set by the project's previous update. No secret value reaches an update:
 `linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
-A rendered example, for a mix of a decision on a missing secret, a plan, a task labelled with the deprecated
-`human_actions.label` and two QA passes blocked on QA tools the running app lacks:
+A rendered example, for a mix of a decision on release signing and a task labelled with the
+deprecated `human_actions.label`:
 
 ```md
-**3 actions need you.** Quickest first.
+**2 actions need you.** Quickest first.
 
-### 1. Update the Symphony app
-
-**~5 min** · Unblocks the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)
-
-**Why:** MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.
-
-1. Update the Symphony app to its latest release.
-
-**Done when:** MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.
-
-### 2. Add the release signing secrets
+### 1. Add the release signing secrets
 
 **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
 
@@ -2281,7 +2272,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 
 **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
-### 3. Turn on the pre-push hook on your laptop
+### 2. Turn on the pre-push hook on your laptop
 
 Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
@@ -2290,7 +2281,7 @@ Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 **Done when:** you close MOT-31, or move it on.
 
 ---
-_Symphony posts a new update when this list changes · list `3a394cb1`_
+_Symphony posts a new update when this list changes · list `024ee477`_
 ```
 
 ## `WORKFLOW.md`

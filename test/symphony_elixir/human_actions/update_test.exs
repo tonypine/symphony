@@ -32,20 +32,6 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         done_when: "you close MOT-31, or move it on.",
         issue: issue("MOT-31", "Turn on the pre-push hook on your laptop"),
         project: @project
-      },
-      %Action{
-        key: "qa:app_update:id-MOT-52,id-MOT-53",
-        kind: :qa_blocked,
-        title: "Update the Symphony app",
-        why:
-          "MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. " <>
-            "MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.",
-        unblocks: "the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)",
-        est_minutes: 5,
-        steps: ["Update the Symphony app to its latest release."],
-        done_when: "MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.",
-        issue: nil,
-        project: @project
       }
     ]
   end
@@ -54,19 +40,9 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     {body, []} = Update.render(example_actions())
 
     assert body == """
-           **3 actions need you.** Quickest first.
+           **2 actions need you.** Quickest first.
 
-           ### 1. Update the Symphony app
-
-           **~5 min** · Unblocks the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)
-
-           **Why:** MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.
-
-           1. Update the Symphony app to its latest release.
-
-           **Done when:** MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.
-
-           ### 2. Add the release signing secrets
+           ### 1. Add the release signing secrets
 
            **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
 
@@ -79,7 +55,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
-           ### 3. Turn on the pre-push hook on your laptop
+           ### 2. Turn on the pre-push hook on your laptop
 
            Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
@@ -140,7 +116,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Done when:** the next run of `Release` on `main` is green.
 
-           ### 2. Update the Symphony app
+           ### 2. Add the release signing secrets
            """
   end
 

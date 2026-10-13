@@ -1825,8 +1825,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.provider`: `anthropic` or `openrouter`, default `anthropic`. The provider that serves the
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
-  `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
-  `review_feedback`, `pre_push_review`, `qa`, `code_review`, `epic_review`. Each field resolves, for the issue's routed
+  `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`,
+  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` and `final_verification`
+  named the retired close-out and final verification runs: an entry naming them still loads, and
+  no run uses it. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
   else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
   null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
@@ -2570,7 +2572,7 @@ An issue is dispatch-eligible only if all are true:
       parent's latest move into its state, the end of the service's last run on it and the
       service's start, the service replies once that if the comment asks for a plan change,
       `Rework` re-plans it. Replies inside a thread get nothing.
-    - `Rework` keeps its meaning: a full re-plan.
+    - A person's move to `Rework` keeps its meaning: a full re-plan.
   - Approval: on each poll, for a plan parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
     its latest state change is `Plan Review` to the waiting state, every sub-issue that has been in
@@ -2580,7 +2582,7 @@ An issue is dispatch-eligible only if all are true:
     and the reviewer can share one Linear user, so the service durably records when it moves a
     parent to the waiting state itself (before the move), and a change within 60 seconds of that
     record is not an approval. While that record cannot be read nothing moves.
-  - Rejection: for a plan parent in `Rework` with a sub-issue in `Backlog`, the rejected
+  - Rejection: for a plan parent a person moved to `Rework` with a sub-issue in `Backlog`, the rejected
     plan's sub-issues in `Backlog` since the parent's latest move to `Rework` are cancelled
     (`Canceled`, else `Cancelled`) before the re-plan is dispatched; until that succeeds the
     parent is not dispatched. The plan's sub-issues are those created by the run that moved the
@@ -3470,8 +3472,8 @@ Scoped Linear tool extension contract:
   issues it blocks or is blocked by, its parent, its siblings (the parent's other children) and its
   sub-issues. Without arguments it lists them as summaries. With an `identifier` (and an optional
   `comment_limit`) it reads that one issue's title, description, state, labels and comments,
-  wrapped, truncated and secret-redacted like the current issue's reads, so a final verification
-  can read its siblings' QA reports and a sub-issue its parent's workpad. Any other identifier MUST
+  wrapped, truncated and secret-redacted like the current issue's reads, so a sub-issue can read
+  its siblings' QA reports and its parent's workpad. Any other identifier MUST
   fail with an explicit error that lists the family, before the issue is read. It stays read-only
   and is available to the read-only reviewer and QA scopes.
 - Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
@@ -3964,7 +3966,7 @@ SHOULD return:
 - `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
   `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`,
-  `qa`, `breakdown`, `close_out`, `final_verification`, `epic_review`), `running` (an agent run is
+  `qa`, `breakdown`, `epic_review`), `running` (an agent run is
   going for it), `waiting_on` (one of `slot`, `human`, `ci`, `blocker`, `usage_limit`, `paused`, `backlog`,
   or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
   one-line `summary`; for a forced plan parent with a current part, the phase and what it
@@ -4271,7 +4273,7 @@ Minimum endpoints:
         {
           "issue_id": "stu901",
           "issue_identifier": "MT-655",
-          "title": "Final verification: Export",
+          "title": "Export the run history as CSV",
           "state": "Todo",
           "kind": "blockers",
           "reason": null,
@@ -4281,7 +4283,7 @@ Minimum endpoints:
         {
           "issue_id": "stu902",
           "issue_identifier": "MT-658",
-          "title": "Final verification: Pause",
+          "title": "Pause a running agent from the menu bar",
           "state": "Todo",
           "kind": "app_update",
           "reason": "waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`",
@@ -4560,16 +4562,17 @@ Minimum endpoints:
     (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `final_verification`, `counts`
     and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out and the `Final
-    verification:` sub-issue set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    order; a cycle is broken by creation order), canceled ones left out and a final verification
+    sub-issue left from before the drain set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
     `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
     state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
     Review, QA, Merging, CI Fix or Epic Review with nothing running) or `slot` (it can run and waits
     for a free slot).
-  - `final_verification` is the `Final verification:` sub-issue in the same shape plus
-    `open_tickets`, the number of sub-tickets not done yet; null without one.
+  - `final_verification` is, for an epic planned before the drain, its `Final verification:`
+    sub-issue in the same shape plus `open_tickets`, the number of sub-tickets not done yet; null
+    without one, as for every epic planned since.
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
   - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),
