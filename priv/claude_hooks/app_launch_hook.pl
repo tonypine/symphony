@@ -161,7 +161,7 @@ sub check_swift {
       refuse("swift run " . basename($candidate)) if app_binary($candidate);
     }
 
-    # `swift run` builds the product first, so one that isn't built yet is judged by its sources.
+    # `swift run` builds the product first, so its sources decide too, built or not.
     my @unbuilt = defined $plain[1] ? grep { $_ eq $plain[1] } @app_targets : @app_targets;
     refuse("swift run $unbuilt[0]") if @unbuilt;
   } elsif (my ($script) = grep { /\.swift$/ } @plain) {
@@ -187,6 +187,7 @@ sub built_product {
 
 sub files_under {
   my ($path) = @_;
+  return () if -l $path && -d $path;
   return -f $path ? ($path) : map { files_under($_) } entries($path);
 }
 
