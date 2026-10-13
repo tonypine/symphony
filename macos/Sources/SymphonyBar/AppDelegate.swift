@@ -251,13 +251,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
     }
 
-    /// Acts on what the quitting app recorded before an update or a rollback, and returns whether Symphony ran before
-    /// the update, so the app starts it.
     /// Where the window's client reads Symphony's local API.
     private func apiBase() -> URL? {
         StateRoot.controlURL(in: poller.stateRoot(), fallback: AppStores.current.apiFallback)
     }
 
+    /// Acts on what the quitting app recorded before an update or a rollback, and returns whether Symphony ran before
+    /// the update, so the app starts it.
     private func relaunched(_ relaunch: UpdateRelaunch) -> Bool {
         switch relaunch {
         case .none:
