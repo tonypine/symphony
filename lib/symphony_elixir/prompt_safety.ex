@@ -89,6 +89,10 @@ defmodule SymphonyElixir.PromptSafety do
   @spec pr_conflict_field(String.t()) :: String.t()
   def pr_conflict_field(value), do: sanitize_untrusted_text(value, @pr_conflict_field_limit, "pr_conflict", &escape_boundary_text/1)
 
+  @doc "An open pull request's identifier, state, URL or changed path, as the overlap section lists it."
+  @spec open_pull_request_field(String.t()) :: String.t()
+  def open_pull_request_field(value), do: sanitize_untrusted_text(value, @pr_conflict_field_limit, "open_pull_request", &escape_boundary_text/1)
+
   @spec linear_block(String.t(), String.t(), pos_integer()) :: String.t()
   def linear_block(value, tag, limit) when is_binary(value) and is_binary(tag) and is_integer(limit) and limit > 0 do
     boundary_block(value, tag, limit, &escape_boundary_text/1)

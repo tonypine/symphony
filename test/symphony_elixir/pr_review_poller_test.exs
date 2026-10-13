@@ -83,6 +83,24 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     end
   end
 
+  # Each PR its own activity, and the open ones listed with the files they change.
+  defmodule LandingGitHub do
+    @spec fetch_activity(String.t(), keyword()) :: {:ok, map()}
+    def fetch_activity(pr_url, _opts) do
+      {:ok, :symphony_elixir |> Application.fetch_env!(:pr_review_test_activities) |> Map.fetch!(pr_url)}
+    end
+
+    @spec list_open_pull_requests(String.t(), keyword()) :: {:ok, [map()]}
+    def list_open_pull_requests(_pr_url, _opts) do
+      files = Application.fetch_env!(:symphony_elixir, :pr_review_test_pr_files)
+
+      {:ok,
+       for {url, %{state: "OPEN"} = activity} <- Application.fetch_env!(:symphony_elixir, :pr_review_test_activities) do
+         %{number: activity.pr_number, url: url, title: activity.pr_title, head_sha: activity.head_ref_oid, files: Map.fetch!(files, url)}
+       end}
+    end
+  end
+
   defmodule FakeLearningProvider do
     @spec review(map(), map()) :: {:ok, String.t()}
     def review(request, settings) do
@@ -1517,6 +1535,138 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
     assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "Merging"
+  end
+
+  describe "landing order" do
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :pr_review_test_activities)
+        Application.delete_env(:symphony_elixir, :pr_review_test_pr_files)
+      end)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
+      )
+
+      :ok
+    end
+
+    test "three PRs that share files land one after another, each follower fixing its conflict once, after its leader" do
+      now = ~U[2026-05-01 09:00:00Z]
+
+      Application.put_env(:symphony_elixir, :pr_review_test_pr_files, %{
+        landing_pr_url(1) => ["lib/a.ex", "lib/shared.ex"],
+        landing_pr_url(2) => ["lib/shared.ex", "lib/b.ex"],
+        landing_pr_url(3) => ["lib/shared.ex", "lib/b.ex", "lib/c.ex"]
+      })
+
+      for {id, number} <- [{"a", 1}, {"b", 2}, {"c", 3}], do: :ok = put_landing_review(now, id, number)
+
+      # Poll 1: A is landing; B and C already conflict with main.
+      landing_states(%{"a" => "Merging", "b" => "QA", "c" => "Code Review"}, now)
+      landing_activities(%{1 => {"OPEN", :clean, "head-a"}, 2 => {"OPEN", :conflict, "head-b"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-0", now)
+
+      assert {:ok, %{actions: actions}} = landing_poll(now)
+      assert {:landing_wait, "issue-b", "ACME-A"} in actions
+      assert {:landing_wait, "issue-c", "ACME-A"} in actions
+      refute_received {:issue_state_update, _id, _state}
+
+      assert [
+               %{
+                 issue_identifier: "ACME-B",
+                 state: "QA",
+                 waits_for: %{issue_identifier: "ACME-A", state: "Merging"},
+                 shared_files: 1,
+                 files: ["lib/shared.ex"],
+                 reason: "waits for ACME-A to land (shares 1 file)",
+                 since: ^now
+               },
+               %{issue_identifier: "ACME-C", waits_for: %{issue_identifier: "ACME-A"}, reason: "waits for ACME-A to land (shares 1 file)"}
+             ] = PrReviewPoller.landing_waits()
+
+      # A waiting follower's conflict is no prompt to fix it yet.
+      assert PrReviewPoller.pending_pr_conflict("issue-b") == nil
+
+      # Poll 2: A merged. B, next in line, merges main once; C now waits for B.
+      landing_activities(%{1 => {"MERGED", :clean, "head-a"}, 2 => {"OPEN", :conflict, "head-b"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-1", now)
+
+      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 60))
+      assert {:cleanup, "issue-a", "merged"} in actions
+      assert {:state_transitioned, "issue-b", :conflict, "CI Fix"} in actions
+      assert {:landing_wait, "issue-c", "ACME-B"} in actions
+      assert_received {:issue_state_update, "issue-a", "Done"}
+      assert_received {:issue_state_update, "issue-b", "CI Fix"}
+      refute_received {:issue_state_update, "issue-c", _state}
+      assert [%{issue_identifier: "ACME-C", reason: "waits for ACME-B to land (shares 2 files)"}] = PrReviewPoller.landing_waits()
+
+      # Poll 3: B is in CI Fix, which the poller doesn't read: it keeps its place ahead of C.
+      landing_states(%{"b" => "CI Fix", "c" => "Code Review"}, now)
+      landing_activities(%{2 => {"OPEN", :clean, "head-b2"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-1", now)
+      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 120))
+      assert {:landing_wait, "issue-c", "ACME-B"} in actions
+      refute_received {:issue_state_update, "issue-c", _state}
+
+      # Poll 4: B back through QA into Merging. C still waits.
+      landing_states(%{"b" => "Merging", "c" => "Code Review"}, now)
+      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 180))
+      assert {:landing_wait, "issue-c", "ACME-B"} in actions
+      refute_received {:issue_state_update, "issue-c", _state}
+
+      # Poll 5: B merged. C merges main once, with both A's and B's changes.
+      landing_activities(%{2 => {"MERGED", :clean, "head-b2"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-2", now)
+      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 240))
+      assert {:state_transitioned, "issue-c", :conflict, "CI Fix"} in actions
+      assert_received {:issue_state_update, "issue-b", "Done"}
+      assert_received {:issue_state_update, "issue-c", "CI Fix"}
+      assert PrReviewPoller.landing_waits() == []
+      assert [%{conflict_retry_count: 1, dispatched_conflict_keys: ["head-c|base-2"]}] = RunStore.list_pr_reviews()
+    end
+
+    test "conflicting PRs that share no file each get their conflict fix at once" do
+      now = ~U[2026-05-01 09:00:00Z]
+
+      files = %{landing_pr_url(1) => ["lib/a.ex"], landing_pr_url(2) => ["lib/b.ex"]}
+      Application.put_env(:symphony_elixir, :pr_review_test_pr_files, files)
+      for {id, number} <- [{"a", 1}, {"b", 2}], do: :ok = put_landing_review(now, id, number)
+      landing_states(%{"a" => "QA", "b" => "Code Review"}, now)
+      landing_activities(%{1 => {"OPEN", :conflict, "head-a"}, 2 => {"OPEN", :conflict, "head-b"}}, "base-0", now)
+
+      assert {:ok, %{actions: actions}} = landing_poll(now)
+      assert Enum.sort(actions) == [{:state_transitioned, "issue-a", :conflict, "CI Fix"}, {:state_transitioned, "issue-b", :conflict, "CI Fix"}]
+      assert PrReviewPoller.landing_waits() == []
+
+      # Each record still keeps the files its PR changes.
+      assert [["lib/a.ex"], ["lib/b.ex"]] = RunStore.list_pr_reviews() |> Enum.sort_by(& &1.issue_id) |> Enum.map(& &1.landing.files)
+    end
+
+    test "the first prompt names the open PRs that share files, and the one this PR waits for" do
+      now = ~U[2026-05-01 09:00:00Z]
+
+      Application.put_env(:symphony_elixir, :pr_review_test_pr_files, %{
+        landing_pr_url(1) => ["lib/a.ex", "lib/shared.ex"],
+        landing_pr_url(2) => ["lib/shared.ex"],
+        landing_pr_url(3) => ["lib/c.ex"]
+      })
+
+      for {id, number} <- [{"a", 1}, {"b", 2}, {"c", 3}], do: :ok = put_landing_review(now, id, number)
+      landing_states(%{"a" => "QA", "b" => "Code Review", "c" => "Rework"}, now)
+      landing_activities(%{1 => {"OPEN", :clean, "head-a"}, 2 => {"OPEN", :clean, "head-b"}, 3 => {"OPEN", :clean, "head-c"}}, "base-0", now)
+      assert {:ok, _summary} = landing_poll(now)
+
+      assert %{
+               waits_for: %{issue_identifier: "ACME-A"},
+               shared: [%{issue_identifier: "ACME-A", state: "QA", files: ["lib/shared.ex"]}],
+               open: []
+             } = PrReviewPoller.open_pr_overlap("issue-b")
+
+      assert PrReviewPoller.open_pr_overlap("issue-c") == nil
+
+      # A ticket without a PR in the map sees every open one and its files.
+      assert %{shared: [], open: open} = PrReviewPoller.open_pr_overlap("issue-new")
+      assert Enum.map(open, & &1.issue_identifier) |> Enum.sort() == ["ACME-A", "ACME-B", "ACME-C"]
+    end
   end
 
   test "discovers a designed repo's Code Review, QA and Rework PRs so a conflict there is polled" do
@@ -4160,6 +4310,52 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert [%{last_action: "rework", last_action_at: %DateTime{}, pending_reviewer_comments: [%{id: "comment-1"}]}] =
              StatefulRunStore.list_pr_reviews()
+  end
+
+  defp landing_pr_url(number), do: "https://github.com/example/repo/pull/#{number}"
+
+  defp put_landing_review(now, id, number) do
+    identifier = "ACME-#{String.upcase(id)}"
+
+    put_review(now, %{issue_id: "issue-#{id}", issue_identifier: identifier, pr_url: landing_pr_url(number), workspace_path: "/tmp/workspaces/#{identifier}"})
+  end
+
+  defp landing_states(states, now) do
+    issues =
+      for {id, state} <- states do
+        identifier = "ACME-#{String.upcase(id)}"
+        number = %{"a" => 1, "b" => 2, "c" => 3}[id]
+        in_review_issue(updated_at: now, id: "issue-#{id}", identifier: identifier, pr_url: landing_pr_url(number), state: state)
+      end
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, issues)
+  end
+
+  defp landing_activities(prs, base, now) do
+    activities =
+      Map.new(prs, fn {number, {state, mergeable, head}} ->
+        merge =
+          if mergeable == :conflict,
+            do: [mergeable: "CONFLICTING", merge_state_status: "DIRTY"],
+            else: [mergeable: "MERGEABLE", merge_state_status: "CLEAN"]
+
+        refs = [head_ref_name: "auto/#{number}", head_ref_oid: head, base_ref_name: "main", base_ref_oid: base]
+        activity = open_activity(now, [state: state, pr_number: number] ++ refs ++ merge)
+
+        {landing_pr_url(number), %{activity | pr_url: landing_pr_url(number)}}
+      end)
+
+    Application.put_env(:symphony_elixir, :pr_review_test_activities, activities)
+  end
+
+  defp landing_poll(now) do
+    capture_log(fn ->
+      result = PrReviewPoller.poll_once(tracker: FakeTracker, github: LandingGitHub, workspace: FakeWorkspace, now: now)
+      send(self(), {:landing_poll, result})
+    end)
+
+    assert_received {:landing_poll, result}
+    result
   end
 
   defp put_review(now, attrs \\ %{}) do

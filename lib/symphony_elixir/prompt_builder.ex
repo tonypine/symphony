@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, TicketState, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, LandingOrder, PromptSafety, ReviewAgent, TicketState, Workflow}
 
   @render_opts [
     strict_variables: true,
@@ -22,6 +22,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
   @ticket_state_limit 4_000
+  @open_pr_limit 10
+  @open_pr_file_limit 15
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -105,6 +107,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
     |> append_pr_conflict(pr_conflict)
+    |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -167,6 +170,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
     |> append_pr_conflict(pr_conflict)
+    |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -555,6 +559,61 @@ defmodule SymphonyElixir.PromptBuilder do
 
   # The per-ticket machine record is injected as continuation context (D9), never read through a
   # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
+  # The other open PRs that change this ticket's files (`PrReviewPoller.open_pr_overlap/2`), so the
+  # agent can stack on one instead of meeting the conflict after it lands. Paths and URLs come from
+  # GitHub: untrusted.
+  defp append_open_pr_overlap(prompt, %{shared: [_ | _] = shared} = overlap) do
+    lines = [
+      "Open pull requests that change the same files as this ticket's PR:",
+      "",
+      "BEGIN UNTRUSTED OPEN PULL REQUESTS",
+      open_pr_lines(shared),
+      "END UNTRUSTED OPEN PULL REQUESTS",
+      "",
+      open_pr_wait_line(Map.get(overlap, :waits_for)) <>
+        "When your change builds on one of them, you may stack this branch on that PR's branch rather than resolve the same files twice."
+    ]
+
+    prompt <> "\n\n" <> Enum.join(lines, "\n")
+  end
+
+  defp append_open_pr_overlap(prompt, %{open: [_ | _] = open}) do
+    lines = [
+      "Open pull requests other tickets are landing, and the files they change:",
+      "",
+      "BEGIN UNTRUSTED OPEN PULL REQUESTS",
+      open_pr_lines(open),
+      "END UNTRUSTED OPEN PULL REQUESTS",
+      "",
+      "If your change touches these files, each of those merges will reopen a conflict on your PR. When it builds on one of them, you may stack your branch on that PR's branch instead."
+    ]
+
+    prompt <> "\n\n" <> Enum.join(lines, "\n")
+  end
+
+  defp append_open_pr_overlap(prompt, _overlap), do: prompt
+
+  defp open_pr_lines(entries) do
+    entries
+    |> Enum.take(@open_pr_limit)
+    |> Enum.map_join("\n", fn entry ->
+      {listed, rest} = Enum.split(entry.files, @open_pr_file_limit)
+      more = if rest == [], do: "", else: " (and #{length(rest)} more)"
+
+      pr =
+        [blank_fallback(entry.issue_identifier, "untracked"), "(#{blank_fallback(entry.state, "unknown")})", blank_fallback(entry.pr_url, nil)]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
+
+      "- " <> PromptSafety.open_pull_request_field("#{pr}: #{Enum.join(listed, ", ")}#{more}")
+    end)
+  end
+
+  defp open_pr_wait_line(%{} = wait),
+    do: "This PR #{LandingOrder.reason(wait)}: Symphony sends it no conflict fix and doesn't update its branch until then. "
+
+  defp open_pr_wait_line(_wait), do: ""
+
   defp append_ticket_state(prompt, ticket_state) do
     case ticket_state_section(ticket_state) do
       nil -> prompt

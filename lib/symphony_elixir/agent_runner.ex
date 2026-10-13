@@ -1252,6 +1252,7 @@ defmodule SymphonyElixir.AgentRunner do
       |> put_reviewer_comments(issue)
       |> put_ci_failure(issue)
       |> put_pr_conflict(issue)
+      |> put_open_pr_overlap(issue)
       |> put_ticket_state(issue)
 
     prompt = PromptBuilder.build_prompt(issue, prompt_opts)
@@ -1431,6 +1432,14 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp pending_pr_conflict(_issue, _opts), do: nil
+
+  defp put_open_pr_overlap(opts, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    Keyword.put_new_lazy(opts, :open_pr_overlap, fn ->
+      PrReviewPoller.open_pr_overlap(issue_id, pending_lookup_opts(issue, opts))
+    end)
+  end
+
+  defp put_open_pr_overlap(opts, _issue), do: opts
 
   defp put_ticket_state(opts, issue) when is_list(opts) do
     if Keyword.has_key?(opts, :ticket_state) do
