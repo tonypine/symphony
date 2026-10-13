@@ -795,6 +795,40 @@ defmodule SymphonyElixir.DirectorMovesTest do
       Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
     end
 
+    test "the decision answers at once while the orchestrator is too busy to take the refresh", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      test_pid = self()
+
+      # An orchestrator still busy with a poll: it takes the refresh request and never replies.
+      busy =
+        spawn(fn ->
+          receive do
+            {:"$gen_call", {caller, _tag}, :request_refresh} ->
+              send(test_pid, {:refresh_requested, caller})
+              Process.sleep(:infinity)
+          end
+        end)
+
+      assert {:ok, %{move: "decide", moved: false}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, Keyword.put(opts, :orchestrator, busy))
+
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert_receive {:refresh_requested, caller}
+
+      # The orchestrator going away mid-call ends the request with a warning, not a crash.
+      ref = Process.monitor(caller)
+
+      log =
+        capture_log(fn ->
+          Process.exit(busy, :kill)
+          assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
+        end)
+
+      assert log =~ "Director move couldn't ask the orchestrator to poll again"
+    end
+
     test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()
