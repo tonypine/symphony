@@ -31,11 +31,16 @@ defmodule SymphonyElixirWeb.ObservabilityHistoryTest do
         started_at: DateTime.utc_now()
       })
 
+    :ok = RunStore.record_ticket_verdict(Config.repo_key!(), "history-issue-1", "code_review", "abc", "approve")
+
     body = json_response(get(build_conn(), "/api/v1/history?days=3"), 200)
 
     assert %{"days" => 3, "tokens_per_day" => [_, _, today], "tickets" => tickets, "merged_per_day" => [_, _, _]} = body
     assert today["providers"]["anthropic"] >= 1_234
     assert Enum.any?(tickets, &(&1["identifier"] == "HIS-1" and &1["total_tokens"] == 1_234))
+    assert %{"agreement" => %{"pending" => pending}, "by_repo" => [_ | _] = by_repo} = body["review"]
+    assert pending >= 1
+    assert Enum.all?(by_repo, &(&1["manual_review"] in ["on", "off"]))
   end
 
   test "GET /api/v1/history rejects an invalid days value and other methods" do

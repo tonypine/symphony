@@ -15,7 +15,7 @@ defmodule SymphonyElixir.HistoryTest do
 
   defp payload(params, runs) do
     runs_started_on = fn date -> Enum.filter(runs, &(DateTime.to_date(&1.started_at) == date)) end
-    History.payload(params, today: @today, agent: @agent, runs_started_on: runs_started_on)
+    History.payload(params, today: @today, agent: @agent, runs_started_on: runs_started_on, ticket_states: [])
   end
 
   test "totals tokens per day per provider, per ticket with attempts and cap, and merges per day" do
@@ -49,6 +49,7 @@ defmodule SymphonyElixir.HistoryTest do
            ] = payload.tickets
 
     assert payload.merged_per_day == [%{date: "2026-10-12", merged: 0}, %{date: "2026-10-13", merged: 1}]
+    assert %{agreement: %{agreed: 0, rate: nil}, disagreements: []} = payload.review
   end
 
   test "defaults to 14 days and rejects a days value outside 1..90" do
@@ -64,7 +65,7 @@ defmodule SymphonyElixir.HistoryTest do
     failing = fn _date -> {:error, :down} end
 
     assert {:ok, %{tokens_per_day: [%{total_tokens: 0}]}} =
-             History.payload(%{"days" => "1"}, today: @today, agent: @agent, runs_started_on: failing)
+             History.payload(%{"days" => "1"}, today: @today, agent: @agent, runs_started_on: failing, ticket_states: [])
   end
 
   test "provider comes from the recorded provider, else the model" do

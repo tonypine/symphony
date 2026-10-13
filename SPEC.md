@@ -4611,6 +4611,16 @@ Minimum endpoints:
     `cap` (`agent.max_tokens_per_issue`, null when unset).
   - `merged_per_day` has one entry per day (`date`, `merged`): the tickets whose completion
     Symphony noted that day.
+  - `review` is how far the Code Review agent can be trusted, from the tickets' verdicts and
+    signals ledger. A Code Review approval is upheld when QA passes or skips it or the Director
+    confirms the merge, overturned when QA fails it or the Director sends it to Rework, and pending
+    until one of them judges it. `agreement` and each `by_repo` entry (with the repo's
+    `manual_review`) carry `agreed`, `disagreed`, `pending` and `rate` (agreed over judged, null
+    when none). `qa_first_pass` (`passed`, `judged`, `rate`) counts tickets whose first QA pass or
+    fail was a pass; `sent_to_rework` (`sent`, `reviewed`, `rate`) counts reviewed tickets that a
+    Code Review rework, a QA fail or the Director sent back. `disagreements` lists each overturned
+    approval, newest first: `issue_id`, `identifier`, `repo_key`, `review`, `decision`,
+    `decided_by` (`QA` or `Director`) and `decided_at`.
   - The response also has `days`, `from`, `to`, `daily_budget` (`agent.max_tokens_per_day`) and
     `per_ticket_cap`.
 

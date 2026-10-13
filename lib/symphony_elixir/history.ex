@@ -9,7 +9,7 @@ defmodule SymphonyElixir.History do
   names.
   """
 
-  alias SymphonyElixir.{Config, RunStore}
+  alias SymphonyElixir.{Config, ReviewQuality, RunStore}
 
   @default_days 14
   @max_days 90
@@ -19,7 +19,8 @@ defmodule SymphonyElixir.History do
   @doc """
   The history for `params["days"]` days ending today (default #{@default_days}, at most
   #{@max_days}). `opts`: `:today` (a `Date`), `:runs_started_on` (a `Date` → runs function) and
-  `:agent` (the `agent` settings with `max_tokens_per_day` and `max_tokens_per_issue`).
+  `:agent` (the `agent` settings with `max_tokens_per_day` and `max_tokens_per_issue`); the
+  `review` part takes `SymphonyElixir.ReviewQuality.payload/2`'s options.
   """
   @spec payload(map(), keyword()) :: {:ok, payload()} | {:error, :invalid_days}
   def payload(params, opts \\ []) when is_map(params) do
@@ -40,7 +41,8 @@ defmodule SymphonyElixir.History do
          per_ticket_cap: cap,
          tokens_per_day: tokens_per_day(runs, dates),
          tickets: tickets(runs, cap),
-         merged_per_day: merged_per_day(runs, dates)
+         merged_per_day: merged_per_day(runs, dates),
+         review: ReviewQuality.payload(dates, opts)
        }}
     end
   end
