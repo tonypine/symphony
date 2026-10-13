@@ -15,6 +15,7 @@ final class SymphonyWindowModel: ObservableObject {
             guard selection != oldValue else { return }
             onSelect(selection)
             readHistoryIfDue()
+            readQualityIfDue()
         }
     }
 
@@ -58,6 +59,18 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var usageHistory: HistoryPayload?
     /// What the last history read got when it got none, nil after one that did.
     @Published private(set) var historyResult: EndpointResult?
+    /// The history and runs of Quality's period, read while Quality shows.
+    @Published private(set) var quality: (history: HistoryPayload, runs: [QualityRun])?
+    /// What the last Quality read got when it got none, nil after one that did.
+    @Published private(set) var qualityResult: EndpointResult?
+    /// Quality's period; changing it reads again.
+    @Published var qualityPeriod: Quality.Period = .month {
+        didSet {
+            guard qualityPeriod != oldValue else { return }
+            qualityReadAt = nil
+            readQualityIfDue()
+        }
+    }
     /// The initiative shown, by issue id; nil shows the first.
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
@@ -98,7 +111,8 @@ final class SymphonyWindowModel: ObservableObject {
 
     var onSelect: (SymphonyView) -> Void = { _ in }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    var onOpenRepos: () -> Void = {}
+    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    var onOpenRepos: (String?) -> Void = { _ in }
     var onOpenWebDashboard: () -> Void = {}
     var onScopeChange: (OverviewScope) -> Void = { _ in }
     /// Sends a control request to Symphony, or to the API fixtures in QA mode, and says how it went.
@@ -116,6 +130,8 @@ final class SymphonyWindowModel: ObservableObject {
     private var readingHistory = false
     /// When the history was last read; the run records it comes from change slowly.
     private var historyReadAt: Date?
+    private var readingQuality = false
+    private var qualityReadAt: Date?
     /// The history is read again at most this often.
     static let historyInterval: TimeInterval = 60
     var readingTicket = false
@@ -140,6 +156,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readInbox()
                 readInitiatives()
                 readHistoryIfDue()
+                readQualityIfDue()
                 readTicket()
             }
             .store(in: &cancellables)
@@ -389,6 +406,37 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
+    /// Reads Quality's history and runs while Quality shows, for its period.
+    private func readQualityIfDue() {
+        guard selection == .quality, shownTicket == nil, !readingQuality, state.countsKnown,
+            qualityReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+        else { return }
+        readingQuality = true
+        let period = qualityPeriod
+        Task {
+            let result = await client.get(HistoryPayload.path(days: period.rawValue))
+            if case let .loaded(data) = result, let history = HistoryPayload.decode(data) {
+                let from = history.tokensPerDay.first?.date ?? ""
+                let runsResult = await client.get(QualityRun.path(from: from))
+                let runs = if case let .loaded(data) = runsResult { QualityRun.decode(data) ?? [] } else { [QualityRun]() }
+                if period == qualityPeriod {
+                    quality = (history, runs)
+                    qualityResult = nil
+                }
+            } else {
+                qualityResult = result
+            }
+            qualityReadAt = period == qualityPeriod ? Date() : nil
+            readingQuality = false
+            if qualityReadAt == nil { readQualityIfDue() }
+        }
+    }
+
+    /// Change Review…: the Repos window on `repoKey`'s Edit sheet, where its manual review is.
+    func changeReview(_ repoKey: String) {
+        onOpenRepos(repoKey)
+    }
+
     private func readReposIfDue() {
         guard !readingRepos, reposReadAt.map({ Date().timeIntervalSince($0) >= Self.reposInterval }) ?? true else { return }
         readingRepos = true
@@ -403,7 +451,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// Shows `view`: Repos opens its window and the selection stays where it was.
     func show(_ view: SymphonyView) {
         if view.opensOwnWindow {
-            onOpenRepos()
+            onOpenRepos(nil)
         } else {
             selection = view
             history.visit(.view(view))
@@ -662,6 +710,8 @@ struct SymphonyDetail: View {
                 DiagnosticsContent(model: model, client: client)
             case .usage:
                 UsageContent(model: model, client: client)
+            case .quality:
+                QualityContent(model: model)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }

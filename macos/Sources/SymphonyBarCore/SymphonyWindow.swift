@@ -24,7 +24,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .overview: "The factory at a glance"
         case .initiatives: "Plans and their sub-tickets"
         case .tickets: "Every ticket Symphony sees"
-        case .quality: "How far the gate agrees with you"
+        case .quality: "How far to trust the crew"
         case .usage: "Tokens and limits"
         case .repos: "Repositories Symphony works on"
         case .diagnostics: "Symphony's own health"
@@ -73,7 +73,7 @@ public enum SidebarSection: String, CaseIterable, Equatable {
 /// The sidebar: only the views built so far, in the design's order, with ⌘1–⌘8 following that order.
 public struct Sidebar: Equatable {
     /// The views this version of the app has. Later views join here, in place.
-    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .usage, .repos, .diagnostics]
+    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .repos, .diagnostics]
     public static let maxShortcuts = 8
 
     public let views: [SymphonyView]

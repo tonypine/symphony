@@ -47,6 +47,8 @@ public struct HistoryPayload: Equatable {
     public var tickets: [Ticket]
     /// Tickets merged per UTC day, by date.
     public var mergedPerDay: [(date: String, merged: Int)]
+    /// How far the Code Review agent can be trusted; nil from a Symphony that doesn't serve it.
+    public var review: ReviewHistory?
 
     public init(
         days: Int,
@@ -54,7 +56,8 @@ public struct HistoryPayload: Equatable {
         perTicketCap: Int? = nil,
         tokensPerDay: [Day] = [],
         tickets: [Ticket] = [],
-        mergedPerDay: [(date: String, merged: Int)] = []
+        mergedPerDay: [(date: String, merged: Int)] = [],
+        review: ReviewHistory? = nil
     ) {
         self.days = days
         self.dailyBudget = dailyBudget
@@ -62,13 +65,14 @@ public struct HistoryPayload: Equatable {
         self.tokensPerDay = tokensPerDay
         self.tickets = tickets
         self.mergedPerDay = mergedPerDay
+        self.review = review
     }
 
     public static func == (lhs: HistoryPayload, rhs: HistoryPayload) -> Bool {
         lhs.days == rhs.days && lhs.dailyBudget == rhs.dailyBudget && lhs.perTicketCap == rhs.perTicketCap
             && lhs.tokensPerDay == rhs.tokensPerDay && lhs.tickets == rhs.tickets
             && lhs.mergedPerDay.map(\.date) == rhs.mergedPerDay.map(\.date)
-            && lhs.mergedPerDay.map(\.merged) == rhs.mergedPerDay.map(\.merged)
+            && lhs.mergedPerDay.map(\.merged) == rhs.mergedPerDay.map(\.merged) && lhs.review == rhs.review
     }
 
     /// The path that asks for `days` days.
@@ -89,7 +93,8 @@ public struct HistoryPayload: Equatable {
                     totalTokens: ticket.totalTokens ?? 0, attempts: ticket.attempts ?? 0, cap: ticket.cap
                 )
             },
-            mergedPerDay: (payload.mergedPerDay ?? []).map { (date: $0.date, merged: $0.merged ?? 0) }
+            mergedPerDay: (payload.mergedPerDay ?? []).map { (date: $0.date, merged: $0.merged ?? 0) },
+            review: payload.review?.review
         )
     }
 
@@ -121,6 +126,7 @@ public struct HistoryPayload: Equatable {
         let tokensPerDay: [Day]?
         let tickets: [Ticket]?
         let mergedPerDay: [Merged]?
+        let review: ReviewHistory.Payload?
     }
 }
 

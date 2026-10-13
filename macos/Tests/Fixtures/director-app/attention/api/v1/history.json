@@ -61,6 +61,53 @@
     }
   ],
   "per_ticket_cap": 2000000,
+  "review": {
+    "agreement": {
+      "agreed": 11,
+      "disagreed": 1,
+      "pending": 1,
+      "rate": 0.9167
+    },
+    "by_repo": [
+      {
+        "agreed": 5,
+        "disagreed": 0,
+        "manual_review": "off",
+        "pending": 0,
+        "rate": 1.0,
+        "repo_key": "api"
+      },
+      {
+        "agreed": 6,
+        "disagreed": 1,
+        "manual_review": "on",
+        "pending": 1,
+        "rate": 0.8571,
+        "repo_key": "shop"
+      }
+    ],
+    "disagreements": [
+      {
+        "decided_at": "2026-10-05T16:20:00Z",
+        "decided_by": "Director",
+        "decision": "Sent to Rework",
+        "identifier": "SHOP-298",
+        "issue_id": "i-298",
+        "repo_key": "shop",
+        "review": "Approved"
+      }
+    ],
+    "qa_first_pass": {
+      "judged": 11,
+      "passed": 9,
+      "rate": 0.8182
+    },
+    "sent_to_rework": {
+      "rate": 0.2308,
+      "reviewed": 13,
+      "sent": 3
+    }
+  },
   "tickets": [
     {
       "attempts": 4,
