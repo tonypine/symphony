@@ -23,6 +23,8 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
   # The processes that draw the "quit unexpectedly" dialog, by macOS release.
   @dialog_owners ["Problem Reporter", "UserNotificationCenter", "CrashReporter", "ReportCrash"]
   @reports_dir Path.expand("~/Library/Logs/DiagnosticReports")
+  # What the probe prints to stderr before it touches AppKit.
+  @started "TP-479 probe started"
 
   setup do
     root = Path.join(System.tmp_dir!(), "appkit-probe-#{System.unique_integer([:positive])}")
@@ -85,6 +87,8 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
       {"Control: crash dialog outside the sandbox", yes_no(Enum.any?(crash_control.owners, &dialog?/1))},
       {"Sandboxed: probe window", yes_no(window?)},
       {"Sandboxed: crash dialog", yes_no(dialog?)},
+      {"Sandboxed: probe started", yes_no(output =~ @started)},
+      {"Sandboxed crash: probe started", yes_no(crash_output =~ @started)},
       {"Sandboxed crash: new crash report", if(reports == [], do: "no", else: Enum.join(reports, ", "))},
       {"Sandboxed: exit status", to_string(status)},
       {"Sandboxed crash: exit status", to_string(crash_status)},
@@ -92,6 +96,11 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
       {"Sandboxed: output (tail)", tail(output)},
       {"Sandboxed crash: output (tail)", tail(crash_output)}
     ])
+
+    # A run that never reached AppKit shows neither, which would answer nothing.
+    assert output =~ @started, "the sandboxed probe never started (exit #{status}): #{output}"
+    assert crash_output =~ @started, "the sandboxed crash probe never started (exit #{crash_status}): #{crash_output}"
+    assert crash_status != 0, "the sandboxed crash probe exited 0, so it never crashed: #{crash_output}"
 
     refute window?, "the sandboxed probe drew a window: #{output} / #{crash_output}"
     refute dialog?, "the sandboxed probe's crash showed a dialog: #{inspect(Enum.uniq(sandboxed.owners ++ crashed.owners))}"

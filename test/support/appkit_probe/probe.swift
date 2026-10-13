@@ -2,12 +2,15 @@
 // quits after 5 seconds. `probe crash` traps (`fatalError`) once the window is up instead, so a
 // control run shows what a crash looks like. A background timer ends it after 10 seconds in case
 // AppKit hangs without a window server: with `crash` it traps too, so a crash run always crashes.
+// It prints "TP-479 probe started" to stderr before it touches AppKit, so the test can tell a run
+// that reached AppKit from one the sandbox never started.
 //
 // The `appkit_dialog` test runs it on a disposable macOS runner only. Never run it on the host: its
 // window, and its "quit unexpectedly" dialog when it crashes, land on the operator's screen.
 import AppKit
 
 let crash = CommandLine.arguments.dropFirst().first == "crash"
+FileHandle.standardError.write(Data("TP-479 probe started\n".utf8))
 
 DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
   if crash { fatalError("TP-479 crash after a hang") }
