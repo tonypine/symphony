@@ -18,9 +18,13 @@ CODESIGN_FLAGS ?=
 # A SymphonyBar executable built already (`swift build -c release`), copied
 # instead of building one, so several bundles can share one build.
 PREBUILT_EXECUTABLE ?=
-# Inputs for `make bundle`: the Burrito-built Symphony binary to embed, and the
-# versions to write into Info.plist (left as in Info.plist when unset).
-SYMPHONY_BIN ?=
+# Inputs for `make bundle`: the `mix release` directory to embed (`make release`
+# at the repo root builds _build/prod/rel/symphony), and the versions to write
+# into Info.plist (left as in Info.plist when unset).
+SYMPHONY_RELEASE ?=
+# For `make qa-app` only: a single-file Symphony (the escript) embedded at
+# Contents/Resources/symphony in place of a release.
+SYMPHONY_ESCRIPT ?=
 SHORT_VERSION ?=
 BUILD_NUMBER ?=
 # The minisign public key (the key line of minisign.pub) updates are verified
@@ -56,22 +60,48 @@ app:
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
 
-# Builds the app with Symphony embedded at Contents/Resources/symphony. The
-# embedded binary is signed first, then the bundle, without --deep. Hardened
-# runtime stays off: the Burrito binary unpacks and runs its own Erlang runtime.
+# Builds the app with the Symphony release embedded at
+# Contents/Resources/symphony-release and its launcher (the release's
+# bin/symphony-app) at Contents/Resources/symphony, the path the app runs. Every
+# Mach-O in the release (ERTS's executables, NIFs, port programs) is signed first,
+# innermost first, then the bundle, without --deep. Hardened runtime stays off.
 bundle: app
-	@if [ -z "$(SYMPHONY_BIN)" ]; then echo "ERROR: set SYMPHONY_BIN to the Symphony binary to embed, e.g. make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64"; exit 1; fi
-	@if [ ! -f "$(SYMPHONY_BIN)" ]; then echo "ERROR: SYMPHONY_BIN $(SYMPHONY_BIN) does not exist"; exit 1; fi
+	@if [ -n "$(SYMPHONY_ESCRIPT)" ]; then \
+		if [ ! -f "$(SYMPHONY_ESCRIPT)" ]; then echo "ERROR: SYMPHONY_ESCRIPT $(SYMPHONY_ESCRIPT) does not exist"; exit 1; fi; \
+	elif [ -z "$(SYMPHONY_RELEASE)" ]; then \
+		echo "ERROR: set SYMPHONY_RELEASE to the release directory to embed, e.g. make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony (make release at the repo root builds it)"; exit 1; \
+	elif [ ! -f "$(SYMPHONY_RELEASE)/releases/start_erl.data" ] || [ ! -f "$(SYMPHONY_RELEASE)/bin/symphony-app" ]; then \
+		echo "ERROR: SYMPHONY_RELEASE $(SYMPHONY_RELEASE) is not a Symphony release (no releases/start_erl.data or bin/symphony-app)"; exit 1; \
+	fi
 	mkdir -p "$(APP)/Contents/Resources"
-	cp "$(SYMPHONY_BIN)" "$(APP)/Contents/Resources/symphony"
+	rm -rf "$(APP)/Contents/Resources/symphony" "$(APP)/Contents/Resources/symphony-release"
+	@if [ -n "$(SYMPHONY_ESCRIPT)" ]; then \
+		cp "$(SYMPHONY_ESCRIPT)" "$(APP)/Contents/Resources/symphony"; \
+	else \
+		ditto "$(SYMPHONY_RELEASE)" "$(APP)/Contents/Resources/symphony-release" && \
+		cp "$(APP)/Contents/Resources/symphony-release/bin/symphony-app" "$(APP)/Contents/Resources/symphony"; \
+	fi
 	chmod 755 "$(APP)/Contents/Resources/symphony"
 	@if [ -n "$(SHORT_VERSION)" ]; then plutil -replace CFBundleShortVersionString -string "$(SHORT_VERSION)" "$(APP)/Contents/Info.plist"; fi
 	@if [ -n "$(BUILD_NUMBER)" ]; then plutil -replace CFBundleVersion -string "$(BUILD_NUMBER)" "$(APP)/Contents/Info.plist"; fi
-	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)/Contents/Resources/symphony"
+	@release="$(APP)/Contents/Resources/symphony-release"; \
+	if [ -d "$$release" ]; then \
+		find "$$release" -type f -exec file {} + | grep 'Mach-O' | cut -d: -f1 | \
+			awk -F/ '{ print NF "\t" $$0 }' | sort -rn | cut -f2- > "$(BUILD_DIR)/macho.txt"; \
+		test -s "$(BUILD_DIR)/macho.txt" || { echo "ERROR: no Mach-O files found in $$release"; exit 1; }; \
+		echo "Signing $$(wc -l < "$(BUILD_DIR)/macho.txt" | tr -d ' ') Mach-O files in symphony-release"; \
+		while IFS= read -r file; do \
+			codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$$file" || exit 1; \
+		done < "$(BUILD_DIR)/macho.txt"; \
+	else \
+		codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)/Contents/Resources/symphony"; \
+	fi
 	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
-	codesign --verify --strict "$(APP)/Contents/Resources/symphony"
+	@if [ -f "$(BUILD_DIR)/macho.txt" ] && [ -d "$(APP)/Contents/Resources/symphony-release" ]; then \
+		while IFS= read -r file; do codesign --verify --strict "$$file" || exit 1; done < "$(BUILD_DIR)/macho.txt"; \
+	fi
 	codesign --verify --strict "$(QA_DRIVER_APP)"
-	codesign --verify --strict "$(APP)"
+	codesign --verify --strict --deep "$(APP)"
 
 # Builds the app with this checkout's Symphony embedded, for Auto Review's macos_app QA
 # (see docs/configuration.md), so the app's `symphony check` runs this code. Symphony is
@@ -85,7 +115,7 @@ qa-app:
 	root="$$($(ERL) -noshell -eval 'io:put_chars(code:root_dir()), halt().')" && \
 		{ printf '#!%s/bin/escript\n' "$$root"; tail -n +2 ../bin/symphony; } > "$(QA_SYMPHONY)"
 	chmod 755 "$(QA_SYMPHONY)"
-	$(MAKE) bundle SYMPHONY_BIN="$(QA_SYMPHONY)"
+	$(MAKE) bundle SYMPHONY_ESCRIPT="$(QA_SYMPHONY)"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"

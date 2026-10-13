@@ -945,7 +945,7 @@ make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to ch
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
 make clean    # removes build/ and .build/
-make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Symphony binary, as releases do
+make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
 
 `make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a

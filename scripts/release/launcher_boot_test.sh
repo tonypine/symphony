@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boots a real `mix release` (no Burrito) through bin/symphony-app, so a launcher
+# Boots a real `mix release` through bin/symphony-app, so a launcher
 # that can't start the VM fails here: `--help` must print usage and `check` must
 # get a config path with spaces in it unchanged.
 set -euo pipefail
@@ -10,7 +10,7 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/symphony-launcher-boot.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 failures=0
 
-MIX_ENV=prod SYMPHONY_PLAIN_RELEASE=1 mix release --overwrite >/dev/null
+MIX_ENV=prod mix release --overwrite >/dev/null
 launcher="$repo/_build/prod/rel/symphony/bin/symphony-app"
 
 export SYMPHONY_STATE_ROOT="$work/state"

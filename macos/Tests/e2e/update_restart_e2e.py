@@ -6,18 +6,20 @@ temporary folder, runs it in scripted QA mode against a fake Linear (the memory
 tracker) and a stub agent, and checks four scenarios:
 
 1. Update N -> N+1 while a run is active: the old Symphony drains and stops, the
-   new app starts its Symphony on its own, dispatch resumes, only N+1's unpacked
-   release is left, and no BEAM from N is left running.
+   new app starts its Symphony on its own, dispatch resumes, every Symphony BEAM
+   runs from inside the running app's bundle, nothing was unpacked outside it, and
+   no BEAM from N is left running.
 2. Restart while a run is active, pressed after dispatch was resumed but before
    the app polled again: it pauses dispatch itself, waits for the run, restarts
    and resumes.
 3. Restart with a broken symphony.yml: refused with the config error, and the
    running Symphony is left as it was.
-4. Rollback to `Symphony (previous).app`: it starts and still reads its secrets.
+4. Rollback to `Symphony (previous).app`: it starts N's BEAM from its own bundle
+   and still reads its secrets.
 
 It never touches the installed app: the app, its settings, secrets, logs,
-update downloads, Symphony's state, logs and unpacked release, HOME and the
-epmd port are all its own, and the dashboard binds a free port. The live app's
+update downloads, Symphony's state and logs, HOME and the epmd port are all its
+own, and the dashboard binds a free port. The live app's
 processes, state files, unpacked releases and port 4000 are snapshotted before
 and after, and any change fails the test.
 
@@ -137,9 +139,14 @@ def live_snapshot(work):
     snapshot = {}
 
     rows = [(pid, cmd) for pid, cmd in processes() if str(work) not in cmd]
-    # The installed app (~/Applications or /Applications) and the Symphony it runs from its unpacked release.
+    # The installed app (~/Applications or /Applications) and the Symphony it runs: from the release in its
+    # bundle, or, for a Burrito build, from its unpacked release.
     snapshot["apps"] = sorted(pid for pid, cmd in rows if "/Applications/Symphony.app/Contents/MacOS/" in cmd)
-    snapshot["beams"] = sorted(pid for pid, cmd in rows if "beam.smp" in cmd and str(support / ".burrito") in cmd)
+    snapshot["beams"] = sorted(
+        pid for pid, cmd in rows
+        if "beam.smp" in cmd
+        and (str(support / ".burrito") in cmd or "/Applications/Symphony.app/Contents/Resources/symphony-release/" in cmd)
+    )
 
     listeners = run(["lsof", "-nP", "-iTCP:4000", "-sTCP:LISTEN", "-t"], check=False).stdout.split()
     snapshot["port_4000"] = sorted(int(pid) for pid in listeners if pid.isdigit())
@@ -276,22 +283,21 @@ class Signing:
 
 
 def build_symphony(build, out):
+    """Copies build `build`'s Symphony release (`make release`, ERTS included) to `out`."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    prebuilt = os.environ.get(f"SYMPHONY_E2E_SYMPHONY_BIN_{'N1' if build == BUILD_N1 else 'N'}")
+    prebuilt = os.environ.get(f"SYMPHONY_E2E_SYMPHONY_RELEASE_{'N1' if build == BUILD_N1 else 'N'}")
     if prebuilt:
-        shutil.copy(prebuilt, out)
-        log(f"using the prebuilt Symphony binary {prebuilt} as build {build}")
+        run(["ditto", prebuilt, out])
+        log(f"using the prebuilt Symphony release {prebuilt} as build {build}")
         return
-    log(f"building the Symphony binary for build {build} (make package)")
-    env = dict(os.environ, SYMPHONY_BUILD_NUMBER=str(build), BURRITO_TARGET="macos_arm64")
+    log(f"building the Symphony release for build {build} (make release)")
+    env = dict(os.environ, SYMPHONY_BUILD_NUMBER=str(build))
     env.pop("SYMPHONY_AGENT_RUNTIME", None)
-    run(["make", "package"], cwd=REPO, env=env, capture=False)
-    # `make package` renames Burrito's symphony_macos_arm64 to the name release.yml ships.
-    built = REPO / "burrito_out" / "symphony-macos-arm64"
-    if not built.is_file():
-        found = sorted(p.name for p in (REPO / "burrito_out").glob("*")) if (REPO / "burrito_out").is_dir() else []
-        raise SystemExit(f"make package didn't produce {built}; burrito_out/ holds {found or 'nothing'}")
-    shutil.copy(built, out)
+    run(["make", "release"], cwd=REPO, env=env, capture=False)
+    built = REPO / "_build" / "prod" / "rel" / "symphony"
+    if not (built / "releases" / f"0.0.1-{build}").is_dir():
+        raise SystemExit(f"make release didn't produce build {build}'s release in {built}")
+    run(["ditto", built, out])
 
 
 def build_app_executable():
@@ -316,15 +322,15 @@ def build(work):
     executable = build_app_executable()
     apps = {}
     for number in (BUILD_N, BUILD_N1):
-        binary = work / "bin" / f"symphony-{number}"
-        build_symphony(number, binary)
+        release = work / "releases" / f"symphony-{number}"
+        build_symphony(number, release)
         build_dir = work / f"build-{number}"
         log(f"bundling Symphony.app {version(number)}")
         run([
             "make", "-C", MACOS, "bundle",
             f"BUILD_DIR={build_dir}",
             f"PREBUILT_EXECUTABLE={executable}",
-            f"SYMPHONY_BIN={binary}",
+            f"SYMPHONY_RELEASE={release}",
             f"SHORT_VERSION={version(number)}",
             f"BUILD_NUMBER={number}",
             f"MINISIGN_PUBLIC_KEY={public_key}",
@@ -402,9 +408,25 @@ class Instance:
         run(["ditto", app_n, self.app])
         self.env = self._app_environment(feed)
 
-    def burrito_folder(self, build):
-        matches = sorted((self.qa / "burrito" / ".burrito").glob(f"symphony_erts-*_0.0.1-{build}"))
-        return matches[0] if matches else self.qa / "burrito" / ".burrito" / f"symphony_erts-?_0.0.1-{build}"
+    def unpacked(self):
+        """Burrito-style unpack folders: the release runs in place, so there must be none."""
+        folders = (self.qa / "burrito" / ".burrito", self.work / "home" / "Library" / "Application Support" / ".burrito")
+        return [str(folder) for folder in folders if folder.exists()]
+
+    def check_runs_from_bundle(self, app, build):
+        """Every Symphony BEAM of this instance is build `build`'s and runs from `app`'s bundled release."""
+        release = os.path.realpath(app / "Contents" / "Resources" / "symphony-release") + "/"
+        beams = [(pid, cmd) for pid, cmd in processes() if str(self.work) in cmd and "/bin/beam.smp" in cmd]
+        if not beams:
+            raise Failure(f"no Symphony BEAM is running (expected build {build}'s from {release})")
+        outside = [(pid, cmd[:200]) for pid, cmd in beams if not cmd.startswith(release)]
+        if outside:
+            raise Failure(f"Symphony BEAMs running from outside {release}: {outside}")
+        others = [pid for pid, _ in beams if pid not in self.beam_pids(build)]
+        if others:
+            raise Failure(f"Symphony BEAMs {others} are not build {build}'s")
+        if self.unpacked():
+            raise Failure(f"Symphony unpacked a release outside the app: {self.unpacked()}")
 
     def _write_fake_linear_and_stub(self):
         config = self.config.parent
@@ -416,12 +438,12 @@ class Instance:
             "id": "e2e-issue-1", "identifier": ISSUE, "title": "Stub run",
             "description": "End-to-end test issue", "state": "Todo",
         }]))
-        # The hook runs with Symphony's own environment: the binary and unpacked release that run, and the secret
-        # the app passed it.
+        # The hook runs with Symphony's own environment: the release that runs, its version, and the secret the app
+        # passed it.
         (config / "WORKFLOW.md").write_text(
             "---\nhooks:\n  before_run: |\n"
-            f"    printf '%s binary=%s root=%s secret=%s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" "
-            f"\"${{__BURRITO_BIN_PATH:-unknown}}\" \"${{RELEASE_ROOT:-unknown}}\" \"${{E2E_SECRET:-unset}}\" "
+            f"    printf '%s root=%s vsn=%s secret=%s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" "
+            f"\"${{SYMPHONY_RELEASE_ROOT:-unknown}}\" \"${{RELEASE_VSN:-unknown}}\" \"${{E2E_SECRET:-unset}}\" "
             f">> '{self.runs_log}'\n"
             "---\nWork on {{ issue.identifier }}.\n"
         )
@@ -612,14 +634,11 @@ class Instance:
             return runs[-1] if runs else None
 
         fields = wait_for("a new agent run", started, timeout)
-        if os.path.realpath(fields.get("binary", "")) != os.path.realpath(self.app / "Contents" / "Resources" / "symphony"):
-            raise Failure(f"the run's Symphony is {fields.get('binary')}, not the installed app's")
-        # The unpacked release is named after the build: symphony_erts-<erts>_0.0.1-<build>.
-        root = fields.get("root", "")
-        if os.path.realpath(Path(root).parent) != os.path.realpath(self.qa / "burrito" / ".burrito") or not root.endswith(
-            f"-{build}"
-        ):
-            raise Failure(f"the run's Symphony runs from {fields.get('root')}, not build {build}'s unpacked release")
+        release = self.app / "Contents" / "Resources" / "symphony-release"
+        if os.path.realpath(fields.get("root", "")) != os.path.realpath(release):
+            raise Failure(f"the run's Symphony runs from {fields.get('root')}, not the installed app's {release}")
+        if fields.get("vsn") != f"0.0.1-{build}":
+            raise Failure(f"the run's Symphony is release {fields.get('vsn')}, not build {build}'s")
         return fields.get("secret")
 
     @staticmethod
@@ -635,15 +654,14 @@ class Instance:
             return ""
 
     def beam_pids(self, build):
-        """The build's Symphony BEAMs, whose unpacked release may be deleted already.
+        """The build's Symphony BEAMs, told apart by the boot script of their release version.
 
-        Only `beam.smp` counts: the release's `epmd -daemon` also runs from the unpacked folder,
-        but it is detached and outlives the node by design, so it isn't a running Symphony.
+        Only `beam.smp` counts: the release's `epmd -daemon` also runs from the bundle, but it is
+        detached and outlives the node by design, so it isn't a running Symphony.
         """
-        root = str(self.qa / "burrito" / ".burrito") + "/"
         return [
             pid for pid, cmd in processes()
-            if root in cmd and f"_0.0.1-{build}/" in cmd and "/bin/beam.smp" in cmd
+            if str(self.applications) in cmd and "/bin/beam.smp" in cmd and f"/releases/0.0.1-{build}/start" in cmd
         ]
 
     # -- teardown -----------------------------------------------------------
@@ -662,7 +680,7 @@ class Instance:
         wait_for_quiet = time.monotonic() + 30
         while time.monotonic() < wait_for_quiet and any("beam.smp" in cmd for _, cmd in self.leftovers()):
             time.sleep(0.5)
-        epmds = sorted((self.qa / "burrito").glob(".burrito/*/erts-*/bin/epmd"))
+        epmds = sorted(self.applications.glob("*.app/Contents/Resources/symphony-release/erts-*/bin/epmd"))
         if epmds:
             run([epmds[0], "-kill"], env=dict(os.environ, ERL_EPMD_PORT=str(self.epmd_port)), check=False)
         deadline = time.monotonic() + 10
@@ -709,12 +727,10 @@ class Instance:
 class Tracker(threading.Thread):
     """Watches processes and folders during an update or restart, every 100ms."""
 
-    def __init__(self, instance, pids, old_build=None):
+    def __init__(self, instance, pids):
         super().__init__(daemon=True)
         self.instance = instance
         self.pids = dict.fromkeys(pids)
-        self.old_build = old_build
-        self.violation = None
         self.lines = set()
         self.running = True
 
@@ -726,15 +742,6 @@ class Tracker(threading.Thread):
                     self.pids[pid] = now
             for item in (self.instance.status() or {}).get("menu", []):
                 self.lines.add(item["title"])
-            if self.old_build and self.violation is None:
-                folder = self.instance.burrito_folder(self.old_build)
-                if not folder.exists():
-                    beams = self.instance.beam_pids(self.old_build)
-                    if beams:
-                        self.violation = (
-                            f"TP-339: build {self.old_build}'s unpacked release was deleted while its Symphony "
-                            f"(pids {beams}) was still running"
-                        )
             time.sleep(0.1)
 
     def gone_at(self, pid):
@@ -760,6 +767,7 @@ def scenario_update(instance):
     instance.press("Start Symphony", timeout=60)
     instance.wait_for_active_run()
     instance.wait_for_new_run(0, BUILD_N)
+    instance.check_runs_from_bundle(instance.app, BUILD_N)
     instance.press("Check for Updates…")
     update_title = f"Update to v{version(BUILD_N1)}"
     wait_for(f"'{update_title}'", lambda: instance.menu().get(update_title), 60)
@@ -769,7 +777,7 @@ def scenario_update(instance):
     old_app = instance.status()["pid"]
     old_symphony = instance.symphony_pid()
     runs_before = len(instance.runs())
-    tracker = Tracker(instance, [old_app, old_symphony], old_build=BUILD_N)
+    tracker = Tracker(instance, [old_app, old_symphony])
     tracker.start()
     try:
         instance.press(update_title)
@@ -786,17 +794,13 @@ def scenario_update(instance):
         wait_for("dispatch to be resumed", lambda: (s := instance.symphony_state()) and not s["pause"]["paused"], 60)
     finally:
         tracker.stop()
-    if tracker.violation:
-        raise Failure(tracker.violation)
     if not any(line.startswith("Waiting for") for line in tracker.lines):
         raise Failure(f"the update never showed it was waiting for agent runs; lines seen: {sorted(tracker.lines)}")
     check_drained(instance, sessions[0], old_symphony, tracker)
 
     if alive(old_symphony) or instance.beam_pids(BUILD_N):
         raise Failure(f"build {BUILD_N}'s Symphony is still running: {instance.beam_pids(BUILD_N)}")
-    unpacked = sorted(p.name for p in (instance.qa / "burrito" / ".burrito").iterdir() if p.is_dir())
-    if unpacked != [instance.burrito_folder(BUILD_N1).name]:
-        raise Failure(f"unpacked releases after the update: {unpacked}, expected only build {BUILD_N1}'s")
+    instance.check_runs_from_bundle(instance.app, BUILD_N1)
     if instance.app_build(instance.app) != BUILD_N1 or instance.app_build(instance.previous) != BUILD_N:
         raise Failure("the app folder doesn't hold N+1 as Symphony.app and N as Symphony (previous).app")
     if instance.alerts():
@@ -897,6 +901,7 @@ def scenario_rollback(instance):
     runs_before = len(instance.runs())
     instance.press("Start Symphony", timeout=60)
     secret = instance.wait_for_new_run(runs_before, BUILD_N, timeout=180)
+    instance.check_runs_from_bundle(instance.app, BUILD_N)
     if secret != instance.secret:
         raise Failure(f"the rolled-back Symphony didn't get the stored secret (got {secret!r})")
     if instance.alerts():

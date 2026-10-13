@@ -1,4 +1,4 @@
-.PHONY: help all setup deps audit build smoke package fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
+.PHONY: help all setup deps audit build smoke release fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
 
 MIX ?= mix
 TEST_MAX_CASES ?= 4
@@ -7,7 +7,7 @@ TEST_ENV := ELIXIR_ERL_OPTIONS="+S $(BEAM_SCHEDULERS):$(BEAM_SCHEDULERS)"
 TEST_ARGS := --max-cases $(TEST_MAX_CASES)
 
 help:
-	@echo "Targets: setup, deps, audit, build, smoke, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
+	@echo "Targets: setup, deps, audit, build, smoke, release, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
 
 # Turns on .githooks/pre-push (format, compile and credo on the files a push changes)
 # for this clone and all its worktrees.
@@ -30,17 +30,14 @@ build:
 smoke: build
 	scripts/release/smoke_test.sh bin/symphony symphony.yml
 
-# Zig 0.15.2 (pinned by Burrito 1.5.0) can't link against the macOS 26 and later
-# SDKs' libSystem.tbd. The shim dir holds an xcrun wrapper that redirects Zig to
-# the macOS 15 SDK when present, else to a copy of the active SDK it can link
-# against; on older macOS it's a no-op pass-through.
-PACKAGE_PATH := $(CURDIR)/scripts/zig-sdk-shim:$(PATH)
+# The plain `mix release`, ERTS included, that Symphony.app carries in
+# Contents/Resources/symphony-release (`make -C macos bundle SYMPHONY_RELEASE=...`).
+RELEASE_DIR := _build/prod/rel/symphony
 
-package:
-	PATH="$(PACKAGE_PATH)" MIX_ENV=prod $(MIX) deps.get --only prod
-	PATH="$(PACKAGE_PATH)" MIX_ENV=prod $(MIX) release symphony --overwrite
-	@if [ -f burrito_out/symphony_macos_arm64 ]; then mv burrito_out/symphony_macos_arm64 burrito_out/symphony-macos-arm64; fi
-	@if [ -f burrito_out/symphony_macos_x86_64 ]; then mv burrito_out/symphony_macos_x86_64 burrito_out/symphony-macos-x86_64; fi
+release:
+	MIX_ENV=prod $(MIX) deps.get --only prod
+	MIX_ENV=prod $(MIX) release symphony --overwrite
+	@echo "Release: $(CURDIR)/$(RELEASE_DIR)"
 
 fmt:
 	$(MIX) format
