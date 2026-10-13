@@ -557,8 +557,6 @@ defmodule SymphonyElixir.PromptBuilder do
     prompt <> "\n\n" <> pr_conflict_section(pr_conflict)
   end
 
-  # The per-ticket machine record is injected as continuation context (D9), never read through a
-  # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
   # The other open PRs that change this ticket's files (`PrReviewPoller.open_pr_overlap/2`), so the
   # agent can stack on one instead of meeting the conflict after it lands. Paths and URLs come from
   # GitHub: untrusted.
@@ -614,6 +612,8 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp open_pr_wait_line(_wait), do: ""
 
+  # The per-ticket machine record is injected as continuation context (D9), never read through a
+  # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
   defp append_ticket_state(prompt, ticket_state) do
     case ticket_state_section(ticket_state) do
       nil -> prompt
