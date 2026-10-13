@@ -38,6 +38,18 @@ final class ChildLogTests: XCTestCase {
         try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)
     }
 
+    func testExitLineSaysHowAndWhetherTheAppAskedForIt() {
+        let date = Date(timeIntervalSince1970: 1_791_857_841)
+        XCTAssertEqual(
+            ChildLog.exitLine(.exited(1), requested: false, at: date),
+            "=== 2026-10-13T02:17:21Z Symphony exited with status 1 (unexpected)\n"
+        )
+        XCTAssertEqual(
+            ChildLog.exitLine(.signaled(15), requested: true, at: date),
+            "=== 2026-10-13T02:17:21Z Symphony was killed by signal 15 (stopped by the app)\n"
+        )
+    }
+
     func testDefaultDirectoryIsUnderLibraryLogs() {
         XCTAssertEqual(
             ChildLog.defaultDirectory(home: URL(fileURLWithPath: "/Users/me")).path,

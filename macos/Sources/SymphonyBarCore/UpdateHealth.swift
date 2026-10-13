@@ -28,7 +28,10 @@ public enum UpdateHealthFailure: Equatable {
 /// with an injected clock. Events go in; the effects the app must carry out come back.
 ///
 /// 1. `symphony check` with the new embedded binary must pass.
-/// 2. When the app starts Symphony after the update, it must answer within `answerTimeout` of starting.
+/// 2. When the app starts Symphony after the update, it must answer within `answerTimeout` of starting. A Symphony
+///    still answering when the app goes to start it is the one the update stopped, still on its way out: the app waits
+///    up to `handoverTimeout` for it to exit before it starts the new one. One that doesn't answer in time is stopped
+///    and started once more, then the update fails.
 /// 3. Until `crashWindow` after the update, an unexpected exit starts Symphony again, so a crash loop can be counted;
 ///    the `crashLimit`th one fails. After the window an exit is left alone, as outside an update.
 ///
@@ -39,6 +42,8 @@ public struct UpdateHealthCheck: Equatable {
     public static let answerTimeout = RestartMachine.answerTimeout
     public static let crashWindow: TimeInterval = 10 * 60
     public static let crashLimit = 3
+    /// How long the app waits for a Symphony it didn't start to exit before it leaves it running.
+    public static let handoverTimeout: TimeInterval = 60
 
     public enum Phase: Equatable {
         /// No check began.
@@ -59,8 +64,10 @@ public struct UpdateHealthCheck: Equatable {
         case configChecked(ConfigCheckResult)
         /// The app started Symphony.
         case started
-        /// The app didn't start Symphony: one already runs outside the app, or Start failed.
+        /// The app didn't start Symphony: Start failed.
         case notStarted
+        /// The app didn't start Symphony because one it doesn't own still answers.
+        case otherRunning
         case polled(StatusPoll)
         /// The app's Symphony exited; `requested` is true when the app or you stopped it.
         case exited(requested: Bool)
@@ -73,6 +80,8 @@ public struct UpdateHealthCheck: Equatable {
         case start
         /// Symphony works on the new build: record the update and say so. Comes once per check.
         case healthy
+        /// Stop the Symphony that didn't answer, then start it again and report `.started` or `.notStarted`.
+        case restart
         /// Put the previous build back.
         case rollBack(UpdateHealthFailure)
     }
@@ -86,6 +95,8 @@ public struct UpdateHealthCheck: Equatable {
     private var reportedHealthy = false
     private var windowEnd = Date.distantPast
     private var answerDeadline = Date.distantPast
+    private var handoverDeadline: Date?
+    private var restartedForAnswer = false
 
     public init() {}
 
@@ -127,6 +138,13 @@ public struct UpdateHealthCheck: Equatable {
             phase = .starting
             return [.start]
 
+        case (.starting, .otherRunning):
+            let deadline = handoverDeadline ?? now.addingTimeInterval(Self.handoverTimeout)
+            handoverDeadline = deadline
+            guard now >= deadline else { return [.start] }
+            watch(now: now)
+            return healthy()
+
         case (.starting, .started):
             phase = .waitingForAnswer
             answerDeadline = now.addingTimeInterval(Self.answerTimeout)
@@ -138,7 +156,11 @@ public struct UpdateHealthCheck: Equatable {
             return healthy()
 
         case (.waitingForAnswer, .polled):
-            return now >= answerDeadline ? fail(.noAnswer) : []
+            guard now >= answerDeadline else { return [] }
+            guard !restartedForAnswer else { return fail(.noAnswer) }
+            restartedForAnswer = true
+            phase = .starting
+            return [.restart]
 
         case (.watching, .polled):
             watch(now: now)
