@@ -4959,8 +4959,6 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state, issue_repo_key(issue)) end)}
   end
 
-  # The handoff target comes from the issue's own repo: `state_machine` is set per repo, so the
-  # global settings would send a designed repo's ticket to Auto Review instead of Code Review.
   # A designed ticket whose run went quiet on its PR without the handoff signal. The runner hands off
   # a run whose PR is on its workspace HEAD, so one left here could not show that; each successor
   # would stop the same way, so instead of continuing every second its runs back off and, after
@@ -5007,11 +5005,11 @@ defmodule SymphonyElixir.Orchestrator do
     Logger.warning("Holding #{issue_context(issue)}: #{attrs.reason}")
 
     record_ticket_signal(issue, Handoff.missing_signal(), %{head: head, quiet_runs: quiet_runs, held: true})
-    state = %{state | quiet_handoff_runs: Map.delete(state.quiet_handoff_runs, issue_id)}
-
     {:noreply, release_issue_claim(state, issue_id)}
   end
 
+  # The handoff target comes from the issue's own repo: `state_machine` is set per repo, so the
+  # global settings would send a designed repo's ticket to Auto Review instead of Code Review.
   defp post_pr_handoff_state(%Issue{} = issue) do
     case issue_repo_key(issue) && Config.settings_for_repo(issue_repo_key(issue)) do
       {:ok, settings} -> Handoff.target_state(settings)
@@ -5765,7 +5763,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp release_issue_claim(%State{} = state, issue_id) do
     state = delete_persisted_retry(state, issue_id)
-    %{state | claimed: MapSet.delete(state.claimed, issue_id)}
+    # A released claim ends the quiet cycle, so a later one on the same head counts from zero.
+    %{state | claimed: MapSet.delete(state.claimed, issue_id), quiet_handoff_runs: Map.delete(state.quiet_handoff_runs, issue_id)}
   end
 
   # Terminal setup failures release the claim so the issue can recover without an
@@ -8167,7 +8166,8 @@ defmodule SymphonyElixir.Orchestrator do
       state
       | completed: MapSet.delete(state.completed, issue_id),
         completed_run_metadata: Map.delete(state.completed_run_metadata, issue_id),
-        watching: Map.delete(state.watching, issue_id)
+        watching: Map.delete(state.watching, issue_id),
+        quiet_handoff_runs: Map.delete(state.quiet_handoff_runs, issue_id)
     }
   end
 

@@ -1877,6 +1877,19 @@ defmodule SymphonyElixir.CoreTest do
       assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
     end
 
+    test "a quiet count is dropped once the issue leaves the active states", %{issue_id: issue_id, completed: completed} do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "Backlog", pull_request_url: completed.pull_request_url}
+      ])
+
+      capture_log(fn ->
+        pid = start_quiet_retry(:QuietLeft, issue_id, completed, %{issue_id => {nil, 1}})
+        state = wait_for_orchestrator_state(pid, &(not MapSet.member?(&1.claimed, issue_id)))
+
+        refute Map.has_key?(state.quiet_handoff_runs, issue_id)
+      end)
+    end
+
     test "a quiet run with unpushed commits is dispatched again to push them", %{issue_id: issue_id, completed: completed} do
       repo = Path.join(System.tmp_dir!(), "symphony-quiet-unpushed-#{System.unique_integer([:positive])}")
       File.mkdir_p!(repo)
