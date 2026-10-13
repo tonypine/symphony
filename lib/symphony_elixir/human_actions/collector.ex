@@ -3,18 +3,14 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that sits in `In Review` or the Human Review state (`SymphonyElixir.HumanReview`), is a
-  `Final verification:` ticket, or carries a deprecated request label
-  (`SymphonyElixir.HumanReview.legacy_request_labels/1`). From those:
+  that carries the `Needs Decision` hold label, sits in a draining review state
+  (`SymphonyElixir.TransitionGuard.draining_states/0`), is a `Final verification:` ticket, or
+  carries a deprecated request label (`SymphonyElixir.HumanReview.legacy_request_labels/1`). From
+  those:
 
   - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
-    (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
-  - an issue with a deprecated request label and no request comment is itself a `:task`;
-  - a plan parent in a review state is a `:plan_review`;
-  - an issue in the Human Review state with none of the above is a `:human_review`.
-
-  Every action on an issue in the Human Review state is marked `human_review`, so the update lists
-  it first.
+    (see `SymphonyElixir.HumanActions.Request`); a withdrawn or answered one is not listed;
+  - an issue with a deprecated request label and no request comment is itself a `:task`.
 
   An issue's comments and history are read in full, past the first page the issue query returns,
   up to ten more pages of 100 each.
@@ -28,8 +24,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
-  alias SymphonyElixir.{HumanReview, RunKind, StateMachine, SubIssueWait}
-  alias SymphonyElixir.Linear.{Client, Issue}
+  alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait, TransitionGuard}
+  alias SymphonyElixir.Linear.Client
 
   @issue_first 50
   @comment_last 30
@@ -39,8 +35,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @more_page_size 100
   @more_pages_max 10
   @max_task_steps 12
-  @plan_review_minutes 10
-  @human_review_minutes 10
 
   @query """
   query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
@@ -257,12 +251,11 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp filter(scope, settings) do
     labelled = Enum.map(HumanReview.legacy_request_labels(settings), &label_filter/1)
-    in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+    draining = Enum.map(TransitionGuard.draining_states(), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
     final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
-    # A designed repo's request leaves the ticket in its phase, so the hold's label is what finds it.
-    # A legacy repo never carries the label, so this reads nothing there.
+    # A request leaves the ticket in its phase, so the hold's label is what finds it.
     held = label_filter(Hold.label(:needs_decision))
-    wanted = %{"or" => labelled ++ in_review ++ [final_verification, held]}
+    wanted = %{"or" => labelled ++ draining ++ [final_verification, held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -287,17 +280,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
     context = %{node: node, issue: issue, project: %{id: project_id, name: project["name"]}, settings: settings}
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
-    in_review? = HumanReview.review_state?(issue.state, settings)
-    human_review? = HumanReview.in_state?(issue.state, settings)
     legacy_labelled? = Enum.any?(HumanReview.legacy_request_labels(settings), &(&1 in labels))
 
-    actions =
-      request_actions(context, legacy_labelled?) ++
-        plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1))
-
-    actions
-    |> human_review_actions(context, human_review?)
-    |> Enum.map(&%{&1 | human_review: human_review?})
+    request_actions(context, legacy_labelled?)
   end
 
   defp issue_actions(_node, _settings), do: []
@@ -319,7 +304,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   def open_requests(node, settings) do
     changes = state_changes(node)
     owned = owned_states(settings)
-    closed = MapSet.union(withdrawn_ids(node), answered_ids(node, settings))
+    closed = MapSet.union(withdrawn_ids(node), answered_ids(node))
 
     Enum.filter(requests(node), fn {comment_id, request} ->
       not MapSet.member?(closed, comment_id) and Request.open?(request, changes, owned)
@@ -351,19 +336,13 @@ defmodule SymphonyElixir.HumanActions.Collector do
     for %{"parent" => %{"id" => parent_id}} = comment <- comments(node), Request.withdrawal?(comment["body"]), into: MapSet.new(), do: parent_id
   end
 
-  # A designed repo's request does not move its issue, so no state change says it is over: a person's
-  # reply under the request is the answer that closes it. On a legacy repo the request is closed by
-  # the state move alone, and a reply under it — a person commenting to ask something, say — leaves
-  # it open, so this reads nothing there.
-  defp answered_ids(node, settings) do
-    if StateMachine.designed?(settings) do
-      for %{"parent" => %{"id" => parent_id}} = comment <- comments(node),
-          not Request.withdrawal?(comment["body"]),
-          into: MapSet.new(),
-          do: parent_id
-    else
-      MapSet.new()
-    end
+  # A request does not move its issue, so no state change says it is over: a person's reply under
+  # the request is the answer that closes it.
+  defp answered_ids(node) do
+    for %{"parent" => %{"id" => parent_id}} = comment <- comments(node),
+        not Request.withdrawal?(comment["body"]),
+        into: MapSet.new(),
+        do: parent_id
   end
 
   defp requests(node) do
@@ -384,29 +363,16 @@ defmodule SymphonyElixir.HumanActions.Collector do
       question: request.question,
       options: request.options,
       steps: request.steps,
-      done_when: request_done_when(context, request)
+      done_when: request_done_when(request)
     })
   end
 
-  # A designed repo's request never moves its ticket: the person's reply (or the Inbox's Decide)
-  # records the decision and clears the hold, so the line names no state move.
-  defp request_done_when(context, %{options: [_ | _]}) do
-    if designed?(context) do
-      "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
-    else
-      "you reply with your pick and move #{context.issue.identifier} out of #{context.issue.state}, or the agent withdraws the request."
-    end
-  end
+  # A request never moves its ticket: the person's reply (or the Inbox's Decide) records the
+  # decision and clears the hold, so the line names no state move.
+  defp request_done_when(%{options: [_ | _]}),
+    do: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
 
-  defp request_done_when(context, _request) do
-    if designed?(context) do
-      "you reply to the request, or the agent withdraws the request."
-    else
-      "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
-    end
-  end
-
-  defp designed?(%{settings: settings}), do: StateMachine.designed?(settings)
+  defp request_done_when(_request), do: "you reply to the request, or the agent withdraws the request."
 
   defp task_action(context) do
     action(context, %{
@@ -417,54 +383,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
       done_when: "you close #{context.issue.identifier}, or move it on."
     })
   end
-
-  defp plan_review_actions(_context, false), do: []
-
-  defp plan_review_actions(%{issue: issue} = context, true) do
-    approve =
-      case SubIssueWait.state(context.settings) do
-        waiting when is_binary(waiting) -> "To approve, move #{issue.identifier} to `#{waiting}`; Symphony moves its sub-tickets to Todo."
-        nil -> "To approve, move the sub-tickets you accept to Todo."
-      end
-
-    [
-      action(context, %{
-        key: "plan:#{issue.id}",
-        kind: :plan_review,
-        title: "Approve the plan for #{issue.identifier}",
-        why: "#{issue.identifier} is split into sub-tickets, and none of them starts before you approve the plan.",
-        unblocks: "its sub-tickets, waiting in Backlog",
-        est_minutes: @plan_review_minutes,
-        steps: [
-          "Read the plan in the `## Symphony Workpad` comment on #{issue.identifier}.",
-          approve,
-          "To reject it, comment what to change and move #{issue.identifier} to `Rework`."
-        ],
-        done_when: "#{issue.identifier} leaves #{issue.state}."
-      })
-    ]
-  end
-
-  # An issue in the Human Review state is waiting on a person even when nothing else names what for.
-  defp human_review_actions([], %{issue: issue} = context, true) do
-    [
-      action(context, %{
-        key: "review:#{issue.id}",
-        kind: :human_review,
-        title: "Review #{issue.identifier}",
-        why: "#{issue.identifier} waits in #{issue.state}: only you can move it on.",
-        est_minutes: @human_review_minutes,
-        steps: [
-          "Read the `## Symphony Workpad` comment and the latest QA report on #{issue.identifier}, and its PR if it has one.",
-          "Move #{issue.identifier} to `Merging` to approve its PR, to `Rework` to send it back, " <>
-            "or to `Done` to sign off a final verification."
-        ],
-        done_when: "#{issue.identifier} leaves #{issue.state}."
-      })
-    ]
-  end
-
-  defp human_review_actions(actions, _context, _human_review?), do: actions
 
   defp action(context, attrs), do: struct!(Action, Map.merge(attrs, %{issue: context.issue, project: context.project}))
 

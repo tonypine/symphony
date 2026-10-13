@@ -2,10 +2,10 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   @moduledoc """
   The tickets waiting on the operator, as the state API's `waiting_on_you` lists them.
 
-  Built from the issues `SymphonyElixir.HumanActions.Collector` reads: one entry per issue in a
-  review state (`SymphonyElixir.HumanReview.review_states/1`) or with an open
-  `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`). Its `kind` says
-  what waits:
+  Built from the issues `SymphonyElixir.HumanActions.Collector` reads: one entry per issue with an
+  open `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`), or still in a
+  draining review state (`SymphonyElixir.TransitionGuard.draining_states/0`) waiting on a person's
+  hand move. Its `kind` says what waits:
 
   - `:action`: an open request, whatever else the issue is;
   - `:final_verification`: a `Final verification:` ticket to sign off;
@@ -13,15 +13,15 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   - `:pr`: any other issue, a pull request to review.
 
   `waiting_since` is the later of the latest move into the issue's current state in its history and
-  the creation of its newest open request, or whichever of the two exists, else nil: a designed
-  repo leaves the ticket in its phase, so the move into that phase can predate the request.
+  the creation of its newest open request, or whichever of the two exists, else nil: a request
+  leaves the ticket in its phase, so the move into that phase can predate the request.
   `headline` is the line after `**What to review:**` in the issue's latest `## Review brief`
   comment, nil when it has none.
   """
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Collector, Request}
-  alias SymphonyElixir.{HumanReview, RunKind}
+  alias SymphonyElixir.{RunKind, TransitionGuard}
   alias SymphonyElixir.Linear.Issue
 
   @brief_heading "## Review brief"
@@ -48,7 +48,7 @@ defmodule SymphonyElixir.HumanActions.Waiting do
     state = get_in(node, ["state", "name"])
     requests = node |> Collector.open_requests(settings) |> Enum.map(fn {_comment_id, request} -> request end)
 
-    if requests != [] or HumanReview.review_state?(state, settings) do
+    if requests != [] or TransitionGuard.retired_state?(state) do
       [
         %{
           issue_id: issue_id,
@@ -74,14 +74,14 @@ defmodule SymphonyElixir.HumanActions.Waiting do
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])
 
     cond do
-      RunKind.classify(%Issue{title: node["title"]}) == :final_verification -> :final_verification
+      RunKind.final_verification_title?(%{title: node["title"]}) -> :final_verification
       Enum.any?(labels, &Issue.breakdown_label?/1) -> :plan
       true -> :pr
     end
   end
 
   # The current wait began at the later of the move into the current state and the newest open
-  # request. A designed repo keeps the ticket in its phase, so the phase move can predate the
+  # request. The ticket stays in its phase, so the phase move can predate the
   # request; a request the phase move postdates still reads as the newer trigger.
   defp waiting_since(node, state, requests) do
     [entered_at(node, state), newest_request_at(requests)]

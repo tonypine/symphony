@@ -8,21 +8,16 @@ defmodule SymphonyElixir.HumanActions.Action do
   - `:request`: a `## Decision needed:` comment (`linear_request_human_action`), with its `question`
     and `options`, or an older `## Action needed:` comment written by hand, with its `steps`;
   - `:task`: an issue carrying a deprecated request label (`HumanReview.legacy_request_labels/1`) with no request comment;
-  - `:plan_review`: a plan parent waiting in `In Review` for its plan to be approved;
-  - `:human_review`: an issue waiting in the Human Review state with no other action;
   - `:ci_secret`: a workflow on a repository's base branch that keeps failing on a missing secret
     (see `SymphonyElixir.HumanActions.CiSecrets`). It belongs to no issue, so its `issue` is nil.
-
-  `human_review` is true when the action's issue sits in the Human Review state
-  (`SymphonyElixir.HumanReview`): the update lists those first.
   """
 
   @enforce_keys [:key, :kind, :title, :issue, :project]
   defstruct @enforce_keys ++
-              [:why, :unblocks, :est_minutes, :done_when, :question, options: [], steps: [], human_review: false]
+              [:why, :unblocks, :est_minutes, :done_when, :question, options: [], steps: []]
 
   @type kind ::
-          :request | :task | :plan_review | :human_review | :ci_secret
+          :request | :task | :ci_secret
   @type t :: %__MODULE__{
           key: String.t(),
           kind: kind(),
@@ -34,7 +29,6 @@ defmodule SymphonyElixir.HumanActions.Action do
           question: String.t() | nil,
           options: [String.t()],
           steps: [String.t()],
-          human_review: boolean(),
           issue:
             %{
               id: String.t(),

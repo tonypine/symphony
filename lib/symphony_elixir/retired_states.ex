@@ -3,11 +3,11 @@ defmodule SymphonyElixir.RetiredStates do
   The drain report: every ticket still sitting in a retired or draining state, with what it waits
   on and the move that frees it.
 
-  `Auto Review` is retired with the acceptance gate (`docs/design/state-machine.md` §Retired): the
-  transition guard refuses every move into it (`SymphonyElixir.TransitionGuard.retired_states/0`),
-  so no ticket can enter it again. `In Review` and `Human Review` retire once they drain (decision
-  D11: drain only, no migration command): a ticket there finishes on the legacy path, and a
-  straggler is moved on by a person's hand — a parked plan into `Plan Review`, an open decision into
+  `Auto Review` is retired with the acceptance gate (`docs/design/state-machine.md` §Retired), and
+  `In Review` and `Human Review` retire once they drain (decision D11: drain only, no migration
+  command). The transition guard refuses every move into any of them
+  (`SymphonyElixir.TransitionGuard.retired_states/0` and `draining_states/0`), so no ticket can
+  enter one again, and nothing dispatches from one: a straggler is moved on by a person's hand — a parked plan into `Plan Review`, an open decision into
   its phase with a `Needs Decision` hold.
 
   `report/1` runs at startup and logs each straggler loudly: an error for a retired state, which
@@ -23,7 +23,6 @@ defmodule SymphonyElixir.RetiredStates do
 
   alias SymphonyElixir.{Tracker, TransitionGuard}
 
-  @draining_states ["In Review", "Human Review"]
   @refresh_interval_ms 5 * 60 * 1000
   @landed_limit 20
   @cache_key {__MODULE__, :drain_report}
@@ -43,7 +42,7 @@ defmodule SymphonyElixir.RetiredStates do
 
   @doc "The states the report reads: the retired states and the draining ones."
   @spec states() :: [String.t()]
-  def states, do: TransitionGuard.retired_states() ++ @draining_states
+  def states, do: TransitionGuard.retired_states() ++ TransitionGuard.draining_states()
 
   @doc """
   Logs each ticket in a retired or draining state, records the report for the dashboard and

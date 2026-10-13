@@ -341,13 +341,10 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
-  # Dispatch picks work up from a repo's version-dependent active states: the tracker's configured
-  # active states, plus the designed phase states for a repo on the `designed` machine.
+  # Dispatch picks work up from the tracker's configured active states plus the phase states.
   defp dispatch_states_for(tracker), do: &dispatch_state_names(&1, tracker)
 
-  defp dispatch_state_names(repo, tracker) do
-    StateMachine.tracker_active_states(StateMachine.version(repo), tracker)
-  end
+  defp dispatch_state_names(_repo, tracker), do: StateMachine.tracker_active_states(tracker)
 
   @spec fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
   def fetch_issue_by_identifier(identifier) when is_binary(identifier) do

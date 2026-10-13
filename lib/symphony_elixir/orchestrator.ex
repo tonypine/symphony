@@ -57,7 +57,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
-  # Quiet runs a designed ticket gets on one head before it is held with `handoff_missing`.
+  # Quiet runs a ticket gets on one head before it is held with `handoff_missing`.
   @max_quiet_handoff_runs 2
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
@@ -73,13 +73,13 @@ defmodule SymphonyElixir.Orchestrator do
   # A landing session can see its issue turn terminal (for example Linear's
   # "PR merged -> Done" automation) before it posts its final workpad update.
   @merging_state "merging"
-  # The designed machine's reviewer state, as the fallback when a repo's settings are unavailable.
+  # The reviewer state, as the fallback when a repo's settings are unavailable.
   @code_review_state "Code Review"
-  # The designed machine's QA state, the fallback when a repo's settings are unavailable.
+  # The QA state, the fallback when a repo's settings are unavailable.
   @qa_state "QA"
-  # The ledger signal recorded when a designed repo's QA ticket's head is not green.
+  # The ledger signal recorded when a QA ticket's head is not green.
   @qa_head_not_green_signal "qa_head_not_green"
-  # The ledger signal recorded when a designed repo's Code Review ticket has no reviewer to run;
+  # The ledger signal recorded when a Code Review ticket has no reviewer to run;
   # `SymphonyElixir.CodeReview` records the same name when it refuses to review.
   @code_review_reviewer_disabled_signal "code_review_reviewer_disabled"
   @merging_terminal_grace_ms 300_000
@@ -809,9 +809,9 @@ defmodule SymphonyElixir.Orchestrator do
             "reason=#{inspect(reason)}; reviewer block is not retried"
         )
 
-        blocked_state = review_agent_blocked_state(state, running_entry)
-        comment = fn -> maybe_comment_review_agent_block(issue_id, running_entry, reason, blocked_state) end
-        state = maybe_transition_review_agent_blocked_issue(state, issue_id, running_entry, blocked_state, comment)
+        comment = fn -> maybe_comment_review_agent_block(issue_id, running_entry, reason) end
+        hold = Hold.access_attrs("the pre-push reviewer blocked the run: #{review_agent_block_reason(reason)}")
+        state = maybe_hold_blocked_issue(state, issue_id, running_entry, hold, comment)
         emit_run_failed(running_entry, error, nil)
         state
 
@@ -821,9 +821,9 @@ defmodule SymphonyElixir.Orchestrator do
             "reason=#{inspect(reason)}; repeated tool failure circuit breaker is not retried"
         )
 
-        blocked_state = review_agent_blocked_state(state, running_entry)
-        comment = fn -> maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason, blocked_state) end
-        state = maybe_transition_review_agent_blocked_issue(state, issue_id, running_entry, blocked_state, comment)
+        comment = fn -> maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason) end
+        hold = Hold.access_attrs("the agent repeated the same failing tool call until the circuit breaker tripped")
+        state = maybe_hold_blocked_issue(state, issue_id, running_entry, hold, comment)
         emit_run_failed(running_entry, error, nil)
         state
 
@@ -971,9 +971,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp terminal_tool_failure_circuit_breaker?({:tool_failure_circuit_breaker, _payload}), do: true
   defp terminal_tool_failure_circuit_breaker?(_reason), do: false
 
-  defp maybe_comment_review_agent_block(issue_id, running_entry, reason, blocked_state)
-       when is_binary(issue_id) and is_map(running_entry) and is_binary(blocked_state) do
-    body = review_agent_block_comment(reason, blocked_state)
+  defp maybe_comment_review_agent_block(issue_id, running_entry, reason)
+       when is_binary(issue_id) and is_map(running_entry) do
+    body = review_agent_block_comment(reason)
 
     case Tracker.create_comment(issue_id, body) do
       :ok ->
@@ -993,11 +993,11 @@ defmodule SymphonyElixir.Orchestrator do
       )
   end
 
-  defp maybe_comment_review_agent_block(_issue_id, _running_entry, _reason, _blocked_state), do: :ok
+  defp maybe_comment_review_agent_block(_issue_id, _running_entry, _reason), do: :ok
 
-  defp maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason, blocked_state)
-       when is_binary(issue_id) and is_map(running_entry) and is_binary(blocked_state) do
-    body = tool_failure_circuit_breaker_comment(reason, blocked_state)
+  defp maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason)
+       when is_binary(issue_id) and is_map(running_entry) do
+    body = tool_failure_circuit_breaker_comment(reason)
 
     case Tracker.create_comment(issue_id, body) do
       :ok ->
@@ -1017,44 +1017,43 @@ defmodule SymphonyElixir.Orchestrator do
       )
   end
 
-  defp maybe_comment_tool_failure_circuit_breaker(_issue_id, _running_entry, _reason, _blocked_state), do: :ok
+  defp maybe_comment_tool_failure_circuit_breaker(_issue_id, _running_entry, _reason), do: :ok
 
-  # The comment saying why and the move to the blocked state run in one task, so they land in that
-  # order and Linear never holds up the orchestrator; the claim stays held until the move is done.
-  defp maybe_transition_review_agent_blocked_issue(%State{} = state, issue_id, running_entry, blocked_state, comment)
-       when is_binary(issue_id) and is_map(running_entry) and is_binary(blocked_state) do
-    context = %{kind: :blocked_transition, issue_ids: [issue_id], issue: Map.get(running_entry, :issue), blocked_state: blocked_state}
+  # The comment saying why and the Blocked hold run in one task, so they land in that order and
+  # Linear never holds up the orchestrator; the claim stays held until the hold is set. The hold
+  # pauses the ticket in its phase: a person lifts it with Unblock.
+  defp maybe_hold_blocked_issue(%State{} = state, issue_id, running_entry, hold, comment)
+       when is_binary(issue_id) and is_map(running_entry) do
+    issue = Map.get(running_entry, :issue)
+    repo_key = running_repo_key(state, running_entry)
+    context = %{kind: :blocked_transition, issue_ids: [issue_id], issue: issue, reason: hold.reason}
 
     start_tracker_task(state, context, fn ->
       comment.()
-
-      TransitionGuard.perform(issue_id, :review_agent_blocked, %{
-        target: blocked_state,
-        repo_key: running_repo_key(state, running_entry)
-      })
+      Hold.set(repo_key, issue_id, :blocked, hold)
     end)
   end
 
-  defp maybe_transition_review_agent_blocked_issue(%State{} = state, _issue_id, _running_entry, _blocked_state, _comment), do: state
+  defp maybe_hold_blocked_issue(%State{} = state, _issue_id, _running_entry, _hold, _comment), do: state
 
-  defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], issue: issue, blocked_state: blocked_state}, :ok) do
-    record_ticket_signal(issue, "blocked", %{to: blocked_state})
+  defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], issue: issue, reason: reason}, :ok) do
+    record_ticket_signal(issue, "blocked", %{reason: reason})
 
     state =
       case issue do
-        %Issue{} = issue -> put_watching_issue(state, %{issue | state: blocked_state, updated_at: DateTime.utc_now()})
+        %Issue{} = issue -> put_watching_issue(state, %{issue | updated_at: DateTime.utc_now()})
         _no_issue -> state
       end
 
     release_issue_claim(state, issue_id)
   end
 
-  defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], blocked_state: blocked_state}, {:error, reason}) do
-    Logger.warning("Failed to move review-agent blocked issue to #{blocked_state}: issue_id=#{issue_id} reason=#{inspect(reason)}")
+  defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id]}, {:error, reason}) do
+    Logger.warning("Failed to hold the blocked run's issue: issue_id=#{issue_id} reason=#{inspect(reason)}")
     release_issue_claim(state, issue_id)
   end
 
-  defp review_agent_block_comment(reason, blocked_state) do
+  defp review_agent_block_comment(reason) do
     """
     Symphony stopped this run without retrying because the reviewer agent returned a verified blocking verdict.
 
@@ -1062,25 +1061,22 @@ defmodule SymphonyElixir.Orchestrator do
 
     #{review_agent_block_findings_section(reason)}
 
-    Target human-review state: #{blocked_state}.
+    #{blocked_hold_note()}
     """
   end
 
-  defp tool_failure_circuit_breaker_comment(reason, blocked_state) do
+  defp tool_failure_circuit_breaker_comment(reason) do
     """
     Symphony stopped this run without retrying because the agent repeated the same failing tool execution until the circuit breaker tripped.
 
     #{tool_failure_circuit_breaker_details(reason)}
 
-    Target human-review state: #{blocked_state}.
+    #{blocked_hold_note()}
     """
   end
 
-  defp review_agent_blocked_state(%State{} = state, running_entry) do
-    state
-    |> running_repo_key(running_entry)
-    |> Config.review_agent_blocked_state()
-  end
+  defp blocked_hold_note,
+    do: "The ticket stays in its phase on a `Blocked` hold; Unblock in the Symphony Inbox resumes it."
 
   defp review_agent_block_reason({:review_agent_blocked, payload}), do: review_agent_block_reason(payload)
   defp review_agent_block_reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason
@@ -1312,10 +1308,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp resolve_update_holds(_repo_result, cache), do: cache
 
   # Runs in the poll task: reconciles each polled issue's Blocked hold against its blockers — a
-  # designed repo's Todo ticket with an open blocker gains the hold (and pauses), and one whose
-  # blockers all went terminal loses it and dispatches, with no state move and no person involved.
-  # `BlockedHold.sync/3` skips a repo that is not on the designed machine, so legacy repos are
-  # untouched. Resolving the repo's settings once here keeps it off the per-issue config read.
+  # Todo ticket with an open blocker gains the hold (and pauses), and one whose blockers all went
+  # terminal loses it and dispatches, with no state move and no person involved. Resolving the repo's settings once here keeps it off the per-issue config read.
   defp sweep_blocked_holds(repo_name, issues, terminal_states) do
     case Config.settings_for_repo(repo_name) do
       {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings)
@@ -1412,7 +1406,7 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
-  @claim_holding_tracker_task_kinds [:retry_refresh, :post_pr_transition, :blocked_transition]
+  @claim_holding_tracker_task_kinds [:retry_refresh, :blocked_transition]
 
   defp claim_holding_tracker_task_issue_ids(%State{tracker_tasks: tasks}) do
     for {_ref, %{kind: kind, issue_ids: issue_ids}} <- tasks,
@@ -3199,8 +3193,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A person's new comment on a `breakdown` parent's plan (see `PlanComments`): a plan under review
-  # goes back to be re-planned — `In Progress` on a legacy repo, `Rework` on a designed one, where
-  # the plan is revised in place — and an approved plan gets a reply. Parents waiting for review come
+  # goes back to `Rework`, where the plan is revised in place, and an approved plan gets a reply. Parents waiting for review come
   # from the watching refresh (which watches the review state, `Plan Review` included, like any
   # non-active state), approved ones from the candidates.
   # `plan_comment_checks` keeps the newest comment each parent's poll showed once it was acted on,
@@ -3250,7 +3243,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
     # The move is recorded before it is made, so a review reading the parent's history never sees it
-    # without the record that marks it as Symphony's own. On a designed repo the parent goes to
+    # without the record that marks it as Symphony's own. The parent goes to
     # `Rework` to be revised in place, and that record is what keeps `BreakdownReview` from reading
     # the move as the person's rejection of the plan — which is what cancels its sub-issues.
     _ = issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
@@ -3428,19 +3421,6 @@ defmodule SymphonyElixir.Orchestrator do
     waiting = Map.get(previous_waiting, issue.id, %{})
 
     cond do
-      # Its PR showed up after its retry started waiting; the move takes no slot.
-      Map.has_key?(previous_waiting, issue.id) and post_pr_quiet_active_issue?(issue, state) ->
-        metadata = Map.take(waiting, [:repo_key, :worker_host])
-
-        case keep_unpushed_issue_active(state, issue, metadata) do
-          {:unpushed, state} ->
-            maybe_dispatch_chosen_issue(issue, {state, hold}, previous_waiting, active_states, terminal_states)
-
-          :pushed ->
-            {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
-            {state, hold}
-        end
-
       not dispatch_gates_open?(issue, state, active_states, terminal_states) ->
         {note_blocked_flow_head(state, issue), hold}
 
@@ -3623,13 +3603,11 @@ defmodule SymphonyElixir.Orchestrator do
       priority_allowed?(issue, state)
   end
 
-  # The gates the review flow owns: a legacy repo's run that went quiet with its PR open (the
-  # catch-handler below), a designed repo's Code Review ticket whose head is not green yet, one
-  # whose repo has no reviewer enabled to run, and a designed repo's QA ticket whose head is not
-  # green yet. The QA agent, like the reviewer, only runs on a green head.
-  defp review_flow_hold?(%Issue{} = issue, %State{} = state) do
-    post_pr_quiet_active_issue?(issue, state) or
-      code_review_head_blocked?(issue) or
+  # The gates the review flow owns: a Code Review ticket whose head is not green yet, one whose
+  # repo has no reviewer enabled to run, and a QA ticket whose head is not green yet. The QA agent,
+  # like the reviewer, only runs on a green head.
+  defp review_flow_hold?(%Issue{} = issue, %State{} = _state) do
+    code_review_head_blocked?(issue) or
       code_review_reviewer_disabled?(issue) or
       qa_head_blocked?(issue)
   end
@@ -4122,7 +4100,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         %{
           state: issue.state,
-          human_review_state: HumanReview.state(settings),
+          human_states: human_gate_states(settings),
           kind: AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind,
           merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
           auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
@@ -4189,8 +4167,7 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
     issue_routable_to_worker?(issue) and
       active_issue_state?(state_name, active_states) and
-      !terminal_issue_state?(state_name, terminal_states) and
-      !designed_plan_review_issue?(issue)
+      !terminal_issue_state?(state_name, terminal_states)
   end
 
   defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
@@ -4226,8 +4203,7 @@ defmodule SymphonyElixir.Orchestrator do
   # A hold pauses the ticket in its phase and lifts when its condition does — a `Blocked` one when
   # what it waits on goes terminal or a person grants access, a `Needs Decision` one when the person
   # records the decision — and the ticket then dispatches again from where it stopped. The store is
-  # the truth; the board label is only its projection. A legacy repo never records a hold, so this
-  # is false there and dispatch is unaffected.
+  # the truth; the board label is only its projection.
   defp hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held_any?(repo_key, issue_id)
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
@@ -4264,38 +4240,15 @@ defmodule SymphonyElixir.Orchestrator do
     tracker = Config.settings!().tracker
 
     tracker
-    |> active_states_with_designed()
+    |> dispatch_active_states()
     |> Enum.map(&normalize_issue_state/1)
     |> Enum.filter(&(&1 != ""))
     |> MapSet.new()
   end
 
-  # Each repo dispatches from the active states of its own machine, so the global active set (the
-  # dispatch gate and the reconciliation filter) is the union across repos. With every repo on
-  # `legacy` this is exactly the configured active states.
-  defp active_states_with_designed(tracker) do
-    case Config.repos() do
-      {:ok, [_ | _] = repos} ->
-        repos
-        |> Enum.flat_map(&StateMachine.tracker_active_states(StateMachine.version(&1), tracker))
-        |> Enum.uniq()
-
-      _no_repos ->
-        tracker.active_states
-    end
-  end
-
-  # A designed repo never dispatches from `Plan Review`, even when a legacy repo keeps it in the
-  # union of active states.
-  defp designed_plan_review_issue?(%Issue{state: state_name} = issue) do
-    with plan_review when is_binary(plan_review) <- Config.settings!().tracker.plan_review_state,
-         true <- normalize_issue_state(state_name) == normalize_issue_state(plan_review),
-         {:ok, repo} <- Config.repo(issue_repo_key(issue)) do
-      StateMachine.designed?(repo)
-    else
-      _not_designed_plan_review -> false
-    end
-  end
+  # Dispatch picks work up from the configured active states plus the phase states, never
+  # `Plan Review` (`StateMachine.tracker_active_states/1`).
+  defp dispatch_active_states(tracker), do: StateMachine.tracker_active_states(tracker)
 
   defp dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
     repo_key = dispatch_repo_key(state, issue)
@@ -4874,8 +4827,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
-    # A refetched issue carries no repo key; without the retry's, a designed repo's ticket would
-    # read as legacy and take the quiet post-PR move into Auto Review.
+    # A refetched issue carries no repo key; the retry's gives it its repo's settings.
     issue = freeze_issue_repo_key(issue, issue_repo_key(issue) || retry_repo_key(state, metadata, %{}))
 
     cond do
@@ -4890,12 +4842,8 @@ defmodule SymphonyElixir.Orchestrator do
 
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
 
-      post_pr_quiet_active_issue?(issue, state) ->
-        on_pushed = &handle_post_pr_quiet_active_issue(&1, issue, issue_id, attempt, metadata)
-        handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed)
-
-      designed_quiet_continuation?(issue, state, metadata) ->
-        on_pushed = &handle_designed_quiet_handoff(&1, issue, attempt, metadata)
+      quiet_continuation?(issue, state, metadata) ->
+        on_pushed = &handle_quiet_handoff(&1, issue, attempt, metadata)
         handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed)
 
       active_retry_issue?(issue, terminal_states) ->
@@ -4951,26 +4899,17 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The move runs in a task; the claim stays held until it lands.
-  defp handle_post_pr_quiet_active_issue(%State{} = state, %Issue{} = issue, issue_id, attempt, metadata) do
-    post_pr_state = post_pr_handoff_state(issue)
-    Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
-
-    context = %{kind: :post_pr_transition, issue_ids: [issue_id], issue: issue, attempt: attempt, metadata: metadata}
-    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state, issue_repo_key(issue)) end)}
-  end
-
-  # A designed ticket whose run went quiet on its PR without the handoff signal. The runner hands off
+  # A ticket whose run went quiet on its PR without the handoff signal. The runner hands off
   # a run whose PR is on its workspace HEAD, so one left here could not show that; each successor
   # would stop the same way, so instead of continuing every second its runs back off and, after
   # `@max_quiet_handoff_runs` on the same head, it is held with `handoff_missing` until a person
   # unblocks it. A new commit starts the count again.
-  defp designed_quiet_continuation?(%Issue{} = issue, %State{} = state, metadata) do
-    metadata[:continuation] == true and designed_issue?(issue) and Handoff.origin?(issue.state) and
+  defp quiet_continuation?(%Issue{} = issue, %State{} = state, metadata) do
+    metadata[:continuation] == true and Handoff.origin?(issue.state) and
       quiet_post_pr_issue?(issue, state)
   end
 
-  defp handle_designed_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, attempt, metadata) do
+  defp handle_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, attempt, metadata) do
     completed_metadata = Map.get(state.completed_run_metadata, issue_id, %{})
     workspace = metadata[:workspace_path] || Map.get(completed_metadata, :workspace_path)
     head = WorkspaceHead.read(workspace, metadata[:worker_host] || Map.get(completed_metadata, :worker_host))
@@ -5009,48 +4948,11 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, release_issue_claim(state, issue_id)}
   end
 
-  # The handoff target comes from the issue's own repo: `state_machine` is set per repo, so the
-  # global settings would send a designed repo's ticket to Auto Review instead of Code Review.
+  # The handoff target comes from the issue's own repo settings when it has them.
   defp post_pr_handoff_state(%Issue{} = issue) do
     case issue_repo_key(issue) && Config.settings_for_repo(issue_repo_key(issue)) do
       {:ok, settings} -> Handoff.target_state(settings)
       _no_repo_settings -> Handoff.target_state(Config.settings!())
-    end
-  end
-
-  defp move_post_pr_issue(issue_id, post_pr_state, repo_key) do
-    Usage.with_caller(:post_pr_transition, fn ->
-      TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, repo_key: repo_key})
-    end)
-  end
-
-  defp finish_post_pr_transition(%State{} = state, %{issue: %Issue{} = issue, attempt: attempt, metadata: metadata, post_pr_state: post_pr_state}, result) do
-    issue_id = issue.id
-
-    case result do
-      :ok ->
-        record_ticket_signal(issue, "handoff", %{to: post_pr_state, move: true})
-        reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
-
-        state
-        |> put_watching_issue(reviewed_issue)
-        |> release_issue_claim(issue_id)
-
-      {:error, reason} ->
-        Logger.warning("Failed to move post-PR issue to #{post_pr_state}: #{issue_context(issue)} reason=#{inspect(reason)}")
-
-        schedule_issue_retry(
-          state,
-          issue_id,
-          attempt,
-          metadata
-          |> Map.merge(%{
-            identifier: issue.identifier,
-            title: issue.title,
-            error: post_pr_move_error(post_pr_state, reason)
-          })
-          |> linear_wait_metadata(reason)
-        )
     end
   end
 
@@ -5059,14 +4961,6 @@ defmodule SymphonyElixir.Orchestrator do
       "waiting for Linear before dispatch: #{inspect(reason)}"
     else
       "retry issue refresh failed: #{inspect(reason)}"
-    end
-  end
-
-  defp post_pr_move_error(post_pr_state, reason) do
-    if TransientRetry.transient?(reason) do
-      "waiting for Linear to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
-    else
-      "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
     end
   end
 
@@ -5102,10 +4996,9 @@ defmodule SymphonyElixir.Orchestrator do
         # state a later feature needs exists by the time that feature looks for it.
         StateProvisioning.provision(settings, teams)
         SubIssueWait.check_tracker_state(settings, teams)
-        HumanReview.check_tracker_state(settings, teams)
 
       {:error, reason} ->
-        Logger.warning("Skipping the waiting-on-sub-issues and human review state checks; failed to load repositories: #{inspect(reason)}")
+        Logger.warning("Skipping the waiting-on-sub-issues state check; failed to load repositories: #{inspect(reason)}")
     end
 
     RetiredStates.report()
@@ -5655,10 +5548,11 @@ defmodule SymphonyElixir.Orchestrator do
     Notifications.emit_issue_event(event, issue, attrs)
   end
 
-  defp in_review_state?(state_name) when is_binary(state_name),
-    do: normalize_issue_state(state_name) == "in review" or HumanReview.in_state?(state_name)
+  # A state a person reviews the ticket in: the plan parent's `Plan Review`, or a draining review
+  # state a straggler still sits in.
+  defp in_review_state?(state_name), do: TransitionGuard.retired_state?(state_name) or HumanReview.plan_review_state?(state_name)
 
-  defp in_review_state?(_state_name), do: false
+  defp human_gate_states(settings), do: TransitionGuard.draining_states() ++ HumanReview.plan_review_states(settings)
 
   defp done_state?(state_name) when is_binary(state_name), do: normalize_issue_state(state_name) == "done"
   defp done_state?(_state_name), do: false
@@ -6665,7 +6559,6 @@ defmodule SymphonyElixir.Orchestrator do
     state
   end
 
-  defp handle_tracker_task_result(%State{} = state, %{kind: :post_pr_transition} = context, result), do: finish_post_pr_transition(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :blocked_transition} = context, result), do: finish_blocked_transition(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :breakdown_review} = context, result), do: finish_breakdown_review(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :plan_comments} = context, result), do: finish_plan_comments(state, context, result)
@@ -8944,14 +8837,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The run that opens the PR was dispatched without one, so the PR attached to the refetched
   # issue counts too.
-  #
-  # A designed repo never takes this catch-handler: its handoff is the session's explicit signal,
-  # performed by the run itself (`SymphonyElixir.Handoff`), so a run that goes quiet without it
-  # leaves the ticket where it is instead of advancing it.
-  defp post_pr_quiet_active_issue?(%Issue{} = issue, %State{} = state) do
-    not designed_issue?(issue) and quiet_post_pr_issue?(issue, state)
-  end
-
   defp quiet_post_pr_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
     completed_metadata = Map.get(state.completed_run_metadata, issue_id)
@@ -8970,20 +8855,16 @@ defmodule SymphonyElixir.Orchestrator do
   # The reviewer run starts only on a green head. A verdict binds to the head it judged, so a
   # verdict on a red head is not actionable; a head whose checks are still running, or that has
   # none yet, is not green either.
-  #
-  # The gate is designed-only: a legacy repo has no Code Review state of its own, so a state that
-  # happens to share the name must keep dispatching exactly as it did before.
   defp code_review_head_blocked?(%Issue{} = issue) do
-    designed_issue?(issue) and code_review_issue?(issue) and not green_head?(issue)
+    code_review_issue?(issue) and not green_head?(issue)
   end
 
-  # A designed repo with the reviewer turned off cannot review anything. `ReviewAgent.evaluate/4`
+  # A repo with the reviewer turned off cannot review anything. `ReviewAgent.evaluate/4`
   # answers a disabled reviewer with a fabricated approval, so dispatching the run would record a
   # verdict no reviewer made and move the ticket straight to `Merging`. The ticket is parked
-  # instead, with the reason recorded once; turning `review_agent` on opens the gate. Designed-only
-  # for the same reason as the head gate: a legacy repo has no Code Review state to review from.
+  # instead, with the reason recorded once; turning `review_agent` on opens the gate.
   defp code_review_reviewer_disabled?(%Issue{} = issue) do
-    designed_issue?(issue) and code_review_issue?(issue) and not code_review_reviewer_enabled?(issue)
+    code_review_issue?(issue) and not code_review_reviewer_enabled?(issue)
   end
 
   # A repo's reviewer setting, read the way every other review-flow decision reads it. A repo whose
@@ -9039,10 +8920,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The QA run starts only on a green head, exactly as the reviewer run does. A verdict binds to
   # the head it judged, so a verdict on a red head is not actionable; a head whose checks are still
-  # running, or that has none yet, is not green either. Designed-only, so a legacy repo whose
-  # workflow names a QA state keeps dispatching it as it did before.
+  # running, or that has none yet, is not green either.
   defp qa_head_blocked?(%Issue{} = issue) do
-    designed_issue?(issue) and qa_issue?(issue) and not green_head?(issue)
+    qa_issue?(issue) and not green_head?(issue)
   end
 
   defp qa_issue?(%Issue{state: state} = issue) when is_binary(state) do
@@ -9064,7 +8944,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Records the no-dispatch event when a gate closed because a designed repo's Code Review or QA
+  # Records the no-dispatch event when a gate closed because a Code Review or QA
   # ticket is held back (a head that is not green, or a repo with no reviewer); a no-op for every
   # other blocked ticket.
   defp note_blocked_flow_head(%State{} = state, %Issue{} = issue) do
@@ -9162,22 +9042,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp code_review_reviewer_disabled_recorded?(_issue), do: false
-
-  # The repo's resolved state-machine version, read from the issue's own repo key so a designed
-  # repo is never treated as a legacy one (and vice versa) when the settings are global.
-  defp designed_issue?(%Issue{} = issue) do
-    case issue_repo_key(issue) do
-      nil -> false
-      repo_key -> designed_repo?(repo_key)
-    end
-  end
-
-  defp designed_repo?(repo_key) do
-    case Config.settings_for_repo(repo_key) do
-      {:ok, settings} -> StateMachine.designed?(settings)
-      {:error, _reason} -> false
-    end
-  end
 
   defp completed_run_has_pr?(completed_metadata) when is_map(completed_metadata) do
     is_binary(URLUtils.pull_request_url(completed_metadata))

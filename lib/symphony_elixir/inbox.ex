@@ -6,9 +6,9 @@ defmodule SymphonyElixir.Inbox do
   The server reads Linear on Symphony's poll (`polling.interval_ms`) and caches what it read, so a
   GET makes no Linear request:
 
-  1. one light query per repository route lists the issues in its scope that sit in `In Review`
-     or the Human Review state (`SymphonyElixir.HumanReview.review_states/1`) or carry the
-     `Blocked` label, each with its `updatedAt` and the time its newest comment was last edited;
+  1. one light query per repository route lists the issues in its scope that sit in a draining
+     review state (`SymphonyElixir.TransitionGuard.draining_states/0`) or carry the `Blocked` or
+     `Needs Decision` label, each with its `updatedAt` and the time its newest comment was last edited;
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
      their comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
@@ -22,7 +22,7 @@ defmodule SymphonyElixir.Inbox do
   reports: the hold is what waits on the Director. A failed read keeps the last list.
 
   Each read also reconciles the read tickets' `Needs Decision` holds
-  (`SymphonyElixir.NeedsDecisionHold`): a designed repo's decision request pauses its ticket in
+  (`SymphonyElixir.NeedsDecisionHold`): a decision request pauses its ticket in
   place, and the person's answer — or the run's withdrawal — clears the hold so the ticket
   continues. Those tickets are listed by the hold's label wherever in the workflow they sit.
 
@@ -33,7 +33,7 @@ defmodule SymphonyElixir.Inbox do
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, Config, Hold, HumanReview, NeedsDecisionHold}
+  alias SymphonyElixir.{CiPoller, Config, Hold, NeedsDecisionHold, TransitionGuard}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.Item
@@ -133,7 +133,7 @@ defmodule SymphonyElixir.Inbox do
     |> cached()
     |> Enum.reject(fn item ->
       MapSet.member?(running_ids, item.issue_id) or
-        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not HumanReview.review_state?(watched_states[item.issue_id]))
+        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not TransitionGuard.retired_state?(watched_states[item.issue_id]))
     end)
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> Enum.concat(clarify)
@@ -231,16 +231,17 @@ defmodule SymphonyElixir.Inbox do
     scope_filter = Keyword.get(state.opts, :scope_filter, &Client.repo_scope_filter/1)
 
     with {:ok, scope} <- scope_filter.(repo) do
-      list_pages(%{"and" => [scope, %{"or" => list_conditions(settings(state, repo))}]}, nil, [], state)
+      list_pages(%{"and" => [scope, %{"or" => list_conditions()}]}, nil, [], state)
     end
   end
 
-  # The issues a review covers, plus the ones carrying a `Blocked` or `Needs Decision` label: a hold
-  # pauses a ticket in its phase, so it need not sit in a review state to wait on the Director.
-  # `Item.from_node/4` reads each one's store record and keeps only the holds a person lifts; a
-  # designed repo's decision request is listed by the hold's label wherever in the workflow it sits.
-  defp list_conditions(settings) do
-    reviews = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+  # The stragglers in a draining review state, plus the issues carrying a `Blocked` or
+  # `Needs Decision` label: a hold pauses a ticket in its phase, so it need not sit in a review state
+  # to wait on the Director. `Item.from_node/4` reads each one's store record and keeps only the
+  # holds a person lifts; a decision request is listed by the hold's label wherever in the workflow
+  # it sits.
+  defp list_conditions do
+    reviews = Enum.map(TransitionGuard.draining_states(), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
 
     reviews ++
       Enum.map(

@@ -10,9 +10,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{StateMachine, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
+  alias SymphonyElixir.{SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
 
-  @in_review_state "In Review"
   @merging_state "Merging"
   @rework_state "Rework"
   @done_state "Done"
@@ -524,13 +523,13 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered, merging_issue_ids, designed_phase_issue_ids} <-
+    with {:ok, discovered, merging_issue_ids, phase_issue_ids} <-
            discover_reviews(settings, run_store, tracker, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
       opts =
         opts
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
-        |> Keyword.put(:designed_phase_issue_ids, designed_phase_issue_ids)
+        |> Keyword.put(:phase_issue_ids, phase_issue_ids)
 
       actions =
         reviews
@@ -581,13 +580,13 @@ defmodule SymphonyElixir.PrReviewPoller do
           do: issues |> Enum.filter(&(AutoMerge.merging?(&1) and issue_in_repo?(&1, repo_key))) |> MapSet.new(& &1.id),
           else: MapSet.new()
 
-      designed_phase_issue_ids =
-        issues |> Enum.filter(&issue_in_states?(&1, designed_phase_states(settings))) |> MapSet.new(& &1.id)
+      phase_issue_ids =
+        issues |> Enum.filter(&issue_in_states?(&1, phase_states(settings))) |> MapSet.new(& &1.id)
 
       discovered =
         Enum.count(issues, &persist_discovered_review?(&1, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
-      {:ok, discovered, merging_issue_ids, designed_phase_issue_ids}
+      {:ok, discovered, merging_issue_ids, phase_issue_ids}
     end
   end
 
@@ -601,30 +600,20 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
   #
-  # A designed repo's `Code Review`, `QA` and `Rework` issues are watched as well, so a PR that
+  # `Code Review`, `QA` and `Rework` issues are watched as well, so a PR that
   # conflicts with its base while the ticket sits there is polled and routed into the CI Fix lane
   # (`SymphonyElixir.CiFix`); without them a conflicting PR in those phases has no detection path.
   # Their review activity is not this poller's to act on — each phase's own machinery decides its
   # verdicts and review comments — so `limited_to_conflicts?/3` keeps those records on
   # `:watching`, and only a conflict, a merged PR or a closed one is acted on.
   defp watched_states(settings) do
-    review_states = HumanReview.review_states(settings)
-
-    base =
-      if AutoMerge.enabled?(settings),
-        do: review_states ++ [@merging_state],
-        else: review_states
-
-    base ++ designed_phase_states(settings)
+    merging = if AutoMerge.enabled?(settings), do: [@merging_state], else: []
+    merging ++ phase_states(settings)
   end
 
-  # The phase states a designed repo's CI Fix lane serves. `Merging` is not one of them: it is
-  # watched separately, for auto-merge.
-  defp designed_phase_states(settings) do
-    if StateMachine.designed?(settings),
-      do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state],
-      else: []
-  end
+  # The phase states the CI Fix lane serves. `Merging` is not one of them: it is watched
+  # separately, for auto-merge.
+  defp phase_states(settings), do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
 
   defp fetch_watched_issues(settings, tracker, opts) do
     case Keyword.fetch(opts, :watched_issues) do
@@ -828,16 +817,16 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # A designed phase's review record is watched for conflicts only: its verdicts and review comments
+  # A phase's review record is watched for conflicts only: its verdicts and review comments
   # belong to the phase's own machinery, not this poller, so nothing but a conflict, a merged PR or a
   # closed one is acted on. Treating the rest as `:watching` also keeps the record — and the conflict
   # detection it carries — from being aged out as stale. Legacy repos and review-state tickets are
   # untouched.
   defp limited_to_conflicts?(action, record, opts),
-    do: designed_phase_issue?(record, opts) and action not in [:conflict, :merged, :closed]
+    do: phase_issue?(record, opts) and action not in [:conflict, :merged, :closed]
 
-  defp designed_phase_issue?(record, opts) do
-    MapSet.member?(Keyword.get(opts, :designed_phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
+  defp phase_issue?(record, opts) do
+    MapSet.member?(Keyword.get(opts, :phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
   end
 
   defp do_act_on_review(action, record, attrs, activity, settings, opts, now) do
@@ -1372,7 +1361,6 @@ defmodule SymphonyElixir.PrReviewPoller do
         Map.merge(attrs, %{
           status: "conflict_escalated",
           error: "merge conflict retry limit reached",
-          target_issue_state: @in_review_state,
           updated_at: now
         }),
         {:conflict_escalated, Map.get(record, :issue_id), @conflict_max_retries}
@@ -1382,16 +1370,15 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # The state the issue was in when its PR was found conflicting, for the designed CI Fix lane to
-  # record as the origin it returns to. nil when this poll's read did not have the issue, which
-  # keeps the legacy conflict path.
+  # The state the issue was in when its PR was found conflicting, for the CI Fix lane to record as
+  # the origin it returns to. nil when this poll's read did not have the issue, which sends the
+  # conflict to `In Progress`.
   defp conflict_origin_state({:ok, %Issue{state: state}}), do: state
   defp conflict_origin_state(_result), do: nil
 
-  # An issue that waits on a person sits in the Human Review state, outside the active states
-  # with a label that asks for one, or, with that state off, in `In Review` with an open request
-  # (see `HumanReview.parked_for_person/3`). One outside the states the pollers watch (`Backlog`)
-  # waits for a person to promote it (`HumanReview.held_for_person/3`). A conflict-fix run
+  # An issue that waits on a person sits outside the active states with a label that asks for one
+  # (see `HumanReview.parked_for_person?/2`). One outside the states the pollers watch (`Backlog`)
+  # waits for a person to promote it (`HumanReview.held_for_person?/3`). A conflict-fix run
   # can't do what the person must: it would merge the base branch, push and park the issue again.
   # The issue stays where it is, with no fix run or escalation and no retry spent, until a person
   # moves it on or removes the label; the next conflicting poll then takes the conflict path.
@@ -1417,17 +1404,13 @@ defmodule SymphonyElixir.PrReviewPoller do
       case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
         %Issue{} = issue ->
           held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
-          parked_result(issue, HumanReview.held_for_person(issue, settings, held_opts))
+          if HumanReview.held_for_person?(issue, settings, held_opts), do: {:parked, issue}, else: {:ok, issue}
 
         nil ->
           :not_parked
       end
     end
   end
-
-  defp parked_result(issue, {:ok, true}), do: {:parked, issue}
-  defp parked_result(issue, {:ok, false}), do: {:ok, issue}
-  defp parked_result(_issue, {:error, reason}), do: {:error, reason}
 
   # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
   # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer
@@ -1658,8 +1641,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # The move an action performs. A rework, a merge and every legacy conflict keep the edge they
-  # always used; a designed repo's conflict in one of the phases the CI Fix lane serves enters that
+  # The move an action performs. A rework, a merge and a conflict outside the CI Fix lane's phases
+  # go back to `In Progress`; a conflict in one of the phases the CI Fix lane serves enters that
   # lane instead, carrying the origin the repair returns to and the settings the guard resolves the
   # lane's state name from.
   defp transition_move(action, ctx) do
@@ -1668,7 +1651,7 @@ defmodule SymphonyElixir.PrReviewPoller do
          {:ok, signal, origin} <- CiFix.entry(Map.get(ctx, :origin_state), settings) do
       %{signal: signal, target: CiFix.state(settings), origin: origin, settings: settings}
     else
-      _legacy -> %{signal: :review_rework, target: @active_state, origin: nil, settings: Map.get(ctx, :settings)}
+      _not_ci_fix -> %{signal: :review_rework, target: @active_state, origin: nil, settings: Map.get(ctx, :settings)}
     end
   end
 
@@ -1698,8 +1681,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   # The CI Fix lane's origin is recorded before the move, so a repair that cannot be recorded has
-  # nowhere to return and the move is not made: the next poll retries. The legacy paths record
-  # nothing.
+  # nowhere to return and the move is not made: the next poll retries. A move outside the lane
+  # records nothing.
   defp record_transition_origin(_record, %{origin: nil}, _opts), do: :ok
 
   defp record_transition_origin(record, %{origin: origin}, opts) do
@@ -3255,7 +3238,6 @@ defmodule SymphonyElixir.PrReviewPoller do
         issue_identifier: Map.get(record, :issue_identifier),
         issue_url: Map.get(record, :issue_url),
         pr_url: Map.get(record, :pr_url),
-        state: @in_review_state,
         reason: "PR review polling failed #{consecutive_errors} consecutive times: #{inspect(reason)}",
         metadata: %{
           source: "pr_review_poller",

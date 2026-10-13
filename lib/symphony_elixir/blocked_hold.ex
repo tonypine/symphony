@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.BlockedHold do
   @moduledoc """
-  The Blocked hold: a dependency pauses a designed repo's ticket in place and lifts on its own.
+  The Blocked hold: a dependency pauses a ticket in place and lifts on its own.
 
-  On a repo running the designed machine, a Todo ticket with an open blocked-by blocker gains the
+  A Todo ticket with an open blocked-by blocker gains the
   `Blocked` machine label and a recorded reason (the blockers it waits on) instead of being held
   invisibly. When every blocker goes terminal the hold clears on its own and the ticket dispatches
   — no state move, no person involved. `sync/3` reconciles one issue's store hold against its
@@ -15,14 +15,13 @@ defmodule SymphonyElixir.BlockedHold do
   back after the repair is compared against the failure the repair was for rather than judged as a
   fresh one that files another fix ticket.
 
-  Legacy repos are untouched: `sync/3` is a no-op there, so the invisible Todo hold behaves exactly
-  as before. Only the holds that lift themselves are cleared here — one waiting on an access grant
+  Only the holds that lift themselves are cleared here — one waiting on an access grant
   is lifted by a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, RunStore, StateMachine}
+  alias SymphonyElixir.{Config, Hold, RunStore}
   alias SymphonyElixir.Linear.Issue
 
   @todo_state "todo"
@@ -72,15 +71,14 @@ defmodule SymphonyElixir.BlockedHold do
   @doc """
   Reconciles the Blocked hold of one issue against its blockers. `opts[:settings]` is the repo's
   resolved settings (the poll loop passes it once per repo); without it the issue's repo is
-  resolved through `Config.settings_for_repo/1`. Returns `:skipped` on a repo that is not the
-  designed machine, else the action taken (`:set`, `:clear` or `:none`).
+  resolved through `Config.settings_for_repo/1`. Returns `:skipped` when the repo's settings
+  can't be resolved, else the action taken (`:set`, `:clear` or `:none`).
   """
   @spec sync(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :skipped | :set | :clear | :none
   def sync(issue, terminal_states, opts \\ []) do
     with %Issue{} = issue <- issue,
-         %{} = settings <- settings(issue, opts),
-         true <- StateMachine.designed?(settings) do
-      sync_designed(issue, terminal_states, opts)
+         %{} <- settings(issue, opts) do
+      sync_issue(issue, terminal_states, opts)
     else
       _skipped -> :skipped
     end
@@ -95,7 +93,7 @@ defmodule SymphonyElixir.BlockedHold do
     if is_list(issues), do: Enum.count(issues, &(sync(&1, terminal_states, opts) in [:set, :clear])), else: 0
   end
 
-  defp sync_designed(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, opts) do
+  defp sync_issue(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, opts) do
     repair_drift(repo_key, issue_id, issue.labels, opts)
     current = Hold.get(repo_key, issue_id, :blocked, opts)
 

@@ -4,16 +4,17 @@ defmodule SymphonyElixir.DependencyGate do
 
   Both paths must block `github_create_pull_request` (and the equivalent
   `gh pr create` shell approval) when the dependency audit reports a hold or
-  fails. The gate also moves the Linear issue to the configured review state
-  and emits an operator-visible notification so dependency holds are surfaced
-  before any PR is opened.
+  fails. The gate also pauses the Linear issue in its phase on a Blocked hold a
+  person lifts (`SymphonyElixir.Hold.access_attrs/1`) and emits an
+  operator-visible notification so dependency holds are surfaced before any PR
+  is opened.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, DependencyAudit, Notifications, TicketSignals, Tracker, TransitionGuard}
+  alias SymphonyElixir.{Config, DependencyAudit, Hold, Notifications, TicketSignals, Tracker}
 
-  @hold_state "In Review"
+  @hold_reason "dependency changes need a person's approval before the pull request opens"
 
   @type gate :: %{
           workspace: Path.t(),
@@ -30,8 +31,9 @@ defmodule SymphonyElixir.DependencyGate do
           | {:hold, [map()], map()}
           | {:audit_error, term(), map()}
 
-  @spec hold_state() :: String.t()
-  def hold_state, do: @hold_state
+  @doc "The reason the Blocked hold a dependency hold sets records."
+  @spec hold_reason() :: String.t()
+  def hold_reason, do: @hold_reason
 
   @doc """
   Build a gate map from the standard agent options keyword list.
@@ -111,8 +113,8 @@ defmodule SymphonyElixir.DependencyGate do
   @doc """
   Returns true when the tracker reports the issue in a terminal state.
 
-  Used before any dependency hold moves state, so an issue that already reached
-  a terminal state (for example `Done` after its PR merged) is never reopened.
+  Used before any dependency hold is set, so an issue that already reached a
+  terminal state (for example `Done` after its PR merged) is never held.
   Lookup failures report false so a hold still applies when the state is unknown.
   """
   @spec issue_terminal?(term()) :: boolean()
@@ -129,23 +131,23 @@ defmodule SymphonyElixir.DependencyGate do
   def issue_terminal?(_issue, _issue_state_fetcher), do: false
 
   @doc """
-  Move the gated issue to the configured review state and emit the
+  Pause the gated issue on a Blocked hold and emit the
   `dependency_pending_approval` notification with the audit items as metadata.
   """
   @spec react_to_hold(gate(), [map()]) :: :ok
   def react_to_hold(gate, items) do
-    move_issue_to_hold(gate)
+    hold_issue(gate)
     emit_hold_event(gate, items)
     :ok
   end
 
   @doc """
-  Move the gated issue to the configured review state and emit the
+  Pause the gated issue on a Blocked hold and emit the
   `dependency_pending_approval` notification with the audit error inspected.
   """
   @spec react_to_audit_error(gate(), term()) :: :ok
   def react_to_audit_error(gate, error) do
-    move_issue_to_hold(gate)
+    hold_issue(gate)
     emit_audit_failure_event(gate, error)
     :ok
   end
@@ -198,33 +200,33 @@ defmodule SymphonyElixir.DependencyGate do
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp move_issue_to_hold(%{issue: %{id: issue_id} = issue} = gate) when is_binary(issue_id) do
+  defp hold_issue(%{issue: %{id: issue_id} = issue} = gate) when is_binary(issue_id) do
     if issue_terminal?(issue) do
-      Logger.info("Skipping dependency hold state move for terminal issue issue_id=#{issue_id}")
+      Logger.info("Skipping dependency hold for terminal issue issue_id=#{issue_id}")
     else
-      update_issue_to_hold(issue, Map.get(gate, :settings), Map.get(gate, :repo_key))
+      set_hold(issue, Map.get(gate, :repo_key) || Map.get(issue, :repo_key))
     end
   end
 
-  defp move_issue_to_hold(_gate), do: :ok
+  defp hold_issue(_gate), do: :ok
 
-  defp update_issue_to_hold(%{id: issue_id} = issue, settings, repo_key) do
-    case TransitionGuard.perform(issue_id, :dependency_hold, %{settings: settings, repo_key: repo_key}) do
+  defp set_hold(%{id: issue_id} = issue, repo_key) do
+    case Hold.set(repo_key, issue_id, :blocked, Hold.access_attrs(@hold_reason)) do
       :ok ->
-        record_hold_signal(issue, issue_id)
+        record_hold_signal(issue, repo_key, issue_id)
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to move dependency hold issue to #{@hold_state}: #{inspect(reason)}")
+        Logger.warning("Failed to hold dependency hold issue: #{inspect(reason)}")
         :ok
     end
   end
 
-  # Best-effort recording of the dependency hold move into the ticket's signals ledger (inert; a
-  # store failure never changes the move). Runs only after the move has succeeded.
-  defp record_hold_signal(issue, issue_id) do
-    TicketSignals.record(Map.get(issue, :repo_key), issue_id, "decision requested", %{
-      to: @hold_state,
+  # Best-effort recording of the dependency hold into the ticket's signals ledger (inert; a store
+  # failure never changes the hold). Runs only after the hold is set.
+  defp record_hold_signal(issue, repo_key, issue_id) do
+    TicketSignals.record(repo_key || Map.get(issue, :repo_key), issue_id, "blocked", %{
+      state: Map.get(issue, :state),
       reason: "dependency_source_requires_approval"
     })
   end
@@ -243,7 +245,7 @@ defmodule SymphonyElixir.DependencyGate do
       issue,
       %{
         repo_key: gate.repo_key,
-        state: @hold_state,
+        state: Map.get(issue || %{}, :state),
         reason: "dependency_source_requires_approval",
         metadata: DependencyAudit.approval_metadata(items)
       }
@@ -256,7 +258,7 @@ defmodule SymphonyElixir.DependencyGate do
       issue,
       %{
         repo_key: gate.repo_key,
-        state: @hold_state,
+        state: Map.get(issue || %{}, :state),
         reason: "dependency_audit_failed",
         metadata: %{audit_error: inspect(error)}
       }

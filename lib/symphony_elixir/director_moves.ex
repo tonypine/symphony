@@ -7,32 +7,33 @@ defmodule SymphonyElixir.DirectorMoves do
   (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
   move, writes a `director_move` audit record and answers with the states it moved between:
 
-  - `:approve_plan`: a plan (label `plan` or `breakdown`) in a review state — `In Review`, the
-    Human Review state, or a designed repo's `Plan Review` — moves to the waiting state (`Waiting on sub-tickets`). It is a person's move, so Symphony
-    promotes the plan's `Backlog` sub-tickets as it does today (`SymphonyElixir.BreakdownReview`);
+  A review state is `Plan Review`, where a plan parent waits for its plan's review, or one of the
+  draining states (`SymphonyElixir.TransitionGuard.draining_states/0`), where a straggler waits for
+  a person's hand move (`SymphonyElixir.RetiredStates`).
+
+  - `:approve_plan`: a plan (label `plan` or `breakdown`) in a review state moves to the waiting
+    state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
+    `Backlog` sub-tickets as it does today (`SymphonyElixir.BreakdownReview`);
   - `:approve_pr`: a pull request in a review state moves to `Merging`;
-  - `:rework`: a ticket in a review state (a designed repo's `Plan Review` included) gets the reason as a comment, then moves to `Rework`.
-    On a designed repo that continues the existing pull request; the full reset is `:restart`;
-  - `:restart`: the full reset, and only a person makes it (design doc D7). A designed repo closes
-    the ticket's pull requests, removes its workspaces — so the next dispatch branches fresh from
-    the configured base branch — and supersedes the workpad, then moves the ticket to `In Progress`
-    (`SymphonyElixir.Restart`). A legacy repo is refused: its `Rework` already closes the pull
-    request and starts over, so a second full reset would only be ambiguous;
-  - `:decisions`: a plan in a review state (a designed repo's `Plan Review` included) gets one
-    comment with the picked options. A plan in the Human Review state first moves to `In Review`,
-    so the comment, posted after the move, starts Symphony's plan revision run
-    (`SymphonyElixir.PlanComments`); a plan in `In Review` or `Plan Review` gets the comment in place;
+  - `:rework`: a ticket in a review state gets the reason as a comment, then moves to `Rework`,
+    which continues the existing pull request; the full reset is `:restart`;
+  - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
+    pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
+    base branch — and supersedes the workpad, then moves the ticket to `In Progress`
+    (`SymphonyElixir.Restart`);
+  - `:decisions`: a plan in a review state gets one comment with the picked options, in place, so
+    the comment starts Symphony's plan revision run (`SymphonyElixir.PlanComments`);
   - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
     cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
     clears on its own, so it is refused;
-  - `:decide`: a designed repo's ticket waiting on a `Needs Decision` hold gets the Director's
+  - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's
     answer as a reply under the request comment, and the hold is cleared so the ticket continues in
     its phase. The optional `:move` names a state the decision directs — `rework` or `done` — and
     the move goes through `SymphonyElixir.TransitionGuard`. A ticket with no such hold that a
-    request parked in the Human Review state gets the reply too, then moves to `Todo` (or the
-    directed state). Any other ticket with no hold is refused.
+    request parked in a draining state gets the reply too, then moves to `Todo` (or the directed
+    state). Any other ticket with no hold is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
@@ -64,7 +65,6 @@ defmodule SymphonyElixir.DirectorMoves do
     Orchestrator,
     Restart,
     RunKind,
-    StateMachine,
     SubIssueWait,
     TicketSignals,
     Tracker,
@@ -76,7 +76,6 @@ defmodule SymphonyElixir.DirectorMoves do
   alias SymphonyElixir.PrReviewPoller
 
   @undo_window_ms 10_000
-  @review_state "In Review"
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
@@ -310,26 +309,17 @@ defmodule SymphonyElixir.DirectorMoves do
     with :ok <- require_review(issue, settings), do: {:ok, @rework_state}
   end
 
-  # The full reset (design doc D7) is a designed-repo move: a legacy repo's `Rework` is already
-  # the full reset, so offering a second one there would only be ambiguous.
+  # The full reset (design doc D7).
   defp target(:restart, %Issue{state: state} = issue, settings) do
-    cond do
-      not StateMachine.designed?(settings) ->
-        conflict("#{issue.identifier} is on the legacy state machine, where Rework already closes the pull request and starts over")
-
-      Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)) ->
-        conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted")
-
-      true ->
-        {:ok, @in_progress_state}
-    end
+    if Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)),
+      do: conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted"),
+      else: {:ok, @in_progress_state}
   end
 
   defp target(:decisions, issue, settings) do
     with :ok <- require_kind(issue, :plan, "decisions"),
-         :ok <- require_review(issue, settings) do
-      {:ok, if(HumanReview.in_state?(issue, settings), do: @review_state)}
-    end
+         :ok <- require_review(issue, settings),
+         do: {:ok, nil}
   end
 
   defp target(:sign_off, issue, settings) do
@@ -355,7 +345,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp kind(issue) do
     cond do
-      RunKind.classify(issue) == :final_verification -> :final_verification
+      RunKind.final_verification_title?(issue) -> :final_verification
       Issue.breakdown?(issue) -> :plan
       true -> :pr
     end
@@ -365,17 +355,17 @@ defmodule SymphonyElixir.DirectorMoves do
   defp kind_phrase(:pr), do: "a pull request"
   defp kind_phrase(:final_verification), do: "a final verification"
 
-  # The Director answers a ticket a person is reviewing: `In Review` or the human review state, and
-  # a designed repo's `Plan Review`, where a plan parent waits for its plan's review.
+  # The Director answers a ticket a person is reviewing: a plan parent in `Plan Review`, or a
+  # straggler in a draining state.
   defp require_review(%Issue{state: state} = issue, settings) do
-    if HumanReview.review_state?(state, settings) or HumanReview.plan_review_state?(state, settings) do
+    if Enum.any?(TransitionGuard.draining_states(), &same_state?(&1, state)) or HumanReview.plan_review_state?(state, settings) do
       :ok
     else
       conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{Enum.join(answerable_states(settings), " or ")}")
     end
   end
 
-  defp answerable_states(settings), do: Enum.uniq(HumanReview.review_states(settings) ++ HumanReview.plan_review_states(settings))
+  defp answerable_states(settings), do: TransitionGuard.draining_states() ++ HumanReview.plan_review_states(settings)
 
   defp conflict(message), do: {:error, {:conflict, message}}
 
@@ -484,12 +474,12 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The move the answers pick from the ticket's open Needs Decision hold, if any. A ticket with no hold has a
-  # request to answer only when the request parked it in the Human Review state (a legacy repo, or
-  # a request made before the repo moved to the designed machine): `:parked`, and answering it
-  # moves the ticket to `Todo`, as the request's review brief says, so the next run carries it out.
+  # request to answer only when the request parked it in a draining state, before the hold
+  # replaced the move: `:parked`, and answering it moves the ticket to `Todo`, as the request's
+  # review brief says, so the next run carries it out.
   defp carried_move(%Issue{repo_key: repo_key, id: issue_id} = issue, picks, opts) do
     case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
-      nil -> if HumanReview.in_state?(issue, Config.settings!()), do: :parked, else: :error
+      nil -> if Enum.any?(TransitionGuard.draining_states(), &same_state?(&1, issue.state)), do: :parked, else: :error
       hold -> {:ok, picked_move(hold, picks)}
     end
   end
@@ -603,13 +593,12 @@ defmodule SymphonyElixir.DirectorMoves do
   defp maybe_update_state(_issue, nil, _move), do: :ok
   defp maybe_update_state(issue, to_state, move), do: update_state(issue, to_state, move)
 
-  # The Blocked hold in the store — the truth, whatever the board shows. Only a designed repo ever
-  # records one, so a legacy ticket always has none here.
+  # The Blocked hold in the store — the truth, whatever the board shows.
   defp access_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
 
   defp store_opts(opts), do: Keyword.take(opts, [:store])
 
-  # Restart moves through its own signal, whose target the designed edge table owns (`In Progress`),
+  # Restart moves through its own signal, whose target the edge table owns (`In Progress`),
   # rather than a requested one: the ledger then names the move `restart`, as the design doc's
   # signal vocabulary does.
   defp update_state(issue, to_state, :restart) do

@@ -4,15 +4,14 @@ defmodule SymphonyElixir.CiFix do
 
   Every phase carries a CI attribute (`SymphonyElixir.CiState`). When a head goes red — or a PR
   conflicts with its base branch — while the ticket sits in `Code Review`, `QA`, `Merging` or
-  `Rework`, a designed repo enters this lane instead of the legacy red → `In Progress` fix loop and
-  conflict → `Rework` heuristic. The two pollers detect it
+  `Rework`, the ticket enters this lane. The two pollers detect it
   (`SymphonyElixir.CiPoller`, `SymphonyElixir.PrReviewPoller`), call `entry/2` to pick the edge for
   the state the ticket is in, and call `record_origin/4` before performing that edge through
   `SymphonyElixir.TransitionGuard`. The origin is recorded on the ticket
   (`SymphonyElixir.TicketState`), which is what lets the repair return where it came from.
 
   The repair run itself is an ordinary executor run, constrained by the repo's `ci_fix` run profile
-  and the designed playbook to minimal work: formatting, a flaky rerun, a dependency bump, a
+  and the playbook to minimal work: formatting, a flaky rerun, a dependency bump, a
   conflict resolution — no behavior change. `SymphonyElixir.AgentRunner` reads `origin/3` back and
   returns the ticket with `:ci_fix_mechanical`, releasing the auto-merge hold when the origin is
   `Merging`, so the approval an earlier verdict earned still covers the PR.
@@ -25,9 +24,8 @@ defmodule SymphonyElixir.CiFix do
   move to `Rework`; one it cannot make without access or a secret is a Needs Decision hold. Both are
   recorded here as a `fix verdict`.
 
-  Everything here is designed-only. A repo on the `legacy` machine keeps its red → `In Progress`
-  loop and its conflict → `Rework` heuristic exactly: `entry/2` answers `:none`, so the pollers fall
-  back to the edges they always used.
+  A red head in any other state (`In Progress`) keeps the red → `In Progress` fix run: `entry/2`
+  answers `:none` there.
   """
 
   alias SymphonyElixir.{
@@ -35,7 +33,6 @@ defmodule SymphonyElixir.CiFix do
     Config,
     QaVerification,
     RunStore,
-    StateMachine,
     TicketSignals,
     TicketState,
     TransitionGuard
@@ -62,19 +59,14 @@ defmodule SymphonyElixir.CiFix do
 
   def state(_settings), do: @default_state
 
-  @doc "Whether the repo runs the designed machine, and so has a CI Fix lane at all."
-  @spec designed?(map() | nil) :: boolean()
-  def designed?(settings), do: StateMachine.designed?(settings)
-
   @doc """
-  Whether `issue` (or the state name itself) is a designed repo's CI Fix ticket. Every other ticket
-  — including one on a legacy repo whose workflow happens to name a state the same way — is not.
+  Whether `issue` (or the state name itself) is a CI Fix ticket.
   """
   @spec in_state?(Issue.t() | String.t() | nil, map() | nil) :: boolean()
   def in_state?(%Issue{state: state}, settings), do: in_state?(state, settings)
 
   def in_state?(state, settings) when is_binary(state),
-    do: designed?(settings) and matches?(state, state(settings))
+    do: matches?(state, state(settings))
 
   def in_state?(_state, _settings), do: false
 
@@ -83,16 +75,10 @@ defmodule SymphonyElixir.CiFix do
   phase's *configured* name, so a repo that renames `Code Review` or `QA` still returns there).
 
   `:none` for every state the lane is not entered from — including `In Progress`, whose red heads
-  keep the legacy edge — and for every legacy repo.
+  dispatch a fix run in place.
   """
   @spec entry(String.t() | nil, map() | nil) :: {:ok, TransitionGuard.signal(), origin()} | :none
   def entry(origin_state, settings) when is_binary(origin_state) do
-    if designed?(settings), do: do_entry(origin_state, settings), else: :none
-  end
-
-  def entry(_origin_state, _settings), do: :none
-
-  defp do_entry(origin_state, settings) do
     tracker = Map.get(settings, :tracker) || %{}
 
     cond do
@@ -112,6 +98,8 @@ defmodule SymphonyElixir.CiFix do
         :none
     end
   end
+
+  def entry(_origin_state, _settings), do: :none
 
   @doc """
   Records `origin` as the phase the ticket's CI Fix stay came from. Returns an error rather than
@@ -167,8 +155,7 @@ defmodule SymphonyElixir.CiFix do
   return to `Merging` carries its approval through auto-merge instead, and a return to `Rework`
   invalidates nothing because `Rework` has no verdict.
 
-  Best-effort, like every ledger write, and a no-op for a phase with no carrying verdict or for a
-  legacy repo.
+  Best-effort, like every ledger write, and a no-op for a phase with no carrying verdict.
   """
   @spec carry_verdict(String.t() | nil, String.t() | nil, origin() | nil, String.t() | nil, map() | nil) :: :ok
   def carry_verdict(repo_key, issue_id, origin, head, settings) do

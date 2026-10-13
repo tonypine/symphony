@@ -8,7 +8,6 @@ defmodule SymphonyElixirWeb.Presenter do
     BuildInfo,
     Config,
     ForcedStatus,
-    HumanReview,
     Inbox,
     Initiatives,
     Orchestrator,
@@ -58,7 +57,6 @@ defmodule SymphonyElixirWeb.Presenter do
       %{} = snapshot ->
         run_history = Map.get(snapshot, :run_history, [])
         blocked = Map.get(snapshot, :blocked, [])
-        human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
         shipped_today = Map.get(snapshot, :shipped_today, [])
         waiting_on_you = Inbox.items(snapshot, inbox)
 
@@ -70,7 +68,6 @@ defmodule SymphonyElixirWeb.Presenter do
           counts: %{
             running: length(snapshot.running),
             watching: length(Map.get(snapshot, :watching, [])),
-            human_review: length(human_review),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
@@ -81,7 +78,6 @@ defmodule SymphonyElixirWeb.Presenter do
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           sessions: sessions_payload(snapshot.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
-          human_review: Enum.map(human_review, &watching_entry_payload/1),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
           inbox_read: Inbox.read?(inbox),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
@@ -246,7 +242,6 @@ defmodule SymphonyElixirWeb.Presenter do
       identifier: item.identifier,
       title: item.title,
       repo_key: item.repo_key,
-      state_machine: Map.get(item, :state_machine),
       kind: Atom.to_string(item.kind),
       state: item.state,
       ask: item.ask,

@@ -20,6 +20,7 @@ defmodule SymphonyElixir.AgentRunner do
     EpicReview,
     GitHub.PullRequest,
     Handoff,
+    Hold,
     LeftoverProcesses,
     Linear.Issue,
     Linear.TransientRetry,
@@ -46,7 +47,6 @@ defmodule SymphonyElixir.AgentRunner do
   }
 
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
-  @dependency_review_state "In Review"
   @idle_park_state "Backlog"
   @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
@@ -865,11 +865,12 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hold_dependency_approval(%Issue{id: issue_id} = issue, items, turn_session, opts)
        when is_binary(issue_id) do
-    move = fn -> TransitionGuard.perform(issue_id, :dependency_review, %{settings: Keyword.fetch!(opts, :settings)}) end
+    repo_key = run_repo_key(issue, opts)
+    hold = fn -> Hold.set(repo_key, issue_id, :blocked, Hold.access_attrs(DependencyGate.hold_reason())) end
 
-    case with_linear_retry(move, "moving #{issue_context(issue)} to #{@dependency_review_state} for dependency approval", opts) do
+    case with_linear_retry(hold, "holding #{issue_context(issue)} for dependency approval", opts) do
       :ok ->
-        record_move_signal(issue, "decision requested", %{to: @dependency_review_state, reason: "dependency_source_requires_approval"}, opts)
+        record_move_signal(issue, "blocked", %{state: issue.state, reason: "dependency_source_requires_approval"}, opts)
 
         Notifications.emit_issue_event(
           :dependency_pending_approval,
@@ -900,7 +901,6 @@ defmodule SymphonyElixir.AgentRunner do
       repo_key: Keyword.get(opts, :repo_key),
       run_id: Keyword.get(opts, :run_id),
       session_id: turn_session[:session_id],
-      state: @dependency_review_state,
       reason: "dependency_source_requires_approval",
       metadata: DependencyAudit.approval_metadata(items)
     }
@@ -1543,17 +1543,16 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A designed repo advances only on the handoff signal, which the push and PR tool hooks emit. A
+  # A ticket advances only on the handoff signal, which the push and PR tool hooks emit. A
   # run that finds its PR already on the workspace HEAD (an interrupted run's successor, a park and
   # unpark) has nothing to push, so no hook fires and every successor would stop the same way. The
   # ticket is then exactly where a signal for that head would put it, so the signal is recorded for
   # the head and the run hands off. A HEAD or PR head that can't be read hands nothing off; the
   # orchestrator caps those quiet runs.
   defp hand_off_quiet_pr_head(%Issue{} = previous_issue, %Issue{} = issue, run_context) do
-    settings = Keyword.fetch!(run_context.opts, :settings)
     pr_url = URLUtils.pull_request_url(issue) || URLUtils.pull_request_url(previous_issue)
 
-    with true <- Handoff.required?(issue.state, settings),
+    with true <- Handoff.required?(issue.state),
          head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
          true <- pr_url_head?(pr_url, head, run_context) do
       Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: pr_url, source: "pushed_pr_head"})
@@ -1761,10 +1760,10 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A designed repo hands its work off to `Code Review`; a legacy repo to `In Review`.
+  # A finished implementation is handed off to `Code Review`.
   defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> Handoff.target_state()
 
-  # A designed repo moves an implementation handoff to `Code Review` only on the session's explicit
+  # An implementation handoff moves to `Code Review` only on the session's explicit
   # handoff signal, which the push and PR tool hooks emit into the ticket's ledger. Without it the
   # run does not advance: the ticket is left where it is with a `handoff_missing` event recorded,
   # and the run fails so the orchestrator's retry machinery picks it up.
@@ -1782,16 +1781,14 @@ defmodule SymphonyElixir.AgentRunner do
   defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
 
-    if Handoff.required?(issue.state, settings) and not handoff_emitted?(issue, run_context) do
+    if Handoff.required?(issue.state) and not handoff_emitted?(issue, run_context) do
       Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: no handoff signal for its head")
       record_move_signal(issue, Handoff.missing_signal(), %{to: post_pr_state, reason: reason}, run_context.opts)
       {:error, {:handoff_signal_missing, post_pr_state}}
     else
-      # A designed repo's handoff is the table's explicit `:handoff` edge, whose target resolves
-      # from the settings to the configured Code Review state; a legacy repo keeps the
-      # `:post_pr_handoff` edge with the explicit post-PR target it always used.
-      signal = if Handoff.designed?(settings), do: :handoff, else: :post_pr_handoff
-      move = fn -> TransitionGuard.perform(issue_id, signal, %{target: post_pr_state, settings: settings}) end
+      # The handoff is the table's explicit `:handoff` edge, whose target resolves from the
+      # settings to the configured Code Review state.
+      move = fn -> TransitionGuard.perform(issue_id, :handoff, %{target: post_pr_state, settings: settings}) end
 
       case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
         :ok ->

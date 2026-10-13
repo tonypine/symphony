@@ -65,11 +65,10 @@ defmodule SymphonyElixir.PlanComments do
 
   @doc """
   What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in a plan
-  review state (`HumanReview.plan_review_states/1`: `In Review` or Human Review on a legacy repo,
-  the configured `Plan Review` on a designed one) whose plan was not approved, `:answer` for one
-  whose plan was (in the waiting state, or back in a review state with sub-issues under way), nil
-  otherwise. A legacy parent in the human review state with its plan not approved waits for the
-  operator, and one whose sub-issues are all terminal is left to its close-out.
+  review state (`HumanReview.plan_review_states/1`: the configured `Plan Review`) whose plan was
+  not approved, `:answer` for one whose plan was (in the waiting state, or back in a review state
+  with sub-issues under way), nil otherwise. One whose sub-issues are all terminal is left to its
+  epic review.
   """
   @spec action(Issue.t() | term(), Enumerable.t(String.t()), term()) :: action() | nil
   def action(%Issue{state: state} = issue, terminal_states, settings) when is_binary(state) do
@@ -78,7 +77,6 @@ defmodule SymphonyElixir.PlanComments do
       SubIssueWait.in_state?(issue, settings) -> :answer
       not HumanReview.plan_review_state?(state, settings) -> nil
       Issue.waiting_on_sub_issues?(issue, terminal_states) -> :answer
-      HumanReview.in_state?(state, settings) -> nil
       true -> :revise
     end
   end
