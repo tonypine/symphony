@@ -11,12 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let poller = StatusPoller()
     /// The one client the Symphony window's views read Symphony's local API through.
     private lazy var apiClient = LiveAPIClient(
-        fetch: LiveAPIClient.fetch(
-            base: { [weak self] in
-                let stateRoot = self?.poller.stateRoot() ?? StateRoot.locate(environment: AppStores.current.environment)
-                return StateRoot.controlURL(in: stateRoot, fallback: AppStores.current.apiFallback)
-            },
-            transport: AppStores.current.apiTransport
+        fetch: LiveAPIClient.fetch(base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport),
+        download: LiveAPIClient.fetch(
+            base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport, timeout: LiveAPIClient.downloadTimeout
         )
     )
     private lazy var symphonyWindow = SymphonyWindowController(client: apiClient)
@@ -252,6 +249,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showUpdate(nil, manual: false)
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
+    }
+
+    /// Where the window's client reads Symphony's local API.
+    private func apiBase() -> URL? {
+        StateRoot.controlURL(in: poller.stateRoot(), fallback: AppStores.current.apiFallback)
     }
 
     /// Acts on what the quitting app recorded before an update or a rollback, and returns whether Symphony ran before

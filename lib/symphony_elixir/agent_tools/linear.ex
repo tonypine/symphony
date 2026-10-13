@@ -341,6 +341,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentSubissueScope($id: String!, $first: Int!) {
     issue(id: $id) {
       id
+      priority
       team {
         id
         states {
@@ -889,9 +890,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Creates a Backlog child of the current issue in the same team and project, assigned to the same
   assignee. Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
-  everything that scopes the new issue is read from the current issue. A title this run already
-  filed under the current issue is refused with the earlier sub-issue's identifier, so a looping run
-  can't file the same sub-issue again and again.
+  everything that scopes the new issue is read from the current issue. Without a `priority`, the
+  child inherits the current issue's, so `tickets.priorities` dispatches it like its parent. A
+  title this run already filed under the current issue is refused with the earlier sub-issue's
+  identifier, so a looping run can't file the same sub-issue again and again.
 
   `blocked_by` lists identifiers of sibling sub-issues (the current issue's existing children, or
   sub-issues this run created) that block the new one. Unknown identifiers are refused before
@@ -904,8 +906,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   @doc """
   Creates a child of the current issue in the state named `state_name`, scoped exactly like
-  `create_subissue/3`'s Backlog child (same team, project, assignee and parent) and with the same
-  validation, secret scan and per-run title deduplication.
+  `create_subissue/3`'s Backlog child (same team, project, assignee and parent, and the parent's
+  priority unless `attrs` names one) and with the same validation, secret scan and per-run title
+  deduplication.
 
   This is the machine-side filing path, for a flow that files a child an agent must not: an epic
   review files each gap it found as a follow-up in `Todo` (`SymphonyElixir.EpicReview`), because a
@@ -1763,7 +1766,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
          {:ok, state_id} <- child_state_id(states, state_name),
          {:ok, blockers} <- resolve_blockers(blocked_by, parent, registry),
-         input = subissue_input(parent, state_id, title, description, priority),
+         input = subissue_input(parent, state_id, title, description, priority || parent["priority"]),
          {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts),
          {:ok, response} <- check_mutation_success(response, "issueCreate"),
          {:ok, identifier, new_id} <- created_subissue(response) do

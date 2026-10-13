@@ -201,8 +201,9 @@ issues:
   machine enters them and dispatch picks them up — `Code Review` for the reviewer run, `QA` for the
   QA pass, `CI Fix` for mechanical repair, and `Epic Review` for the automatic close of a plan
   parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each one filed as a follow-up
-  sub-ticket in `Todo` under the same epic, with the parent back in `Waiting on sub-tickets`). They
-  sit in Linear's `started` group, beside `In Progress`, so they read as active columns;
+  sub-ticket in `Todo` under the same epic with the epic's priority, with the parent back in
+  `Waiting on sub-tickets`). They sit in Linear's `started` group, beside `In Progress`, so they
+  read as active columns;
   `states.plan_review` is the one person-owned state of the five: it is never dispatched, and an
   issue in it waits for the person reviewing the plan.
 
@@ -1499,6 +1500,9 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
 | `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value: a text field gets it typed in with key events sent to the app alone (brought to the front, focused, text selected, then Tab), so the app sees the edit; other controls get `AXValue` set | a PID it did not launch, a tab or line break for a single-line field |
+| `qa_ax_select` | selects a table or outline row (an `AXRow`, or a cell inside one), which answers no `AXPress`: sets the table's `AXSelectedRows` to that row, or the row's `AXSelected`, checks the row reports itself selected, then brings the app forward and focuses the table so `qa_key` acts on the selection | a PID it did not launch, a `path` that is not a row or inside one |
+| `qa_click` | clicks the centre of an element's frame (`clicks: 2` for a double click) after bringing the app and the element's window forward, with mouse events sent to the app alone | a PID it did not launch, an element with no frame, off screen, or under another app's window |
+| `qa_key` | presses a named key (`return`, `escape`, arrows, …) or one character key, with `command`, `shift`, `option` or `control`, in the app's focused window, with key events sent to the app alone; returns the focused window and element | a PID it did not launch, a key or modifier outside that list, an app with no focused window |
 | `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
 | `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
@@ -1916,7 +1920,8 @@ its output isn't a terminal (a file or a pipe). `symphony dashboard [--url <cont
 view in another terminal by polling `GET /api/v1/state?format=terminal&columns=<n>` on the control plane.
 
 The dashboard also serves an Audit tab at `/audit` (filters, per-record expansion, daily hash-chain
-verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`.
+verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`, and each
+day's chain verification from `/api/v1/audit/verify?date=YYYY-MM-DD` (see SPEC §13.8.2).
 Per-issue transcripts are available in the dashboard and as JSON at
 `/api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript` (or
 `/api/v1/issues/<issue_identifier>/transcript` for the default repository).

@@ -83,6 +83,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/initiatives", ObservabilityApiController, :initiatives)
     get("/api/v1/runs/:session_id/report", ObservabilityApiController, :quality_report)
     get("/api/v1/audit", AuditController, :index)
+    get("/api/v1/audit/verify", AuditController, :verify)
     get("/api/v1/repos/:repo_key/issues/:identifier/transcript", ObservabilityApiController, :transcript)
     get("/api/v1/issues/:identifier/transcript", ObservabilityApiController, :transcript)
 
@@ -97,6 +98,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/initiatives", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/runs/:session_id/report", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/audit", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/audit/verify", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/repos/:repo_key/issues/:identifier/transcript", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/issues/:identifier/transcript", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)

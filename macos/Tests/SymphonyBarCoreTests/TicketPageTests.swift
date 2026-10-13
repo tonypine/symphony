@@ -286,8 +286,6 @@ final class TicketPageTests: XCTestCase {
             "api/v1/audit?issue=SHOP-305&type=run_stopped&from=2026-09-24&to=2026-10-07",
             "api/v1/audit?issue=SHOP-305&type=director_move&from=2026-09-24&to=2026-10-07",
         ])
-        let base = try XCTUnwrap(URL(string: "http://127.0.0.1:4000"))
-        XCTAssertEqual(TicketPage.auditRecordsURL("SHOP-305", base: base)?.absoluteString, "http://127.0.0.1:4000/audit?issue=SHOP-305")
         XCTAssertEqual(TicketPage.pullRequestName(try XCTUnwrap(URL(string: "https://gitlab.com/a/b/-/merge_requests/3"))), "https://gitlab.com/a/b/-/merge_requests/3")
     }
 

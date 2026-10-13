@@ -1152,8 +1152,29 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert input["stateId"] == "state-todo"
       assert input["parentId"] == "issue-parent-uuid"
       assert input["title"] == "Epic review fails: the export button is missing"
+      refute Map.has_key?(input, "priority")
 
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "a child filed without a priority inherits the parent's, and an explicit one wins" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      states = [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}]
+      scope = Map.put(subissue_scope(states), "priority", 1)
+      context = %{issue: %Issue{id: "issue-parent"}, comment_registry: registry}
+      opts = [linear_client: subissue_client(self(), scope)]
+
+      assert {:ok, _response} =
+               Linear.create_subissue_in_state(context, "Todo", %{"title" => "No export", "description" => "body"}, opts)
+
+      assert_received {:linear_called, _scope_query, %{id: "issue-parent"}}
+      assert_received {:linear_called, _mutation, %{input: %{"priority" => 1, "stateId" => "state-todo"}}}
+
+      assert {:ok, _response} =
+               Linear.create_subissue_in_state(context, "Todo", %{"title" => "A low one", "description" => "body", "priority" => 4}, opts)
+
+      assert_received {:linear_called, _scope_query, %{id: "issue-parent"}}
+      assert_received {:linear_called, _mutation, %{input: %{"priority" => 4}}}
     end
 
     test "a state the team does not have names the state it asked for, and does not fall back to Backlog" do

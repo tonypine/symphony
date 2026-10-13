@@ -32,8 +32,12 @@ extension SymphonyWindowModel {
         show(.tickets)
     }
 
-    /// ⌘F: Learnings' search on Shipped, else Tickets' search, from any view.
+    /// ⌘F: Audit's search on Audit, Learnings' on Shipped, else Tickets' search, from any view.
     func searchTickets() {
+        if searchesAudit {
+            auditSearchRequested = true
+            return
+        }
         if searchesLearnings {
             shippedTab = .learnings
             learningsSearchRequested = true
@@ -45,6 +49,17 @@ extension SymphonyWindowModel {
 
     /// Whether ⌘F searches Learnings rather than Tickets: on Shipped, whichever tab shows.
     var searchesLearnings: Bool { selection == .shipped && shownTicket == nil }
+
+    /// Whether ⌘F searches Audit's records.
+    var searchesAudit: Bool { selection == .audit && shownTicket == nil }
+
+    /// The menu item ⌘F presses: "Search Audit Records", "Search Learnings" or "Search Tickets".
+    var searchTitle: String {
+        searchesAudit ? "Search Audit Records" : searchesLearnings ? "Search Learnings" : "Search Tickets"
+    }
+
+    /// Whether the view shown has an inspector for ⌥⌘I.
+    var hasInspector: Bool { [.tickets, .audit].contains(selection) && shownTicket == nil }
 
     func toggleInspector() {
         inspectorShown.toggle()

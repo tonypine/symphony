@@ -1388,6 +1388,10 @@ The QA agent:
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
   `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
   sent to that app alone, and the tools MUST NOT return a secure field's value.
+  `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an
+  element's frame centre and `qa_key` presses a key with modifiers in the app's focused window; their
+  mouse and key events MUST go to that app alone, and `qa_click` MUST refuse a point where the
+  window in front is not the app's own.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
@@ -2432,7 +2436,8 @@ Rules:
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
   machine enters `Epic Review` and runs the QA agent against the default branch; it files follow-ups
-  in `Todo` under the epic, never in `Backlog`. No `Final verification:` ticket or close-out run is
+  in `Todo` under the epic, never in `Backlog`, each with the epic's priority so
+  `tickets.priorities` dispatches them like the epic. No `Final verification:` ticket or close-out run is
   created.
 - **Prompt.** The rendered prompt MUST NOT name Auto Review, `In Review`, the Human Review state,
   supervisor checks or `Final verification:` tickets. Prompt assembly still passes `state_machine`,
@@ -3496,10 +3501,10 @@ Scoped Linear tool extension contract:
   Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
   one the run created earlier); otherwise the call MUST fail with an explicit error before the
   issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
-  after it. The new issue MUST land in the team's `Backlog`
-  state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
-  other agents; a human promotes it. Title and description MUST pass the same secret scan as
-  comments before any Linear call. Creation MUST NOT be capped per run; a title matching
+  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. The new
+  issue MUST land in the team's `Backlog` state (falling back to a `backlog`-type state), never an
+  active state, so an agent cannot start other agents; a human promotes it. Title and description
+  MUST pass the same secret scan as comments before any Linear call. Creation MUST NOT be capped per run; a title matching
   (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
   explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
   run has no state to check against.
@@ -4634,6 +4639,23 @@ Minimum endpoints:
     set only for a canonical GitHub host and `issue_url` only for an HTTPS `linear.app` link.
   - The response also has `filters` (the filters applied) and `repos` and `tags`: every repo key
     and tag the records have, before filtering.
+
+- `GET /api/v1/audit?from=&to=&issue=&repo=&type=&run_id=&since=`
+  - The local audit records of the inclusive UTC date range (default today), oldest first, as NDJSON
+    (`application/x-ndjson`), redacted as the web dashboard's `/audit` shows them; the filters
+    match exactly. `download=1` adds a `content-disposition` for `symphony-audit.ndjson`.
+  - `limit=N` pages from the start of the range: `x-next-cursor` names the cursor that reads the
+    next page with `cursor=`. `last=N` instead serves the N newest matching records (still oldest
+    first) and sets `x-audit-truncated: true` when older ones matched too; it can't be combined
+    with `limit` or `cursor`. A bad filter returns `400` `invalid_audit_filter`.
+
+- `GET /api/v1/audit/verify?date=` (or `from=&to=`, at most 31 days; default today)
+  - The hash-chain verification of each day's audit file, for the Mac app's Audit view. `days`
+    lists each day of the range (`date`, `verified`, `broken`); a day without records verifies.
+    `broken` is null on a verified day, else the first record that breaks the chain: its `line` in
+    the day's file, `record_hash`, `reason` (`chain_break`, or `invalid_record` for a line that
+    isn't a JSON object) and the redacted `record` (null when the line doesn't read). The response
+    also has `from` and `to`. A bad date or range returns `400` `invalid_audit_filter`.
 
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
