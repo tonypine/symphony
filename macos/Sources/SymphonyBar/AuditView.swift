@@ -168,6 +168,8 @@ struct AuditView: View {
                     }
             }
         }
+        // Fill the detail from the top, as the other views do; otherwise the split view centres it.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { tableSelection = selection }
         .onChange(of: tableSelection) { _, chosen in
             guard chosen != selection else { return }
@@ -204,6 +206,8 @@ struct AuditHeader: View {
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -261,7 +265,6 @@ struct AuditChainLineView: View {
             Text(line.text)
                 .font(DesignTokens.TypeStyle.callout.font)
                 .foregroundStyle(line.verified ? .secondary : .primary)
-                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
         .accessibilityElement(children: .combine)
