@@ -15,8 +15,10 @@ defmodule SymphonyElixirWeb.Presenter do
     Quality,
     RetiredStates,
     RunKind,
+    RunStore,
     Sessions,
     StrayProcesses,
+    TicketState,
     URLUtils,
     UsageLimit
   }
@@ -291,14 +293,60 @@ defmodule SymphonyElixirWeb.Presenter do
         watching = snapshot |> Map.get(:watching, []) |> Enum.find(&(&1.identifier == issue_identifier))
 
         if is_nil(running) and is_nil(retry) and is_nil(watching) do
-          {:error, :issue_not_found}
+          untracked_issue_payload(issue_identifier)
         else
-          {:ok, issue_payload_body(issue_identifier, running, retry, watching)}
+          payload = issue_payload_body(issue_identifier, running, retry, watching)
+          record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
+          {:ok, Map.put(payload, :verdicts, verdicts_payload(record))}
         end
 
       _ ->
         {:error, :issue_not_found}
     end
+  end
+
+  # A ticket Symphony no longer runs or watches is still served while its ticket state record
+  # holds it, so the ticket page can show its Code Review and QA verdicts.
+  defp untracked_issue_payload(issue_identifier) do
+    case ticket_state_by_identifier(issue_identifier) do
+      nil ->
+        {:error, :issue_not_found}
+
+      record ->
+        payload = issue_payload_body(issue_identifier, nil, nil, nil)
+
+        {:ok,
+         %{payload | repo_key: record.repo_key, issue_id: record.issue_id, status: "untracked"}
+         |> Map.put(:verdicts, verdicts_payload(record))}
+    end
+  end
+
+  defp ticket_state_record(repo_key, issue_id, issue_identifier) when is_binary(repo_key) and is_binary(issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      %{} = record -> TicketState.normalize(record)
+      _none_or_error -> ticket_state_by_identifier(issue_identifier)
+    end
+  end
+
+  defp ticket_state_record(_repo_key, _issue_id, issue_identifier), do: ticket_state_by_identifier(issue_identifier)
+
+  # A store error reads as no record: `normalize/1` turns the wrapped error into an empty one.
+  defp ticket_state_by_identifier(issue_identifier) do
+    RunStore.list_all_ticket_states()
+    |> List.wrap()
+    |> Enum.map(&TicketState.normalize/1)
+    |> Enum.find(&(&1.issue_identifier == issue_identifier))
+  end
+
+  @verdict_kinds ["code_review", "qa"]
+
+  # The ticket's Code Review and QA verdicts, newest first, as the ledger keeps them.
+  defp verdicts_payload(nil), do: []
+
+  defp verdicts_payload(record) do
+    record.verdicts
+    |> Enum.filter(&(&1.kind in @verdict_kinds))
+    |> Enum.map(&%{kind: &1.kind, outcome: &1.outcome, head_sha: &1.head_sha, recorded_at: iso8601(&1.recorded_at)})
   end
 
   @spec transcript_payload(String.t(), GenServer.name(), timeout()) ::
