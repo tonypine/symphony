@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.{AuditLog, StrayProcesses}
+  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses}
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -632,6 +632,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "forced" => false
                }
              ],
+             "drain_report" => state_payload["drain_report"],
              "awaiting_clarification" => [],
              "skipped" => [],
              "run_history" => [
@@ -1736,6 +1737,48 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _view, html} = live(build_conn(), "/")
     assert html =~ "Human Review"
     assert html =~ "needs you"
+  end
+
+  defmodule DrainTracker do
+    def fetch_issues_by_states(_states), do: {:ok, Process.get(:drain_issues, [])}
+    def fetch_issue_states_by_ids(_ids), do: {:ok, [%{id: "issue-gone", state: "Plan Review"}]}
+  end
+
+  test "the state api and the dashboard show the drain report: stragglers with their wait, and where the gone ones landed" do
+    on_exit(&RetiredStates.reset_for_test/0)
+    RetiredStates.reset_for_test()
+
+    Process.put(:drain_issues, [%{id: "issue-gone", identifier: "MT-GONE", state: "Human Review", labels: ["plan"]}])
+    capture_log(fn -> RetiredStates.report(tracker: DrainTracker, now_ms: 0) end)
+
+    Process.put(:drain_issues, [
+      %{id: "issue-drain", identifier: "MT-DRAIN", title: "Old", url: "https://linear.app/example/issue/MT-DRAIN", state: "In Review", labels: []},
+      %{id: "issue-nourl", identifier: nil, state: "Human Review", labels: []}
+    ])
+
+    capture_log(fn -> RetiredStates.report(tracker: DrainTracker, now_ms: 1) end)
+
+    orchestrator_name = Module.concat(__MODULE__, :DrainOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{
+             "stragglers" => [
+               %{"issue_identifier" => "MT-DRAIN", "state" => "In Review", "wait" => "supervisor_check", "waits_on" => "a supervisor check of its PR"},
+               %{"issue_identifier" => "issue-nourl", "wait" => "open_decision", "url" => nil}
+             ],
+             "landed" => [%{"issue_identifier" => "MT-GONE", "from" => "Human Review", "to" => "Plan Review"}]
+           } = json_response(get(build_conn(), "/api/v1/state"), 200)["drain_report"]
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Drain report"
+    assert html =~ "MT-DRAIN"
+    assert html =~ "a supervisor check of its PR"
+    assert html =~ "MT-GONE left Human Review for Plan Review"
+
+    RetiredStates.reset_for_test()
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "No ticket left in a retired state"
   end
 
   test "the state api and the dashboard list what waits on you, oldest first, without tickets that left review" do
