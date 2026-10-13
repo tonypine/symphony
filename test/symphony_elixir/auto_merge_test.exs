@@ -511,6 +511,62 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert %{state: "enabled", enabled_head_sha: "head-2", disabled_at: nil} = PrReviewPoller.auto_merge(@issue_id)
   end
 
+  test "a designed repo's conflicting Merging PR enters CI Fix, stays off on its head and lands after the fix" do
+    repo = [key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+    write_auto_merge_workflow!(repos: [repo])
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+    activity(head: "head-1", mergeable: "CONFLICTING", merge_state: "DIRTY", auto_merge_enabled: true)
+
+    capture_log(fn -> assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "CI Fix"}]}} = poll(DateTime.add(now, 30)) end)
+
+    assert [
+             {:disable_auto_merge, @pr_url, "PR_node"},
+             {:issue_comment, @issue_id, _comment},
+             {:issue_state_update, @issue_id, "CI Fix"}
+           ] = mailbox()
+
+    assert SymphonyElixir.CiFix.origin(@repo_key, @issue_id) == "Merging"
+    assert %{state: "conflict", head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
+
+    # Should the ticket still read `Merging` (the move never took it out), the poll that has already
+    # dispatched this conflict, and the one right after the base branch moves (GitHub reports the
+    # mergeability as UNKNOWN while it recomputes), leave auto-merge off on the conflicting head; the
+    # landing agent takes the ticket rather than every orchestrator poll skipping it.
+    for {opts, offset} <- [
+          {[mergeable: "CONFLICTING", merge_state: "DIRTY"], 60},
+          {[base: "base-2", mergeable: "UNKNOWN", merge_state: "UNKNOWN"], 90}
+        ] do
+      activity([head: "head-1"] ++ opts)
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "conflict"}]}} = poll(DateTime.add(now, offset))
+      assert mailbox() == []
+      assert %{state: "conflict", head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
+      refute AutoMerge.owns_issue?(merging)
+    end
+
+    # The fix pushes head-2 in CI Fix, and the lane returns the ticket to `Merging`: auto-merge turns
+    # on for the new head and the PR lands.
+    track([issue("CI Fix")])
+    activity(head: "head-2", base: "base-2", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 120))
+    assert mailbox() == []
+
+    track([merging])
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 150))
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-2"}}
+    assert AutoMerge.owns_issue?(merging)
+
+    activity(head: "head-2", base: "base-2", state: "MERGED", auto_merge_enabled: true)
+    capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 180)) end)
+    assert_received {:issue_state_update, @issue_id, "Done"}
+  end
+
   test "a conflicting Merging PR with auto-merge already off gets no disable call or comment" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)

@@ -284,6 +284,9 @@ struct AddRepoView: View {
                     Section(ManualReview.pickerTitle) {
                         ManualReviewPicker(choice: $model.draft.manualReview)
                     }
+                    Section(BuiltInTicketPatterns.pickerTitle) {
+                        BuiltInTicketPatternsPicker(choice: $model.draft.ticketPatternsBuiltIn)
+                    }
                 }
             }
             .formStyle(.grouped)

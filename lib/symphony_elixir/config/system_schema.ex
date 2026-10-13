@@ -55,7 +55,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # rules; the gate agent's runtime, model and concurrency stay global.
   @acceptance_gate_keys ~w(mode runtime command model effort max_turns timeout_ms max_concurrent escalate)
   @repo_acceptance_gate_keys ~w(mode max_turns timeout_ms escalate)
-  @acceptance_gate_escalate_keys ~w(labels ticket_patterns paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
+  @acceptance_gate_escalate_keys ~w(labels ticket_patterns ticket_patterns_builtin paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
   @acceptance_gate_busy_files_keys ~w(top window_days max_lines)
 
   # The deprecated acceptance-gate `mode` → the `manual_review` setting, per the design's review-modes
