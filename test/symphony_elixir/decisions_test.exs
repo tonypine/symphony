@@ -63,9 +63,21 @@ defmodule SymphonyElixir.DecisionsTest do
       assert entry().scope == "Deferred to TP-891"
       assert Decisions.scope("Defer it, please") == "Out of scope"
       assert Decisions.scope("This is out of scope for now") == "Out of scope"
-      assert Decisions.scope("Do not touch the partials") == "Out of scope"
+      assert Decisions.scope("Leave them for later") == "Out of scope"
+      assert Decisions.scope("Do not touch the partials") == "As answered"
       assert Decisions.scope("Yes, that's in scope") == "In scope"
       assert Decisions.scope("Ship unsigned builds") == "As answered"
+    end
+
+    test "a negated deferral or removal is no scope" do
+      assert Decisions.scope("do not defer to TP-891") == "As answered"
+      assert Decisions.scope("Don't worry, include it") == "As answered"
+      assert Decisions.scope("No need to defer this") == "As answered"
+      assert Decisions.scope("Never leave it out") == "As answered"
+      assert Decisions.scope("Don't defer to TP-891; it is in scope") == "In scope"
+      assert Decisions.scope("Don't defer to TP-891, defer to TP-900") == "Deferred to TP-900"
+      assert Decisions.scope("No, defer it to TP-891") == "Deferred to TP-891"
+      assert Decisions.scope("Defer it, but name no ticket") == "Out of scope"
     end
 
     test "folds text onto one line and drops comment markers, so it can't close the section" do

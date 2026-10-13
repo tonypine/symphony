@@ -36,6 +36,11 @@ defmodule SymphonyElixir.Decisions do
   @entry_pattern ~r/^- \*\*(D\d+)\*\* · (\S+) · (.*?) <!-- symphony:decision:(\S+) -->$/
   @field_pattern ~r/^\s+- \*\*(Question|Answer|Scope):\*\* (.*)$/
   @identifier_pattern ~r/\b[A-Z][A-Z0-9]*-\d+\b/
+  @defer_pattern ~r/\bdefer\w*\b/i
+  @out_of_scope_pattern ~r/\b(defer\w*|out of scope|not in scope|leave (it|them|that) (out|for))\b/i
+  @in_scope_pattern ~r/\bin scope\b/i
+  # A negation up to two words before a phrase: `do not defer`, `no need to defer`.
+  @negation_pattern ~r/\b(not|never|no|cannot|\w+n['’]t)\s+(\w+\s+){0,2}$/iu
   @answer_max_length 600
   @prompt_limit 10_000
 
@@ -83,7 +88,8 @@ defmodule SymphonyElixir.Decisions do
   @doc """
   What an answer means for the ticket's scope: `Deferred to TP-x` when it defers the work to a
   named ticket, `Out of scope` when it keeps the work out of this ticket, `In scope` when it says
-  so, else `As answered`.
+  so, else `As answered`. A phrase with a negation just before it (`do not defer`) counts for
+  nothing, so an answer that rejects a deferral is never recorded as one.
   """
   @spec scope(String.t()) :: String.t()
   def scope(answer) when is_binary(answer) do
@@ -95,19 +101,30 @@ defmodule SymphonyElixir.Decisions do
 
   defp unnamed_scope(answer) do
     cond do
-      Regex.match?(~r/\b(defer\w*|out of scope|not in scope|don't|do not|leave it|leave them)\b/i, answer) -> "Out of scope"
-      Regex.match?(~r/\bin scope\b/i, answer) -> "In scope"
+      affirmed(@out_of_scope_pattern, answer) != [] -> "Out of scope"
+      affirmed(@in_scope_pattern, answer) != [] -> "In scope"
       true -> "As answered"
     end
   end
 
+  # The ticket named after the first deferral the answer does not negate.
   defp deferred_to(answer) do
-    with [_match, rest] <- Regex.run(~r/\bdefer\w*\b(.*)/is, answer),
-         [identifier] <- Regex.run(@identifier_pattern, rest) do
-      identifier
-    else
-      _none -> nil
-    end
+    Enum.find_value(affirmed(@defer_pattern, answer), fn {start, length} ->
+      rest = binary_part(answer, start + length, byte_size(answer) - start - length)
+
+      case Regex.run(@identifier_pattern, rest) do
+        [identifier] -> identifier
+        nil -> nil
+      end
+    end)
+  end
+
+  # Where `pattern` matches `answer` without a negation just before it, as `{start, length}`.
+  defp affirmed(pattern, answer) do
+    pattern
+    |> Regex.scan(answer, return: :index)
+    |> Enum.map(&hd/1)
+    |> Enum.reject(fn {start, _length} -> Regex.match?(@negation_pattern, binary_part(answer, 0, start)) end)
   end
 
   @doc """
