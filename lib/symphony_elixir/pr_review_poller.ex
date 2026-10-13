@@ -1693,9 +1693,14 @@ defmodule SymphonyElixir.PrReviewPoller do
       record_review_action_signal(record, action, move.target)
       complete_transition_action(record, pending_attrs, opts, now, action, move.target)
     else
-      {:error, reason} -> record_transition_error(record, pending_attrs, opts, now, action, reason)
+      {:error, reason} -> record_transition_error(record, pending_attrs, opts, now, action, named_state(reason, move.target))
     end
   end
+
+  # Linear reports a state the team doesn't have without its name, so the error names the state the
+  # move asked for: the log then says which state to add or configure.
+  defp named_state(:state_not_found, target), do: {:state_not_found, target}
+  defp named_state(reason, _target), do: reason
 
   # The CI Fix lane's origin is recorded before the move, so a repair that cannot be recorded has
   # nowhere to return and the move is not made: the next poll retries. The legacy paths record
