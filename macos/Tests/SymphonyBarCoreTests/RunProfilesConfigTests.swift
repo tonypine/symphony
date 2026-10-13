@@ -613,7 +613,7 @@ final class RunProfilesConfigTests: XCTestCase {
               command: claude
             auto_review:
               enabled: true
-              state: Auto Review
+              state: QA
               command: "claude --effort=low --dangerously-skip-permissions"  # QA
               max_turns: 20
 
@@ -628,7 +628,7 @@ final class RunProfilesConfigTests: XCTestCase {
                 qa: { model: claude-sonnet-5-5, effort: low }
             auto_review:
               enabled: true
-              state: Auto Review
+              state: QA
               command: "claude --dangerously-skip-permissions"  # QA
               max_turns: 20
 

@@ -135,6 +135,16 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(overview.stages.first { $0.kind == .waitingOnYou }?.count, 0)
     }
 
+    func testATicketADecisionHoldsInQACountsOnlyAsWaitingOnYou() {
+        let state = OverviewState(
+            snapshot: StateSnapshot(running: 0, waitingOnYou: [.init(identifier: "TP-2", kind: .pr, waitingSeconds: 60)]),
+            watching: [.init(identifier: "TP-1", state: "Code Review"), .init(identifier: "TP-2", state: "QA")]
+        )
+        let stages = Overview(state: state, now: wallClock, timeZone: utc).stages
+        XCTAssertEqual(stages.first { $0.kind == .review }?.count, 1)
+        XCTAssertEqual(stages.first { $0.kind == .waitingOnYou }?.count, 1)
+    }
+
     // MARK: - Stuck (DD7)
 
     func testARunCountsAsStuckFromTenMinutesWithoutAnAgentEvent() {

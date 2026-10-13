@@ -184,9 +184,7 @@ public struct TicketList: Equatable {
         for ticket in state.watching {
             let stage: Stage
             let waitsOn: String
-            if Self.isState(ticket.state, "Human Review") {
-                (stage, waitsOn) = (.waitingOnYou, "you")
-            } else if Self.isState(ticket.state, "Merging") {
+            if Self.isState(ticket.state, "Merging") {
                 (stage, waitsOn) = (.merging, "CI")
             } else {
                 let qa = ticket.issueID.map(qaIDs.contains) == true || Self.isState(ticket.state, "QA")

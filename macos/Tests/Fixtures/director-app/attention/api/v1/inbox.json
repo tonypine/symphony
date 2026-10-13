@@ -55,7 +55,7 @@
           "url": "https://github.com/acme/docs/pull/88"
         }
       },
-      "state": "Human Review",
+      "state": "QA",
       "title": "Quick start rewrite",
       "url": "https://linear.app/acme/issue/DOCS-40",
       "waiting_seconds": 11520,
@@ -108,7 +108,7 @@
           "url": "https://github.com/acme/web-shop/pull/409"
         }
       },
-      "state": "Human Review",
+      "state": "QA",
       "title": "Address autocomplete",
       "url": "https://linear.app/acme/issue/SHOP-290",
       "waiting_seconds": 2400,

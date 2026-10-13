@@ -88,17 +88,6 @@ final class InboxMovesTests: XCTestCase {
 
     // MARK: - Deciding
 
-    func testSendDecisionOnARequestParkedInHumanReviewMovesItToTodo() {
-        var action = item(.action)
-        action.state = "Human Review"
-        action.review.action = InboxReview.Action(question: "Close TP-612 as a duplicate?", steps: [], options: options, commentID: "c-1")
-
-        let sheet = ConsequenceSheet(move: .decide, item: action)
-        XCTAssertEqual(sheet.happens, "Records your answer on X-1 as a reply to its request and moves X-1 to Todo: the next run carries it out.")
-        XCTAssertEqual(sheet.stays, "Your answer stays on the ticket as the recorded decision, even after Undo.")
-        XCTAssertEqual(sheet.targetState, "Todo")
-    }
-
     func testSendDecisionAnswersTheRequestInPlaceAndReworkRedirectsIt() {
         var action = item(.action)
         action.state = "In Progress"
@@ -204,7 +193,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(ConsequenceSheet(move: .approvePlan, item: one).happens, "Moves SHOP-330 to Waiting on sub-tickets.")
     }
 
-    func testSendDecisionsPostsThePicksAndMovesAPlanInHumanReviewToInReview() throws {
+    func testSendDecisionsPostsThePicksAndLeavesThePlanInPlanReview() throws {
         var plan = try shipped("SHOP-330")
         let picks = DecisionPicks(picks: [0: 1])
         let sheet = ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks)
@@ -214,29 +203,26 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.picks.map(\.answer), ["On a separate page", "The store's currency"])
         XCTAssertEqual(sheet.action(), .decisions("SHOP-330", picks: sheet.picks))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions", undo: false))
+        XCTAssertEqual(sheet.stays, "The plan stays in Plan Review and isn't approved: it comes back to the Inbox once Symphony has revised it.")
 
-        plan.state = "Human Review"
-        let humanReview = ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks)
-        XCTAssertEqual(humanReview.targetState, "In Review")
-        XCTAssertTrue(humanReview.happens.hasPrefix("Moves SHOP-330 from Human Review to In Review, then posts one comment"))
-
-        // A workflow's Human Review state under another name, and In Review in another case.
-        plan.state = "Needs a person"
-        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).happens.hasPrefix("Moves SHOP-330 from Needs a person to In Review"))
-        plan.state = "in review"
+        // The workflow's Plan Review state under another name; the sheet names the state the plan is in.
+        plan.state = "Plan review (design)"
         XCTAssertNil(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).targetState)
+        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).stays.hasPrefix("The plan stays in Plan review (design) and"))
+        plan.state = nil
+        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).stays.hasPrefix("The plan stays in Plan Review and"))
     }
 
     func testTheBannerFollowsSymphonysAnswerNotTheSheetsGuess() throws {
         let sheet = ConsequenceSheet(move: .sendDecisions, item: try shipped("SHOP-330"), picks: DecisionPicks(picks: [0: 1]))
         XCTAssertNil(sheet.targetState)
-        let moved = sheet.banner(after: MoveOutcome(moved: true, toState: "In Review"))
-        XCTAssertEqual(moved, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to In Review", undo: true))
-        XCTAssertEqual(sheet.banner(after: MoveOutcome(moved: false, toState: "In Review")).text, "Sent your decisions")
+        let moved = sheet.banner(after: MoveOutcome(moved: true, toState: "Rework"))
+        XCTAssertEqual(moved, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to Rework", undo: true))
+        XCTAssertEqual(sheet.banner(after: MoveOutcome(moved: false, toState: "Plan Review")).text, "Sent your decisions")
 
         let decisions = ControlAction.decisions("SHOP-330", picks: [])
-        let answer = Data(#"{"move":"decisions","moved":true,"to_state":"In Review","undo_window_ms":10000}"#.utf8)
-        XCTAssertEqual(ControlAPI.result(decisions, statusCode: 200, data: answer), .moved(MoveOutcome(moved: true, toState: "In Review")))
+        let answer = Data(#"{"move":"decisions","moved":true,"to_state":"Rework","undo_window_ms":10000}"#.utf8)
+        XCTAssertEqual(ControlAPI.result(decisions, statusCode: 200, data: answer), .moved(MoveOutcome(moved: true, toState: "Rework")))
         XCTAssertEqual(ControlAPI.result(decisions, statusCode: 200, data: Data()), .done)
         XCTAssertEqual(ControlAPI.result(.undo("SHOP-330"), statusCode: 200, data: answer), .done)
         XCTAssertNil(ControlResult.done.moveOutcome)
@@ -369,10 +355,10 @@ final class InboxMovesTests: XCTestCase {
     }
 
     func testARefusedMoveSaysWhy() {
-        let body = Data(#"{"error":{"code":"move_not_allowed","message":"BIL-206 is Merging; the Director answers it only from In Review or Human Review"}}"#.utf8)
+        let body = Data(#"{"error":{"code":"move_not_allowed","message":"BIL-206 is Merging; the Director answers it only from Plan Review"}}"#.utf8)
         XCTAssertEqual(
             ControlAPI.result(.approvePR("BIL-206"), statusCode: 409, data: body),
-            .failed("Couldn't move BIL-206 to Merging: BIL-206 is Merging; the Director answers it only from In Review or Human Review (HTTP 409)")
+            .failed("Couldn't move BIL-206 to Merging: BIL-206 is Merging; the Director answers it only from Plan Review (HTTP 409)")
         )
         let prefixes = [
             ControlAction.approvePlan("X"), .rework("X", reason: "r"), .restart("X", reason: "r"), .decisions("X", picks: []),

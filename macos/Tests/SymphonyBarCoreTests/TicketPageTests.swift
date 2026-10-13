@@ -200,12 +200,11 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(phase(["blocked": with(["blocked_by": [["issue_identifier": "T-0", "state": "In Progress"]]])]), .waiting(on: "a blocker: T-0"))
         XCTAssertEqual(phase(["blocked": with(["reason": "waits for an app update", "blocked_by": []])]), .waiting(on: "a blocker (waits for an app update)"))
         XCTAssertEqual(phase(["blocked": with([:])]), .waiting(on: "a blocker"))
-        XCTAssertEqual(phase(["watching": with(["state": "Human Review"])]), .waiting(on: "you"))
         XCTAssertEqual(phase(["watching": with(["state": "Merging"])]), .waiting(on: "CI"))
         XCTAssertEqual(phase(["watching": with(["state": "Todo"])]), .waiting(on: "Todo"))
         XCTAssertEqual(phase(["watching": with(["state": "QA"]), "qa": ["running": [["identifier": "T-1"]], "queued": []]]),
                        .inReview(qa: "QA pass running"))
-        XCTAssertEqual(phase(["watching": with(["state": "In Review"]), "qa": ["running": [], "queued": [["issue_id": "i-1"]]]]),
+        XCTAssertEqual(phase(["watching": with(["state": "Code Review"]), "qa": ["running": [], "queued": [["issue_id": "i-1"]]]]),
                        .inReview(qa: "QA pass queued"))
         XCTAssertEqual(phase(["shipped_today": with([:])]), .done(pullRequest: nil, mergedAt: nil))
     }

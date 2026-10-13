@@ -156,9 +156,6 @@ public struct DecisionPicks: Equatable {
 /// the same, the options (Rework's required reason), and Cancel with the verb.
 public struct ConsequenceSheet: Equatable, Identifiable {
     public static let waitingState = "Waiting on sub-tickets"
-    public static let reviewState = "In Review"
-    public static let humanReviewState = "Human Review"
-    public static let todoState = "Todo"
 
     public var move: InboxMove
     /// The Inbox item's issue id.
@@ -175,7 +172,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var request: InboxReview.Decision?
     /// The id of the request comment the answer replies under, nil for the moves that don't answer one.
     public var requestCommentID: String?
-    /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in In Review).
+    /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in Plan Review).
     /// The banner follows Symphony's answer instead, which knows the workflow's states.
     public var targetState: String?
 
@@ -213,13 +210,11 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 : "The plan stays as written. To change it, send decisions or comment on it in Linear instead."
         case .sendDecisions:
             title = "Send your decisions on \(id)?"
-            // A plan waits in the Inbox in In Review or in the workflow's Human Review state, whatever its name.
-            let humanReview = item.state.map { $0.caseInsensitiveCompare(Self.reviewState) != .orderedSame } ?? false
-            targetState = humanReview ? Self.reviewState : nil
+            // The comment goes in place: a person's comment on a plan under review starts its revision run.
+            targetState = nil
             self.picks = picks.answers(item.review.decisions)
-            happens = (humanReview ? "Moves \(id) from \(item.state ?? "") to \(Self.reviewState), then posts" : "Posts")
-                + " one comment on \(id) with your picks, and Symphony revises the plan from it."
-            stays = "The plan isn't approved: it comes back to the Inbox once Symphony has revised it."
+            happens = "Posts one comment on \(id) with your picks, and Symphony revises the plan from it."
+            stays = "The plan stays in \(item.state ?? "Plan Review") and isn't approved: it comes back to the Inbox once Symphony has revised it."
         case .approveAndMerge:
             title = "Move \(id) to Merging?"
             targetState = "Merging"
@@ -246,17 +241,11 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .decide:
             title = "Send your decision on \(id)?"
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
-            // A merge confirmation continues into the state its hold names. A request that parked its ticket in
-            // Human Review set no hold: answering it moves the ticket to Todo, so the next run carries the decision
-            // out. An ordinary decision moves nothing.
+            // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
             if let confirm = item.review.action?.confirm {
                 targetState = confirm
                 happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
-            } else if item.state?.caseInsensitiveCompare(Self.humanReviewState) == .orderedSame {
-                targetState = Self.todoState
-                happens = "Records your answer on \(id) as a reply to its request and moves \(id) to \(Self.todoState): the next run carries it out."
-                stays = "Your answer stays on the ticket as the recorded decision, even after Undo."
             } else {
                 targetState = nil
                 happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
