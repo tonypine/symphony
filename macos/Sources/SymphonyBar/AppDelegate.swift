@@ -310,9 +310,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 }
             case .start:
                 // On the next poll, so a Symphony already running from the CLI is attached to, not started twice.
+                // While one still answers, the regular poll checks again whether it has exited.
                 startWhenStopped = true
                 resumeWhenAnswering = resumeAfterUpdate
-                poller.pollNow()
+                if machine.canStart { poller.pollNow() }
+            case .restart:
+                runner.stop { [weak self] in self?.performHealth([.start]) }
             case .healthy:
                 guard let checkedUpdate else { break }
                 let update = LastUpdate(checkedUpdate, installedAt: Date())
@@ -905,7 +908,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     startSymphony(nil)
                 } else {
                     resumeWhenAnswering = false
-                    handleHealth(.notStarted)
+                    // After an update, the Symphony it stopped may not have exited yet: the check waits for it.
+                    handleHealth(.otherRunning)
                 }
             }
             autoUpdateTick()
