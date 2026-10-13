@@ -13,7 +13,7 @@ defmodule SymphonyElixir.InboxConfigTest do
     refute SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
   end
 
-  test "reads every Linear repository route in the scope it polls, on the poll interval, with Symphony's own CI records" do
+  test "reads every Linear repository route in the scope it polls, on the poll interval" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: "token",
       tracker_project_slug: "cycle",
@@ -22,12 +22,13 @@ defmodule SymphonyElixir.InboxConfigTest do
 
     test_pid = self()
 
-    pr = %{
+    plan = %{
       "id" => "id-MT-1",
       "identifier" => "MT-1",
-      "title" => "A PR",
+      "title" => "A plan",
       "url" => "https://linear.app/acme/issue/MT-1",
-      "state" => %{"name" => "In Review"},
+      "state" => %{"name" => "Plan Review"},
+      "labels" => %{"nodes" => [%{"name" => "plan"}]},
       "comments" => %{"nodes" => []},
       "history" => %{"nodes" => []}
     }
@@ -37,7 +38,7 @@ defmodule SymphonyElixir.InboxConfigTest do
         send(test_pid, {:filter, variables.filter})
         {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "id-MT-1", "updatedAt" => "2026-10-01T00:00:00Z"}]}}}}
       else
-        {:ok, %{"data" => %{"issues" => %{"nodes" => [pr]}}}}
+        {:ok, %{"data" => %{"issues" => %{"nodes" => [plan]}}}}
       end
     end
 
@@ -46,7 +47,7 @@ defmodule SymphonyElixir.InboxConfigTest do
     assert {:noreply, state} = Inbox.handle_info(:tick, server_state)
 
     assert_received {:filter, %{"and" => [%{"project" => %{"slugId" => %{"eq" => "cycle"}}}, %{"or" => _states}]}}
-    assert [%{identifier: "MT-1", kind: :pr, review: %{pull_request: %{ci: nil, qa: nil}}}] = Inbox.cached(name)
+    assert [%{identifier: "MT-1", kind: :plan, review: %{sub_tickets: []}}] = Inbox.cached(name)
     assert Process.read_timer(state.timer) in 12_000..12_345
   end
 

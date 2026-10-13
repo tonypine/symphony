@@ -150,7 +150,7 @@ defmodule SymphonyElixir.OrchestratorClaimsTest do
         | retry_attempts: %{refreshing.id => %{attempt: 1, retry_token: token, identifier: refreshing.identifier, repo_key: Config.repo_key!()}},
           claimed: MapSet.new([refreshing.id, "issue-blocking", "issue-commenting", "issue-orphan"]),
           tracker_tasks: %{
-            make_ref() => %{kind: :blocked_transition, issue_ids: ["issue-blocking"]},
+            make_ref() => %{kind: :blocked_hold, issue_ids: ["issue-blocking"]},
             make_ref() => %{kind: :comment, issue_ids: ["issue-commenting"]}
           }
       }

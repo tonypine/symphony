@@ -81,7 +81,6 @@ defmodule SymphonyElixir.CodeReviewTest do
       Map.merge(
         %{
           "tracker" => %{"kind" => "memory"},
-          "state_machine" => "designed",
           "review_agent" => %{"enabled" => true, "kind" => "codex", "command" => "codex app-server"}
         },
         extra
@@ -94,11 +93,7 @@ defmodule SymphonyElixir.CodeReviewTest do
   end
 
   defp reviewer_disabled_settings do
-    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
-  end
-
-  defp legacy_settings(extra \\ %{}) do
-    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
+    settings!(%{"tracker" => %{"kind" => "memory"}})
   end
 
   defp issue(state \\ "Code Review") do
@@ -182,20 +177,17 @@ defmodule SymphonyElixir.CodeReviewTest do
   end
 
   describe "reviewer_run?/2" do
-    test "is true only for a designed repo's configured Code Review state" do
+    test "is true only for the configured Code Review state" do
       assert CodeReview.reviewer_run?(issue(), designed_settings())
       assert CodeReview.reviewer_run?(issue(" code review "), designed_settings())
       refute CodeReview.reviewer_run?(issue("In Progress"), designed_settings())
-      refute CodeReview.reviewer_run?(issue(), legacy_settings())
-      refute CodeReview.reviewer_run?(issue("Code Review"), legacy_settings())
       refute CodeReview.reviewer_run?(%Issue{id: "x", state: nil}, designed_settings())
     end
   end
 
   describe "run/3" do
-    test "skips every ticket that is not a designed repo's Code Review ticket" do
+    test "skips every ticket that is not a Code Review ticket" do
       assert :skip = run("/tmp/workspace", [settings: designed_settings()], "In Progress")
-      assert :skip = run("/tmp/workspace", settings: legacy_settings())
       refute_received {:reviewed, _, _}
     end
 
@@ -890,10 +882,9 @@ defmodule SymphonyElixir.CodeReviewTest do
 
     test "a ticket that only names the human review state isn't escalated" do
       Process.put(:fake_review_result, approve_result([plain_file()]))
-      settings = designed_settings(%{"tracker" => %{"kind" => "memory", "human_review_state" => "Needs Human Review"}})
-      named = %{issue() | title: "Remove In Review and Human Review", description: "Tickets wait in Needs Human Review until a person moves them."}
+      named = %{issue() | title: "Remove In Review and Human Review", description: "Tickets wait in `Human Review` until a person moves them out of the Human Review state."}
 
-      assert :ok = CodeReview.run(named, "/tmp/workspace", settings: settings, review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy)
+      assert :ok = CodeReview.run(named, "/tmp/workspace", settings: designed_settings(), review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy)
 
       assert_received {:moved, @issue_id, "QA"}
       assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil

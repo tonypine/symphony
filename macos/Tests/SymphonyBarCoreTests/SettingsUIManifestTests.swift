@@ -60,7 +60,6 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.workflow = "WORKFLOW.md"
         changed.route = RepositoryRoute(team: "OPS", projects: ["ops"], labels: ["infra"], assignee: "you")
         changed.workspace = RepositoryWorkspace(source: "acme/api", fetchBeforeDispatch: false)
-        changed.stateMachine = "designed"
         changed.manualReview = "on"
         changed.ticketPatternsBuiltIn = false
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)

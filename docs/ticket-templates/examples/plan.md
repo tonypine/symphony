@@ -137,7 +137,7 @@ its acceptance criteria instead of a ticket of their own.
 
 ## The review
 
-The ticket moves to `In Review` with one review brief that links the five documents and the HTML
+The ticket moves to `Plan Review` with one review brief that links the five documents and the HTML
 screens, lists the ten sub-tickets and asks for D1 and D2 under `Decisions needed`, each with its
 recommended default (the run went on with it). The ticket's summary block links the same
 documents, the HTML screens and the sub-tickets.

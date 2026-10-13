@@ -1,6 +1,6 @@
 {% comment %}
 name: plan_pipeline
-description: The stages a plan ticket with an Artifacts wanted section produces before its split (domain brief, journeys, Kano map, screens, decisions, implementation plan), one Linear document each, checked against a rubric per stage and handed over in one review; renders nothing for any other ticket.
+description: The stages a plan ticket with an Artifacts wanted section produces before its split (domain brief, journeys, Kano map, screens, decisions, implementation plan), one Linear document each, checked against a rubric per stage and handed over in one review; renders nothing for any other ticket. The split files no Final verification sub-ticket, because the epic closes itself in Epic Review.
 vars: [issue]
 
 Render it with a left-trimming render tag (a dash after its opening brace), right
@@ -74,17 +74,19 @@ second document for a stage.
    the context, the options, the one you recommend and why, and what it costs.
    Only real choices: a question with one sensible answer is not a decision.
 6. **Implementation plan**: the sub-tickets, filed as in the plan run of
-   `Parent tickets` (one PR each, `blocked_by` links, the `Final verification:`
-   sub-ticket last). Every sub-ticket names the feature it builds, the journey
-   and the screens it serves and the feature's Kano class (feature → journey →
-   screen → ticket), and carries a `## User walkthrough`: numbered steps a user
-   takes, each with the result they should see, written so an end-to-end test or
-   the QA agent can reproduce it (a check only the operator can make once the
-   change is live goes under `## After release`, which QA skips and which never
-   blocks the ticket). File the Must-be tickets first,
-   then Performance, then Attractive; Indifferent features get no ticket unless
-   the description asks for them. With no Kano map, name the part of the
-   description each sub-ticket serves instead.
+   `Parent tickets` (one PR each, `blocked_by` links). Every sub-ticket names the
+   feature it builds, the journey and the screens it serves and the feature's
+   Kano class (feature → journey → screen → ticket), and carries a
+   `## User walkthrough`: numbered steps a user takes, each with the result they
+   should see, written so an end-to-end test or the QA agent can reproduce it (a
+   check only the operator can make once the change is live goes under
+   `## After release`, which QA skips and which never blocks the ticket). File
+   the Must-be tickets first, then Performance, then
+   Attractive; Indifferent features get no ticket unless the description asks
+   for them. With no Kano map, name the part of the description each sub-ticket
+   serves instead. The split files no verification sub-ticket: the epic closes
+   itself once every sub-ticket is terminal (`The epic close` in `Parent
+   tickets`), so the last sub-ticket to land is an ordinary one.
 
 ### House standards
 
@@ -119,8 +121,8 @@ what fails, and record the check in the workpad `Notes`, one line per rubric.
 - **Implementation plan:** every sub-ticket traces to a feature, a journey and a
   Kano class; every Must-be feature is covered by a sub-ticket; Must-be tickets
   come first; every sub-ticket has acceptance criteria and a
-  `## User walkthrough`; the `Final verification:` sub-ticket is blocked by every
-  other one and lists their criteria.
+  `## User walkthrough`; no sub-ticket is a verification ticket, and the parent's
+  own description still states the requirements the epic review will resolve.
 
 ### One review, at the end
 

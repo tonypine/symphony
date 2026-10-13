@@ -2,7 +2,7 @@ defmodule SymphonyElixir.TicketState do
   @moduledoc """
   The canonical per-ticket state machine record.
 
-  A record holds everything the designed machine owns for one ticket: its current phase, the phase
+  A record holds everything the machine owns for one ticket: its current phase, the phase
   a CI Fix stay came from (so a mechanical repair can return it), the holds that pause it
   (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records and its
   signals ledger (the timeline both the machinery and agents read).

@@ -98,7 +98,7 @@ defmodule SymphonyElixir.ForceIssueTest do
 
       # Forcing a ticket that already carries the label leaves Linear alone.
       assert {{:halt, 0}, "MT-1 forced (slot 1 of 1)\n"} = force(["MT-1"])
-      refute_received {:memory_tracker_label_added, "id-1", _label}
+      refute_received {:memory_tracker_label_added, "id-1", "expedite"}
 
       assert {{:halt, 0}, "MT-2 no longer forced\n"} = force(["--clear", "MT-2"])
       assert_received {:memory_tracker_label_removed, "id-2", "expedite"}
@@ -150,7 +150,7 @@ defmodule SymphonyElixir.ForceIssueTest do
       tracked([issue("id-6", "MT-6", "Todo", ["Expedite"])])
       assert {{:error, "Linear request failed: :boom"}, ""} = force(["--clear", "MT-6"])
       assert labels("id-6") == ["Expedite"]
-      refute_received {:memory_tracker_label_added, _id, _label}
+      refute_received {:memory_tracker_label_added, _id, "expedite"}
     end
 
     test "the control API needs the token and an identifier" do
@@ -390,11 +390,14 @@ defmodule SymphonyElixir.ForceIssueTest do
   defp label(id, nil), do: %{"id" => id, "team" => nil}
   defp label(id, team_id), do: %{"id" => id, "team" => %{"id" => team_id}}
 
+  # The ticket's labels, without the `Blocked` hold the dependency gate projects on a Todo ticket
+  # with an open blocker.
   defp labels(issue_id) do
     :symphony_elixir
     |> Application.fetch_env!(:memory_tracker_issues)
     |> Enum.find(&(&1.id == issue_id))
     |> Map.fetch!(:labels)
+    |> Enum.reject(&(&1 == "Blocked"))
   end
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
