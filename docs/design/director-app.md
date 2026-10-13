@@ -21,8 +21,8 @@
   - `In Review` and `Human Review` are retired. A plan waits on the Director in `Plan Review`, and an escalation or a
     merge confirmation waits as a `Needs Decision` hold on the ticket, in whatever phase it is. The Inbox lists both,
     and still lists a ticket left in a retired state until it drains.
-  - `Final verification:` tickets and their sign-off are retired: an epic closes itself through `Epic Review`. The
-    Inbox still lists, and Sign Off still moves, a `Final verification:` ticket planned before the change.
+  - `Final verification:` tickets and their sign-off are retired: an epic closes itself through `Epic Review`, and
+    neither the Inbox nor the control API knows such a ticket any more.
 
 ## 1. The Director
 
@@ -89,7 +89,7 @@ Done when:
 
 - the list holds tickets in `In Review` and `Human Review`, open human-action requests, and tickets the quality gate
   holds or skipped (they wait on me to rewrite them);
-- each item shows its kind (plan, PR, final verification, action, clarify), the ask in one line, and how long it has
+- each item shows its kind (plan, PR, action, clarify, blocked), the ask in one line, and how long it has
   waited;
 - a notification, the Dock badge and the menu bar icon tell me when something new arrives, even with the window closed.
 
@@ -137,7 +137,7 @@ Done when:
 ### US6. Follow an initiative to done (Should)
 
 > As the Director, I want to follow each plan I approved (its sub-tickets in landing order, which are done, working,
-> waiting on me or blocked, and its final verification), so that I know when an initiative lands and what holds it up.
+> waiting on me or blocked), so that I know when an initiative lands and what holds it up.
 
 ### US7. Decide how much to trust the crew (Should)
 
@@ -229,8 +229,7 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
 2. Select it. Its sub-tickets are listed in landing order with their blocked-by links: BIL-206 waits on you (a PR), and
    BIL-207 and BIL-208 wait on it. → **D5**
 3. **Review** on BIL-206 opens its inbox item; approve it. → **D2b**
-4. The final verification row reads "Waits on 3 tickets". When the rest are done it runs, and its result shows here.
-   → **D5**
+4. When the rest are done, the epic review runs on its own and the initiative moves to done. → **D5**
 
 ### J6. Decide how much to trust the gate (US7)
 

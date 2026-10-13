@@ -75,7 +75,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
-  test "queries the route's scope for labelled, final verification or held issues that are not terminal" do
+  test "queries the route's scope for labelled or held issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -88,7 +88,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                %{
                  "or" => [
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
-                   %{"title" => %{"startsWith" => "Final verification:"}},
                    # A decision request leaves the ticket in its phase.
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
                  ]
@@ -128,7 +127,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
 
     assert wanted == [
-             %{"title" => %{"startsWith" => "Final verification:"}},
              %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
            ]
   end

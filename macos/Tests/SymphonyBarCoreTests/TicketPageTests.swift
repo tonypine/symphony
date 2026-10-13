@@ -274,7 +274,7 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.badges.map(\.word), ["In review", "Failed 3 times", "Forced"])
         XCTAssertEqual(page.initiative, "T-0 Billing")
         XCTAssertEqual(page.facts.map(\.label), ["State", "Type", "Initiative", "Forced"])
-        XCTAssertEqual(page.facts[1].value, "Final verification")
+        XCTAssertEqual(page.facts[1].value, "Ticket")
         XCTAssertEqual(page.timeline.map(\.title), [])
         XCTAssertEqual(page.lastMessage, "boom")
         XCTAssertEqual(page.workspacePath, "/w/T-1")

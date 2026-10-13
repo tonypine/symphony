@@ -79,9 +79,7 @@ defmodule SymphonyElixir.Initiatives do
   @spec parent_of(String.t(), [Initiative.t()]) :: %{identifier: String.t() | nil, title: String.t() | nil} | nil
   def parent_of(issue_id, initiatives \\ cached()) when is_binary(issue_id) do
     Enum.find_value(initiatives, fn initiative ->
-      children = [initiative.final_verification | initiative.sub_tickets]
-
-      if Enum.any?(children, &(is_map(&1) and &1.id == issue_id)),
+      if Enum.any?(initiative.sub_tickets, &(&1.id == issue_id)),
         do: %{identifier: initiative.identifier, title: initiative.title}
     end)
   end

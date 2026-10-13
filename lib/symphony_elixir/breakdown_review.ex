@@ -8,8 +8,7 @@ defmodule SymphonyElixir.BreakdownReview do
   `Todo` in one batch; blocked-by links keep the order. Moving the parent to `Rework` rejects
   the plan: Symphony cancels the plan's sub-issues still in `Backlog` and runs the breakdown again.
   The plan's sub-issues are the ones created while the parent was worked into `Plan Review`, so a
-  sub-issue a person added under the parent before or after that run, such as a parked
-  `Final verification`, is left alone.
+  sub-issue a person added under the parent before or after that run is left alone.
 
   Symphony only polls, so it reads the parent's state history to see the move. Only a person's
   move approves: Symphony records each time it moves a parent itself, and a move within a minute of
@@ -18,7 +17,7 @@ defmodule SymphonyElixir.BreakdownReview do
   it there to revise the plan in place when a person comments on it, and only a person's own move to
   `Rework` rejects the plan and cancels its sub-issues. A sub-issue is acted on only when it has sat
   in `Backlog` since before that move, which keeps both actions idempotent across polls and restarts:
-  a sub-issue a human (or a final verification run) moves back to `Backlog` later is left alone, and
+  a sub-issue a human moves back to `Backlog` later is left alone, and
   so is one created after the move, such as the sub-issues of the re-planned breakdown.
   """
 

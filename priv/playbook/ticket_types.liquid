@@ -29,8 +29,9 @@ section.
 - With no box checked under `Artifacts wanted`, or no such section, the plan is a
   plain split into sub-tickets.
 - `Constraints` and `Quality bar` bind every sub-ticket: repeat the ones that
-  apply in its description. `Done when` is what the whole must achieve: carry it
-  into the `Final verification:` sub-ticket's checklist.
+  apply in its description. `Done when` is what the whole must achieve: keep it
+  in the parent's description, which the epic review checks once every sub-ticket
+  is done.
 {%- elsif issue.labels contains "type:bug" %}
 
 ## Ticket type: bug

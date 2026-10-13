@@ -1838,9 +1838,10 @@ not require recognizing or validating extension fields unless that extension is 
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`,
-  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` and `final_verification`
-  named the retired close-out and final verification runs: an entry naming them still loads, and
-  no run uses it. Each field resolves, for the issue's routed
+  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` named the retired close-out run: an entry
+  naming it still loads, and no run uses it. `final_verification` (retired with
+  `Final verification:` tickets) and `acceptance_gate` load with a deprecation warning and do
+  nothing. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
   else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
   null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
@@ -4598,7 +4599,7 @@ Minimum endpoints:
     - `plan`: `brief`, the latest `## Review brief` comment parsed into
       `headline`, `what_to_review` (`text` and `links`), `what_changed`, `decisions` (`question`,
       `options`, `recommendation`, `recommended`: the index of the recommended option, null when it
-      can't be told), `moves` (`approve`, `change`, `reject`) and `supervisor_check`, with `format`
+      can't be told), `moves` (`approve`, `change`, `reject`), with `format`
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, and `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order.
@@ -4615,7 +4616,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 1, "pr": 0, "final_verification": 0, "action": 0, "clarify": 1, "blocked": 0},
+      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0},
       "items": [
         {
           "issue_id": "i-330",
@@ -4629,7 +4630,7 @@ Minimum endpoints:
           "waiting_seconds": 5460,
           "url": "https://linear.app/acme/issue/SHOP-330",
           "review": {
-            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": [], "supervisor_check": null},
+            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": []
           }
         },
@@ -4655,20 +4656,16 @@ Minimum endpoints:
     their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
     the last list. Its Linear requests count as `initiatives`.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `final_verification`, `counts`
+    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `counts`
     and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out and a final verification
-    sub-issue left from before the drain set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
     `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
     state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
     Review, QA, Merging, CI Fix or Epic Review with nothing running) or `slot` (it can run and waits
     for a free slot).
-  - `final_verification` is, for an epic planned before the drain, its `Final verification:`
-    sub-issue in the same shape plus `open_tickets`, the number of sub-tickets not done yet; null
-    without one, as for every epic planned since.
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
   - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),

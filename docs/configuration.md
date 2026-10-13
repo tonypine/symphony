@@ -660,10 +660,11 @@ agent:
   terminal: the epic review), `breakdown` (other plan ticket: a new, resumed or revised plan),
   `landing` (`Merging`), `code_review` (`Code Review`), `qa` (`QA`), `rework` (`Rework`), `ci_fix`
   (continuation after red CI), `review_feedback` (continuation after PR review comments), and
-  `implementation` (everything else). `close_out` and `final_verification` named the retired
-  legacy machine's runs: they still load and match no run. `pre_push_review` names the pre-push reviewer run, and `qa` the QA
-  agent's runs. `acceptance_gate` is deprecated with the retired gate: it loads with a warning and
-  does nothing.
+  `implementation` (everything else). `close_out` named the retired legacy machine's close-out
+  run: it still loads and matches no run. `pre_push_review` names the pre-push reviewer run, and
+  `qa` the QA agent's runs. `acceptance_gate` is deprecated with the retired gate, and
+  `final_verification` with the retired `Final verification:` tickets: each loads with a warning
+  and does nothing.
 - Resolution per field, for the repository the issue is routed to:
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
   `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:

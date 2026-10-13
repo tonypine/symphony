@@ -3,10 +3,9 @@
     "action": 1,
     "blocked": 1,
     "clarify": 1,
-    "final_verification": 1,
     "plan": 1,
     "pr": 1,
-    "total": 6
+    "total": 5
   },
   "generated_at": "2026-10-07T14:20:00Z",
   "items": [
@@ -55,7 +54,6 @@
               "text": "move SHOP-330 to Rework; Symphony cancels its Backlog sub-tickets and plans again."
             }
           ],
-          "supervisor_check": null,
           "what_changed": [],
           "what_to_review": [
             {
@@ -159,7 +157,6 @@
               "text": "move BIL-206 to Rework."
             }
           ],
-          "supervisor_check": null,
           "what_changed": [],
           "what_to_review": [
             {
@@ -191,24 +188,6 @@
       "url": "https://linear.app/acme/issue/BIL-206",
       "waiting_seconds": 5460,
       "waiting_since": "2026-10-07T12:49:00Z"
-    },
-    {
-      "ask": "Every requirement of BIL-200 checked on main; one supervisor check left.",
-      "identifier": "BIL-213",
-      "issue_id": "i-200",
-      "kind": "final_verification",
-      "repo_key": "api",
-      "review": {
-        "brief": {
-          "format": "raw",
-          "markdown": "## Review brief\n\nAll eight sub-tickets of BIL-200 are Done. Each requirement was checked on main, with CI run 8812 green.\n\nSign off by moving BIL-213 to Done."
-        }
-      },
-      "state": "In Review",
-      "title": "Final verification: Usage-based billing",
-      "url": "https://linear.app/acme/issue/BIL-213",
-      "waiting_seconds": 2700,
-      "waiting_since": "2026-10-07T13:35:00Z"
     },
     {
       "ask": "Add the signing certificate to the release workflow",

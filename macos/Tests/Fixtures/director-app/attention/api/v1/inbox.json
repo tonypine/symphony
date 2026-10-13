@@ -2,7 +2,6 @@
   "counts": {
     "action": 0,
     "clarify": 0,
-    "final_verification": 0,
     "plan": 0,
     "pr": 2,
     "total": 2
@@ -34,7 +33,6 @@
               "text": "move DOCS-40 to Rework."
             }
           ],
-          "supervisor_check": null,
           "what_changed": [],
           "what_to_review": [
             {
@@ -88,7 +86,6 @@
               "text": "move SHOP-290 to Rework."
             }
           ],
-          "supervisor_check": null,
           "what_changed": [],
           "what_to_review": [
             {

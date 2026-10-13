@@ -336,9 +336,9 @@ final class RunProfilesConfigTests: XCTestCase {
     }
 
     func testEveryKindHasATitleAndTheSettingsOrder() {
-        XCTAssertEqual(RunProfilesConfig.scopes.count, 11)
+        XCTAssertEqual(RunProfilesConfig.scopes.count, 10)
         XCTAssertEqual(RunKind.allCases.map(\.title), [
-            "Breakdown", "Close-out", "Final verification", "Implementation", "Rework", "CI fix",
+            "Breakdown", "Close-out", "Implementation", "Rework", "CI fix",
             "Review feedback", "Landing", "Pre-push review", "QA",
         ])
         XCTAssertEqual(RunKind.ciFix.id, "ci_fix")

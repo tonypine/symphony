@@ -92,7 +92,8 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   transition guard refuses every move into them, and Symphony logs any ticket still found in one at
   startup, at error level, and lists it in the dashboard's Drain report. The acceptance gate is
   retired too: its QA moved to the `QA` state, its judgment to `Code Review`, and its escalation
-  rules to a Needs Decision hold or a deeper Code Review. See
+  rules to a Needs Decision hold or a deeper Code Review. Supervisor checks and
+  `Final verification:` tickets are retired as well: an epic closes in its epic review. See
   [docs/design/state-machine.md](docs/design/state-machine.md) and SPEC §7.6.
 - **Parent tickets** — label a large ticket `plan` (`breakdown`, the label's older name, still works)
   and the agent splits this plan ticket into sub-tickets instead of opening a PR, then hands the

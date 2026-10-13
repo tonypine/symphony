@@ -65,14 +65,14 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2a · Inbox: a plan to review
 
-- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked (and Final verifications), each row with
+- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked, each row with
   identifier, title, one-line ask and age. The review: header with kind, wait and state badges; the brief's headline;
   **What to review** (the plan's Linear documents and HTML); **Decisions needed** as radio groups with the recommended
   option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker.
 - **Actions:** **Approve Plan…** (prominent), **Send Decisions** (enabled when a pick changes; posts one comment, which
   starts Symphony's plan revision run), **Open in Linear**, ⋯ **Send to Rework…**.
-- **States:** a final verification item shows its checklist with each requirement's evidence, and **Sign Off…** (moves
-  it to Done) instead of Approve. A scope that hides items says "2 more in other repos".
+- **States:** a scope that hides items says "2 more in other repos". (The final verification item and its
+  **Sign Off…** were retired with `Final verification:` tickets: an epic closes in its epic review.)
 - **Conventions:** three-column `NavigationSplitView` like Mail; after an answer the selection moves to the next item;
   ↑↓ and Return work in the list.
 - **Data:** the Inbox list and the review brief (section 2).
@@ -255,7 +255,6 @@ later journeys point back to it. The mock draws every screen under its ID.
 | 1 | Opens Initiatives: BIL-200, 4 of 8 | D5 |
 | 2 | Reads its sub-tickets in landing order; BIL-206 waits on them | D5 |
 | 3 | Clicks Review on BIL-206 | D2b |
-| 4 | Sees the final verification waiting on 3 tickets | D5 |
 
 #### D5 · Initiatives
 
@@ -363,7 +362,7 @@ Most of the dashboard reads data `/api/v1/state` already serves. These are the g
 | --- | --- | --- | --- |
 | **Inbox list**: `In Review` and `Human Review` tickets, open human-action requests, quality-gate holds and skips, each with kind, ask and age | D1, D2, D13, D14 | `human_review` counts `Human Review` only; holds and skips are listed | A list endpoint: ADR 0001's "Waiting on you" (TP-617) plus the Clarify kind |
 | **Review content**: a plan's documents, decisions with options and recommendation, sub-tickets; a PR's checks, QA result, gate verdict and size | D2a, D2b | Agents write a `## Review brief` comment at each handoff (TP-723); it isn't served | The brief in a structured form, per ticket |
-| **Director's moves**: approve a plan, approve and merge a PR, send to Rework with a reason, send decisions, move to Backlog with a note, sign off a final verification | D2, D12c, D12d | Pause, resume, stop and force exist in the control API | New control API endpoints that make the Linear move and write the audit record (DD4) |
+| **Director's moves**: approve a plan, approve and merge a PR, send to Rework with a reason, send decisions, move to Backlog with a note | D2, D12c, D12d | Pause, resume, stop and force exist in the control API | New control API endpoints that make the Linear move and write the audit record (DD4) |
 | **Initiatives**: plan tickets with sub-tickets, states and blocked-by links | D5, D1 | `epic_lanes` (slots only) | An initiatives endpoint |
 | **History**: tokens per day and per ticket, merged tickets per day | D8, D9, D1 | Today's budget only | A history endpoint over the run records |
 
