@@ -4,6 +4,11 @@ All notable changes to Symphony are documented here. The section for each
 version was used as the body of its GitHub Release up to 0.0.1. Releases now
 list the commit subjects since the previous release (see `docs/releasing.md`).
 
+## Unreleased
+
+- Symphony.app runs the plain mix release from its bundle; Burrito, Zig and the
+  Xcode SDK shim are gone from the build.
+
 ## 0.0.1
 
 - Initial release of the Symphony agent orchestration service.

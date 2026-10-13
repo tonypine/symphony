@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.ReleaseNode do
   @moduledoc """
-  Starts Erlang distribution for the Symphony service in the Burrito binary.
+  Starts Erlang distribution for the Symphony service started by the release launcher.
 
-  `rel/vm.args` names no node, so the binary boots without distribution and a
+  `rel/vm.args` names no node, so the release boots without distribution and a
   one-off command such as `symphony check` can run next to a running Symphony.
   Only the long-running service takes the fixed name `symphony@127.0.0.1`: Mnesia
   tags the RunStore's disc_copies with `node()`, so the name must stay the same

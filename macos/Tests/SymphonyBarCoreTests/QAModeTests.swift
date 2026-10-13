@@ -114,7 +114,6 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(qa.symphonyLogsRoot.path, "/tmp/qa/symphony-logs")
         XCTAssertEqual(qa.updateCacheDirectory.path, "/tmp/qa/updates")
         XCTAssertEqual(qa.stateRoot.path, "/tmp/qa/state")
-        XCTAssertEqual(qa.burritoInstallDirectory.path, "/tmp/qa/burrito")
         XCTAssertEqual(qa.commandsFolder.path, "/tmp/qa/commands")
         XCTAssertEqual(qa.statusFile.path, "/tmp/qa/status.json")
     }
@@ -177,16 +176,14 @@ final class QAModeTests: XCTestCase {
         )
     }
 
-    func testQAModeKeepsSymphonysLogsAndUnpackedReleaseUnderTheRootUnlessSet() {
+    func testQAModeKeepsSymphonysLogsUnderTheRootUnlessSet() {
         let path = root.standardizedFileURL.path
         let environment = qaStores(["PATH": "/opt/bin"]).environment
         XCTAssertEqual(environment[QAMode.symphonyLogsRootKey], path + "/symphony-logs")
-        XCTAssertEqual(environment[QAMode.burritoInstallDirectoryKey], path + "/burrito")
 
-        let given = qaStores([QAMode.symphonyLogsRootKey: "/srv/logs", QAMode.burritoInstallDirectoryKey: "/srv/burrito"])
+        let given = qaStores([QAMode.symphonyLogsRootKey: "/srv/logs"])
         XCTAssertEqual(given.environment[QAMode.symphonyLogsRootKey], "/srv/logs")
-        XCTAssertEqual(given.environment[QAMode.burritoInstallDirectoryKey], "/srv/burrito")
-        XCTAssertEqual(qaStores([QAMode.burritoInstallDirectoryKey: " "]).environment[QAMode.burritoInstallDirectoryKey], path + "/burrito")
+        XCTAssertEqual(qaStores([QAMode.symphonyLogsRootKey: " "]).environment[QAMode.symphonyLogsRootKey], path + "/symphony-logs")
     }
 
     func testTheUpdateHelperGetsTheQAEnvironment() {
@@ -194,7 +191,7 @@ final class QAModeTests: XCTestCase {
         let helper = qaStores(["PATH": "/opt/bin:/usr/bin", "HOME": "/Users/me"]).updateHelperEnvironment
         XCTAssertEqual(helper[QAMode.environmentKey], root.path)
         XCTAssertEqual(helper["PATH"], "/opt/bin:/usr/bin")
-        XCTAssertEqual(helper[QAMode.burritoInstallDirectoryKey], root.standardizedFileURL.path + "/burrito")
+        XCTAssertEqual(helper[QAMode.symphonyLogsRootKey], root.standardizedFileURL.path + "/symphony-logs")
         XCTAssertEqual(qaStores().updateHelperEnvironment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
     }
 
@@ -362,6 +359,5 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(launch.executable, "/app/symphony")
         XCTAssertEqual(launch.environment[StateRoot.environmentKey], path + "/state")
         XCTAssertEqual(launch.environment[QAMode.symphonyLogsRootKey], path + "/symphony-logs")
-        XCTAssertEqual(launch.environment[QAMode.burritoInstallDirectoryKey], path + "/burrito")
     }
 }

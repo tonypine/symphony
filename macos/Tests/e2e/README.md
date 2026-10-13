@@ -5,8 +5,7 @@ and checks what TP-272 used to leave to a person on the live app:
 
 1. **Update** from release N to N+1 while an agent run is active. The old Symphony waits for the run, then
    stops; the new app starts its Symphony on its own and dispatch resumes. Afterwards every Symphony
-   `beam.smp` runs N+1's release from inside the running app's bundle, nothing was unpacked outside it (no
-   `.burrito` folder in the QA root or `HOME`), no BEAM from N runs, the app folder holds N+1 as
+   `beam.smp` runs N+1's release from inside the running app's bundle, no BEAM from N runs, the app folder holds N+1 as
    `Symphony.app` and N as `Symphony (previous).app`, and the new app's menu shows "Updated to vN+1", the
    release carried across the relaunch.
 2. **Restart** while a run is active: it waits for the run, restarts, and dispatch resumes. The test pauses
@@ -71,10 +70,9 @@ The test can run while the installed app runs Symphony. The instance gets its ow
 - fake Linear: the memory tracker reading one issue from a file (`issues.memory.issues_file`), and a stub
   `claude` that answers each turn after `SYMPHONY_E2E_STUB_SECONDS`, so runs cost nothing.
 
-Before and after, it records the installed app's processes, the Symphony BEAMs running from its bundle (or,
-for a Burrito build, from `~/Library/Application Support/.burrito`), what listens on port 4000, the metadata of the live state files
-(`control_url`, `control_token`, `erlang_cookie`, `secrets.json`, never their contents) and the live Burrito
-unpacked releases. Any difference fails the test.
+Before and after, it records the installed app's processes, the Symphony BEAMs running from its bundle, what listens
+on port 4000 and the metadata of the live state files (`control_url`, `control_token`, `erlang_cookie`,
+`secrets.json`, never their contents). Any difference fails the test.
 
 ## CI
 

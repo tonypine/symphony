@@ -9,8 +9,6 @@ defmodule SymphonyElixir.Paths do
   @state_root_override_key :state_root_override
   @logs_root_override_key :logs_root_override
   @release_root_env "SYMPHONY_RELEASE_ROOT"
-  # Set by the Burrito wrapper; accepted until Burrito is gone (TP-871).
-  @burrito_env "__BURRITO"
   @release_subdir "release"
 
   @spec state_root() :: Path.t()
@@ -155,6 +153,6 @@ defmodule SymphonyElixir.Paths do
   end
 
   defp detect_packaged_release do
-    Enum.any?([@release_root_env, @burrito_env], &(System.get_env(&1) not in [nil, ""]))
+    System.get_env(@release_root_env) not in [nil, ""]
   end
 end

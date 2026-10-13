@@ -6,7 +6,7 @@ public enum StateRoot {
     /// Overrides the state directory, for Symphony and for the app.
     public static let environmentKey = "SYMPHONY_STATE_ROOT"
 
-    /// Subdirectory the Burrito release build keeps its state in.
+    /// Subdirectory the packaged release (the one Symphony.app runs) keeps its state in.
     public static let releaseSubdirectory = "release"
 
     public static let controlURLFileName = "control_url"

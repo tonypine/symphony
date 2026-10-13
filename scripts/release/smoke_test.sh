@@ -12,8 +12,7 @@
 #      and still exits 1 for broken YAML, an unknown key and a missing file.
 #
 # Each run gets a fresh HOME, so no state from an earlier run is reused. The
-# release runs in place: no run may leave a `.burrito` unpack folder in its HOME
-# (`Library/Application Support/.burrito`), and the release must be unchanged.
+# release runs in place, and the release must be unchanged.
 # `check` rejects a `strategy: worktree` repo that doesn't exist, so each fresh
 # HOME gets an empty git repo at every `repo: ~/...` path CONFIG names.
 # The run uses its own epmd port, so a Symphony already running on this machine
@@ -80,14 +79,6 @@ create_home_repos() {
   done
 }
 
-# Fails the test when a run left a Burrito-style unpack folder under HOME.
-check_no_unpack() {
-  if [ -e "$1/Library/Application Support/.burrito" ]; then
-    echo "::error::symphony unpacked into $1/Library/Application Support/.burrito; it must run from the release in place."
-    failed=1
-  fi
-}
-
 # Lists the release's files with their sizes and modification times.
 release_fingerprint() {
   find "$release" -type f -exec stat -f '%z %m %N' {} + | sort
@@ -110,7 +101,6 @@ run() {
   printf '%s\n' "$output"
   echo "exit code: $code"
   echo "::endgroup::"
-  check_no_unpack "$home"
   rm -rf "$home"
 
   if [ "$code" -ne "$expected_exit" ]; then
@@ -192,7 +182,6 @@ if [ -n "$release" ]; then
     wait "$service_pid" 2>/dev/null || true
     service_pid=""
   fi
-  check_no_unpack "$work/service-home"
   release_fingerprint >"$work/release-after.txt"
   if ! diff -u "$work/release-before.txt" "$work/release-after.txt"; then
     echo "::error::The release under $release changed while symphony ran; it must run in place, read-only."

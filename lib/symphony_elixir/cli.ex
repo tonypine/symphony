@@ -20,8 +20,6 @@ defmodule SymphonyElixir.CLI do
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
   # Set by the release launcher (`rel/overlays/bin/symphony-app`) before it execs the BEAM.
   @release_root_env "SYMPHONY_RELEASE_ROOT"
-  # Set by the Burrito wrapper; accepted until Burrito is gone (TP-871).
-  @burrito_bin_path_env "__BURRITO_BIN_PATH"
   @service_switches [
     {@acknowledgement_switch, :boolean},
     config: :string,
@@ -670,7 +668,7 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp packaged_marker do
-    Enum.find_value([@release_root_env, @burrito_bin_path_env], &System.get_env(&1, nil))
+    System.get_env(@release_root_env)
   end
 
   # The launcher passes its arguments after `-extra`, which the VM exposes as plain
