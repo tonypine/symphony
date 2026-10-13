@@ -68,14 +68,19 @@ defmodule SymphonyElixir.AutoMerge do
   @doc """
   True when auto-merge lands this issue, so the orchestrator must not dispatch a landing
   agent: the issue is in `Merging`, has a PR, auto-merge is on for its repository, and the
-  PR poller hasn't fallen back to the landing agent.
+  PR poller hasn't fallen back to the landing agent. A CI-failure hold (see `held?/1`) means
+  Symphony turned GitHub auto-merge off, so nothing lands the PR: a hold still in `Merging` is a
+  red head the CI-fix move never took out of it, and the landing agent takes it over rather than
+  every poll skipping it.
   """
   @spec owns_issue?(Issue.t(), keyword()) :: boolean()
   def owns_issue?(%Issue{} = issue, opts \\ []) do
     merging?(issue) and match?([url | _] when is_binary(url), issue.pr_urls) and
       enabled_for_repo?(issue.repo_key) and
-      not fallback?(Keyword.get(opts, :lookup, &SymphonyElixir.PrReviewPoller.auto_merge/2).(issue.id, repo_opts(issue.repo_key)))
+      not handed_off?(Keyword.get(opts, :lookup, &SymphonyElixir.PrReviewPoller.auto_merge/2).(issue.id, repo_opts(issue.repo_key)))
   end
+
+  defp handed_off?(auto_merge), do: fallback?(auto_merge) or held?(auto_merge)
 
   defp enabled_for_repo?(repo_key) do
     case Config.settings_for_repo(repo_key) do
