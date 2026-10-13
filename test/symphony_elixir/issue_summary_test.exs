@@ -77,6 +77,7 @@ defmodule SymphonyElixir.IssueSummaryTest do
                  Enum.join(
                    [
                      @start,
+                     "",
                      "---",
                      "",
                      "### Symphony summary",
@@ -92,6 +93,7 @@ defmodule SymphonyElixir.IssueSummaryTest do
                      "**Changelog:**",
                      "",
                      "- 2026-10-06: Started",
+                     "",
                      @finish
                    ],
                    "\n"
@@ -124,6 +126,26 @@ defmodule SymphonyElixir.IssueSummaryTest do
       assert written == "A\n\n" <> rendered()
 
       assert IssueSummary.put("A\n\n#{@start}\nold", summary!(), ~D[2026-10-06]) == {:error, :summary_block_unterminated}
+    end
+
+    test "rewrites a block as Linear stores it: no empty heading, and the `*` changelog entries kept" do
+      stored =
+        "Goal\n\n## #{@start}\n\n### Symphony summary\n\n**Status:** Old\n\n**Changelog:**\n\n" <>
+          "* 2026-10-05: Earlier\n* 2026-10-04: Oldest #{@finish}"
+
+      assert {:ok, written} = IssueSummary.put(stored, summary!(), ~D[2026-10-06])
+
+      assert String.starts_with?(written, "Goal\n\n#{@start}\n\n---\n")
+      assert written =~ "- 2026-10-06: Started\n- 2026-10-05: Earlier\n- 2026-10-04: Oldest\n\n#{@finish}"
+      assert {:ok, ^written} = IssueSummary.put(String.replace(written, "- 2026-10-06: Started\n", ""), summary!(), ~D[2026-10-06])
+    end
+
+    test "drops only an empty heading at the end of a text" do
+      assert IssueSummary.drop_empty_heading("Goal\n\n## ") == "Goal\n\n"
+      assert IssueSummary.drop_empty_heading("Goal\n##\n\n") == "Goal\n\n"
+      assert IssueSummary.drop_empty_heading("## ") == ""
+      assert IssueSummary.drop_empty_heading("Goal\n\n## Plan\n") == "Goal\n\n## Plan\n"
+      assert IssueSummary.drop_empty_heading("Issue #12\n\n") == "Issue #12\n\n"
     end
   end
 

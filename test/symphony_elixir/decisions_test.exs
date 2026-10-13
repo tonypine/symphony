@@ -53,6 +53,18 @@ defmodule SymphonyElixir.DecisionsTest do
     )
   end
 
+  # What Linear stores of a written description: `*` bullets, nested ones indented by four.
+  defp linear_stored(description), do: description |> String.replace("\n  - ", "\n    * ") |> String.replace("\n- ", "\n* ")
+
+  # The section's entries written `copies` times, the last copy after a blank line, as on TP-892.
+  defp repeated(description, copies) do
+    [before, section] = String.split(description, Decisions.start_marker())
+    [head, entries] = String.split(section, "\n\n* **D1**", parts: 2)
+    [entries, _end] = String.split("* **D1**" <> entries, "\n\n" <> Decisions.end_marker())
+    copies = Enum.join(List.duplicate(entries, copies - 1), "\n") <> "\n\n" <> entries
+    before <> Decisions.start_marker() <> head <> "\n\n" <> copies <> "\n" <> Decisions.end_marker()
+  end
+
   defp ticket(comments, attrs \\ %{}), do: Map.merge(%{"id" => @issue_id, "description" => "Fix it.", "comments" => %{"nodes" => comments}}, attrs)
 
   defp comment(id, body, created_at \\ "2026-10-13T05:40:00Z", parent \\ nil),
@@ -136,6 +148,47 @@ defmodule SymphonyElixir.DecisionsTest do
 
       assert {:ok, ^description} = Decisions.put(description, [entry(%{answer: "Something else"})])
       assert {:ok, "Fix it."} = Decisions.put("Fix it.", [])
+    end
+
+    test "changes nothing on a section as Linear stores it, and numbers a new decision after it" do
+      {:ok, written} = Decisions.put("Fix it.", [entry()])
+      stored = linear_stored(written)
+      second = entry(%{key: "comment-2", title: "Sign the builds"})
+
+      assert {:ok, ^stored} = Decisions.put(stored, [entry()])
+      assert [%{id: "D1", key: "comment-1", date: "2026-10-13", scope: "Deferred to TP-891"}] = Decisions.recorded(stored)
+
+      assert {:ok, description} = Decisions.put(stored, [entry(), second])
+      assert [%{id: "D1", key: "comment-1"}, %{id: "D2", key: "comment-2"}] = Decisions.recorded(description)
+      assert String.ends_with?(description, "Scope:** Deferred to TP-891\n\n" <> Decisions.end_marker())
+    end
+
+    test "rewrites a section that holds a decision more than once, and drops the empty heading above it" do
+      second = entry(%{key: "comment-2", title: "Sign the builds"})
+      {:ok, written} = Decisions.put("Fix it.\n\n##", [entry(), second])
+      repeated = written |> linear_stored() |> repeated(4)
+
+      assert [%{id: "D1", key: "comment-1"}, %{id: "D2", key: "comment-2"}] = Decisions.recorded(repeated)
+      assert {:ok, repaired} = Decisions.put(repeated <> "\n\nAfter.", [])
+
+      assert String.starts_with?(repaired, "Fix it.\n\n" <> Decisions.start_marker())
+      assert String.ends_with?(repaired, Decisions.end_marker() <> "\n\nAfter.")
+      assert length(Regex.scan(~r/symphony:decision:comment-1/, repaired)) == 1
+      assert [%{id: "D1", date: "2026-10-13"}, %{id: "D2", key: "comment-2"}] = Decisions.recorded(repaired)
+      assert {:ok, ^repaired} = Decisions.put(repaired, [entry()])
+
+      third = entry(%{key: "comment-3", title: "Ship it"})
+      assert {:ok, extended} = Decisions.put(repeated, [third])
+      assert [%{id: "D1"}, %{id: "D2"}, %{id: "D3", key: "comment-3"}] = Decisions.recorded(extended)
+    end
+
+    test "goes before the empty heading Linear made of the summary's marker line, and drops it" do
+      summary = IssueSummary.start_marker() <> "\n\n### Symphony summary\n" <> IssueSummary.end_marker()
+
+      assert {:ok, description} = Decisions.put("Fix it.\n\n## " <> summary, [entry()])
+
+      assert String.starts_with?(description, "Fix it.\n\n" <> Decisions.start_marker())
+      assert String.ends_with?(description, Decisions.end_marker() <> "\n\n" <> summary)
     end
 
     test "refuses a section with no end marker" do
@@ -259,6 +312,22 @@ defmodule SymphonyElixir.DecisionsTest do
 
       assert :ok = Decisions.sync(node, tracker: FakeTracker)
       assert :ok = Decisions.sync(%{"comments" => %{"nodes" => []}}, tracker: FakeTracker)
+      refute_received {:description_written, _issue_id, _description}
+    end
+
+    test "rewrites a section that holds an answer twice once, then writes nothing" do
+      {:ok, once} = Decisions.put("Fix it.", [entry(%{key: "c1"})])
+      twice = once |> linear_stored() |> repeated(2)
+      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")], %{"description" => twice})
+      Process.put({FakeTracker, :description}, {:ok, twice})
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker)
+
+      assert_received {:description_written, @issue_id, repaired}
+      assert [%{id: "D1", key: "c1"}] = Decisions.recorded(repaired)
+      assert length(Regex.scan(~r/symphony:decision:c1/, repaired)) == 1
+
+      assert :ok = Decisions.sync(%{node | "description" => repaired}, tracker: FakeTracker)
       refute_received {:description_written, _issue_id, _description}
     end
 
