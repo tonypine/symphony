@@ -10,7 +10,7 @@ defmodule SymphonyElixir.Inbox do
      (`SymphonyElixir.PlanReview`) or carry the `Blocked` or `Needs Decision` label, each with its
      `updatedAt` and the time its newest comment was last edited;
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
-     their comments, state history, labels, attachments and sub-tickets
+     their description, comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
   3. each becomes an `SymphonyElixir.Inbox.Item`, with, for a ticket no request or plan review
      covers, the access hold its store record carries.
@@ -24,7 +24,8 @@ defmodule SymphonyElixir.Inbox do
   Each read also reconciles the read tickets' `Needs Decision` holds
   (`SymphonyElixir.NeedsDecisionHold`): a decision request pauses its ticket in place, and the
   person's answer — or the run's withdrawal — clears the hold so the ticket
-  continues. Those tickets are listed by the hold's label wherever in the workflow they sit.
+  continues, and the answer is written into the description's Decisions section
+  (`SymphonyElixir.Decisions`). Those tickets are listed by the hold's label wherever in the workflow they sit.
 
   The server tags itself `inbox` in `SymphonyElixir.Linear.Usage`.
   """
@@ -67,6 +68,7 @@ defmodule SymphonyElixir.Inbox do
         id
         identifier
         title
+        description
         url
         state { name }
         labels { nodes { name } }
@@ -223,7 +225,7 @@ defmodule SymphonyElixir.Inbox do
     |> Enum.group_by(&elem(&1, 0), &Map.get(nodes, elem(&1, 1)["id"]))
     |> Enum.each(fn {repo, entries} ->
       repo_nodes = for %{node: %{} = node} <- entries, do: node
-      NeedsDecisionHold.sweep(repo.name, repo_nodes, settings: settings(state, repo))
+      NeedsDecisionHold.sweep(repo.name, repo_nodes, [settings: settings(state, repo)] ++ Keyword.take(state.opts, [:tracker]))
     end)
 
     :ok

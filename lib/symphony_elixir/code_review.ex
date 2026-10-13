@@ -472,6 +472,8 @@ defmodule SymphonyElixir.CodeReview do
 
   # The same read-only reviewer the pre-push pass uses, pointed at the PR head this run is checked
   # out on. The base branch comes from the repo's config, exactly as the pre-push pass resolves it.
+  # Whatever reviewer judged it, a finding against a person's recorded decision is a note, never a
+  # change request (`ReviewAgent.honour_decisions/2`).
   defp evaluate(issue, workspace, opts, settings) do
     review_opts =
       opts
@@ -480,7 +482,10 @@ defmodule SymphonyElixir.CodeReview do
       |> Keyword.put(:review_scope, :code_review)
       |> maybe_put_base_branch(opts)
 
-    Keyword.get(opts, :review_agent, ReviewAgent).evaluate(issue, workspace, settings, review_opts)
+    case Keyword.get(opts, :review_agent, ReviewAgent).evaluate(issue, workspace, settings, review_opts) do
+      {:ok, result} -> {:ok, ReviewAgent.honour_decisions(result, issue)}
+      error -> error
+    end
   end
 
   defp maybe_put_base_branch(review_opts, opts) do

@@ -512,6 +512,42 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
     end
 
+    test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add checkout."}])
+      set_decision_hold()
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      assert String.starts_with?(description, "Add checkout.\n\n")
+
+      assert [
+               %{
+                 id: "D1",
+                 key: "comment-1",
+                 title: "Add the release signing secrets",
+                 question: "Add the signing secrets, or ship unsigned builds?",
+                 answer: "Add the secrets"
+               }
+             ] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "a description Linear refuses to write still records the decision under the request", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_description_result, [{:error, :rate_limited}])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_description_result) end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+        end)
+
+      assert log =~ "Failed to record decisions on issue_id=pr"
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
     test "a decision that directs a move sends the ticket there through the guard", %{opts: opts} do
       for {move, target} <- [{"rework", "Rework"}, {"DONE", "Done"}] do
         put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
