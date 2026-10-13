@@ -670,8 +670,12 @@ The line under the update items shows "Checking vX: …" while it does:
 1. **Config check:** `symphony check --config <symphony.yml>` with the new embedded binary must pass, so a
    config error such as `workspaces.repo does not exist` is caught. Symphony starts only once it passes.
 2. **Answer:** when the app starts Symphony after the update (it ran before the update, or "Start Symphony
-   when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. When
-   it doesn't start Symphony, only the config check runs.
+   when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. If it
+   doesn't, the app stops it and starts it once more, and a second miss fails the check. A Symphony that
+   still answers when the app goes to start it is the one the update stopped, still on its way out: the app
+   waits up to a minute for it to exit before it starts the new one. When it doesn't start Symphony, only
+   the config check runs. Each exit of Symphony is noted at the end of `menubar-child.log`, with its status,
+   so a crash before Symphony's own logger starts is on record.
 3. **No crash loop:** for 10 minutes after the update, an unexpected exit of Symphony starts it again (each
    start must answer within 2 minutes), and the third unexpected exit in those 10 minutes fails the check.
    A Stop you choose doesn't count. Outside those 10 minutes the app doesn't start Symphony again after an
