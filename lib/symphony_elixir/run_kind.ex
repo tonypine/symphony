@@ -12,35 +12,36 @@ defmodule SymphonyElixir.RunKind do
   Classification is deterministic and uses the signals the orchestrator already
   routes on. The first match wins:
 
-    1. `final_verification`: the title starts with `Final verification:` (a legacy repo only:
-       the designed machine's epic path reviews the epic in `Epic Review` instead).
-    2. `breakdown`: a `breakdown` parent in `Rework`, whose rejected plan is made again.
-    3. `close_out`: a legacy repo's `breakdown` parent whose sub-issues are all terminal.
-    4. `epic_review`: a designed repo's `breakdown` parent whose sub-issues are all terminal:
+    1. `breakdown`: a `breakdown` parent in `Rework`, whose rejected plan is made again.
+    2. `close_out`: a legacy repo's `breakdown` parent whose sub-issues are all terminal.
+    3. `epic_review`: a designed repo's `breakdown` parent whose sub-issues are all terminal:
        the epic path's close, which Symphony starts from `Waiting on sub-tickets`.
-    5. `breakdown`: any other `breakdown` parent: one without sub-issues yet, one whose
+    4. `breakdown`: any other `breakdown` parent: one without sub-issues yet, one whose
        never-approved plan stopped midway, or one revising its plan from review comments.
-    6. `landing`: the issue is in `Merging`.
-    7. `rework`: the issue is in `Rework`.
-    8. `code_review`: the issue is in the designed machine's configured `code_review_state`:
+    5. `landing`: the issue is in `Merging`.
+    6. `rework`: the issue is in `Rework`.
+    7. `code_review`: the issue is in the designed machine's configured `code_review_state`:
        the poll-dispatched reviewer run, which judges the PR head and records a verdict. Only a
        repo on the designed machine reaches this: a legacy repo whose Linear workflow happens
        to have a `Code Review` column keeps classifying its runs as it did before.
-    9. `qa`: the issue is in the designed machine's configured `qa_state`: the poll-dispatched
+    8. `qa`: the issue is in the designed machine's configured `qa_state`: the poll-dispatched
        QA run, which exercises the change from the user's point of view and records a verdict.
        Designed-only, like `code_review`.
-    10. `epic_review`: the issue is in the designed machine's configured `epic_review_state`:
+    9. `epic_review`: the issue is in the designed machine's configured `epic_review_state`:
        the poll-dispatched epic review, which the tick starts again if the run that moved the
        parent there stopped. Designed-only, like the phases above.
-    11. `ci_fix`: the issue is in the designed machine's configured `ci_fix_state` (the mechanical
+    10. `ci_fix`: the issue is in the designed machine's configured `ci_fix_state` (the mechanical
        repair lane a red head or a conflict routes to), or the run continues after a red CI run
        (`:ci_failure` signal).
-    12. `review_feedback`: the run continues after PR review comments
+    11. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
-    13. `implementation`: everything else.
+    12. `implementation`: everything else.
 
-  Parent and final-verification tickets come before states because they never
-  open a PR: the workflow sends them to the parent-ticket steps whatever their state.
+  A ticket's title never names its run kind: `Final verification:` tickets are retired, and the
+  epic review closes an epic parent instead.
+
+  Parent tickets come before states because they never open a PR: the workflow sends them to
+  the parent-ticket steps whatever their state.
 
   #{@reserved_kind_names} is never returned by `classify/2`; it names the pre-push reviewer run,
   which Symphony starts itself. The designed machine's configured
@@ -55,7 +56,6 @@ defmodule SymphonyElixir.RunKind do
           :implementation
           | :breakdown
           | :close_out
-          | :final_verification
           | :rework
           | :landing
           | :code_review
@@ -75,7 +75,6 @@ defmodule SymphonyElixir.RunKind do
     :implementation,
     :breakdown,
     :close_out,
-    :final_verification,
     :rework,
     :landing,
     :code_review,
@@ -86,7 +85,6 @@ defmodule SymphonyElixir.RunKind do
     :qa
   ]
 
-  @final_verification_prefix "Final verification:"
   @landing_state "merging"
   @rework_state "rework"
   @code_review_state "code review"
@@ -109,10 +107,6 @@ defmodule SymphonyElixir.RunKind do
   @doc "Every run kind as the string used for `agent.run_profiles` keys."
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
-
-  @doc "The title prefix that makes a ticket a `final_verification` run on a legacy repo."
-  @spec final_verification_prefix() :: String.t()
-  def final_verification_prefix, do: @final_verification_prefix
 
   @doc """
   A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.
@@ -147,7 +141,6 @@ defmodule SymphonyElixir.RunKind do
     settings = Keyword.get(signals, :settings)
 
     cond do
-      final_verification?(issue, settings) -> :final_verification
       Issue.breakdown?(issue) -> parent_kind(issue, terminal_states, settings)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
@@ -199,16 +192,6 @@ defmodule SymphonyElixir.RunKind do
       _none -> default
     end
   end
-
-  # A designed repo has no `Final verification:` tickets: the epic path reviews the epic itself in
-  # `Epic Review` (`SymphonyElixir.EpicReview`), so the title no longer names a run kind there. A
-  # legacy repo keeps the title's run kind exactly as before.
-  defp final_verification?(%Issue{title: title}, settings) when is_binary(title) do
-    not StateMachine.designed?(settings) and
-      title |> String.trim_leading() |> String.starts_with?(@final_verification_prefix)
-  end
-
-  defp final_verification?(_issue, _settings), do: false
 
   defp in_state?(%Issue{state: state}, expected) when is_binary(state) and is_binary(expected) do
     normalize_state(state) == normalize_state(expected)

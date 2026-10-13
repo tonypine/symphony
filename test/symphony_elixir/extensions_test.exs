@@ -1417,7 +1417,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received {:linear, _query}
 
     assert %{
-             "counts" => %{"total" => 2, "pr" => 1, "clarify" => 1, "plan" => 0, "action" => 0, "final_verification" => 0},
+             "counts" => %{"total" => 2, "pr" => 1, "clarify" => 1, "plan" => 0, "action" => 0},
              "items" => [
                %{
                  "identifier" => "MT-HELD",
@@ -1503,8 +1503,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         [
           child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
           child.("MT-2", "In Review", "started", %{}),
-          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"}),
-          child.("MT-9", "Todo", "unstarted", %{"title" => "Final verification: the plan"})
+          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"})
         ],
         %{}
       ),
@@ -1565,11 +1564,11 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{"identifier" => "MT-2", "waits_on" => "you", "blocked_by" => [], "waiting_for" => []},
                %{"identifier" => "MT-3", "waits_on" => "blocker", "blocked_by" => ["MT-2"], "waiting_for" => ["MT-2"]},
                %{"identifier" => "MT-HTTP", "waits_on" => "working"}
-             ],
-             "final_verification" => %{"identifier" => "MT-9", "waits_on" => "slot", "open_tickets" => 3}
+             ]
            } = hd(listed)
 
-    assert %{"slot" => %{"status" => "queued", "position" => 1}, "final_verification" => nil} = Enum.at(listed, 1)
+    assert %{"slot" => %{"status" => "queued", "position" => 1}} = Enum.at(listed, 1)
+    refute Map.has_key?(hd(listed), "final_verification")
     assert %{"slot" => nil} = Enum.at(listed, 2)
 
     assert json_response(post(build_conn(), "/api/v1/initiatives", %{}), 405) ==
@@ -1803,7 +1802,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
       entry.("MT-PR", :pr, 1, "The retry fix"),
-      entry.("MT-UNKNOWN", :final_verification, nil, nil),
+      entry.("MT-UNKNOWN", :clarify, nil, nil),
       entry.("MT-PLAN", :plan, 3, "The split into four sub-tickets"),
       entry.("MT-ACTION", :action, 2, nil),
       entry.("MT-APPROVED", :plan, 4, "Approved already"),
@@ -1850,7 +1849,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              },
              %{"kind" => "action", "headline" => nil},
              %{"kind" => "pr", "state" => "Human Review", "headline" => "The retry fix"},
-             %{"kind" => "final_verification", "waiting_since" => nil, "waiting_seconds" => nil}
+             %{"kind" => "clarify", "waiting_since" => nil, "waiting_seconds" => nil}
            ] = waiting
 
     assert is_binary(waiting_since)
@@ -1867,7 +1866,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert Enum.at(rows, 1) =~ "Decision"
     assert Enum.at(rows, 1) =~ "Title of MT-ACTION"
     assert Enum.at(rows, 2) =~ "PR"
-    assert Enum.at(rows, 3) =~ "Final verification"
+    assert Enum.at(rows, 3) =~ "Clarify"
     assert Enum.at(rows, 3) =~ "n/a"
     refute Enum.any?(rows, &(&1 =~ "MT-APPROVED"))
   end

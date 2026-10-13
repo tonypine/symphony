@@ -7,7 +7,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   # documents it created (so it may edit them before Linear lists their attachments, and stays
   # under the cap), and
   # whether it asked a person for something (so its issue waits for that person in the Human Review
-  # state), the comments of its that hold a `## Supervisor check`, and whether it opened a PR.
+  # state), and whether it opened a PR.
 
   use Agent
 
@@ -28,7 +28,6 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       documents: 0,
       created_documents: MapSet.new(),
       human_action_requested: false,
-      supervisor_check_comments: MapSet.new(),
       pull_request_created: false
     }
 
@@ -55,9 +54,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   @spec remove(pid() | nil, String.t()) :: :ok
   def remove(pid, comment_id) when is_pid(pid) and is_binary(comment_id) do
-    Agent.update(pid, fn state ->
-      %{state | comments: MapSet.delete(state.comments, comment_id), supervisor_check_comments: MapSet.delete(state.supervisor_check_comments, comment_id)}
-    end)
+    Agent.update(pid, fn state -> %{state | comments: MapSet.delete(state.comments, comment_id)} end)
   end
 
   def remove(_pid, _comment_id), do: :ok
@@ -161,25 +158,6 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @spec clear_human_action_request(pid() | nil) :: :ok
   def clear_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, false))
   def clear_human_action_request(_pid), do: :ok
-
-  @doc """
-  Records whether the run's comment `comment_id` holds a `## Supervisor check` block
-  (`SymphonyElixir.SupervisorCheck`), as written now: an edit that drops the block clears it.
-  """
-  @spec record_supervisor_check(pid() | nil, String.t() | nil, boolean()) :: :ok
-  def record_supervisor_check(pid, comment_id, holds_block?) when is_pid(pid) and is_binary(comment_id) do
-    Agent.update(pid, fn state ->
-      comments = if holds_block?, do: MapSet.put(state.supervisor_check_comments, comment_id), else: MapSet.delete(state.supervisor_check_comments, comment_id)
-      %{state | supervisor_check_comments: comments}
-    end)
-  end
-
-  def record_supervisor_check(_pid, _comment_id, _holds_block?), do: :ok
-
-  @doc "True while at least one of the run's comments holds a `## Supervisor check` block."
-  @spec supervisor_check?(pid() | nil) :: boolean()
-  def supervisor_check?(pid) when is_pid(pid), do: Agent.get(pid, &(MapSet.size(&1.supervisor_check_comments) > 0))
-  def supervisor_check?(_pid), do: false
 
   @doc "Records that the run opened a pull request."
   @spec record_pull_request(pid() | nil) :: :ok

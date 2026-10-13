@@ -130,7 +130,9 @@ carrying a `## User walkthrough`:
 7. `Watering reminders`: Reminders (Performance), J2, S10.
 8. `Seasonal schedules`: Seasonal adjustment (Attractive), J5, S11.
 9. `Share a routine with a plant-sitter`: Share (Attractive), J6, S12.
-10. `Final verification: Plant care app for Android`, blocked by every sub-ticket above.
+
+No verification sub-ticket: once every sub-ticket is done, the epic review checks the parent's
+`Done when` against the default branch.
 
 Accessibility and offline use are Must-be across every screen, so each sub-ticket carries them in
 its acceptance criteria instead of a ticket of their own.
@@ -138,7 +140,7 @@ its acceptance criteria instead of a ticket of their own.
 ## The review
 
 The ticket moves to `In Review` with one review brief that links the five documents and the HTML
-screens, lists the ten sub-tickets and asks for D1 and D2 under `Decisions needed`, each with its
+screens, lists the nine sub-tickets and asks for D1 and D2 under `Decisions needed`, each with its
 recommended default (the run went on with it). The ticket's summary block links the same
 documents, the HTML screens and the sub-tickets.
 
@@ -146,6 +148,6 @@ documents, the HTML screens and the sub-tickets.
 - **Change:** comment on any part, for example "Drop the plant-sitter journey". The revision run
   removes J6 from the journeys, drops `Share a routine` from the Kano map, removes S12 from the
   Screens document and the HTML file, cancels sub-ticket 9 with the reason, updates the
-  `Final verification:` checklist and the brief, and hands over again.
+  brief, and hands over again.
 - **Reject:** move the ticket to `Rework`; Symphony cancels the `Backlog` sub-tickets and plans
   again.

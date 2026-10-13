@@ -3,8 +3,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that sits in `In Review` or the Human Review state (`SymphonyElixir.HumanReview`), is a
-  `Final verification:` ticket, or carries a deprecated request label
+  that sits in `In Review` or the Human Review state (`SymphonyElixir.HumanReview`), carries the
+  `Needs Decision` hold's label, or carries a deprecated request label
   (`SymphonyElixir.HumanReview.legacy_request_labels/1`). From those:
 
   - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
@@ -28,7 +28,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
-  alias SymphonyElixir.{HumanReview, RunKind, StateMachine, SubIssueWait}
+  alias SymphonyElixir.{HumanReview, StateMachine, SubIssueWait}
   alias SymphonyElixir.Linear.{Client, Issue}
 
   @issue_first 50
@@ -258,11 +258,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp filter(scope, settings) do
     labelled = Enum.map(HumanReview.legacy_request_labels(settings), &label_filter/1)
     in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
-    final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
     # A designed repo's request leaves the ticket in its phase, so the hold's label is what finds it.
     # A legacy repo never carries the label, so this reads nothing there.
     held = label_filter(Hold.label(:needs_decision))
-    wanted = %{"or" => labelled ++ in_review ++ [final_verification, held]}
+    wanted = %{"or" => labelled ++ in_review ++ [held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -456,8 +455,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
         est_minutes: @human_review_minutes,
         steps: [
           "Read the `## Symphony Workpad` comment and the latest QA report on #{issue.identifier}, and its PR if it has one.",
-          "Move #{issue.identifier} to `Merging` to approve its PR, to `Rework` to send it back, " <>
-            "or to `Done` to sign off a final verification."
+          "Move #{issue.identifier} to `Merging` to approve its PR, or to `Rework` to send it back."
         ],
         done_when: "#{issue.identifier} leaves #{issue.state}."
       })

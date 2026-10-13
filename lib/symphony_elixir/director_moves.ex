@@ -22,7 +22,6 @@ defmodule SymphonyElixir.DirectorMoves do
     comment with the picked options. A plan in the Human Review state first moves to `In Review`,
     so the comment, posted after the move, starts Symphony's plan revision run
     (`SymphonyElixir.PlanComments`); a plan in `In Review` or `Plan Review` gets the comment in place;
-  - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
     cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
@@ -63,7 +62,6 @@ defmodule SymphonyElixir.DirectorMoves do
     MergeConfirmation,
     Orchestrator,
     Restart,
-    RunKind,
     StateMachine,
     SubIssueWait,
     TicketSignals,
@@ -91,7 +89,6 @@ defmodule SymphonyElixir.DirectorMoves do
           | :rework
           | :restart
           | :decisions
-          | :sign_off
           | :backlog
           | :unblock
           | :decide
@@ -114,7 +111,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
+  @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :backlog, :unblock, :decide]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -332,12 +329,6 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp target(:sign_off, issue, settings) do
-    with :ok <- require_kind(issue, :final_verification, "sign_off"),
-         :ok <- require_review(issue, settings),
-         do: {:ok, @done_state}
-  end
-
   defp target(:backlog, %Issue{state: state} = issue, settings) do
     cond do
       same_state?(state, @backlog_state) -> conflict("#{issue.identifier} is already in Backlog")
@@ -353,17 +344,10 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp kind(issue) do
-    cond do
-      RunKind.classify(issue) == :final_verification -> :final_verification
-      Issue.breakdown?(issue) -> :plan
-      true -> :pr
-    end
-  end
+  defp kind(issue), do: if(Issue.breakdown?(issue), do: :plan, else: :pr)
 
   defp kind_phrase(:plan), do: "a plan"
   defp kind_phrase(:pr), do: "a pull request"
-  defp kind_phrase(:final_verification), do: "a final verification"
 
   # The Director answers a ticket a person is reviewing: `In Review` or the human review state, and
   # a designed repo's `Plan Review`, where a plan parent waits for its plan's review.

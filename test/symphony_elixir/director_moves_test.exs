@@ -141,11 +141,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_state_update, "pr", "Merging"}
     end
 
-    test "refuses a plan, a final verification and a pull request already merging", %{opts: opts} do
-      put_issues([plan("In Review"), final_verification("In Review"), pr("Merging")])
+    test "refuses a plan and a pull request already merging", %{opts: opts} do
+      put_issues([plan("In Review"), pr("Merging")])
 
       assert {:error, {:conflict, "MOT-30 is a plan; approve_pr is for a pull request"}} = DirectorMoves.move(:approve_pr, "MOT-30", %{}, opts)
-      assert {:error, {:conflict, "MOT-50 is a final verification; approve_pr is for a pull request"}} = DirectorMoves.move(:approve_pr, "MOT-50", %{}, opts)
       assert {:error, {:conflict, "MOT-40 is Merging;" <> _}} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
       refute_received {:memory_tracker_state_update, _id, _state}
     end
@@ -456,16 +455,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([pr("In Progress")])
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
       assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nLater"}
-    end
-  end
-
-  describe "sign_off" do
-    test "moves a final verification in review to Done, and refuses anything else", %{opts: opts} do
-      put_issues([final_verification("Human Review"), pr("In Review")])
-
-      assert {:ok, %{to_state: "Done"}} = DirectorMoves.move(:sign_off, "MOT-50", %{}, opts)
-      assert_received {:memory_tracker_state_update, "verify", "Done"}
-      assert {:error, {:conflict, "MOT-40 is a pull request; sign_off is for a final verification"}} = DirectorMoves.move(:sign_off, "MOT-40", %{}, opts)
     end
   end
 
@@ -934,7 +923,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
+    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :restart, :decisions, :backlog, :unblock, :decide]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 
@@ -997,7 +986,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defp plan(state), do: %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: state, labels: ["plan"]}
   defp pr(state), do: %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: state, labels: []}
-  defp final_verification(state), do: %Issue{id: "verify", identifier: "MOT-50", title: "Final verification: Plan an MVP", state: state}
 
   defp audit_records do
     {:ok, stream} = AuditLog.query(event_type: "director_move")

@@ -547,46 +547,6 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     test "an agent can move its issue to Human Review itself" do
       assert move("Human Review", %{}) == "state-human"
     end
-
-    test "the comment registry tracks a run's `## Supervisor check` block as it is posted, edited and deleted" do
-      {:ok, registry} = CommentRegistry.start_link()
-
-      comment = fn tool, args ->
-        response =
-          DynamicTool.execute(tool, args,
-            issue: %Issue{id: "issue-current"},
-            comment_registry: registry,
-            linear_client: fn _query, _variables, _opts ->
-              {:ok,
-               %{
-                 "data" => %{
-                   "commentCreate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
-                   "commentUpdate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
-                   "commentDelete" => %{"success" => true}
-                 }
-               }}
-            end
-          )
-
-        assert response["success"] == true
-      end
-
-      # A brief without the block, or naming it only in passing, changes nothing.
-      comment.("linear_add_comment", %{"body" => "## Review brief\n\nSee the `## Supervisor check` below."})
-      refute CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\n  ## Supervisor check\n\n**Verify:** no crash on `main`."})
-      assert CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\nNothing left to check."})
-      refute CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Supervisor check\n\n**Verify:** no crash on `main`."})
-      assert CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_delete_comment", %{"comment_id" => "brief-1"})
-      refute CommentRegistry.supervisor_check?(registry)
-    end
   end
 
   test "update_state allows Waiting on sub-tickets when the waiting state is turned off in config" do

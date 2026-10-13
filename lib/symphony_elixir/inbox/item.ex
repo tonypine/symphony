@@ -7,7 +7,6 @@ defmodule SymphonyElixir.Inbox.Item do
   - `:action`: an open `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`),
     whatever else the ticket is; its review is the request: why, the steps or the options, about
     how long, what it unblocks;
-  - `:final_verification`: a `Final verification:` ticket to sign off;
   - `:plan`: a plan parent (label `plan` or `breakdown`) whose plan waits for approval, with its
     sub-tickets in landing order;
   - `:pr`: any other ticket in `In Review` or `Human Review`, a pull request to review, with its
@@ -17,7 +16,7 @@ defmodule SymphonyElixir.Inbox.Item do
   - `:blocked`: a ticket an access hold pauses in place (`SymphonyElixir.Hold`), with the reason the
     hold recorded and what clears it; the Director lifts it with `Unblock`.
 
-  A plan, PR or final verification carries its `## Review brief` comment parsed
+  A plan or PR carries its `## Review brief` comment parsed
   (`SymphonyElixir.Inbox.ReviewBrief`) as `review.brief`, nil when it has none.
 
   `state_machine` is the repo's resolved version (`SymphonyElixir.StateMachine.version/1`): the app
@@ -37,7 +36,7 @@ defmodule SymphonyElixir.Inbox.Item do
   alias SymphonyElixir.QaAgent.Report
   alias SymphonyElixir.StateMachine
 
-  @type kind :: :action | :final_verification | :plan | :pr | :clarify | :blocked
+  @type kind :: :action | :plan | :pr | :clarify | :blocked
   @type t :: %{
           required(:issue_id) => String.t(),
           required(:identifier) => String.t() | nil,
@@ -121,7 +120,6 @@ defmodule SymphonyElixir.Inbox.Item do
   defp ask(%{kind: :action}, node, settings), do: Collector.newest_request(node, settings).title
   defp ask(%{headline: headline}, _node, _settings) when is_binary(headline), do: headline
   defp ask(%{kind: :plan}, _node, _settings), do: "Approve the plan"
-  defp ask(%{kind: :final_verification}, _node, _settings), do: "Sign off the final verification"
   defp ask(%{kind: :pr}, _node, _settings), do: "Review the pull request"
 
   # A merge confirmation's hold carries the move its confirmation performs (`Merging`), so the
@@ -147,8 +145,6 @@ defmodule SymphonyElixir.Inbox.Item do
 
   defp review(:pr, node, repo_key, _settings, lookups),
     do: %{brief: brief(node), pull_request: pull_request(node, repo_key, lookups)}
-
-  defp review(:final_verification, node, _repo_key, _settings, _lookups), do: %{brief: brief(node)}
 
   @doc "A rendered request option (`**Label** (recommended): effect`) as its label, effect and whether it is recommended."
   @spec option(String.t()) :: %{label: String.t(), effect: String.t() | nil, recommended: boolean()}

@@ -162,7 +162,7 @@ defmodule SymphonyElixir.InboxTest do
       refute Map.has_key?(pull_request, :gate)
     end
 
-    test "a plan with its sub-tickets in landing order, and a final verification" do
+    test "a plan with its sub-tickets in landing order, and no final-verification kind" do
       plan =
         issue_node("SHOP-330", %{
           "labels" => %{"nodes" => [%{"name" => "plan"}]},
@@ -182,7 +182,7 @@ defmodule SymphonyElixir.InboxTest do
 
       verification = issue_node("SHOP-340", %{"title" => "Final verification: Gift cards"})
 
-      assert %{kind: :final_verification, ask: "Sign off the final verification", review: %{brief: nil}} =
+      assert %{kind: :pr, ask: "Review the pull request"} =
                Item.from_node(verification, "shop", %Schema{}, lookups())
     end
 

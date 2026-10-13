@@ -1290,7 +1290,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp waiting_kind_label("plan"), do: "Plan"
   defp waiting_kind_label("pr"), do: "PR"
-  defp waiting_kind_label("final_verification"), do: "Final verification"
   defp waiting_kind_label("action"), do: "Decision"
   defp waiting_kind_label("clarify"), do: "Clarify"
 

@@ -6,8 +6,8 @@ defmodule SymphonyElixir.HumanActions.Request do
   state (`SymphonyElixir.HumanReview`); on a designed one it leaves the issue in its phase and sets
   the `Needs Decision` hold (`SymphonyElixir.NeedsDecisionHold`), and `render_hold/2` renders that
   comment. A person only ever gets a decision: one question and two to four options, each with what
-  it does, one of them recommended. Never a runbook of steps: a check an agent can't run goes to
-  the supervisor as a `## Supervisor check` in `In Review` instead.
+  it does, one of them recommended. Never a runbook of steps: a check an agent can't run is a
+  coverage gap for CI or a QA playbook instead.
 
       ## Decision needed: Close TP-612 as a duplicate of TP-668
 

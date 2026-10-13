@@ -154,24 +154,6 @@ public struct Initiative: Equatable, Identifiable {
         }
     }
 
-    public struct FinalVerification: Equatable {
-        public var ticket: SubTicket
-        /// The initiative's sub-tickets not done yet.
-        public var openTickets: Int
-
-        /// "Waits on 3 tickets" until the others are done, then what it is at: its result once done.
-        public var line: String {
-            switch ticket.waits {
-            case .done: return "Passed"
-            case .working: return "Running"
-            case .you: return "Waits on you to sign off"
-            default:
-                if openTickets > 0 { return "Waits on \(openTickets) \(openTickets == 1 ? "ticket" : "tickets")" }
-                return ticket.waits.line
-            }
-        }
-    }
-
     /// The initiative's line in the epic lanes.
     public struct Slot: Equatable {
         public var status: String
@@ -204,7 +186,6 @@ public struct Initiative: Equatable, Identifiable {
     public var url: URL?
     public var group: Group
     public var subTickets: [SubTicket]
-    public var finalVerification: FinalVerification?
     public var slot: Slot?
 
     public var id: String { issueID }
@@ -260,9 +241,6 @@ public struct Initiative: Equatable, Identifiable {
         url = payload.url.flatMap(URL.init(string:))
         self.group = group
         subTickets = (payload.subTickets ?? []).compactMap(SubTicket.init)
-        finalVerification = payload.finalVerification.flatMap { final in
-            SubTicket(final).map { FinalVerification(ticket: $0, openTickets: final.openTickets ?? 0) }
-        }
         slot = payload.slot.flatMap { slot in
             slot.status.map { Slot(status: $0, identifier: slot.identifier, reason: slot.reason, position: slot.position) }
         }
@@ -270,7 +248,7 @@ public struct Initiative: Equatable, Identifiable {
 
     public init(
         issueID: String, identifier: String, title: String?, state: String? = nil, repoKey: String?, url: URL? = nil,
-        group: Group, subTickets: [SubTicket], finalVerification: FinalVerification? = nil, slot: Slot? = nil
+        group: Group, subTickets: [SubTicket], slot: Slot? = nil
     ) {
         self.issueID = issueID
         self.identifier = identifier
@@ -280,7 +258,6 @@ public struct Initiative: Equatable, Identifiable {
         self.url = url
         self.group = group
         self.subTickets = subTickets
-        self.finalVerification = finalVerification
         self.slot = slot
     }
 
@@ -294,7 +271,6 @@ public struct Initiative: Equatable, Identifiable {
             let blockedBy: [String]?
             let waitsOn: String?
             let waitingFor: [String]?
-            let openTickets: Int?
         }
 
         struct SlotPayload: Decodable {
@@ -312,7 +288,6 @@ public struct Initiative: Equatable, Identifiable {
         let url: String?
         let group: String?
         let subTickets: [SubTicketPayload]?
-        let finalVerification: SubTicketPayload?
         let slot: SlotPayload?
     }
 }

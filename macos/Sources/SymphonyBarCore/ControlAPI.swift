@@ -20,7 +20,6 @@ public enum ControlAction: Equatable {
     /// workpad, back to In Progress. A person's move; agents cannot ask for it.
     case restart(String, reason: String)
     case decisions(String, picks: [DecisionPick])
-    case signOff(String)
     case backlog(String, note: String?)
     /// Answers a decision request: the picks, the id of the request comment they answer, and the state the
     /// decision directs (`rework`, `done`) when it directs one.
@@ -64,8 +63,6 @@ public enum ControlAction: Equatable {
             return "api/v1/control/restart"
         case .decisions:
             return "api/v1/control/decisions"
-        case .signOff:
-            return "api/v1/control/sign_off"
         case .backlog:
             return "api/v1/control/backlog"
         case .decide:
@@ -82,7 +79,7 @@ public enum ControlAction: Equatable {
         switch self {
         case let .approvePlan(identifier), let .approvePR(identifier), let .rework(identifier, _),
              let .restart(identifier, _),
-             let .decisions(identifier, _), let .signOff(identifier), let .backlog(identifier, _),
+             let .decisions(identifier, _), let .backlog(identifier, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .pauseWithReason, .resume, .force, .stopForcing, .stop:
@@ -102,7 +99,7 @@ public enum ControlAction: Equatable {
             return ["identifier": identifier]
         case let .stopForcing(identifier):
             return ["identifier": identifier, "clear": "true"]
-        case let .stop(identifier), let .approvePlan(identifier), let .approvePR(identifier), let .signOff(identifier),
+        case let .stop(identifier), let .approvePlan(identifier), let .approvePR(identifier),
              let .unblock(identifier), let .undo(identifier):
             return ["issue_identifier": identifier]
         case let .rework(identifier, reason):
@@ -147,8 +144,6 @@ public enum ControlAction: Equatable {
             return "Couldn't restart \(identifier)"
         case let .decisions(identifier, _):
             return "Couldn't send the decisions on \(identifier)"
-        case let .signOff(identifier):
-            return "Couldn't sign off \(identifier)"
         case let .backlog(identifier, _):
             return "Couldn't move \(identifier) to Backlog"
         case let .decide(identifier, _, _, _):

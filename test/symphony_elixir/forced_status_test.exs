@@ -8,7 +8,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
       kinds = [:implementation, :rework, :review_feedback, :ci_fix, :landing, :code_review, :qa]
       kinds = kinds ++ [:breakdown, :close_out, :epic_review]
 
-      for kind <- [:final_verification | kinds] do
+      for kind <- kinds do
         assert %{phase: ^kind, running: true, waiting_on: nil, blockers: []} =
                  ForcedStatus.describe(%{running_kind: kind, blockers: ["MT-1"]})
       end

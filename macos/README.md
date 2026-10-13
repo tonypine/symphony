@@ -203,7 +203,7 @@ set (or, in Development mode, no checkout folder).
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
   overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
-  (breakdown, close-out, final verification, implementation, rework, CI fix, review feedback, landing,
+  (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
   pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
   the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
   inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
@@ -333,7 +333,7 @@ starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens 
 Open Logs opens `menubar-child.log`.
 
 While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans and PRs in
-`In Review` or `Human Review`, final verifications to sign off, open decisions, tickets the quality gate
+`In Review` or `Human Review`, open decisions, tickets the quality gate
 holds or skipped, and tickets an access hold pauses in place), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
 each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
 ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
@@ -833,14 +833,13 @@ state. The window opens on the Inbox the first time.
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
-  **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
-  verification **Sign Off…**; an action asking a decision **Send Decision…** (its options are the picks) and,
+  **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); an action asking a decision **Send Decision…** (its options are the picks) and,
   under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access hold and
   lets it continue in place. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
-  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `decide`, `unblock`), and what went wrong
+  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `decide`, `unblock`), and what went wrong
   shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
   Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
   seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow

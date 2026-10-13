@@ -36,7 +36,7 @@
     "retrying": 0,
     "running": 3,
     "shipped_today": 3,
-    "waiting_on_you": 6,
+    "waiting_on_you": 5,
     "watching": 5
   },
   "dispatch_state": {
@@ -349,19 +349,6 @@
       "url": "https://linear.app/acme/issue/BIL-206",
       "waiting_seconds": 5460,
       "waiting_since": "2026-10-07T12:49:00Z"
-    },
-    {
-      "checks_green": false,
-      "headline": "Every requirement of BIL-200 checked on main; one supervisor check left.",
-      "issue_id": "i-200",
-      "issue_identifier": "BIL-213",
-      "kind": "final_verification",
-      "repo_key": "api",
-      "state": "In Review",
-      "title": "Final verification: Usage-based billing",
-      "url": "https://linear.app/acme/issue/BIL-213",
-      "waiting_seconds": 2700,
-      "waiting_since": "2026-10-07T13:35:00Z"
     },
     {
       "checks_green": false,

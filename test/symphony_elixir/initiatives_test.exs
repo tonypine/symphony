@@ -79,13 +79,12 @@ defmodule SymphonyElixir.InitiativesTest do
       assert %{group: "active", state: nil} = Initiative.from_node(plan("BIL-11", {nil, "started"}, []), "billing", settings(), @now)
     end
 
-    test "orders sub-tickets by blocked-by, then creation, and sets the final verification apart" do
+    test "orders sub-tickets by blocked-by, then creation, and lists every open sub-ticket" do
       children = [
         child("BIL-4", @todo, Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by([{"BIL-3", "unstarted"}]))),
         child("BIL-3", @todo, %{"createdAt" => "2026-10-02T09:00:00Z"}),
         child("BIL-2", @done, %{"createdAt" => "2026-10-03T09:00:00Z"}),
         child("BIL-9", {"Canceled", "canceled"}),
-        child("BIL-8", @todo, %{"title" => "Final verification: the epic"}),
         child("BIL-6", @todo, Map.merge(%{"createdAt" => "2026-10-04T09:00:00Z"}, blocked_by([{"BIL-7", "unstarted"}]))),
         child("BIL-7", @todo, Map.merge(%{"createdAt" => "2026-10-05T09:00:00Z"}, blocked_by([{"BIL-6", "unstarted"}]))),
         child("BIL-5", @todo, %{"createdAt" => nil, "title" => nil})
@@ -95,29 +94,9 @@ defmodule SymphonyElixir.InitiativesTest do
 
       # BIL-6 and BIL-7 block each other: creation order breaks the cycle.
       assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
-      assert initiative.final_verification.identifier == "BIL-8"
       assert hd(Enum.filter(initiative.sub_tickets, &(&1.identifier == "BIL-4"))).blocked_by == [%{identifier: "BIL-3", state: "x", open: true}]
       assert initiative.repo_key == "billing"
       refute initiative.incomplete
-    end
-
-    test "keeps the oldest open final verification and leaves the others in the sub-tickets" do
-      final = &child(&1, &2, %{"title" => "Final verification: the epic", "createdAt" => &3})
-
-      children = [
-        final.("BIL-4", @todo, "2026-10-03T09:00:00Z"),
-        final.("BIL-3", @todo, "2026-10-02T09:00:00Z"),
-        final.("BIL-2", @done, "2026-10-01T09:00:00Z")
-      ]
-
-      initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings(), @now)
-      assert initiative.final_verification.identifier == "BIL-3"
-      assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-2", "BIL-4"]
-
-      all_done = [final.("BIL-6", @done, "2026-10-02T09:00:00Z"), final.("BIL-5", @done, "2026-10-01T09:00:00Z")]
-      all_done = Initiative.from_node(plan("BIL-1", @in_progress, all_done), "billing", settings(), @now)
-      assert all_done.final_verification.identifier == "BIL-5"
-      assert Enum.map(all_done.sub_tickets, & &1.identifier) == ["BIL-6"]
     end
 
     test "flags a plan whose sub-tickets or blockers run past one read as incomplete" do
@@ -141,8 +120,7 @@ defmodule SymphonyElixir.InitiativesTest do
         child("BIL-7", @todo),
         child("BIL-8", {"Backlog", "backlog"}),
         child("BIL-10", @todo, blocked_by([{"BIL-4", "started"}])),
-        child("BIL-11", @in_review),
-        child("BIL-9", {"Todo", "unstarted"}, Map.merge(%{"title" => "Final verification: billing"}, blocked_by([{"BIL-7", "unstarted"}])))
+        child("BIL-11", @in_review)
       ]
 
       settings = %Schema{tracker: %{kind: "memory", human_review_state: "Human Review"}}
@@ -166,11 +144,7 @@ defmodule SymphonyElixir.InitiativesTest do
 
       assert Enum.find(live.sub_tickets, &(&1.identifier == "BIL-5")).waiting_for == ["BIL-4"]
       assert live.counts == %{"done" => 1, "working" => 2, "you" => 3, "queued" => 1, "blocked" => 2, "total" => 9}
-      assert %{identifier: "BIL-9", waits_on: "blocker", open_tickets: 8} = live.final_verification
       assert Initiative.stages() == ~w(done working you queued blocked)
-
-      no_final = Initiative.live(%{initiative | final_verification: nil}, %{running: MapSet.new(), you: MapSet.new(), settings: nil})
-      assert no_final.final_verification == nil
     end
   end
 

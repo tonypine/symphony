@@ -269,6 +269,23 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert log =~ "`repositories[app].agent.run_profiles.acceptance_gate` is deprecated and has no effect"
     end
 
+    test "agent.run_profiles.final_verification still loads, warns and is dropped" do
+      agent = %{
+        "runtime" => "claude",
+        "command" => "claude --dangerously-skip-permissions",
+        "run_profiles" => %{"final_verification" => %{"model" => "claude-opus-5-5"}, "qa" => %{"effort" => "high"}}
+      }
+
+      log =
+        capture_log(fn ->
+          assert {:ok, system} = SystemSchema.parse(symphony(%{"agent" => agent}, %{}))
+          assert {:ok, settings} = Schema.parse(SystemSchema.to_config_map(system))
+          assert settings.agent.run_profiles == %{"qa" => %{"effort" => "high"}}
+        end)
+
+      assert log =~ "`agent.run_profiles.final_verification` is deprecated and has no effect: `Final verification:` tickets are retired"
+    end
+
     test "pull_requests.checks.escalate_to_state still loads and warns that it does nothing" do
       log = parse_log(%{"pull_requests" => %{"checks" => %{"escalate_to_state" => "Blocked"}}})
 

@@ -80,7 +80,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
-  test "queries the route's scope for labelled, In Review, Human Review, final verification or held issues that are not terminal" do
+  test "queries the route's scope for labelled, In Review, Human Review or held issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -95,7 +95,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
-                   %{"title" => %{"startsWith" => "Final verification:"}},
                    # A designed repo's decision request leaves the ticket in its phase.
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
                  ]
@@ -138,7 +137,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert wanted == [
              %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
              %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
-             %{"title" => %{"startsWith" => "Final verification:"}},
              %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
            ]
   end
@@ -339,7 +337,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                title: "Review MOT-63",
                why: "MOT-63 waits in Human Review: only you can move it on.",
                est_minutes: 10,
-               steps: [_read, "Move MOT-63 to `Merging` to approve its PR, to `Rework` to send it back, or to `Done` to sign off a final verification."],
+               steps: [_read, "Move MOT-63 to `Merging` to approve its PR, or to `Rework` to send it back."],
                done_when: "MOT-63 leaves Human Review."
              }
            ] = actions(collected)
@@ -355,9 +353,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert collected == %{}
 
     assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
-    assert [in_review, final_verification, held] = wanted
+    assert [in_review, held] = wanted
     assert in_review == %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
-    assert final_verification == %{"title" => %{"startsWith" => "Final verification:"}}
     # The hold's label lists a designed repo's request wherever in the workflow it sits.
     assert held == %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
   end

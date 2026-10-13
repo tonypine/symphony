@@ -27,7 +27,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.StateMachine
-  alias SymphonyElixir.SupervisorCheck
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
 
@@ -741,10 +740,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
     }
   end
 
-  defp record_supervisor_check(context, comment_id, body) do
-    CommentRegistry.record_supervisor_check(Map.get(context, :comment_registry), comment_id, SupervisorCheck.in_body?(body))
-  end
-
   @spec add_comment(context(), String.t()) :: {:ok, map()} | {:error, term()}
   def add_comment(context, body), do: add_comment(context, body, [])
 
@@ -757,7 +752,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment_id = get_in(response, ["data", "commentCreate", "comment", "id"])
       CommentRegistry.record(Map.get(context, :comment_registry), comment_id)
-      record_supervisor_check(context, comment_id, body)
       {:ok, response}
     end
   end
@@ -783,10 +777,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with :ok <- verify_comment_owner(context, comment_id),
          :ok <- reject_truncated_body(body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_update_comment", opts),
-         {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts),
-         {:ok, response} <- check_mutation_success(response, "commentUpdate") do
-      record_supervisor_check(context, comment_id, body)
-      {:ok, response}
+         {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts) do
+      check_mutation_success(response, "commentUpdate")
     end
   end
 
@@ -1119,7 +1111,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Marks the current issue blocked by existing issues: each identifier in `blocked_by` gets a
   `blocks` relation to the current issue, so Symphony holds it in `Todo` until every blocker is
-  terminal. A final verification uses it to wait on the gaps it filed. Every identifier is looked
+  terminal. Every identifier is looked
   up before any relation is created; unknown identifiers and the current issue itself are refused.
   """
   @spec add_blocked_by(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}

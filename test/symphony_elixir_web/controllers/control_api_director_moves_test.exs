@@ -19,8 +19,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
       %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Human Review", labels: ["plan"]},
-      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Review", labels: []},
-      %Issue{id: "verify", identifier: "MOT-50", title: "Final verification: Plan an MVP", state: "In Review"}
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Review", labels: []}
     ])
 
     server = :"director_moves_api_#{System.unique_integer([:positive])}"
@@ -34,7 +33,6 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
           {:approve_pr, %{}, "MOT-40", "Merging"},
           {:rework, %{"reason" => "Totals are wrong"}, "MOT-40", "Rework"},
           {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "In Review"},
-          {:sign_off, %{}, "MOT-50", "Done"},
           {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"}
         ] do
       conn = post(action, Map.put(params, "issue_identifier", identifier), moves)
@@ -209,7 +207,6 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       :rework,
       :restart,
       :decisions,
-      :sign_off,
       :backlog,
       :unblock,
       :decide,

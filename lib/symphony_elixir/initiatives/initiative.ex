@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   One plan ticket followed to done, for the Mac app's Initiatives (`GET /api/v1/initiatives`).
 
   `from_node/4` reads what Linear said about the plan ticket on Symphony's poll: its group (`active`,
-  `in_review` or `done`), its sub-tickets in landing order and its `Final verification:` sub-ticket.
+  `in_review` or `done`), and its sub-tickets in landing order.
   `live/2` adds what each open sub-ticket waits on from what Symphony knows locally at GET time (the
   running tickets, the Inbox, the epic lanes), so a GET never reads Linear:
 
@@ -15,15 +15,12 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   - `slot`: it can run and waits for a free slot.
 
   Landing order is blocked-by order between the sub-tickets, then creation order. Canceled
-  sub-tickets are left out. When several sub-tickets are titled `Final verification:`, the oldest
-  one not done is the final verification (the oldest one when all are done); the others stay in
-  the sub-tickets. `incomplete` is true when Linear had more sub-tickets, or more blockers on one,
+  sub-tickets are left out. `incomplete` is true when Linear had more sub-tickets, or more blockers on one,
   than the read returns: the counts and landing order then cover only what was read.
   """
 
   alias SymphonyElixir.HumanReview
 
-  @final_verification_prefix "final verification:"
   @machine_states MapSet.new(["code review", "qa", "merging", "ci fix", "epic review"])
   @stages ~w(done working you queued blocked)
 
@@ -48,7 +45,6 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           group: String.t(),
           completed_at: String.t() | nil,
           sub_tickets: [sub_ticket()],
-          final_verification: sub_ticket() | nil,
           incomplete: boolean()
         }
 
@@ -81,8 +77,6 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           |> Enum.map(&sub_ticket/1)
           |> Enum.reject(&(&1.state_type == "canceled"))
 
-        {final, parts} = split_final(children)
-
         %{
           id: id,
           identifier: node["identifier"],
@@ -92,8 +86,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           repo_key: repo_key,
           group: group,
           completed_at: node["completedAt"],
-          sub_tickets: landing_order(parts),
-          final_verification: final,
+          sub_tickets: landing_order(children),
           incomplete: truncated?(node)
         }
     end
@@ -148,26 +141,12 @@ defmodule SymphonyElixir.Initiatives.Initiative do
     end
   end
 
-  defp split_final(children) do
-    finals = children |> Enum.filter(&final_verification?/1) |> Enum.sort_by(&{&1.created_at || "", &1.identifier || ""})
-
-    case Enum.find(finals, &(&1.state_type != "completed")) || List.first(finals) do
-      nil -> {nil, children}
-      final -> {final, List.delete(children, final)}
-    end
-  end
-
   defp truncated?(node) do
     more?(node["children"]) or node |> get_in(["children", "nodes"]) |> List.wrap() |> Enum.any?(&more?(&1["inverseRelations"]))
   end
 
   defp more?(%{"pageInfo" => %{"hasNextPage" => true}}), do: true
   defp more?(_connection), do: false
-
-  defp final_verification?(%{title: title}) when is_binary(title),
-    do: title |> String.trim_leading() |> String.downcase() |> String.starts_with?(@final_verification_prefix)
-
-  defp final_verification?(_sub_ticket), do: false
 
   # Kahn's walk over the blocked-by links between siblings, taking the oldest ready ticket each step.
   # A cycle is broken by creation order.
@@ -192,25 +171,17 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   end
 
   @doc """
-  The initiative with what each sub-ticket waits on, the final verification's open-ticket count, the
-  counts by stage and the waiting-on-you headline, from what Symphony knows locally.
+  The initiative with what each sub-ticket waits on, the counts by stage and the waiting-on-you headline, from what Symphony knows locally.
   """
   @spec live(t(), live()) :: map()
   def live(initiative, live) do
     sub_tickets = Enum.map(initiative.sub_tickets, &with_wait(&1, live))
-    open = Enum.count(sub_tickets, &(&1.waits_on != "done"))
-
-    final =
-      case initiative.final_verification do
-        nil -> nil
-        final -> final |> with_wait(live) |> Map.put(:open_tickets, open)
-      end
 
     counts = Map.new(@stages, &{&1, 0})
     counts = Enum.reduce(sub_tickets, counts, &Map.update!(&2, stage(&1.waits_on), fn count -> count + 1 end))
 
     initiative
-    |> Map.merge(%{sub_tickets: sub_tickets, final_verification: final, counts: Map.put(counts, "total", length(sub_tickets))})
+    |> Map.merge(%{sub_tickets: sub_tickets, counts: Map.put(counts, "total", length(sub_tickets))})
   end
 
   defp with_wait(sub_ticket, live) do

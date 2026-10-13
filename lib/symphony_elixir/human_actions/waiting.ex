@@ -8,7 +8,6 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   what waits:
 
   - `:action`: an open request, whatever else the issue is;
-  - `:final_verification`: a `Final verification:` ticket to sign off;
   - `:plan`: a plan parent (label `plan` or `breakdown`) whose plan waits for approval;
   - `:pr`: any other issue, a pull request to review.
 
@@ -21,14 +20,14 @@ defmodule SymphonyElixir.HumanActions.Waiting do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Collector, Request}
-  alias SymphonyElixir.{HumanReview, RunKind}
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
 
   @brief_heading "## Review brief"
   @what_to_review ~r/^\s*\*\*What to review:\*\*(.*)$/
   @headline_max 200
 
-  @type kind :: :action | :final_verification | :plan | :pr
+  @type kind :: :action | :plan | :pr
   @type entry :: %{
           issue_id: String.t(),
           identifier: String.t() | nil,
@@ -73,11 +72,7 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   defp kind(node, []) do
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])
 
-    cond do
-      RunKind.classify(%Issue{title: node["title"]}) == :final_verification -> :final_verification
-      Enum.any?(labels, &Issue.breakdown_label?/1) -> :plan
-      true -> :pr
-    end
+    if Enum.any?(labels, &Issue.breakdown_label?/1), do: :plan, else: :pr
   end
 
   # The current wait began at the later of the move into the current state and the newest open

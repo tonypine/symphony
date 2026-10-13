@@ -46,7 +46,7 @@ defmodule SymphonyElixir.EpicReview do
        it ended where it did.
 
   A legacy repo never reaches this module: `run/3` returns `:skip` for anything but a designed
-  repo's epic parent, so the close-out run and the `Final verification:` flow are untouched.
+  repo's epic parent, so the legacy close-out run is untouched.
 
   Every effect is injectable: `opts[:qa_agent]`, `opts[:tracker]`, `opts[:git]`,
   `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]` default to the real ones and are fakes
@@ -547,7 +547,7 @@ defmodule SymphonyElixir.EpicReview do
   defp short_sha(sha) when is_binary(sha), do: String.slice(sha, 0, 12)
 
   # The checklist is the epic's own definition of done, so a `pass` that reports none of its rows,
-  # or skipped most of them, verified nothing (the rule TP-545 set for the final verification). It
+  # or skipped most of them, verified nothing (the rule TP-545 set for epic verification). It
   # is not a pass but a block: retried boundedly, then handed to the self-heal lane, which takes it
   # to a person when only a person can clear it.
   # A carried pass has no steps of its own: the checklist was resolved by the review that earned

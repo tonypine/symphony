@@ -41,7 +41,6 @@ public struct InboxItem: Equatable, Identifiable {
     public enum Kind: String, CaseIterable, Equatable {
         case plan
         case pr
-        case finalVerification = "final_verification"
         case action
         case clarify
         /// A ticket an access hold pauses in place, waiting on an Unblock.
@@ -52,7 +51,6 @@ public struct InboxItem: Equatable, Identifiable {
             switch self {
             case .plan: "Plans"
             case .pr: "Pull requests"
-            case .finalVerification: "Final verifications"
             case .action: "Actions"
             case .clarify: "Clarify"
             case .blocked: "Blocked"
@@ -64,7 +62,6 @@ public struct InboxItem: Equatable, Identifiable {
             switch self {
             case .plan: "Plan"
             case .pr: "Pull request"
-            case .finalVerification: "Final verification"
             case .action: "Action"
             case .clarify: "Clarify"
             case .blocked: "Blocked"
@@ -76,7 +73,6 @@ public struct InboxItem: Equatable, Identifiable {
             switch self {
             case .plan: "doc.text.magnifyingglass"
             case .pr: "arrow.triangle.pull"
-            case .finalVerification: "checkmark.seal"
             case .action: "hand.raised"
             case .clarify: "questionmark.bubble"
             case .blocked: "hand.raised.slash"
@@ -172,7 +168,7 @@ public struct InboxItem: Equatable, Identifiable {
 
 /// The review of an item (C15): which parts it has depends on its kind.
 public struct InboxReview: Equatable {
-    /// A plan's, PR's or final verification's `## Review brief`; nil when the ticket has none.
+    /// A plan's or PR's `## Review brief`; nil when the ticket has none.
     public var brief: Brief?
     /// A plan's sub-tickets, in landing order.
     public var subTickets: [SubTicket]
@@ -228,7 +224,6 @@ public struct InboxReview: Equatable {
         public var whatChanged: [String]
         public var decisions: [Decision]
         public var moves: [Move]
-        public var supervisorCheck: String?
     }
 
     public struct SubTicket: Equatable {
@@ -373,7 +368,6 @@ public struct InboxReview: Equatable {
             let whatChanged: [String]?
             let decisions: [DecisionPayload]?
             let moves: [MovePayload]?
-            let supervisorCheck: String?
         }
 
         struct SubTicketPayload: Decodable {
@@ -400,7 +394,7 @@ public struct InboxReview: Equatable {
             let recommended: Bool?
         }
 
-        // A plan, PR or final verification.
+        // A plan or PR.
         let brief: BriefPayload?
         let subTickets: [SubTicketPayload]?
         let pullRequest: PullRequestPayload?
@@ -496,8 +490,7 @@ public struct InboxReview: Equatable {
             moves: (payload.moves ?? []).compactMap { move in
                 guard let name = move.move, let text = move.text else { return nil }
                 return Move(move: name, text: text)
-            },
-            supervisorCheck: payload.supervisorCheck
+            }
         ))
     }
 }
@@ -583,7 +576,7 @@ public enum InboxAction: Equatable {
     public static func actions(for item: InboxItem) -> [InboxAction] {
         let linear = item.url.map(InboxAction.openInLinear)
         switch item.kind {
-        case .plan, .finalVerification:
+        case .plan:
             return [linear].compactMap { $0 }
         case .pr:
             let pr = item.review.pullRequest?.url.map(InboxAction.openPR)

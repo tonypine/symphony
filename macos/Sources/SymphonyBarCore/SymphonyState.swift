@@ -35,8 +35,6 @@ public struct StateSnapshot: Equatable {
             case plan
             /// A pull request to review.
             case pr
-            /// A `Final verification:` ticket to sign off.
-            case finalVerification
             /// A decision an agent asked for with `linear_request_human_action`.
             case action
             /// A ticket the quality gate held for clarification or skipped.
@@ -50,7 +48,6 @@ public struct StateSnapshot: Equatable {
                 switch text {
                 case "plan"?: self = .plan
                 case "pr"?: self = .pr
-                case "final_verification"?: self = .finalVerification
                 case "action"?: self = .action
                 case "clarify"?: self = .clarify
                 case "blocked"?: self = .blocked
@@ -63,7 +60,6 @@ public struct StateSnapshot: Equatable {
                 switch self {
                 case .plan: .plan
                 case .pr: .pr
-                case .finalVerification: .finalVerification
                 case .action: .action
                 case .clarify: .clarify
                 case .blocked: .blocked

@@ -8,7 +8,6 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case approveAndMerge
     case sendToRework
     case restart
-    case signOff
     /// Answers a decision request: the ticket continues in its phase, or the answer directs a move.
     case decide
     case unblock
@@ -23,7 +22,6 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
         case .restart: "Restart…"
-        case .signOff: "Sign Off…"
         case .decide: "Send Decision…"
         case .unblock: "Unblock…"
         }
@@ -37,7 +35,6 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
         case .restart: "Restart"
-        case .signOff: "Sign Off"
         case .decide: "Send Decision"
         case .unblock: "Unblock"
         }
@@ -73,7 +70,7 @@ public struct InboxToolbar: Equatable {
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
     /// recommendation) and ⋯ Send to Rework… and Restart…; a PR Approve and Merge… and Send to Rework…, with Open PR
-    /// the default while a check is red (D2b), and ⋯ Restart…; a final verification Sign Off…; a blocked ticket
+    /// the default while a check is red (D2b), and ⋯ Restart…; a blocked ticket
     /// Unblock…. Actions and clarify items keep their links. Restart (the human-only full reset) sits under ⋯ on
     /// both, so it takes a deliberate trip through the menu and its consequence sheet. An action carrying an
     /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
@@ -98,8 +95,6 @@ public struct InboxToolbar: Equatable {
                 return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: restart)
             }
             return InboxToolbar(buttons: moves + links, overflow: restart)
-        case .finalVerification:
-            return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .blocked:
             return InboxToolbar(buttons: [move(.unblock)] + links, overflow: [])
         case .action:
@@ -248,11 +243,6 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = "In Progress"
             happens = "Closes \(id)'s open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
             stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
-        case .signOff:
-            title = "Sign off \(id)?"
-            targetState = "Done"
-            happens = "Moves \(id) to Done; the parent's close-out run follows."
-            stays = "Nothing else changes in Linear."
         case .decide:
             title = "Send your decision on \(id)?"
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
@@ -312,7 +302,6 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 move: "rework"
             )
         case .restart: return .restart(identifier, reason: answer)
-        case .signOff: return .signOff(identifier)
         case .decide:
             guard let requestCommentID else { return nil }
             return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)

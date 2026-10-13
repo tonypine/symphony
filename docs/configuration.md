@@ -66,8 +66,8 @@ Relative repository workflow paths resolve from the directory containing `sympho
 ## Settings in the macOS app
 
 Every `symphony.yml` setting gets a control in the macOS app, or a person's exemption. When a
-ticket adds a setting, its plan includes the control: in the same PR, or in a sub-ticket that
-blocks the parent's final verification, with a `## User walkthrough` for the new control.
+ticket adds a setting, its plan includes the control: in the same PR, or in a sub-ticket of the
+same plan, which the parent's epic review checks, with a `## User walkthrough` for the new control.
 
 CI enforces it. `mix settings.ui_coverage`, part of `mix lint` (so of `make all` and the `lint`
 job), lists every setting as a dotted key path from the config schema
@@ -192,8 +192,8 @@ issues:
   when it is missing logs a warning and sends those tickets to `In Review` until restart. It must
   not be one of `states.active`: Symphony never dispatches a ticket in it. The CI and PR review
   pollers watch its PR as they do in `In Review`, and a person's move out of it counts like one out
-  of `In Review`: to `Merging` (approve), `Rework`, `states.waiting_on_sub_issues` (approve a
-  plan) or `Done` (sign off a final verification). It is the one way to say a person needs to act:
+  of `In Review`: to `Merging` (approve), `Rework` or `states.waiting_on_sub_issues` (approve a
+  plan). It is the one way to say a person needs to act:
   no label says it (the `human-action` label is retired, see `human_actions`). Symphony puts a
   ticket there instead of `In Review` when:
   - an agent moves a plan ticket to `In Review` and its ticket says a human reviews the plan:
@@ -680,15 +680,14 @@ agent:
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `final_verification` (title starts with `Final verification:`; a legacy repo only), `breakdown` (plan ticket in
-  `Rework`), `close_out` (a legacy repo's plan ticket whose sub-issues are all terminal), `epic_review`
-  (a designed repo's plan ticket whose sub-issues are all terminal: the epic review), `breakdown` (other
+  `breakdown` (plan ticket in `Rework`), `close_out` (a legacy repo's plan ticket whose sub-issues
+  are all terminal), `epic_review` (a designed repo's plan ticket whose sub-issues are all terminal: the epic review), `breakdown` (other
   plan ticket: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else); a designed repo also has `code_review`
   (`Code Review`) and `qa` (`QA`). `pre_push_review` names the pre-push reviewer run, and `qa` the QA
-  agent's runs. `acceptance_gate` is deprecated with the retired gate: it loads with a warning and
-  does nothing.
+  agent's runs. `acceptance_gate` is deprecated with the retired gate, and `final_verification`
+  with the retired `Final verification:` tickets: each loads with a warning and does nothing.
 - Resolution per field, for the repository the issue is routed to:
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
   `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
@@ -755,7 +754,7 @@ agent:
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
   queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
-  `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
+  `breakdown`, `close_out`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
@@ -775,8 +774,8 @@ agent:
   `forced_max` forced runs are going it starts even when `max_total`, the epic lanes,
   `finishing_max`, `max_by_issue_state` are full or a finish is waiting, at the next poll. This
   covers every phase: implementation, `Rework`, CI-fix and review-feedback continuations and
-  landing, a designed repo's `Code Review`, `QA` and epic review runs, and a `Final verification:`
-  ticket. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
+  landing, and a designed repo's `Code Review`, `QA` and epic review runs. Its run is marked
+  `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
   agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
   going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
@@ -792,7 +791,7 @@ agent:
   A forced plan ticket is one forced unit. Its plan, re-plan and close-out runs use the
   allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
-  blocked-by links keep their order; the `Final verification:` sub-ticket comes last) counts as
+  blocked-by links keep their order) counts as
   forced in the parent's place in the queue, without the label being written on it. It keeps that
   until it leaves the path or stops running or waiting on a retry. The other sub-tickets use normal slots and the epic lane.
   `/api/v1/state` shows it as the parent's `forced[].sub_issue`. Forcing never approves a plan: a
@@ -2176,7 +2175,7 @@ the `issues.states.human_review` state in each route's scope plus the ones carry
 label (a hold pauses a ticket in its phase, so it need not sit in a review state), reads a ticket's
 comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request, else
-`final_verification`, `plan` for a `plan` or `breakdown` parent, or `pr`; `clarify` for a quality
+`plan` for a `plan` or `breakdown` parent, or `pr`; `clarify` for a quality
 gate hold or skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
 recorded and what clears it), `headline` (its one-line ask: the text after `**What to review:**` in the latest
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
@@ -2196,7 +2195,7 @@ lists:
   person can decide: a product call, a missing secret or permission (add it, or drop what needs
   it), an account to set up. A request without options is refused, and a person never gets a check
   to run: a check an agent can't run (launching the app, a host crash check, a check on a device)
-  goes to the supervisor as a `## Supervisor check` block with the ticket in `In Review`. The
+  is a coverage gap for CI or a QA playbook. The
   update lists the question and the options, the recommended one marked. The tool moves the issue to `issues.states.human_review` (`In Review` when that
   state is off) and adds no label; the move ends the run shortly after, so the agent first pushes
   its committed work (and opens or updates the PR when the rest of the ticket is done) and updates
@@ -2254,10 +2253,7 @@ leaves a state a person moves it out of (anything but `issues.states.active` and
 move to `Human Review` keeps it open, and so does the agent's move to `Backlog`. A withdrawal
 closes it, and so does a terminal state. A plan
 review closes when the parent leaves its review state, and a blocked QA cause when every issue
-blocked on it leaves its review state or its next QA report is not `blocked`. A blocked final verification closes when
-its next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it
-to (`In Review`, `Human Review` when only a person can do the steps left, or `Todo` while gap
-tickets for its failing steps block it). A Human Review action closes when the issue leaves
+blocked on it leaves its review state or its next QA report is not `blocked`. A Human Review action closes when the issue leaves
 `Human Review`. A missing secret closes when the next run of
 its workflow on the base branch is green. Closed actions drop out of the next update.
 
