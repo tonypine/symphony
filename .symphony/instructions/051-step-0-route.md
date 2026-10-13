@@ -31,4 +31,4 @@
    - find/create `{{ agent.workpad_heading }}` bootstrap comment
    - only then begin analysis/planning/implementation work.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.
-7. If the ticket has the `plan` label (or `breakdown`, its older name, still accepted){% if state_machine != "designed" %}, or its title starts with `Final verification:`{% endif %}, follow `Parent tickets` below in place of the implementation steps (Step 1 items 8-11 and Step 2). The `Todo` -> `In Progress` transition and the workpad still apply.
+7. If the ticket has the `plan` label (or `breakdown`, its older name, still accepted), follow `Parent tickets` below in place of the implementation steps (Step 1 items 8-11 and Step 2). The `Todo` -> `In Progress` transition and the workpad still apply.
