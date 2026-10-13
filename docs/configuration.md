@@ -754,7 +754,7 @@ agent:
   restarts); a ticket labelled in another state, such as `Backlog` or `In Review`, joins once it
   moves into an active state. Once queued it stays listed in any non-terminal state (`In Review`,
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
-  queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
+  `title`, `repo_key`, queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
   `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,

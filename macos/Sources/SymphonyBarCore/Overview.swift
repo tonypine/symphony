@@ -91,6 +91,22 @@ public struct Overview: Equatable {
             case .shippedToday: "Shipped today"
             }
         }
+
+        /// Where a tile leads (J2 step 5).
+        public enum Destination: Equatable {
+            case inbox, shipped
+            case tickets(TicketList.Filter)
+        }
+
+        /// Waiting on you opens the Inbox, Shipped today opens Shipped (D9), the others open Tickets filtered to their
+        /// stage.
+        public var destination: Destination {
+            switch self {
+            case .waitingOnYou: .inbox
+            case .shippedToday: .shipped
+            default: TicketList.Filter(stage: self).map(Destination.tickets) ?? .inbox
+            }
+        }
     }
 
     /// A stat tile (C5): a count, its label and one line of context.
@@ -258,6 +274,7 @@ public struct Overview: Equatable {
 
     public static let resumeTitle = "Resume Dispatch"
     public static let allCaughtUp = "All caught up."
+    public static let showShippedTitle = "Show Shipped"
     public static let nowWorkingTitle = "Now working"
     public static let nextUpTitle = "Next up"
     public static let needsAttentionTitle = "Needs attention"

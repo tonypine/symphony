@@ -200,6 +200,9 @@ public struct StateSnapshot: Equatable {
     /// A ticket forced past the dispatch limits (`symphony force`, or its force label in Linear).
     public struct ForcedTicket: Equatable {
         public var identifier: String
+        public var issueID: String?
+        public var title: String?
+        public var repoKey: String?
         /// What it is doing and what it waits on, as Symphony words it: "implementation · running",
         /// "implementation · waiting on blocker TP-1", "waiting for a human". Nil when Symphony didn't say.
         public var summary: String?
@@ -213,6 +216,9 @@ public struct StateSnapshot: Equatable {
 
         public init(
             identifier: String,
+            issueID: String? = nil,
+            title: String? = nil,
+            repoKey: String? = nil,
             summary: String? = nil,
             state: String? = nil,
             forcedForSeconds: Int? = nil,
@@ -220,6 +226,9 @@ public struct StateSnapshot: Equatable {
             part: String? = nil
         ) {
             self.identifier = identifier
+            self.issueID = issueID
+            self.title = title
+            self.repoKey = repoKey
             self.summary = summary
             self.state = state
             self.forcedForSeconds = forcedForSeconds
@@ -368,6 +377,9 @@ public enum SymphonyState {
             guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
             return StateSnapshot.ForcedTicket(
                 identifier: identifier,
+                issueID: ticket.issueId,
+                title: ticket.title,
+                repoKey: ticket.repoKey,
                 summary: ticket.summary,
                 state: ticket.state,
                 forcedForSeconds: ticket.forcedForSeconds,
@@ -477,6 +489,8 @@ public enum SymphonyState {
 
             let issueId: String?
             let issueIdentifier: String?
+            let title: String?
+            let repoKey: String?
             let summary: String?
             let state: String?
             let forcedForSeconds: Int?

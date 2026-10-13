@@ -119,6 +119,16 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(overview.meters.first?.value, "0 of 5M")
     }
 
+    func testEachTileOpensItsView() {
+        XCTAssertEqual(Overview.StageKind.waitingOnYou.destination, .inbox)
+        XCTAssertEqual(Overview.StageKind.shippedToday.destination, .shipped)
+        XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.queued))
+        XCTAssertEqual(Overview.StageKind.working.destination, .tickets(.working))
+        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.review))
+        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.merging))
+        XCTAssertEqual(Overview.showShippedTitle, "Show Shipped")
+    }
+
     func testTheRunningFixtureFromBeforeTheOverviewStillReads() throws {
         let overview = try overview("running")
         XCTAssertEqual(overview.stages.first { $0.kind == .shippedToday }?.count, 0)

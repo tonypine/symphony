@@ -32,11 +32,19 @@ extension SymphonyWindowModel {
         show(.tickets)
     }
 
-    /// ⌘F: Tickets' search, from any view.
+    /// ⌘F: Learnings' search on Shipped, else Tickets' search, from any view.
     func searchTickets() {
+        if searchesLearnings {
+            shippedTab = .learnings
+            learningsSearchRequested = true
+            return
+        }
         if shownTicket != nil || selection != .tickets { show(.tickets) }
         searchRequested = true
     }
+
+    /// Whether ⌘F searches Learnings rather than Tickets: on Shipped, whichever tab shows.
+    var searchesLearnings: Bool { selection == .shipped && shownTicket == nil }
 
     func toggleInspector() {
         inspectorShown.toggle()
