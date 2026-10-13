@@ -4964,10 +4964,12 @@ defmodule SymphonyElixir.Orchestrator do
   # a run whose PR is on its workspace HEAD, so one left here could not show that; each successor
   # would stop the same way, so instead of continuing every second its runs back off and, after
   # `@max_quiet_handoff_runs` on the same head, it is held with `handoff_missing` until a person
-  # unblocks it. A new commit starts the count again.
+  # unblocks it. A new commit starts the count again. A ticket on a hold, such as one waiting on its
+  # decision request, went quiet because it waits, not because a handoff is missing: it is not
+  # counted, and the claim is released below so the hold alone says when it runs again.
   defp designed_quiet_continuation?(%Issue{} = issue, %State{} = state, metadata) do
     metadata[:continuation] == true and designed_issue?(issue) and Handoff.origin?(issue.state) and
-      quiet_post_pr_issue?(issue, state)
+      quiet_post_pr_issue?(issue, state) and not hold?(issue)
   end
 
   defp handle_designed_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, attempt, metadata) do

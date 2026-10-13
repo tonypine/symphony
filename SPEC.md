@@ -2037,6 +2037,10 @@ Important nuance:
   the one the run started on or has passed the reviewer. Otherwise it MUST log why and continue, so
   the reviewer runs and the agent pushes. When the workspace `HEAD` or the PR head cannot be read,
   the run ends as before and the post-PR transition's workspace check applies.
+- A run whose ticket waits on a hold (a `Needs Decision` hold from its decision request, a
+  `Blocked` hold from a block report), or that posted a decision request itself, MUST end after
+  that turn, without the idle park below and without a handoff: the hold, not another turn, says
+  when the ticket continues.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
@@ -2378,7 +2382,9 @@ Rules:
   quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
   the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
-  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head.
+  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
+  ticket on a hold is not counted: it waits on the hold alone. Recording a decision also lifts a
+  `handoff_missing` hold on the same ticket, so the ticket resumes with no other hold to clear.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its

@@ -24,6 +24,15 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
     def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
   end
 
+  # Everything goes through the real store but clearing a Blocked hold, so the decision's own clear
+  # lands and the `handoff_missing` hold it lifts too is driven into its failure path.
+  defmodule BlockedClearFailsStore do
+    def set_ticket_hold(repo_key, issue_id, kind, attrs), do: RunStore.set_ticket_hold(repo_key, issue_id, kind, attrs)
+    def clear_ticket_hold(_repo_key, _issue_id, :blocked), do: {:error, :boom}
+    def clear_ticket_hold(repo_key, issue_id, kind), do: RunStore.clear_ticket_hold(repo_key, issue_id, kind)
+    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+  end
+
   # The labels project fine; only the move a confirmation performs fails, so a clear reaches the
   # continue and is driven into its failure path.
   defmodule FailingMoveTracker do
@@ -280,6 +289,45 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
       assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
       refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "answering it also lifts the handoff_missing Blocked hold its quiet runs left, so the ticket resumes" do
+      quiet = %{reason: "handoff_missing: 2 runs went quiet", waits_on: %{type: "handoff_missing", keys: ["sha-1"]}}
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, quiet)
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
+      assert capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear end) =~ "Cleared the handoff_missing Blocked hold"
+      refute Hold.held_any?(@repo_key, @issue_id)
+      assert labels() == []
+    end
+
+    test "answering it leaves a Blocked hold on anything else in place" do
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "waits on TP-1", waits_on: %{type: "dependency", keys: ["TP-1"]}})
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      :set = NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings())
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
+      assert stored_hold() == nil
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+    end
+
+    test "a handoff_missing hold that can't be cleared is logged, and the decision still clears" do
+      :ok = Hold.set(@repo_key, @issue_id, :blocked, %{reason: "handoff_missing", waits_on: %{type: "handoff_missing", keys: []}})
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      :set = NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings())
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply()]}})
+
+      log =
+        capture_log(fn ->
+          assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings(), store: BlockedClearFailsStore) == :clear
+        end)
+
+      assert log =~ "Failed to clear the handoff_missing Blocked hold"
+      assert stored_hold() == nil
     end
 
     test "clears the hold when the run withdraws the request" do
