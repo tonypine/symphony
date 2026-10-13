@@ -7,8 +7,7 @@ tracker) and a stub agent, and checks four scenarios:
 
 1. Update N -> N+1 while a run is active: the old Symphony drains and stops, the
    new app starts its Symphony on its own, dispatch resumes, every Symphony BEAM
-   runs from inside the running app's bundle, nothing was unpacked outside it, and
-   no BEAM from N is left running.
+   runs from inside the running app's bundle, and no BEAM from N is left running.
 2. Restart while a run is active, pressed after dispatch was resumed but before
    the app polled again: it pauses dispatch itself, waits for the run, restarts
    and resumes.
@@ -20,7 +19,7 @@ tracker) and a stub agent, and checks four scenarios:
 It never touches the installed app: the app, its settings, secrets, logs,
 update downloads, Symphony's state and logs, HOME and the epmd port are all its
 own, and the dashboard binds a free port. The live app's
-processes, state files, unpacked releases and port 4000 are snapshotted before
+processes, state files and port 4000 are snapshotted before
 and after, and any change fails the test.
 
 Usage (from macos/): make e2e, or python3 Tests/e2e/update_restart_e2e.py
@@ -139,13 +138,12 @@ def live_snapshot(work):
     snapshot = {}
 
     rows = [(pid, cmd) for pid, cmd in processes() if str(work) not in cmd]
-    # The installed app (~/Applications or /Applications) and the Symphony it runs: from the release in its
-    # bundle, or, for a Burrito build, from its unpacked release.
+    # The installed app (~/Applications or /Applications) and the Symphony it runs from the release in its bundle.
     snapshot["apps"] = sorted(pid for pid, cmd in rows if "/Applications/Symphony.app/Contents/MacOS/" in cmd)
     snapshot["beams"] = sorted(
         pid for pid, cmd in rows
         if "beam.smp" in cmd
-        and (str(support / ".burrito") in cmd or "/Applications/Symphony.app/Contents/Resources/symphony-release/" in cmd)
+        and "/Applications/Symphony.app/Contents/Resources/symphony-release/" in cmd
     )
 
     listeners = run(["lsof", "-nP", "-iTCP:4000", "-sTCP:LISTEN", "-t"], check=False).stdout.split()
@@ -164,15 +162,6 @@ def live_snapshot(work):
                 fingerprint = f"unreadable ({error.strerror})"
             snapshot[f"state {path}"] = fingerprint
 
-    burrito = support / ".burrito"
-    try:
-        snapshot["unpacked"] = sorted(
-            f"{entry.name} ino={entry.stat().st_ino}" for entry in burrito.iterdir() if entry.is_dir()
-        )
-    except FileNotFoundError:
-        snapshot["unpacked"] = "missing"
-    except OSError as error:
-        snapshot["unpacked"] = f"unreadable ({error.strerror})"
     return snapshot
 
 
@@ -408,11 +397,6 @@ class Instance:
         run(["ditto", app_n, self.app])
         self.env = self._app_environment(feed)
 
-    def unpacked(self):
-        """Burrito-style unpack folders: the release runs in place, so there must be none."""
-        folders = (self.qa / "burrito" / ".burrito", self.work / "home" / "Library" / "Application Support" / ".burrito")
-        return [str(folder) for folder in folders if folder.exists()]
-
     def check_runs_from_bundle(self, app, build):
         """Every Symphony BEAM of this instance is build `build`'s and runs from `app`'s bundled release."""
         release = os.path.realpath(app / "Contents" / "Resources" / "symphony-release") + "/"
@@ -425,8 +409,6 @@ class Instance:
         others = [pid for pid, _ in beams if pid not in self.beam_pids(build)]
         if others:
             raise Failure(f"Symphony BEAMs {others} are not build {build}'s")
-        if self.unpacked():
-            raise Failure(f"Symphony unpacked a release outside the app: {self.unpacked()}")
 
     def _write_fake_linear_and_stub(self):
         config = self.config.parent

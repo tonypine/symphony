@@ -32,9 +32,7 @@ for a new major, minor or patch version.
 The app carries the release in `Contents/Resources/symphony-release` and runs it
 in place, so nothing is unpacked outside the signed bundle. `make release`
 appends `SYMPHONY_BUILD_NUMBER` to the `mix.exs` version (`0.0.1-42`); without
-it the release version is the plain `mix.exs` version. Builds from before the
-switch unpacked into `~/Library/Application Support/.burrito/`; once no such
-build runs, that folder can be removed by hand.
+it the release version is the plain `mix.exs` version.
 
 ## Release assets
 

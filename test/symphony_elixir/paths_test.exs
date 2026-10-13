@@ -7,19 +7,16 @@ defmodule SymphonyElixir.PathsTest do
   @state_keys [:state_root_override, :state_root]
   @logs_keys [:logs_root_override, :logs_root, :log_file]
   @release_keys [:running_as_release]
-  @burrito_env "__BURRITO"
   @release_root_env "SYMPHONY_RELEASE_ROOT"
 
   setup do
     previous_state_env = System.get_env("SYMPHONY_STATE_ROOT")
     previous_logs_env = System.get_env("SYMPHONY_LOGS_ROOT")
-    previous_burrito_env = System.get_env(@burrito_env)
     previous_release_root_env = System.get_env(@release_root_env)
     previous_env = Map.new(@state_keys ++ @logs_keys ++ @release_keys, &{&1, Application.get_env(@app, &1)})
 
     System.delete_env("SYMPHONY_STATE_ROOT")
     System.delete_env("SYMPHONY_LOGS_ROOT")
-    System.delete_env(@burrito_env)
     System.delete_env(@release_root_env)
     Enum.each(@state_keys ++ @logs_keys ++ @release_keys, &Application.delete_env(@app, &1))
     Application.put_env(@app, :running_as_release, false)
@@ -27,7 +24,6 @@ defmodule SymphonyElixir.PathsTest do
     on_exit(fn ->
       restore_env("SYMPHONY_STATE_ROOT", previous_state_env)
       restore_env("SYMPHONY_LOGS_ROOT", previous_logs_env)
-      restore_env(@burrito_env, previous_burrito_env)
       restore_env(@release_root_env, previous_release_root_env)
 
       Enum.each(previous_env, fn
@@ -64,22 +60,6 @@ defmodule SymphonyElixir.PathsTest do
 
     assert Paths.logs_root() ==
              Path.join([System.user_home!(), "Library", "Logs", "symphony", "release"])
-  end
-
-  test "release builds can be detected from the Burrito environment" do
-    Application.delete_env(@app, :running_as_release)
-    System.put_env(@burrito_env, "1")
-
-    assert Paths.state_root() ==
-             Path.join([System.user_home!(), "Library", "Application Support", "symphony", "release"])
-
-    assert Paths.logs_root() ==
-             Path.join([System.user_home!(), "Library", "Logs", "symphony", "release"])
-
-    System.put_env(@burrito_env, "")
-
-    assert Paths.state_root() == Path.join([System.user_home!(), "Library", "Application Support", "symphony"])
-    assert Paths.logs_root() == Path.join([System.user_home!(), "Library", "Logs", "symphony"])
   end
 
   test "release builds can be detected from the release launcher's environment" do
