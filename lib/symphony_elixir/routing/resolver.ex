@@ -43,6 +43,30 @@ defmodule SymphonyElixir.Routing.Resolver do
     end
   end
 
+  @doc """
+  Gives an issue fetched from the tracker, which carries no repo key, the key of the repo it routes
+  to, so holds, signals and guard moves read and write it under that repo. An issue that already
+  has a key is returned as it is; one no repo or more than one non-default repo matches keeps none.
+  """
+  @spec with_repo_key(Issue.t(), [repo()]) :: Issue.t()
+  def with_repo_key(%Issue{repo_key: repo_key} = issue, _repos) when is_binary(repo_key) and repo_key != "", do: issue
+
+  def with_repo_key(%Issue{} = issue, repos) when is_list(repos) do
+    case resolve(issue, repos) do
+      {:matched, repo} -> %{issue | repo_key: repo_value(repo, :name)}
+      {:conflict, matched} -> routed_past_defaults(issue, matched)
+      :unmatched -> issue
+    end
+  end
+
+  # A default repo catches what its team's scoped repos don't, so a scoped match wins over it.
+  defp routed_past_defaults(issue, matched) do
+    case Enum.reject(matched, &default?/1) do
+      [repo] -> %{issue | repo_key: repo_value(repo, :name)}
+      _none_or_many -> issue
+    end
+  end
+
   @spec validate_repos([repo()]) :: :ok | {:error, [validation_error()]}
   def validate_repos(repos) when is_list(repos) do
     errors =

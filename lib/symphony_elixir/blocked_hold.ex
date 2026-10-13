@@ -72,12 +72,14 @@ defmodule SymphonyElixir.BlockedHold do
   @doc """
   Reconciles the Blocked hold of one issue against its blockers. `opts[:settings]` is the repo's
   resolved settings (the poll loop passes it once per repo); without it the issue's repo is
-  resolved through `Config.settings_for_repo/1`. Returns `:skipped` on a repo that is not the
-  designed machine, else the action taken (`:set`, `:clear` or `:none`).
+  resolved through `Config.settings_for_repo/1`. A polled issue carries no repo key, so
+  `opts[:repo_key]` names the repo it was polled for, and the hold is read and written under it.
+  Returns `:skipped` on a repo that is not the designed machine, else the action taken (`:set`,
+  `:clear` or `:none`).
   """
   @spec sync(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :skipped | :set | :clear | :none
   def sync(issue, terminal_states, opts \\ []) do
-    with %Issue{} = issue <- issue,
+    with %Issue{} = issue <- with_repo_key(issue, Keyword.get(opts, :repo_key)),
          %{} = settings <- settings(issue, opts),
          true <- StateMachine.designed?(settings) do
       sync_designed(issue, terminal_states, opts)
@@ -94,6 +96,11 @@ defmodule SymphonyElixir.BlockedHold do
   def sweep(issues, terminal_states, opts \\ []) do
     if is_list(issues), do: Enum.count(issues, &(sync(&1, terminal_states, opts) in [:set, :clear])), else: 0
   end
+
+  defp with_repo_key(%Issue{repo_key: key} = issue, repo_key) when key in [nil, ""] and is_binary(repo_key),
+    do: %{issue | repo_key: repo_key}
+
+  defp with_repo_key(issue, _repo_key), do: issue
 
   defp sync_designed(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, opts) do
     repair_drift(repo_key, issue_id, issue.labels, opts)
