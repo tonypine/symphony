@@ -53,8 +53,8 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
 
     # A labelled issue counts as one with an open request.
     settings = Config.settings!()
-    assert SymphonyElixir.HumanReview.legacy_request_labels(settings) == ["needs-tony", "human-action"]
-    assert SymphonyElixir.HumanReview.parked_for_person?(%Issue{state: "Backlog", labels: ["Needs-Tony"]}, settings)
+    assert SymphonyElixir.PersonWait.legacy_request_labels(settings) == ["needs-tony", "human-action"]
+    assert SymphonyElixir.PersonWait.parked?(%Issue{state: "Backlog", labels: ["Needs-Tony"]}, settings)
   end
 
   test "logs each deprecation warning once per load of symphony.yml, not on every settings read" do

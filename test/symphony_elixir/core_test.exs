@@ -2,7 +2,6 @@ defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
   alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.Ci, as: CiConfig
   alias SymphonyElixir.Config.Schema.ReviewAgent, as: ReviewAgentConfig
   alias SymphonyElixir.Config.Schema.Tracker, as: TrackerConfig
   alias SymphonyElixir.Secret
@@ -134,7 +133,6 @@ defmodule SymphonyElixir.CoreTest do
     assert config.ci.log_excerpt_lines == 200
     assert config.ci.flaky_retry == true
     assert config.ci.max_retries == 3
-    assert config.ci.escalation_state == "In Review"
     assert config.ci.merging_wait_timeout_ms == 1_800_000
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
@@ -167,7 +165,6 @@ defmodule SymphonyElixir.CoreTest do
         log_excerpt_lines: 50,
         flaky_retry: false,
         max_retries: 1,
-        escalation_state: "Blocked",
         merging_wait_timeout_ms: 600_000
       }
     )
@@ -178,22 +175,12 @@ defmodule SymphonyElixir.CoreTest do
              log_excerpt_lines: 50,
              flaky_retry: false,
              max_retries: 1,
-             escalation_state: "Blocked",
              merging_wait_timeout_ms: 600_000
            } = Config.settings!().ci
 
     assert Config.settings!().pr_review.poll_interval_ms == 15_000
 
-    write_workflow_file!(Workflow.workflow_file_path(), ci: %{escalation_state: ""})
-    assert Config.settings!().ci.escalation_state == "In Review"
-
-    ci_config =
-      %CiConfig{}
-      |> CiConfig.changeset(%{escalation_state: nil})
-      |> Ecto.Changeset.apply_changes()
-
-    assert ci_config.escalation_state == "In Review"
-    assert Config.review_agent_blocked_state(Config.repo_key!()) == "In Review"
+    refute Map.has_key?(Config.settings!().ci, :escalation_state)
 
     write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true, max_retries: 0})
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
@@ -1599,48 +1586,6 @@ defmodule SymphonyElixir.CoreTest do
              RunStore.list_retries("api")
   end
 
-  test "retry for an active completed PR on a legacy repo dispatches the run instead of moving it on" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_active_states: ["Todo", "In Progress", "Rework"],
-      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
-    )
-
-    issue_id = "issue-post-pr-legacy"
-    retry_token = make_ref()
-    last_ran_at = DateTime.utc_now()
-    pr_url = "https://github.com/example/repo/pull/890"
-    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %Issue{id: issue_id, identifier: "MT-890", title: "Post PR", state: "In Progress", pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
-    ])
-
-    on_exit(fn ->
-      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
-    end)
-
-    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :PostPrLegacyOrchestrator))
-    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
-
-    completed = %{identifier: "MT-890", pull_request_url: pr_url, last_ran_at: last_ran_at}
-    due_at_ms = System.monotonic_time(:millisecond)
-    retry = %{attempt: 1, timer_ref: nil, retry_token: retry_token, due_at_ms: due_at_ms, identifier: "MT-890"}
-
-    :sys.replace_state(pid, fn state ->
-      %{state | claimed: MapSet.new([issue_id]), completed_run_metadata: %{issue_id => completed}, retry_attempts: %{issue_id => retry}}
-    end)
-
-    send(pid, {:retry_issue, issue_id, retry_token})
-
-    # A run that went quiet without pushing and handing off its PR never advances the ticket.
-    moved_or_ran? = &(Map.has_key?(&1.running, issue_id) or Map.has_key?(&1.watching, issue_id))
-    state = wait_for_orchestrator_state(pid, moved_or_ran?)
-    assert Map.has_key?(state.running, issue_id)
-    refute_received {:memory_tracker_state_update, ^issue_id, _state}
-  end
-
   test "retry for an active completed PR on a designed repo dispatches the run instead of moving to the global Auto Review" do
     workflow = Workflow.workflow_file_path()
 
@@ -1653,7 +1598,7 @@ defmodule SymphonyElixir.CoreTest do
       auto_review: %{enabled: true},
       repos: [
         [key: "legacy-repo", workflow: workflow, team: "Legacy"],
-        [key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]
+        [key: "designed-repo", workflow: workflow, team: "Designed"]
       ]
     )
 
@@ -1707,7 +1652,7 @@ defmodule SymphonyElixir.CoreTest do
         tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
         pr_review_mode: "polling",
         ci: %{enabled: true},
-        repos: [[key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]]
+        repos: [[key: "designed-repo", workflow: workflow, team: "Designed"]]
       )
 
       issue_id = "issue-quiet-designed"
@@ -3579,7 +3524,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "## CI failure triage protocol (required when checks are red)"
     assert prompt =~ "## Blocked-access escape hatch (required behavior)"
     assert prompt =~ "## In-execution clarification escape hatch (required behavior)"
-    assert prompt =~ "## Completion bar before In Review"
+    assert prompt =~ "## Completion bar before the handoff"
     assert prompt =~ "## Guardrails"
     assert prompt =~ "## Splitting work and out-of-scope improvements"
     assert prompt =~ "linear_create_subissue"
@@ -5134,9 +5079,10 @@ defmodule SymphonyElixir.CoreTest do
 
       assert_receive {:issue_state_fetch, ["issue-dep-hold"]}
       refute_receive {:issue_state_fetch, _ids}, 50
-      assert_receive {:memory_tracker_state_update, "issue-dep-hold", "In Review"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-dep-hold", "Needs Decision"}, 500
+      refute_received {:memory_tracker_state_update, "issue-dep-hold", _state}
 
-      assert [%{name: "decision requested", details: %{to: "In Review", reason: "dependency_source_requires_approval"}}] =
+      assert [%{name: "decision requested", details: %{hold: "needs_decision", reason: "dependency_source_requires_approval"}}] =
                RunStore.get_ticket_state(Config.repo_key!(), "issue-dep-hold").signals
 
       assert_receive {:notification_event,

@@ -1,10 +1,11 @@
 {% comment %}
 name: pr_feedback_sweep
-description: Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review.
+description: Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before the handoff to Code Review.
 vars: []
 {% endcomment %}## PR feedback sweep protocol (required)
 
-When a ticket has an attached PR, run this before moving to `In Review`:
+When a ticket has an attached PR, run this before the push that hands it off to
+`Code Review`:
 
 1. Identify the PR number from issue links/attachments.
 2. Gather feedback from every channel: `github_get_pull_request()` (body/metadata),

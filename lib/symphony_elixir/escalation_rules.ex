@@ -6,7 +6,7 @@ defmodule SymphonyElixir.EscalationRules do
   person rules (`person_rules/0`) need a person and pause the ticket on a Needs Decision hold, and
   the risk rules (`risk_rules/0`) deepen the Code Review run with a second reviewer pass.
 
-  `check/5` returns one reason per rule that triggers, in this order, or `[]`:
+  `check/4` returns one reason per rule that triggers, in this order, or `[]`:
 
     * `:label` - the issue has an `escalate.labels` label (case-insensitive);
     * `:ticket_pattern` - the issue title or description matches an `escalate.ticket_patterns` regex;
@@ -19,9 +19,8 @@ defmodule SymphonyElixir.EscalationRules do
 
   `:ticket_pattern` matches the ticket's prose only: fenced code blocks and backticked spans are
   blanked first (the Symphony summary block is already left out of `Issue.description`). Then
-  each name in the `:review_states` option (`In Review` and `issues.states.human_review`), and
-  `In Review` and `Human Review` even when that state is off, is blanked wherever the text names
-  the state: bare, bolded or quoted. The name matches case-sensitively, so a ticket about the
+  the retired review states' names, `In Review` and `Human Review`, are blanked wherever the text
+  names the state: bare, bolded or quoted. The name matches case-sensitively, so a ticket about the
   state doesn't match, while "needs a human review" still does. Before `state` or `states` it
   matches in any case ("the human review state"). A name right after a request ("Needs Human
   Review", "requires a Human Review") stays, since that asks for one.
@@ -78,32 +77,18 @@ defmodule SymphonyElixir.EscalationRules do
   @doc """
   The reasons `issue` and its PR's diff escalate, one per triggered rule. `busy_files` are the
   paths changed most often on the default branch lately; `rules` is the repo's effective `escalate`
-  block. Options: `:review_states`, the state names the `:ticket_pattern` rule skips.
+  block.
   """
-  @spec check(Issue.t(), diff_summary(), [String.t()], Escalate.t(), keyword()) :: [reason()]
-  def check(%Issue{} = issue, %{files: files}, busy_files, %Escalate{} = rules, opts \\ []) when is_list(files) and is_list(busy_files) do
+  @spec check(Issue.t(), diff_summary(), [String.t()], Escalate.t()) :: [reason()]
+  def check(%Issue{} = issue, %{files: files}, busy_files, %Escalate{} = rules) when is_list(files) and is_list(busy_files) do
     [
       {:label, label_detail(issue, rules.labels)},
-      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, Keyword.get(opts, :review_states, []))},
+      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns)},
       {:path, path_detail(files, rules.paths)},
       {:diff_pattern, diff_pattern_detail(files, rules.diff_patterns)},
       {:dependency, dependency_detail(files, rules.dependencies)},
       {:size, size_detail(files, rules.max_changed_lines)},
       {:busy_file, busy_file_detail(files, busy_files, rules.busy_files.max_lines)}
-    ]
-    |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
-    |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
-  end
-
-  @doc """
-  The reasons the ticket alone (its labels, title and description) needs a person: the
-  `:label` and `:ticket_pattern` rules of `check/5`, which need no diff. Options as `check/5`.
-  """
-  @spec ticket_reasons(Issue.t(), Escalate.t(), keyword()) :: [reason()]
-  def ticket_reasons(%Issue{} = issue, %Escalate{} = rules, opts \\ []) do
-    [
-      {:label, label_detail(issue, rules.labels)},
-      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, Keyword.get(opts, :review_states, []))}
     ]
     |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
@@ -117,12 +102,12 @@ defmodule SymphonyElixir.EscalationRules do
     |> join_or_nil(&"the issue is labelled `#{&1}`")
   end
 
-  defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns, review_states) do
+  defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns) do
     text =
       [title || "", description || ""]
       |> Enum.join("\n")
       |> blank_code()
-      |> blank_state_names(Enum.uniq(review_states ++ @state_names))
+      |> blank_state_names(@state_names)
 
     patterns
     |> Enum.filter(&Regex.match?(Regex.compile!(&1), text))
@@ -141,9 +126,7 @@ defmodule SymphonyElixir.EscalationRules do
   # the name follows a request word: "Needs Human Review". Before `state` or `states` the name
   # matches in any case: "the human review state".
   defp blank_state_names(text, states) do
-    states
-    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-    |> Enum.reduce(text, fn state, acc ->
+    Enum.reduce(states, text, fn state, acc ->
       name = Regex.escape(state)
 
       Regex.replace(~r/(\b(?i:needs?|requires?|wants?)\s+(?:(?i:an?)\s+)?)?\b(?:#{name}\b|(?i:#{name})(?=\W{0,2}\s+(?i:states?)\b))/u, acc, fn

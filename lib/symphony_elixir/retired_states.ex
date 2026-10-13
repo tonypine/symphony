@@ -1,29 +1,28 @@
 defmodule SymphonyElixir.RetiredStates do
   @moduledoc """
-  The drain report: every ticket still sitting in a retired or draining state, with what it waits
-  on and the move that frees it.
+  The drain report: every ticket still sitting in a retired state, with what it waits on and the
+  move that frees it.
 
-  `Auto Review` is retired with the acceptance gate (`docs/design/state-machine.md` §Retired): the
-  transition guard refuses every move into it (`SymphonyElixir.TransitionGuard.retired_states/0`),
-  so no ticket can enter it again. `In Review` and `Human Review` retire once they drain (decision
-  D11: drain only, no migration command): a ticket there finishes on the legacy path, and a
-  straggler is moved on by a person's hand — a parked plan into `Plan Review`, an open decision into
-  its phase with a `Needs Decision` hold.
+  `Auto Review`, `In Review` and `Human Review` are retired (`docs/design/state-machine.md`
+  §Retired): the transition guard refuses every move into them
+  (`SymphonyElixir.TransitionGuard.retired_states/0`), nothing dispatches from them, and they left
+  the Linear team workflow once they drained (decision D11: drain only, no migration command). A
+  ticket still found in one is a straggler a person moves on by hand — a parked plan into
+  `Plan Review`, an open decision into its phase with a `Needs Decision` hold.
 
-  `report/1` runs at startup and logs each straggler loudly: an error for a retired state, which
-  nothing dispatches, and a warning for a draining one, which waits on a person. The poll task
+  `report/1` runs at startup and logs each straggler loudly, at error level. The poll task
   refreshes it at most every `@refresh_interval_ms` (`refresh_if_due/1`), logging only the
   stragglers that are new since the last report, and the dashboard reads the last result
   (`drain_report/0`). A ticket that leaves the report is looked up and logged with the state it
-  landed in, so none vanishes from it without landing somewhere visible. The removal of the
-  draining states waits on this report being empty.
+  landed in, so none vanishes from it without landing somewhere visible.
   """
 
   require Logger
 
   alias SymphonyElixir.{Tracker, TransitionGuard}
 
-  @draining_states ["In Review", "Human Review"]
+  @auto_review_state "auto review"
+  @human_review_state "human review"
   @refresh_interval_ms 5 * 60 * 1000
   @landed_limit 20
   @cache_key {__MODULE__, :drain_report}
@@ -41,12 +40,12 @@ defmodule SymphonyElixir.RetiredStates do
   @type landing :: %{id: String.t() | nil, identifier: String.t() | nil, from: String.t() | nil, to: String.t() | nil}
   @type drain :: %{stragglers: [straggler()], landed: [landing()], checked_at_ms: integer() | nil}
 
-  @doc "The states the report reads: the retired states and the draining ones."
+  @doc "The states the report reads: the retired states."
   @spec states() :: [String.t()]
-  def states, do: TransitionGuard.retired_states() ++ @draining_states
+  def states, do: TransitionGuard.retired_states()
 
   @doc """
-  Logs each ticket in a retired or draining state, records the report for the dashboard and
+  Logs each ticket in a retired state, records the report for the dashboard and
   returns the tickets. `opts[:log]` is `:all` (the default, at startup) or `:new` (a refresh: only
   the tickets the last report did not list). `opts[:tracker]` overrides the tracker (tests, a
   fake); `opts[:now_ms]` the clock. A tracker that can't be read is logged as a warning, reports nothing
@@ -96,20 +95,24 @@ defmodule SymphonyElixir.RetiredStates do
     :ok
   end
 
-  @doc "What a ticket in a retired or draining state waits on, and the move that frees it."
+  @doc """
+  What a ticket in a retired state waits on, and the move that frees it: a ticket left in
+  `Auto Review` waits on nothing; one left in `In Review` or `Human Review` waits on what it was
+  parked there for (a plan's review, a decision, blocked QA or a supervisor check).
+  """
   @spec wait(map()) :: {atom(), String.t(), String.t()}
   def wait(issue) do
     state = normalize(Map.get(issue, :state))
     labels = issue |> Map.get(:labels) |> List.wrap() |> Enum.map(&normalize/1)
 
     cond do
-      Enum.any?(TransitionGuard.retired_states(), &(normalize(&1) == state)) ->
+      state == @auto_review_state ->
         {:retired, "nothing: no path dispatches or moves on from this state", "move it by hand to Code Review (its PR is open) or In Progress"}
 
       Enum.any?(labels, &(&1 in ["plan", "breakdown"])) ->
         {:parked_plan, "a parked plan waiting on its review", "move it by hand to Plan Review"}
 
-      state == "human review" or Enum.any?(labels, &(&1 in ["needs decision", "needs-human", "human-action"])) ->
+      state == @human_review_state or Enum.any?(labels, &(&1 in ["needs decision", "needs-human", "human-action"])) ->
         {:open_decision, "an open decision for a person", "move it by hand into its phase with a Needs Decision hold"}
 
       "blocked" in labels ->
@@ -173,11 +176,8 @@ defmodule SymphonyElixir.RetiredStates do
 
   defp log_straggler(issue) do
     {_wait, waits_on, move} = wait(issue)
-    state = Map.get(issue, :state)
-    retired? = Enum.any?(TransitionGuard.retired_states(), &(normalize(&1) == normalize(state)))
-    {level, kind} = if retired?, do: {:error, "retired"}, else: {:warning, "draining"}
 
-    Logger.log(level, "#{Map.get(issue, :identifier) || Map.get(issue, :id)} is still in the #{kind} #{state} state, waiting on #{waits_on}: #{move}")
+    Logger.error("#{Map.get(issue, :identifier) || Map.get(issue, :id)} is still in the retired #{Map.get(issue, :state)} state, waiting on #{waits_on}: #{move}")
   end
 
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()

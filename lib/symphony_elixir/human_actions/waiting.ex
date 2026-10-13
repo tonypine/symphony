@@ -2,34 +2,31 @@ defmodule SymphonyElixir.HumanActions.Waiting do
   @moduledoc """
   The tickets waiting on the operator, as the state API's `waiting_on_you` lists them.
 
-  Built from the issues `SymphonyElixir.HumanActions.Collector` reads: one entry per issue in a
-  review state (`SymphonyElixir.HumanReview.review_states/1`), per plan parent waiting in a plan
-  review state (`SymphonyElixir.HumanReview.plan_review_states/1`: a designed repo's `Plan Review`)
-  or with an open `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`).
-  Its `kind` says what waits:
+  Built from the issues `SymphonyElixir.HumanActions.Collector` reads: one entry per issue with an
+  open `linear_request_human_action` request (`SymphonyElixir.HumanActions.Request`), or per plan
+  parent (label `plan` or `breakdown`) in `Plan Review` (`SymphonyElixir.PlanReview`). Its `kind`
+  says what waits:
 
   - `:action`: an open request, whatever else the issue is;
-  - `:final_verification`: a `Final verification:` ticket to sign off;
-  - `:plan`: a plan parent (label `plan` or `breakdown`) whose plan waits for approval;
-  - `:pr`: any other issue, a pull request to review.
+  - `:plan`: a plan parent whose plan waits for approval.
 
   `waiting_since` is the later of the latest move into the issue's current state in its history and
-  the creation of its newest open request, or whichever of the two exists, else nil: a designed
-  repo leaves the ticket in its phase, so the move into that phase can predate the request.
+  the creation of its newest open request, or whichever of the two exists, else nil: a request
+  leaves the ticket in its phase, so the move into that phase can predate the request.
   `headline` is the line after `**What to review:**` in the issue's latest `## Review brief`
   comment, nil when it has none.
   """
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Collector, Request}
-  alias SymphonyElixir.{HumanReview, RunKind}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PlanReview
 
   @brief_heading "## Review brief"
   @what_to_review ~r/^\s*\*\*What to review:\*\*(.*)$/
   @headline_max 200
 
-  @type kind :: :action | :final_verification | :plan | :pr
+  @type kind :: :action | :plan
   @type entry :: %{
           issue_id: String.t(),
           identifier: String.t() | nil,
@@ -49,7 +46,7 @@ defmodule SymphonyElixir.HumanActions.Waiting do
     state = get_in(node, ["state", "name"])
     requests = node |> Collector.open_requests(settings) |> Enum.map(fn {_comment_id, request} -> request end)
 
-    if requests != [] or HumanReview.review_state?(state, settings) or plan_in_review?(node, state, settings) do
+    if requests != [] or plan_review?(node, state, settings) do
       [
         %{
           issue_id: issue_id,
@@ -69,24 +66,17 @@ defmodule SymphonyElixir.HumanActions.Waiting do
 
   defp entry(_node, _settings), do: []
 
-  # A designed repo's plan handoff waits in `Plan Review`, outside the review states.
-  defp plan_in_review?(node, state, settings), do: plan?(node) and HumanReview.plan_review_state?(state, settings)
-
-  defp plan?(node), do: node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.any?(&Issue.breakdown_label?(&1["name"]))
-
   defp kind(_node, [_ | _]), do: :action
+  defp kind(_node, []), do: :plan
 
-  defp kind(node, []) do
-    cond do
-      RunKind.classify(%Issue{title: node["title"]}) == :final_verification -> :final_verification
-      plan?(node) -> :plan
-      true -> :pr
-    end
+  defp plan_review?(node, state, settings) do
+    labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["name"])
+    PlanReview.in_state?(state, settings) and Enum.any?(labels, &Issue.breakdown_label?/1)
   end
 
   # The current wait began at the later of the move into the current state and the newest open
-  # request. A designed repo keeps the ticket in its phase, so the phase move can predate the
-  # request; a request the phase move postdates still reads as the newer trigger.
+  # request. A request keeps the ticket in its phase, so the phase move can predate the request; a
+  # request the phase move postdates still reads as the newer trigger.
   defp waiting_since(node, state, requests) do
     [entered_at(node, state), newest_request_at(requests)]
     |> Enum.reject(&is_nil/1)

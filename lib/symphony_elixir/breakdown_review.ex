@@ -2,21 +2,19 @@ defmodule SymphonyElixir.BreakdownReview do
   @moduledoc """
   Acts on a human's review of a `breakdown` parent's plan.
 
-  A breakdown run leaves its sub-issues in `Backlog` and the parent in a review state: `In Review`
-  (or the Human Review state, when its ticket says a person reviews it) on a legacy repo, the
-  configured `Plan Review` on a designed one (see `HumanReview.plan_review_states/1`). The human
-  approves the plan with one move of the parent, from either review state to the waiting state
-  (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
+  A breakdown run leaves its sub-issues in `Backlog` and the parent in the configured `Plan Review`
+  state (`SymphonyElixir.PlanReview`). The human approves the plan with one move of the parent from
+  there to the waiting state (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
   `Todo` in one batch; blocked-by links keep the order. Moving the parent to `Rework` rejects
   the plan: Symphony cancels the plan's sub-issues still in `Backlog` and runs the breakdown again.
-  The plan's sub-issues are the ones created while the parent was worked into a review state, so a
+  The plan's sub-issues are the ones created while the parent was worked into `Plan Review`, so a
   sub-issue a person added under the parent before or after that run, such as a parked
   `Final verification`, is left alone.
 
   Symphony only polls, so it reads the parent's state history to see the move. Only a person's
   move approves: Symphony records each time it moves a parent itself, and a move within a minute of
   that is not read as the person's, since Symphony and the reviewer can share one Linear user. That
-  record separates the two ways a designed repo's parent reaches `Rework` as well: the machine moves
+  record separates the two ways a parent reaches `Rework` as well: the machine moves
   it there to revise the plan in place when a person comments on it, and only a person's own move to
   `Rework` rejects the plan and cancels its sub-issues. A sub-issue is acted on only when it has sat
   in `Backlog` since before that move, which keeps both actions idempotent across polls and restarts:
@@ -24,8 +22,8 @@ defmodule SymphonyElixir.BreakdownReview do
   so is one created after the move, such as the sub-issues of the re-planned breakdown.
   """
 
-  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PlanReview
   alias SymphonyElixir.SubIssueWait
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
@@ -70,9 +68,9 @@ defmodule SymphonyElixir.BreakdownReview do
   @doc """
   The sub-issues `action` applies to: those in `Backlog` since before the move that asked for it,
   and for `:replace` only those created by the rejected plan's run, between the parent's state
-  change before its latest move to a review state and that move. With no such move as the parent's
+  change before its latest move to `Plan Review` and that move. With no such move as the parent's
   latest state change (for example a parent Symphony parked from `In Progress`, which nobody
-  approved), or no move to a review state before a rejection, there are none. `own_move_at` is when
+  approved), or no move to `Plan Review` before a rejection, there are none. `own_move_at` is when
   Symphony itself last moved the parent: an approval at that time is Symphony's, and approves
   nothing, and a rejection there is Symphony's own revise of the plan, which rejects nothing.
   """
@@ -121,13 +119,13 @@ defmodule SymphonyElixir.BreakdownReview do
   def comment_openers, do: ["Promoted to #{@todo_state}:", "Cancelled for re-plan:"]
 
   defp decided_at(:promote, %{from: from, to: to, at: at}, settings, own_move_at) do
-    if HumanReview.plan_review_state?(from, settings) and state_matches?(to, SubIssueWait.state(settings)) and
+    if PlanReview.in_state?(from, settings) and state_matches?(to, SubIssueWait.state(settings)) and
          not own_move?(at, own_move_at),
        do: at
   end
 
-  # A person's move of the parent to `Rework` rejects the plan. On a designed repo the machine moves
-  # the parent there itself to revise it in place when a person comments on the plan, so its own move
+  # A person's move of the parent to `Rework` rejects the plan. The machine moves the parent there
+  # itself to revise it in place when a person comments on the plan, so its own move
   # (`own_move_at`) rejects nothing: only a move Symphony did not make cancels the plan's sub-issues.
   defp decided_at(:replace, %{to: to, at: at}, _settings, own_move_at) do
     if state_matches?(to, @rework_state) and not own_move?(at, own_move_at), do: at
@@ -139,16 +137,14 @@ defmodule SymphonyElixir.BreakdownReview do
   defp own_move?(_at, nil), do: false
 
   # When the plan's sub-issues were created: `:promote` takes every sub-issue from before the
-  # approval, `:replace` only the run that moved the parent to a review state before the rejection.
-  # The review state is the repo's plan review state: `In Review` or Human Review on a legacy repo,
-  # the configured `Plan Review` on a designed one.
+  # approval, `:replace` only the run that moved the parent to `Plan Review` before the rejection.
   defp plan_window(:promote, _changes, at, _settings), do: {nil, at}
 
   defp plan_window(:replace, changes, at, settings) do
     changes
     |> Enum.filter(&(DateTime.compare(&1.at, at) == :lt))
     |> Enum.sort_by(& &1.at, {:desc, DateTime})
-    |> Enum.drop_while(&(not HumanReview.plan_review_state?(&1.to, settings)))
+    |> Enum.drop_while(&(not PlanReview.in_state?(&1.to, settings)))
     |> case do
       [review, previous | _] -> {previous.at, review.at}
       [review] -> {nil, review.at}

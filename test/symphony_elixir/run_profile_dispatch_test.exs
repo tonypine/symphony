@@ -329,7 +329,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
     end
 
     test "a designed epic parent the epic review handles starts no agent", ctx do
-      write_profile_workflow!(ctx, state_machine: "designed")
+      write_profile_workflow!(ctx)
       workspace = Path.join([ctx.test_root, "workspaces", "MT-EPIC"])
       File.mkdir_p!(workspace)
 
