@@ -1388,7 +1388,8 @@ still read, by Code Review, until the block is removed. Each rule's new home:
 | `inconclusive_limit` | dropped: Code Review retries an inconclusive review twice, then asks a person |
 | the gate's `settings_ui` rule | dropped: CI's `mix settings.ui_coverage` fails such a PR |
 
-The built-in lists stay in force, and a configured list adds to them. See
+The built-in lists stay in force, and a configured list adds to them; only
+`escalate.ticket_patterns_builtin: false` drops the built-in `ticket_patterns`. See
 [`docs/acceptance_gate.md`](acceptance_gate.md) for the rules' syntax.
 
 #### Android settings
