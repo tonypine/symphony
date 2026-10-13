@@ -305,7 +305,9 @@ final class TranscriptWindows: NSObject, NSWindowDelegate {
             return
         }
         let model = TranscriptModel(identifier: identifier, repoKey: repoKey, client: client, reference: { [weak self] in self?.reference() ?? Date() })
-        let hostingController = NSHostingController(rootView: TranscriptContent(model: model))
+        let hostingController = NSHostingController(
+            rootView: TranscriptContent(model: model).environment(\.openURL, URLOpener.action)
+        )
         hostingController.sizingOptions = [.minSize]
         let window = NSWindow(contentViewController: hostingController)
         window.title = "\(identifier) · Transcript"
