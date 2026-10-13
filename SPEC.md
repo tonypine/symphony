@@ -39,7 +39,7 @@ Important boundary:
 - Symphony is a scheduler/runner and tracker reader.
 - Ticket writes (state transitions, comments, PR links) are typically performed by the coding agent
   using tools available in the workflow/runtime environment.
-- A successful run can end at a workflow-defined handoff state (for example `Human Review`), not
+- A successful run can end at a workflow-defined handoff state (for example `Code Review`), not
   necessarily `Done`.
 
 ## 2. Goals and Non-Goals
@@ -1764,15 +1764,14 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.states.terminal`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `issues.states.waiting_on_sub_issues`: string or null, default `Waiting on sub-tickets`; added to
   the active states when set
-- `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
-  NOT be one of the active states (see the human review rule)
+- `issues.states.human_review`: deprecated with the retired `Human Review` state; a config that
+  sets it MUST load with a deprecation warning and the value has no effect
 - `issues.states.code_review`, `issues.states.qa`, `issues.states.plan_review`,
   `issues.states.epic_review`, `issues.states.ci_fix`: the machine-owned phase states, string or
   null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
   MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
   and create it when it is missing, logging what it created; a missing one MUST be reported with its
-  exact name and the `issues.states.*` key to point at the new name before it is created. Only a
-  repo on the `designed` machine (see 7.6) dispatches from or moves into them.
+  exact name and the `issues.states.*` key to point at the new name before it is created.
 - `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
   the numbers `0`..`4`, or `no priority`, default `[]`; empty means every priority is
   dispatch-eligible. See 8.2 Candidate Selection Rules.
@@ -1949,8 +1948,8 @@ not require recognizing or validating extension fields unless that extension is 
   `300`)
 - `repositories[].acceptance_gate`: `mode` and `escalate` for that repository (`max_turns` and
   `timeout_ms` are deprecated with the gate); scalars replace the global values, lists add to them
-- `repositories[].state_machine`: `legacy` (default) or `designed`, the ticket state machine the
-  repo runs (see 7.6). An unknown value reads as `legacy`.
+- `repositories[].state_machine`: deprecated; every repository runs the one ticket state machine
+  (see 7.6). A config that sets it MUST load with a deprecation warning and the value has no effect.
 - `repositories[].manual_review`: `off` (default) or `on`, who decides that a verified ticket
   merges. `on` pauses the step into `Merging` on a **Needs Decision** hold carrying the summary;
   confirming continues into `Merging`, a redirect directs a move. It is a per-repo setting with no
@@ -2020,9 +2019,7 @@ Important nuance:
   refuses leaves the issue where it is and reports which step failed. On the designed machine the
   guard refuses an agent's request to enter `In Progress` from `Rework`, the Code Review state, the
   QA state or `Merging`: on those phases the request can only mean a full reset, which is not the
-  agent's to make. `Restart` is offered on designed repos only — a legacy repo's `Rework` is
-  already the full reset. Each Inbox item carries its repo's resolved `state_machine`, and the app
-  leaves `Restart` out on a legacy one; the control API refuses it there too.
+  agent's to make. `Restart` is offered on every repo.
 - Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
   that `HEAD` differs from the one the run started on and has checks that are still running or
   have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
@@ -2341,14 +2338,13 @@ state transitions, and tracked PR cleanup. Pending review-comment, merge-conflic
 prompt context lookups use the issue's repository scope when one is known, and otherwise search the
 configured repositories.
 
-### 7.6 Ticket State Machine (`designed`)
+### 7.6 Ticket State Machine
 
-A repo's ticket state machine is chosen per repo by `repositories[].state_machine`: `legacy` (the
-default) or `designed`. One resolver (`StateMachine.version/1`) answers it for the transition guard,
-dispatch and prompt assembly alike. A `legacy` repo keeps every rule elsewhere in this
-specification that names `In Review`, the Human Review state, supervisor checks or
-`Final verification:` tickets. The `Auto Review` state and the acceptance gate are retired for
-both versions (see **Retired states** below). A `designed` repo runs the machine below instead. The design of
+Every repo runs the one machine below; the per-repo `repositories[].state_machine` switch is
+retired. Where a rule elsewhere in this specification still names `In Review`, the Human Review
+state, supervisor checks or `Final verification:` tickets, this section supersedes it: those states
+are retired with `Auto Review` and the acceptance gate (see **Retired states** below), and only the
+drain of issues still sitting in them names them. The design of
 record is [`docs/design/state-machine.md`](docs/design/state-machine.md); this section states what
 the implementation enforces.
 

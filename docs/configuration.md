@@ -116,7 +116,6 @@ issues:
     active: [Todo, In Progress]
     terminal: [Closed, Cancelled, Canceled, Duplicate, Done]
     waiting_on_sub_issues: Waiting on sub-tickets
-    human_review: Human Review
     code_review: Code Review
     qa: QA
     plan_review: Plan Review
@@ -185,32 +184,9 @@ issues:
     it asks for a plan change, `Rework` re-plans it.
   - **Re-plan:** moving the parent to `Rework` makes the plan again from scratch, as above.
 
-- `states.human_review`: the state a ticket waits in when only a person can move it on, default
-  `Human Review`; `null` turns it off, and every such ticket goes to `In Review` as before. It
-  keeps those tickets apart from the supervisor's `In Review` queue. Create it in Linear as a
-  started state just after In Review; at startup Symphony checks the configured teams have it, and
-  when it is missing logs a warning and sends those tickets to `In Review` until restart. It must
-  not be one of `states.active`: Symphony never dispatches a ticket in it. The CI and PR review
-  pollers watch its PR as they do in `In Review`, and a person's move out of it counts like one out
-  of `In Review`: to `Merging` (approve), `Rework`, `states.waiting_on_sub_issues` (approve a
-  plan) or `Done` (sign off a final verification). It is the one way to say a person needs to act:
-  no label says it (the `human-action` label is retired, see `human_actions`). Symphony puts a
-  ticket there instead of `In Review` when:
-  - an agent moves a plan ticket to `In Review` and its ticket says a human reviews the plan:
-    an `escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
-    or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
-    "human review"; naming the `Human Review` state doesn't count, see
-    [What escalates](acceptance_gate.md#what-escalates)), or a description in which its author
-    says they review it ("I only want to review and validate the artifacts", "we'll approve the
-    plan");
-  - an agent posts a `linear_request_human_action` request: the tool moves the ticket there, and
-    the run's later move to `Backlog` or `In Review` lands there too.
-
-  The dashboard, `/api/v1/state` (`counts.human_review` and a `human_review` list of the watched
-  tickets in it) show how many tickets wait there, and the human-action update lists them first.
-  The Mac app's Inbox, the dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you`
-  list and the menu bar list them with the plans and PRs in `In Review` (see `human_actions`). A supervisor moves a ticket there when it needs the operator, and never moves
-  one out of it on the operator's behalf.
+- `states.human_review` (deprecated): the retired `Human Review` state. A config that still sets
+  it loads with a deprecation warning and the value has no effect: a ticket that needs a person
+  keeps its state on a `Needs Decision` hold instead (see `human_actions`).
 
 - `states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review` and `states.ci_fix`:
   the machine-owned phase states — the board columns — defaulting to `Code Review`, `QA`,
@@ -313,28 +289,18 @@ repositories:
   [`auto_review`](#the-retired-acceptance-gates-escalation-rules)). Its `escalate` rules add to the
   global ones and feed this repo's Code Review; its `mode` sets `manual_review` when that is unset;
   `max_turns` and `timeout_ms` do nothing.
-- `state_machine`: the ticket state-machine version this repo runs, `legacy` (the default) or
-  `designed`. `legacy` is today's flow: dispatch from `states.active`, the legacy transition guard,
-  and the legacy status-map prompt. `designed` moves this repo alone onto the designed machine of
-  [`docs/design/state-machine.md`](design/state-machine.md): dispatch also picks up the designed
-  phase states (`states.code_review`, `states.qa`, `states.epic_review`, `states.ci_fix`), the
-  transition guard uses the designed machine's edge table, and prompts render
-  the designed status map. `states.plan_review` is a designed state too, but dispatch never picks
-  it up: it is the epic path's person-owned plan review — where a plan parent's handoff lands, and
-  where the person reviewing the plan approves it or sends it back — so an issue in it is never
-  dispatched. Unset reads as `legacy`. Every part of a run resolves the version through
-  the same resolver, so an agent only ever sees one machine. The macOS Repos edit sheet sets it with
-  a State machine picker. A `designed` repo reviews its work through the designed `Code Review`
-  state, so it needs the reviewer on: with `review_agent.enabled` off, its `Code Review` tickets are
-  parked (a `code_review_reviewer_disabled` signal is recorded) instead of being dispatched. A
-  `Code Review` run also reads the repo's `auto_review.acceptance_gate.escalate` rules on an
-  approval: a person rule (`labels`, `ticket_patterns`) pauses the ticket on a **Needs Decision**
-  hold whose confirmation continues into QA, and a risk rule (`paths`, `diff_patterns`,
-  `dependencies`, `max_changed_lines`, `busy_files`) deepens the review rather than routing it — the
-  run takes a second reviewer pass on the same head, records the verdict bound to it and moves
-  nothing, and the next dispatch performs that verdict. A reviewer block, or a review still
-  inconclusive after two retries, pauses the ticket on a Needs Decision hold too. See
-  [`docs/design/state-machine.md`](design/state-machine.md).
+- `state_machine` (deprecated): every repo runs the one ticket state machine of
+  [`docs/design/state-machine.md`](design/state-machine.md), so the key has no effect; a config
+  that still sets it loads with a deprecation warning. Reviews go through the `Code Review` state,
+  so the reviewer must be on: with `review_agent.enabled` off, `Code Review` tickets are parked (a
+  `code_review_reviewer_disabled` signal is recorded) instead of being dispatched. A `Code Review`
+  run also reads the repo's `auto_review.acceptance_gate.escalate` rules on an approval: a person
+  rule (`labels`, `ticket_patterns`) pauses the ticket on a **Needs Decision** hold whose
+  confirmation continues into QA, and a risk rule (`paths`, `diff_patterns`, `dependencies`,
+  `max_changed_lines`, `busy_files`) deepens the review rather than routing it — the run takes a
+  second reviewer pass on the same head, records the verdict bound to it and moves nothing, and the
+  next dispatch performs that verdict. A reviewer block, or a review still inconclusive after two
+  retries, pauses the ticket on a Needs Decision hold too.
 - `manual_review`: who decides that a verified ticket merges, `off` (the default) or `on`
   ([`docs/design/state-machine.md`](design/state-machine.md), **Manual review**). It controls
   decision authority on the ticket path, not verification: the machine verifies the same way either
@@ -1070,7 +1036,6 @@ pull_requests:
     log_excerpt_lines: 200
     retry_failed_once: true
     max_fix_attempts: 3
-    escalate_to_state: In Review
     landing_wait_timeout_ms: 1800000
   learnings:
     enabled: false
@@ -2160,8 +2125,7 @@ human_actions:
   `linear_request_human_action` refuses with `human_actions_disabled` so the agent writes a plain
   blocker comment instead.
 - `label` (deprecated, no default): the label that used to mark an issue as needing a person. The
-  `Human Review` state (`issues.states.human_review`) is now the one way to say a person needs to
-  act, and `linear_request_human_action` adds no label. A config that still sets it loads with a
+  `Needs Decision` hold is now the one way to say a person needs to act, and `linear_request_human_action` adds no label. A config that still sets it loads with a
   deprecation warning, and an issue carrying the label counts as one with an open request: the
   pollers leave its red CI and merge conflicts to the person, and
   the update lists it. So does `human-action` in `auto_review.acceptance_gate.escalate.labels`,
@@ -2174,8 +2138,7 @@ human_actions:
 
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
-its own poll, not on this read: every `polling.interval_ms` it lists the tickets in `In Review` or
-the `issues.states.human_review` state in each route's scope plus the ones carrying the `Blocked`
+its own poll, not on this read: every `polling.interval_ms` it lists the plan parents in `Plan Review` in each route's scope plus the ones carrying the `Blocked`
 label (a hold pauses a ticket in its phase, so it need not sit in a review state), reads a ticket's
 comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request, else
@@ -2199,12 +2162,11 @@ lists:
   person can decide: a product call, a missing secret or permission (add it, or drop what needs
   it), an account to set up. A request without options is refused, and a person never gets a check
   to run: a check an agent can't run (launching the app, a host crash check, a check on a device)
-  goes to the supervisor as a `## Supervisor check` block with the ticket in `In Review`. The
-  update lists the question and the options, the recommended one marked. The tool moves the issue to `issues.states.human_review` (`In Review` when that
-  state is off) and adds no label; the move ends the run shortly after, so the agent first pushes
+  belongs to CI or a QA playbook. The update lists the question and the options, the recommended
+  one marked. The tool never moves the issue: it sets the `Needs Decision` hold, which pauses the
+  issue in its state until the answer, and the hold ends the run shortly after, so the agent first pushes
   its committed work (and opens or updates the PR when the rest of the ticket is done) and updates
-  its workpad. A request whose title matches one still open on the issue is not posted again,
-  and the issue still moves. An agent that finds its request is not needed after all withdraws it
+  its workpad. A request whose title matches one still open on the issue is not posted again. An agent that finds its request is not needed after all withdraws it
   with `linear_withdraw_human_action` (`reason`, optional `title`): Symphony replies
   `## Action withdrawn` with the reason under the request, which closes it. Once no open request
   is left on the issue, an issue the request moved to `Human Review` goes back to the active state
@@ -2316,7 +2278,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
 2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
-**Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
+**Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
 ### 3. Approve the plan for MOT-40
 
