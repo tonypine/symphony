@@ -6795,8 +6795,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp reviewer_profile_record(nil), do: %{}
   defp reviewer_profile_record(profile), do: %{reviewer_profile: run_profile_record(profile)}
 
-  defp run_profile_record(%{kind: kind, model: model, effort: effort}),
-    do: %{run_kind: Atom.to_string(kind), model: model, effort: effort}
+  defp run_profile_record(%{kind: kind, model: model, effort: effort} = profile),
+    do: %{run_kind: Atom.to_string(kind), model: model, effort: effort, provider: Map.get(profile, :provider)}
 
   defp run_profile_record(nil), do: %{}
 
