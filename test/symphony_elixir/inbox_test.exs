@@ -380,6 +380,59 @@ defmodule SymphonyElixir.InboxTest do
       assert Inbox.cached(state.opts[:name]) == []
     end
 
+    test "lists a designed repo's plan waiting in Plan Review, and drops it once it leaves" do
+      test_pid = self()
+
+      plan =
+        issue_node("SHOP-330", %{
+          "state" => %{"name" => "Plan Review"},
+          "labels" => %{"nodes" => [%{"name" => "plan"}]},
+          "history" => %{"nodes" => [moved("Plan Review", "2026-10-01T09:00:00Z")]},
+          "comments" => %{"nodes" => [comment("brief", @brief)]},
+          "children" => %{
+            "nodes" => [%{"identifier" => "SHOP-331", "title" => "First", "url" => "u1", "createdAt" => "2026-10-01T09:01:00Z", "state" => %{"name" => "Backlog"}}]
+          }
+        })
+
+      {:ok, listed} = Agent.start_link(fn -> [light(plan)] end)
+      client = linear(test_pid, fn _variables -> page(Agent.get(listed, & &1)) end, %{plan["id"] => plan})
+      state = state(client, settings_fun: fn _repo -> designed_settings() end)
+
+      state = Inbox.run_once(state)
+      assert_received {:listed, %{"and" => [_scope, %{"or" => conditions}]}}
+      assert %{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} in conditions
+
+      assert [
+               %{
+                 identifier: "SHOP-330",
+                 kind: :plan,
+                 state: "Plan Review",
+                 ask: "The retry fix for the importer.",
+                 waiting_since: ~U[2026-10-01 09:00:00Z],
+                 review: %{brief: %{headline: "The retry fix for the importer."}, sub_tickets: [%{identifier: "SHOP-331", state: "Backlog"}]}
+               }
+             ] = Inbox.cached(state.opts[:name])
+
+      # Approved: the parent moved on to `Waiting on sub-tickets`, which the list no longer finds.
+      Agent.update(listed, fn _nodes -> [] end)
+      state = Inbox.run_once(state)
+      assert Inbox.cached(state.opts[:name]) == []
+    end
+
+    test "lists nothing more with the Plan Review state turned off" do
+      test_pid = self()
+      settings = designed_settings()
+      off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
+      plan = issue_node("SHOP-330", %{"state" => %{"name" => "Plan Review"}, "labels" => %{"nodes" => [%{"name" => "plan"}]}})
+
+      client = linear(test_pid, fn _variables -> page([light(plan)]) end, %{plan["id"] => plan})
+      state = state(client, settings_fun: fn _repo -> off end) |> Inbox.run_once()
+
+      assert_received {:listed, %{"and" => [_scope, %{"or" => conditions}]}}
+      refute %{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} in conditions
+      assert Inbox.cached(state.opts[:name]) == []
+    end
+
     test "says it read Linear once a read succeeds, even one that found nothing" do
       test_pid = self()
       {:ok, answer} = Agent.start_link(fn -> {:error, :timeout} end)
@@ -566,6 +619,38 @@ defmodule SymphonyElixir.InboxTest do
 
       # The hold is what waits on the Director; an item with no hold that left the review states does not.
       assert Enum.map(Inbox.items(snapshot, name), & &1.identifier) == ["SHOP-70"]
+    end
+
+    test "keeps a plan while the orchestrator still sees it in the state the read listed it in" do
+      name = {:test, make_ref()}
+
+      plan = fn identifier, state ->
+        %{
+          issue_id: "id-" <> identifier,
+          identifier: identifier,
+          title: nil,
+          repo_key: "shop",
+          kind: :plan,
+          state: state,
+          ask: "Approve the plan",
+          waiting_since: ~U[2026-10-01 12:00:00Z],
+          url: nil,
+          review: %{}
+        }
+      end
+
+      :persistent_term.put({Inbox, :items, name}, [plan.("SHOP-80", "Plan Review"), plan.("SHOP-81", "Plan Review"), plan.("SHOP-82", nil)])
+
+      snapshot = %{
+        running: [],
+        watching: [
+          %{issue_id: "id-SHOP-80", state: " plan review "},
+          %{issue_id: "id-SHOP-81", state: "Waiting on sub-tickets"},
+          %{issue_id: "id-SHOP-82", state: "Plan Review"}
+        ]
+      }
+
+      assert [%{identifier: "SHOP-80", state: " plan review "}] = Inbox.items(snapshot, name)
     end
   end
 end

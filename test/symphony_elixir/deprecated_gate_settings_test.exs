@@ -126,6 +126,32 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert error!(%{}, %{"acceptance_gate" => "shadow"}) =~ "`repositories[app].acceptance_gate` must be an object"
     end
 
+    test "ticket_patterns_builtin: false leaves only the configured ticket patterns" do
+      escalate = fn fields -> settings!(gate(%{"escalate" => fields})).auto_review.acceptance_gate.escalate end
+      [built_in | _] = built_ins = Escalate.built_in().ticket_patterns
+
+      assert %Escalate{ticket_patterns_builtin: false, ticket_patterns: ["(?i)do not ship"]} =
+               escalate.(%{"ticket_patterns_builtin" => false, "ticket_patterns" => [" (?i)do not ship ", ""]})
+
+      assert escalate.(%{"ticket_patterns_builtin" => false}).ticket_patterns == []
+      assert escalate.(%{"ticket_patterns_builtin" => false, "ticket_patterns" => [built_in]}).ticket_patterns == [built_in]
+      assert escalate.(%{"ticket_patterns_builtin" => false, "ticket_patterns" => built_ins}).ticket_patterns == built_ins
+
+      # The other built-in lists stay.
+      assert escalate.(%{"ticket_patterns_builtin" => false}).labels == Escalate.built_in().labels
+      assert escalate.(%{"ticket_patterns_builtin" => true, "ticket_patterns" => ["(?i)do not ship"]}).ticket_patterns == Escalate.built_in().ticket_patterns ++ ["(?i)do not ship"]
+    end
+
+    test "an invalid ticket_patterns_builtin or ticket_patterns names the key" do
+      assert error!(gate(%{"escalate" => %{"ticket_patterns_builtin" => "no"}})) =~ "auto_review.acceptance_gate.escalate.ticket_patterns_builtin is invalid"
+
+      assert error!(gate(%{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => "(?i)x"}})) =~
+               "auto_review.acceptance_gate.escalate.ticket_patterns is invalid"
+
+      assert error!(gate(%{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["(unclosed"]}})) =~
+               "auto_review.acceptance_gate.escalate.ticket_patterns has an invalid regular expression `(unclosed`"
+    end
+
     test "a repository's WORKFLOW.md can't set the gate" do
       assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"auto_review" => %{"acceptance_gate" => %{"mode" => "off"}}})
       assert message =~ "operator-level key `auto_review.acceptance_gate`"
@@ -145,6 +171,7 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert "needs-human" in gate.escalate.labels
       assert "plan" in gate.escalate.labels
       assert "breakdown" in gate.escalate.labels
+      assert gate.escalate.ticket_patterns_builtin
       assert ".github/workflows/**" in gate.escalate.paths
     end
 
@@ -186,6 +213,50 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       escalate = Config.settings_for_repo!("api").auto_review.acceptance_gate.escalate
 
       for {field, values} <- Escalate.built_in(), do: assert(Map.fetch!(escalate, field) == values)
+    end
+
+    test "can turn the built-in ticket patterns off, keeping the global block's configured ones" do
+      write_repos!(
+        [
+          repo("api", ["api"], %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["(?i)api only"]}}),
+          repo("web", ["web"], nil)
+        ],
+        auto_review: %{"acceptance_gate" => %{"escalate" => %{"ticket_patterns" => ["(?i)do not ship"]}}}
+      )
+
+      api = Config.settings_for_repo!("api").auto_review.acceptance_gate.escalate
+      web = Config.settings_for_repo!("web").auto_review.acceptance_gate.escalate
+
+      assert {api.ticket_patterns_builtin, api.ticket_patterns} == {false, ["(?i)do not ship", "(?i)api only"]}
+      assert {web.ticket_patterns_builtin, web.ticket_patterns} == {true, Escalate.built_in().ticket_patterns ++ ["(?i)do not ship"]}
+    end
+
+    test "inherit the global switch, or turn the built-in ticket patterns back on" do
+      write_repos!(
+        [
+          repo("api", ["api"], %{"escalate" => %{"ticket_patterns" => ["(?i)api only"]}}),
+          repo("web", ["web"], %{"escalate" => %{"ticket_patterns_builtin" => true}})
+        ],
+        auto_review: %{"acceptance_gate" => %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["(?i)do not ship"]}}}
+      )
+
+      api = Config.settings_for_repo!("api").auto_review.acceptance_gate.escalate
+      web = Config.settings_for_repo!("web").auto_review.acceptance_gate.escalate
+
+      assert {api.ticket_patterns_builtin, api.ticket_patterns} == {false, ["(?i)do not ship", "(?i)api only"]}
+      assert {web.ticket_patterns_builtin, web.ticket_patterns} == {true, Escalate.built_in().ticket_patterns ++ ["(?i)do not ship"]}
+    end
+
+    test "merge_override/2 drops the global block's built-in ticket patterns only when it still had them" do
+      [built_in | _] = Escalate.built_in().ticket_patterns
+      off = %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["b"]}}
+
+      assert Settings.merge_override(%{"escalate" => %{"ticket_patterns_builtin" => true, "ticket_patterns" => Escalate.built_in().ticket_patterns ++ ["a"]}}, off) ==
+               %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["a", "b"]}}
+
+      # A global block that already turned them off listed this one itself.
+      assert Settings.merge_override(%{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => [built_in]}}, off) ==
+               %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => [built_in, "b"]}}
     end
 
     test "merge_override/2 adds lists, merges maps and replaces scalars" do

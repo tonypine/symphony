@@ -75,6 +75,9 @@ public struct RepositoryEntry: Equatable {
     public var stateMachine: String?
     /// `manual_review`, the repo's manual review setting (`on`/`off`), as written; nil uses the default (`off`).
     public var manualReview: String?
+    /// `acceptance_gate.escalate.ticket_patterns_builtin`, whether Code Review's built-in ticket patterns apply to
+    /// the repo; nil uses the global setting.
+    public var ticketPatternsBuiltIn: Bool?
 
     public init(
         key: String,
@@ -84,7 +87,8 @@ public struct RepositoryEntry: Equatable {
         route: RepositoryRoute = RepositoryRoute(),
         workspace: RepositoryWorkspace = RepositoryWorkspace(),
         stateMachine: String? = nil,
-        manualReview: String? = nil
+        manualReview: String? = nil,
+        ticketPatternsBuiltIn: Bool? = nil
     ) {
         self.key = key
         self.isDefault = isDefault
@@ -94,6 +98,7 @@ public struct RepositoryEntry: Equatable {
         self.workspace = workspace
         self.stateMachine = stateMachine
         self.manualReview = manualReview
+        self.ticketPatternsBuiltIn = ticketPatternsBuiltIn
     }
 }
 
@@ -153,10 +158,10 @@ public enum RepositoriesConfig {
             try set(field, to: field.get(entry), of: entry.key, in: &text, step: step)
         }
         for group in groups {
-            let groupFields = fields.filter { $0.path.count == 2 && $0.path[0] == group }
+            let groupFields = fields.filter { $0.path.count > 1 && $0.path[0] == group }
             let item = try currentItem(entry.key, in: text)
             guard item.nodes.named(group) != nil else {
-                let newLines = render(group, of: entry, column: item.column, step: step)
+                let newLines = render(block: [group], of: entry, column: item.column, step: step)
                 if !newLines.isEmpty {
                     let index = insertionIndex(for: group, among: item.nodes, order: entryOrder, parent: item.dashIndex, in: text)
                     text.lines.insert(contentsOf: newLines, at: index)
@@ -206,8 +211,9 @@ public enum RepositoriesConfig {
     /// Keys of an entry in the order new ones are written.
     static let entryOrder = [
         "key", "default", "base_branch", "workflow", "state_machine", "manual_review", "route", "workspace",
+        "acceptance_gate",
     ]
-    static let groups = ["route", "workspace"]
+    static let groups = ["route", "workspace", "acceptance_gate"]
 
     /// The fields the model knows, in the order they are written. Fields of one group stay together.
     fileprivate static let fields: [Field] = [
@@ -224,6 +230,7 @@ public enum RepositoriesConfig {
         .string(["workspace", "repo"], \.workspace.repo),
         .string(["workspace", "source"], \.workspace.source),
         .bool(["workspace", "fetch_before_dispatch"], \.workspace.fetchBeforeDispatch),
+        .bool(["acceptance_gate", "escalate", "ticket_patterns_builtin"], \.ticketPatternsBuiltIn),
     ]
 
     private static func validate(_ entry: RepositoryEntry) throws {
@@ -238,19 +245,25 @@ public enum RepositoriesConfig {
         return item
     }
 
-    /// Sets one field of the entry `key`.
+    /// Sets one field of the entry `key`. A missing block between the entry's group and the field is added with
+    /// it, and one the edit empties goes; `updating` adds and removes the group itself.
     private static func set(_ field: Field, to value: Value?, of key: String, in text: inout ConfigLines, step: Int) throws {
         let item = try currentItem(key, in: text)
         var nodes = item.nodes
         var parent = item.dashIndex
         var column = item.column
         var order = entryOrder
-        if field.path.count == 2 {
-            guard let group = item.nodes.named(field.path[0]) else { return }
-            nodes = try group.mapping()
-            parent = group.line.index
-            column = nodes.first?.line.column ?? group.line.column + step
-            order = fields.filter { $0.path[0] == field.path[0] }.map { $0.path[1] }
+        for depth in field.path.indices.dropLast() {
+            guard let block = nodes.named(field.path[depth]) else {
+                guard depth > 0, let value else { return }
+                let index = insertionIndex(for: field.path[depth], among: nodes, order: order, parent: parent, in: text)
+                text.lines.insert(contentsOf: render(field.path[depth...], holding: value, column: column, step: step), at: index)
+                return
+            }
+            nodes = try block.mapping()
+            parent = block.line.index
+            column = nodes.first?.line.column ?? block.line.column + step
+            order = fields.filter { $0.path.count > depth + 1 && $0.path[...depth] == field.path[...depth] }.map { $0.path[depth + 1] }
         }
         let name = field.path[field.path.count - 1]
 
@@ -265,6 +278,7 @@ public enum RepositoriesConfig {
         guard let value else {
             if old != nil {
                 text.lines.removeSubrange(node.line.index...text.blockEnd(node.lastIndex, deeperThan: node.line.column))
+                try removeEmptiedBlocks(above: field, of: key, in: &text)
             }
             return
         }
@@ -273,6 +287,20 @@ public enum RepositoriesConfig {
             text.replaceBlockList(node, with: items, column: first.column)
         } else {
             text.replaceValue(of: node, with: render(value))
+        }
+    }
+
+    /// Removes the blocks between the entry's group and `field` that hold no key any more, deepest first.
+    private static func removeEmptiedBlocks(above field: Field, of key: String, in text: inout ConfigLines) throws {
+        for depth in stride(from: field.path.count - 2, through: 1, by: -1) {
+            var nodes = try currentItem(key, in: text).nodes
+            var block: Node?
+            for name in field.path[...depth] {
+                block = nodes.named(name)
+                nodes = try block?.mapping() ?? []
+            }
+            guard let block, block.children.isEmpty else { return }
+            text.lines.removeSubrange(block.line.index...text.blockEnd(block.lastIndex, deeperThan: block.line.column))
         }
     }
 
@@ -295,17 +323,37 @@ public enum RepositoriesConfig {
             }
         }
         for group in groups {
-            lines += render(group, of: entry, column: layout.content, step: layout.step)
+            lines += render(block: [group], of: entry, column: layout.content, step: layout.step)
         }
         return lines
     }
 
-    /// `group:` and its fields, or nothing when every field is nil.
-    private static func render(_ group: String, of entry: RepositoryEntry, column: Int, step: Int) -> [String] {
-        let children = fields.filter { $0.path.count == 2 && $0.path[0] == group }.compactMap { field in
-            field.get(entry).map { String(repeating: " ", count: column + step) + field.path[1] + ": " + render($0) }
+    /// The block at `path` (`["route"]`, `["acceptance_gate", "escalate"]`) and the fields under it, or nothing
+    /// when every one of them is nil.
+    private static func render(block path: [String], of entry: RepositoryEntry, column: Int, step: Int) -> [String] {
+        var children: [String] = []
+        var names: [String] = []
+        for field in fields where field.path.count > path.count && Array(field.path.prefix(path.count)) == path {
+            let name = field.path[path.count]
+            guard !names.contains(name) else { continue }
+            names.append(name)
+            if field.path.count == path.count + 1 {
+                if let value = field.get(entry) {
+                    children.append(String(repeating: " ", count: column + step) + name + ": " + render(value))
+                }
+            } else {
+                children += render(block: path + [name], of: entry, column: column + step, step: step)
+            }
         }
-        return children.isEmpty ? [] : [String(repeating: " ", count: column) + group + ":"] + children
+        return children.isEmpty ? [] : [String(repeating: " ", count: column) + path[path.count - 1] + ":"] + children
+    }
+
+    /// `path`'s keys, each nested under the one before, the last one holding `value`.
+    private static func render(_ path: ArraySlice<String>, holding value: Value, column: Int, step: Int) -> [String] {
+        path.enumerated().map { offset, name in
+            String(repeating: " ", count: column + offset * step) + name + ":"
+                + (offset == path.count - 1 ? " " + render(value) : "")
+        }
     }
 
     fileprivate static func render(_ value: Value) -> String {

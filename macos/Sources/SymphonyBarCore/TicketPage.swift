@@ -197,13 +197,6 @@ public struct TicketPage: Equatable {
         return auditTypes.map { "api/v1/audit?issue=\(issue)&type=\($0)&from=\(from)&to=\(to)" }
     }
 
-    /// The web dashboard's Audit view filtered to the ticket, as the app's Audit view is deferred.
-    public static func auditRecordsURL(_ identifier: String, base: URL) -> URL? {
-        var components = URLComponents(url: base.appendingPathComponent("audit"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [URLQueryItem(name: "issue", value: identifier)]
-        return components?.url
-    }
-
     // MARK: - Building
 
     public init(identifier: String, sources: Sources, now: Date = Date(), timeZone: TimeZone = .current) {

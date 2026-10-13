@@ -54,12 +54,25 @@ defmodule SymphonyElixir.Config.DeprecatedGateSettings do
 
   @doc """
   Merges a repository's override into the global block, both as string-keyed maps: a scalar
-  in the override replaces the global one, a list adds to it.
+  in the override replaces the global one, a list adds to it. An override that sets
+  `escalate.ticket_patterns_builtin: false` keeps the global block's configured ticket patterns
+  but not the built-in ones it carries.
   """
   @spec merge_override(map(), map()) :: map()
   def merge_override(global, override) when is_map(global) and is_map(override) do
-    Map.merge(global, override, fn _key, global_value, override_value -> merge_value(global_value, override_value) end)
+    global
+    |> drop_built_in_ticket_patterns(override)
+    |> Map.merge(override, fn _key, global_value, override_value -> merge_value(global_value, override_value) end)
   end
+
+  defp drop_built_in_ticket_patterns(
+         %{"escalate" => %{"ticket_patterns_builtin" => true, "ticket_patterns" => patterns} = escalate} = global,
+         %{"escalate" => %{"ticket_patterns_builtin" => false}}
+       ) do
+    %{global | "escalate" => %{escalate | "ticket_patterns" => patterns -- Escalate.built_in().ticket_patterns}}
+  end
+
+  defp drop_built_in_ticket_patterns(global, _override), do: global
 
   defp merge_value(global, override) when is_map(global) and is_map(override), do: merge_override(global, override)
   defp merge_value(global, override) when is_list(global) and is_list(override), do: Enum.uniq(global ++ override)

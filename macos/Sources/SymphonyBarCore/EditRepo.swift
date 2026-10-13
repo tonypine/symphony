@@ -21,7 +21,8 @@ public enum EditRepo {
             project: entry.route.projects?.first,
             labels: entry.route.labels ?? [],
             stateMachine: StateMachineChoice(override: entry.stateMachine),
-            manualReview: ManualReviewChoice(override: entry.manualReview)
+            manualReview: ManualReviewChoice(override: entry.manualReview),
+            ticketPatternsBuiltIn: BuiltInTicketPatternsChoice(override: entry.ticketPatternsBuiltIn)
         )
     }
 
@@ -91,6 +92,8 @@ public enum EditRepo {
         if draft.manualReview != ManualReviewChoice(override: original.manualReview) {
             entry.manualReview = draft.manualReview.override
         }
+        // Same as Settings removes the repo's key.
+        entry.ticketPatternsBuiltIn = draft.ticketPatternsBuiltIn.override
 
         let others = existing.filter { $0.key != original.key }
         if AddRepo.isUnscoped(entry.route), entry.isDefault != true, !others.isEmpty {

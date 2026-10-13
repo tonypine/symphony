@@ -88,6 +88,28 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
            ] = entries([pr, plan, bare])
   end
 
+  test "a designed repo's plan parent waiting in Plan Review is a plan, and nothing else is listed for that state" do
+    assert {:ok, designed} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+
+    plan =
+      node("TP-20", %{
+        "state" => %{"name" => "Plan Review"},
+        "labels" => labels(["breakdown"]),
+        "history" => history([moved("Plan Review", "2026-10-01T08:00:00Z")])
+      })
+
+    not_a_plan = node("TP-21", %{"state" => %{"name" => "Plan Review"}})
+    approved = node("TP-22", %{"state" => %{"name" => "Waiting on sub-tickets"}, "labels" => labels(["plan"])})
+
+    assert [%{identifier: "TP-20", kind: :plan, state: "Plan Review", waiting_since: ~U[2026-10-01 08:00:00Z]}] =
+             Waiting.entries([plan, not_a_plan, approved], designed)
+
+    # With the Plan Review state turned off, a plan waits in the review states as before.
+    off = %{designed | tracker: %{designed.tracker | plan_review_state: nil}}
+    assert Waiting.entries([plan], off) == []
+    assert [%{identifier: "TP-20", kind: :plan}] = Waiting.entries([%{plan | "state" => %{"name" => "In Review"}}], off)
+  end
+
   test "an open request makes the issue an action, waiting since the request when its history has no move" do
     action = node("TP-4", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["plan"]), "comments" => comments([request_comment("2026-10-02T07:00:00Z")])})
 

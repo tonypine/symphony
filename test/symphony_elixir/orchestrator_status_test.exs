@@ -4403,7 +4403,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     # The plan the ticket belongs to, as the Initiatives server caches it.
     initiatives_key = {SymphonyElixir.Initiatives, :initiatives, SymphonyElixir.Initiatives}
-    plan = %{identifier: "MT-PLAN", title: "Plan", final_verification: nil, sub_tickets: [%{id: issue_id}]}
+    plan = %{identifier: "MT-PLAN", title: "Plan", sub_tickets: [%{id: issue_id}]}
     :persistent_term.put(initiatives_key, [plan])
     on_exit(fn -> :persistent_term.erase(initiatives_key) end)
 
