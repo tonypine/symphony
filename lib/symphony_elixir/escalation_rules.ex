@@ -19,8 +19,8 @@ defmodule SymphonyElixir.EscalationRules do
 
   `:ticket_pattern` matches the ticket's prose only: fenced code blocks and backticked spans are
   blanked first (the Symphony summary block is already left out of `Issue.description`). Then
-  the retired review states' names, `In Review` and `Human Review`, are blanked wherever the text
-  names the state: bare, bolded or quoted. The name matches case-sensitively, so a ticket about the
+  the retired review states' names (`TransitionGuard.retired_states/0`) are blanked wherever the
+  text names the state: bare, bolded or quoted. The name matches case-sensitively, so a ticket about the
   state doesn't match, while "needs a human review" still does. Before `state` or `states` it
   matches in any case ("the human review state"). A name right after a request ("Needs Human
   Review", "requires a Human Review") stays, since that asks for one.
@@ -36,9 +36,9 @@ defmodule SymphonyElixir.EscalationRules do
   alias SymphonyElixir.DependencyAudit.{MixParser, NpmParser}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
+  alias SymphonyElixir.TransitionGuard
 
   @manifests ["mix.lock", "package.json"]
-  @state_names ["In Review", "Human Review"]
   @person_rules [:label, :ticket_pattern]
   @risk_rules [:path, :diff_pattern, :dependency, :size, :busy_file]
 
@@ -107,7 +107,7 @@ defmodule SymphonyElixir.EscalationRules do
       [title || "", description || ""]
       |> Enum.join("\n")
       |> blank_code()
-      |> blank_state_names(@state_names)
+      |> blank_state_names(TransitionGuard.retired_states())
 
     patterns
     |> Enum.filter(&Regex.match?(Regex.compile!(&1), text))
