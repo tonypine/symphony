@@ -401,7 +401,7 @@ class Instance:
         self.app_process = None
         self.launches = 0
         self.command_count = 0
-        for folder in (self.qa, self.applications, work / "config", work / "logs", work / "home", work / "repo"):
+        for folder in (self.qa, self.applications, work / "bin", work / "config", work / "logs", work / "home", work / "repo"):
             folder.mkdir(parents=True, exist_ok=True)
         self._write_fake_linear_and_stub()
         self._write_qa_settings()
