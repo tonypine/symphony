@@ -39,6 +39,40 @@ steps.
   answered; it returns the recorded answer, which you apply. A review finding that
   contradicts a recorded decision is not a finding: answer it by naming the decision.
 
+### Writing a decision for the Director
+
+The Director reads the request in the Inbox and does not read code. Write every field in
+their words (`docs/standards/decision-writing.md`):
+
+- The question stands alone: name each ticket by its identifier and a short name the
+  first time, and explain any term a director wouldn't know in the same sentence.
+- No file names or paths, code identifiers, branch names, commit hashes, template syntax
+  or backticks; no internal jargon ("partials", "head", "verdict", "hold"). Say what a
+  thing does, not where it lives. A pull request is PR #448.
+- `why`: at most two short paragraphs, one fact per sentence, subject first.
+- Each option's `effect` says what will happen to the work, in the Director's terms.
+- Add `if_unanswered` (what waits or repeats until someone answers), up to three
+  `tradeoffs` per option (`good`, `cost`, `risk`, one line each) and
+  `decision.recommendation_reason` (one line).
+- The tool refuses a request holding backticks, template syntax, a path or file name, a
+  commit hash or an `auto/` or `origin/` branch, and names each token and its field.
+  Rewrite it in plain words and call it again.
+
+Before: "How should TP-892 handle the legacy partials that Code Review keeps flagging?",
+why "Code Review sent PR #448 back again (head 2f5af5ab). Its only finding is that the
+legacy partials (parent_tickets.liquid, plan_pipeline.liquid, review_brief.liquid) still
+describe [a retired review step]."
+
+After: "TP-892 (Retire two old review steps) keeps failing Code Review because the older
+set of agent instructions still describes one of those steps. Should TP-892 leave that
+text to TP-891 (Remove the retired review states), which deletes it anyway?", why "Code
+Review sent PR #448 back a second time. Its only finding is the old step's text. You
+decided earlier today that TP-891 removes it.", if unanswered "TP-892 stays in Rework.
+Each time it goes back to Code Review unchanged, it is sent back for the same reason.",
+and the recommended option "Leave it to TP-891: you add one line to TP-892's description
+saying TP-891 removes the old text. TP-892 goes back to Code Review with no code change."
+with "Good: TP-892 can merge today."
+
 ## Blocked-access escape hatch (required behavior)
 
 Use this only when completion is blocked by missing required tools or

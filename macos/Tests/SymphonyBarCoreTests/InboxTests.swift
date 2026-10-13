@@ -173,6 +173,39 @@ final class InboxTests: XCTestCase {
         ])
     }
 
+    func testReadsADecisionsWhatWaitsTradeOffsAndWhyRecommendedAndAnOlderOneWithout() throws {
+        let json = """
+        {"items": [
+          {"identifier": "TP-892", "kind": "action", "review": {"comment_id": "c-1", "question": "Leave the old text to TP-891?",
+            "if_unanswered": "TP-892 stays in Rework.", "recommendation_reason": "It is one line of text.",
+            "options": [
+              {"label": "Leave it to TP-891", "effect": "TP-892 goes back to Code Review.", "recommended": true,
+               "tradeoffs": [{"kind": "good", "text": "TP-892 can merge today."}, {"kind": "cost", "text": "The old text stays a while."},
+                             {"kind": "nice", "text": "An unknown kind is skipped."}, {"kind": "risk"}]},
+              {"label": "Remove it now", "tradeoffs": [{"kind": "risk", "text": "It clashes with PR #454."}]}
+            ]}},
+          {"identifier": "NOTE-90", "kind": "action", "review": {"est_minutes": 10, "options": [{"label": "Add it", "recommended": true}, {"label": "Drop it"}]}}
+        ]}
+        """
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(json.utf8)))
+
+        let action = try XCTUnwrap(inbox.items[0].review.action)
+        XCTAssertEqual(action.ifUnanswered, "TP-892 stays in Rework.")
+        XCTAssertEqual(action.recommendationReason, "It is one line of text.")
+        XCTAssertEqual(action.options[0].tradeoffs, [
+            .init(kind: .good, text: "TP-892 can merge today."),
+            .init(kind: .cost, text: "The old text stays a while."),
+        ])
+        XCTAssertEqual(action.options[1].tradeoffs, [.init(kind: .risk, text: "It clashes with PR #454.")])
+        XCTAssertNil(action.estMinutes)
+
+        let older = try XCTUnwrap(inbox.items[1].review.action)
+        XCTAssertNil(older.ifUnanswered)
+        XCTAssertNil(older.recommendationReason)
+        XCTAssertEqual(older.options.map(\.tradeoffs), [[], []])
+        XCTAssertEqual(older.estMinutes, 10)
+    }
+
     func testReadsAnItemWithMissingFieldsAndSkipsOneWithoutAKind() throws {
         let json = """
         {"items": [

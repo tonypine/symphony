@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.PrReviewPollerTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Notifications.Event
   alias SymphonyElixir.PrReviewPoller
@@ -8,6 +9,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   @repo_key "default"
 
   defmodule FakeTracker do
+    alias SymphonyElixir.HumanActions.PlainWords
     alias SymphonyElixir.Linear.Issue
 
     @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]}
@@ -73,6 +75,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   end
 
   defmodule IssueReadFailingTracker do
+    alias SymphonyElixir.HumanActions.PlainWords
     alias SymphonyElixir.Linear.Issue
 
     # The issue sits outside the watched states (`Backlog`), so the poller reads it by id.
@@ -1814,8 +1817,10 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     refute_receive {:issue_state_update, "issue-1780", _state}, 50
     assert_receive {:issue_comment, "issue-1780", body}
     assert body =~ "## Decision needed: Merge conflict persists on ACME-1780"
-    assert body =~ "after 3 conflict fixes"
-    assert body =~ "on https://github.com/example/repo/pull/1780"
+    assert body =~ "after 3 attempts to reconcile them"
+    assert body =~ "reconcile PR #1780 with the latest merged work"
+    assert body =~ "**If unanswered:** ACME-1780 stays where it is"
+    assert PlainWords.tokens(body) == []
 
     hold = SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision)
     assert SymphonyElixir.MergeConfirmation.confirm_target(hold) == "Rework"

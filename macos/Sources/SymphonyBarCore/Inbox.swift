@@ -253,10 +253,14 @@ public struct InboxReview: Equatable {
         public var title: String?
         public var question: String?
         public var why: String?
+        /// What waits or repeats until someone answers; nil on an older request.
+        public var ifUnanswered: String? = nil
         public var unblocks: String?
         public var estMinutes: Int?
         public var steps: [String]
         public var options: [Option]
+        /// Why the recommended option is the one to pick; nil on an older request.
+        public var recommendationReason: String? = nil
         /// The id of the request comment a decision answers: its reply goes under it. Nil for a request Symphony
         /// can't answer from the Inbox.
         public var commentID: String?
@@ -268,6 +272,18 @@ public struct InboxReview: Equatable {
             public var label: String
             public var effect: String?
             public var recommended: Bool
+            /// Up to three things picking the option gains, costs or risks.
+            public var tradeoffs: [Tradeoff] = []
+        }
+
+        /// One line on what an option gains (`good`), costs (`cost`) or risks (`risk`).
+        public struct Tradeoff: Equatable {
+            public enum Kind: String, Equatable {
+                case good, cost, risk
+            }
+
+            public var kind: Kind
+            public var text: String
         }
 
         /// The request as one decision (C16), so the Inbox's picks answer it: its question and its options, the
@@ -388,10 +404,16 @@ public struct InboxReview: Equatable {
             let qa: QA?
         }
 
+        struct TradeoffPayload: Decodable {
+            let kind: String?
+            let text: String?
+        }
+
         struct OptionPayload: Decodable {
             let label: String?
             let effect: String?
             let recommended: Bool?
+            let tradeoffs: [TradeoffPayload]?
         }
 
         // A plan, PR or final verification.
@@ -402,10 +424,12 @@ public struct InboxReview: Equatable {
         let title: String?
         let question: String?
         let why: String?
+        let ifUnanswered: String?
         let unblocks: String?
         let estMinutes: Int?
         let steps: [String]?
         let options: [OptionPayload]?
+        let recommendationReason: String?
         /// The request comment a decision answers.
         let commentId: String?
         /// The state confirming the request moves the ticket to.
@@ -443,12 +467,24 @@ public struct InboxReview: Equatable {
                 title: payload.title,
                 question: payload.question,
                 why: payload.why,
+                ifUnanswered: payload.ifUnanswered,
                 unblocks: payload.unblocks,
                 estMinutes: payload.estMinutes,
                 steps: payload.steps ?? [],
                 options: (payload.options ?? []).compactMap { option in
-                    option.label.map { Action.Option(label: $0, effect: option.effect, recommended: option.recommended ?? false) }
+                    option.label.map {
+                        Action.Option(
+                            label: $0,
+                            effect: option.effect,
+                            recommended: option.recommended ?? false,
+                            tradeoffs: (option.tradeoffs ?? []).compactMap { tradeoff in
+                                guard let kind = tradeoff.kind.flatMap(Action.Tradeoff.Kind.init(rawValue:)), let text = tradeoff.text else { return nil }
+                                return Action.Tradeoff(kind: kind, text: text)
+                            }
+                        )
+                    }
                 },
+                recommendationReason: payload.recommendationReason,
                 commentID: payload.commentId,
                 confirm: payload.confirm
             ),

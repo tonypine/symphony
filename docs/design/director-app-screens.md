@@ -98,8 +98,10 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2c · Inbox: an action only the Director can do
 
-- **Shows:** a `linear_request_human_action` request: why, the numbered steps, about how long, what it unblocks, which
-  run asked. The banner at the bottom is the Undo after D12d.
+- **Shows:** a `linear_request_human_action` request: why, what waits if nobody answers, the question and its options
+  (each with its effect and up to three trade-offs, and why the recommended one), or the numbered steps of an older
+  request, what it unblocks, which run asked. Every field is written in the Director's words
+  ([the decision writing standard](../standards/decision-writing.md)). The banner at the bottom is the Undo after D12d.
 - **Actions:** **Open in Linear** (prominent), **Copy Steps**.
 - **Data:** the open human-action requests (section 2).
 

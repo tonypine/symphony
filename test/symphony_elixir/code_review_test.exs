@@ -5,6 +5,7 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.CodeReview
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Hold
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.RunStore
@@ -169,6 +170,9 @@ defmodule SymphonyElixir.CodeReviewTest do
     assert body =~ "## Decision needed: Code Review escalated TP-815"
     assert body =~ "the ticket stays in Code Review until the decision is recorded"
     assert body =~ "#{recommended}** (recommended)"
+    assert body =~ "Code Review could not settle TP-815 (Land the Code Review state) on its own."
+    assert body =~ "**If unanswered:** TP-815 stays in Code Review and goes no further."
+    assert PlainWords.tokens(body) == []
     refute_received {:moved, @issue_id, _state}
 
     hold = Hold.get(@repo_key, @issue_id, :needs_decision)
@@ -280,7 +284,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       refute_received {:moved, @issue_id, _state}
       assert_received {:commented, @issue_id, request}
       assert request =~ "## Decision needed:"
-      assert request =~ "Merge TP-815 into its base branch?"
+      assert request =~ "Merge TP-815 (Land the Code Review state) into its base branch?"
       assert request =~ "Code Review: looks good"
       assert request =~ "QA: QA skipped: the PR only changes docs, tests or `auto_review.skip_globs` paths"
       assert request =~ "the ticket stays in Code Review until the decision is recorded"
@@ -813,7 +817,7 @@ defmodule SymphonyElixir.CodeReviewTest do
                )
 
       body = assert_escalated("Continue to QA")
-      assert body =~ "the reviewer approved; label: the issue is labelled `needs-human`"
+      assert body =~ "**Why:** The reviewer approved the change. The ticket carries a label that asks for a person to review it before it goes on."
       assert [%{outcome: "approve"}] = verdicts()
       assert [%{details: %{signal: "code_review_escalate"}}] = signals() |> Enum.filter(&(&1.name == "code_review"))
     end
@@ -906,6 +910,22 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
     end
 
+    test "a ticket without a title is named by its identifier alone" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      untitled = %{issue() | title: nil, labels: ["needs-human"], description: "Adds a widget."}
+
+      assert :ok =
+               CodeReview.run(untitled, "/tmp/workspace",
+                 settings: designed_settings(),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
+               )
+
+      assert_received {:commented, @issue_id, body}
+      assert body =~ "**Question:** Code Review could not settle TP-815 on its own. How should it continue?"
+    end
+
     test "with the built-in ticket patterns off, a configured one still pauses the ticket for a person" do
       Process.put(:fake_review_result, approve_result([plain_file()]))
       asked = %{issue() | description: "Do not ship this before the launch."}
@@ -918,7 +938,7 @@ defmodule SymphonyElixir.CodeReviewTest do
                  qa_policy: FakeQaPolicy
                )
 
-      assert assert_escalated("Continue to QA") =~ "ticket_pattern"
+      assert assert_escalated("Continue to QA") =~ "The ticket's own words ask for a person to review it"
     end
 
     test "a ticket that only names the human review state isn't escalated" do

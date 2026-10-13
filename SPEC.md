@@ -3650,14 +3650,21 @@ Scoped Linear tool extension contract:
   never reads its own summary as requirements. The read-only reviewer and QA scopes MUST NOT
   advertise or execute it.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
-  `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
-  one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
-  exactly one of them `recommended`; a request without it, or with fewer than 2 options, MUST be
+  `why`, a `decision`, an optional `unblocks` and an optional `if_unanswered` (what waits or
+  repeats until someone answers). The `decision` holds one non-blank `question`, 2 to 4 `options`,
+  each with a non-blank `label` and `effect` and up to three `tradeoffs` (`kind` `good`, `cost` or
+  `risk`, and a non-blank `text`), exactly one of them `recommended`, and an optional
+  `recommendation_reason`; a request without it, or with fewer than 2 options, MUST be
   refused with an error that says so. A person only gets decisions: a check an agent can't run
   belongs to CI or a QA playbook instead. Every field MUST pass the
-  same secret scan as comments before any Linear call. It posts a
-  `## Decision needed: <title>` comment (the question, then the numbered options with the
-  recommended one marked, and no steps) that Symphony's human-action project updates list, and
+  same secret scan as comments before any Linear call, and MUST be refused when it holds code the
+  Director doesn't read (`docs/standards/decision-writing.md`): backticks, `{%` or `%}`, a path or a
+  file name with an extension, a 7 to 40 character hex run with a digit and a letter, or an
+  `auto/` or `origin/` branch. The error names each token and its field; ticket identifiers and PR
+  numbers (`PR #448`) pass. It posts a
+  `## Decision needed: <title>` comment (the question, the why, `**If unanswered:**`, then the
+  numbered options with the recommended one marked and each option's trade-offs indented under it
+  as `- Good:`, `- Cost:` or `- Risk:` lines, then `**Why recommended:**`, and no steps) that Symphony's human-action project updates list, and
   those updates still read a hand-written `## Action needed: <title>` comment. It MUST NOT move the
   current issue: it sets the `Needs Decision` hold, which pauses the issue in its phase, and adds
   no label of its own. The request stays open until a person answers it (a reply under it, or the
@@ -4602,8 +4609,9 @@ Minimum endpoints:
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, and `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order.
-    - `action`: `title`, `question`, `why`, `unblocks`, `est_minutes`, `steps`, `options` (`label`,
-      `effect`, `recommended`) and `requested_at`.
+    - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
+      (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
+      and `requested_at`.
     - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
       `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
       `questions`.

@@ -88,13 +88,14 @@ defmodule SymphonyElixir.HumanActionsTest do
   defp collected(actions), do: %{@project.id => %{project: @project, actions: actions}}
 
   test "posts one update listing a new action, and nothing more while the list stays the same" do
-    actions = start_actions([action("request:comment-1", %{why: "Release fails.", est_minutes: 10})])
+    actions = start_actions([action("request:comment-1", %{why: "Release fails.", if_unanswered: "Releases stay red."})])
     state = state(actions: actions) |> HumanActions.run_once()
 
     assert_received {:recovered, "project-1"}
     assert_received {:posted, %{"projectId" => "project-1", "health" => "atRisk", "body" => body}}
     assert body =~ "### 1. Do request:comment-1"
     assert body =~ "1. Step for request:comment-1"
+    assert body =~ "**If unanswered:** Releases stay red."
     assert body =~ "Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24)"
     assert_received {:notified, :human_action_needed, %{issue_identifier: "MOT-24", reason: "Do request:comment-1", metadata: %{"kind" => "request"}}}
 
@@ -170,12 +171,12 @@ defmodule SymphonyElixir.HumanActionsTest do
     state = HumanActions.run_once(state)
     assert_received {:posted, %{"projectId" => "project-1", "health" => "atRisk", "body" => body}}
     assert body =~ "**1 action needs you.**"
-    assert body =~ "### 1. Add the `SIGNING_KEY` secret"
-    assert body =~ "Unblocks the `Release` workflow on `main` in acme/cycle"
+    assert body =~ "### 1. Add the SIGNING_KEY secret"
+    assert body =~ "Unblocks the Release workflow on main in the cycle repository"
     assert body =~ "1. Open https://github.com/acme/cycle/settings/secrets/actions (the repository's Settings → Secrets and variables → Actions)."
-    assert body =~ "**Done when:** the next run of `Release` on `main` is green."
+    assert body =~ "**Done when:** the next run of the Release workflow on main is green."
     refute body =~ fake_value
-    assert_received {:notified, :human_action_needed, %{issue_identifier: nil, reason: "Add the `SIGNING_KEY` secret", metadata: %{"kind" => "ci_secret"}}}
+    assert_received {:notified, :human_action_needed, %{issue_identifier: nil, reason: "Add the SIGNING_KEY secret", metadata: %{"kind" => "ci_secret"}}}
 
     Process.put(:runs, [%{red.("3") | conclusion: "SUCCESS"}, red.("2"), red.("1")])
     Agent.update(clock, fn _now -> 15 * @minute end)

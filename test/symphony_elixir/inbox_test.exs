@@ -67,8 +67,12 @@ defmodule SymphonyElixir.InboxTest do
         question: "Add the secret?",
         why: "Releases fail to sign.",
         unblocks: "the Release workflow",
-        est_minutes: 5,
-        options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
+        if_unanswered: "Every release stays unsigned.",
+        options: [
+          %{label: "Add it", effect: "Releases sign again.", recommended: true, tradeoffs: [%{kind: "good", text: "Gatekeeper stops warning."}]},
+          %{label: "Drop signing", effect: "Unsigned builds."}
+        ],
+        recommendation_reason: "Signing is a one-time setup."
       },
       "Code Review"
     )
@@ -161,7 +165,7 @@ defmodule SymphonyElixir.InboxTest do
       end
     end
 
-    test "an action with why, options, time and what it unblocks" do
+    test "an action with why, what waits if unanswered, options with trade-offs and what it unblocks" do
       action =
         issue_node("SHOP-90", %{
           "state" => %{"name" => "Code Review"},
@@ -172,21 +176,25 @@ defmodule SymphonyElixir.InboxTest do
       assert %{
                kind: :action,
                ask: "Add the signing secret",
-               review: %{
-                 comment_id: "request",
-                 title: "Add the signing secret",
-                 question: "Add the secret?",
-                 why: "Releases fail to sign.",
-                 unblocks: "the Release workflow",
-                 est_minutes: 5,
-                 steps: [],
-                 options: [
-                   %{label: "Add it", effect: "Releases sign again.", recommended: true},
-                   %{label: "Drop signing", effect: "Unsigned builds.", recommended: false}
-                 ],
-                 requested_at: ~U[2026-10-01 08:00:01Z]
-               }
+               review:
+                 %{
+                   comment_id: "request",
+                   title: "Add the signing secret",
+                   question: "Add the secret?",
+                   why: "Releases fail to sign.",
+                   unblocks: "the Release workflow",
+                   if_unanswered: "Every release stays unsigned.",
+                   steps: [],
+                   options: [
+                     %{label: "Add it", effect: "Releases sign again.", recommended: true, tradeoffs: [%{kind: "good", text: "Gatekeeper stops warning."}]},
+                     %{label: "Drop signing", effect: "Unsigned builds.", recommended: false, tradeoffs: []}
+                   ],
+                   recommendation_reason: "Signing is a one-time setup.",
+                   requested_at: ~U[2026-10-01 08:00:01Z]
+                 } = review
              } = Item.from_node(action, "shop", %Schema{}, lookups())
+
+      refute Map.has_key?(review, :est_minutes)
     end
 
     test "a held ticket waits in its phase, listed with the request's ask and age" do

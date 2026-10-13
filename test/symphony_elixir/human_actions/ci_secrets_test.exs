@@ -4,7 +4,7 @@ defmodule SymphonyElixir.HumanActions.CiSecretsTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{Action, CiSecrets}
+  alias SymphonyElixir.HumanActions.{Action, CiSecrets, PlainWords}
   alias SymphonyElixir.Linear.Client
 
   @fake_value "ghp_" <> String.duplicate("A1b2", 9)
@@ -118,11 +118,11 @@ defmodule SymphonyElixir.HumanActions.CiSecretsTest do
       assert %Action{
                key: "ci_secret:acme/cycle:Release:SIGNING_KEY",
                kind: :ci_secret,
-               title: "Add the `SIGNING_KEY` secret",
-               unblocks: "the `Release` workflow on `main` in acme/cycle",
-               est_minutes: 5,
+               title: "Add the SIGNING_KEY secret",
+               unblocks: "the Release workflow on main in the cycle repository",
+               if_unanswered: "Every run of the Release workflow on main fails the same way.",
                issue: nil,
-               done_when: "the next run of `Release` on `main` is green.",
+               done_when: "the next run of the Release workflow on main is green.",
                steps: [
                  "Open https://github.com/acme/cycle/settings/secrets/actions (the repository's Settings → Secrets and variables → Actions).",
                  "Click New repository secret, name it `SIGNING_KEY`, and paste its value.",
@@ -130,8 +130,9 @@ defmodule SymphonyElixir.HumanActions.CiSecretsTest do
                ]
              } = signing
 
-      assert signing.why =~ "has failed on `main` 2 times in a row"
-      assert notary.title == "Add the `NOTARY_KEY` secret"
+      assert signing.why =~ "has failed on main 2 times in a row"
+      assert notary.title == "Add the NOTARY_KEY secret"
+      assert PlainWords.findings(Map.from_struct(signing)) == []
       refute inspect(collected) =~ @fake_value
 
       # The same red run again: its log and the project are not read twice.

@@ -6,12 +6,13 @@ defmodule SymphonyElixir.HumanActions.Update do
   else:
 
   - one numbered `###` heading per action, so the list scans on a narrow screen;
-  - the line under it says how long it takes and what it unblocks, so the reader can pick what to
-    do before reading the rest;
-  - the why, then the question and its options for a decision, or the steps of any other action,
+  - the line under it says what it unblocks, so the reader can pick what to do before reading the
+    rest;
+  - the why and what waits until it is answered, then the question and its options for a decision,
+    or the steps of any other action,
     as a numbered list, one per line (no tables, which scroll sideways on a phone);
   - a closing **Done when** line, so it is clear how the action leaves the list;
-  - quickest first, so a short session clears the small ones;
+  - ordered by issue, so the list stays put between updates;
   - a footer with the list id (a hash of the action keys), which lets Symphony recognise its own
     last update after a restart instead of posting the same list again.
 
@@ -70,20 +71,21 @@ defmodule SymphonyElixir.HumanActions.Update do
     |> SecretScanner.redact()
   end
 
-  @doc "Actions in the order an update lists them: quickest first, then by issue."
+  @doc "Actions in the order an update lists them: by issue, then by key."
   @spec sort([Action.t()]) :: [Action.t()]
-  def sort(actions), do: Enum.sort_by(actions, &{&1.est_minutes || 1_000_000, &1.issue[:identifier], &1.key})
+  def sort(actions), do: Enum.sort_by(actions, &{&1.issue[:identifier], &1.key})
 
   defp header([]), do: "**Nothing needs you.** Every action from the last update is closed."
   defp header([_action]), do: "**1 action needs you.**"
 
-  defp header(actions), do: "**#{length(actions)} actions need you.** Quickest first."
+  defp header(actions), do: "**#{length(actions)} actions need you.**"
 
   defp action_section(%Action{} = action, index) do
     [
       "### #{index}. #{Request.one_line(action.title)}",
       meta_line(action),
       why_line(action.why),
+      if_unanswered_line(action.if_unanswered),
       question_line(action.question),
       numbered_list(action.options),
       numbered_list(action.steps),
@@ -93,10 +95,7 @@ defmodule SymphonyElixir.HumanActions.Update do
     |> Enum.join("\n\n")
   end
 
-  defp meta_line(%Action{} = action) do
-    time = if is_integer(action.est_minutes), do: "**~#{action.est_minutes} min** · "
-    "#{time}#{issue_relation(action)}"
-  end
+  defp meta_line(%Action{} = action), do: issue_relation(action)
 
   defp issue_relation(%Action{issue: nil} = action), do: "Unblocks #{Request.one_line(action.unblocks)}"
 
@@ -112,6 +111,9 @@ defmodule SymphonyElixir.HumanActions.Update do
 
   defp why_line(why) when is_binary(why), do: "**Why:** #{Request.one_line(why)}"
   defp why_line(_why), do: nil
+
+  defp if_unanswered_line(text) when is_binary(text), do: "**If unanswered:** #{Request.one_line(text)}"
+  defp if_unanswered_line(_text), do: nil
 
   defp question_line(question) when is_binary(question), do: "**Decide:** #{Request.one_line(question)}"
   defp question_line(_question), do: nil
