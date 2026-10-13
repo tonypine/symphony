@@ -14,10 +14,10 @@
 # A program the same line builds isn't on disk yet, so the hook also remembers what an earlier
 # command builds from app sources: the output of `swiftc`, `clang`, `cc` or `gcc` (also through
 # `xcrun`), and the products of `swift build`. A source file the line writes itself (a heredoc)
-# isn't on disk either, so then the line's own text counts as the source. `swift run` of a
-# package is judged by its sources. A copy of an app (`cp`, `mv`, `ln`) is an app too, and the line
-# a shell runs with `-c` (`bash -c '...'`) is checked like the outer one. A program named through a
-# variable (`$P`) or started by a script is not seen.
+# isn't on disk either, so then the line's own text counts as the source; any other missing source
+# is not an app. `swift run` of a package is judged by its sources. A copy of an app (`cp`, `mv`,
+# `ln`) is an app too, and the line a shell runs with `-c` (`bash -c '...'`) is checked like the
+# outer one. A program named through a variable (`$P`) or started by a script is not seen.
 #
 # Claude Code passes the tool call as JSON on stdin. Exit 2 refuses the command and shows stderr to
 # the agent; anything else lets it run.
@@ -46,6 +46,8 @@ exit 0 unless ref $event eq 'HASH' && ref $event->{tool_input} eq 'HASH';
 my $command = $event->{tool_input}{command};
 exit 0 unless defined $command && !ref $command;
 my $cwd = defined $event->{cwd} && !ref $event->{cwd} ? $event->{cwd} : '.';
+# Names of the files the line writes with a redirect or `tee`.
+my %written = map { basename($_) => 1 } $command =~ /(?:>>?|\btee(?:\s+-a)?)\s*['"]?([^\s'";&|()<>]+)/g;
 # Paths an earlier command in the line builds from app sources.
 my %built_apps;
 # `[build dir, product]` pairs an earlier `swift build` builds from app sources.
@@ -156,7 +158,7 @@ sub compile {
     }
   }
 
-  return unless grep { app_source(resolve($_, $dir)) } @sources;
+  return unless grep { app_source($_ eq '-' ? '-' : resolve($_, $dir)) } @sources;
 
   $output //= basename($program) eq 'swiftc' ? basename($sources[0], '.swift') : 'a.out';
   $built_apps{resolve($output, $dir)} = 1;
@@ -271,11 +273,13 @@ sub scan {
   return 0;
 }
 
-# A source file that starts an app. One the line itself writes (a heredoc) or reads from stdin
-# isn't on disk yet, so the line's own text stands in for it.
+# A source file that starts an app. One the line itself writes (`cat > new.swift <<EOF`, `tee`) or
+# reads from stdin (`-`) isn't on disk yet, so the line's own text stands in for it. Any other
+# missing file is not an app.
 sub app_source {
   my ($path) = @_;
-  return -f $path ? contains_source($path) : $command =~ $app_source;
+  return contains_source($path) if -f $path;
+  return ($path eq '-' || $written{basename($path)}) && $command =~ $app_source;
 }
 
 sub contains_source {

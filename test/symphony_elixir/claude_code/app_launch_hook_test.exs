@@ -122,6 +122,8 @@ defmodule SymphonyElixir.ClaudeCode.AppLaunchHookTest do
           "cc app.m -framework AppKit && ./a.out",
           "cat > new.swift <<'EOF'\nimport AppKit\nNSApplication.shared.run()\nEOF\nswiftc new.swift -o new && ./new",
           "cat > new.swift <<'EOF'\nNSApplication.shared.run()\nEOF\nswift new.swift",
+          "printf 'NSApplication.shared.run()' | tee piped.swift && swiftc piped.swift -o piped && ./piped",
+          "echo 'NSApplication.shared.run()' | swiftc - -o stdin-app && ./stdin-app",
           "cd pkg && swift build && ./.build/debug/Demo",
           "swift build --package-path pkg -c release && pkg/.build/arm64-apple-macosx/release/Demo",
           "swift run --package-path pkg",
@@ -141,6 +143,8 @@ defmodule SymphonyElixir.ClaudeCode.AppLaunchHookTest do
           "swiftc app.swift -o fresh && ./other",
           "swiftc -c app.swift",
           "swiftc missing.swift -o missing && ./missing",
+          "grep NSWindow notes.txt; swiftc missing.swift -o m && ./m",
+          "echo NSApplication > notes.txt; swift missing.swift",
           "cd pkg && swift build && ./.build/debug/Tool",
           "swift run --package-path pkg Tool",
           "xcrun"
