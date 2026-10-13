@@ -918,6 +918,85 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  describe "a reviewer that ends in prose" do
+    setup do
+      test_root = unique_tmp("symphony-elixir-review-agent-json-nudge")
+      repo = git_repo_with_change!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      on_exit(fn ->
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end)
+
+      %{repo: repo}
+    end
+
+    test "gets one JSON nudge in the same session and its verdict counts", %{repo: repo} do
+      put_sequence_responses!(["The diff looks fine to me.", ~s({"verdict":"approve","comments":[]})])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive :review_agent_sequence_session_started
+      refute_receive :review_agent_sequence_session_started
+      assert_receive {:review_agent_sequence_call, 2, nudge, nudge_opts}
+      assert nudge =~ "Return only the JSON verdict for the review you just did"
+      assert nudge_opts[:max_iterations] == 4
+    end
+
+    test "stays inconclusive when the nudge is prose too", %{repo: repo} do
+      put_sequence_responses!(["Prose.", "Still prose."])
+
+      assert {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, :no_json_object}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      refute_receive {:review_agent_sequence_call, 3, _prompt, _opts}
+    end
+
+    test "reports an unreachable model API on the nudge as unreachable", %{repo: repo} do
+      put_sequence_responses!(["Prose.", {:error, {:model_api_unreachable, %{reason: :econnrefused}}}])
+
+      assert {:error, {:model_api_unreachable, %{reason: :econnrefused}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+    end
+  end
+
+  test "the assembled reviewer prompt ends with the JSON rule, after the project conventions" do
+    test_root = unique_tmp("symphony-elixir-review-agent-contract-last")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      File.write!(Path.join(repo, "CLAUDE.md"), "Project rule body\n")
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      settings = Config.settings!()
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, settings, review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      assert {:ok, assembled} = SymphonyElixir.ProjectGuides.append_to_prompt(prompt, repo, settings, :claude)
+
+      [before_contract, contract] = String.split(assembled, "Return ONLY one JSON object in this shape:")
+      assert before_contract =~ "## Project conventions"
+      assert before_contract =~ "Project rule body"
+      refute contract =~ "## Project conventions"
+      refute assembled =~ SymphonyElixir.ProjectGuides.output_contract_marker()
+      assert String.trim_trailing(contract) =~ ~r/Your final message must be only this JSON object, with no prose before or after it\.$/
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evaluate downgrades a block to inconclusive when self-check retracts all findings" do
     test_root = unique_tmp("symphony-elixir-review-agent-self-check-empty")
 

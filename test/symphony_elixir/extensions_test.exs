@@ -1453,6 +1453,141 @@ defmodule SymphonyElixir.ExtensionsTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
+  test "the initiatives api lists plan tickets from Symphony's cache, without a Linear request" do
+    test_pid = self()
+    initiatives = {:test, make_ref()}
+    inbox = {:test, make_ref()}
+
+    child = fn identifier, state, type, extra ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Part " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "createdAt" => "2026-10-01T10:00:00Z",
+          "state" => %{"name" => state, "type" => type},
+          "inverseRelations" => %{"nodes" => []}
+        },
+        extra
+      )
+    end
+
+    blocked_by = fn identifier ->
+      %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Human Review", "type" => "started"}}}]}}
+    end
+
+    plan = fn identifier, state, type, children, extra ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Plan " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "completedAt" => nil,
+          "state" => %{"name" => state, "type" => type},
+          "children" => %{"nodes" => children}
+        },
+        extra
+      )
+    end
+
+    nodes = [
+      plan.("MT-DONE", "Done", "completed", [], %{"completedAt" => DateTime.utc_now() |> DateTime.to_iso8601()}),
+      plan.("MT-REVIEW", "In Review", "started", [], %{}),
+      plan.(
+        "MT-PLAN",
+        "Waiting on sub-tickets",
+        "started",
+        [
+          child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
+          child.("MT-2", "In Review", "started", %{}),
+          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"}),
+          child.("MT-9", "Todo", "unstarted", %{"title" => "Final verification: the plan"})
+        ],
+        %{}
+      ),
+      plan.("MT-QUEUED", "Waiting on sub-tickets", "started", [], %{})
+    ]
+
+    linear_client = fn query, _variables, _opts ->
+      send(test_pid, {:linear, query})
+      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => false}}}}}
+    end
+
+    SymphonyElixir.Initiatives.run_once(%{
+      opts: [
+        name: initiatives,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      timer: nil
+    })
+
+    assert_received {:linear, _query}
+
+    lanes = %{
+      max_total: 2,
+      lanes: [%{issue_id: "issue-MT-PLAN", identifier: "MT-PLAN", status: "running", sub_issue: %{identifier: "MT-HTTP"}}],
+      queued_epics: [%{issue_id: "issue-MT-QUEUED", identifier: "MT-QUEUED"}],
+      shared: %{slots: 1, used: 0}
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :InitiativesOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :epic_lanes, lanes))
+
+    start_test_endpoint(
+      orchestrator: orchestrator_name,
+      initiatives: initiatives,
+      inbox: inbox,
+      snapshot_timeout_ms: 50
+    )
+
+    payload = json_response(get(build_conn(), "/api/v1/initiatives"), 200)
+    refute_received {:linear, _query}
+
+    assert %{"read" => true, "counts" => %{"active" => 2, "in_review" => 1, "done" => 1}, "initiatives" => listed} = payload
+    assert Enum.map(listed, & &1["identifier"]) == ["MT-PLAN", "MT-QUEUED", "MT-REVIEW", "MT-DONE"]
+
+    assert %{
+             "issue_id" => "issue-MT-PLAN",
+             "title" => "Plan MT-PLAN",
+             "state" => "Waiting on sub-tickets",
+             "repo_key" => "default",
+             "url" => "https://linear.app/example/issue/MT-PLAN",
+             "group" => "active",
+             "counts" => %{"done" => 0, "working" => 1, "you" => 1, "queued" => 0, "blocked" => 1, "total" => 3},
+             "slot" => %{"status" => "running", "identifier" => "MT-HTTP", "reason" => nil},
+             "sub_tickets" => [
+               %{"identifier" => "MT-2", "waits_on" => "you", "blocked_by" => [], "waiting_for" => []},
+               %{"identifier" => "MT-3", "waits_on" => "blocker", "blocked_by" => ["MT-2"], "waiting_for" => ["MT-2"]},
+               %{"identifier" => "MT-HTTP", "waits_on" => "working"}
+             ],
+             "final_verification" => %{"identifier" => "MT-9", "waits_on" => "slot", "open_tickets" => 3}
+           } = hd(listed)
+
+    assert %{"slot" => %{"status" => "queued", "position" => 1}, "final_verification" => nil} = Enum.at(listed, 1)
+    assert %{"slot" => nil} = Enum.at(listed, 2)
+
+    assert json_response(post(build_conn(), "/api/v1/initiatives", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+
+    no_lanes = Module.concat(__MODULE__, :InitiativesNoLanesOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: no_lanes, snapshot: Map.delete(static_snapshot(), :epic_lanes))
+
+    assert %{initiatives: [%{slot: nil} | _rest]} =
+             SymphonyElixirWeb.Presenter.initiatives_payload(no_lanes, 50, initiatives, inbox)
+
+    assert %{error: %{code: "snapshot_unavailable"}} =
+             SymphonyElixirWeb.Presenter.initiatives_payload(Module.concat(__MODULE__, :NoInitiatives), 50, initiatives)
+
+    timeout_orchestrator = Module.concat(__MODULE__, :InitiativesTimeoutOrchestrator)
+    {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
+    assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.initiatives_payload(timeout_orchestrator, 1, initiatives)
+  end
+
   test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do
     inbox = {:test, make_ref()}
 

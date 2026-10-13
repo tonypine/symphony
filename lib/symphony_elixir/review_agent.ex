@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   require Logger
 
-  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, PromptSafety, SSH}
+  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.Context
@@ -478,7 +478,7 @@ defmodule SymphonyElixir.ReviewAgent do
           turn_opts =
             reviewer_turn_opts(opts, reviewer_settings, on_message, linear_comment_registry: Keyword.get(opts, :linear_comment_registry))
 
-          with {:ok, verdict} <- run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts),
+          with {:ok, verdict} <- review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts),
                {:ok, checked} <- self_check(agent_module, session, issue, verdict, message_collector, turn_opts) do
             ground_findings(agent_module, session, issue, checked, source, message_collector, turn_opts)
           end
@@ -514,6 +514,32 @@ defmodule SymphonyElixir.ReviewAgent do
       {:error, reason} ->
         {:error, classify_review_turn_failure(reason)}
     end
+  end
+
+  # A long tool-using review can end in prose instead of the JSON verdict. The same session gets
+  # one short turn asking for the verdict alone before the run counts as inconclusive, so the
+  # review it already did is kept.
+  defp review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts) do
+    case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
+      {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, _reason}}} = malformed ->
+        nudge_opts = Keyword.put(turn_opts, :max_iterations, @self_check_max_iterations)
+
+        case run_review_turn(agent_module, session, json_nudge_prompt(), issue, message_collector, nudge_opts) do
+          {:ok, _verdict} = ok -> ok
+          {:error, {:model_api_unreachable, _info}} = unreachable -> unreachable
+          {:error, _reason} -> malformed
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp json_nudge_prompt do
+    """
+    #{ProjectGuides.output_contract_marker()}
+    Return only the JSON verdict for the review you just did: one JSON object in the shape the review prompt asked for, with no other text.
+    """
   end
 
   defp classify_review_turn_result({:ok, _result} = ok), do: ok
@@ -600,6 +626,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp requote_prompt(result, %{failures: failures}) do
     """
+    #{ProjectGuides.output_contract_marker()}
     Symphony could not find the quoted snippet of these findings in the diff or the changed files:
 
     #{Enum.map_join(failures, "\n\n", &requote_failure/1)}
@@ -636,6 +663,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp self_check_prompt(result) do
     """
+    #{ProjectGuides.output_contract_marker()}
     For each finding, paste the exact lines from the diff or file that prove it (use the read-only tools if necessary). If you cannot paste the lines, retract the finding by removing it from `findings`. Return the corrected JSON object.
 
     Previous JSON:
@@ -714,6 +742,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - If you are uncertain, prefer `approve` or `request_changes` (with concrete diffs) over `block`.
     - Do not fabricate function or module names. If you cannot grep for the symbol you intend to cite, do not cite it.
 
+    #{ProjectGuides.output_contract_marker()}
     Return ONLY one JSON object in this shape:
     {
       "verdict": "approve" | "request_changes" | "block",
@@ -728,6 +757,8 @@ defmodule SymphonyElixir.ReviewAgent do
       ],
       "reason": "<required for block>"
     }
+
+    Your final message must be only this JSON object, with no prose before or after it.
     """
   end
 

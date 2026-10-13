@@ -11,6 +11,9 @@ defmodule SymphonyElixir.ProjectGuides do
   @max_depth 5
   @max_files 20
   @import_pattern ~r/^@(.+)$/
+  # A prompt with a structured-output contract puts this marker on the line before the contract,
+  # so the project conventions land above it and the contract stays the last thing the model reads.
+  @output_contract_marker "<!-- symphony:output-contract -->"
 
   @type guide :: %{path: String.t(), content: String.t()}
   @type runner :: :claude | :codex
@@ -41,11 +44,14 @@ defmodule SymphonyElixir.ProjectGuides do
     end
   end
 
+  @spec output_contract_marker() :: String.t()
+  def output_contract_marker, do: @output_contract_marker
+
   @spec append_to_prompt(String.t(), Path.t(), Schema.t(), runner()) :: {:ok, String.t()} | {:error, term()}
   def append_to_prompt(prompt, workspace, %Schema{} = settings, runner) when is_binary(prompt) do
     case settings.agent.include_project_guides do
       true -> append_enabled_guides(prompt, workspace, settings, runner)
-      false -> {:ok, prompt}
+      false -> {:ok, insert_section(prompt, nil)}
     end
   end
 
@@ -82,17 +88,27 @@ defmodule SymphonyElixir.ProjectGuides do
     files = settings.agent.project_guide_files || default_files(runner)
 
     case read(workspace, files, runner: runner) do
-      {:ok, guides} -> {:ok, append_section(prompt, guides)}
+      {:ok, guides} -> {:ok, insert_section(prompt, prompt_section(guides))}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp append_section(prompt, guides) do
-    case prompt_section(guides) do
-      nil -> prompt
-      section -> String.trim_trailing(prompt) <> "\n\n" <> section <> "\n"
+  # Splits at the last marker: an earlier one can only come from quoted material such as a diff.
+  defp insert_section(prompt, section) do
+    case :binary.matches(prompt, @output_contract_marker) do
+      [] ->
+        append_section(prompt, section)
+
+      matches ->
+        {start, length} = List.last(matches)
+        before = binary_part(prompt, 0, start)
+        contract = binary_part(prompt, start + length, byte_size(prompt) - start - length)
+        append_section(before, section) <> "\n" <> String.trim_leading(contract)
     end
   end
+
+  defp append_section(prompt, nil), do: prompt
+  defp append_section(prompt, section), do: String.trim_trailing(prompt) <> "\n\n" <> section <> "\n"
 
   defp read_entry(file, state) do
     case resolve_path(file, state.workspace, state.root) do

@@ -4870,6 +4870,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
+    # A refetched issue carries no repo key; without the retry's, a designed repo's ticket would
+    # read as legacy and take the quiet post-PR move into Auto Review.
+    issue = freeze_issue_repo_key(issue, issue_repo_key(issue) || retry_repo_key(state, metadata, %{}))
 
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
@@ -4926,7 +4929,7 @@ defmodule SymphonyElixir.Orchestrator do
         :pushed
 
       head ->
-        post_pr_state = Handoff.target_state(Config.settings!())
+        post_pr_state = post_pr_handoff_state(issue)
         Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state}: its workspace HEAD #{head} has commits its PR does not; keeping it in #{issue.state}")
         completed_metadata = Map.put(completed_metadata, :unpushed_head, head)
         {:unpushed, %{state | completed_run_metadata: Map.put(state.completed_run_metadata, issue_id, completed_metadata)}}
@@ -4935,11 +4938,20 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The move runs in a task; the claim stays held until it lands.
   defp handle_post_pr_quiet_active_issue(%State{} = state, %Issue{} = issue, issue_id, attempt, metadata) do
-    post_pr_state = Handoff.target_state(Config.settings!())
+    post_pr_state = post_pr_handoff_state(issue)
     Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
     context = %{kind: :post_pr_transition, issue_ids: [issue_id], issue: issue, attempt: attempt, metadata: metadata}
     {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state, issue_repo_key(issue)) end)}
+  end
+
+  # The handoff target comes from the issue's own repo: `state_machine` is set per repo, so the
+  # global settings would send a designed repo's ticket to Auto Review instead of Code Review.
+  defp post_pr_handoff_state(%Issue{} = issue) do
+    case issue_repo_key(issue) && Config.settings_for_repo(issue_repo_key(issue)) do
+      {:ok, settings} -> Handoff.target_state(settings)
+      _no_repo_settings -> Handoff.target_state(Config.settings!())
+    end
   end
 
   defp move_post_pr_issue(issue_id, post_pr_state, repo_key) do
