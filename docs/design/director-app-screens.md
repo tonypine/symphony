@@ -320,7 +320,8 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Shows:** the local audit records (today's `/audit`): kind and date filters, search, chain verification,
   **Export…** (NDJSON). Moves made from the app are recorded like any other.
-- **Data:** `/api/v1/audit` (exists).
+- **Data:** `/api/v1/audit` (exists; `last=N` reads the newest records) and `/api/v1/audit/verify` (each day's chain:
+  verified, or the first broken record).
 
 ### J9. Mac routines (platform baseline)
 

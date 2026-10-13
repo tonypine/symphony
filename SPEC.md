@@ -4664,6 +4664,23 @@ Minimum endpoints:
   - The response also has `filters` (the filters applied) and `repos` and `tags`: every repo key
     and tag the records have, before filtering.
 
+- `GET /api/v1/audit?from=&to=&issue=&repo=&type=&run_id=&since=`
+  - The local audit records of the inclusive UTC date range (default today), oldest first, as NDJSON
+    (`application/x-ndjson`), redacted as the web dashboard's `/audit` shows them; the filters
+    match exactly. `download=1` adds a `content-disposition` for `symphony-audit.ndjson`.
+  - `limit=N` pages from the start of the range: `x-next-cursor` names the cursor that reads the
+    next page with `cursor=`. `last=N` instead serves the N newest matching records (still oldest
+    first) and sets `x-audit-truncated: true` when older ones matched too; it can't be combined
+    with `limit` or `cursor`. A bad filter returns `400` `invalid_audit_filter`.
+
+- `GET /api/v1/audit/verify?date=` (or `from=&to=`, at most 31 days; default today)
+  - The hash-chain verification of each day's audit file, for the Mac app's Audit view. `days`
+    lists each day of the range (`date`, `verified`, `broken`); a day without records verifies.
+    `broken` is null on a verified day, else the first record that breaks the chain: its `line` in
+    the day's file, `record_hash`, `reason` (`chain_break`, or `invalid_record` for a line that
+    isn't a JSON object) and the redacted `record` (null when the line doesn't read). The response
+    also has `from` and `to`. A bad date or range returns `400` `invalid_audit_filter`.
+
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
     the implementation tracks that is useful for debugging.

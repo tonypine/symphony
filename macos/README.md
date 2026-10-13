@@ -884,7 +884,7 @@ state. The window opens on the Inbox the first time.
   last message. It reads `/api/v1/:issue_identifier`, `/api/v1/runs` and `/api/v1/audit` besides the state;
   a done ticket, which Symphony no longer tracks, shows what the state and the run records still say. Its
   actions: **View Transcript**, **Open in Linear**, **Stop Run…**, and under ⋯ **Copy API URL**, **Show Audit
-  Records** (the web dashboard's Audit view, filtered to the ticket) and **Reveal Worktree**.
+  Records** (Audit, filtered to the ticket) and **Reveal Worktree**.
 - **View Transcript** opens the run's transcript in its own window (⌘-click opens another): the agent's
   messages, each tool call with its result and duration, and errors, grouped by turn, with **All**,
   **Messages**, **Tools** and **Errors**, a search field (⌘F) and **Copy Session ID**. The selected event shows
@@ -898,6 +898,16 @@ state. The window opens on the Inbox the first time.
   and row of the Overview (the sidebar badge still counts every repo), and the app remembers it across
   relaunches.
 
+- **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
+  under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
+  moves from the app (approve, merge, rework, decisions, sign-off, Backlog, Stop Run) are recorded like any
+  other. The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
+  whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
+  that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the
+  selected record in full. **Export…** saves every record under the filters and the search as NDJSON, one per
+  line as Symphony wrote it, from the API's export. With nothing to show it says "No audit records match." with
+  **Clear Filters**.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
@@ -1047,7 +1057,9 @@ Four more variables, read only in QA mode:
   `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one and a
   conflict), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
-  shipped today, and learnings in both repos with tags). Ages in them count from the payload's `generated_at`, so they read the same
+  shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
+  moves among them; Oct 7's chain verifies and Oct 6's breaks at its line 5, SHOP-298's PR opened, and SHOP-305's
+  ticket page has a stop and a Backlog move). Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

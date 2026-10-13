@@ -63,6 +63,8 @@ public final class LiveAPIClient: ObservableObject {
     public static let statePath = "api/v1/state"
     public static let visibleInterval: TimeInterval = 2
     public static let hiddenInterval: TimeInterval = 30
+    /// How long a download may take, such as Audit's export of a busy week.
+    public static let downloadTimeout: TimeInterval = 120
 
     /// Sends a GET for a path such as `api/v1/state`.
     public typealias Fetch = (_ path: String) async -> APIAnswer
@@ -89,6 +91,7 @@ public final class LiveAPIClient: ObservableObject {
     public var interval: TimeInterval { isVisible ? Self.visibleInterval : Self.hiddenInterval }
 
     private let fetch: Fetch
+    private let downloadFetch: Fetch
     private let scheduler: PollScheduler
     private let now: () -> Date
     private var timer: PollTimer?
@@ -96,8 +99,12 @@ public final class LiveAPIClient: ObservableObject {
     private var pollAgain = false
     private var started = false
 
-    public init(fetch: @escaping Fetch, scheduler: PollScheduler = RunLoopScheduler(), now: @escaping () -> Date = Date.init) {
+    /// `download` reads a body that may take long to send, such as Audit's export; it defaults to `fetch`.
+    public init(
+        fetch: @escaping Fetch, download: Fetch? = nil, scheduler: PollScheduler = RunLoopScheduler(), now: @escaping () -> Date = Date.init
+    ) {
         self.fetch = fetch
+        downloadFetch = download ?? fetch
         self.scheduler = scheduler
         self.now = now
     }
@@ -133,6 +140,11 @@ public final class LiveAPIClient: ObservableObject {
     /// A GET for a view's own endpoint, shared by every view.
     public func get(_ path: String) async -> EndpointResult {
         EndpointResult(await fetch(path))
+    }
+
+    /// A GET for a long body, through the download fetch.
+    public func download(_ path: String) async -> EndpointResult {
+        EndpointResult(await downloadFetch(path))
     }
 
     private func poll() async {

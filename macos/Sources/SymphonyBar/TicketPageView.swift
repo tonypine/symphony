@@ -145,10 +145,9 @@ extension SymphonyWindowModel {
         copy(url.absoluteString)
     }
 
-    /// Opens the web dashboard's Audit view filtered to the ticket.
+    /// Opens Audit filtered to the ticket.
     func showAuditRecords(_ page: TicketPage) {
-        guard let base = apiURL(), let url = TicketPage.auditRecordsURL(page.identifier, base: base) else { return }
-        onOpenURL(url)
+        showAudit(ticket: page.identifier)
     }
 
     func revealWorktree(_ path: String) {
