@@ -1,10 +1,10 @@
 {
   "commented": true,
-  "from_state": "Human Review",
+  "from_state": "In Progress",
   "issue_id": "i-90",
   "issue_identifier": "NOTE-90",
   "move": "decide",
   "moved": false,
-  "to_state": "Human Review",
+  "to_state": "In Progress",
   "undo_window_ms": null
 }

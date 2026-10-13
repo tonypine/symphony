@@ -125,7 +125,7 @@
           }
         ]
       },
-      "state": "In Review",
+      "state": "Plan Review",
       "title": "Gift cards at checkout",
       "url": "https://linear.app/acme/issue/SHOP-330",
       "waiting_seconds": 11520,
@@ -183,7 +183,7 @@
           "url": "https://github.com/acme/api/pull/412"
         }
       },
-      "state": "In Review",
+      "state": "QA",
       "title": "Prorate plan changes mid-cycle",
       "url": "https://linear.app/acme/issue/BIL-206",
       "waiting_seconds": 5460,
@@ -210,7 +210,7 @@
         "unblocks": "the Release workflow on main",
         "why": "The release workflow can't sign the app without the certificate, so no release ships."
       },
-      "state": "Human Review",
+      "state": "In Progress",
       "title": "Sign the release build",
       "url": "https://linear.app/acme/issue/NOTE-90",
       "waiting_seconds": 1260,

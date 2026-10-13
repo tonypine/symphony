@@ -106,7 +106,7 @@ final class StatusMenuTests: XCTestCase {
 
     func testDetailLinesLeaveWhatWaitsOnYouToItsItems() {
         var waiting = StateSnapshot(
-            running: 2, retrying: 1, updateUnblocks: 1, humanReview: 3,
+            running: 2, retrying: 1, updateUnblocks: 1,
             waitingOnYou: [.init(identifier: "TP-1", kind: .pr, waitingSeconds: 60)]
         )
         waiting.pause = .init(reason: "deploy freeze", since: pausedAt)

@@ -263,11 +263,11 @@ public struct TicketPage: Equatable {
             phase = .working(stuck: stuck)
         } else if let shipped {
             phase = .done(pullRequest: pullRequest, mergedAt: shipped.completedAt.flatMap(Self.date))
-        } else if waitingOnYou != nil || Self.isState(watching?.state, "Human Review") {
+        } else if waitingOnYou != nil {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
             phase = .waiting(on: landingLeader.map { "\($0) to land\(sharedFiles)" } ?? "CI")
-        } else if let watching, ["In Review", "Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
+        } else if let watching, ["Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
             phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
             let due = retry.dueAt.flatMap(Self.date)
