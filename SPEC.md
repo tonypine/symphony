@@ -2374,8 +2374,11 @@ Rules:
   from any ticket but a plan parent, for which that request is the plan handoff. A request for
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
-  signal the push and pull-request tool hooks record against the pushed head. A run that ends
-  without it MUST record `handoff_missing` and leave the ticket where it is for the retry machinery.
+  signal the push and pull-request tool hooks record against the pushed head. A run that stops
+  quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
+  the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
+  and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
+  hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
