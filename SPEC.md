@@ -2456,8 +2456,10 @@ Rules:
   `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR;
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
-  (or reuses) one high-priority fix ticket per broken component and sets a `Blocked` hold on the
-  affected ticket waiting on it. Only the same failure recurring with no new information escalates
+  (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
+  waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
+  High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
+  reused one keeps its priority. Only the same failure recurring with no new information escalates
   to a `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in

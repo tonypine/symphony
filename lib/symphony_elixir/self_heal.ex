@@ -10,9 +10,10 @@ defmodule SymphonyElixir.SelfHeal do
     * names the broken **component** and the repo that owns its fix — Symphony for orchestration
       and structural causes, the managed project's repo for its own build/test/run setup
       (`scope/3`);
-    * files **one** high-priority fix ticket per broken component, deduplicated: an open fix ticket
-      for the same component is reused, not filed again, and the new failure is attached to it as
-      evidence;
+    * files **one** fix ticket per broken component — High, or Urgent for an Urgent affected
+      ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
+      component is reused, not filed again, keeping its priority, and the new failure is attached to
+      it as evidence;
     * links the affected ticket to the fix ticket as blocked-by and gives it a `Blocked` hold
       waiting on that ticket, which lifts on its own when the fix goes terminal
       (`SymphonyElixir.BlockedHold`) — no decision request and no check for a person;
