@@ -438,12 +438,22 @@ class Instance:
             "id": "e2e-issue-1", "identifier": ISSUE, "title": "Stub run",
             "description": "End-to-end test issue", "state": "Todo",
         }]))
-        # The hook runs with Symphony's own environment: the release that runs, its version, and the secret the app
-        # passed it.
+        # The hook records the release root and version of the Symphony BEAM that started the run, read from the
+        # command line of its nearest `beam.smp` ancestor (ports spawn through `erl_child_setup`), since the
+        # service keeps the launcher's variables out of the environment it gives hooks. It also records the secret
+        # the app passed Symphony.
         (config / "WORKFLOW.md").write_text(
             "---\nhooks:\n  before_run: |\n"
+            "    p=$PPID; cmd=''\n"
+            "    for _ in 1 2 3 4 5; do\n"
+            "      cmd=$(ps -o command= -p \"$p\")\n"
+            "      case \"$cmd\" in *beam.smp*) break ;; esac\n"
+            "      p=$(ps -o ppid= -p \"$p\" | tr -d ' ')\n"
+            "    done\n"
+            "    root=$(printf '%s\\n' \"$cmd\" | sed -n 's/.* -root \\([^ ]*\\).*/\\1/p')\n"
+            "    vsn=$(printf '%s\\n' \"$cmd\" | sed -n 's|.*/releases/\\([^/]*\\)/.*|\\1|p')\n"
             f"    printf '%s root=%s vsn=%s secret=%s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" "
-            f"\"${{SYMPHONY_RELEASE_ROOT:-unknown}}\" \"${{RELEASE_VSN:-unknown}}\" \"${{E2E_SECRET:-unset}}\" "
+            f"\"${{root:-unknown}}\" \"${{vsn:-unknown}}\" \"${{E2E_SECRET:-unset}}\" "
             f">> '{self.runs_log}'\n"
             "---\nWork on {{ issue.identifier }}.\n"
         )
