@@ -137,7 +137,7 @@ jobs:
 
       - name: Find Xcode 26
         id: xcode
-        run: echo "developer_dir=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "developer_dir=$(sh scripts/ci/macos15-xcode-developer-dir.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Build Symphony.app
         working-directory: macos
