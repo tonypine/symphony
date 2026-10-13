@@ -5,9 +5,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   # edit its own comments), the sub-issues it created by identifier (so a later sub-issue may be
   # blocked by an earlier one) and by parent and title (so a looping run can't file one twice), the
   # documents it created (so it may edit them before Linear lists their attachments, and stays
-  # under the cap), and
-  # whether it asked a person for something (so its issue waits for that person in the Human Review
-  # state), and whether it opened a PR.
+  # under the cap), whether it opened a PR, and whether it asked a person for a decision.
 
   use Agent
 
@@ -27,8 +25,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       project_updates: 0,
       documents: 0,
       created_documents: MapSet.new(),
-      human_action_requested: false,
-      pull_request_created: false
+      pull_request_created: false,
+      human_action_requested: false
     }
 
     Agent.start_link(fn -> state end, agent_opts)
@@ -151,13 +149,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   @doc "True once `record_human_action_request/1` ran for this run."
   @spec human_action_requested?(pid() | nil) :: boolean()
-  def human_action_requested?(pid) when is_pid(pid), do: Agent.get(pid, &Map.get(&1, :human_action_requested, false))
+  def human_action_requested?(pid) when is_pid(pid), do: Agent.get(pid, & &1.human_action_requested)
   def human_action_requested?(_pid), do: false
-
-  @doc "Records that the run withdrew its issue's last open human-action request."
-  @spec clear_human_action_request(pid() | nil) :: :ok
-  def clear_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, false))
-  def clear_human_action_request(_pid), do: :ok
 
   @doc "Records that the run opened a pull request."
   @spec record_pull_request(pid() | nil) :: :ok

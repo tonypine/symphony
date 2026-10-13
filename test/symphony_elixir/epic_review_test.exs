@@ -83,12 +83,10 @@ defmodule SymphonyElixir.EpicReviewTest do
 
   defp settings!(extra \\ %{}) do
     assert {:ok, settings} =
-             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"}, extra))
+             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
 
     settings
   end
-
-  defp legacy_settings, do: settings!(%{"state_machine" => "legacy"})
 
   defp epic(attrs \\ %{}) do
     struct!(
@@ -143,6 +141,7 @@ defmodule SymphonyElixir.EpicReviewTest do
              "data" => %{
                "issue" => %{
                  "id" => @issue_id,
+                 "priority" => 1,
                  "team" => %{"id" => "team-1", "states" => %{"nodes" => states}},
                  "children" => %{"nodes" => []}
                }
@@ -224,7 +223,7 @@ defmodule SymphonyElixir.EpicReviewTest do
   end
 
   describe "epic_review_run?/2" do
-    test "is true only for a designed repo's epic parent, in the review state or ready for it" do
+    test "is true only for an epic parent, in the review state or ready for it" do
       assert EpicReview.epic_review_run?(epic(), settings!())
       assert EpicReview.epic_review_run?(epic(%{state: "Epic Review"}), settings!())
 
@@ -237,7 +236,6 @@ defmodule SymphonyElixir.EpicReviewTest do
       refute EpicReview.epic_review_run?(epic(%{labels: []}), settings!())
       refute EpicReview.epic_review_run?(epic(%{sub_issues: []}), settings!())
       refute EpicReview.epic_review_run?(epic(%{state: "Rework"}), settings!())
-      refute EpicReview.epic_review_run?(epic(), legacy_settings())
       refute EpicReview.epic_review_run?(%Issue{id: "x", state: nil}, settings!())
     end
 
@@ -322,7 +320,6 @@ defmodule SymphonyElixir.EpicReviewTest do
     test "skips every other ticket without reading anything" do
       assert :skip = run(epic(%{labels: []}))
       assert :skip = run(epic(%{state: "Rework"}))
-      assert :skip = run(epic(), settings: legacy_settings())
       assert :skip = run(%{}, [])
 
       assert :skip = EpicReview.run(epic(), nil, default_opts())
@@ -458,6 +455,8 @@ defmodule SymphonyElixir.EpicReviewTest do
 
       assert input["stateId"] == "state-todo"
       assert input["parentId"] == @issue_id
+      # The epic's Urgent priority, so `tickets.priorities: [urgent]` dispatches the follow-up.
+      assert input["priority"] == 1
       assert input["title"] == "Epic review fails: Settings shows the API key field"
       assert input["description"] =~ "The epic review of TP-823 (https://linear.test/TP-823) failed on commit `c0ffee001122`"
       assert input["description"] =~ "https://uploads.linear.test/s2.png"

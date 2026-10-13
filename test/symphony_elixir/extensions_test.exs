@@ -550,7 +550,6 @@ defmodule SymphonyElixir.ExtensionsTest do
              "counts" => %{
                "running" => 1,
                "watching" => 1,
-               "human_review" => 0,
                "conflicts" => 0,
                "retrying" => 1,
                "claimed" => 2,
@@ -614,7 +613,6 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "seconds_since_last_run" => 3_600
                }
              ],
-             "human_review" => [],
              "waiting_on_you" => [],
              "inbox_read" => true,
              "conflicts" => [],
@@ -1425,23 +1423,24 @@ defmodule SymphonyElixir.ExtensionsTest do
     test_pid = self()
     inbox = {:test, make_ref()}
 
-    pr = %{
-      "id" => "issue-MT-PR",
-      "identifier" => "MT-PR",
-      "title" => "Retry fix",
-      "url" => "https://linear.app/example/issue/MT-PR",
-      "state" => %{"name" => "In Review"},
-      "attachments" => %{"nodes" => [%{"url" => "https://github.com/example/repo/pull/9"}]},
+    plan = %{
+      "id" => "issue-MT-PLAN",
+      "identifier" => "MT-PLAN",
+      "title" => "Plan the export",
+      "url" => "https://linear.app/example/issue/MT-PLAN",
+      "state" => %{"name" => "Plan Review"},
+      "labels" => %{"nodes" => [%{"name" => "plan"}]},
+      "children" => %{"nodes" => []},
       "comments" => %{"nodes" => []},
-      "history" => %{"nodes" => [%{"createdAt" => "2026-10-01T10:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "In Review"}}]}
+      "history" => %{"nodes" => [%{"createdAt" => "2026-10-01T10:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Plan Review"}}]}
     }
 
     linear_client = fn query, _variables, _opts ->
       send(test_pid, {:linear, query})
 
       if query =~ "SymphonyInboxList",
-        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-MT-PR", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
-        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [pr]}}}}
+        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-MT-PLAN", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [plan]}}}}
     end
 
     SymphonyElixir.Inbox.run_once(%{
@@ -1450,9 +1449,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         repos: fn -> {:ok, [%{name: "default"}]} end,
         settings_fun: fn _repo -> Config.settings!() end,
         scope_filter: fn _repo -> {:ok, %{}} end,
-        linear_client: linear_client,
-        ci: fn _issue_id, _repo_key -> "FAILURE" end,
-        gate: fn _repo_key, _issue_id -> nil end
+        linear_client: linear_client
       ],
       nodes: %{},
       timer: nil
@@ -1487,7 +1484,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received {:linear, _query}
 
     assert %{
-             "counts" => %{"total" => 2, "pr" => 1, "clarify" => 1, "plan" => 0, "action" => 0},
+             "counts" => %{"total" => 2, "pr" => 0, "clarify" => 1, "plan" => 1, "action" => 0},
              "items" => [
                %{
                  "identifier" => "MT-HELD",
@@ -1497,18 +1494,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "review" => %{"held" => true, "score" => 3, "round" => 1, "max_rounds" => 2, "questions" => ["What should it do?"]}
                },
                %{
-                 "issue_id" => "issue-MT-PR",
-                 "identifier" => "MT-PR",
-                 "title" => "Retry fix",
+                 "issue_id" => "issue-MT-PLAN",
+                 "identifier" => "MT-PLAN",
+                 "title" => "Plan the export",
                  "repo_key" => "default",
-                 "state_machine" => "legacy",
-                 "kind" => "pr",
-                 "state" => "In Review",
-                 "ask" => "Review the pull request",
+                 "kind" => "plan",
+                 "state" => "Plan Review",
+                 "ask" => "Approve the plan",
                  "waiting_since" => "2026-10-01T10:00:00Z",
                  "waiting_seconds" => waiting_seconds,
-                 "url" => "https://linear.app/example/issue/MT-PR",
-                 "review" => %{"brief" => nil, "pull_request" => %{"url" => "https://github.com/example/repo/pull/9", "ci" => "failed"}}
+                 "url" => "https://linear.app/example/issue/MT-PLAN",
+                 "review" => %{"brief" => nil, "sub_tickets" => []}
                }
              ]
            } = payload
@@ -1516,9 +1512,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert waiting_seconds > 0
     assert state["counts"]["waiting_on_you"] == 2
     assert state["inbox_read"]
-    assert Enum.map(state["waiting_on_you"], & &1["kind"]) == ["clarify", "pr"]
-    # The PR's CI failed, so its notification offers no Approve and Merge.
-    assert Enum.map(state["waiting_on_you"], & &1["checks_green"]) == [false, false]
+    assert Enum.map(state["waiting_on_you"], & &1["kind"]) == ["clarify", "plan"]
 
     assert json_response(post(build_conn(), "/api/v1/inbox", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
@@ -1545,7 +1539,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
 
     blocked_by = fn identifier ->
-      %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Human Review", "type" => "started"}}}]}}
+      %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Plan Review", "type" => "started"}}}]}}
     end
 
     plan = fn identifier, state, type, children, extra ->
@@ -1565,14 +1559,14 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     nodes = [
       plan.("MT-DONE", "Done", "completed", [], %{"completedAt" => DateTime.utc_now() |> DateTime.to_iso8601()}),
-      plan.("MT-REVIEW", "In Review", "started", [], %{}),
+      plan.("MT-REVIEW", "Plan Review", "started", [], %{}),
       plan.(
         "MT-PLAN",
         "Waiting on sub-tickets",
         "started",
         [
           child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
-          child.("MT-2", "In Review", "started", %{}),
+          child.("MT-2", "Plan Review", "started", %{}),
           child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"})
         ],
         %{}
@@ -1789,38 +1783,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert live_view_js =~ "var LiveView = (() => {"
   end
 
-  test "the state api and the dashboard list tickets waiting in Human Review" do
-    human_review = %{
-      issue_id: "issue-human",
-      repo_key: "default",
-      identifier: "MT-HUMAN",
-      state: "Human Review",
-      url: "https://linear.app/example/issue/MT-HUMAN",
-      last_ran_at: DateTime.add(DateTime.utc_now(), -60, :second),
-      seconds_since_last_run: 60
-    }
-
-    snapshot = Map.update!(static_snapshot(), :watching, &(&1 ++ [human_review]))
-    orchestrator_name = Module.concat(__MODULE__, :HumanReviewOrchestrator)
-
-    {:ok, _pid} =
-      StaticOrchestrator.start_link(
-        name: orchestrator_name,
-        snapshot: snapshot,
-        refresh: %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}
-      )
-
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
-
-    state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert %{"watching" => 2, "human_review" => 1} = state_payload["counts"]
-    assert [%{"issue_identifier" => "MT-HUMAN", "state" => "Human Review", "url" => "https://linear.app/example/issue/MT-HUMAN"}] = state_payload["human_review"]
-
-    {:ok, _view, html} = live(build_conn(), "/")
-    assert html =~ "Human Review"
-    assert html =~ "needs you"
-  end
-
   defmodule DrainTracker do
     def fetch_issues_by_states(_states), do: {:ok, Process.get(:drain_issues, [])}
     def fetch_issue_states_by_ids(_ids), do: {:ok, [%{id: "issue-gone", state: "Plan Review"}]}
@@ -1873,7 +1835,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         title: "Title of " <> identifier,
         repo_key: "default",
         url: "https://linear.app/example/issue/" <> identifier,
-        state: "In Review",
+        state: "Plan Review",
         kind: kind,
         waiting_since: hours_ago && DateTime.add(now, -hours_ago * 3_600, :second),
         ask: ask,
@@ -1884,8 +1846,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     inbox = {:test, make_ref()}
 
     :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
-      entry.("MT-PR", :pr, 1, "The retry fix"),
-      entry.("MT-UNKNOWN", :clarify, nil, nil),
+      entry.("MT-PR", :action, 1, "The retry fix"),
+      entry.("MT-UNKNOWN", :blocked, nil, nil),
       entry.("MT-PLAN", :plan, 3, "The split into four sub-tickets"),
       entry.("MT-ACTION", :action, 2, nil),
       entry.("MT-APPROVED", :plan, 4, "Approved already"),
@@ -1902,9 +1864,9 @@ defmodule SymphonyElixir.ExtensionsTest do
       seconds_since_last_run: nil
     }
 
-    human_review = %{approved | issue_id: "issue-MT-PR", identifier: "MT-PR", state: "Human Review"}
+    in_review = %{approved | issue_id: "issue-MT-PR", identifier: "MT-PR", state: "Plan Review"}
     snapshot = static_snapshot()
-    snapshot = %{snapshot | watching: snapshot.watching ++ [approved, human_review], running: Enum.map(snapshot.running, &%{&1 | issue_id: "issue-MT-HTTP"})}
+    snapshot = %{snapshot | watching: snapshot.watching ++ [approved, in_review], running: Enum.map(snapshot.running, &%{&1 | issue_id: "issue-MT-HTTP"})}
     orchestrator_name = Module.concat(__MODULE__, :WaitingOnYouOrchestrator)
 
     {:ok, _pid} =
@@ -1924,15 +1886,15 @@ defmodule SymphonyElixir.ExtensionsTest do
                "issue_id" => "issue-MT-PLAN",
                "title" => "Title of MT-PLAN",
                "url" => "https://linear.app/example/issue/MT-PLAN",
-               "state" => "In Review",
+               "state" => "Plan Review",
                "kind" => "plan",
                "headline" => "The split into four sub-tickets",
                "waiting_since" => waiting_since,
                "waiting_seconds" => waiting_seconds
              },
              %{"kind" => "action", "headline" => nil},
-             %{"kind" => "pr", "state" => "Human Review", "headline" => "The retry fix"},
-             %{"kind" => "clarify", "waiting_since" => nil, "waiting_seconds" => nil}
+             %{"kind" => "action", "state" => "Plan Review", "headline" => "The retry fix"},
+             %{"kind" => "blocked", "waiting_since" => nil, "waiting_seconds" => nil}
            ] = waiting
 
     assert is_binary(waiting_since)
@@ -1948,8 +1910,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert Enum.at(rows, 0) =~ "3h ago"
     assert Enum.at(rows, 1) =~ "Decision"
     assert Enum.at(rows, 1) =~ "Title of MT-ACTION"
-    assert Enum.at(rows, 2) =~ "PR"
-    assert Enum.at(rows, 3) =~ "Clarify"
+    assert Enum.at(rows, 2) =~ "Decision"
+    assert Enum.at(rows, 3) =~ "Blocked"
     assert Enum.at(rows, 3) =~ "n/a"
     refute Enum.any?(rows, &(&1 =~ "MT-APPROVED"))
   end
@@ -3909,7 +3871,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert response.body["counts"] == %{
              "running" => 1,
              "watching" => 1,
-             "human_review" => 0,
              "conflicts" => 0,
              "retrying" => 1,
              "claimed" => 2,

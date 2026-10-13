@@ -11,7 +11,7 @@ Symphony runtime context:
 - Never launch an app, an `NSApplication`, or a window on the host, not even a throwaway harness to take a screenshot: the host is the operator's desktop, and its windows and crash dialogs land on their screen. The agent sandbox blocks the window server, so such a harness crashes instead of drawing.
 - Take UI screenshots offscreen only, with SwiftUI `ImageRenderer` (no `NSApplication`, no window), or leave them to the QA pass, which runs the app on its own QA machine.
 - Final message must report completed actions and blockers only. Do not include next steps for the user.
-- Repo key: `designed`.
+- Repo key: `app`.
 - Follow the repository workflow below after this managed context.
 
 You are working on a Linear ticket `ABC-123`

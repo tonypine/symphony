@@ -3,54 +3,23 @@ defmodule SymphonyElixir.LinearClientStateMachineTest do
 
   alias SymphonyElixir.Linear.Client
 
-  # Dispatch reads each repo's own resolved state machine: a `designed` repo polls the machine-owned
-  # phase states on top of the tracker's active states, a `legacy` repo polls exactly the active ones.
+  # Every repo polls the machine-owned phase states on top of the tracker's active states.
   describe "per-repo dispatch states" do
-    test "a designed repo polls the phase states and a legacy repo does not" do
+    test "every repo polls the active states and the phase states" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "linear",
         repos: [
-          %{key: "legacy_repo", workflow: Workflow.workflow_file_path(), default: true, team: "LEGACY", state_machine: "legacy"},
-          %{key: "designed_repo", workflow: Workflow.workflow_file_path(), team: "DESIGNED", state_machine: "designed"}
+          %{key: "first_repo", workflow: Workflow.workflow_file_path(), default: true, team: "FIRST"},
+          %{key: "second_repo", workflow: Workflow.workflow_file_path(), team: "SECOND"}
         ]
       )
 
       assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())
 
       states = poll_states_by_team()
-      assert states["LEGACY"] == ["Todo", "In Progress", "Waiting on sub-tickets"]
-
-      assert states["DESIGNED"] ==
-               ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
-    end
-
-    test "a designed repo never polls Plan Review, even when the active states name it" do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "linear",
-        tracker_active_states: ["Todo", "Plan Review"],
-        repos: [
-          %{key: "legacy_repo", workflow: Workflow.workflow_file_path(), default: true, team: "LEGACY", state_machine: "legacy"},
-          %{key: "designed_repo", workflow: Workflow.workflow_file_path(), team: "DESIGNED", state_machine: "designed"}
-        ]
-      )
-
-      assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())
-
-      states = poll_states_by_team()
-      assert "Plan Review" in states["LEGACY"]
-      refute "Plan Review" in states["DESIGNED"]
-      assert "QA" in states["DESIGNED"]
-    end
-
-    test "a repo with no state_machine set polls the active states, unchanged" do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "linear",
-        repos: [%{key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "TEAM"}]
-      )
-
-      assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())
-
-      assert poll_states_by_team() == %{"TEAM" => ["Todo", "In Progress", "Waiting on sub-tickets"]}
+      phase_states = ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
+      assert states == %{"FIRST" => phase_states, "SECOND" => phase_states}
+      refute "Plan Review" in states["FIRST"]
     end
   end
 

@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.SelfHeal do
   @moduledoc """
-  The self-heal lane: a designed repo's flow blocked by tooling or environment repairs itself
+  The self-heal lane: a flow blocked by tooling or environment repairs itself
   instead of stopping for a person (`docs/design/state-machine.md`, principle 8 and §Guards
   "Self-heal on environment blocks", "Fix-ticket scope", "Repairs iterate on new information").
 
@@ -22,7 +22,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
-  lifts. Legacy repos never reach this module — the QA run that calls it is designed-only.
+  lifts.
 
   Every effect is injectable: `opts[:store]` (the run store), `opts[:tracker]` and `opts[:fixer]`
   (the fix-ticket filer) default to the real ones and are fakes in tests.

@@ -124,12 +124,11 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   defp settings!(extra \\ %{}) do
     assert {:ok, settings} =
-             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"}, extra))
+             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
 
     settings
   end
 
-  defp legacy_settings, do: settings!(%{"state_machine" => "legacy"})
   defp custom_qa_settings, do: settings!(%{"tracker" => %{"kind" => "memory", "qa_state" => "Verification"}})
 
   defp issue(state \\ "QA", attrs \\ %{}) do
@@ -183,12 +182,11 @@ defmodule SymphonyElixir.QaVerificationTest do
   defp verdicts, do: Handoff.verdicts(@repo_key, @issue_id, "qa")
 
   describe "qa_run?/2" do
-    test "is true only for a designed repo's configured QA state" do
+    test "is true only for the configured QA state" do
       assert QaVerification.qa_run?(issue(), settings!())
       assert QaVerification.qa_run?(issue(" qa "), settings!())
       assert QaVerification.qa_run?(issue("Verification"), custom_qa_settings())
       refute QaVerification.qa_run?(issue("Code Review"), settings!())
-      refute QaVerification.qa_run?(issue("QA"), legacy_settings())
       refute QaVerification.qa_run?(issue("Verification"), settings!())
       refute QaVerification.qa_run?(%Issue{id: "x", state: nil}, settings!())
     end
@@ -222,9 +220,8 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   describe "run/3" do
-    test "skips every ticket that is not a designed repo's QA ticket" do
+    test "skips every ticket that is not a QA ticket" do
       assert :skip = run("/tmp/workspace", [], "Code Review")
-      assert :skip = run("/tmp/workspace", settings: legacy_settings())
       refute_received {:qa_agent_run, _, _}
       assert verdicts() == []
     end

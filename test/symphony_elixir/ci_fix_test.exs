@@ -14,11 +14,7 @@ defmodule SymphonyElixir.CiFixTest do
   end
 
   defp designed_settings(extra \\ %{}) do
-    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"} |> Map.merge(extra))
-  end
-
-  defp legacy_settings(extra \\ %{}) do
-    settings!(%{"tracker" => Map.merge(%{"kind" => "memory"}, extra)})
+    settings!(%{"tracker" => %{"kind" => "memory"}} |> Map.merge(extra))
   end
 
   defp issue(state), do: %Issue{id: @issue_id, identifier: "ACME-1", title: "Fix", state: state, labels: []}
@@ -42,25 +38,16 @@ defmodule SymphonyElixir.CiFixTest do
     end
   end
 
-  describe "designed?/1" do
-    test "follows the repo's machine version" do
-      assert CiFix.designed?(designed_settings())
-      refute CiFix.designed?(legacy_settings())
-    end
-  end
-
   describe "in_state?/2" do
-    test "is true only for a designed repo's CI Fix ticket" do
+    test "is true only for a CI Fix ticket" do
       designed = designed_settings()
-      legacy = legacy_settings()
 
       assert CiFix.in_state?(issue("CI Fix"), designed)
       assert CiFix.in_state?(" ci fix ", designed)
       refute CiFix.in_state?(issue("Code Review"), designed)
-      # A legacy repo that happens to name the state the same way has no lane.
-      refute CiFix.in_state?(issue("CI Fix"), legacy)
       refute CiFix.in_state?(nil, designed)
-      refute CiFix.in_state?("CI Fix", nil)
+      # Without settings the lane is the default `CI Fix` state.
+      assert CiFix.in_state?("CI Fix", nil)
     end
   end
 
@@ -84,11 +71,10 @@ defmodule SymphonyElixir.CiFixTest do
       assert CiFix.entry("Verification", settings) == {:ok, :ci_fix_enter_qa, "Verification"}
     end
 
-    test "is :none for every state the lane is not entered from, and for every legacy repo" do
+    test "is :none for every state the lane is not entered from" do
       assert CiFix.entry("In Progress", designed_settings()) == :none
       assert CiFix.entry("In Review", designed_settings()) == :none
       assert CiFix.entry(nil, designed_settings()) == :none
-      assert CiFix.entry("Code Review", legacy_settings()) == :none
       assert CiFix.entry("Merging", nil) == :none
     end
   end
@@ -120,7 +106,6 @@ defmodule SymphonyElixir.CiFixTest do
       assert CiFix.verdict_for_move("CI Fix", "Rework", designed) == "substantive"
       assert CiFix.verdict_for_move("CI Fix", "Merging", designed) == nil
       assert CiFix.verdict_for_move("Code Review", "Rework", designed) == nil
-      assert CiFix.verdict_for_move("CI Fix", "Rework", legacy_settings()) == nil
       assert CiFix.verdict_for_move("CI Fix", nil, designed) == nil
     end
   end
@@ -129,7 +114,6 @@ defmodule SymphonyElixir.CiFixTest do
     test "is cannot_fix for a hold set on a CI Fix ticket, nil otherwise" do
       assert CiFix.hold_verdict("CI Fix", designed_settings()) == "cannot_fix"
       assert CiFix.hold_verdict("QA", designed_settings()) == nil
-      assert CiFix.hold_verdict("CI Fix", legacy_settings()) == nil
     end
   end
 

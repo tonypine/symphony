@@ -2,12 +2,11 @@ defmodule SymphonyElixir.HumanActions.Request do
   @moduledoc """
   The `## Decision needed:` comment that records a request for a human on an issue.
 
-  `linear_request_human_action` posts it. On a legacy repo it moves the issue to the Human Review
-  state (`SymphonyElixir.HumanReview`); on a designed one it leaves the issue in its phase and sets
-  the `Needs Decision` hold (`SymphonyElixir.NeedsDecisionHold`), and `render_hold/2` renders that
+  `linear_request_human_action` posts it. It leaves the issue in its phase and sets the
+  `Needs Decision` hold (`SymphonyElixir.NeedsDecisionHold`), and `render_hold/2` renders that
   comment. A person only ever gets a decision: one question and two to four options, each with what
-  it does, one of them recommended. Never a runbook of steps: a check an agent can't run is a
-  coverage gap for CI or a QA playbook instead.
+  it does, one of them recommended. Never a runbook of steps: a check an agent can't run belongs to
+  CI or a QA playbook instead.
 
       ## Decision needed: Close TP-612 as a duplicate of TP-668
 
@@ -21,12 +20,10 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   Symphony finds the request again on every poll and after a restart. It also reads the older
   `## Action needed:` comment, with its `**Steps:**` list, which a supervisor or a person may still
-  write by hand. Only the heading is required; `parse/1` reads whatever else is there. On a legacy
-  repo a request stays open until its issue moves on: after the request, the issue leaves a state
-  outside `issues.states.active` (`Human Review` to `Merging`, `Rework` or `Done`, `Backlog` back to
-  `Todo`). The tool moves the issue to Human Review before it posts the comment, so that move keeps
-  the request open whatever state the issue came from. On a designed repo the issue never moves, so
-  the request is answered instead — see `SymphonyElixir.HumanActions.Collector.open_requests/2`.
+  write by hand. Only the heading is required; `parse/1` reads whatever else is there. A request
+  is closed once a person answers it — see `SymphonyElixir.HumanActions.Collector.open_requests/2` —
+  or once a person moves its issue on: after the request, the issue leaves a state outside
+  `issues.states.active` (`Code Review` to `Rework`, `Backlog` back to `Todo`).
 
   A request is also closed once it is withdrawn: a reply under it that starts with
   `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.
@@ -65,20 +62,8 @@ defmodule SymphonyElixir.HumanActions.Request do
   def headings, do: [@decision_heading, @action_heading]
 
   @doc """
-  Renders a decision request. `state` is the state the request moves the issue to, named in the
-  closing line so whoever reads the comment knows how to answer it.
-  """
-  @spec render(map(), String.t()) :: String.t()
-  def render(request, state) do
-    render_request(
-      request,
-      "_Reply with the option you pick, then move the issue out of #{state}. Symphony lists this in the project update until the issue moves on._"
-    )
-  end
-
-  @doc """
-  Renders a decision request on a designed repo, where the request sets the `Needs Decision` hold
-  instead of moving the issue: the closing line says the ticket stays in `state` and names the
+  Renders a decision request, which sets the `Needs Decision` hold instead of moving the issue: the
+  closing line says the ticket stays in `state` and names the
   Inbox as the other way to answer, so whoever reads the comment knows the ticket is not going
   anywhere while it waits.
   """

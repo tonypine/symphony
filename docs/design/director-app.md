@@ -11,6 +11,18 @@
   `notes-app`, `docs-site`; tickets `BIL-`, `SHOP-`, `NOTE-`, `DOC-`).
 - **Screen IDs** (`D0`–`D14`) are defined in [Screens](director-app-screens.md). Each journey step names the screen
   that serves it.
+- **Since approval:** the ticket life cycle changed while the app was built (the
+  [ticket state machine](state-machine.md), TP-823 and TP-827). These documents and the mock keep the approved
+  wording; the app on `main` follows the new life cycle:
+  - The acceptance gate is retired. Quality's **Gate agreement** reads **Review agreement**: the Code Review
+    approvals that the next judge upheld (QA, or the Director at the merge when the repo's manual review is on).
+    **Change Gate…** reads **Change Review…** and opens the repo's Edit sheet with its Manual review control.
+    **Disagreements** are tickets where Code Review approved and QA or the Director decided otherwise.
+  - `In Review` and `Human Review` are retired. A plan waits on the Director in `Plan Review`, and an escalation or a
+    merge confirmation waits as a `Needs Decision` hold on the ticket, in whatever phase it is. The Inbox lists both,
+    and still lists a ticket left in a retired state until it drains.
+  - `Final verification:` tickets and their sign-off are retired: an epic closes itself through `Epic Review`, and
+    neither the Inbox nor the control API knows such a ticket any more.
 
 ## 1. The Director
 

@@ -684,17 +684,16 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   # The explicit handoff signal, emitted mechanically where it is unambiguous: a successful push
   # or pull request is the session saying its work is on the PR. It is recorded bound to the head
-  # it pushed, so the runner may advance a designed repo from `In Progress` to `Code Review`
-  # (`SymphonyElixir.Handoff`). A legacy repo records nothing, and a tool call made outside a
-  # configured repo (a test, a bare session) records nothing rather than failing.
+  # it pushed, so the runner may advance the ticket from `In Progress` to `Code Review`
+  # (`SymphonyElixir.Handoff`). A tool call made outside a configured repo (a test, a bare session)
+  # records nothing rather than failing.
   defp record_handoff(context, opts, details) do
     with repo_key when is_binary(repo_key) <- issue_repo_key(context),
          issue_id when is_binary(issue_id) <- handoff_issue_id(context),
-         {:ok, settings} <- handoff_settings(repo_key, opts),
-         true <- Handoff.designed?(settings) do
+         {:ok, _settings} <- handoff_settings(repo_key, opts) do
       Handoff.emit(repo_key, issue_id, Map.put(details, :head, workspace_head(context, opts)))
     else
-      _not_a_designed_handoff -> :ok
+      _not_a_handoff -> :ok
     end
   end
 

@@ -144,8 +144,6 @@ public struct AddRepoDraft: Equatable {
     /// The name of the Linear project picked.
     public var project: String?
     public var labels: [String]
-    /// The repo's state-machine version, which only the Edit sheet shows.
-    public var stateMachine: StateMachineChoice
     /// The repo's manual review setting, which only the Edit sheet shows.
     public var manualReview: ManualReviewChoice
     /// Whether Code Review's built-in ticket patterns apply to the repo, which only the Edit sheet shows.
@@ -159,7 +157,6 @@ public struct AddRepoDraft: Equatable {
         baseBranch: String = AddRepo.defaultBaseBranch,
         project: String? = nil,
         labels: [String] = [],
-        stateMachine: StateMachineChoice = .legacy,
         manualReview: ManualReviewChoice = .off,
         ticketPatternsBuiltIn: BuiltInTicketPatternsChoice = .inherit
     ) {
@@ -170,7 +167,6 @@ public struct AddRepoDraft: Equatable {
         self.baseBranch = baseBranch
         self.project = project
         self.labels = labels
-        self.stateMachine = stateMachine
         self.manualReview = manualReview
         self.ticketPatternsBuiltIn = ticketPatternsBuiltIn
     }

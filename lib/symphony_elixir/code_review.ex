@@ -2,7 +2,7 @@ defmodule SymphonyElixir.CodeReview do
   @moduledoc """
   The `Code Review` state's reviewer run.
 
-  A designed repo's `Code Review` ticket is dispatched by the poll loop like any other active
+  A `Code Review` ticket is dispatched by the poll loop like any other active
   ticket; this module turns that dispatch into a review instead of an executor run. It reuses the
   pre-push reviewer's machinery (`SymphonyElixir.ReviewAgent`), so a Code Review verdict is
   grounded in the same read-only, diff-based judgment the pre-push reviewer already makes.
@@ -21,9 +21,8 @@ defmodule SymphonyElixir.CodeReview do
   recorded in the verdict's signal, and the guard row it picks does the move — `:code_review_approve`
   into the configured QA state, `:code_review_approve_skip` into `Merging`.
 
-  An inconclusive review retries boundedly on the same head, then escalates the same way. A legacy
-  repo never reaches this module: `run/3` returns `:skip` for anything but a designed repo's
-  `Code Review` ticket, so the executor path is untouched.
+  An inconclusive review retries boundedly on the same head, then escalates the same way. `run/3`
+  returns `:skip` for anything but a `Code Review` ticket, so the executor path is untouched.
 
   An escalation never moves the ticket: it posts a `## Decision needed:` request and sets a Needs
   Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`), whose confirmation continues into the
@@ -54,12 +53,10 @@ defmodule SymphonyElixir.CodeReview do
     Config,
     EscalationRules,
     Handoff,
-    HumanReview,
     MergeConfirmation,
     NeedsDecisionHold,
     QaPolicy,
     ReviewAgent,
-    StateMachine,
     TicketSignals,
     Tracker,
     TransitionGuard,
@@ -84,7 +81,7 @@ defmodule SymphonyElixir.CodeReview do
   @verdict_atoms %{"approve" => :approve, "request_changes" => :request_changes, "block" => :block}
 
   @doc """
-  Runs the reviewer for `issue` when it is a designed repo's `Code Review` ticket, else `:skip` so
+  Runs the reviewer for `issue` when it is a `Code Review` ticket, else `:skip` so
   the caller falls through to the executor run. `opts[:review_agent]` and `opts[:tracker]` override
   the reviewer and the tracker (tests, a fake).
   """
@@ -102,13 +99,12 @@ defmodule SymphonyElixir.CodeReview do
   def run(_issue, _workspace, _opts), do: :skip
 
   @doc """
-  Whether `issue` is the ticket this module reviews: a designed repo's configured Code Review
-  state. Every other ticket belongs to the executor run.
+  Whether `issue` is the ticket this module reviews: one in the configured Code Review state.
+  Every other ticket belongs to the executor run.
   """
   @spec reviewer_run?(Issue.t(), map()) :: boolean()
   def reviewer_run?(%Issue{state: state}, settings) when is_binary(state) do
-    StateMachine.designed?(settings) and
-      normalize_state(state) == normalize_state(settings.tracker.code_review_state)
+    normalize_state(state) == normalize_state(settings.tracker.code_review_state)
   end
 
   def reviewer_run?(_issue, _settings), do: false
@@ -349,7 +345,7 @@ defmodule SymphonyElixir.CodeReview do
     {diff, busy_files} = diff_summary(result, workspace, opts, rules)
 
     issue
-    |> EscalationRules.check(diff, busy_files, rules, review_states: HumanReview.review_states(settings))
+    |> EscalationRules.check(diff, busy_files, rules)
     |> Enum.split_with(&(&1.rule in EscalationRules.person_rules()))
   end
 
@@ -687,7 +683,7 @@ defmodule SymphonyElixir.CodeReview do
 
   # Every move goes through the one writer. `run/3` only ever gets here for a ticket already in the
   # configured Code Review state (`reviewer_run?/2`), which is the origin of each of these edges in
-  # the designed table; the table itself is what defines them, and is tested directly.
+  # the table; the table itself is what defines them, and is tested directly.
   defp move(issue, opts, settings, signal, extra) do
     ctx = Map.merge(%{settings: settings}, extra)
     target = TransitionGuard.target(signal, ctx)

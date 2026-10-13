@@ -30,29 +30,25 @@ defmodule SymphonyElixir.RunKindTest do
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
   end
 
-  test "the moduledoc names exactly the reserved kinds as never returned by classify/2" do
+  test "the moduledoc names exactly the reserved and retired kinds as never returned by classify/2" do
     {:docs_v1, _, _, _, %{"en" => doc}, _, _} = Code.fetch_docs(RunKind)
 
-    named = Enum.map_join(RunKind.reserved_kinds(), " and ", &"`#{&1}`")
-
     assert RunKind.reserved_kinds() == [:pre_push_review]
-    assert doc =~ "#{named} is never returned by `classify/2`"
+    assert doc =~ "`pre_push_review` is never returned by `classify/2`"
+    assert doc =~ "Neither is `close_out`"
   end
 
-  test "classify/2 can return every kind except the reserved ones" do
-    designed = %{state_machine: "designed"}
-
+  test "classify/2 can return every kind except the reserved and retired ones" do
     samples = [
       {:implementation, issue(), []},
       {:breakdown, breakdown_parent(sub_issues: []), []},
-      {:close_out, breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Done"}]), []},
       {:rework, issue(state: "Rework"), []},
       {:landing, issue(state: "Merging"), []},
-      {:code_review, issue(state: "Code Review"), [settings: designed]},
-      {:epic_review, breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Done"}]), [settings: designed]},
+      {:code_review, issue(state: "Code Review"), []},
+      {:epic_review, breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Done"}]), []},
       {:ci_fix, issue(), [ci_failure: %{check: "test"}]},
       {:review_feedback, issue(), [reviewer_comments: [%{body: "Rename this"}]]},
-      {:qa, issue(state: "QA"), [settings: designed]}
+      {:qa, issue(state: "QA"), []}
     ]
 
     for {kind, sample, signals} <- samples do
@@ -60,7 +56,7 @@ defmodule SymphonyElixir.RunKindTest do
     end
 
     assert Enum.map(samples, &elem(&1, 0)) |> Enum.sort() ==
-             Enum.sort(RunKind.kinds() -- RunKind.reserved_kinds())
+             Enum.sort(RunKind.kinds() -- (RunKind.reserved_kinds() ++ [:close_out]))
   end
 
   describe "classify/2" do
@@ -80,7 +76,7 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(parent) == :breakdown
     end
 
-    test "a breakdown parent whose sub-issues are all terminal is a close-out run" do
+    test "a breakdown parent whose sub-issues are all terminal is an epic review" do
       parent =
         breakdown_parent(
           sub_issues: [
@@ -89,7 +85,7 @@ defmodule SymphonyElixir.RunKindTest do
           ]
         )
 
-      assert RunKind.classify(parent) == :close_out
+      assert RunKind.classify(parent) == :epic_review
     end
 
     test "a breakdown parent in Rework is a breakdown run, even with every sub-issue terminal" do
@@ -103,11 +99,11 @@ defmodule SymphonyElixir.RunKindTest do
       refute Issue.replanning?(nil)
     end
 
-    test "close-out uses the given terminal states" do
+    test "the epic review uses the given terminal states" do
       parent = breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Shipped"}])
 
       assert RunKind.classify(parent) == :breakdown
-      assert RunKind.classify(parent, terminal_states: ["Shipped"]) == :close_out
+      assert RunKind.classify(parent, terminal_states: ["Shipped"]) == :epic_review
     end
 
     test "a Final verification: title names no run kind of its own" do
@@ -123,60 +119,37 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(issue(state: "REWORK")) == :rework
     end
 
-    test "the designed machine's Code Review state is a code review run, whatever the case" do
-      designed = %{state_machine: "designed"}
-
-      assert RunKind.classify(issue(state: "Code Review"), settings: designed) == :code_review
-      assert RunKind.classify(issue(state: " code review "), settings: designed) == :code_review
+    test "the Code Review state is a code review run, whatever the case" do
+      assert RunKind.classify(issue(state: "Code Review")) == :code_review
+      assert RunKind.classify(issue(state: " code review "), settings: %{}) == :code_review
     end
 
-    test "the designed machine's QA state is a QA run, whatever the case" do
-      designed = %{state_machine: "designed"}
-
-      assert RunKind.classify(issue(state: "QA"), settings: designed) == :qa
-      assert RunKind.classify(issue(state: " qa "), settings: designed) == :qa
+    test "the QA, Epic Review and CI Fix states are their own runs, whatever the case" do
+      assert RunKind.classify(issue(state: "QA")) == :qa
+      assert RunKind.classify(issue(state: " qa "), settings: %{tracker: nil}) == :qa
+      assert RunKind.classify(issue(state: "Epic Review")) == :epic_review
+      assert RunKind.classify(issue(state: "CI Fix")) == :ci_fix
     end
 
-    test "a designed repo's renamed Code Review state is still a code review run" do
-      designed = %{state_machine: "designed", tracker: %{code_review_state: "Peer Review"}}
+    test "a renamed Code Review state is still a code review run" do
+      designed = %{tracker: %{code_review_state: "Peer Review"}}
 
       assert RunKind.classify(issue(state: "Peer Review"), settings: designed) == :code_review
       assert RunKind.classify(issue(state: " peer review "), settings: designed) == :code_review
       assert RunKind.classify(issue(state: "Code Review"), settings: designed) == :implementation
     end
 
-    test "a designed repo's renamed QA state is still a QA run" do
-      designed = %{state_machine: "designed", tracker: %{qa_state: "Verification"}}
+    test "a renamed QA state is still a QA run" do
+      designed = %{tracker: %{qa_state: "Verification"}}
 
       assert RunKind.classify(issue(state: "Verification"), settings: designed) == :qa
       assert RunKind.classify(issue(state: " verification "), settings: designed) == :qa
       assert RunKind.classify(issue(state: "QA"), settings: designed) == :implementation
     end
 
-    test "a designed repo's other states keep the run kind they had" do
-      designed = %{state_machine: "designed"}
-
-      assert RunKind.classify(issue(state: "In Progress"), settings: designed) == :implementation
-      assert RunKind.classify(issue(state: "Merging"), settings: designed) == :landing
-    end
-
-    test "a legacy repo's QA state keeps the run kind it had before" do
-      legacy = %{state_machine: "legacy"}
-      qa_state = issue(state: "QA")
-
-      assert RunKind.classify(qa_state) == :implementation
-      assert RunKind.classify(qa_state, settings: legacy) == :implementation
-      assert RunKind.classify(qa_state, settings: legacy, ci_failure: %{check: "test"}) == :ci_fix
-    end
-
-    test "a legacy repo's Code Review state keeps the run kind it had before" do
-      legacy = %{state_machine: "legacy"}
-      in_review = issue(state: "Code Review")
-
-      assert RunKind.classify(in_review) == :implementation
-      assert RunKind.classify(in_review, settings: legacy) == :implementation
-      assert RunKind.classify(in_review, settings: legacy, ci_failure: %{check: "test"}) == :ci_fix
-      assert RunKind.classify(in_review, settings: legacy, reviewer_comments: [%{body: "Rename this"}]) == :review_feedback
+    test "the other states keep the run kind they had" do
+      assert RunKind.classify(issue(state: "In Progress"), settings: %{}) == :implementation
+      assert RunKind.classify(issue(state: "Merging"), settings: %{}) == :landing
     end
 
     test "a continuation after red CI is a CI fix run" do
@@ -193,7 +166,7 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(breakdown_parent(state: "Merging")) == :breakdown
 
       closed_out = breakdown_parent(state: "Merging", sub_issues: [%{id: "s1", identifier: "TP-2", state: "Done"}])
-      assert RunKind.classify(closed_out) == :close_out
+      assert RunKind.classify(closed_out) == :epic_review
     end
 
     test "a breakdown parent in Rework is a breakdown run" do

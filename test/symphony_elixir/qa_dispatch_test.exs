@@ -5,24 +5,20 @@ defmodule SymphonyElixir.QaDispatchTest do
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.RunStore
 
-  @designed_repo "designed-repo"
-  @legacy_repo "legacy-repo"
+  @designed_repo "qa-repo"
   @issue_id "issue-qa-dispatch"
 
   defp repos do
     [
-      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"], state_machine: "designed"],
-      [key: @legacy_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["legacy"]]
+      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["qa"]]
     ]
   end
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: repos())
 
-    for repo <- [@designed_repo, @legacy_repo] do
-      RunStore.delete_ticket_state(repo, @issue_id)
-      on_exit(fn -> RunStore.delete_ticket_state(repo, @issue_id) end)
-    end
+    RunStore.delete_ticket_state(@designed_repo, @issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@designed_repo, @issue_id) end)
 
     :ok
   end
@@ -100,15 +96,6 @@ defmodule SymphonyElixir.QaDispatchTest do
 
       refute Orchestrator.should_dispatch_issue_for_test(issue, state())
       assert head_signals(@designed_repo) == []
-    end
-
-    test "a legacy repo's QA state is not the designed QA gate's to hold" do
-      # A legacy repo has no designed QA phase: a ticket in that state is not gated on a green head
-      # and never records a QA no-dispatch signal.
-      record_ci!(@legacy_repo, "abc123", "red")
-
-      assert Orchestrator.should_dispatch_issue_for_test(issue(@legacy_repo, "QA"), state())
-      assert head_signals(@legacy_repo) == []
     end
 
     test "a QA ticket whose run is missing is dispatched exactly once" do

@@ -62,7 +62,7 @@ defmodule SymphonyElixir.BlockedHoldDispatchTest do
       tracker_kind: "memory",
       tracker_active_states: @active_states,
       tracker_terminal_states: @terminal,
-      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
   end
 

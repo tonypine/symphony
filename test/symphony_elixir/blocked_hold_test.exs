@@ -46,11 +46,6 @@ defmodule SymphonyElixir.BlockedHoldTest do
   end
 
   defp designed_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
-    settings
-  end
-
-  defp legacy_settings do
     assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
@@ -152,10 +147,10 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert BlockedHold.sync(open_issue, @terminal, settings: designed_settings()) == :none
     end
 
-    test "leaves a legacy repo untouched" do
+    test "leaves a ticket whose repo can't be resolved untouched" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
 
-      assert BlockedHold.sync(open_issue, @terminal, settings: legacy_settings()) == :skipped
+      assert BlockedHold.sync(open_issue, @terminal, settings: nil) == :skipped
       assert stored_hold() == nil
       assert labels() == []
     end
@@ -163,7 +158,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
     test "resolves the repo's settings from its key when the caller passes none" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
-        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
       )
 
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
@@ -351,10 +346,10 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert BlockedHold.sweep([unblocked, other], @terminal, settings: designed_settings()) == 1
     end
 
-    test "counts nothing on a legacy repo or without a list" do
+    test "counts nothing for a repo it can't resolve or without a list" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
 
-      assert BlockedHold.sweep([open_issue], @terminal, settings: legacy_settings()) == 0
+      assert BlockedHold.sweep([open_issue], @terminal, settings: nil) == 0
       assert BlockedHold.sweep(:not_a_list, @terminal, settings: designed_settings()) == 0
       # Without the caller's settings the repo is resolved from the issue's key.
       assert BlockedHold.sweep([open_issue], @terminal) == 0

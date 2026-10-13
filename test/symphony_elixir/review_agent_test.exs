@@ -549,23 +549,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert prompt =~ "`gh` or `git push`"
     end
 
-    test "keeps the move-to-review wording on legacy repos" do
-      write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "codex")
-
-      prompt =
-        ReviewAgent.approval_prompt(%{verdict: :approve, comments: []},
-          settings: Config.settings!()
-        )
-
-      assert prompt =~ "attach the PR URL with `linear_attach_url` before moving the issue to review"
-      refute prompt =~ "the push is the handoff"
-    end
-
     for {kind, attach_tool} <- [{"codex", "`linear_attach_url`"}, {"claude", "`mcp__symphony__linear_attach_url`"}] do
-      test "tells a designed #{kind} run the push is the handoff and to leave the state alone" do
+      test "tells a #{kind} run the push is the handoff and to leave the state alone" do
         write_workflow_file!(Workflow.workflow_file_path(), agent_kind: unquote(kind), agent_command: "#{unquote(kind)} app-server")
 
-        settings = %{Config.settings!() | state_machine: "designed"}
+        settings = Config.settings!()
         prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}, settings: settings)
 
         assert prompt =~ "attach the PR URL with #{unquote(attach_tool)}; the push is the handoff"

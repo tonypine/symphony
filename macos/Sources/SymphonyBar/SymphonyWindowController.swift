@@ -110,13 +110,15 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 afterControl()
                 return result
             }
-            model.onOpenURL = { url in NSWorkspace.shared.open(url) }
+            model.onOpenURL = { url in URLOpener.open(url) }
             model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
                 self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
             }
             self.model = model
 
-            let hostingController = NSHostingController(rootView: SymphonyWindowView(model: model))
+            let hostingController = NSHostingController(
+                rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action)
+            )
             // SwiftUI's toolbar goes in the window's; the window keeps its own title.
             hostingController.sceneBridgingOptions = [.toolbars]
             // The window keeps the size the user set: the content's minimum never widens it, `contentMinSize` bounds it.
