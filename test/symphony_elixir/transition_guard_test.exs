@@ -493,9 +493,16 @@ defmodule SymphonyElixir.TransitionGuardTest do
                  })
       end
 
-      # Not a plan parent, not a designed repo, or the state not on the team: the request stands.
+      # Not a plan parent: no redirect, and the guard refuses In Review on a designed repo.
+      assert {:error, {:review_requires_handoff_signal, "In Review"}} =
+               TransitionGuard.resolve_request(state("In Review"), %{
+                 settings: designed_settings(),
+                 states: [state("In Review"), plan_review],
+                 plan_parent?: false
+               })
+
+      # Not a designed repo, or the state not on the team: the request stands.
       for ctx <- [
-            %{settings: designed_settings(), states: [state("In Review"), plan_review], plan_parent?: false},
             %{settings: memory_settings(), states: [state("In Review"), plan_review], plan_parent?: true},
             %{settings: designed_settings(), states: [state("In Review")], plan_parent?: true}
           ] do
@@ -533,6 +540,34 @@ defmodule SymphonyElixir.TransitionGuardTest do
     test "refuses an agent's hand move into Code Review on a designed repo" do
       assert {:error, {:code_review_requires_handoff_signal, "Code Review"}} =
                TransitionGuard.resolve_request(state("Code Review"), %{settings: designed_settings()})
+    end
+
+    test "refuses an agent's move into In Review or Human Review on a designed repo, except a plan parent's" do
+      designed = designed_settings(%{"tracker" => %{"kind" => "memory", "human_review_state" => "Human Review"}})
+
+      # The push hands the work to Code Review: parking it in a legacy review state would skip
+      # Code Review and QA, from whichever phase it asks.
+      for {name, from} <- [{"In Review", "In Progress"}, {"in review", "Rework"}, {"Human Review", "In Progress"}] do
+        assert {:error, {:review_requires_handoff_signal, ^name}} =
+                 TransitionGuard.resolve_request(state(name), %{settings: designed, from_state: from})
+      end
+
+      # A run that asked a person for something is redirected to Human Review and refused all the same.
+      assert {:error, {:review_requires_handoff_signal, "Human Review"}} =
+               TransitionGuard.resolve_request(state("In Review"), %{
+                 settings: designed,
+                 from_state: "In Progress",
+                 states: [state("Human Review", "state-human-review")],
+                 needs_person?: true
+               })
+
+      # A plan parent's handoff keeps its move.
+      assert {:ok, %{"name" => "In Review"}} =
+               TransitionGuard.resolve_request(state("In Review"), %{settings: designed, from_state: "In Progress", plan_parent?: true})
+
+      # A legacy repo keeps the In Review handoff.
+      assert {:ok, %{"name" => "In Review"}} =
+               TransitionGuard.resolve_request(state("In Review"), %{settings: memory_settings(), from_state: "In Progress"})
     end
 
     test "refuses an agent's move to In Progress from a phase past implementation on a designed repo" do

@@ -1,16 +1,15 @@
 name: release
 
-# Builds Symphony.app with the self-contained Burrito `symphony` binary inside
-# and publishes it as a GitHub Release, on every push to main, on pushed v*
-# tags, and on demand.
+# Builds Symphony.app with the self-contained Symphony release (`make release`,
+# ERTS included) inside, run in place from Contents/Resources/symphony-release
+# through the launcher at Contents/Resources/symphony, and publishes it as a
+# GitHub Release, on every push to main, on pushed v* tags, and on demand.
 #
 # Versioning (monotonic and machine-comparable):
 #   CFBundleVersion            = github.run_number            e.g. 42
 #   CFBundleShortVersionString = <mix.exs version>.<run_number> e.g. 0.0.1.42
 #   release tag                = v<short version>              e.g. v0.0.1.42
 #   Elixir release version     = <mix.exs version>-<run_number> e.g. 0.0.1-42
-#     Burrito unpacks each build into a directory named after it, so a new
-#     build doesn't run the code an older one unpacked.
 # A pushed v* tag is released under its own name, with the same versions.
 # version.json's `build` is the number to compare.
 #
@@ -46,12 +45,9 @@ concurrency:
 jobs:
   release:
     name: release
-    # macOS 15: Zig 0.15.2 (pinned by Burrito) cannot link against the macOS 26
-    # SDK, so the Burrito build uses the runner's default Xcode and its macOS 15
-    # SDK. The app targets macOS 26 and builds with Xcode 26 (DEVELOPER_DIR on
-    # its step). Apple silicon, so the arm64 Burrito binary and the app build
-    # natively.
-    runs-on: macos-15
+    # The app targets macOS 26; the whole job builds with the Xcode pinned in
+    # .xcode-version. Apple silicon, so the release and the app build natively.
+    runs-on: macos-26
     timeout-minutes: 60
 
     steps:
@@ -87,24 +83,26 @@ jobs:
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Select the pinned Xcode
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
+
       - name: Set up mise tools
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           install: true
+          install_args: "erlang elixir"
           cache: true
 
-      - name: Build the Symphony binary (macOS arm64)
+      - name: Build the Symphony release
         env:
-          BURRITO_TARGET: macos_arm64
           SYMPHONY_BUILD_NUMBER: ${{ steps.version.outputs.build }}
           # The commit and repository the app is built from: Symphony holds a ticket blocked by
           # a fix in this repository until the running app includes the fix's merge commit.
           SYMPHONY_BUILD_SHA: ${{ github.sha }}
           SYMPHONY_BUILD_REPO: ${{ github.server_url }}/${{ github.repository }}
         run: |
-          make package
-          test -x burrito_out/symphony-macos-arm64
-          scripts/release/smoke_test.sh burrito_out/symphony-macos-arm64 "$GITHUB_WORKSPACE/symphony.yml"
+          make release
+          test -x _build/prod/rel/symphony/bin/symphony-app
 
       - name: Import the signing certificate
         id: signing
@@ -135,14 +133,9 @@ jobs:
           echo "Imported the signing certificate into a temporary keychain."
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Find Xcode 26
-        id: xcode
-        run: echo "developer_dir=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_OUTPUT"
-
       - name: Build Symphony.app
         working-directory: macos
         env:
-          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer_dir }}
           # Passed directly: step outputs that contain a secret are dropped.
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           SIGNED: ${{ steps.signing.outputs.signed }}
@@ -155,7 +148,7 @@ jobs:
           else
             identity=-
           fi
-          make bundle SYMPHONY_BIN="$GITHUB_WORKSPACE/burrito_out/symphony-macos-arm64" SIGNING_IDENTITY="$identity"
+          make bundle SYMPHONY_RELEASE="$GITHUB_WORKSPACE/_build/prod/rel/symphony" SIGNING_IDENTITY="$identity"
           codesign -dvv build/Symphony.app 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
           ../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$GITHUB_WORKSPACE/symphony.yml"
 

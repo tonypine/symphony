@@ -3,7 +3,6 @@
 **/cover
 **/deps
 **/log
-**/burrito_out
 **/.elixir_ls
 **/erl_crash.dump
 elixir/

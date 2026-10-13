@@ -1786,6 +1786,129 @@ defmodule SymphonyElixir.CoreTest do
     refute_received {:memory_tracker_state_update, ^issue_id, "Auto Review"}
   end
 
+  describe "quiet designed runs on a pushed PR" do
+    setup do
+      workflow = Workflow.workflow_file_path()
+
+      write_workflow_file!(workflow,
+        tracker_kind: "memory",
+        tracker_active_states: ["Todo", "In Progress", "Rework"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        repos: [[key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]]
+      )
+
+      issue_id = "issue-quiet-designed"
+      pr_url = "https://github.com/example/repo/pull/884"
+      last_ran_at = DateTime.utc_now()
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "In Progress", pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
+      ])
+
+      RunStore.delete_ticket_state("designed-repo", issue_id)
+
+      on_exit(fn ->
+        RunStore.delete_ticket_state("designed-repo", issue_id)
+        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      end)
+
+      %{issue_id: issue_id, completed: %{identifier: "MT-884", pull_request_url: pr_url, last_ran_at: last_ran_at}}
+    end
+
+    defp start_quiet_retry(name, issue_id, completed, quiet_runs) do
+      {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
+      on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
+      retry_token = make_ref()
+
+      retry = %{
+        attempt: 1,
+        timer_ref: nil,
+        retry_token: retry_token,
+        due_at_ms: System.monotonic_time(:millisecond),
+        identifier: "MT-884",
+        repo_key: "designed-repo",
+        delay_type: :continuation
+      }
+
+      :sys.replace_state(pid, fn state ->
+        %{
+          state
+          | claimed: MapSet.new([issue_id]),
+            completed_run_metadata: %{issue_id => completed},
+            retry_attempts: %{issue_id => retry},
+            quiet_handoff_runs: quiet_runs
+        }
+      end)
+
+      send(pid, {:retry_issue, issue_id, retry_token})
+      pid
+    end
+
+    test "the first quiet run backs off instead of continuing in a second", %{issue_id: issue_id, completed: completed} do
+      log =
+        capture_log(fn ->
+          pid = start_quiet_retry(:QuietFirst, issue_id, completed, %{issue_id => {"sha-older", 1}})
+          state = wait_for_orchestrator_state(pid, &match?(%{attempt: 2}, &1.retry_attempts[issue_id]))
+
+          assert %{delay_type: nil, error: "handoff_missing"} = state.retry_attempts[issue_id]
+          assert state.quiet_handoff_runs[issue_id] == {nil, 1}
+          refute Map.has_key?(state.running, issue_id)
+        end)
+
+      assert log =~ "without the handoff signal (1 of 2); backing off"
+    end
+
+    test "the capped quiet run on the same head is held with handoff_missing", %{issue_id: issue_id, completed: completed} do
+      capture_log(fn ->
+        pid = start_quiet_retry(:QuietCapped, issue_id, completed, %{issue_id => {nil, 1}})
+        state = wait_for_orchestrator_state(pid, &(not MapSet.member?(&1.claimed, issue_id)))
+
+        refute Map.has_key?(state.running, issue_id)
+        refute Map.has_key?(state.retry_attempts, issue_id)
+        refute Map.has_key?(state.quiet_handoff_runs, issue_id)
+      end)
+
+      record = RunStore.get_ticket_state("designed-repo", issue_id)
+      assert %{reason: "handoff_missing: 2 runs" <> _rest, waits_on: %{type: "handoff_missing"}} = SymphonyElixir.TicketState.get_hold(record, :blocked)
+      assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
+    end
+
+    test "a quiet count is dropped once the issue leaves the active states", %{issue_id: issue_id, completed: completed} do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "Backlog", pull_request_url: completed.pull_request_url}
+      ])
+
+      capture_log(fn ->
+        pid = start_quiet_retry(:QuietLeft, issue_id, completed, %{issue_id => {nil, 1}})
+        state = wait_for_orchestrator_state(pid, &(not MapSet.member?(&1.claimed, issue_id)))
+
+        refute Map.has_key?(state.quiet_handoff_runs, issue_id)
+      end)
+    end
+
+    test "a quiet run with unpushed commits is dispatched again to push them", %{issue_id: issue_id, completed: completed} do
+      repo = Path.join(System.tmp_dir!(), "symphony-quiet-unpushed-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(repo)
+      on_exit(fn -> File.rm_rf(repo) end)
+      git = &System.cmd("git", ["-C", repo | &1])
+      git.(["init", "-b", "main"])
+      git.(["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "one"])
+      git.(["update-ref", "refs/remotes/origin/main", "HEAD"])
+      git.(["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "two"])
+
+      capture_log(fn ->
+        pid = start_quiet_retry(:QuietUnpushed, issue_id, Map.put(completed, :workspace_path, repo), %{})
+        state = wait_for_orchestrator_state(pid, &Map.has_key?(&1.running, issue_id))
+
+        refute Map.has_key?(state.quiet_handoff_runs, issue_id)
+      end)
+    end
+  end
+
   test "a run that opened its PR moves to In Review without waiting for a busy slot" do
     issue_id = "issue-pr-opened-busy-slots"
     pr_url = "https://github.com/example/repo/pull/385"

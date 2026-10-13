@@ -151,3 +151,4 @@ Every phase is a board-visible Linear state; holds are labels, not states.
 - **States retired after migration:** `Auto Review`, `In Review`, `Human Review`.
 - **Labels (machine-owned):** `Blocked`, `Needs Decision`, plus the CI state labels (`CI green` / `CI red` / `CI running`).
 - Migrating in-flight tickets out of retired states is an implementation concern.
+  They drain (D11: no migration command): startup and the dashboard's drain report list every ticket still in one with what it waits on and the hand move that frees it, and log where each one that leaves lands. The states leave the workflow only once that report is empty.

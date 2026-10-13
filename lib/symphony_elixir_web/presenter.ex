@@ -13,6 +13,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Initiatives,
     Orchestrator,
     Quality,
+    RetiredStates,
     RunKind,
     Sessions,
     StrayProcesses,
@@ -85,6 +86,7 @@ defmodule SymphonyElixirWeb.Presenter do
           inbox_read: Inbox.read?(inbox),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
+          drain_report: drain_report_payload(RetiredStates.drain_report()),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])
@@ -754,6 +756,28 @@ defmodule SymphonyElixirWeb.Presenter do
       pull_request_url: URLUtils.pull_request_url(entry),
       last_ran_at: iso8601(entry.last_ran_at),
       seconds_since_last_run: entry.seconds_since_last_run
+    }
+  end
+
+  defp drain_report_payload(%{stragglers: stragglers, landed: landed}) do
+    %{
+      stragglers:
+        Enum.map(stragglers, fn straggler ->
+          %{
+            issue_id: straggler.id,
+            issue_identifier: straggler.identifier || straggler.id,
+            title: straggler.title,
+            url: URLUtils.present_url(straggler.url),
+            state: straggler.state,
+            wait: Atom.to_string(straggler.wait),
+            waits_on: straggler.waits_on,
+            move: straggler.move
+          }
+        end),
+      landed:
+        Enum.map(landed, fn landing ->
+          %{issue_id: landing.id, issue_identifier: landing.identifier || landing.id, from: landing.from, to: landing.to}
+        end)
     }
   end
 

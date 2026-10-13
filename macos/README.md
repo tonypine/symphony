@@ -386,7 +386,7 @@ status until the next Pause or Resume.
 The state root is found as Symphony finds it:
 
 - `SYMPHONY_STATE_ROOT`, from the app's environment or from the variables Start Symphony last used.
-- Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
+- Otherwise `~/Library/Application Support/symphony` or, for the release Symphony.app runs, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
 
@@ -640,16 +640,14 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
 4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
    dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
    stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
-   version's Symphony yet: running it removes older versions' unpacked releases from
-   `~/Library/Application Support/.burrito/`, including the one the running Symphony loads its code from.
+   version's Symphony yet.
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. Its log is
    `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
 6. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
-   it checks `symphony.yml` with its new embedded binary, starts Symphony from it, which removes the old
-   version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A pause you
+   it checks `symphony.yml` with its new embedded binary, starts Symphony from it, and, once it answers, resumes dispatch if the update paused it. A pause you
    made before the update stays. If the helper had to put the old app back, an alert says so.
 
 Update is disabled, with the reason under it, when:
@@ -947,7 +945,7 @@ make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to ch
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
 make clean    # removes build/ and .build/
-make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Symphony binary, as releases do
+make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
 
 `make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
@@ -1001,19 +999,17 @@ In QA mode, under that directory:
 | `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |
 | `state/` | Symphony's state: control URL and token (`SYMPHONY_STATE_ROOT`) | `~/Library/Application Support/symphony` |
 | `symphony-logs/` | Symphony's own logs (`SYMPHONY_LOGS_ROOT`) | `~/Library/Logs/symphony/release` |
-| `burrito/` | the embedded Symphony's unpacked release, in `burrito/.burrito/` (`SYMPHONY_INSTALL_DIR`) | `~/Library/Application Support/.burrito` |
 
 The app starts with empty settings, so Settings opens. It doesn't see a Symphony already running outside QA
 mode, so Stop, Restart, Pause and Resume can't reach it, unless `SYMPHONY_STATE_ROOT` is set too, which wins
 over `state/`. Until its own Symphony has written a control URL, the app doesn't look for one on the default
-port 4000 either, where the Symphony a normal launch runs answers. `SYMPHONY_LOGS_ROOT` and
-`SYMPHONY_INSTALL_DIR` set in the environment win over `symphony-logs/` and `burrito/` the same way. Saving
+port 4000 either, where the Symphony a normal launch runs answers. `SYMPHONY_LOGS_ROOT` set in
+the environment wins over `symphony-logs/` the same way. Saving
 Settings leaves `~/Library/Application Support/symphony/release/secrets.json` and the login Keychain as they
 were.
 
 Start runs a checkout in Development mode, or the embedded Symphony with Development mode off. The embedded
-Symphony unpacks under `burrito/`, so it never removes the installed app's unpacked release (running a newer
-build removes older builds' unpacked releases from its folder). It still takes the Erlang node name
+Symphony runs from the app's bundle and takes the Erlang node name
 `symphony@127.0.0.1`, so while another Symphony release runs, start the app with its own `ERL_EPMD_PORT`, for
 example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` is free (`0` picks one).
 

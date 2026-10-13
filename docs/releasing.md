@@ -1,8 +1,8 @@
 # Releasing
 
 Symphony ships as `Symphony.app`, the macOS menu bar app with the self-contained
-[Burrito](https://github.com/burrito-elixir/burrito) `symphony` binary inside at
-`Contents/Resources/symphony`. The [`release` workflow](../.github/workflows/release.yml)
+Symphony release (`mix release`, Erlang runtime included) inside at
+`Contents/Resources/symphony-release` and its launcher at `Contents/Resources/symphony`. The [`release` workflow](../.github/workflows/release.yml)
 builds and publishes it as a GitHub Release on every push to `main`, on every
 pushed `v*` tag, and when run by hand (**Actions → release → Run workflow**).
 Only macOS arm64 is built.
@@ -29,15 +29,10 @@ A pushed `v*` tag is released under its own name with the same versions.
 Compare `build` to tell which release is newer. Bump `@version` in `mix.exs`
 for a new major, minor or patch version.
 
-Burrito unpacks the binary into
-`~/Library/Application Support/.burrito/symphony_erts-<erts>_<release version>/`
-and reuses that directory when it exists, so each build needs its own Elixir
-release version. `make package` appends `SYMPHONY_BUILD_NUMBER` to the `mix.exs`
-version as a semver pre-release; without it the release version is the plain
-`mix.exs` version. Burrito deletes the directories of lower versions when a
-newer build first runs. A pre-release sorts below the plain version, so the
-directory of an unsuffixed build (`symphony_erts-<erts>_0.0.1`, including any
-unpacked before build numbers were added) is never deleted; remove it by hand.
+The app carries the release in `Contents/Resources/symphony-release` and runs it
+in place, so nothing is unpacked outside the signed bundle. `make release`
+appends `SYMPHONY_BUILD_NUMBER` to the `mix.exs` version (`0.0.1-42`); without
+it the release version is the plain `mix.exs` version.
 
 ## Release assets
 
@@ -56,8 +51,9 @@ locally on a built app.
 
 ## Signing
 
-The workflow signs the embedded binary first, then the app bundle, without
-`--deep` and without the hardened runtime. Two sets of repository secrets are
+The workflow signs every Mach-O in the embedded release first (ERTS's executables,
+NIFs and port programs), then the app bundle, without the hardened runtime, and
+checks the app with `codesign --verify --strict --deep`. Two sets of repository secrets are
 optional; without them the release still publishes:
 
 - `MACOS_SIGNING_P12_BASE64`, `MACOS_SIGNING_P12_PASSWORD`, `MACOS_SIGNING_IDENTITY`:
@@ -95,7 +91,7 @@ shasum -a 256 -c Symphony-<version>.zip.sha256
 minisign -Vm Symphony-<version>.zip -P RWThT600NSBP4TROh1cvUt5N37/c3BctbnE3Qe+VO0A81t6IikB2BPMp
 ditto -x -k Symphony-<version>.zip .
 codesign --verify --strict Symphony.app    # CSSMERR_TP_NOT_TRUSTED where the Symphony certificate isn't trusted
-codesign --verify --strict Symphony.app/Contents/Resources/symphony
+codesign --verify --strict --deep Symphony.app
 codesign -dvv Symphony.app    # Authority=… once the certificate is configured
 ./Symphony.app/Contents/Resources/symphony check
 ```
@@ -103,15 +99,18 @@ codesign -dvv Symphony.app    # Authority=… once the certificate is configured
 ## Build the app locally
 
 ```bash
-BURRITO_TARGET=macos_arm64 SYMPHONY_BUILD_NUMBER=1 make package   # writes burrito_out/symphony-macos-arm64
+SYMPHONY_BUILD_NUMBER=1 make release   # writes _build/prod/rel/symphony
 cd macos
-make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64 SHORT_VERSION=0.0.1.1 BUILD_NUMBER=1
+make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony SHORT_VERSION=0.0.1.1 BUILD_NUMBER=1
 ```
 
-`make bundle` signs ad hoc unless you pass `SIGNING_IDENTITY`, and embeds the update key
-when you pass `MINISIGN_PUBLIC_KEY`.
+`make bundle` copies the release to `Contents/Resources/symphony-release`, installs its
+launcher (`bin/symphony-app`) as `Contents/Resources/symphony`, signs every Mach-O in the
+release and then the app, and checks the app with `codesign --verify --strict --deep`. It
+signs ad hoc unless you pass `SIGNING_IDENTITY`, and embeds the update key when you pass
+`MINISIGN_PUBLIC_KEY`.
 
-The release workflow smoke-tests the binary before and after signing; run the
+The release workflow smoke-tests the app's Symphony after signing; run the
 same check locally (cwd is `macos/`, after the commands above):
 
 ```bash
@@ -119,14 +118,14 @@ same check locally (cwd is `macos/`, after the commands above):
 ```
 
 The release workflow runs only on pushes to `main`, so pull request CI (`make-all`'s `build`
-job) runs the same script on the escript, without the service step only the Burrito binary
+job) runs the same script on the escript, without the service step only the release
 needs. Locally, `make smoke` does the same. A pull request that changes how the release is
 built or started (`rel/`, `mix.exs`, `mix.lock`, `mise.toml`, the `Makefile`, `config/`'s
 `config.exs` and `runtime.exs`, `ReleaseNode`, `ReleaseCookie`, the `CLI` entry point and
-`Paths`, `scripts/release/`, the Zig SDK shim, the sample `symphony.yml`, or the `release` and
+`Paths`, `scripts/release/`, the pinned Xcode, the sample `symphony.yml`, or the `release` and
 `release-smoke` workflows) also runs the [`release-smoke`
-workflow](../.github/workflows/release-smoke.yml): it builds the Burrito binary on `macos-15` as
-`release` does and runs the whole script on it, service step included.
+workflow](../.github/workflows/release-smoke.yml): it builds the release and the app on `macos-26` as
+`release` does and runs the whole script on the app's launcher, service step included.
 
 The script gives each run a fresh `HOME` and creates an empty git repo there at every
 `repo: ~/...` path the config names, since `symphony check` rejects a `strategy: worktree`

@@ -150,7 +150,6 @@ defmodule SymphonyElixir.MixProject do
       {:yaml_elixir, "~> 2.12"},
       {:solid, "~> 1.3"},
       {:ecto, "~> 3.14"},
-      {:burrito, "~> 1.5", only: :prod, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
     ]
@@ -185,24 +184,37 @@ defmodule SymphonyElixir.MixProject do
         applications: [
           symphony_elixir: :permanent
         ],
-        steps: [:assemble, &Burrito.wrap/1],
-        burrito: [
-          targets: [
-            macos_arm64: [os: :darwin, cpu: :aarch64],
-            macos_x86_64: [os: :darwin, cpu: :x86_64]
-          ]
-        ]
+        steps: [:assemble, &prune_release/1]
       ]
     ]
   end
 
-  # Burrito unpacks into a directory named after the release version and reuses
-  # it when it already exists, so each packaged build needs its own version. The
-  # build number goes in as a semver pre-release (0.0.1-42): Burrito's launcher
-  # must parse the version as semver and orders numeric pre-releases by value, so
-  # it still deletes the directories of older builds. A pre-release sorts below
-  # the plain version, so an unsuffixed build's directory (such as one from
-  # before build numbers) is never deleted and has to be removed by hand.
+  # Files the assembled release never uses at runtime, removed so Symphony.app's
+  # zip stays small: ERTS's developer tools, OpenSSL's test engine, JavaScript
+  # source maps, and the priv/ assets that are read only at compile time (the
+  # dashboard embeds Phoenix's JavaScript; date_time_parser embeds its tzdata) or
+  # by mix generators (Phoenix's templates).
+  @release_bin_unused ~w(ct_run dialyzer dyn_erl erl_call erlc escript run_erl to_erl typer yielding_c_fun)
+  @release_lib_unused ~w(
+    crypto-*/priv/lib/otp_test_engine.so
+    date_time_parser-*/priv
+    phoenix-*/priv
+    phoenix_html-*/priv
+    phoenix_live_view-*/priv
+    */priv/**/*.map
+  )
+
+  defp prune_release(%Mix.Release{path: path} = release) do
+    bins = for name <- @release_bin_unused, do: Path.join([path, "erts-*", "bin", name])
+    libs = for pattern <- @release_lib_unused, do: Path.join([path, "lib", pattern])
+    Enum.each(bins ++ libs, fn pattern -> pattern |> Path.wildcard() |> Enum.each(&File.rm_rf!/1) end)
+    release
+  end
+
+  # Each packaged build gets its own release version, the build number as a
+  # semver pre-release (0.0.1-42), so its `releases/<vsn>/` boot files, and the
+  # BEAM started from them, tell one build from another (the update e2e test
+  # relies on it).
   defp release_version do
     case System.get_env("SYMPHONY_BUILD_NUMBER", "") do
       "" -> @version

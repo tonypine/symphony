@@ -364,16 +364,17 @@ defmodule SymphonyElixir.CLITest do
     assert {:error, "Usage: symphony dashboard" <> _} = CLI.evaluate(["dashboard", "extra"], base_deps())
   end
 
-  test "maybe_configure_burrito_runtime is a no-op outside Burrito" do
-    assert :ok = CLI.maybe_configure_burrito_runtime()
+  test "maybe_configure_packaged_runtime is a no-op outside a packaged build" do
+    assert :ok = CLI.maybe_configure_packaged_runtime()
   end
 
-  test "burrito_args reads the wrapper's plain arguments only inside a Burrito binary" do
-    assert CLI.burrito_args(nil, [~c"--help"]) == :not_in_burrito
-    assert CLI.burrito_args("", [~c"--help"]) == :not_in_burrito
+  test "packaged_args reads the launcher's plain arguments only inside a packaged build" do
+    assert CLI.packaged_args(nil, [~c"--help"]) == :not_packaged
+    assert CLI.packaged_args("", [~c"--help"]) == :not_packaged
 
-    assert CLI.burrito_args("/Applications/Symphony.app/Contents/Resources/symphony", [~c"check", ~c"--config", ~c"s.yml"]) ==
-             ["check", "--config", "s.yml"]
+    # SYMPHONY_RELEASE_ROOT, set by rel/overlays/bin/symphony-app.
+    assert CLI.packaged_args("/Applications/Symphony.app/Contents/Resources/symphony-release", [~c"check", ~c"--config", ~c"s y.yml"]) ==
+             ["check", "--config", "s y.yml"]
   end
 
   test "reads root env overrides before applying flag overrides" do

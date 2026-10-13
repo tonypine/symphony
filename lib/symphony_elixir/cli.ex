@@ -18,9 +18,8 @@ defmodule SymphonyElixir.CLI do
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  # Set by the Burrito wrapper before it execs the BEAM. The `burrito` dep is
-  # build-only (`runtime: false`), so `Burrito.Util.Args` is not in the release.
-  @burrito_bin_path_env "__BURRITO_BIN_PATH"
+  # Set by the release launcher (`rel/overlays/bin/symphony-app`) before it execs the BEAM.
+  @release_root_env "SYMPHONY_RELEASE_ROOT"
   @service_switches [
     {@acknowledgement_switch, :boolean},
     config: :string,
@@ -362,10 +361,10 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec maybe_configure_burrito_runtime() :: :ok
-  def maybe_configure_burrito_runtime do
-    case burrito_args() do
-      :not_in_burrito ->
+  @spec maybe_configure_packaged_runtime() :: :ok
+  def maybe_configure_packaged_runtime do
+    case packaged_args() do
+      :not_packaged ->
         :ok
 
       [command | _args] = args when command in ["check", "dashboard", "force"] ->
@@ -664,16 +663,20 @@ defmodule SymphonyElixir.CLI do
     :ok
   end
 
-  defp burrito_args do
-    burrito_args(System.get_env(@burrito_bin_path_env), :init.get_plain_arguments())
+  defp packaged_args do
+    packaged_args(packaged_marker(), :init.get_plain_arguments())
   end
 
-  # Same as `Burrito.Util.Args.argv/0`: the wrapper passes its arguments after
-  # `-extra`, which the VM exposes as plain arguments.
+  defp packaged_marker do
+    System.get_env(@release_root_env)
+  end
+
+  # The launcher passes its arguments after `-extra`, which the VM exposes as plain
+  # arguments. `marker` is the launcher's env var, unset outside a packaged build.
   @doc false
-  @spec burrito_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_in_burrito
-  def burrito_args(bin_path, _plain_arguments) when bin_path in [nil, ""], do: :not_in_burrito
-  def burrito_args(_bin_path, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
+  @spec packaged_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_packaged
+  def packaged_args(marker, _plain_arguments) when marker in [nil, ""], do: :not_packaged
+  def packaged_args(_marker, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
 
   # A long-running command such as `openrouter-stub` serves from its own processes until the
   # escript is stopped. `Process.sleep/1` is typed to return, so the halt keeps this `no_return()`.

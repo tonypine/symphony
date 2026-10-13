@@ -911,6 +911,52 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
+              <h2 class="section-title">Drain report</h2>
+              <p class="section-copy">Tickets still in a retired or draining state (Auto Review, In Review, Human Review), with what each waits on and the move that frees it.</p>
+            </div>
+          </div>
+
+          <%= if drain_stragglers(@visible_payload) == [] do %>
+            <p class="empty-state">No ticket left in a retired state</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>State</th>
+                    <th>Waits on</th>
+                    <th>Move</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- drain_stragglers(@visible_payload)}>
+                    <td>
+                      <%= if entry.url do %>
+                        <a class="issue-id" href={entry.url} target="_blank" rel="noreferrer" title={entry.title}><%= entry.issue_identifier %></a>
+                      <% else %>
+                        <span class="issue-id" title={entry.title}><%= entry.issue_identifier %></span>
+                      <% end %>
+                    </td>
+                    <td><%= entry.state %></td>
+                    <td><span class="event-text"><%= entry.waits_on %></span></td>
+                    <td><span class="event-text"><%= entry.move %></span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+
+          <ul :if={drain_landed(@visible_payload) != []} class="section-copy">
+            <li :for={landing <- drain_landed(@visible_payload)}>
+              <%= landing.issue_identifier %> left <%= landing.from %> for <%= landing.to || "an unread state" %>
+            </li>
+          </ul>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
               <h2 class="section-title">Awaiting clarification</h2>
               <p class="section-copy">Quality-gate holds waiting for clearer issue context.</p>
             </div>
@@ -1094,6 +1140,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
       retrying: payload |> Map.get(:retrying, []) |> length()
     })
   end
+
+  defp drain_stragglers(payload), do: get_in(payload, [Access.key(:drain_report, %{}), Access.key(:stragglers, [])])
+  defp drain_landed(payload), do: get_in(payload, [Access.key(:drain_report, %{}), Access.key(:landed, [])])
 
   defp filter_repo_rows(rows, repo_filter), do: Enum.filter(rows, &(Map.get(&1, :repo_key) == repo_filter))
 

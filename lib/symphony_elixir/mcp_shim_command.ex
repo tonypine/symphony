@@ -9,8 +9,8 @@ defmodule SymphonyElixir.McpShimCommand do
   needs neither PATH nor a version manager, from a checkout and from the
   release alike.
 
-  The command is ERTS's `erlexec`, the launcher `erl` wraps. A Burrito release
-  ships `erlexec` but no `erl` script, so `erlexec` gets the environment `erl`
+  The command is ERTS's `erlexec`, the launcher `erl` wraps. It is called
+  directly rather than through `erl`, so `erlexec` gets the environment `erl`
   would set: `ROOTDIR`, `BINDIR`, `EMU` and `PROGNAME`.
   """
 

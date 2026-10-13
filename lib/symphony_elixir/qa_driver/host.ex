@@ -21,8 +21,8 @@ defmodule SymphonyElixir.QaDriver.Host do
   Symphony.app ships the helper signed at `Contents/Helpers/SymphonyQADriver.app`
   and passes its path in `SYMPHONY_QA_DRIVER_APP`, so a grant survives app
   updates. Without it (Symphony run from a terminal) the helper source, which
-  ships as `priv/qa_driver/` and is embedded at compile time (escript and Burrito
-  builds drop `priv/`), is compiled with `swiftc` on first use and signed ad hoc
+  ships as `priv/qa_driver/` and is embedded at compile time (escript builds
+  drop `priv/`), is compiled with `swiftc` on first use and signed ad hoc
   into `<state root>/qa-driver/<source hash>/`, so a new helper source builds a
   new helper that needs a new grant.
   """
