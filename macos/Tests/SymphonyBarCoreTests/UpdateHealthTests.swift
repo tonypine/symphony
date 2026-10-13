@@ -411,7 +411,7 @@ final class UpdateHealthTests: XCTestCase {
 
         XCTAssertNil(updater.checked(.available(Self.release(build: 43)), context(Self.release(build: 43))))
         let newer = Self.release(build: 44)
-        XCTAssertEqual(updater.checked(.available(newer), context(newer)), .install(newer, runsTimeout: 0))
+        XCTAssertEqual(updater.checked(.available(newer), context(newer)), .install(newer, kind: .automatic(runsTimeout: 0)))
     }
 
     func testMenuLinesSayWhyAndHowToRollBackByHand() {

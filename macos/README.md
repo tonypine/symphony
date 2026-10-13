@@ -170,14 +170,17 @@ set (or, in Development mode, no checkout folder).
   before it also offers Restart Now Anyway, and how long Automatically at a set time waits for them before it
   tries again the next day.
 - **Update mode** (in **Updates**) is how the app installs a newer release:
-  - **Manual** (the default, and what an install from before this setting gets): the menu shows the
-    release and you install it with Update to vX. See [Update](#update).
+  - **Manual**: the menu shows the release and you install it with Update to vX. See [Update](#update).
   - **Automatically when idle** installs a new release by itself as soon as no agent runs are active.
   - **Automatically at a set time** installs a new release by itself each day at the **Time** shown under
     it (03:00 by default, in the Mac's time zone), waiting for agent runs like Update to vX. The time shows
     only for this mode, and is kept when you choose another.
+  - **Automatically when released** (the default for every install that never saved an update mode)
+    installs a new release by itself as soon as a check finds it, waiting for agent runs like Update to vX.
 
-  See [Automatic updates](#automatic-updates).
+  In an automatic mode, when this copy can't install updates (a development build, Development mode, no
+  update signing key, or an app folder you can't write to), a line under the picker says "▲ This copy can't
+  update itself:" and why. The picker stays editable. See [Automatic updates](#automatic-updates).
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
   it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`) and
   update time (`updateTime`, minutes after midnight) are stored in UserDefaults
@@ -743,9 +746,12 @@ allowed in System Settings > Notifications; when they aren't, the app shows an a
 
 **Update mode** in Settings chooses how a newer release is installed:
 
-- **Manual** (the default): the menu shows the release and you install it with Update to vX. Nothing
-  installs by itself.
-- **Automatically when idle** and **Automatically at a set time**, below.
+- **Manual**: the menu shows the release and you install it with Update to vX. Nothing installs by itself.
+- **Automatically when idle**, **Automatically at a set time** and **Automatically when released**, below.
+
+**Automatically when released** is the default for every install that has no update mode stored: a new one,
+and one that ran before but never saved Settings. Saving Settings stores the mode, and a stored mode,
+Manual included, is never changed.
 
 With one of the automatic modes, the app installs a newer release by itself through the same steps as
 [Install an update](#install-an-update), without the confirmation:
@@ -764,8 +770,28 @@ With one of the automatic modes, the app installs a newer release by itself thro
   "Update postponed"; the next attempt is the next day's time. A time missed while the Mac slept or the app
   was closed (more than 10 minutes late) waits for the next day's time too, so dispatch isn't paused in the
   middle of the day. A release found by another check waits for the set time.
+- **Automatically when released**: as soon as a check finds a release (at launch, every 6 hours, or Check
+  for Updates…), or a status poll sees one already found, the app installs it, whatever agent runs are
+  active. It downloads and verifies it ("Updating: downloading and verifying vX…"), pauses dispatch, waits for
+  the active runs to finish ("Updating to vX: waiting for N agent runs…") and installs, as Update to vX does
+  but without asking. It never gives up on the runs: after the **Restart timeout** the line adds how long it
+  has waited ("(35 min)") and **Update Now Anyway** stops Symphony without waiting more. Release Notes…
+  shows the release under way.
+  - Once it has paused dispatch, it posts a notification, "Updating Symphony to vX", saying how many agent
+    runs it waits for, with **Cancel Update**. It makes no sound, and nothing shows in its place when
+    notifications aren't allowed. Clicking it opens the Symphony window. It is removed once the update
+    ends, fails or is cancelled, and the other modes post none.
+  - **Cancel Update**, in the menu while the release downloads or the update waits for runs, or on the
+    notification, stops the update and resumes the dispatch it paused. It holds that release: no check
+    installs it again, and the menu shows it as available with "You cancelled this update. It waits for
+    you; a newer release installs by itself.", **Update to vX** and **Skip This Version**. Installing it by
+    hand, skipping it or a newer release ends the hold; the app forgets it when it relaunches. Once
+    Symphony is stopping for the swap, Cancel Update does nothing.
+  - A failure before the swap, such as a failed download or verification, shows "Symphony wasn't updated:
+    <reason>. Trying again at the next check." under the update items, with no alert; the next check tries
+    again, not every status poll.
 
-In both modes:
+In all automatic modes:
 
 - A release you [skip](#skip-a-release), or one an update [rolled back](#health-check-and-automatic-rollback),
   is never installed by itself. A newer release is.
@@ -773,12 +799,12 @@ In both modes:
   or an app folder you can't write to).
 - A pause you made before the update stays after it, as with Update to vX. Cancel Update stops waiting.
 - A failure shows on the line under the update items, with no alert: a failed download or verification,
-  for example. When idle, the app tries again after the next check (every 6 hours, or Check for Updates); at
-  a set time, the next day.
+  for example. When idle or when released, the app tries again after the next check (every 6 hours, or Check
+  for Updates); at a set time, the next day.
 - The relaunched app runs the [health check](#health-check-and-automatic-rollback), as after Update to vX:
   `symphony check` must pass, Symphony must answer within 120 seconds of starting, and it must not exit
   unexpectedly 3 times within 10 minutes of the update. If any of these fails, the app rolls back to
-  `Symphony (previous).app` by itself and pins the failed version, so neither mode installs it again; a
+  `Symphony (previous).app` by itself and pins the failed version, so no automatic mode installs it again; a
   notification and the menu say which version was rolled back and why. **Retry vX** installs the pinned
   version again by hand, health check included. A newer release is installed as usual.
 - Once the update is healthy, a notification says "Symphony updated to vX" and the menu shows
@@ -792,9 +818,9 @@ kept. When an update fails its [health check](#health-check-and-automatic-rollba
 itself, moving the failed version aside as `Symphony (rolled back).app`. To go back to it by hand:
 
 1. **With an [automatic update mode](#automatic-updates) on, set Update mode to Manual in Settings… first.**
-   Otherwise the version you go back to finds the newer release with its check at launch and, when idle,
-   installs it again right away. The running version can't skip itself: its menu offers no release. The
-   mode is kept in UserDefaults, so the version you go back to reads it.
+   Otherwise the version you go back to finds the newer release with its check at launch and, when idle or
+   when released, installs it again right away. The running version can't skip itself: its menu offers no
+   release. The mode is kept in UserDefaults, so the version you go back to reads it.
 2. Choose **Quit** from the menu (this stops Symphony).
 3. Swap the two apps, in Finder or a terminal:
 

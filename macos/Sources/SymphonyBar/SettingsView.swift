@@ -93,7 +93,14 @@ struct SettingsView: View {
                 } header: {
                     Text("Updates")
                 } footer: {
-                    SectionFooter(model.settings.updateMode.explanation)
+                    VStack(alignment: .leading, spacing: 6) {
+                        SectionFooter(model.settings.updateMode.explanation)
+                        if let line = model.settings.updateMode.blockerLine(
+                            model.updateBlocker(model.settings.developmentMode)
+                        ) {
+                            SectionFooter(line)
+                        }
+                    }
                 }
 
                 Section {

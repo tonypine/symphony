@@ -15,6 +15,9 @@ public struct AppSettings: Equatable {
     /// Restart timeout used until the user picks one.
     public static let defaultRestartTimeoutMinutes = 30
 
+    /// Update mode of every install that never saved one, fresh or not: there is no migration.
+    public static let defaultUpdateMode = UpdateMode.onRelease
+
     /// Absolute path to the Symphony checkout.
     public var checkoutPath: String
 
@@ -50,7 +53,7 @@ public struct AppSettings: Equatable {
         restartTimeoutMinutes: Int = AppSettings.defaultRestartTimeoutMinutes,
         startOnLaunch: Bool = false,
         developmentMode: Bool = false,
-        updateMode: UpdateMode = .manual,
+        updateMode: UpdateMode = AppSettings.defaultUpdateMode,
         updateTime: TimeOfDay = .defaultUpdateTime
     ) {
         self.checkoutPath = checkoutPath
