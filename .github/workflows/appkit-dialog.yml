@@ -2,17 +2,18 @@ name: appkit-dialog
 
 # Runs the `:appkit_dialog` test, which starts a minimal `NSApplication` + `NSWindow` program under
 # the agent profile (the one the latest `@anthropic-ai/sandbox-runtime` generates from Symphony's
-# SRT settings; Claude Code runs SRT's profile too), once plainly and once made to crash, and checks
-# that it puts no window and no "quit unexpectedly" dialog on screen and never checks in with
-# LaunchServices, the check-in that makes ReportCrash show the dialog. Two control runs outside the
-# sandbox first show that this runner draws the window and sees the check-in. The job summary
-# records what each run showed, and the screenshots are uploaded.
+# SRT settings; Claude Code runs SRT's profile too), once plainly and once made to crash. It checks
+# that the program draws no window and that Claude Code's Bash hook (`priv/claude_hooks`) refuses
+# both commands, and records whether it checks in with LaunchServices and shows a "quit
+# unexpectedly" dialog: the profile allows both, which is why the hook exists. Two control runs
+# outside the sandbox first show that this runner draws the window and sees the check-in. The job
+# summary records what each run showed, and the screenshots are uploaded.
 #
 # The runner is a disposable Mac with a desktop session, so a window or dialog lands on nobody's
 # screen. `test/test_helper.exs` excludes the test everywhere else, and it never runs on the host.
 #
 # Not a required check: it runs weekly, to catch an SRT or macOS release, and on pull requests that
-# change the probe, the test or the agent's SRT settings.
+# change the probe, the test, the hook or the agent's SRT settings.
 on:
   workflow_dispatch:
   schedule:
@@ -20,6 +21,8 @@ on:
   pull_request:
     paths:
       - "lib/symphony_elixir/agent_sandbox_config.ex"
+      - "lib/symphony_elixir/claude_code/app_launch_hook.ex"
+      - "priv/claude_hooks/**"
       - "test/support/appkit_probe/**"
       - "test/symphony_elixir/agent_sandbox_appkit_test.exs"
       - "test/test_helper.exs"

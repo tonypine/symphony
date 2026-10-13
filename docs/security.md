@@ -231,16 +231,24 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   sandbox gets no window server connection and can't draw. Offscreen `ImageRenderer` snapshots
   still work.
 - The profiles still allow LaunchServices (`com.apple.coreservices.launchservicesd`), which the
-  runtimes don't let Symphony turn off. So the `appkit-dialog` workflow checks, on a disposable
-  macOS runner, that a minimal `NSApplication` + `NSWindow` program started under the agent
-  profile with Symphony's settings puts no window and no "quit unexpectedly" dialog on screen:
-  it runs once plainly and once made to crash. It also checks that the program never checks in
-  with LaunchServices, the check-in that makes ReportCrash treat a crashed process as an app and
-  show the dialog; the GitHub runner shows no crash dialog even outside the sandbox, so the
-  check-in is what answers the question there. Two runs outside the sandbox first show that the
-  runner draws the window and sees the check-in. The job summary records what each run showed.
-  The workflow runs weekly, to catch an SRT or macOS release, and on pull requests that change
-  the probe or the agent's SRT settings. The prompt rule still applies.
+  runtimes don't let Symphony turn off. The `appkit-dialog` workflow showed what that leaves open,
+  on a disposable macOS runner (run 38452505961): a minimal `NSApplication` + `NSWindow` program
+  started under the agent profile draws no window, but it checks in with LaunchServices, so
+  ReportCrash treats it as an app, and when it crashes the "quit unexpectedly" dialog appears.
+- So Claude Code sessions get a `PreToolUse` hook on the Bash tool
+  (`priv/claude_hooks/app_launch_hook.pl`, written next to the session's `settings.json` and run
+  with `/usr/bin/perl`) that refuses a command starting a macOS app: a Mach-O program naming
+  `NSApplication`, `NSApplicationMain`, `NSWindow`, `NSPanel`, `NSAlert`, `NSStatusBar` or
+  SwiftUI's `App.main`, the products `swift run` would start, or a Swift script run with `swift`
+  that uses one of them. It looks at the program of each command in the line, following `cd`, so
+  `otool -L` or `codesign` on an app still run, and so does a program that only renders SwiftUI
+  views offscreen with `ImageRenderer`. The hook reads command lines, not what a script runs
+  later, so the prompt rule still applies. Codex has no such hook.
+- The workflow runs the probe twice outside the sandbox first, to show that the runner draws the
+  window and sees the check-in, then twice in the sandbox, plainly and made to crash. It fails if
+  the sandboxed probe draws a window or the hook lets either command run, and its job summary
+  records the check-in and the dialog. It runs weekly, to catch an SRT or macOS release, and on
+  pull requests that change the probe, the hook or the agent's SRT settings.
 
 ### Optional outer sandbox (Codex + SRT)
 

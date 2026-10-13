@@ -9,9 +9,11 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
   # `crash` run for the dialog.
   #
   # The check-in is what makes ReportCrash treat a crashed process as an app and show its "quit
-  # unexpectedly" dialog. The GitHub runner showed no crash dialog even outside the sandbox, so the
-  # check-in stands in for the dialog: a sandboxed probe that never checks in can't get one. The
-  # dialogs on screen are still watched and recorded.
+  # unexpectedly" dialog. On the runner the sandboxed probe draws no window, but it checks in and its
+  # crash shows the dialog (run 38452505961), and the agent runtimes have no setting to deny
+  # LaunchServices. So the test records the check-in and the dialog, and checks the enforcement
+  # instead: Claude Code's `PreToolUse` hook (`SymphonyElixir.ClaudeCode.AppLaunchHook`) refuses
+  # both sandboxed commands before they start.
   #
   # It puts windows and dialogs on screen, so it runs only with `--only appkit_dialog`, on the
   # `appkit-dialog` workflow's disposable macOS runner. Never on the host: they would land on the
@@ -19,6 +21,7 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.AgentSandboxConfig
+  alias SymphonyElixir.ClaudeCode.AppLaunchHook
 
   @moduletag :appkit_dialog
   @moduletag timeout: 300_000
@@ -50,7 +53,7 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     {:ok, root: root, probe: probe, control: control, windows: windows, artifacts: artifacts}
   end
 
-  test "an AppKit program in the agent sandbox puts no window and no crash dialog on screen", context do
+  test "an AppKit program in the agent sandbox draws no window, and the Bash hook refuses to start it", context do
     %{root: root, probe: probe, control: control, windows: windows, artifacts: artifacts} = context
     srt = srt_cli!()
     settings = Path.join(root, "srt-settings.json")
@@ -115,8 +118,21 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     assert crash_status != 0, "the sandboxed crash probe exited 0, so it never crashed: #{crash_output}"
 
     refute window?, "the sandboxed probe drew a window: #{output} / #{crash_output}"
-    refute checked_in?, "the sandboxed probe checked in with LaunchServices, so a crash can show a dialog"
-    refute dialog?, "the sandboxed probe's crash showed a dialog: #{inspect(Enum.uniq(sandboxed.owners ++ crashed.owners))}"
+
+    # The sandbox lets the probe check in, and its crash can show the dialog, so the hook keeps an
+    # agent from starting it.
+    for command <- [probe, "#{probe} crash", "./probe crash"] do
+      assert {stderr, 2} = app_launch_hook(root, command), "the hook let `#{command}` run"
+      assert stderr =~ "starts a macOS app"
+    end
+  end
+
+  defp app_launch_hook(root, command) do
+    [{script, contents}] = AppLaunchHook.files(root)
+    File.write!(script, contents)
+    input = Path.join(root, "hook-input.json")
+    File.write!(input, Jason.encode!(%{tool_name: "Bash", cwd: root, tool_input: %{command: command}}))
+    System.cmd("/bin/sh", ["-c", ~s(/usr/bin/perl "$0" < "$1" 2>&1 >/dev/null), script, input])
   end
 
   defp compile!(source, output) do
