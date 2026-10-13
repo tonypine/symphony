@@ -110,12 +110,8 @@ defmodule SymphonyElixir.InitiativesTest do
   end
 
   describe "parent_of/2" do
-    test "names the plan that has the ticket among its sub-tickets or as its final verification" do
-      node =
-        plan("BIL-1", @in_progress, [
-          child("BIL-2", @done),
-          child("BIL-3", @todo, %{"title" => "Final verification: Plan BIL-1"})
-        ])
+    test "names the plan that has the ticket among its sub-tickets" do
+      node = plan("BIL-1", @in_progress, [child("BIL-2", @done), child("BIL-3", @todo)])
 
       other = plan("BIL-9", @in_progress, [])
       initiatives = Enum.map([other, node], &Initiative.from_node(&1, "billing", settings(), @now))

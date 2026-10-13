@@ -70,8 +70,7 @@ defmodule SymphonyElixir.ShippedTest do
     initiative = %{
       identifier: "WEB-1",
       title: "Checkout",
-      sub_tickets: [%{id: "i3"}],
-      final_verification: nil
+      sub_tickets: [%{id: "i3"}]
     }
 
     assert {:ok, payload} = payload(%{"days" => "3"}, runs, ticket_states: ticket_states, initiatives: [initiative])
