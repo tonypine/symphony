@@ -773,10 +773,19 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # The orchestrator polls again at once, so the Inbox and the dashboard follow the move.
+  # The orchestrator polls again at once, so the Inbox and the dashboard follow the move. The move is
+  # already made, so the request goes from a task: an orchestrator busy past the call's timeout
+  # delays the refresh instead of turning the move's answer into an error.
   defp request_refresh(opts) do
-    opts |> Keyword.get(:orchestrator, Orchestrator) |> Orchestrator.request_refresh()
+    orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
+    {:ok, _pid} = Task.start(fn -> refresh(orchestrator) end)
     :ok
+  end
+
+  defp refresh(orchestrator) do
+    Orchestrator.request_refresh(orchestrator)
+  catch
+    :exit, reason -> Logger.warning("Director move couldn't ask the orchestrator to poll again: #{inspect(reason)}")
   end
 
   defp server(opts), do: Keyword.get(opts, :server, __MODULE__)
