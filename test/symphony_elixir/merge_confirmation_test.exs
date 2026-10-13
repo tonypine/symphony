@@ -200,4 +200,56 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert_received {:comment, @issue_id, _body}
     end
   end
+
+  describe "picked/2 and reply_target/2" do
+    # The options as Linear's comment reads them back: rendered lines, not the tool's maps.
+    defp ci_hold do
+      %{
+        decision: %{
+          confirm: "Rework",
+          options: [
+            "**Send to Rework** (recommended): the ticket moves to Rework, where a run makes the fix",
+            "**Leave it**: the ticket stays in its phase with red CI",
+            "a hand-written line",
+            :unreadable,
+            %{"label" => nil, "effect" => nil}
+          ]
+        }
+      }
+    end
+
+    defp merge_hold do
+      %{
+        decision: %{
+          confirm: "Merging",
+          options: [
+            %{label: "Merge", effect: "the ticket moves to Merging"},
+            %{label: "Send to Rework", effect: "the ticket moves to Rework"}
+          ]
+        }
+      }
+    end
+
+    test "an answer picks the option its number or label opens with" do
+      assert MergeConfirmation.picked(ci_hold(), ["send to rework please"]) == {:ok, "Rework"}
+      assert MergeConfirmation.picked(ci_hold(), ["Option 2"]) == {:ok, nil}
+      assert MergeConfirmation.picked(ci_hold(), ["Leave it for now", "2"]) == {:ok, nil}
+    end
+
+    test "nothing is picked by free text, a longer word, conflicting answers or no hold" do
+      assert MergeConfirmation.picked(ci_hold(), ["Neither: leave it alone", nil]) == :none
+      assert MergeConfirmation.picked(ci_hold(), ["12 is the count"]) == :none
+      assert MergeConfirmation.picked(ci_hold(), ["1", "2"]) == :none
+      assert MergeConfirmation.picked(nil, ["1"]) == :none
+    end
+
+    test "a reply that picks nothing is a change request; an ordinary decision moves nothing" do
+      assert MergeConfirmation.reply_target(ci_hold(), ["Neither option"]) == "In Progress"
+      assert MergeConfirmation.reply_target(ci_hold(), ["1"]) == "Rework"
+      assert MergeConfirmation.reply_target(ci_hold(), ["1 change needed on the same PR"]) == "In Progress"
+      assert MergeConfirmation.reply_target(merge_hold(), ["Merge conflicts remain, fix first"]) == "In Progress"
+      assert MergeConfirmation.reply_target(merge_hold(), ["Merge."]) == "Merging"
+      assert MergeConfirmation.reply_target(%{decision: %{}}, ["1"]) == nil
+    end
+  end
 end
