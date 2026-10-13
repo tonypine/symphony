@@ -127,24 +127,7 @@
             "BIL-206"
           ]
         }
-      ],
-      "final_verification": {
-        "issue_id": "i-209",
-        "identifier": "BIL-209",
-        "title": "Final verification: Usage-based billing",
-        "state": "Todo",
-        "url": "https://linear.app/acme/issue/BIL-209",
-        "blocked_by": [
-          "BIL-207",
-          "BIL-208"
-        ],
-        "waits_on": "blocker",
-        "waiting_for": [
-          "BIL-207",
-          "BIL-208"
-        ],
-        "open_tickets": 4
-      }
+      ]
     },
     {
       "issue_id": "p-20",
@@ -226,24 +209,7 @@
           "waits_on": "slot",
           "waiting_for": []
         }
-      ],
-      "final_verification": {
-        "issue_id": "i-26",
-        "identifier": "DOCS-26",
-        "title": "Final verification: Search the docs",
-        "state": "Todo",
-        "url": "https://linear.app/acme/issue/DOCS-26",
-        "blocked_by": [
-          "DOCS-24",
-          "DOCS-25"
-        ],
-        "waits_on": "blocker",
-        "waiting_for": [
-          "DOCS-24",
-          "DOCS-25"
-        ],
-        "open_tickets": 3
-      }
+      ]
     },
     {
       "issue_id": "i-330",
@@ -298,8 +264,7 @@
           "waits_on": "you",
           "waiting_for": []
         }
-      ],
-      "final_verification": null
+      ]
     },
     {
       "issue_id": "p-300",
@@ -354,18 +319,7 @@
           "waits_on": "done",
           "waiting_for": []
         }
-      ],
-      "final_verification": {
-        "issue_id": "i-304",
-        "identifier": "SHOP-304",
-        "title": "Final verification: Saved carts",
-        "state": "Done",
-        "url": "https://linear.app/acme/issue/SHOP-304",
-        "blocked_by": [],
-        "waits_on": "done",
-        "waiting_for": [],
-        "open_tickets": 0
-      }
+      ]
     }
   ]
 }

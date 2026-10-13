@@ -479,7 +479,6 @@ public struct TicketPage: Equatable {
         case "approve_pr": return "Moved to Merging by you"
         case "rework": return "Sent to Rework by you"
         case "decisions": return "Decisions sent by you"
-        case "sign_off": return "Signed off by you"
         case "backlog": return "Moved to Backlog by you"
         case "undo": return "Move undone by you"
         default: return "Moved to \(move.toState ?? "another state") by you"
@@ -502,7 +501,6 @@ public struct TicketPage: Equatable {
 
     private static func type(title: String?, inboxKind: String?) -> String {
         if inboxKind == "plan" { return "Plan" }
-        if title?.hasPrefix("Final verification:") == true || inboxKind == "final_verification" { return "Final verification" }
         return "Ticket"
     }
 

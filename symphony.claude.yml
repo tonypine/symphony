@@ -67,7 +67,7 @@ agent:
   command: claude --model claude-opus-4-7 --dangerously-skip-permissions --verbose
   # Model, effort and provider per kind of run. Drop the model and effort flags from `command`
   # when setting any of these. Kinds: implementation, breakdown, close_out,
-  # final_verification, rework, landing, ci_fix, review_feedback, pre_push_review, qa.
+  # rework, landing, code_review, qa, epic_review, ci_fix, review_feedback, pre_push_review.
   # `openrouter` needs an OpenRouter model id for every run it serves.
   # model: claude-sonnet-5-5
   # effort: medium   # low | medium | high | xhigh | max

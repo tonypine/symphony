@@ -207,7 +207,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_add_blocked_by",
       "description" =>
-        "Mark the current Linear issue blocked by existing issues, such as the gap tickets a final verification filed. Symphony holds an issue in Todo until every blocker is Done or Canceled, then dispatches it again on its own.",
+        "Mark the current Linear issue blocked by existing issues, such as the tickets its work depends on. Symphony holds an issue in Todo until every blocker is Done or Canceled, then dispatches it again on its own.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,

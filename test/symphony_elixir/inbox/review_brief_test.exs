@@ -35,10 +35,6 @@ defmodule SymphonyElixir.Inbox.ReviewBriefTest do
   - Approve: move SHOP-330 to `Waiting on sub-tickets`; Symphony promotes its sub-tickets.
   - Change: comment on any part of the plan.
   - Reject: move SHOP-330 to `Rework`.
-
-  ## Supervisor check
-
-  **Verify:** the importer runs on the device.
   """
 
   test "parses a plan's brief into what to review with its links, what changed, decisions and moves" do
@@ -71,8 +67,7 @@ defmodule SymphonyElixir.Inbox.ReviewBriefTest do
                %{move: "approve", text: "move SHOP-330 to Waiting on sub-tickets; Symphony promotes its sub-tickets."},
                %{move: "change", text: "comment on any part of the plan."},
                %{move: "reject", text: "move SHOP-330 to Rework."}
-             ],
-             supervisor_check: "## Supervisor check\n**Verify:** the importer runs on the device."
+             ]
            } = ReviewBrief.parse(@plan_brief)
   end
 

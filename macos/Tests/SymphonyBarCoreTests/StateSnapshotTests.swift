@@ -283,7 +283,7 @@ final class StateSnapshotTests: XCTestCase {
                 issueID: "id-1", identifier: "TP-1", repoKey: "symphony", title: "Research issue template",
                 url: URL(string: "https://linear.app/tonypine/issue/TP-1"), kind: .plan, headline: "The split", waitingSeconds: 7_200
             ),
-            .init(issueID: "id-2", identifier: "id-2", kind: .finalVerification),
+            .init(issueID: "id-2", identifier: "id-2", kind: .other("final_verification")),
             .init(identifier: "TP-3", kind: .action),
             .init(identifier: "TP-4", kind: .pr),
             .init(identifier: "TP-5", kind: .other("")),

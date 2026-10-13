@@ -8,8 +8,7 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
   - `what_changed`: the bullets under `**What changed since the last brief:**`;
   - `decisions`: each numbered question under `**Decisions needed:**`, with its options, the
     recommendation and the index of the recommended option when it can be told (`None.` is none);
-  - `moves`: the `Approve:`, `Change:` and `Reject:` lines under `**How to approve / change / reject:**`;
-  - `supervisor_check`: a `## Supervisor check` block below the brief, as markdown.
+  - `moves`: the `Approve:`, `Change:` and `Reject:` lines under `**How to approve / change / reject:**`.
 
   A body without the `**What to review:**` line doesn't parse: it comes back as `raw` markdown,
   for the app to show as text.
@@ -25,7 +24,6 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
   @move_field ~r/^(Approve|Change|Reject):\s*(.*)$/i
   @markdown_link ~r/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/
   @bare_url ~r/(?<![(\[])\bhttps?:\/\/[^\s)>\]]+/
-  @supervisor_check ~r/^##\s+Supervisor check\s*$/m
   @option_letter ~r/^(?:option\s+)?([A-Z])(?:\b|[.):])/i
 
   @type link :: %{label: String.t(), url: String.t()}
@@ -41,8 +39,7 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
           what_to_review: [%{text: String.t(), links: [link()]}],
           what_changed: [String.t()],
           decisions: [decision()],
-          moves: [%{move: String.t(), text: String.t()}],
-          supervisor_check: String.t() | nil
+          moves: [%{move: String.t(), text: String.t()}]
         }
   @type raw :: %{format: String.t(), markdown: String.t()}
 
@@ -54,8 +51,7 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
   @doc "The brief's parts, or `%{format: \"raw\", markdown: body}` when it has no `**What to review:**` line."
   @spec parse(String.t()) :: parsed() | raw()
   def parse(body) when is_binary(body) do
-    {brief, check} = split_supervisor_check(body)
-    sections = sections(brief)
+    sections = sections(body)
 
     case Map.fetch(sections, "what to review") do
       {:ok, {headline, lines}} ->
@@ -65,19 +61,11 @@ defmodule SymphonyElixir.Inbox.ReviewBrief do
           what_to_review: lines |> items() |> Enum.map(&%{text: plain(&1), links: links(&1)}),
           what_changed: sections |> section_lines("what changed since the last brief") |> items() |> Enum.map(&plain/1),
           decisions: sections |> section_lines("decisions needed") |> decisions(),
-          moves: sections |> section_lines("how to approve / change / reject") |> moves(),
-          supervisor_check: check
+          moves: sections |> section_lines("how to approve / change / reject") |> moves()
         }
 
       :error ->
         %{format: "raw", markdown: String.trim(body)}
-    end
-  end
-
-  defp split_supervisor_check(body) do
-    case Regex.split(@supervisor_check, body, parts: 2) do
-      [brief, check] -> {brief, blank_to_nil("## Supervisor check\n" <> String.trim(check))}
-      [brief] -> {brief, nil}
     end
   end
 

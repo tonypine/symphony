@@ -5,7 +5,7 @@ defmodule SymphonyElixir.RunKind do
   @reserved_kinds [:pre_push_review]
   @reserved_kind_names Enum.map_join(@reserved_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
   # The legacy machine's kinds, which `classify/2` never returns either; see the moduledoc.
-  @retired_kinds [:close_out, :final_verification]
+  @retired_kinds [:close_out]
   @retired_kind_names Enum.map_join(@retired_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
 
   @moduledoc """
@@ -35,13 +35,16 @@ defmodule SymphonyElixir.RunKind do
        (non-empty `:reviewer_comments` signal).
     11. `implementation`: everything else.
 
+  A ticket's title never names its run kind: `Final verification:` tickets are retired, and the
+  epic review closes an epic parent instead.
+
   Parent tickets come before states because they never open a PR: the workflow sends them to the
   parent-ticket steps whatever their state.
 
   #{@reserved_kind_names} is never returned by `classify/2`; it names the pre-push reviewer run,
-  which Symphony starts itself. Neither are #{@retired_kind_names}: the legacy machine's close-out
-  run and `Final verification:` tickets are retired with it (the epic path reviews the epic in
-  `Epic Review`), and the names stay only so an `agent.run_profiles` that still sets them loads.
+  which Symphony starts itself. Neither is #{@retired_kind_names}: the legacy machine's close-out
+  run is retired with it (the epic path reviews the epic in `Epic Review`), and the name stays only
+  so an `agent.run_profiles` that still sets it loads.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -50,7 +53,6 @@ defmodule SymphonyElixir.RunKind do
           :implementation
           | :breakdown
           | :close_out
-          | :final_verification
           | :rework
           | :landing
           | :code_review
@@ -70,7 +72,6 @@ defmodule SymphonyElixir.RunKind do
     :implementation,
     :breakdown,
     :close_out,
-    :final_verification,
     :rework,
     :landing,
     :code_review,
@@ -81,7 +82,6 @@ defmodule SymphonyElixir.RunKind do
     :qa
   ]
 
-  @final_verification_prefix "Final verification:"
   @landing_state "merging"
   @rework_state "rework"
   @code_review_state "code review"
@@ -104,17 +104,6 @@ defmodule SymphonyElixir.RunKind do
   @doc "Every run kind as the string used for `agent.run_profiles` keys."
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
-
-  @doc "The title prefix of a `Final verification:` ticket, which the Director signs off."
-  @spec final_verification_prefix() :: String.t()
-  def final_verification_prefix, do: @final_verification_prefix
-
-  @doc "True when `title` starts with `final_verification_prefix/0`."
-  @spec final_verification_title?(String.t() | nil) :: boolean()
-  def final_verification_title?(title) when is_binary(title),
-    do: title |> String.trim_leading() |> String.starts_with?(@final_verification_prefix)
-
-  def final_verification_title?(_title), do: false
 
   @doc """
   A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.
