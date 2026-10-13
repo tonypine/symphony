@@ -157,12 +157,13 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
       assert Orchestrator.should_dispatch_issue_for_test(issue(@designed_repo, "In Progress"), state)
     end
 
-    test "still advances a legacy repo's quiet run" do
+    test "never advances a legacy repo's quiet run either" do
       quiet = %{pull_request_url: "https://github.com/acme/symphony/pull/9"}
 
       state = %Orchestrator.State{completed_run_metadata: %{@issue_id => quiet}}
 
-      refute Orchestrator.should_dispatch_issue_for_test(issue(@legacy_repo, "In Progress"), state)
+      # Quiet is never done: the ticket stays dispatchable so its run is retried.
+      assert Orchestrator.should_dispatch_issue_for_test(issue(@legacy_repo, "In Progress"), state)
     end
   end
 end
