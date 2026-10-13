@@ -126,7 +126,7 @@ defmodule SymphonyElixir.Learnings.Feed do
       pr_number: Map.get(record, :evidence_pr_number),
       pr_url: pr_url(record),
       run_id: Map.get(record, :evidence_run_id),
-      created_at: record.created_at |> DateTime.to_iso8601()
+      created_at: record.created_at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
   end
 end

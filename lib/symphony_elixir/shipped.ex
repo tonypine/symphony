@@ -113,12 +113,15 @@ defmodule SymphonyElixir.Shipped do
       repo_key: repo_key,
       initiative: initiative(run, context.initiatives),
       pr_url: Enum.find_value(runs, &URLUtils.pull_request_url/1),
-      merged_at: DateTime.to_iso8601(merged_at),
+      merged_at: iso8601(merged_at),
       date: merged_at |> context.local_date.() |> Date.to_iso8601(),
-      todo_at: todo_at && DateTime.to_iso8601(todo_at),
+      todo_at: todo_at && iso8601(todo_at),
       todo_to_done_seconds: todo_at && max(DateTime.diff(merged_at, todo_at), 0)
     }
   end
+
+  # Whole seconds, as Symphony writes its other timestamps.
+  defp iso8601(%DateTime{} = at), do: at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
   defp initiative(%{initiative: %{} = initiative}, _initiatives),
     do: %{identifier: Map.get(initiative, :identifier), title: Map.get(initiative, :title)}

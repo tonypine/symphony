@@ -1,0 +1,360 @@
+{
+  "days": 14,
+  "from": "2026-09-24",
+  "to": "2026-10-07",
+  "total": 22,
+  "shipped_per_day": [
+    {
+      "date": "2026-09-24",
+      "shipped": 1
+    },
+    {
+      "date": "2026-09-25",
+      "shipped": 1
+    },
+    {
+      "date": "2026-09-26",
+      "shipped": 1
+    },
+    {
+      "date": "2026-09-27",
+      "shipped": 2
+    },
+    {
+      "date": "2026-09-28",
+      "shipped": 1
+    },
+    {
+      "date": "2026-09-29",
+      "shipped": 1
+    },
+    {
+      "date": "2026-09-30",
+      "shipped": 1
+    },
+    {
+      "date": "2026-10-01",
+      "shipped": 2
+    },
+    {
+      "date": "2026-10-02",
+      "shipped": 2
+    },
+    {
+      "date": "2026-10-03",
+      "shipped": 1
+    },
+    {
+      "date": "2026-10-04",
+      "shipped": 3
+    },
+    {
+      "date": "2026-10-05",
+      "shipped": 1
+    },
+    {
+      "date": "2026-10-06",
+      "shipped": 2
+    },
+    {
+      "date": "2026-10-07",
+      "shipped": 3
+    }
+  ],
+  "tickets": [
+    {
+      "issue_id": "i-288",
+      "identifier": "SHOP-288",
+      "title": "Gift card balance on the cart",
+      "repo_key": "web-shop",
+      "initiative": {
+        "identifier": "SHOP-300",
+        "title": "Gift cards"
+      },
+      "pr_url": "https://github.com/acme/web-shop/pull/912",
+      "merged_at": "2026-10-07T13:40:00Z",
+      "date": "2026-10-07",
+      "todo_at": "2026-10-07T09:20:00Z",
+      "todo_to_done_seconds": 15600
+    },
+    {
+      "issue_id": "i-125",
+      "identifier": "API-125",
+      "title": "Idempotency keys",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/341",
+      "merged_at": "2026-10-07T12:02:00Z",
+      "date": "2026-10-07",
+      "todo_at": "2026-10-06T08:02:00Z",
+      "todo_to_done_seconds": 100800
+    },
+    {
+      "issue_id": "i-287",
+      "identifier": "SHOP-287",
+      "title": "Redeem a gift card at checkout",
+      "repo_key": "web-shop",
+      "initiative": {
+        "identifier": "SHOP-300",
+        "title": "Gift cards"
+      },
+      "pr_url": "https://github.com/acme/web-shop/pull/909",
+      "merged_at": "2026-10-07T09:15:00Z",
+      "date": "2026-10-07",
+      "todo_at": "2026-10-05T08:15:00Z",
+      "todo_to_done_seconds": 176400
+    },
+    {
+      "issue_id": "i-124",
+      "identifier": "API-124",
+      "title": "Per-key request limits",
+      "repo_key": "api",
+      "initiative": {
+        "identifier": "API-120",
+        "title": "Rate limits"
+      },
+      "pr_url": "https://github.com/acme/api/pull/339",
+      "merged_at": "2026-10-06T16:30:00Z",
+      "date": "2026-10-06",
+      "todo_at": "2026-10-06T07:30:00Z",
+      "todo_to_done_seconds": 32400
+    },
+    {
+      "issue_id": "i-286",
+      "identifier": "SHOP-286",
+      "title": "Gift card emails",
+      "repo_key": "web-shop",
+      "initiative": {
+        "identifier": "SHOP-300",
+        "title": "Gift cards"
+      },
+      "pr_url": "https://github.com/acme/web-shop/pull/905",
+      "merged_at": "2026-10-06T11:05:00Z",
+      "date": "2026-10-06",
+      "todo_at": "2026-10-05T08:35:00Z",
+      "todo_to_done_seconds": 95400
+    },
+    {
+      "issue_id": "i-123",
+      "identifier": "API-123",
+      "title": "Limit headers on every response",
+      "repo_key": "api",
+      "initiative": {
+        "identifier": "API-120",
+        "title": "Rate limits"
+      },
+      "pr_url": "https://github.com/acme/api/pull/336",
+      "merged_at": "2026-10-05T15:45:00Z",
+      "date": "2026-10-05",
+      "todo_at": "2026-10-05T10:35:00Z",
+      "todo_to_done_seconds": 18600
+    },
+    {
+      "issue_id": "i-284",
+      "identifier": "SHOP-284",
+      "title": "Gift card codes in the admin",
+      "repo_key": "web-shop",
+      "initiative": {
+        "identifier": "SHOP-300",
+        "title": "Gift cards"
+      },
+      "pr_url": "https://github.com/acme/web-shop/pull/901",
+      "merged_at": "2026-10-04T17:20:00Z",
+      "date": "2026-10-04",
+      "todo_at": "2026-10-03T10:20:00Z",
+      "todo_to_done_seconds": 111600
+    },
+    {
+      "issue_id": "i-283",
+      "identifier": "SHOP-283",
+      "title": "Fix the coupon rounding",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/899",
+      "merged_at": "2026-10-04T10:00:00Z",
+      "date": "2026-10-04",
+      "todo_at": "2026-10-04T07:20:00Z",
+      "todo_to_done_seconds": 9600
+    },
+    {
+      "issue_id": "i-122",
+      "identifier": "API-122",
+      "title": "Rate limit store in Redis",
+      "repo_key": "api",
+      "initiative": {
+        "identifier": "API-120",
+        "title": "Rate limits"
+      },
+      "pr_url": "https://github.com/acme/api/pull/333",
+      "merged_at": "2026-10-04T09:30:00Z",
+      "date": "2026-10-04",
+      "todo_at": "2026-10-01T07:30:00Z",
+      "todo_to_done_seconds": 266400
+    },
+    {
+      "issue_id": "i-121",
+      "identifier": "API-121",
+      "title": "Document the rate limits",
+      "repo_key": "api",
+      "initiative": {
+        "identifier": "API-120",
+        "title": "Rate limits"
+      },
+      "pr_url": "https://github.com/acme/api/pull/330",
+      "merged_at": "2026-10-03T14:10:00Z",
+      "date": "2026-10-03",
+      "todo_at": "2026-10-03T13:20:00Z",
+      "todo_to_done_seconds": 3000
+    },
+    {
+      "issue_id": "i-282",
+      "identifier": "SHOP-282",
+      "title": "Gift card product page",
+      "repo_key": "web-shop",
+      "initiative": {
+        "identifier": "SHOP-300",
+        "title": "Gift cards"
+      },
+      "pr_url": "https://github.com/acme/web-shop/pull/896",
+      "merged_at": "2026-10-02T18:00:00Z",
+      "date": "2026-10-02",
+      "todo_at": "2026-10-01T22:00:00Z",
+      "todo_to_done_seconds": 72000
+    },
+    {
+      "issue_id": "i-281",
+      "identifier": "SHOP-281",
+      "title": "Gift card data model",
+      "repo_key": "web-shop",
+      "initiative": {
+        "identifier": "SHOP-300",
+        "title": "Gift cards"
+      },
+      "pr_url": "https://github.com/acme/web-shop/pull/893",
+      "merged_at": "2026-10-02T12:40:00Z",
+      "date": "2026-10-02",
+      "todo_at": "2026-10-01T06:40:00Z",
+      "todo_to_done_seconds": 108000
+    },
+    {
+      "issue_id": "i-119",
+      "identifier": "API-119",
+      "title": "Faster order search",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/327",
+      "merged_at": "2026-10-01T16:00:00Z",
+      "date": "2026-10-01",
+      "todo_at": "2026-10-01T09:00:00Z",
+      "todo_to_done_seconds": 25200
+    },
+    {
+      "issue_id": "i-279",
+      "identifier": "SHOP-279",
+      "title": "Cart badge alignment",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/889",
+      "merged_at": "2026-10-01T10:20:00Z",
+      "date": "2026-10-01",
+      "todo_at": "2026-10-01T08:50:00Z",
+      "todo_to_done_seconds": 5400
+    },
+    {
+      "issue_id": "i-118",
+      "identifier": "API-118",
+      "title": "Webhook retries",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/324",
+      "merged_at": "2026-09-30T15:00:00Z",
+      "date": "2026-09-30",
+      "todo_at": "2026-09-29T13:00:00Z",
+      "todo_to_done_seconds": 93600
+    },
+    {
+      "issue_id": "i-278",
+      "identifier": "SHOP-278",
+      "title": "Address autocomplete keyboard",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/886",
+      "merged_at": "2026-09-29T13:30:00Z",
+      "date": "2026-09-29",
+      "todo_at": "2026-09-29T04:30:00Z",
+      "todo_to_done_seconds": 32400
+    },
+    {
+      "issue_id": "i-117",
+      "identifier": "API-117",
+      "title": "Pagination cursors",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/320",
+      "merged_at": "2026-09-28T11:00:00Z",
+      "date": "2026-09-28",
+      "todo_at": "2026-09-26T11:00:00Z",
+      "todo_to_done_seconds": 172800
+    },
+    {
+      "issue_id": "i-276",
+      "identifier": "SHOP-276",
+      "title": "Shipping estimate on the cart",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/882",
+      "merged_at": "2026-09-27T16:45:00Z",
+      "date": "2026-09-27",
+      "todo_at": "2026-09-27T10:45:00Z",
+      "todo_to_done_seconds": 21600
+    },
+    {
+      "issue_id": "i-275",
+      "identifier": "SHOP-275",
+      "title": "Promo code error message",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/880",
+      "merged_at": "2026-09-27T09:10:00Z",
+      "date": "2026-09-27",
+      "todo_at": "2026-09-27T04:10:00Z",
+      "todo_to_done_seconds": 18000
+    },
+    {
+      "issue_id": "i-116",
+      "identifier": "API-116",
+      "title": "Health check endpoint",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/316",
+      "merged_at": "2026-09-26T14:00:00Z",
+      "date": "2026-09-26",
+      "todo_at": "2026-09-26T13:20:00Z",
+      "todo_to_done_seconds": 2400
+    },
+    {
+      "issue_id": "i-273",
+      "identifier": "SHOP-273",
+      "title": "Wishlist share link",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/877",
+      "merged_at": "2026-09-25T17:30:00Z",
+      "date": "2026-09-25",
+      "todo_at": "2026-09-24T11:30:00Z",
+      "todo_to_done_seconds": 108000
+    },
+    {
+      "issue_id": "i-115",
+      "identifier": "API-115",
+      "title": "Order export to CSV",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/313",
+      "merged_at": "2026-09-24T10:15:00Z",
+      "date": "2026-09-24",
+      "todo_at": "2026-09-23T12:15:00Z",
+      "todo_to_done_seconds": 79200
+    }
+  ]
+}

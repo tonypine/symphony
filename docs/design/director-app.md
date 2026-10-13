@@ -142,6 +142,11 @@ Done when:
 > As the Director, at the end of a day or a week, I want to see what shipped, grouped by initiative, what the crew
 > learned, and the audit record, so that I can report progress and spot patterns.
 
+Built by [TP-784](https://linear.app/tonypine/issue/TP-784/show-what-shipped-and-what-the-crew-learned-in-the-symphony-window)
+(Shipped and Learnings, D9) and
+[TP-785](https://linear.app/tonypine/issue/TP-785/browse-verify-and-export-the-audit-record-in-the-symphony-window) (Audit,
+D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
+
 ## 4. Journeys
 
 ### J1. Clear the inbox (US1, US2)
