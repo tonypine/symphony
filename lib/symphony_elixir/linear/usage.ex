@@ -2,7 +2,7 @@ defmodule SymphonyElixir.Linear.Usage do
   @moduledoc """
   Counts Linear requests per caller, and per query, over a rolling hour.
 
-  Polling, the CI and PR review pollers, Auto Review, post-PR transitions and
+  Polling, the CI and PR review pollers, post-PR transitions and
   every agent's Linear tool calls share one API key and its hourly budget.
   `SymphonyElixir.Linear.Client.graphql/3` calls `record/1` for each request it
   sends, with the GraphQL operation name, attributed to the calling process's tag (`put_caller/1`,

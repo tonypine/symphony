@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.QaDriver do
   @moduledoc """
-  Host-side driver behind the Auto Review `qa_*` tools for the `macos_app` playbook.
+  Host-side driver behind the QA `qa_*` tools for the `macos_app` playbook.
 
   The QA agent runs sandboxed and cannot build Swift, launch GUI apps or read the
   screen, so Symphony does those few things for it on the host, one driver per QA
@@ -1031,7 +1031,7 @@ defmodule SymphonyElixir.QaDriver do
       "qa_permission_missing",
       "#{holder} has no #{grant} permission, so QA cannot see the app. " <>
         "#{Checks.blocked_hint()} An operator grants Screen Recording and Accessibility to #{grantee} " <>
-        "once in System Settings > Privacy & Security (see docs/configuration.md, Auto Review macOS app QA)."
+        "once in System Settings > Privacy & Security (see docs/configuration.md, macOS app QA)."
     )
   end
 
@@ -1187,7 +1187,7 @@ defmodule SymphonyElixir.QaDriver do
           config,
           "qa_worker_unsafe",
           "The QA host #{worker_host} #{problems}. QA must not run where PR code can reach push credentials. " <>
-            "#{Checks.blocked_hint()} An operator fixes the QA host (see docs/configuration.md, Auto Review macOS app QA)."
+            "#{Checks.blocked_hint()} An operator fixes the QA host (see docs/configuration.md, macOS app QA)."
         )
 
       {:error, {:unreachable, reason}} ->

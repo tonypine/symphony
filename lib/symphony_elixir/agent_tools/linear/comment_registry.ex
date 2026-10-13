@@ -7,9 +7,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   # documents it created (so it may edit them before Linear lists their attachments, and stays
   # under the cap), and
   # whether it asked a person for something (so its issue waits for that person in the Human Review
-  # state), the comments of its that hold a `## Supervisor check` (so a ticket with no PR may still
-  # go to `In Review` with Auto Review on), and whether it opened a PR (so that move is refused
-  # before Linear's GitHub integration lists the PR among the issue's attachments).
+  # state), the comments of its that hold a `## Supervisor check`, and whether it opened a PR.
 
   use Agent
 

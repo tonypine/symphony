@@ -137,7 +137,6 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         guard model != nil else { return }
         self.status = status
         if !ReposList.isAnswering(status) { poll = nil }
-        model?.addRepo?.gateAgreement?.state = state
         model?.canStart = canStart()
         showDisplay()
         guard ReposList.isAnswering(status), !inFlight else { return }
@@ -180,16 +179,6 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         )
         model.selection = next.selection
         model.pendingSelection = next.pending
-    }
-
-    /// Symphony's state while it answers, for the Edit sheet's gate stats.
-    private var state: StateSnapshot? {
-        switch status {
-        case let .running(snapshot, _), let .paused(snapshot, _):
-            return snapshot
-        case .stopped, .starting, .error:
-            return nil
-        }
     }
 
     // MARK: Toolbar
@@ -241,7 +230,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
     private func showSheet(editing key: String?) {
         guard let model, model.addRepo == nil else { return }
-        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, state: state) { [weak self] saved in
+        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key) { [weak self] saved in
             self?.saved(saved)
         }
         // Also on the repo, so the error is still there once the sheet is closed.

@@ -323,7 +323,7 @@ defmodule SymphonyElixir.PlaybookTest do
                "in the review brief or in its own comment, then move the ticket to `In Review`."
 
     assert prompt =~ "  ## Supervisor check\n\n  **Verify:** <what must hold, and on which commit or build>"
-    assert flat =~ "with no PR (the work is already on the default branch), the move to `In Review` is allowed once the block is posted"
+    refute flat =~ "Auto Review"
     assert flat =~ "When a manual check could be an automated test, write the test instead of asking anyone to check by hand."
 
     # TP-612: work already on main becomes a decision or a supervisor check, never steps.

@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.QaAndroid.Driver do
   @moduledoc """
-  Host-side driver behind the Auto Review `qa_android_*` tools for the
+  Host-side driver behind the QA `qa_android_*` tools for the
   `android_app` playbook, one per QA pass.
 
   The QA agent builds the APK in its own sandbox with the playbook's `build`

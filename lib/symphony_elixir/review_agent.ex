@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   require Logger
 
-  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, PromptSafety, SSH}
+  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.Context
@@ -457,7 +457,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
-      prompt = reviewer_prompt(issue, source)
+      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push))
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
 
@@ -478,7 +478,7 @@ defmodule SymphonyElixir.ReviewAgent do
           turn_opts =
             reviewer_turn_opts(opts, reviewer_settings, on_message, linear_comment_registry: Keyword.get(opts, :linear_comment_registry))
 
-          with {:ok, verdict} <- run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts),
+          with {:ok, verdict} <- review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts),
                {:ok, checked} <- self_check(agent_module, session, issue, verdict, message_collector, turn_opts) do
             ground_findings(agent_module, session, issue, checked, source, message_collector, turn_opts)
           end
@@ -514,6 +514,32 @@ defmodule SymphonyElixir.ReviewAgent do
       {:error, reason} ->
         {:error, classify_review_turn_failure(reason)}
     end
+  end
+
+  # A long tool-using review can end in prose instead of the JSON verdict. The same session gets
+  # one short turn asking for the verdict alone before the run counts as inconclusive, so the
+  # review it already did is kept.
+  defp review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts) do
+    case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
+      {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, _reason}}} = malformed ->
+        nudge_opts = Keyword.put(turn_opts, :max_iterations, @self_check_max_iterations)
+
+        case run_review_turn(agent_module, session, json_nudge_prompt(), issue, message_collector, nudge_opts) do
+          {:ok, _verdict} = ok -> ok
+          {:error, {:model_api_unreachable, _info}} = unreachable -> unreachable
+          {:error, _reason} -> malformed
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp json_nudge_prompt do
+    """
+    #{ProjectGuides.output_contract_marker()}
+    Return only the JSON verdict for the review you just did: one JSON object in the shape the review prompt asked for, with no other text.
+    """
   end
 
   defp classify_review_turn_result({:ok, _result} = ok), do: ok
@@ -600,6 +626,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp requote_prompt(result, %{failures: failures}) do
     """
+    #{ProjectGuides.output_contract_marker()}
     Symphony could not find the quoted snippet of these findings in the diff or the changed files:
 
     #{Enum.map_join(failures, "\n\n", &requote_failure/1)}
@@ -636,6 +663,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp self_check_prompt(result) do
     """
+    #{ProjectGuides.output_contract_marker()}
     For each finding, paste the exact lines from the diff or file that prove it (use the read-only tools if necessary). If you cannot paste the lines, retract the finding by removing it from `findings`. Return the corrected JSON object.
 
     Previous JSON:
@@ -682,9 +710,10 @@ defmodule SymphonyElixir.ReviewAgent do
   defp agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
   defp agent_module(other), do: {:error, {:unsupported_review_agent_kind, other}}
 
-  # The pre-push reviewer covers code quality and bugs only. Acceptance criteria, ticket scope and
-  # overlap with other open PRs belong to the acceptance gate (`docs/acceptance_gate.md`).
-  defp reviewer_prompt(issue, source) do
+  # The pre-push reviewer covers code quality and bugs only. Code Review (`review_scope:
+  # :code_review`, `SymphonyElixir.CodeReview`) judges the same diff on the pull request, and there
+  # the ticket's acceptance criteria, scope and intent are part of the judgment.
+  defp reviewer_prompt(issue, source, scope) do
     """
     You are the reviewer agent in an executor + reviewer Symphony run.
 
@@ -701,7 +730,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - Error handling: errors are handled or returned, not swallowed, and failures leave no half-done state.
     - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
 
-    Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff does not touch: the acceptance gate checks that after CI and QA.
+    #{ticket_judgment(scope)}
 
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}
@@ -713,6 +742,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - If you are uncertain, prefer `approve` or `request_changes` (with concrete diffs) over `block`.
     - Do not fabricate function or module names. If you cannot grep for the symbol you intend to cite, do not cite it.
 
+    #{ProjectGuides.output_contract_marker()}
     Return ONLY one JSON object in this shape:
     {
       "verdict": "approve" | "request_changes" | "block",
@@ -727,7 +757,19 @@ defmodule SymphonyElixir.ReviewAgent do
       ],
       "reason": "<required for block>"
     }
+
+    Your final message must be only this JSON object, with no prose before or after it.
     """
+  end
+
+  defp ticket_judgment(:code_review) do
+    "This is the pull request's Code Review, so also judge the change against the ticket: check that the diff meets each of the ticket's acceptance criteria " <>
+      "and stays within its scope and intent. Request changes for an unmet criterion or for work outside the ticket, naming the criterion or the out-of-scope change."
+  end
+
+  defp ticket_judgment(_pre_push) do
+    "Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff " <>
+      "does not touch: Code Review checks that on the pull request."
   end
 
   defp present_issue(%Issue{} = issue) do

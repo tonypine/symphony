@@ -11,7 +11,6 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
-    AutoReview.ParentWalkthrough,
     CiFix,
     CiPoller,
     CodeReview,
@@ -128,7 +127,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # The orchestrator holds the provider's runs until the limit resets instead of failing the run;
   # it does the same, until a probe gets through, for a model API the agent couldn't reach.
-  # A parent walkthrough's QA agent reports either one as `{:usage_limited, info}`.
+  # An epic review's QA agent reports either one as `{:usage_limited, info}`.
   defp provider_hold_reason({:usage_limited, %{} = info}) do
     if UsageLimit.api_unreachable?(info), do: {:model_api_unreachable, info}, else: {:usage_limited, info}
   end
@@ -581,9 +580,7 @@ defmodule SymphonyElixir.AgentRunner do
   # A designed repo's `Code Review` ticket is reviewed rather than executed
   # (`SymphonyElixir.CodeReview`), its `QA` ticket verified rather than executed
   # (`SymphonyElixir.QaVerification`), and its epic parent reviewed once its sub-tickets are
-  # terminal (`SymphonyElixir.EpicReview`); a legacy repo's `Final verification:` ticket gets the
-  # Auto Review parent walkthrough in place of executor turns when it applies
-  # (see `SymphonyElixir.AutoReview.ParentWalkthrough`). Anything else is an ordinary run.
+  # terminal (`SymphonyElixir.EpicReview`). Anything else is an ordinary run.
   defp run_issue(workspace, issue, codex_update_recipient, opts, worker_host) do
     walkthrough_opts =
       opts
@@ -604,19 +601,12 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # The epic review is machine-owned and only ever applies to a designed repo's epic parent
-  # (`SymphonyElixir.EpicReview.epic_review_run?/2`); the parent walkthrough skips the same parent on
-  # the designed path (`SymphonyElixir.AutoReview.ParentWalkthrough`), so a designed epic is never
-  # executed turn by turn and a legacy `Final verification:` ticket keeps its walkthrough.
+  # (`SymphonyElixir.EpicReview.epic_review_run?/2`), so a designed epic is never executed turn by
+  # turn.
   defp run_epic_or_parent_run(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host) do
     case Keyword.get(opts, :epic_review, EpicReview).run(issue, workspace, walkthrough_opts) do
-      :skip ->
-        case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
-          :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
-          result -> result
-        end
-
-      result ->
-        result
+      :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+      result -> result
     end
   end
 
@@ -643,7 +633,6 @@ defmodule SymphonyElixir.AgentRunner do
         |> Keyword.put(:linear_comment_registry, linear_comment_registry)
         |> put_reviewer_comments(issue)
         |> put_ci_failure(issue)
-        |> put_qa_failure(issue)
         |> put_pr_conflict(issue)
         |> put_ticket_state(issue)
 
@@ -1261,7 +1250,6 @@ defmodule SymphonyElixir.AgentRunner do
       opts
       |> put_reviewer_comments(issue)
       |> put_ci_failure(issue)
-      |> put_qa_failure(issue)
       |> put_pr_conflict(issue)
       |> put_ticket_state(issue)
 
@@ -1429,20 +1417,6 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp pending_ci_failure(_issue, _opts), do: nil
 
-  defp put_qa_failure(opts, issue) when is_list(opts) do
-    if Keyword.has_key?(opts, :qa_failure) do
-      opts
-    else
-      Keyword.put(opts, :qa_failure, pending_qa_failure(issue, opts))
-    end
-  end
-
-  defp pending_qa_failure(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    CiPoller.pending_qa_failure(issue_id, pending_lookup_opts(issue, opts))
-  end
-
-  defp pending_qa_failure(_issue, _opts), do: nil
-
   defp put_pr_conflict(opts, issue) when is_list(opts) do
     if Keyword.has_key?(opts, :pr_conflict) do
       opts
@@ -1490,7 +1464,7 @@ defmodule SymphonyElixir.AgentRunner do
         cond do
           post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
-            {:done, refreshed_issue}
+            hand_off_quiet_pr_head(issue, refreshed_issue, run_context)
 
           waiting_on_sub_issues?(refreshed_issue) ->
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
@@ -1569,6 +1543,40 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  # A designed repo advances only on the handoff signal, which the push and PR tool hooks emit. A
+  # run that finds its PR already on the workspace HEAD (an interrupted run's successor, a park and
+  # unpark) has nothing to push, so no hook fires and every successor would stop the same way. The
+  # ticket is then exactly where a signal for that head would put it, so the signal is recorded for
+  # the head and the run hands off. A HEAD or PR head that can't be read hands nothing off; the
+  # orchestrator caps those quiet runs.
+  defp hand_off_quiet_pr_head(%Issue{} = previous_issue, %Issue{} = issue, run_context) do
+    settings = Keyword.fetch!(run_context.opts, :settings)
+    pr_url = URLUtils.pull_request_url(issue) || URLUtils.pull_request_url(previous_issue)
+
+    with true <- Handoff.required?(issue.state, settings),
+         head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
+         true <- pr_url_head?(pr_url, head, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: pr_url, source: "pushed_pr_head"})
+      run_context = put_in(run_context.progress.head, head)
+
+      case move_to_post_pr_state(issue, post_pr_state(run_context), "with its PR already on its head", run_context) do
+        :ok -> {:done, issue}
+        {:error, reason} -> {:error, {:pushed_pr_head_handoff_failed, reason}}
+      end
+    else
+      _no_handoff -> {:done, issue}
+    end
+  end
+
+  defp pr_url_head?(pr_url, head, run_context) do
+    github = Keyword.get(run_context.opts, :github, PullRequest)
+
+    case github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      {:ok, %{commit_sha: ^head}} -> true
+      _other -> false
+    end
+  end
+
   # The run's work is on its PR once the workspace HEAD is the PR head and that head has passed the
   # pre-push reviewer, when the reviewer applies to the run. A commit the run has not pushed, or
   # pushed without a review, keeps the run going: the next turn runs the reviewer and the agent
@@ -1608,7 +1616,6 @@ defmodule SymphonyElixir.AgentRunner do
   defp no_pending_rework_signal?(%Issue{} = issue, opts) do
     pending_reviewer_comments(issue, opts) == [] and
       is_nil(pending_ci_failure(issue, opts)) and
-      is_nil(pending_qa_failure(issue, opts)) and
       is_nil(pending_pr_conflict(issue, opts))
   end
 
@@ -1677,10 +1684,10 @@ defmodule SymphonyElixir.AgentRunner do
   defp progress_fingerprint(head, issue, review_agent),
     do: {head, Map.get(issue, :state), URLUtils.pull_request_url(issue), review_agent}
 
-  # Nothing moves an issue out of `Rework` once its rework is done: the agent may not ask for
-  # `In Review` with Auto Review on, and the post-PR move skips `Rework`. The rework is done once
-  # the workspace HEAD has moved past the head the Rework started from (by this run or an earlier
-  # one), that HEAD is the attached PR's head, and no review, CI, QA or conflict signal is pending.
+  # Nothing moves an issue out of `Rework` once its rework is done: the post-PR move skips `Rework`.
+  # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
+  # this run or an earlier one), that HEAD is the attached PR's head, and no review, CI, QA or
+  # conflict signal is pending.
   defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context) when is_binary(head) do
     rework_state?(issue.state) and attached_pr?(issue) and
       head != progress.rework_base and
@@ -1754,8 +1761,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A designed repo hands its work off to `Code Review`; a legacy repo keeps the Auto Review
-  # post-PR state it always used.
+  # A designed repo hands its work off to `Code Review`; a legacy repo to `In Review`.
   defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> Handoff.target_state()
 
   # A designed repo moves an implementation handoff to `Code Review` only on the session's explicit

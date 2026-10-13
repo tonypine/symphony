@@ -3,6 +3,7 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.QaAndroid.Emulator
 
   @avd "Pixel_Test"
@@ -633,6 +634,25 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
     test "reads auto_review.android from the config", ctx do
       defaults = start_supervised!({Emulator, name: nil, pid_file: ctx.pid_file}, id: :defaults)
       capture_log(fn -> assert Emulator.checkout(defaults) == {:error, :avd_not_configured} end)
+    end
+
+    test "rejects invalid auto_review.android values with clear messages" do
+      repositories = [%{"key" => "default", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}]
+
+      for {android, expected} <- [
+            {%{"avd" => 34}, "auto_review.android.avd must be a string"},
+            {%{"avd" => "Pixel 3a; rm -rf"}, "auto_review.android.avd must be an AVD name such as Pixel_3a_API_34"},
+            {%{"sdk_root" => ["/opt"]}, "auto_review.android.sdk_root must be a string"},
+            {%{"sdk_root" => " "}, "auto_review.android.sdk_root must not be blank"},
+            {%{"boot_timeout_ms" => 0}, "auto_review.android.boot_timeout_ms must be a positive integer"},
+            {%{"idle_timeout_ms" => -1}, "auto_review.android.idle_timeout_ms must be a positive integer"},
+            {%{"boot_timeout_ms" => "slow"}, "auto_review.android.boot_timeout_ms must be a positive integer"}
+          ] do
+        assert {:error, {:invalid_symphony_config, message}} =
+                 SystemSchema.parse(%{"auto_review" => %{"android" => android}, "repositories" => repositories})
+
+        assert message =~ expected
+      end
     end
 
     test "launch/3 reports an executable it cannot start" do

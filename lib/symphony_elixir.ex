@@ -81,7 +81,6 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Repo.Fetcher,
-          SymphonyElixir.AcceptanceGate.OpenPrCache,
           SymphonyElixir.McpServer,
           {Registry, keys: :unique, name: SymphonyElixir.Repo.Registry},
           repo_supervisor_specs(system_config.repos),
@@ -100,12 +99,12 @@ defmodule SymphonyElixir.Application do
            [
              SymphonyElixir.Orchestrator,
              pr_review_child_spec(system_config),
-             qa_runner_child_spec(system_config),
              SymphonyElixir.QaAndroid.Emulator,
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
              inbox_child_spec(system_config),
+             initiatives_child_spec(system_config),
              SymphonyElixir.HttpServer,
              SymphonyElixir.StatusDashboard
            ])
@@ -194,16 +193,15 @@ defmodule SymphonyElixir.Application do
     end
   end
 
-  defp human_actions_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &SymphonyElixir.HumanActions.enabled?(Config.settings_for_repo!(&1.name))) do
-      SymphonyElixir.HumanActions
+  defp initiatives_child_spec(%SystemSchema{repos: repos}) do
+    if Enum.any?(repos, &SymphonyElixir.Inbox.enabled?(Config.settings_for_repo!(&1.name))) do
+      SymphonyElixir.Initiatives
     end
   end
 
-  # The acceptance gate runs after QA, so its runner starts with the QA runner.
-  defp qa_runner_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &(ci_enabled_for_repo?(&1) and Config.settings_for_repo!(&1.name).auto_review.enabled)) do
-      [SymphonyElixir.QaRunner, SymphonyElixir.AcceptanceGate.Runner]
+  defp human_actions_child_spec(%SystemSchema{repos: repos}) do
+    if Enum.any?(repos, &SymphonyElixir.HumanActions.enabled?(Config.settings_for_repo!(&1.name))) do
+      SymphonyElixir.HumanActions
     end
   end
 

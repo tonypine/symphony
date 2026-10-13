@@ -218,12 +218,11 @@ public enum StatusMenu {
         return snapshot.retrying > 0 ? "\(running) · \(snapshot.retrying) retrying" : running
     }
 
-    /// For example "1 QA pass", "2 acceptance gate passes" or "3 code review runs".
+    /// For example "1 QA pass", "2 QA runs" or "3 code review runs".
     static func sessionCount(_ count: Int, kind: String) -> String {
         let (singular, plural): (String, String)
         switch kind {
         case "qa_pass": (singular, plural) = ("QA pass", "QA passes")
-        case "acceptance_gate": (singular, plural) = ("acceptance gate pass", "acceptance gate passes")
         case "qa": (singular, plural) = ("QA run", "QA runs")
         default:
             let name = kind.replacingOccurrences(of: "_", with: " ")

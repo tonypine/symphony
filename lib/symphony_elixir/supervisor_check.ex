@@ -12,9 +12,7 @@ defmodule SymphonyElixir.SupervisorCheck do
       **How:** run the host crash check on the macOS app at `main`, open Companies, open a company.
       **Pass when:** no crash report, and the toolbar sits in the page header.
 
-  It may stand alone in a comment or sit inside the review brief. A ticket with no pull request
-  (its work already on the default branch) whose run left one may move to `In Review` with Auto
-  Review on: there is no PR for Auto Review to test.
+  It may stand alone in a comment or sit inside the review brief.
   """
 
   @heading "## Supervisor check"

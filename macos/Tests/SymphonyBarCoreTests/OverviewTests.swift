@@ -19,7 +19,7 @@ final class OverviewTests: XCTestCase {
         XCTAssertFalse(overview.showsResume)
         XCTAssertFalse(overview.showsAllCaughtUp)
 
-        XCTAssertEqual(overview.stages.map(\.title), ["Queued", "Working", "Auto Review", "Waiting on you", "Merging", "Shipped today"])
+        XCTAssertEqual(overview.stages.map(\.title), ["Queued", "Working", "Code Review & QA", "Waiting on you", "Merging", "Shipped today"])
         XCTAssertEqual(overview.stages.map(\.count), [2, 2, 2, 2, 2, 3])
         XCTAssertEqual(overview.stages.map(\.context), [
             "next: SHOP-320", "longest 22 min", "1 QA pass running", "oldest 3 h 12 min", "1 landing", "latest SHOP-288",

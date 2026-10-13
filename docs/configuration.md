@@ -71,7 +71,7 @@ blocks the parent's final verification, with a `## User walkthrough` for the new
 
 CI enforces it. `mix settings.ui_coverage`, part of `mix lint` (so of `make all` and the `lint`
 job), lists every setting as a dotted key path from the config schema
-(`SystemSchema.operator_key_paths/0`), such as `auto_review.acceptance_gate.mode` or
+(`SystemSchema.operator_key_paths/0`), such as `auto_review.playbooks` or
 `repositories[].route.team` for a key of every repository. It fails, naming each key, when a key is
 in neither of these:
 
@@ -88,9 +88,7 @@ in neither of these:
 
 Only a person can exempt a setting. The exemption file is an agent-protected path: the agent
 sandbox denies writing it, and the `protected paths` check fails a Symphony PR whose own commits
-change it until a person other than the author adds the `protected-paths-approved` label. The
-acceptance gate's `:settings_ui` rule also sends a PR to a person when it adds a field to the config
-schema without changing the manifest (see `docs/acceptance_gate.md`).
+change it until a person other than the author adds the `protected-paths-approved` label.
 
 To add a setting: add its control to the app, list its key in the manifest, and extend the line
 editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
@@ -148,8 +146,7 @@ issues:
   a plan ticket whose sub-tickets are all terminal. Any other ticket whose PR merges with a
   sub-ticket still open outside `Backlog` moves here instead of `Done`; Symphony moves it to `Done`
   itself, with no run and a comment listing how each sub-ticket ended, once every sub-ticket outside
-  `Backlog` is terminal; one a person moves here waits for them. `Backlog` sub-tickets (the
-  acceptance gate's follow-ups) stay there for a person to promote and hold nothing: with only those
+  `Backlog` is terminal; one a person moves here waits for them. `Backlog` sub-tickets stay there for a person to promote and hold nothing: with only those
   open the ticket goes to `Done` on merge. With the state off it
   goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
@@ -199,26 +196,15 @@ issues:
   plan) or `Done` (sign off a final verification). It is the one way to say a person needs to act:
   no label says it (the `human-action` label is retired, see `human_actions`). Symphony puts a
   ticket there instead of `In Review` when:
-  - Auto Review QA is `blocked` and the QA agent says only a person can clear it
-    (`needs_person`: a missing secret or key, a check by hand or on a device); a block the
-    factory can fix (a tool missing on the QA host, a dev server that fails) still goes to
-    `In Review`;
-  - a `Final verification:` parent walkthrough passes, or is blocked with no failing step, and the
-    QA agent says the checks left are manual;
   - an agent moves a plan ticket to `In Review` and its ticket says a human reviews the plan:
-    an `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
+    an `escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
     "human review"; naming the `Human Review` state doesn't count, see
     [What escalates](acceptance_gate.md#what-escalates)), or a description in which its author
     says they review it ("I only want to review and validate the artifacts", "we'll approve the
     plan");
   - an agent posts a `linear_request_human_action` request: the tool moves the ticket there, and
-    the run's later move to `Backlog` or `In Review` lands there too;
-  - the acceptance gate, in `enforce` mode, escalates for a reason only a person can clear: the
-    ticket waits on a person (`human_action`) or carries an `escalate.labels` label. Escalations
-    the supervisor can judge (`path`, `diff_pattern`, `ticket_pattern`, a rework past its fix
-    attempts, ...) stay in `In Review`. The gate never approves a ticket in `Human Review` or with
-    an open action request.
+    the run's later move to `Backlog` or `In Review` lands there too.
 
   The dashboard, `/api/v1/state` (`counts.human_review` and a `human_review` list of the watched
   tickets in it) show how many tickets wait there, and the human-action update lists them first.
@@ -299,7 +285,7 @@ repositories:
     never reach a run. Symphony reads the ref at startup, again on every dispatch after the
     pre-dispatch `git fetch origin` (it fetches the checkout itself when
     `fetch_before_dispatch` is on and the checkout is not the worktree source it already
-    fetched), and before every Auto Review QA pass, after the same fetch. The committed file is copied to `<state root>/workflows/<key>/`.
+    fetched). The committed file is copied to `<state root>/workflows/<key>/`.
     A workflow whose body is `{% render "playbook" %}` takes its instruction files from the same
     ref, and the copy holds the expanded text (see [playbook](playbook.md#the-whole-playbook-in-one-line)). If the file is
     missing or invalid on the ref, Symphony logs an error and keeps the last good workflow, and
@@ -322,9 +308,10 @@ repositories:
 - `agent`: per-repo `provider`, `model`, `effort` and `run_profiles` for issues routed to this
   repo. They take the same values as the `agent` keys and win over them field by field; see
   **Run profiles** under `agent`. Errors name the key, e.g. `repositories[web].agent.effort`.
-- `acceptance_gate`: per-repo acceptance gate `mode`, `max_turns`, `timeout_ms` and `escalate`
-  rules. The mode and numbers replace the global `auto_review.acceptance_gate` ones; lists add to
-  them. See [`docs/acceptance_gate.md`](acceptance_gate.md).
+- `acceptance_gate`: deprecated with the retired acceptance gate (see
+  [`auto_review`](#the-retired-acceptance-gates-escalation-rules)). Its `escalate` rules add to the
+  global ones and feed this repo's Code Review; its `mode` sets `manual_review` when that is unset;
+  `max_turns` and `timeout_ms` do nothing.
 - `state_machine`: the ticket state-machine version this repo runs, `legacy` (the default) or
   `designed`. `legacy` is today's flow: dispatch from `states.active`, the legacy transition guard,
   and the legacy status-map prompt. `designed` moves this repo alone onto the designed machine of
@@ -339,10 +326,13 @@ repositories:
   a State machine picker. A `designed` repo reviews its work through the designed `Code Review`
   state, so it needs the reviewer on: with `review_agent.enabled` off, its `Code Review` tickets are
   parked (a `code_review_reviewer_disabled` signal is recorded) instead of being dispatched. A
-  `Code Review` run also reads the repo's `auto_review.acceptance_gate.escalate` rules: a diff
-  matching one of the risk rules (`paths`, `diff_patterns`, `max_changed_lines`) deepens the review
-  rather than routing it — the run takes a second reviewer pass on the same head, records the
-  verdict bound to it and moves nothing, and the next dispatch performs that verdict. See
+  `Code Review` run also reads the repo's `auto_review.acceptance_gate.escalate` rules on an
+  approval: a person rule (`labels`, `ticket_patterns`) pauses the ticket on a **Needs Decision**
+  hold whose confirmation continues into QA, and a risk rule (`paths`, `diff_patterns`,
+  `dependencies`, `max_changed_lines`, `busy_files`) deepens the review rather than routing it — the
+  run takes a second reviewer pass on the same head, records the verdict bound to it and moves
+  nothing, and the next dispatch performs that verdict. A reviewer block, or a review still
+  inconclusive after two retries, pauses the ticket on a Needs Decision hold too. See
   [`docs/design/state-machine.md`](design/state-machine.md).
 - `manual_review`: who decides that a verified ticket merges, `off` (the default) or `on`
   ([`docs/design/state-machine.md`](design/state-machine.md), **Manual review**). It controls
@@ -587,7 +577,7 @@ agent:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
   `settings.gradle.kts` at the workspace root) starts with
   `GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=<workspace>/.gradle-daemons"`, so its Gradle
-  daemons register in its own workspace (git ignores the folder, and the Auto Review `qa_build`
+  daemons register in its own workspace (git ignores the folder, and the QA `qa_build`
   clean check skips it) rather than in
   `~/.gradle/daemon`, where a daemon started in one agent's sandbox would serve, and fail, builds
   in another workspace. A daemon's working folder is in that registry, so the run's end stops it
@@ -695,8 +685,10 @@ agent:
   (a designed repo's plan ticket whose sub-issues are all terminal: the epic review), `breakdown` (other
   plan ticket: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
-  PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
-  `acceptance_gate` name the pre-push reviewer, QA agent and acceptance gate runs.
+  PR review comments), and `implementation` (everything else); a designed repo also has `code_review`
+  (`Code Review`) and `qa` (`QA`). `pre_push_review` names the pre-push reviewer run, and `qa` the QA
+  agent's runs. `acceptance_gate` is deprecated with the retired gate: it loads with a warning and
+  does nothing.
 - Resolution per field, for the repository the issue is routed to:
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
   `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
@@ -754,8 +746,7 @@ agent:
 - `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
   `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
-  of these is free. Auto Review QA passes are capped by it too, on top of
-  `auto_review.max_concurrent`. Values below `1` fail `symphony check`.
+  of these is free. Values below `1` fail `symphony check`.
 - `concurrency.force_label` (default: `expedite`) is the label a human puts on a ticket to have it
   worked now, through to Done (matched case-insensitively). Symphony records when a poll first
   sees a ticket in an active state (`tracker.active_states`) carry it (`forced_since`, kept across
@@ -763,8 +754,8 @@ agent:
   moves into an active state. Once queued it stays listed in any non-terminal state (`In Review`,
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
   queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
-  `review_feedback`, `ci_fix`, `waiting_on_ci`, `auto_review`, `waiting_for_human`, `landing`,
-  `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent or QA pass is `running` for it,
+  `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
+  `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
@@ -784,12 +775,11 @@ agent:
   `forced_max` forced runs are going it starts even when `max_total`, the epic lanes,
   `finishing_max`, `max_by_issue_state` are full or a finish is waiting, at the next poll. This
   covers every phase: implementation, `Rework`, CI-fix and review-feedback continuations and
-  landing, an Auto Review QA pass (see QA passes below) and a `Final verification:` parent
-  walkthrough. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
+  landing, a designed repo's `Code Review`, `QA` and epic review runs, and a `Final verification:`
+  ticket. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
   agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
-  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it;
-  so does its Auto Review QA pass on the allowance.
+  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
   A forced ticket past `forced_max` gets no extra slot: it still goes first for a
   normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
   warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
@@ -804,8 +794,7 @@ agent:
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
   blocked-by links keep their order; the `Final verification:` sub-ticket comes last) counts as
   forced in the parent's place in the queue, without the label being written on it. It keeps that
-  until it leaves the path or stops running or waiting on a retry; a sub-ticket in Auto Review is
-  the part too, so its QA pass is forced. The other sub-tickets use normal slots and the epic lane.
+  until it leaves the path or stops running or waiting on a retry. The other sub-tickets use normal slots and the epic lane.
   `/api/v1/state` shows it as the parent's `forced[].sub_issue`. Forcing never approves a plan: a
   forced parent in `In Review` stays there, shown with
   `forced[].waiting_on_human: true` (as is any forced ticket in `Backlog`, `Triage` or `In Review`).
@@ -814,13 +803,11 @@ agent:
   it counts as stale: `/api/v1/state` marks it `stale: true`, the dashboards flag it, and Symphony
   logs a warning and sends one `forced_stale` notification (once per forced ticket, also across
   restarts). Values below `1` fail `symphony check`.
-- Dispatch goes forced tickets first, then closest to done: `Merging`, Auto Review, `Rework`,
+- Dispatch goes forced tickets first, then closest to done: `Merging`, `Rework`,
   resumes such as `In Progress`, then `Todo`; priority and age only break ties within a stage.
-  While a `Merging` ticket waits for a finishing slot, or a QA pass is queued because
-  `finishing_max` is below `auto_review.max_concurrent`, no `Todo` ticket starts; `Rework`,
+  While a `Merging` ticket waits for a finishing slot no `Todo` ticket starts; `Rework`,
   resumes and a forced ticket on the forced allowance still do, and the held ticket's reason names
-  what it waits for (`QA pass for MT-3 is waiting for a finishing slot`). A QA pass queued on
-  `auto_review.max_concurrent` doesn't hold `Todo` tickets back. A ticket that finds no free slot
+  what it waits for (`MT-2 (Merging) is waiting for a finishing slot`). A ticket that finds no free slot
   is not retried with backoff: it keeps its
   attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
   dashboard and `/api/v1/state` show the landing runs (`finishing`) and what is waiting for a slot
@@ -872,8 +859,8 @@ agent:
   no reset time is known (neither in the rejection nor remembered for that window). It also caps
   the wait between probes while Claude or Codex can't reach its API (a network or DNS outage): that hold
   starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
-  failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA or
-  acceptance-gate pass that finds the outage again keeps the backoff.
+  failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA run
+  that finds the outage again keeps the backoff.
 - At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
   it, the other held runs follow; if it hits the limit again, the hold starts over from the new
   reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
@@ -901,7 +888,8 @@ agent:
 **Project guides:**
 
 - `prompts.include_project_guides` defaults to `true`. Set it to `false` to omit the injected
-  `## Project conventions` prompt section.
+  `## Project conventions` prompt section. A prompt that ends in an output contract, such as the
+  reviewer's JSON verdict, gets the section above that contract, so the contract stays last.
 - `prompts.project_guide_files: null` uses the runner default: `["CLAUDE.md"]` for Claude, `[]`
   for Codex. Codex keeps relying on native workspace `AGENTS.md` discovery unless an explicit list
   is configured.
@@ -1096,11 +1084,11 @@ pull_requests:
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
   A conflict on an issue that waits on a person (in `Human Review`, or outside
   `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
-  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
+  `escalate.labels` label other than `plan` and `breakdown`, or, while
   the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
   state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
-  or removes the label. So does one on an issue in none of the active states, the review states,
-  the Auto Review state and `Merging` (`Backlog`, say, label or not) until a person promotes it.
+  or removes the label. So does one on an issue in none of the active states, the review states
+  and `Merging` (`Backlog`, say, label or not) until a person promotes it.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
@@ -1108,13 +1096,16 @@ pull_requests:
   agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
-- `checks.max_fix_attempts` bounds automated CI rework.
+- `checks.max_fix_attempts` bounds automated CI rework. Once it is used up, a legacy repo's issue
+  moves to `In Review`, and a designed repo's stays in its phase on a **Needs Decision** hold whose
+  confirmation sends it to `Rework`. `checks.escalate_to_state` is deprecated: it loads with a
+  warning and does nothing.
 - A red head on an issue that waits on a person (in `Human Review`, or outside
   `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
-  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
+  `escalate.labels` label other than `plan` and `breakdown`, or, while
   the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
   re-run, CI-fix run, escalation or state move, and uses no fix attempt. So does one on an issue in
-  none of the active states, the review states, the Auto Review state and `Merging` (`Backlog`,
+  none of the active states, the review states and `Merging` (`Backlog`,
   say, label or not). The normal CI flow resumes once a person moves the issue on or removes the
   label, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
@@ -1149,12 +1140,6 @@ pull_requests:
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
     "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
-  - With the acceptance gate in `enforce` mode (Auto Review on), a push to a `Merging` PR that
-    changes its own diff (`git patch-id` of the diff against the merge-base) turns auto-merge off
-    and moves the ticket back to Auto Review, where the gate judges the new head; Symphony's own
-    update-branch keeps it. The conflict and CI-fix comments then say the gate's approve, not a
-    person, moves the fix back to `Merging`. The audit log (`acceptance_gate_rereview`, with the
-    old and new head) and a ticket comment record it. See `docs/acceptance_gate.md`.
   - Moving a ticket out of `Merging` to any state but `Done` (by hand in Linear, or with the
     Director's Undo) turns auto-merge off on the next poll, with a ticket comment and an
     `auto_merge_disabled` audit event (`reason: "left_merging"`), so the PR doesn't merge without
@@ -1189,8 +1174,8 @@ with none set the reviewer command is unchanged. They take the same values as `a
 When enabled, Symphony runs an executor/reviewer loop in the same workspace before push. The
 reviewer reads the committed diff for code quality and bugs: correctness, tests for new branches,
 error handling, and the repo's code rules from its `AGENTS.md` / `CLAUDE.md`. It doesn't judge the
-ticket's acceptance criteria or scope; the acceptance gate does (see
-[`acceptance_gate.md`](acceptance_gate.md#who-reviews-what)). Its prompt tells it not to run the
+ticket's acceptance criteria or scope; on a designed repo the `Code Review` run of the same reviewer
+does, on the pull request. Its prompt tells it not to run the
 test suite, coverage or Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
 locally (format, compile, lint, the tests for the changed code; Symphony's own list is in its
 `WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
@@ -1199,22 +1184,19 @@ Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rewo
 
 ### `auto_review`
 
-Optional step between the PR opening and human review. Off by default; nothing changes unless you
-enable it.
+The QA agent's settings: the agent a designed repo's `QA` state runs on a green PR head (see
+[`design/state-machine.md`](design/state-machine.md)), and its epic review runs on the base branch.
+The block keeps its name from the retired `Auto Review` state, which bundled the CI wait, a QA pass
+and the acceptance gate; that state and the gate are gone.
 
 ```yaml
 auto_review:
-  enabled: true
-  state: Auto Review
   runtime: claude
   command: claude --dangerously-skip-permissions
   model: claude-sonnet-5-5
   effort: medium
   max_turns: 20
   timeout_ms: 1800000
-  max_concurrent: 1
-  max_fix_attempts: 2
-  run_on: every_push
   skip_globs: []
   playbooks: {}
   # worker_host: qa@qa-vm.local   # optional: run macos_app QA on another macOS host
@@ -1228,17 +1210,12 @@ falling back to the `qa` run profile (the routed repository's `repositories[].ag
 as for `pre_push_review`; when `command` is not set the QA agent uses `agent.command`, which must
 then not pass the flag that `auto_review.model` / `auto_review.effort` sets.
 
-When enabled, Symphony moves an issue whose run opened a PR to `state` (default `Auto Review`)
-instead of `In Review`, and the CI poller watches it there:
-
-- red CI sends the issue back to `In Progress` through the usual CI fix loop;
-- green CI starts a QA pass on the PR head;
-- a PR that conflicts with its base and has no checks (GitHub runs no CI on it) goes to `Rework`
-  with a comment saying which branch to merge in.
-
-Agents can no longer move the issue to `In Review` or `Human Review` themselves (a plan
-or a `Final verification:` ticket, which open no PR, still can): `linear_update_state("In Review")`
-returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
+The old Auto Review keys still load, each with one deprecation warning per config naming what
+replaced it, and do nothing: `enabled`, `state` (the `QA` state's name is `issues.states.qa`),
+`max_concurrent` (QA runs take agent slots), `max_fix_attempts` (a QA fail returns the ticket to
+`Rework` on the same PR) and `run_on`. They leave the schema once the deprecation window ends. No
+ticket can enter the `Auto Review` state any more; one still sitting there is named in an error at
+startup, for a person to move it on by hand.
 
 #### QA passes
 
@@ -1277,7 +1254,7 @@ follow-up".
 
 QA never runs the test suite, `make all`, coverage or Dialyzer: a pass starts only once CI is green
 on the PR head, so the prompt and every built-in playbook tell the agent to rely on CI and to build
-only what it needs to use the change. A parent walkthrough judges a criterion that asks for tests,
+only what it needs to use the change. The epic review judges a criterion that asks for tests,
 coverage or CI to pass by CI's runs on the base branch head it tests, read with `gh run list` where
 the sandbox allows `gh`, else through GitHub's public API: green runs make the step `pass` with the
 run URLs, a failed run makes it `fail` naming the failing job and the run (so it is filed as a gap),
@@ -1318,93 +1295,14 @@ a criterion that only such a change can meet to a person, in a sub-issue or a fo
 named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
 criterion `skipped` with the follow-up ticket's identifier instead of failing the PR on it. Without
 a hand-off it is still `fail`, and a criterion a change elsewhere could meet (under `docs/`, in
-`README.md`) is never skipped this way. A parent walkthrough still fails a missing change to these
+`README.md`) is never skipped this way. The epic review still fails a missing change to these
 paths, since it tests the merged result.
-
-Symphony applies its verdict:
-
-- `pass` → `In Review`;
-- `fail` → back to `In Progress` on the same PR, with the findings in the next run's prompt; after
-  `max_fix_attempts` failures the issue goes to `In Review` instead;
-- `blocked` (the agent could not test, crashed, or gave an unreadable answer) → `In Review` with
-  the reason;
-- skipped → `In Review` with the reason.
-
-A pass whose QA agent runs into the Claude or Codex usage limit gets no verdict and no report: the
-issue stays in Auto Review, Symphony holds that provider's runs until the limit resets (as for an
-agent run, see `agent.usage_limit`), and the next green CI poll after that runs the pass again on
-the same PR head. With `agent.usage_limit.auto_pause: false` it is `blocked` instead.
-
-A `blocked` the QA agent didn't decide itself (it crashed, hit the usage limit with `auto_pause`
-off, or its dev server, emulator or browser didn't start) isn't kept for the PR head: when the
-issue is moved back to Auto Review on the same head, QA runs again before the acceptance gate
-judges it, after the usage limit resets if one still holds. A `blocked` verdict from the agent
-(a missing secret, a step only a person can do) is kept, and goes to the gate or human review
-again as it did the first time. A `blocked` stored by an older Symphony, which didn't record who
-decided it, is told apart by its reason: one Symphony gave for an error runs again too.
 
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
-run store, which the dashboard's run history shows. `qa_passed` and `qa_failed` notifications are
-available for `notifications.channels[].events`.
-
-Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
-pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
-`agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots, so a pass
-queued on `max_concurrent` doesn't hold `Todo` tickets back; one queued because `finishing_max` is
-lower does.
-
-A forced ticket's pass (see `concurrency.force_label`, including a forced parent's current
-sub-ticket) goes to the front of the queue: while it waits, a free QA slot is kept for it. The
-slot is kept only while the ticket keeps asking: if
-no request has come for it in two CI poll intervals (it left Auto Review, or its CI went red or
-pending), other tickets take free slots again. When every QA slot is busy it starts on the forced
-allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes
-are going; such a pass takes no QA slot, counts toward `forced_max`, and is logged with
-`forced=true`. Once the label is removed (`symphony force --clear`, or the forced parent's), or the
-sub-ticket stops being the forced parent's current one, a pass on the allowance gives it back and
-goes on as a normal pass (`forced: false`), so a ticket still forced can take the allowance. A
-ticket labelled in Linear while it is in Auto Review (outside `active_states`) never joins the
-forced queue, so its pass keeps the allowance until it ends. Past `forced_max` a forced request
-waits at the front of the queue. The verdict is applied as for any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
-under `qa.running` and the waiting requests under `qa.queued`, each with `forced`.
-
-#### Parent walkthrough
-
-A parent's `Final verification:` sub-ticket gets a QA-only run instead of an executor agent. Once
-the other sub-tickets have merged and the ticket is dispatched, Symphony runs the QA agent in a
-fresh worktree at the head of `origin/<base_branch>`, with the parent as the issue under test:
-it walks the parent's acceptance criteria and `## User walkthrough` plus the verification
-ticket's checklist (plan runs copy the walkthrough under `## Auto Review: parent
-walkthrough`), and attaches its evidence to the parent. There is no PR to diff, so `qa:<kind>`
-labels on the ticket or the parent choose the playbooks, and every enabled playbook runs without
-one.
-
-- the `## Symphony QA Report` is written on the parent and on the verification ticket;
-- `pass` (or `blocked` with no failing step) → the verification ticket goes to `In Review` for a
-  human to sign off;
-- the QA agent reports each row of the verification ticket's checklist as its own step marked
-  `"checklist": true`, with `pass` or `fail` (a gap) and the evidence, and splits a row that groups
-  several IDs ("UC1 to UC8") into one step per ID. It may skip a row only for a reason it states,
-  such as a check only a person or a device the QA host lacks can do. A `pass` that reports no
-  checklist row while the ticket lists some, or skipped (or was blocked on) more than half of them,
-  is not accepted: the report says `blocked`, names the unchecked rows, and the verification ticket
-  goes to `Backlog` for a human instead of `In Review`, where it would look verified. Check the
-  rows, or move it back to `Todo` to run the walkthrough again;
-- `fail` (or `blocked` with a failing step) → each failing step (or each finding, when no step
-  failed) is filed as a `Backlog` sub-ticket of the verification ticket that names the step and
-  holds its details and evidence, the report lists them, and the verification ticket is marked
-  blocked by each one and stays in `Todo`. Symphony holds it there and runs the walkthrough again
-  once every gap is `Done` (or cancelled), with no human step. When a gap could not be filed or
-  linked, the ticket goes to `Backlog` for a human instead. There is no fix loop.
-- `blocked` in either case also lists the ticket in the parent project's human-action update
-  (see `human_actions`), with the reason and the blocked steps, since only a person can provide
-  what QA was missing.
-- a QA agent that runs into the usage limit gets no verdict and no report: the ticket keeps its
-  state and its run is held and started again once the limit resets, as for any agent run.
-
-The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
-worker, it has the `qa:skip` label, or it has no parent.
+run store, which the dashboard's run history shows. The `QA` state applies the verdict (pass →
+`Merging`, fail → `Rework`, blocked → retried, then a `Blocked` hold on a fix ticket); see
+[`design/state-machine.md`](design/state-machine.md).
 
 `playbooks` overrides playbooks per kind, and adds kinds of your own with `paths` and `prompt`:
 
@@ -1425,7 +1323,7 @@ Set `enabled: false` on a kind to turn it off.
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
 there; any other one fails the repository's workflow with an error pointing at `symphony.yml`.
-For that repository's QA passes (and parent walkthroughs), each kind is merged over
+For that repository's QA passes (and epic reviews), each kind is merged over
 `symphony.yml`'s `auto_review.playbooks` key by key, and the repository's value wins:
 
 ```yaml
@@ -1462,14 +1360,29 @@ QA selection issue_id=… issue_identifier=MOT-32 sha=… decision=run playbooks
 `not_selected` names each playbook that did not run: `not triggered` when none of its paths
 changed, otherwise the setting it is missing or `enabled: false`.
 
-#### Acceptance gate
+#### The retired acceptance gate's escalation rules
 
-`auto_review.acceptance_gate` configures the acceptance gate: its kill switch (`mode`, default
-`off`), the gate agent's run settings and the escalation rules that send a PR to a human. It is
-operator config only: a repository's `WORKFLOW.md` can't set it, and `repositories[].acceptance_gate`
-can only add rules. With `mode: shadow`, Auto Review runs a gate pass after QA, writes an advisory
-`## Symphony Acceptance Gate` comment, and moves the issue to In Review as before. Every key, the
-built-in rules and example blocks are in [`docs/acceptance_gate.md`](acceptance_gate.md).
+The acceptance gate is retired, and `auto_review.acceptance_gate` is deprecated: every key in it
+loads with a warning. Its agent settings (`runtime`, `command`, `model`, `effort`, `max_turns`,
+`timeout_ms`, `max_concurrent`), `escalate.inconclusive_limit` and
+`agent.run_profiles.acceptance_gate` do nothing. `mode` only sets a repo's `manual_review` when the
+repo sets none. Its `escalate` rules (and a `repositories[].acceptance_gate.escalate` override) are
+still read, by Code Review, until the block is removed. Each rule's new home:
+
+| Rule | Home |
+| --- | --- |
+| `labels` (an escalation label other than `plan` / `breakdown`) | Needs Decision hold on an approved Code Review |
+| `ticket_patterns` | Needs Decision hold on an approved Code Review |
+| `paths` | deepens the Code Review (a second reviewer pass on the same head) |
+| `diff_patterns` | deepens the Code Review |
+| `dependencies` | deepens the Code Review |
+| `max_changed_lines` | deepens the Code Review |
+| `busy_files` | deepens the Code Review |
+| `inconclusive_limit` | dropped: Code Review retries an inconclusive review twice, then asks a person |
+| the gate's `settings_ui` rule | dropped: CI's `mix settings.ui_coverage` fails such a PR |
+
+The built-in lists stay in force, and a configured list adds to them. See
+[`docs/acceptance_gate.md`](acceptance_gate.md) for the rules' syntax.
 
 #### Android settings
 
@@ -1630,8 +1543,7 @@ accessibility answer for 10 seconds) or writes a new crash report, and the repor
 the window size. The report's `Wide pass` step gives the window size, the screen size and the
 pages it covered. A QA screen whose usable area is under 1400×900 pt (a VM with a 1024×768 display)
 cannot run it at full size: the step says the wide pass was limited, and Symphony reports a `pass`
-from that screen as `blocked` for a person, so the acceptance gate escalates it (`qa_blocked`)
-instead of approving it. A `pass` with no `qa_resize_window` call at all is `blocked` too, with the
+from that screen as `blocked` for a person instead of passing it. A `pass` with no `qa_resize_window` call at all is `blocked` too, with the
 reason that the wide pass did not run. Give the QA VM a larger display, for example
 `tart set symphony-qa --display 1920x1200`, and restart it. The resize needs no grant beyond the
 helper's Accessibility.
@@ -1702,9 +1614,7 @@ the helper. Both are signed with the hardened runtime, so code injected with
 
 Without a grant the tools return `qa_permission_missing`. The QA agent marks the app steps
 `blocked`, still runs the steps of the other playbooks offered (`cli`, `web`) and reports each as
-`pass` or `fail`, then answers `blocked` with the missing permission as the reason. The issue goes
-to `In Review` with that reason in the QA report; in a parent walkthrough, a failing step from the
-other playbooks is filed as a gap as usual.
+`pass` or `fail`, then answers `blocked` with the missing permission as the reason, which the QA report records.
 
 ##### Running QA on a separate macOS host
 
@@ -1812,8 +1722,8 @@ ssh qa@qa-vm.local 'ls ~/.ssh; ls ~/.config/gh; git config --global credential.h
 Only `authorized_keys` (and `known_hosts`) should show, the next three should be empty, and the
 last command should fail with `Permission denied` or `No such file or directory`.
 
-Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
-the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.
+QA needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`: the `QA` run only
+dispatches on a head the CI poller has seen green.
 
 #### Android app QA
 
@@ -1985,20 +1895,6 @@ hypervisor, Mach ports, adb sockets and a lot of memory). The agent sandbox does
 > and checks every tool call; an agent that could write those paths could change the emulator or
 > the tools Symphony runs.
 
-#### Adding the Linear state
-
-Auto Review needs a workflow state with the configured name in every Linear team Symphony works in
-(`issues.linear.scope.team` and each `repositories[].route.team`; any team when none is set):
-
-1. In Linear, open **Settings → Teams → <team> → Workflow**.
-2. Under **Started**, add a state named `Auto Review` (or your `auto_review.state`).
-3. Drag it between `In Progress` and `In Review`.
-4. Restart Symphony.
-
-At startup Symphony checks that the state exists. If it is missing, or if the CI poller is off,
-Symphony logs `Auto Review disabled: ...` and keeps moving issues to `In Review` until the next
-restart. If Linear cannot be reached for the check, Auto Review stays on.
-
 ### `issue_gate`
 
 Optional pre-dispatch clarity gate.
@@ -2134,7 +2030,7 @@ command can serve both ways:
 ```
 
 A server that can only listen on a TCP port does not run on macOS: when its health check times out
-with nothing at the socket, the run fails with `dev_server_not_on_socket`, and an Auto Review
+with nothing at the socket, the run fails with `dev_server_not_on_socket`, and a QA
 `web` pass is `blocked` with that reason. An Elixir dev server can't run Mix inside the sandbox at
 all: every task that loads deps starts `Mix.PubSub` on an ephemeral `127.0.0.1` port, and Mix's
 build lock takes one too, both refused by the no-TCP-listener profile. Build the escript or release
@@ -2142,7 +2038,7 @@ in `build_cmd` and point `start_cmd` at that prebuilt artifact, so the dev serve
 starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
 
 `build_cmd` (optional) runs with `sh -lc` in the same checkout before `start_cmd`, every time the
-dev server starts: in an agent run before the first turn, and in an Auto Review `web` pass in its
+dev server starts: in an agent run before the first turn, and in a QA `web` pass in its
 fresh worktree at the PR head, which has no `deps/`, `_build/` or build output yet. It gets the dev
 server's environment (`SYMPHONY_VERIFICATION_PORT`, the agent cache folder, the egress proxy, its
 own `$TMPDIR`; no `SYMPHONY_VERIFICATION_SOCKET`) and runs in the agent's confinement rather than
@@ -2151,7 +2047,7 @@ is, so Mix can run (see
 [security](security.md#the-build-command-runs-in-the-agents-confinement)). A build that exits
 non-zero (`dev_server_build_failed`) or runs past 15 minutes (`dev_server_build_timeout`) keeps
 the dev server from starting and releases its port: the agent run fails with
-`verification_failed`, and an Auto Review `web` pass is `blocked`. Symphony's own repo builds its
+`verification_failed`, and a QA `web` pass is `blocked`. Symphony's own repo builds its
 dashboard escript with it when `WORKFLOW.md` sets:
 
 ```yaml
@@ -2161,7 +2057,7 @@ verification:
     start_cmd: scripts/qa-dashboard-server.sh
 ```
 
-Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
+The QA `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
 
 `start_cmd` runs the checkout's code, which the agent can change, so Symphony runs it with
@@ -2264,7 +2160,7 @@ human_actions:
   `Human Review` state (`issues.states.human_review`) is now the one way to say a person needs to
   act, and `linear_request_human_action` adds no label. A config that still sets it loads with a
   deprecation warning, and an issue carrying the label counts as one with an open request: the
-  acceptance gate escalates it, the pollers leave its red CI and merge conflicts to the person, and
+  pollers leave its red CI and merge conflicts to the person, and
   the update lists it. So does `human-action` in `auto_review.acceptance_gate.escalate.labels`,
   which also warns. Drop both once no issue carries the label.
 - `interval_ms` (default `300000`): how often Symphony reads the open actions. A read is one Linear
@@ -2314,23 +2210,6 @@ lists:
 - with the deprecated `human_actions.label`, an issue with the label and no such comment, as a task
   in itself (its description's list items become the steps);
 - a plan ticket in `In Review` or `Human Review`, waiting for its plan to be approved;
-- an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`
-  for a cause only the operator can clear, read from the report's `Reason:` line: QA tools the
-  running app lacks ("Update the Symphony app"), a tool missing on the Symphony host ("Install `X`
-  on the Symphony host", with the command to run) or the QA host's Screen Recording and
-  Accessibility permissions ("Grant the QA host's permissions"). The issues blocked on the same
-  cause share one action, naming each of them and its reason, and it asks for that one step, never
-  for a test of the PR by hand. A block for any other cause, a QA tool the PR itself adds among
-  them, is left to the supervisor and not listed, not even as "Review <issue>";
-- a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
-  such as a QA host without the macOS app's Screen Recording and Accessibility permissions. It is
-  listed in the update of the parent's project, as "Grant the QA host's permissions for the final
-  verification of <parent>" when the report's reason or blocked steps name a permission (with the
-  System Settings steps) and "Unblock the final verification of <parent>" otherwise, with the
-  reason and the blocked steps from the QA report, and how the walkthrough runs again. Failing
-  steps the walkthrough could still run are filed as gap tickets as before; a walkthrough that
-  fails on defects alone (verdict `fail`) adds no action. Reading these tickets adds them to the
-  same query, at no extra request;
 - any other issue in `Human Review`, as "Review <issue>", with the moves that approve it, send it
   back or sign it off;
 - with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
@@ -2371,8 +2250,7 @@ The older `## Action needed: <title>` heading, with a `**Steps:**` list, is stil
 heading is required.
 
 **When an action closes.** A request closes when its issue moves on: after the request, the issue
-leaves a state a person moves it out of (anything but `issues.states.active`, the waiting state and
-the Auto Review state), such as `Human Review` to `Merging`, `Rework` or `Done`. The request's own
+leaves a state a person moves it out of (anything but `issues.states.active` and the waiting state), such as `Human Review` to `Merging`, `Rework` or `Done`. The request's own
 move to `Human Review` keeps it open, and so does the agent's move to `Backlog`. A withdrawal
 closes it, and so does a terminal state. A plan
 review closes when the parent leaves its review state, and a blocked QA cause when every issue

@@ -13,7 +13,7 @@ defmodule SymphonyElixir.CodeReview do
 
     * `approve` -> `QA`, or straight to `Merging` when the QA state's skip rule applies
     * `request_changes` -> `Rework`
-    * `block` -> the escalation state, through the request machinery
+    * `block` -> a Needs Decision hold: the ticket stays in Code Review and a person decides
 
   An approve carries the QA run/skip decision: `SymphonyElixir.QaPolicy` decides it deterministically
   from the changed paths (docs-only/internal-only diffs skip QA), the decision and its reason are
@@ -24,12 +24,20 @@ defmodule SymphonyElixir.CodeReview do
   repo never reaches this module: `run/3` returns `:skip` for anything but a designed repo's
   `Code Review` ticket, so the executor path is untouched.
 
-  A change that matches a risk rule of the repo's `auto_review.acceptance_gate.escalate` block
-  (size, sensitive areas, sensitive content) is not approved straight on: the run *deepens* it with
-  a second reviewer pass on the same head, records that verdict bound to the head and fires no
-  routing edge. The next dispatch performs the deepened verdict. This is the guard's "risk rules
-  deepen the review instead of routing anywhere" (`docs/design/state-machine.md`); the person half
-  of the same guard (labels, ticket patterns) is not this module's to act on.
+  An escalation never moves the ticket: it posts a `## Decision needed:` request and sets a Needs
+  Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`), whose confirmation continues into the
+  QA state and whose redirect sends the ticket to `Rework`.
+
+  The repo's escalation rules (`SymphonyElixir.EscalationRules`, the retired acceptance gate's
+  deterministic rules) act on an approval, per the design's "escalation rules route or deepen — they
+  never queue" (`docs/design/state-machine.md`):
+
+    * a person rule (an escalation label, a ticket pattern) pauses the approved ticket on a Needs
+      Decision hold, with the reviewer's approval as the recommendation;
+    * a risk rule (sensitive paths, sensitive content, a dependency change, the change's size, a
+      large change to a busy file) *deepens* the review: a second reviewer pass on the same head,
+      whose verdict is recorded bound to the head with no routing edge fired. The next dispatch
+      performs the deepened verdict.
 
   A repo with the reviewer turned off (`review_agent.enabled: false`) has no reviewer to run, and
   `SymphonyElixir.ReviewAgent` answers a disabled reviewer with a fabricated approval. A Code Review
@@ -40,17 +48,18 @@ defmodule SymphonyElixir.CodeReview do
 
   require Logger
 
-  alias SymphonyElixir.AcceptanceGate.Escalation
-
   alias SymphonyElixir.{
     Config,
+    EscalationRules,
     Handoff,
     MergeConfirmation,
+    NeedsDecisionHold,
     QaPolicy,
     ReviewAgent,
     StateMachine,
     TicketSignals,
     TransitionGuard,
+    Workspace,
     WorkspaceHead
   }
 
@@ -62,12 +71,6 @@ defmodule SymphonyElixir.CodeReview do
   @deepening_signal "code_review_deepened"
   @deepening_applied_signal "code_review_deepening_applied"
   @max_inconclusive_retries 2
-
-  # The design guard's risk rules (`docs/design/state-machine.md`): the diff-based escalation rules
-  # (size, sensitive areas, sensitive content) *deepen* the Code Review run. The person rules
-  # (`:label`, `:ticket_pattern`, `:dependency`, `:settings_ui`) route or hold and are not this
-  # module's to act on; `:busy_file` needs the base branch's commit history and is left to the gate.
-  @risk_rules [:path, :diff_pattern, :size]
 
   # The verdict strings a deepening records, back to the atoms `route_verdict/5` routes on. A string
   # that names no verdict stays what it is, and is refused as an unknown verdict.
@@ -184,15 +187,31 @@ defmodule SymphonyElixir.CodeReview do
   defp do_review(issue, workspace, opts, settings) do
     case evaluate(issue, workspace, opts, settings) do
       {:ok, %{verdict: :approve} = result} ->
-        if risky?(issue, settings, result),
-          do: deepen(issue, workspace, opts, settings),
-          else: apply_verdict(issue, workspace, opts, settings, :approve, result)
+        approved(issue, workspace, opts, settings, result)
 
       {:ok, %{verdict: verdict} = result} ->
         apply_verdict(issue, workspace, opts, settings, verdict, result)
 
       {:error, reason} ->
         handle_review_error(issue, workspace, opts, settings, reason)
+    end
+  end
+
+  # An approval the escalation rules allow goes on; one a person rule matches waits on the person,
+  # and one a risk rule matches is reviewed a second time first.
+  defp approved(issue, workspace, opts, settings, result) do
+    {person, risk} = escalation_reasons(issue, workspace, opts, settings, result)
+
+    cond do
+      person != [] ->
+        record_verdict(issue, opts, workspace_head(workspace, opts), "approve")
+        escalate(issue, opts, settings, "the reviewer approved; " <> reasons_text(person), :continue)
+
+      risk != [] ->
+        deepen(issue, workspace, opts, settings)
+
+      true ->
+        apply_verdict(issue, workspace, opts, settings, :approve, result)
     end
   end
 
@@ -273,32 +292,98 @@ defmodule SymphonyElixir.CodeReview do
     TicketSignals.record(repo_key(issue, opts), issue.id, @deepening_applied_signal, %{head: head})
   end
 
-  # Whether the reviewer's own judgment of `result`'s diff trips a risk rule. The rules are the same
-  # `auto_review.acceptance_gate.escalate` block the acceptance gate escalates on, filtered to the
-  # diff-based subset the design deepens on: the rest need a person.
-  defp risky?(%Issue{} = issue, settings, result) do
+  # The escalation rules that match the approved change, split into the person rules and the risk
+  # rules. The reviewer already built the diff it judged (`ReviewAgent.Context`), so the rules read
+  # it rather than running the diff again; the dependency and busy-file rules read the manifests and
+  # the base branch's history from the workspace.
+  defp escalation_reasons(%Issue{} = issue, workspace, opts, settings, result) do
     rules = settings.auto_review.acceptance_gate.escalate
+    {diff, busy_files} = diff_summary(result, workspace, opts, rules)
 
-    Escalation.check(issue, diff_summary(result), [], rules)
-    |> Enum.any?(&(&1.rule in @risk_rules))
+    issue
+    |> EscalationRules.check(diff, busy_files, rules)
+    |> Enum.split_with(&(&1.rule in EscalationRules.person_rules()))
   end
 
-  # The reviewer already built the diff it judged (`ReviewAgent.Context`), so the risk check reads it
-  # rather than running git again. The inventory's shape is the escalation rules' own `changed_file`.
-  defp diff_summary(result) do
+  defp reasons_text(reasons), do: Enum.map_join(reasons, "; ", &"#{&1.rule}: #{&1.detail}")
+
+  # The inventory's shape is the escalation rules' own `changed_file`. A dependency manifest also
+  # carries its content before and after the change, and the busy files are the base branch's most
+  # changed paths; both are read from the local workspace, so a run on an SSH worker skips them.
+  defp diff_summary(result, workspace, opts, rules) do
     source = Map.get(result, :source) || %{}
-    files = source |> Map.get(:changed_file_inventory, []) |> Enum.map(&changed_file/1)
+    git = git(workspace, opts)
+    base = range_base(Map.get(source, :git_range))
+    files = source |> Map.get(:changed_file_inventory, []) |> Enum.map(&changed_file(&1, base, git))
 
-    %{files: files}
+    {%{files: files}, busy_files(base, rules.busy_files, git)}
   end
 
-  defp changed_file(file) do
-    %{
-      path: Map.get(file, :path),
+  defp changed_file(file, base, git) do
+    path = Map.get(file, :path)
+
+    entry = %{
+      path: path,
       additions: Map.get(file, :additions) || 0,
       deletions: Map.get(file, :deletions) || 0,
       added_lines: added_lines(Map.get(file, :patch) || "")
     }
+
+    if EscalationRules.manifest?(path),
+      do: Map.merge(entry, %{base: show(git, base, path), head: show(git, "HEAD", path)}),
+      else: entry
+  end
+
+  defp show(_git, nil, _path), do: nil
+
+  defp show(git, revision, path) do
+    case git.(["show", "#{revision}:#{path}"]) do
+      {:ok, content} -> content
+      :error -> nil
+    end
+  end
+
+  defp busy_files(nil, _busy, _git), do: []
+
+  defp busy_files(base, %{top: top, window_days: days}, git) do
+    case git.(["log", "--since=#{days}.days.ago", "--no-renames", "--name-only", "--format=", base]) do
+      {:ok, output} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.frequencies()
+        |> Enum.sort_by(fn {path, commits} -> {-commits, path} end)
+        |> Enum.take(top)
+        |> Enum.map(&elem(&1, 0))
+
+      :error ->
+        []
+    end
+  end
+
+  defp range_base(range) when is_binary(range) do
+    case String.split(range, "..", parts: 2) do
+      [base, _head] when base != "" -> base
+      _other -> nil
+    end
+  end
+
+  defp range_base(_range), do: nil
+
+  # Git in the local workspace: `opts[:git]` overrides it (tests). A run on an SSH worker has no
+  # local workspace to read.
+  defp git(workspace, opts) do
+    cond do
+      Keyword.has_key?(opts, :git) -> Keyword.fetch!(opts, :git)
+      is_binary(Keyword.get(opts, :worker_host)) -> fn _args -> :error end
+      true -> &local_git(workspace, &1)
+    end
+  end
+
+  defp local_git(workspace, args) do
+    case Workspace.safe_git(["-C", workspace | args]) do
+      {output, 0} -> {:ok, output}
+      {_output, _status} -> :error
+    end
   end
 
   # The patch's added lines, without the leading `+`: the `+++` file header adds none.
@@ -346,6 +431,7 @@ defmodule SymphonyElixir.CodeReview do
       opts
       |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :agent_tmp_dir])
       |> Keyword.put(:worker_host, Keyword.get(opts, :worker_host))
+      |> Keyword.put(:review_scope, :code_review)
       |> maybe_put_base_branch(opts)
 
     Keyword.get(opts, :review_agent, ReviewAgent).evaluate(issue, workspace, settings, review_opts)
@@ -382,7 +468,7 @@ defmodule SymphonyElixir.CodeReview do
       # The real reviewer exits a block through `blocked/5` (an error result), never this clause; an
       # overridden reviewer that returns a `:block` verdict map escalates the same way, and so does a
       # deepened block performed on a later dispatch.
-      :block -> escalate(issue, opts, settings, reason)
+      :block -> escalate(issue, opts, settings, reason, :rework)
       other -> {:error, {:code_review_unknown_verdict, other}}
     end
   end
@@ -453,7 +539,7 @@ defmodule SymphonyElixir.CodeReview do
       {:error, {:code_review_inconclusive, reason}}
     else
       record_verdict(issue, opts, head, "inconclusive_escalated")
-      escalate(issue, opts, settings, "inconclusive after #{retries} retries: #{inspect(reason)}")
+      escalate(issue, opts, settings, "inconclusive after #{retries} retries: #{inspect(reason)}", :rework)
     end
   end
 
@@ -466,7 +552,7 @@ defmodule SymphonyElixir.CodeReview do
     record_verdict(issue, opts, head, "block")
     Logger.warning("Code Review blocked for #{issue_label(issue)} head=#{head || "unknown"} verdict=block")
 
-    escalate(issue, opts, settings, verdict_reason(payload))
+    escalate(issue, opts, settings, verdict_reason(payload), :rework)
   end
 
   defp inconclusive_retries(issue, opts, head) do
@@ -475,16 +561,41 @@ defmodule SymphonyElixir.CodeReview do
     |> Enum.count(&(&1.head_sha == head and &1.outcome == "inconclusive"))
   end
 
-  defp escalate(issue, opts, settings, reason) do
+  # An escalation pauses the ticket where it is on a Needs Decision hold: the person continues it
+  # into QA (the hold's confirmation) or sends it to Rework. `recommend` is the option the machine
+  # recommends: `:continue` when the reviewer approved, `:rework` when it did not.
+  defp escalate(issue, opts, settings, reason, recommend) do
     Logger.warning("Escalating Code Review for #{issue_label(issue)} to a person: #{reason}")
+    qa_state = settings.tracker.qa_state
 
-    move(issue, opts, settings, :code_review_escalate, %{
-      target: escalation_state(settings),
-      reason: reason
-    })
+    case NeedsDecisionHold.pause(issue, escalation_request(issue, reason, qa_state, recommend), hold_opts(issue, opts), qa_state) do
+      :ok ->
+        record_move_signal(issue, opts, :code_review_escalate, %{reason: reason})
+        :ok
+
+      {:error, error} ->
+        {:error, {:code_review_escalation_failed, error}}
+    end
   end
 
-  defp escalation_state(settings), do: settings.ci.escalation_state
+  defp escalation_request(issue, reason, qa_state, recommend) do
+    %{
+      title: "Code Review escalated #{issue_label(issue)}",
+      question: "How should #{issue_label(issue)} continue after Code Review escalated it?",
+      why: reason,
+      options: [
+        %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: recommend == :continue},
+        %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: recommend == :rework}
+      ],
+      est_minutes: 5
+    }
+  end
+
+  defp hold_opts(issue, opts) do
+    opts
+    |> Keyword.take([:tracker, :store])
+    |> Keyword.put(:repo_key, repo_key(issue, opts))
+  end
 
   # Every move goes through the one writer. `run/3` only ever gets here for a ticket already in the
   # configured Code Review state (`reviewer_run?/2`), which is the origin of each of these edges in

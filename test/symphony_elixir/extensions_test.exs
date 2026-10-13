@@ -5,8 +5,6 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.AcceptanceGate
-  alias SymphonyElixir.AcceptanceGate.Runner, as: GateRunner
   alias SymphonyElixir.{AuditLog, StrayProcesses}
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
@@ -76,10 +74,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, :unavailable, state}
     end
-  end
-
-  defmodule ConflictGateContext do
-    def build(_issue, _record, _sha, _settings, _opts), do: {:conflict, ["README.md"]}
   end
 
   defmodule StaticOrchestrator do
@@ -544,45 +538,9 @@ defmodule SymphonyElixir.ExtensionsTest do
       inbox: Module.concat(__MODULE__, :ObservabilityApiInbox)
     )
 
-    :ok =
-      RunStore.put_run(%{
-        repo_key: "default",
-        run_id: "gate-MT-WATCH",
-        kind: "acceptance_gate",
-        issue_id: "issue-watch",
-        issue_identifier: "MT-WATCH",
-        pr_url: "https://github.com/example/repo/pull/123",
-        head_sha: "abc1234def",
-        mode: "shadow",
-        verdict: "escalate",
-        agent_verdict: "approve",
-        reasons: [%{rule: "size", detail: "1600 changed lines outside docs and tests"}],
-        criteria: %{met: 2, unmet: 0, unclear: 1},
-        tokens: %{total_tokens: 5_000},
-        started_at: ~U[2026-10-03 05:50:00Z],
-        judged_at: ~U[2026-10-03 06:00:00Z]
-      })
-
     conn = get(build_conn(), "/api/v1/state")
     state_payload = json_response(conn, 200)
     assert is_integer(state_payload["uptime_seconds"]) and state_payload["uptime_seconds"] >= 0
-
-    gate_verdict = %{
-      "repo_key" => "default",
-      "issue_id" => "issue-watch",
-      "issue_identifier" => "MT-WATCH",
-      "pr_url" => "https://github.com/example/repo/pull/123",
-      "head_sha" => "abc1234def",
-      "mode" => "shadow",
-      "verdict" => "escalate",
-      "agent_verdict" => "approve",
-      "reasons" => [%{"rule" => "size", "detail" => "1600 changed lines outside docs and tests"}],
-      "criteria" => %{"met" => 2, "unmet" => 0, "unclear" => 1},
-      "judged_at" => "2026-10-03T06:00:00Z",
-      "run_id" => "gate-MT-WATCH",
-      "human_decision" => nil,
-      "human_decided_at" => nil
-    }
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
@@ -641,13 +599,6 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "MT-HTTP",
                  "repo_key" => "default",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at")
-               },
-               %{
-                 "kind" => "qa_pass",
-                 "issue_id" => "qa-forced-http",
-                 "issue_identifier" => "MT-QA-F",
-                 "repo_key" => nil,
-                 "started_at" => nil
                }
              ],
              "watching" => [
@@ -762,29 +713,6 @@ defmodule SymphonyElixir.ExtensionsTest do
                "used" => 1,
                "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
              },
-             "qa" => %{
-               "running" => [%{"issue_id" => "qa-forced-http", "identifier" => "MT-QA-F", "sha" => "abc1234def", "forced" => true}],
-               "queued" => [%{"issue_id" => "qa-queued-http", "identifier" => "MT-QA-Q", "forced" => false}]
-             },
-             "acceptance_gate" => %{
-               "running" => [],
-               "queued" => [],
-               "recent" => [gate_verdict],
-               "agreement" => %{
-                 "default" => %{
-                   "judged" => 0,
-                   "agreed" => 0,
-                   "agreement_rate" => nil,
-                   "unsafe_approvals" => 0,
-                   "false_reworks" => 0,
-                   "escalations" => 0,
-                   "escalations_merged_unchanged" => 0,
-                   "tokens" => %{"median" => nil, "p90" => nil},
-                   "ready_to_enforce" => false,
-                   "unmet_condition" => "at least 20 judged tickets (0 so far)"
-                 }
-               }
-             },
              "auto_merge" => [
                %{
                  "issue_id" => "merge-http",
@@ -803,7 +731,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "repo_key" => "default",
                  "title" => "Waiting",
                  "state" => "Todo",
-                 "reason" => "a Merging or Auto Review issue is waiting for a slot",
+                 "reason" => "a Merging issue is waiting for a slot",
                  "attempt" => nil,
                  "since" => "2026-10-03T06:00:00Z",
                  "forced" => false
@@ -932,7 +860,6 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
-             "acceptance_gate" => nil,
              "tracked" => %{}
            }
 
@@ -964,7 +891,6 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
-             "acceptance_gate" => gate_verdict,
              "tracked" => %{}
            }
 
@@ -1527,6 +1453,141 @@ defmodule SymphonyElixir.ExtensionsTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
+  test "the initiatives api lists plan tickets from Symphony's cache, without a Linear request" do
+    test_pid = self()
+    initiatives = {:test, make_ref()}
+    inbox = {:test, make_ref()}
+
+    child = fn identifier, state, type, extra ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Part " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "createdAt" => "2026-10-01T10:00:00Z",
+          "state" => %{"name" => state, "type" => type},
+          "inverseRelations" => %{"nodes" => []}
+        },
+        extra
+      )
+    end
+
+    blocked_by = fn identifier ->
+      %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Human Review", "type" => "started"}}}]}}
+    end
+
+    plan = fn identifier, state, type, children, extra ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Plan " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "completedAt" => nil,
+          "state" => %{"name" => state, "type" => type},
+          "children" => %{"nodes" => children}
+        },
+        extra
+      )
+    end
+
+    nodes = [
+      plan.("MT-DONE", "Done", "completed", [], %{"completedAt" => DateTime.utc_now() |> DateTime.to_iso8601()}),
+      plan.("MT-REVIEW", "In Review", "started", [], %{}),
+      plan.(
+        "MT-PLAN",
+        "Waiting on sub-tickets",
+        "started",
+        [
+          child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
+          child.("MT-2", "In Review", "started", %{}),
+          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"}),
+          child.("MT-9", "Todo", "unstarted", %{"title" => "Final verification: the plan"})
+        ],
+        %{}
+      ),
+      plan.("MT-QUEUED", "Waiting on sub-tickets", "started", [], %{})
+    ]
+
+    linear_client = fn query, _variables, _opts ->
+      send(test_pid, {:linear, query})
+      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => false}}}}}
+    end
+
+    SymphonyElixir.Initiatives.run_once(%{
+      opts: [
+        name: initiatives,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      timer: nil
+    })
+
+    assert_received {:linear, _query}
+
+    lanes = %{
+      max_total: 2,
+      lanes: [%{issue_id: "issue-MT-PLAN", identifier: "MT-PLAN", status: "running", sub_issue: %{identifier: "MT-HTTP"}}],
+      queued_epics: [%{issue_id: "issue-MT-QUEUED", identifier: "MT-QUEUED"}],
+      shared: %{slots: 1, used: 0}
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :InitiativesOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :epic_lanes, lanes))
+
+    start_test_endpoint(
+      orchestrator: orchestrator_name,
+      initiatives: initiatives,
+      inbox: inbox,
+      snapshot_timeout_ms: 50
+    )
+
+    payload = json_response(get(build_conn(), "/api/v1/initiatives"), 200)
+    refute_received {:linear, _query}
+
+    assert %{"read" => true, "counts" => %{"active" => 2, "in_review" => 1, "done" => 1}, "initiatives" => listed} = payload
+    assert Enum.map(listed, & &1["identifier"]) == ["MT-PLAN", "MT-QUEUED", "MT-REVIEW", "MT-DONE"]
+
+    assert %{
+             "issue_id" => "issue-MT-PLAN",
+             "title" => "Plan MT-PLAN",
+             "state" => "Waiting on sub-tickets",
+             "repo_key" => "default",
+             "url" => "https://linear.app/example/issue/MT-PLAN",
+             "group" => "active",
+             "counts" => %{"done" => 0, "working" => 1, "you" => 1, "queued" => 0, "blocked" => 1, "total" => 3},
+             "slot" => %{"status" => "running", "identifier" => "MT-HTTP", "reason" => nil},
+             "sub_tickets" => [
+               %{"identifier" => "MT-2", "waits_on" => "you", "blocked_by" => [], "waiting_for" => []},
+               %{"identifier" => "MT-3", "waits_on" => "blocker", "blocked_by" => ["MT-2"], "waiting_for" => ["MT-2"]},
+               %{"identifier" => "MT-HTTP", "waits_on" => "working"}
+             ],
+             "final_verification" => %{"identifier" => "MT-9", "waits_on" => "slot", "open_tickets" => 3}
+           } = hd(listed)
+
+    assert %{"slot" => %{"status" => "queued", "position" => 1}, "final_verification" => nil} = Enum.at(listed, 1)
+    assert %{"slot" => nil} = Enum.at(listed, 2)
+
+    assert json_response(post(build_conn(), "/api/v1/initiatives", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+
+    no_lanes = Module.concat(__MODULE__, :InitiativesNoLanesOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: no_lanes, snapshot: Map.delete(static_snapshot(), :epic_lanes))
+
+    assert %{initiatives: [%{slot: nil} | _rest]} =
+             SymphonyElixirWeb.Presenter.initiatives_payload(no_lanes, 50, initiatives, inbox)
+
+    assert %{error: %{code: "snapshot_unavailable"}} =
+             SymphonyElixirWeb.Presenter.initiatives_payload(Module.concat(__MODULE__, :NoInitiatives), 50, initiatives)
+
+    timeout_orchestrator = Module.concat(__MODULE__, :InitiativesTimeoutOrchestrator)
+    {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
+    assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.initiatives_payload(timeout_orchestrator, 1, initiatives)
+  end
+
   test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do
     inbox = {:test, make_ref()}
 
@@ -1988,119 +2049,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ "MT-API-RUN"
   end
 
-  test "dashboard liveview shows the acceptance gate's passes, verdicts and each repo's agreement" do
-    orchestrator_name = Module.concat(__MODULE__, :AcceptanceGateDashboardOrchestrator)
-    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
-
-    {:ok, _view, html} = live(build_conn(), "/")
-    assert html =~ "Auto Review"
-    assert html =~ "Acceptance gate: 0 running, 0 queued."
-    assert html =~ "The acceptance gate has not judged a ticket yet."
-
-    test_pid = self()
-
-    run_fun = fn _job, _opts ->
-      send(test_pid, {:gate_pass, self()})
-
-      receive do
-        :finish -> :ok
-      end
-    end
-
-    start_supervised!({GateRunner, run_fun: run_fun})
-    issue = %{id: "issue-gate", identifier: "MT-GATE"}
-    gate_job = %{issue: issue, record: %{repo_key: "default", workspace_path: "/tmp/ws"}, sha: "abc1234", settings: Config.settings!()}
-    assert :started = GateRunner.request(gate_job, [])
-    assert_receive {:gate_pass, pass_pid}
-    on_exit(fn -> send(pass_pid, :finish) end)
-
-    gate_run = fn repo_key, identifier, verdict, attrs ->
-      Map.merge(
-        %{
-          repo_key: repo_key,
-          run_id: "gate-#{identifier}",
-          kind: "acceptance_gate",
-          issue_id: "issue-#{identifier}",
-          issue_identifier: identifier,
-          head_sha: "abc1234",
-          mode: "shadow",
-          verdict: verdict,
-          agent_verdict: verdict,
-          reasons: [],
-          criteria: %{met: 1, unmet: 0, unclear: 0},
-          tokens: %{total_tokens: 1_000},
-          started_at: ~U[2026-10-03 05:00:00Z],
-          judged_at: ~U[2026-10-03 05:00:00Z]
-        },
-        attrs
-      )
-    end
-
-    decided = %{human_decision: "approve", human_decided_at: ~U[2026-10-03 07:00:00Z], unchanged: true}
-
-    runs =
-      [
-        gate_run.("default", "MT-ESC", "escalate", %{
-          agent_verdict: "approve",
-          reasons: [%{rule: "size", detail: "1600 changed lines"}],
-          criteria: %{met: 2, unmet: 0, unclear: 1},
-          judged_at: ~U[2026-10-03 06:00:00Z]
-        }),
-        gate_run.("web", "MT-WEB", "approve", %{judged_at: ~U[2026-10-03 05:30:00Z]}),
-        gate_run.("api", "MT-API", "rework", decided)
-      ] ++ for(n <- 1..20, do: gate_run.("default", "MT-OK-#{n}", "approve", Map.put(decided, :judged_at, ~U[2026-10-03 05:00:00Z] |> DateTime.add(n))))
-
-    Enum.each(runs, &(:ok = RunStore.put_run(&1)))
-
-    {:ok, _view, html} = live(build_conn(), "/")
-
-    assert html =~ "Acceptance gate: 1 running (MT-GATE), 0 queued."
-    assert html =~ "MT-ESC: escalate (agent: approve) · 2 met, 0 unmet, 1 unclear · reasons: size · shadow · human: waiting"
-    assert html =~ "MT-WEB: approve · 1 met, 0 unmet, 0 unclear · shadow · human: waiting"
-    assert html =~ "MT-OK-20: approve · 1 met, 0 unmet, 0 unclear · shadow · human: approve"
-
-    assert html =~
-             "default: 20 judged, 20 agreed (100%), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), " <>
-               "gate tokens median 1000, p90 1000 · ready to enforce"
-
-    assert html =~
-             "api: 1 judged, 0 agreed (0%), 0 unsafe approvals, 1 false reworks, 0 escalations (0 merged unchanged), " <>
-               "gate tokens median 1000, p90 1000 · not ready to enforce: at least 20 judged tickets (1 so far)"
-
-    assert html =~ "web: 0 judged, 0 agreed (n/a), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), gate tokens median n/a, p90 n/a"
-  end
-
-  test "state api and dashboard list a gate run the acceptance gate stored among the recent runs" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
-    audit_dir = Path.join(System.tmp_dir!(), "gate-run-history-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf(audit_dir) end)
-
-    issue = %Issue{id: "issue-gate-run", identifier: "MT-GATE-RUN", title: "Gate run", description: "", state: "Auto Review", labels: []}
-    record = %{repo_key: "default", issue_id: issue.id, pr_url: "https://github.com/example/repo/pull/7", workspace_path: "/tmp/ws"}
-    job = %{issue: issue, record: record, sha: "abc1234def", settings: Config.settings!(), qa: %{verdict: :pass}}
-
-    assert {:ok, %{verdict: "rework"}} = AcceptanceGate.judge(job, context: ConflictGateContext, dir: audit_dir)
-    assert [gate_run] = RunStore.list_runs("default", :all)
-    refute Map.has_key?(gate_run, :attempt)
-
-    orchestrator_name = Module.concat(__MODULE__, :GateRunHistoryOrchestrator)
-    snapshot = %{static_snapshot() | run_history: [gate_run]}
-    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
-
-    state_payload = build_conn() |> get("/api/v1/state") |> json_response(200)
-
-    assert [%{"kind" => "acceptance_gate", "issue_identifier" => "MT-GATE-RUN", "status" => "gate_rework", "attempt" => nil}] =
-             state_payload["run_history"]
-
-    assert [%{"issue_identifier" => "MT-GATE-RUN", "verdict" => "rework"}] = state_payload["acceptance_gate"]["recent"]
-
-    {:ok, _view, html} = live(build_conn(), "/")
-
-    assert html =~ "MT-GATE-RUN: rework"
-  end
-
   test "state api and dashboard show Linear requests per caller for the last hour" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: "token")
     request_fun = fn _payload, _headers -> {:ok, %{status: 200, headers: %{}, body: %{"data" => %{}}}} end
@@ -2456,14 +2404,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Waiting for a lane: MT-E4"
     refute html =~ "No active epics"
 
-    assert html =~ "Auto Review passes"
-    assert html =~ "Running: MT-QA-F (QA pass)"
-    refute html =~ "No QA or acceptance gate pass is running."
+    refute html =~ "Auto Review passes"
     assert html =~ "Finishing runs"
     assert html =~ "Landing: MT-LAND"
     assert html =~ "MT-MERGE: auto-merge on, waiting for CI on `abc1234`"
     assert html =~ "MT-WAIT"
-    assert html =~ "a Merging or Auto Review issue is waiting for a slot"
+    assert html =~ "a Merging issue is waiting for a slot"
     refute html =~ "Nothing is waiting to start."
     assert html =~ "Waiting on blockers"
     assert html =~ "MT-VERIFY waiting on MT-GAP (In Progress)"
@@ -4074,10 +4020,6 @@ defmodule SymphonyElixir.ExtensionsTest do
         shared: %{slots: 1, used: 1}
       },
       finishing: %{slots: 2, used: 1, running: [%{issue_id: "land-http", identifier: "MT-LAND", state: "Merging"}]},
-      qa: %{
-        running: [%{issue_id: "qa-forced-http", identifier: "MT-QA-F", sha: "abc1234def", forced: true}],
-        queued: [%{issue_id: "qa-queued-http", identifier: "MT-QA-Q", forced: false}]
-      },
       auto_merge: [
         %{
           issue_id: "merge-http",
@@ -4096,7 +4038,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           identifier: "MT-WAIT",
           title: "Waiting",
           state: "Todo",
-          reason: "a Merging or Auto Review issue is waiting for a slot",
+          reason: "a Merging issue is waiting for a slot",
           attempt: nil,
           since: ~U[2026-10-03 06:00:00Z],
           repo_key: "default"

@@ -23,7 +23,7 @@ defmodule SymphonyElixir.StrayProcesses do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AcceptanceGate, AgentRunner, Config, LeftoverProcesses, Orchestrator, QaRunner, StatusDashboard}
+  alias SymphonyElixir.{AgentRunner, Config, LeftoverProcesses, Orchestrator, StatusDashboard}
   alias SymphonyElixir.LeftoverProcesses.Table
 
   @snapshot_timeout_ms 15_000
@@ -41,7 +41,7 @@ defmodule SymphonyElixir.StrayProcesses do
   @doc """
   Starts the server. Options: `:name`, `:table` (reads the process table),
   `:running_workspaces` (returns `{:ok, paths}` for the runs in flight),
-  `:orchestrator` and `:qa_runner` (where the default `:running_workspaces`
+  `:orchestrator` (where the default `:running_workspaces`
   looks), `:claude_tmp_dir`, `:tmp_dirs` and `:own_pid`.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -184,8 +184,7 @@ defmodule SymphonyElixir.StrayProcesses do
       %{running: running} ->
         agent_workspaces = for %{workspace_path: path} <- running, is_binary(path), do: path
         agent_tmp_dirs = Enum.flat_map(agent_workspaces, &AgentRunner.tmp_dirs/1)
-        gate_workspaces = AcceptanceGate.Runner.workspaces(Keyword.get(opts, :gate_runner, AcceptanceGate.Runner))
-        {:ok, agent_workspaces ++ agent_tmp_dirs ++ QaRunner.workspaces(Keyword.get(opts, :qa_runner, QaRunner)) ++ gate_workspaces}
+        {:ok, agent_workspaces ++ agent_tmp_dirs}
 
       unavailable ->
         {:error, {:orchestrator_snapshot, unavailable}}

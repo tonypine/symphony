@@ -529,7 +529,7 @@ private struct SubTicketsCard: View {
     }
 }
 
-/// D2b: CI, Auto Review QA with its report, the gate's verdict and mode, and the change's size.
+/// D2b: CI, and QA with its report.
 private struct ChecksCard: View {
     let pullRequest: InboxReview.PullRequest
 
@@ -538,19 +538,11 @@ private struct ChecksCard: View {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s2) {
                 CheckRow(label: "CI", value: pullRequest.ci?.rawValue.capitalized ?? "Not seen yet", status: status(ci: pullRequest.ci))
                 CheckRow(
-                    label: "Auto Review QA",
+                    label: "QA",
                     value: pullRequest.qaVerdict?.capitalized ?? "No report yet",
                     status: status(verdict: pullRequest.qaVerdict, good: ["pass"], bad: ["fail", "blocked"]),
                     link: pullRequest.qaReport.map { ("Open Report", $0) }
                 )
-                CheckRow(
-                    label: "Acceptance gate",
-                    value: pullRequest.gateVerdict.map { verdict in
-                        [verdict.capitalized, pullRequest.gateMode.map { "\($0) mode" }].compactMap { $0 }.joined(separator: " · ")
-                    } ?? "No verdict",
-                    status: status(verdict: pullRequest.gateVerdict, good: ["approve"], bad: ["rework"])
-                )
-                CheckRow(label: "Change", value: pullRequest.changeLine ?? "Not measured yet", status: nil)
             }
         }
     }

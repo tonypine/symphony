@@ -2,8 +2,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{Action, Collector, Request, Update}
-  alias SymphonyElixir.QaAgent.Report
+  alias SymphonyElixir.HumanActions.{Action, Collector, Request}
 
   @project %{"id" => "project-1", "name" => "Cycle"}
   @scope %{"team" => %{"key" => %{"eq" => "MOT"}}}
@@ -158,9 +157,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
           history([
             # A person moved the issue on after the old request: it is done.
             %{"createdAt" => "2026-10-02T09:00:00.000Z", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}},
-            # The agent's own moves after the new request keep it open, and so does Auto Review's.
+            # The agent's own moves after the new request keep it open.
             %{"createdAt" => "2026-10-03T10:05:00.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Backlog"}},
-            %{"createdAt" => "2026-10-03T11:00:00.000Z", "fromState" => %{"name" => "Auto Review"}, "toState" => %{"name" => "Backlog"}},
             # Entries that are not state changes, or carry no time, are ignored.
             %{"createdAt" => "2026-10-03T12:00:00.000Z", "fromState" => nil, "toState" => nil},
             %{"createdAt" => "not a time", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}},
@@ -314,86 +312,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert [%Action{steps: [_read, "To approve, move the sub-tickets you accept to Todo.", _reject]}] = actions(collected)
   end
 
-  defp blocked_issue(identifier, state, reason) do
-    body = "## Symphony QA Report\n\n**Verdict:** blocked → #{state}\n**PR head:** `abc`\n\n#{if reason, do: "Reason: " <> reason <> "\n"}"
-    node(identifier, %{"state" => %{"name" => state}, "comments" => comments([%{"id" => "c-" <> identifier, "body" => body, "createdAt" => "2026-10-03T10:00:00.000Z"}])})
-  end
-
-  test "asks once for the app update that unblocks every issue QA-blocked on the running app" do
-    api_fixtures = blocked_issue("MOT-56", "Human Review", "QA needs `api_fixtures`, which the running app (0.0.1.384) lacks.")
-    put_file = blocked_issue("MOT-52", "In Review", "QA needs `qa_put_file`, which the running app (0.0.1.384) lacks")
-
-    assert {:ok, collected} = collect([api_fixtures, put_file])
-
-    assert [
-             %Action{
-               key: "qa:app_update:id-MOT-52,id-MOT-56",
-               kind: :qa_blocked,
-               title: "Update the Symphony app",
-               issue: nil,
-               human_review: false,
-               est_minutes: 5,
-               why: "MOT-52: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks. MOT-56: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks.",
-               unblocks: "the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-56](https://linear.app/acme/issue/MOT-56)",
-               steps: ["Update the Symphony app to its latest release."],
-               done_when: "MOT-52 and MOT-56 each leave their review state, or their next QA reports are not blocked."
-             } = action
-           ] = actions(collected)
-
-    {body, []} = Update.render([action], ["In Review", "Human Review"])
-    refute body =~ "test the PR"
-    assert body =~ "[MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-56](https://linear.app/acme/issue/MOT-56)"
-  end
-
-  test "asks for the one step a tool missing on the Symphony host or the QA host's permissions need" do
-    package = blocked_issue("MOT-52", "In Review", "`@playwright/mcp@0.0.41` is not installed on the Symphony host; run `npx -y @playwright/mcp@0.0.41 --version` there once")
-    npx = blocked_issue("MOT-53", "In Review", "`npx` (Node.js) is not on Symphony's PATH, so the web playbook's browser could not start")
-    permissions = blocked_issue("MOT-54", "In Review", "the QA host has no Screen Recording permission for the app")
-
-    assert {:ok, collected} = collect([package, npx, permissions])
-
-    assert [
-             %Action{
-               key: "qa:qa_permissions:id-MOT-54",
-               title: "Grant the QA host's permissions",
-               unblocks: "the QA of [MOT-54](https://linear.app/acme/issue/MOT-54)",
-               done_when: "MOT-54 leaves its review state, or its next QA report is not blocked."
-             },
-             %Action{
-               key: "qa:tool:@playwright/mcp@0.0.41:id-MOT-52",
-               title: "Install `@playwright/mcp@0.0.41` on the Symphony host",
-               steps: ["Run `npx -y @playwright/mcp@0.0.41 --version` on the Symphony host once."]
-             },
-             %Action{key: "qa:tool:npx:id-MOT-53", title: "Install Node.js on the Symphony host", unblocks: "the QA of [MOT-53](https://linear.app/acme/issue/MOT-53)"}
-           ] = actions(collected)
-
-    no_url = put_in(package, ["url"], nil)
-    assert {:ok, collected} = collect([no_url])
-    assert [%Action{unblocks: "the QA of MOT-52"}] = actions(collected)
-  end
-
-  test "lists nothing for a QA block with no cause only the operator can clear" do
-    other_cause = blocked_issue("MOT-52", "In Review", "the dev server failed its health check, so the web playbook could not run")
-    pr_adds_tool = blocked_issue("MOT-53", "In Review", "QA needs `qa_put_file`, which this PR adds and the running app (0.0.1.384) lacks")
-    no_reason = blocked_issue("MOT-55", "in review", nil)
-    in_human_review = blocked_issue("MOT-61", "Human Review", "no OpenRouter key")
-
-    passed =
-      node("MOT-54", %{
-        "state" => %{"name" => "In Review"},
-        "comments" => comments([%{"id" => "c4", "body" => "## Symphony QA Report\n\n**Verdict:** pass → In Review\n"}, %{"id" => "c5", "body" => nil}])
-      })
-
-    no_report = node("MOT-57", %{"state" => %{"name" => "In Review"}})
-
-    assert {:ok, collected} = collect([other_cause, pr_adds_tool, no_reason, in_human_review, passed, no_report])
-    assert collected == %{}
-  end
-
   test "lists every issue in Human Review, marked so the update puts it first" do
     plan = node("MOT-60", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["breakdown"])})
-
-    blocked = blocked_issue("MOT-61", "Human Review", "the running app lacks `qa_put_file`")
 
     requested =
       node("MOT-62", %{
@@ -406,12 +326,11 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     plain = node("MOT-63", %{"state" => %{"name" => "Human Review"}})
     in_review = node("MOT-64", %{"state" => %{"name" => "In Review"}, "labels" => labels(["breakdown"])})
 
-    assert {:ok, collected} = collect([plan, blocked, requested, plain, in_review])
+    assert {:ok, collected} = collect([plan, requested, plain, in_review])
 
     assert [
              %Action{key: "plan:id-MOT-60", kind: :plan_review, human_review: true, done_when: "MOT-60 leaves Human Review."},
              %Action{key: "plan:id-MOT-64", kind: :plan_review, human_review: false},
-             %Action{key: "qa:app_update:id-MOT-61", kind: :qa_blocked, human_review: false, title: "Update the Symphony app"},
              %Action{key: "request:comment-1", kind: :request, human_review: true},
              %Action{
                key: "review:id-MOT-63",
@@ -424,162 +343,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                done_when: "MOT-63 leaves Human Review."
              }
            ] = actions(collected)
-  end
-
-  test "lists no action for a QA report blocked by the provider's usage limit" do
-    usage_limited_report =
-      "## Symphony QA Report\n\n**Verdict:** blocked → TP-368 In Review\n\n" <>
-        "Reason: the QA agent could not finish: {:qa_agent_failed, {:usage_limited, %{scope: :all, source: :rate_limit_event, provider: \"anthropic\", window: \"five_hour\"}}}\n"
-
-    usage_limited =
-      node("MOT-56", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c5", "body" => usage_limited_report, "createdAt" => "2026-10-04T13:08:00.000Z"}])})
-
-    blocked = blocked_issue("MOT-57", "In Review", "the running app lacks `qa_put_file`")
-
-    assert {:ok, collected} = collect([usage_limited, blocked])
-    assert [%Action{key: "qa:app_update:id-MOT-57"}] = actions(collected)
-  end
-
-  defp walkthrough_report(identifier, verdict, target_state, attrs \\ %{}) do
-    outcome = Map.merge(%{verdict: verdict, sha: "abc123", ref: "origin/main", target_issue: identifier, target_state: target_state}, attrs)
-    %{"id" => "report-" <> identifier, "body" => Report.render(outcome), "createdAt" => "2026-10-03T10:00:00.000Z"}
-  end
-
-  defp step(name, status, evidence \\ []), do: %{name: name, status: status, details: "", evidence: evidence}
-
-  defp verification(identifier, state, report, attrs \\ %{}) do
-    node(
-      identifier,
-      Map.merge(
-        %{
-          "title" => "Final verification: Ship the QA driver",
-          "state" => %{"name" => state},
-          "parent" => %{"identifier" => "MOT-70", "project" => %{"id" => "project-2", "name" => "Parent project"}},
-          "comments" => comments(List.wrap(report))
-        },
-        attrs
-      )
-    )
-  end
-
-  test "lists a final verification blocked on the QA host's permissions on its parent's project" do
-    permission = "SSH on the QA host has no Accessibility permission, so QA cannot see the app."
-
-    report =
-      walkthrough_report("MOT-71", :blocked, "In Review", %{
-        reason: permission,
-        steps: [step("Open Settings", "blocked", ["https://uploads.linear.app/a.png"]), step("Save a repo", "blocked"), step("CLI prints the list", "pass")]
-      })
-
-    assert {:ok, %{"project-2" => %{project: %{id: "project-2", name: "Parent project"}, actions: [action]}} = collected} =
-             collect([verification("MOT-71", "In Review", report)])
-
-    assert Map.keys(collected) == ["project-2"]
-
-    assert %Action{
-             key: "verification:id-MOT-71",
-             kind: :verification_blocked,
-             title: "Grant the QA host's permissions for the final verification of MOT-70",
-             why: "The Auto Review walkthrough could not test everything: " <> ^permission <> " Blocked steps: Open Settings; Save a repo.",
-             unblocks: "the final verification of MOT-70",
-             steps: [
-               "On the QA host, open System Settings > Privacy & Security and grant Screen Recording and Accessibility to the app the reason above names.",
-               "Then move MOT-71 to `Todo` so the walkthrough runs again."
-             ],
-             done_when: "MOT-71 leaves In Review, or its next walkthrough is not blocked.",
-             issue: %{identifier: "MOT-71", state: "In Review"},
-             project: %{id: "project-2"}
-           } = action
-  end
-
-  test "lists a final verification blocked while its failing steps wait in gap tickets, until it leaves Todo" do
-    report =
-      walkthrough_report("MOT-72", :blocked, "Todo", %{
-        reason: "the app does not build on the QA host",
-        steps: [step("CLI prints the list", "fail")],
-        filed: [%{identifier: "MOT-80", title: "Parent walkthrough fails: CLI prints the list"}]
-      })
-
-    no_parent_project = %{"parent" => %{"identifier" => "MOT-70", "project" => nil}}
-
-    assert {:ok, collected} = collect([verification("MOT-72", "Todo", report, no_parent_project)])
-
-    assert [
-             %Action{
-               key: "verification:id-MOT-72",
-               title: "Unblock the final verification of MOT-70",
-               why: "The Auto Review walkthrough could not test everything: the app does not build on the QA host",
-               steps: [
-                 "Fix the cause above, on the machine QA runs on.",
-                 "MOT-72 runs the walkthrough again by itself once the gap tickets that block it are done."
-               ],
-               done_when: "MOT-72 leaves Todo, or its next walkthrough is not blocked."
-             }
-           ] = actions(collected)
-
-    assert {:ok, %{}} = collect([verification("MOT-72", "In Progress", report)])
-  end
-
-  test "lists nothing for a final verification whose latest walkthrough is not blocked" do
-    passed = walkthrough_report("MOT-73", :pass, "In Review")
-
-    failed =
-      walkthrough_report("MOT-74", :fail, "Todo", %{
-        steps: [step("Open Settings", "fail")],
-        filed: [%{identifier: "MOT-81", title: "Parent walkthrough fails: Open Settings"}]
-      })
-
-    other_ticket = walkthrough_report("MOT-70", :blocked, "In Review", %{reason: "no permission"})
-    no_target = %{"id" => "c1", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n", "createdAt" => "2026-10-03T10:00:00.000Z"}
-    no_state = walkthrough_report("MOT-82", :blocked, "In Review", %{reason: "no permission"})
-
-    nodes = [
-      verification("MOT-73", "In Review", passed),
-      verification("MOT-74", "Todo", failed),
-      verification("MOT-75", "In Review", other_ticket),
-      verification("MOT-76", "In Review", no_target),
-      verification("MOT-77", "Todo", nil),
-      verification("MOT-82", nil, no_state, %{"state" => nil})
-    ]
-
-    assert {:ok, %{}} = collect(nodes)
-  end
-
-  test "lists nothing for a final verification whose walkthrough was blocked by the provider's usage limit" do
-    report =
-      walkthrough_report("MOT-79", :blocked, "In Review", %{
-        reason: "the QA agent could not finish: {:qa_agent_failed, {:usage_limited, %{scope: :all, provider: \"anthropic\"}}}"
-      })
-
-    assert {:ok, collected} = collect([verification("MOT-79", "In Review", report)])
-    assert collected == %{}
-  end
-
-  test "lists a final verification without a parent or reason against its own project" do
-    report = walkthrough_report("MOT-78", :blocked, "In Review")
-
-    assert {:ok, collected} = collect([verification("MOT-78", "In Review", report, %{"parent" => nil})])
-
-    assert [
-             %Action{
-               title: "Unblock the final verification of MOT-78",
-               why: "The Auto Review walkthrough could not test everything: see the QA report on MOT-78",
-               project: %{id: "project-1"}
-             }
-           ] = actions(collected)
-  end
-
-  test "lists a blocked final verification the walkthrough moved to Human Review first, without a second review action" do
-    report = walkthrough_report("MOT-79", :blocked, "Human Review", %{reason: "no OpenRouter key on the QA host"})
-
-    assert {:ok, %{"project-2" => %{actions: [action]}}} = collect([verification("MOT-79", "Human Review", report)])
-
-    assert %Action{
-             key: "verification:id-MOT-79",
-             kind: :verification_blocked,
-             human_review: true,
-             done_when: "MOT-79 leaves Human Review, or its next walkthrough is not blocked."
-           } = action
   end
 
   test "with human_review: null, queries and lists only In Review as before" do

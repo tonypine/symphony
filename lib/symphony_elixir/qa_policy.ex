@@ -10,7 +10,7 @@ defmodule SymphonyElixir.QaPolicy do
   every skip is auditable in the ticket's ledger.
   """
 
-  alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
   alias SymphonyElixir.Verification
@@ -62,7 +62,7 @@ defmodule SymphonyElixir.QaPolicy do
           {:ok, [String.t()]} | {:error, term()}
   def changed_paths(workspace, repo_key, sha, opts) when is_binary(workspace) do
     git = Keyword.get(opts, :git, &default_git/2)
-    base = "origin/" <> AutoReview.base_branch(repo_key)
+    base = "origin/" <> Config.base_branch(repo_key)
 
     with {merge_base, 0} <- git.(["merge-base", base, sha], workspace),
          {output, 0} <- git.(["diff", "--name-only", String.trim(merge_base), sha], workspace) do

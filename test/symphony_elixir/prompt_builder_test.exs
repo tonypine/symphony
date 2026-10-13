@@ -158,8 +158,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "PR feedback and CI delivery:"
     assert prompt =~ "PR review feedback is delivered by Symphony re-activating you"
     assert prompt =~ "CI failures are delivered by Symphony re-activating you"
-    assert prompt =~ "An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR"
-    assert prompt =~ "Do not treat it as `Rework`"
+    refute prompt =~ "acceptance gate"
+    refute prompt =~ "A `Code Review` or `QA` rework verdict"
     refute prompt =~ "gather it yourself"
     refute prompt =~ "check it yourself"
   end
@@ -952,7 +952,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     test "a repo left on legacy renders today's status map" do
       prompt = status_map_prompt(Config.settings_for_repo!("legacy"))
 
-      assert prompt =~ "`Auto Review`"
+      refute prompt =~ "Auto Review"
       assert prompt =~ "`In Review`"
       refute prompt =~ "`Code Review`"
     end
