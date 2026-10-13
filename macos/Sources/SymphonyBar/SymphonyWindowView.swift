@@ -14,6 +14,7 @@ final class SymphonyWindowModel: ObservableObject {
         didSet {
             guard selection != oldValue else { return }
             onSelect(selection)
+            readHistoryIfDue()
         }
     }
 
@@ -53,6 +54,10 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var initiatives: InitiativesPayload?
     /// What the last Initiatives read got when it got none, nil after one that did.
     @Published private(set) var initiativesResult: EndpointResult?
+    /// The last history Symphony served, for Usage; read while Usage shows.
+    @Published private(set) var usageHistory: HistoryPayload?
+    /// What the last history read got when it got none, nil after one that did.
+    @Published private(set) var historyResult: EndpointResult?
     /// The initiative shown, by issue id; nil shows the first.
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
@@ -108,6 +113,11 @@ final class SymphonyWindowModel: ObservableObject {
     private var readingRepos = false
     private var readingInbox = false
     private var readingInitiatives = false
+    private var readingHistory = false
+    /// When the history was last read; the run records it comes from change slowly.
+    private var historyReadAt: Date?
+    /// The history is read again at most this often.
+    static let historyInterval: TimeInterval = 60
     var readingTicket = false
     /// When the ticket page last read its runs and audit records, which change slowly.
     var ticketSlowReadAt: Date?
@@ -129,6 +139,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
+                readHistoryIfDue()
                 readTicket()
             }
             .store(in: &cancellables)
@@ -345,8 +356,36 @@ final class SymphonyWindowModel: ObservableObject {
             openStopRun(identifier, origin: .needsAttention)
         case .openDiagnostics:
             show(.diagnostics)
+        case .openUsage:
+            showUsage()
         case let .stopForcing(identifier):
             stopForcing(identifier)
+        }
+    }
+
+    /// Opens Usage and reads the history at once.
+    func showUsage() {
+        show(.usage)
+        historyReadAt = nil
+        readHistoryIfDue()
+    }
+
+    /// Reads the history while Usage shows; Symphony answers from its run records, with no Linear request.
+    private func readHistoryIfDue() {
+        guard selection == .usage, shownTicket == nil, !readingHistory, state.countsKnown,
+            historyReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+        else { return }
+        readingHistory = true
+        Task {
+            let result = await client.get(HistoryPayload.path(days: HistoryPayload.defaultDays))
+            if case let .loaded(data) = result, let payload = HistoryPayload.decode(data) {
+                usageHistory = payload
+                historyResult = nil
+            } else {
+                historyResult = result
+            }
+            historyReadAt = Date()
+            readingHistory = false
         }
     }
 
@@ -621,6 +660,8 @@ struct SymphonyDetail: View {
                 TicketsContent(model: model, client: client)
             case .diagnostics:
                 DiagnosticsContent(model: model, client: client)
+            case .usage:
+                UsageContent(model: model, client: client)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }
@@ -644,7 +685,8 @@ struct OverviewContent: View {
                     openInbox: { model.showInbox() },
                     openTicket: model.openTicket,
                     openTickets: model.showTickets,
-                    openInitiative: model.showInitiative
+                    openInitiative: model.showInitiative,
+                    openUsage: model.showUsage
                 ),
                 initiatives: model.initiativesList?.active ?? []
             )

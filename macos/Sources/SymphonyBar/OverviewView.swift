@@ -15,6 +15,8 @@ struct OverviewActions {
     var openTickets: (TicketList.Filter) -> Void = { _ in }
     /// A click on an initiative in the Initiatives card opens it in Initiatives (D5), by issue id.
     var openInitiative: (String) -> Void = { _ in }
+    /// The Today card opens Usage (D8).
+    var openUsage: () -> Void = {}
 }
 
 /// The Overview in a scroll view, laid out for the width it gets.
@@ -107,6 +109,11 @@ struct OverviewBody: View {
                         ForEach(overview.meters) { MeterView(meter: $0) }
                     }
                 }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: actions.openUsage)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Opens Usage")
+                .help("Open Usage")
             }
             if !initiatives.isEmpty {
                 InitiativesCard(initiatives: initiatives, open: actions.openInitiative)
