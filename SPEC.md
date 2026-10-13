@@ -39,7 +39,7 @@ Important boundary:
 - Symphony is a scheduler/runner and tracker reader.
 - Ticket writes (state transitions, comments, PR links) are typically performed by the coding agent
   using tools available in the workflow/runtime environment.
-- A successful run can end at a workflow-defined handoff state (for example `Human Review`), not
+- A successful run can end at a workflow-defined handoff state (for example `Code Review`), not
   necessarily `Done`.
 
 ## 2. Goals and Non-Goals
@@ -830,8 +830,8 @@ Fields:
 - `checks.max_fix_attempts` (integer)
   - Default: `3`.
 - `checks.escalate_to_state` (string)
-  - Deprecated, no effect: loads with a warning. CI the fix runs could not make green moves a
-    legacy repo's issue to `In Review`, and pauses a designed repo's on a `Needs Decision` hold.
+  - Deprecated, no effect: loads with a warning. CI the fix runs could not make green pauses the
+    issue in its phase on a `Needs Decision` hold.
 - `checks.landing_wait_timeout_ms` (integer)
   - Default: `1800000` (30 minutes).
   - How long a `Merging` issue whose landing run ended on pending checks stays held before the
@@ -845,13 +845,13 @@ affect CI escalation. A head whose only failed check is `protected paths` gets n
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix. A red head on an issue parked for a person, in the
-`issues.states.human_review` state, or outside `tracker.active_states` with `needs-human`, a
-deprecated request label (`human_actions.label`, or `human-action` in the escalate labels) or
-another `escalate.labels` label other than `plan` and `breakdown`, or,
-while that state is off, in `In Review` with an open `## Action needed:` request, gets the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
-an issue in none of `tracker.active_states`, the review states and `Merging`
-(`Backlog`, say), which waits for a person to promote it, label or not. The normal flow
+the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+with `needs-human`, a deprecated request label (`human_actions.label`, or `human-action` in the
+escalate labels) or another `escalate.labels` label other than `plan` and `breakdown`, gets the
+same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head
+on an issue in none of the machine's active states (the phase states among them) and `Merging`
+(`Backlog`, say, or a straggler left in a draining `In Review` or `Human Review` state), which
+waits for a person to move it, label or not. The normal flow
 resumes once a person moves the issue on or removes the label, or the head turns green.
 
 #### 5.4.7 `github` (object)
@@ -984,13 +984,13 @@ Fields:
   - An issue carrying this label (case-insensitive) joins the forced queue when a poll's candidate
     fetch, which only returns active states, first sees it with the label. The orchestrator records
     that time (`forced_since`, persisted across restarts), refreshes the queued issues by id on
-    every poll so they stay queued in any non-terminal state (In Review, Merging, ...), and drops
+    every poll so they stay queued in any non-terminal state (Code Review, Merging, ...), and drops
     one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
     (`forced`) and the audit log (`forced_start`, `forced_end` with `reason` `label_removed`,
     `done` or `missing`), and dispatch on their own allowance (Section 8.3).
   - When a forced issue reaches a terminal state the service SHOULD remove the label from it.
-  - When a forced issue enters `In Review` the service SHOULD emit a `forced_human_gate`
-    notification, once per entry into `In Review`.
+  - When a forced plan parent enters `Plan Review` the service SHOULD emit a `forced_human_gate`
+    notification, once per entry into `Plan Review`.
   - Implementations MAY offer an operator control that adds or removes the label (this one has
     `symphony force [--clear] <identifier>` over `POST /api/v1/control/force`). Such a control
     SHOULD put the change into the queue at once rather than wait for the next poll, so tickets
@@ -1278,9 +1278,9 @@ total.
 
 Reviewer outcome handling MUST distinguish terminal blocks from inconclusive reviewer runs.
 Verified `block` verdicts with at least one grounded finding SHOULD terminate the worker with a
-dedicated `review_agent_blocked` exit, post the block reason/findings to the tracker, move the issue
-to `In Review`, and avoid
-scheduling another orchestrator retry. If that tracker transition fails, Symphony SHOULD still release
+dedicated `review_agent_blocked` exit, post the block reason/findings to the tracker, pause the
+issue in its phase on a `Blocked` hold that a person lifts, and avoid
+scheduling another orchestrator retry. If that hold cannot be set, Symphony SHOULD still release
 its local issue claim rather than leaving the issue stuck as running. Reviewer parse failures,
 turn-budget failures, or self-check paths that remove all findings SHOULD be classified as
 `review_agent_inconclusive`, and so SHOULD a `request_changes` verdict that arrives after the
@@ -1299,8 +1299,8 @@ dropped.
 #### 5.4.17 `auto_review` (object)
 
 The QA settings. The `Auto Review` state that once bundled the CI wait, a QA pass and the
-acceptance gate is retired (`docs/design/state-machine.md` §Retired): a designed repo runs QA in
-its `QA` state (`SymphonyElixir.QaVerification`, Section 7.6) and its epic review, both with the
+acceptance gate is retired (`docs/design/state-machine.md` §Retired): QA runs in
+the `QA` state (`SymphonyElixir.QaVerification`, Section 7.6) and its epic review, both with the
 settings below, which kept their keys.
 
 Fields:
@@ -1764,15 +1764,14 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.states.terminal`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `issues.states.waiting_on_sub_issues`: string or null, default `Waiting on sub-tickets`; added to
   the active states when set
-- `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
-  NOT be one of the active states (see the human review rule)
+- `issues.states.human_review`: deprecated with the retired `Human Review` state; a config that
+  sets it MUST load with a deprecation warning and the value has no effect
 - `issues.states.code_review`, `issues.states.qa`, `issues.states.plan_review`,
   `issues.states.epic_review`, `issues.states.ci_fix`: the machine-owned phase states, string or
   null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
   MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
   and create it when it is missing, logging what it created; a missing one MUST be reported with its
-  exact name and the `issues.states.*` key to point at the new name before it is created. Only a
-  repo on the `designed` machine (see 7.6) dispatches from or moves into them.
+  exact name and the `issues.states.*` key to point at the new name before it is created.
 - `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
   the numbers `0`..`4`, or `no priority`, default `[]`; empty means every priority is
   dispatch-eligible. See 8.2 Candidate Selection Rules.
@@ -1826,8 +1825,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.provider`: `anthropic` or `openrouter`, default `anthropic`. The provider that serves the
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
-  `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
-  `review_feedback`, `pre_push_review`, `qa`, `code_review`, `epic_review`. Each field resolves, for the issue's routed
+  `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`,
+  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` and `final_verification`
+  named the retired close-out and final verification runs: an entry naming them still loads, and
+  no run uses it. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
   else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
   null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
@@ -1950,8 +1951,8 @@ not require recognizing or validating extension fields unless that extension is 
   `300`)
 - `repositories[].acceptance_gate`: `mode` and `escalate` for that repository (`max_turns` and
   `timeout_ms` are deprecated with the gate); scalars replace the global values, lists add to them
-- `repositories[].state_machine`: `legacy` (default) or `designed`, the ticket state machine the
-  repo runs (see 7.6). An unknown value reads as `legacy`.
+- `repositories[].state_machine`: deprecated; every repository runs the one ticket state machine
+  (see 7.6). A config that sets it MUST load with a deprecation warning and the value has no effect.
 - `repositories[].manual_review`: `off` (default) or `on`, who decides that a verified ticket
   merges. `on` pauses the step into `Merging` on a **Needs Decision** hold carrying the summary;
   confirming continues into `Merging`, a redirect directs a move. It is a per-repo setting with no
@@ -1999,16 +2000,15 @@ Important nuance:
 - If the issue is still in an active state, the worker SHOULD start another turn on the same live
   coding-agent thread in the same workspace, up to `agent.max_turns`.
 - An issue in `Rework` whose attached PR's head is the workspace `HEAD`, with no pending review,
-  CI, QA or conflict signal, MUST end the run and move to the post-PR state (`Code Review` on a
-  designed repo, `In Review` on a legacy one) once that `HEAD` differs from the head the `Rework` started
+  CI, QA or conflict signal, MUST end the run and move to the post-PR state (the configured
+  Code Review state) once that `HEAD` differs from the head the `Rework` started
   from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
 
   `Rework` continues the current attempt. Its run MUST NOT close the pull request, cut a branch
-  from scratch or supersede the workpad: those belong to `Restart` (below). On a repo running the
-  designed machine the post-PR state is the configured Code Review state, so the new head is
-  reviewed again — the review or QA verdict that sent the issue to `Rework` bound to the head it
+  from scratch or supersede the workpad: those belong to `Restart` (below). The post-PR state is
+  the configured Code Review state, so the new head is reviewed again — the review or QA verdict that sent the issue to `Rework` bound to the head it
   judged and does not carry over to a new one.
 - `Restart` is a person's move, made from the Director app's Inbox through the control API, and
   never by an agent. It performs the full reset in this order: close every open pull request of the
@@ -2018,12 +2018,9 @@ Important nuance:
   `### Superseded — attempt <n>` heading and writing a fresh set below it; then move the issue to
   `In Progress`. Each step is idempotent, so a second `Restart` with nothing left to do still
   succeeds, and the move is made only after the reset has succeeded — a reset that GitHub or Linear
-  refuses leaves the issue where it is and reports which step failed. On the designed machine the
-  guard refuses an agent's request to enter `In Progress` from `Rework`, the Code Review state, the
+  refuses leaves the issue where it is and reports which step failed. The guard refuses an agent's request to enter `In Progress` from `Rework`, the Code Review state, the
   QA state or `Merging`: on those phases the request can only mean a full reset, which is not the
-  agent's to make. `Restart` is offered on designed repos only — a legacy repo's `Rework` is
-  already the full reset. Each Inbox item carries its repo's resolved `state_machine`, and the app
-  leaves `Restart` out on a legacy one; the control API refuses it there too.
+  agent's to make. `Restart` is offered on every repo.
 - Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
   that `HEAD` differs from the one the run started on and has checks that are still running or
   have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
@@ -2128,9 +2125,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Detect running agents with no transcript event for the configured no-progress threshold.
   - Stop the wedged agent session, run `after_run`, emit `run_stuck`, and schedule retry.
 
-- `Post-PR Transition` (a legacy repo; a designed repo hands off on the explicit handoff signal,
-  Section 7.6)
-  - An active issue whose completed run opened a PR and has no rework signal moves to `In Review`.
+- `Post-PR Transition` (the handoff, Section 7.6)
+  - An active issue whose completed run opened a PR and has no rework signal moves to the
+    configured Code Review state.
   - It is a state move, not an agent run: it MUST count a PR attached to the issue when the
     continuation retry refetches it (the run that opens the PR was dispatched without one), and
     MUST NOT wait for an agent slot. An issue already waiting for a slot whose PR shows up later
@@ -2168,7 +2165,12 @@ writes.
 
 The poller:
 
-- discovers issues in `In Review` with attached GitHub PR URLs (attachments whose Linear metadata
+- discovers issues with attached GitHub PR URLs in the states it watches: the Code Review state,
+  the QA state and `Rework`, `Merging` when `pull_requests.auto_merge` is on, and stragglers left
+  in the draining `In Review` and `Human Review` states (Section 7.6), which finish on the path
+  they started on. In the phase states only a conflict, a merged PR or a closed one is the
+  poller's to act on: each phase's own machinery decides its verdicts and review comments, so the
+  review-decision and approval handling below applies to the stragglers. (Attachments whose Linear metadata
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
   reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
   issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
@@ -2176,7 +2178,7 @@ The poller:
   failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
   as they retry the first page, rather than seeing the issue without its PR; an issue the CI poller watches a PR
   for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
-  attachments show no PR);
+  attachments show no PR.)
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
@@ -2189,11 +2191,10 @@ The poller:
   already-answered comment is not replied to twice;
 - detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
-  and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
-  issue parked for a person (in the `issues.states.human_review` state, or outside
-  `tracker.active_states` with a label that asks for one, or with that state off in `In Review`
-  with an open request, as for a red head in the CI poller), or on an issue in none of
-  `tracker.active_states`, the review states and `Merging` (`Backlog`, say,
+  and moves the issue back to `In Progress` for agent-owned conflict resolution (a phase-state
+  issue's conflict routes to `CI Fix` instead); a conflict on an issue parked for a person
+  (outside `tracker.active_states` with a label that asks for one, as for a red head in the CI
+  poller), or on an issue in none of the machine's active states and `Merging` (`Backlog`, say,
   label or not), is
   recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
   and no retry used, until a person moves the issue on or removes the label;
@@ -2205,11 +2206,10 @@ The poller:
   example the agent merging its own PR) keeps its workspace until the run ends.
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
-  primary repository. On a designed repo it also tracks PRs of issues in the `Code Review`, `QA`
-  and `Rework` states, whose runs dispatch only on a green head and whose red heads enter
-  `CI Fix`. Once the CI-fix runs are used up (`ci.max_retries`), a legacy repo's issue moves to
-  `In Review`, and a designed repo's stays in its phase on a `Needs Decision` hold whose
-  confirmation sends it to `Rework`. It also tracks PRs of issues in
+  primary repository. It tracks PRs of issues in the `Code Review`, `QA` and `Rework` states,
+  whose runs dispatch only on a green head and whose red heads enter `CI Fix`. Once the CI-fix
+  runs are used up (`ci.max_retries`), the issue stays in its phase on a `Needs Decision` hold
+  whose confirmation sends it to `Rework`. It also tracks PRs of issues in
   `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
   CI-failure dispatch.
 - reads a PR head as green only once its CI has finished, not merely when every reported check
@@ -2342,14 +2342,13 @@ state transitions, and tracked PR cleanup. Pending review-comment, merge-conflic
 prompt context lookups use the issue's repository scope when one is known, and otherwise search the
 configured repositories.
 
-### 7.6 Ticket State Machine (`designed`)
+### 7.6 Ticket State Machine
 
-A repo's ticket state machine is chosen per repo by `repositories[].state_machine`: `legacy` (the
-default) or `designed`. One resolver (`StateMachine.version/1`) answers it for the transition guard,
-dispatch and prompt assembly alike. A `legacy` repo keeps every rule elsewhere in this
-specification that names `In Review`, the Human Review state, supervisor checks or
-`Final verification:` tickets. The `Auto Review` state and the acceptance gate are retired for
-both versions (see **Retired states** below). A `designed` repo runs the machine below instead. The design of
+Every repo runs the one machine below; the per-repo `repositories[].state_machine` switch is
+retired and loads with a deprecation warning. The review states of the earlier machine, `In Review`
+and `Human Review`, are retired with `Auto Review` and the acceptance gate, along with the
+supervisor checks and the final verification tickets that used them: only the drain of issues
+still sitting in them names them (see **Retired states** below). The design of
 record is [`docs/design/state-machine.md`](docs/design/state-machine.md); this section states what
 the implementation enforces.
 
@@ -2373,7 +2372,7 @@ States and owners:
 Rules:
 
 - **One writer.** Every move is a named signal performed through `TransitionGuard`, whose edge
-  table for a `designed` repo is the legacy table plus the designed edges. Agents and people request
+  table holds the machine's edges. Agents and people request
   moves; the guard validates and performs them. An agent's request to enter `Code Review`, `QA`,
   `Epic Review` or `Waiting on sub-tickets` MUST be refused; so MUST a request to enter `Plan Review`
   from any ticket but a plan parent, for which that request is the plan handoff. A request for
@@ -2422,10 +2421,18 @@ Rules:
   `Needs Decision` hold recommending `Rework`. Every escalation hold's confirmation continues into
   the QA state; its redirect sends the ticket to `Rework`. The Code Review reviewer, unlike the
   pre-push pass, judges the change against the ticket's acceptance criteria, scope and intent.
-- **Retired states.** No move may enter `Auto Review`: `TransitionGuard.perform/4` and an agent's
-  request both refuse it with `{:retired_state, name}`. A ticket still sitting in it is reported at
-  startup with an error log line naming it and the move that frees it (`RetiredStates.report/1`);
-  nothing dispatches or moves it.
+- **Retired states.** No move may enter `Auto Review` or the draining review states `In Review`
+  and `Human Review`: `TransitionGuard.perform/4` and an agent's request both refuse them with
+  `{:retired_state, name}`. Nothing dispatches from any of them. A ticket still sitting in one (a
+  straggler) is reported at startup with a log line naming it, what it waits on and the move that
+  frees it (`RetiredStates.report/1`): an error for `Auto Review`, a warning for a draining state.
+  The poll refreshes the report every five minutes, logging only new stragglers and the state each
+  one that left landed in, and the dashboard shows the last report. A straggler is moved on by a
+  person's hand: a parked plan into `Plan Review`, an open decision into its phase with a
+  `Needs Decision` hold. Until then the CI and PR review pollers keep watching its PR, so it
+  finishes on the path it started on, and the Inbox lists it (kind `plan`, `pr` or
+  `final_verification` for a `Final verification:` ticket left from before the drain). The draining
+  states are removed once the report is empty.
 - **Manual review.** With `repositories[].manual_review: on`, the step into `Merging` waits on a
   `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR;
   confirming continues into `Merging`. Rework verdicts never wait on a person.
@@ -2437,12 +2444,12 @@ Rules:
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
   machine enters `Epic Review` and runs the QA agent against the default branch; it files follow-ups
-  in `Todo` under the epic, never in `Backlog`. No `Final verification:` ticket or close-out run is
-  created for a `designed` repo.
-- **Prompt.** Prompt assembly passes `state_machine` to the template, serves each playbook
-  partial's `designed` variant when it has one, and a repo's instruction files MAY branch on
-  `state_machine`. A `designed` repo's rendered prompt MUST NOT name Auto Review, `In Review`, the
-  Human Review state, supervisor checks or `Final verification:` tickets.
+  in `Todo` under the epic, never in `Backlog`. The epic needs no verification sub-ticket and no
+  close-out run.
+- **Prompt.** Prompt assembly passes `state_machine` to the template as the constant `designed`,
+  so a repo's instruction file that still branches on it renders this machine's text. A rendered
+  prompt MUST NOT name a retired or draining state, supervisor checks or verification
+  sub-tickets.
 
 ## 8. Polling, Scheduling, and Reconciliation
 
@@ -2481,7 +2488,7 @@ An issue is dispatch-eligible only if all are true:
 - Blocker rule for `Todo` state passes:
   - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
   - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
-    `In Review`, `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
+    `Code Review`, `QA`, `CI Fix` and `Rework` still block, since the blocker's change is not on the
     default branch yet. A blocker without a known state counts as open.
   - A run whose issue ends a turn back in `Todo` with an open blocker stops; the issue is
     dispatched again on the first poll after every blocker is terminal.
@@ -2504,21 +2511,22 @@ An issue is dispatch-eligible only if all are true:
   - If the issue is a plan parent and its plan was approved, do not dispatch while any
     sub-issue is non-terminal (a sub-issue with an unknown state counts as non-terminal and
     approved). The parent waits while its sub-issues are worked and becomes eligible again for
-    close-out once every sub-issue is terminal. The same rule ends a running parent's
+    the epic review once every sub-issue is terminal. The same rule ends a running parent's
     continuation turns and its retries.
   - A plan is approved when a non-terminal sub-issue is outside `Backlog`, or a sub-issue is
     `Done`: approval moves every `Backlog` sub-issue to `Todo` at once, and nothing else promotes
     them. A plan parent whose non-terminal sub-issues are all in `Backlog` and none `Done`
     was never approved: its plan run stopped midway, or its plan is under review. Outside the
     waiting state it is not held, so in an active state it is dispatched as a `breakdown` run that
-    resumes the plan, keeps the sub-issues already filed and ends in `In Review`.
+    resumes the plan, keeps the sub-issues already filed and hands the parent to the Plan Review
+    state.
   - A plan parent in `Rework` is exempt: a human rejected its plan, so it is eligible for a
     re-plan (run kind `breakdown`) whatever its sub-issues' states, once its rejected sub-issues
     are cancelled (see the review rule below).
 - Waiting rule passes:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
-    plan parent with at least one sub-issue and every sub-issue is terminal (the close-out
-    run). Any other issue in that state is never dispatched, and waits for a human unless the
+    plan parent with at least one sub-issue and every sub-issue is terminal (the epic review,
+    which moves it to the Epic Review state, Section 7.6). Any other issue in that state is never dispatched, and waits for a human unless the
     merge of its pull request put it there (below).
   - When a pull request of an issue that is not a plan parent merges while the issue has a
     sub-issue that is neither terminal nor in `Backlog`, the service moves the issue to the waiting
@@ -2535,42 +2543,31 @@ An issue is dispatch-eligible only if all are true:
   - On each poll, a plan parent in `In Progress` whose approved plan has a non-terminal
     sub-issue, and that is not running or claimed, is moved to the waiting state (a never-approved
     plan is not), so `In Progress` only holds issues an agent
-    is working. The poll's candidates can be stale (a plan run that just moved its parent to
-    `In Review` still shows `In Progress`), so the service reads the parent's state again just
+    is working. The poll's candidates can be stale (a plan run that just handed its parent to
+    the Plan Review state still shows `In Progress`), so the service reads the parent's state again just
     before the move and skips it unless it is still `In Progress`; a failed read skips every
     parent until the next poll. Agents cannot move an issue there: `linear_update_state` refuses the state,
     because a human moving a parent there approves its plan (next rule).
-- Human review rule:
-  - An issue in the `issues.states.human_review` state waits for a person only; it is never
-    dispatched. The CI and PR review pollers watch its PR as in `In Review`, and wherever a
-    person's move out of `In Review` means something (a plan approval or rejection, a plan comment),
-    a move out of the human review state means the same. Merging, Rework and Done read only the
-    state moved to, so they behave the same from either.
-  - It is the one way to say a person needs to act; Symphony adds no label for it. The service puts
-    an issue there instead of `In Review` when only a person can move it on: `linear_update_state`
-    to `In Review` for a plan parent whose ticket has an `escalate.labels` label other than
-    `plan` and `breakdown`, matches one of its ticket patterns, or whose author says they review it
-    ("I only want to review and validate the artifacts"); `linear_request_human_action`, which
-    moves its issue there; and `linear_update_state` to `Backlog` or `In Review` from a run that
-    posted (or found open) such a request. The tool's answer names the state.
+- Waiting-on-a-person rule:
+  - A person needing to act is said by the `Needs Decision` hold (Section 7.6), never by a state:
+    `linear_request_human_action` sets it and leaves the issue in its phase, where it is not
+    dispatched until the decision is recorded. The plan parent in the Plan Review state is the one
+    issue that waits on a person in a state of its own; it is never dispatched.
+  - `issues.states.human_review` is deprecated with the retired `Human Review` state: a config that
+    sets it MUST load with a deprecation warning, and the value has no effect.
   - A config that still sets the deprecated `human_actions.label`, or lists `human-action` in
     `escalate.labels`, MUST load with a deprecation warning, and an
     issue carrying that label counts as one with an open request.
-  - When the state is null, or the startup check finds a configured team without it (the state is
-    then off until restart, with a warning), those issues go to `In Review` as before.
-  - The human-action update lists issues in the state first, the state API reports
-    `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
-    moves an issue out of it on the operator's behalf.
   - The state API reports `waiting_on_you`, the Inbox's items (`GET /api/v1/inbox`) in short:
-    oldest first, each with its identifier, repo, title, URL, kind (`action`, `final_verification`,
-    `plan`, `pr` or `clarify`), its one-line ask as `headline` and how long it has waited, and
-    `counts.waiting_on_you` is their number. It MUST drop an issue the orchestrator sees running or
-    watches outside the review states. `inbox_read` is false until Symphony's first successful
-    Linear read for the Inbox, so a client can tell an empty list from one not read yet.
+    oldest first, each with its identifier, repo, title, URL, kind (`action`, `plan`, `pr`,
+    `final_verification` for a straggler, `clarify` or `blocked`), its one-line ask as `headline`
+    and how long it has waited, and `counts.waiting_on_you` is their number. It MUST drop an issue
+    the orchestrator sees running, unless a hold pauses it. `inbox_read` is false until Symphony's
+    first successful Linear read for the Inbox, so a client can tell an empty list from one not
+    read yet.
 - Plan review rule:
-  - The plan run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
-    (`linear_update_state` allows `In Review` for a plan parent),
-    or to the human review state when the ticket asks for a human review (human review rule).
+  - The plan run leaves its sub-issues in `Backlog` and hands the parent to the Plan Review state
+    (`linear_update_state` allows it for a plan parent only, Section 7.6).
   - Comments: a person's comment on a plan parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, the
     review brief, a QA report, an `Action needed` request, a promote or cancel record, a
@@ -2580,47 +2577,47 @@ An issue is dispatch-eligible only if all are true:
     can share one Linear user, so the run's comments are told apart by id, which the run reports as
     it ends, and the others by how they start. The service reads the parent's history and comments
     only when the poll shows a comment newer than the last one it acted on.
-    - Plan under review (the parent in `In Review`, its plan not approved): the service moves the
-      parent to `In Progress`, where the resume rule dispatches a `breakdown` run that revises the
-      plan in place: it edits the artifact comments, updates, files or cancels `Backlog`
-      sub-issues only, replies under each comment, and moves the parent back to `In Review`. A
+    - Plan under review (the parent in the Plan Review state, its plan not approved): the service
+      moves the parent to `Rework`, where a `breakdown` run revises the plan in place: it edits
+      the artifact comments, updates, files or cancels `Backlog` sub-issues only, replies under
+      each comment, and hands the parent back to the Plan Review state. The plan's sub-issues
+      stay: the service's own move to `Rework` rejects nothing (Rejection, below). A
       comment counts when it is newer than the start of the service's last run on the parent and
       no later comment of that run answers it in its thread, so a comment made while the run
-      worked is acted on once the parent is back in `In Review`. When the run's comments are
-      unknown (a run from before a restart), a comment counts when it is newer than the parent's
-      latest move into `In Review` and than the end of that run.
-    - Plan in the human review state, not approved: nothing is dispatched and the parent stays
-      there, since the service never moves an issue out of it. A person moves it to `Rework` or
-      back to `In Review` to have the plan revised.
-    - Approved plan (the parent in the waiting state, or in `In Review` with its plan approved):
+      worked is acted on once the parent is back in the Plan Review state. When the run's comments
+      are unknown (a run from before a restart), a comment counts when it is newer than the
+      parent's latest move into the Plan Review state and than the end of that run.
+    - Approved plan (the parent in the waiting state, or in the Plan Review state with its plan
+      approved):
       nothing is dispatched and the plan is unchanged. Under each top-level comment newer than the
       parent's latest move into its state, the end of the service's last run on it and the
       service's start, the service replies once that if the comment asks for a plan change,
       `Rework` re-plans it. Replies inside a thread get nothing.
-    - `Rework` keeps its meaning: a full re-plan.
+    - A person's move to `Rework` keeps its meaning: a full re-plan.
   - Approval: on each poll, for a plan parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
-    its latest state change is `In Review` (or the human review state) to the waiting state, every sub-issue that has been in
+    its latest state change is the Plan Review state to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
     `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves. Only a person's move approves: the service
     and the reviewer can share one Linear user, so the service durably records when it moves a
     parent to the waiting state itself (before the move), and a change within 60 seconds of that
     record is not an approval. While that record cannot be read nothing moves.
-  - Rejection: for a plan parent in `Rework` with a sub-issue in `Backlog`, the rejected
+  - Rejection: for a plan parent a person moved to `Rework` with a sub-issue in `Backlog`, the rejected
     plan's sub-issues in `Backlog` since the parent's latest move to `Rework` are cancelled
     (`Canceled`, else `Cancelled`) before the re-plan is dispatched; until that succeeds the
-    parent is not dispatched. The plan's sub-issues are those created by the run that moved the
-    parent to `In Review`: from the parent's state change before its latest move to `In Review`
-    (before the `Rework` move) up to that move. With no such move nothing is cancelled.
+    parent is not dispatched. The plan's sub-issues are those created by the run that handed the
+    parent to the Plan Review state: from the parent's state change before its latest move there
+    (before the `Rework` move) up to that move. A move to `Rework` within 60 seconds of the
+    service's own recorded move is its plan revision, not a rejection, and cancels nothing. With no such move nothing is cancelled.
     Sub-issues a person added before that run or during the review, and sub-issues created by the
     re-plan, are left alone.
   - Record: after each batch the service posts one comment on the parent listing the identifiers
     it moved: `Promoted to Todo: TP-a, TP-b` or
     `Cancelled for re-plan: TP-c, TP-d (restore from Canceled if needed)`. A failed comment is
     logged and does not retry the batch.
-  - Both actions are idempotent across polls and restarts: a sub-issue a human (or a final
-    verification run) moves back to `Backlog` later is not moved again. The service remembers the
+  - Both actions are idempotent across polls and restarts: a sub-issue a human moves back to
+    `Backlog` later is not moved again. The service remembers the
     `Backlog` sub-issues it last acted on per parent and skips the history read while they are
     unchanged; a failed read or move is retried on the next poll.
   - At startup the service checks the configured teams have the waiting state. When it is
@@ -2652,13 +2649,13 @@ transitions stay with a person, forced or not:
 | Transition | Who |
 | --- | --- |
 | `Backlog` -> `Todo` | a person promotes the issue; forcing does not |
-| `In Review` -> `Merging` | a person approves the PR |
-| `In Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a plan |
-| any state -> `Rework` | a person rejects the approach |
-| `Final verification:` `In Review` -> `Done` | a person signs it off |
+| the Plan Review state -> the waiting state (default `Waiting on sub-tickets`) | a person approves a plan |
+| the Plan Review state -> `Rework` | a person rejects a plan |
+| a `Needs Decision` hold cleared | a person records the decision |
+| any state -> `In Progress` through `Restart` | a person resets the attempt |
 
-The review-agent verdict and, on a designed repo, the Code Review and QA verdicts are still required
-for a forced issue.
+The review-agent verdict and the Code Review and QA verdicts are still required for a forced
+issue.
 
 ### 8.3 Concurrency Control
 
@@ -2695,20 +2692,18 @@ Forced allowance:
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
   per-host worker cap, blocked-by links, setup-failure suppression, retry backoff,
   and the auto-merge / `Merging` CI waits.
-- A forced plan parent is one forced unit; its plan, re-plan and close-out runs are
+- A forced plan parent is one forced unit; its plan, re-plan and epic review runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
   forced too, without the service writing the label on it: the first issue on its epic path
   (see Epic lanes below) that is dispatch-eligible, in epic-lane order
   (stage, then nearest the epic, then dispatch order), so a blocked sub-issue waits for its
-  blocker and the `Final verification:` sub-issue comes once it is unblocked. The part keeps its
+  blocker. The part keeps its
   parent's place in the forced queue, and stays the parent's while it is on the path and running,
   claimed or waiting on a retry, so at most one of the parent's issues runs on the
   forced allowance at a time. The parent's other
   sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
-- Forcing never moves an issue or approves a plan: a forced parent in `In Review` stays there until
-  a human moves it.
-- A forced `Final verification:` ticket is an ordinary dispatch and uses the forced allowance like
-  any other run.
+- Forcing never moves an issue or approves a plan: a forced parent in the Plan Review state stays
+  there until a human moves it.
 
 Finishing limit:
 
@@ -2727,7 +2722,8 @@ Epic lanes:
 - An active epic is a plan parent waiting on its sub-issues with at least one sub-issue
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
 - An active epic yields while nothing on its path can run: every open issue on the path is in
-  `In Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
+  the Plan Review state, `Backlog`, `Triage` or a draining review state (Section 7.6), has no
+  known state, is a plan parent waiting on its
   sub-issues (outside `Rework`), or is a `Todo` with open blockers. A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
@@ -3500,8 +3496,8 @@ Scoped Linear tool extension contract:
   issues it blocks or is blocked by, its parent, its siblings (the parent's other children) and its
   sub-issues. Without arguments it lists them as summaries. With an `identifier` (and an optional
   `comment_limit`) it reads that one issue's title, description, state, labels and comments,
-  wrapped, truncated and secret-redacted like the current issue's reads, so a final verification
-  can read its siblings' QA reports and a sub-issue its parent's workpad. Any other identifier MUST
+  wrapped, truncated and secret-redacted like the current issue's reads, so a sub-issue can read
+  its siblings' QA reports and its parent's workpad. Any other identifier MUST
   fail with an explicit error that lists the family, before the issue is read. It stays read-only
   and is available to the read-only reviewer and QA scopes.
 - Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
@@ -3591,16 +3587,16 @@ Scoped Linear tool extension contract:
   `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
   one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
   exactly one of them `recommended`; a request without it, or with fewer than 2 options, MUST be
-  refused with an error that says so. A person only gets decisions: a check an agent can't run goes
-  to the supervisor as a `## Supervisor check` in `In Review` instead. Every field MUST pass the
+  refused with an error that says so. A person only gets decisions: a check an agent can't run
+  belongs to CI or a QA playbook, never to a person. Every field MUST pass the
   same secret scan as comments before any Linear call. It posts a
   `## Decision needed: <title>` comment (the question, then the numbered options with the
   recommended one marked, and no steps) that Symphony's human-action project updates list, and
-  those updates still read a hand-written `## Action needed: <title>` comment. It moves the
-  current issue to the `issues.states.human_review` state (`In Review` when that state is off), and
-  MUST NOT add a label. The request stays open until a person moves the issue out of that state, or
-  it is withdrawn. A request with the same title still open on the issue MUST NOT be posted again;
-  the issue still moves. Requests
+  those updates still read a hand-written `## Action needed: <title>` comment. It MUST NOT move
+  the issue and MUST NOT add a label itself: it sets the `Needs Decision` hold (Section 7.6), which
+  pauses the issue in its phase. The request stays open until a person answers it (a reply under
+  the request, or the Inbox's Decide), or it is withdrawn. A request with the same title still open
+  on the issue MUST NOT be posted again; the issue still gains the hold. Requests
   MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
   against, or when the issue's repository turned human actions off. The read-only reviewer scope
   MUST NOT advertise or execute it.
@@ -3608,10 +3604,8 @@ Scoped Linear tool extension contract:
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
   before any Linear call. It replies `## Action withdrawn` with the reason under each open request
   on the issue (only the one whose title matches, when `title` is given). Once no open request is
-  left, an issue in the Human Review state goes back to the active state it came from
-  (`In Progress` when its history doesn't say), a deprecated request label comes off, and the
-  run's later moves to `Backlog` or `In Review` MUST NOT go to the Human Review state on account of
-  its requests. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
+  left, a deprecated request label comes off and the `Needs Decision` hold is cleared, so the issue
+  continues in place; while another request is still open the hold stays. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
   open request to withdraw it MUST change nothing. The read-only reviewer scope MUST NOT advertise
   or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
@@ -3861,8 +3855,8 @@ Orchestrator behavior on tracker errors:
   whole QA walkthrough again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
   and the first-turn stall check and the no-progress watchdog do not restart it before that wait
   ends. A run that still fails on one once the wait runs out keeps its attempt and is retried after
-  5 s (or when the pause ends) instead of the failure backoff, as are a post-PR move to Code Review
-  or In Review, a retry's issue refresh, and a retry's dispatch refresh that hit one. A retry whose
+  5 s (or when the pause ends) instead of the failure backoff, as are a post-PR move to Code Review,
+  a retry's issue refresh, and a retry's dispatch refresh that hit one. A retry whose
   dispatch refresh fails for any reason is scheduled again rather than dropped.
 - Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
   poller, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
@@ -3881,7 +3875,7 @@ Symphony does not require first-class tracker write APIs in the orchestrator.
   agent using tools defined by the workflow prompt.
 - The service remains a scheduler/runner and tracker reader.
 - Workflow-specific success often means "reached the next handoff state" (for example
-  `Human Review`) rather than tracker terminal state `Done`.
+  `Code Review`) rather than tracker terminal state `Done`.
 - If scoped Linear client-side tool extensions are implemented, they are still part of the agent
   toolchain rather than orchestrator business logic.
 
@@ -3992,11 +3986,12 @@ SHOULD return:
   forced parent's current part
 - `forced` rows SHOULD include `title`, `repo_key` (null when Symphony hasn't routed the issue yet),
   `sub_issue` (a forced plan parent's current part, or null)
-  and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
+  and `waiting_on_human` (the issue is in `Backlog`, `Triage`, the Plan Review state or a draining
+  review state)
 - `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
   `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`,
-  `qa`, `breakdown`, `close_out`, `final_verification`, `epic_review`), `running` (an agent run is
+  `qa`, `breakdown`, `epic_review`), `running` (an agent run is
   going for it), `waiting_on` (one of `slot`, `human`, `ci`, `blocker`, `usage_limit`, `paused`, `backlog`,
   or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
   one-line `summary`; for a forced plan parent with a current part, the phase and what it
@@ -4303,7 +4298,7 @@ Minimum endpoints:
         {
           "issue_id": "stu901",
           "issue_identifier": "MT-655",
-          "title": "Final verification: Export",
+          "title": "Export the run history as CSV",
           "state": "Todo",
           "kind": "blockers",
           "reason": null,
@@ -4313,7 +4308,7 @@ Minimum endpoints:
         {
           "issue_id": "stu902",
           "issue_identifier": "MT-658",
-          "title": "Final verification: Pause",
+          "title": "Pause a running agent from the menu bar",
           "state": "Todo",
           "kind": "app_update",
           "reason": "waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`",
@@ -4348,7 +4343,7 @@ Minimum endpoints:
           "repo_key": "web",
           "issue_id": "ghi789",
           "issue_identifier": "MT-651",
-          "state": "In Review",
+          "state": "Code Review",
           "url": "https://linear.app/example/issue/MT-651",
           "last_ran_at": "2026-02-24T18:15:00Z",
           "seconds_since_last_run": 7230
@@ -4515,18 +4510,21 @@ Minimum endpoints:
     last), for the Mac app's Inbox. Read-only, served like `/api/v1/state`, and it MUST make no
     tracker request: the implementation reads the tracker on its own poll and serves what it cached.
   - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
-    one query per repository route lists the issues in its scope in `In Review`, the human review
-    state or the Plan Review state (`issues.states.plan_review`, where a designed repo's plan waits
-    for approval; not queried when it is `null`) with their `updatedAt` and the last edit of their
-    newest comment; only an issue whose pair changed since the last read is read again in full
-    (comments, state history, labels, attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
+    one query per repository route lists the issues in its scope that carry the `Needs Decision`
+    or `Blocked` label, are plan parents in the Plan Review state (`issues.states.plan_review`), or
+    are stragglers in a draining review state (Section 7.6), with their `updatedAt` and the last
+    edit of their newest comment; only an issue whose
+    pair changed since the last read is read again in full (comments, state history, labels,
+    attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
     `inbox`.
-  - One item per issue in a review state, and per plan parent (label `plan` or `breakdown`) in the
-    Plan Review state, with `kind` `action` (an open `linear_request_human_action` request,
-    whatever else it is), else `final_verification` (title starts `Final verification:`), else
-    `plan` (label `plan` or `breakdown`), else `pr`; and one item per quality-gate hold or skip
-    (`awaiting_clarification`, `skipped`), with `kind` `clarify`. An issue the orchestrator sees running, or watches outside the review states (for a
-    plan, outside the Plan Review state it was listed in), is dropped.
+  - One item per listed issue, with `kind` `action` (an open `linear_request_human_action`
+    request, whatever else it is); for a plan parent in the Plan Review state, else `plan`; for a
+    straggler in a draining state, else `final_verification` (a `Final verification:` ticket left
+    from before the drain), else `plan` (label `plan` or `breakdown`), else `pr`; else `blocked`
+    for an access hold a person lifts with `Unblock`, with the reason the hold recorded and what
+    clears it; and one item per quality-gate hold or skip (`awaiting_clarification`, `skipped`),
+    with `kind` `clarify`. An issue the orchestrator sees running, or saw leave the draining states
+    (for a plan, the Plan Review state it was listed in), is dropped unless a hold pauses it.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
     asks), `waiting_since` (the later of the latest move into its state and its newest open
@@ -4554,22 +4552,31 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 0, "pr": 1, "final_verification": 0, "action": 0, "clarify": 1},
+      "counts": {"total": 2, "plan": 0, "pr": 0, "final_verification": 0, "action": 1, "clarify": 1},
       "items": [
         {
           "issue_id": "i-206",
           "identifier": "BIL-206",
           "title": "Prorate plan changes mid-cycle",
           "repo_key": "api",
-          "kind": "pr",
-          "state": "In Review",
-          "ask": "Proration for plan changes in the middle of a billing cycle.",
+          "kind": "action",
+          "state": "Code Review",
+          "ask": "Prorate by day or by second?",
           "waiting_since": "2026-10-07T12:49:00Z",
           "waiting_seconds": 5460,
           "url": "https://linear.app/acme/issue/BIL-206",
           "review": {
-            "brief": {"format": "parsed", "headline": "Proration for plan changes in the middle of a billing cycle.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": [], "supervisor_check": null},
-            "pull_request": {"url": "https://github.com/acme/api/pull/412", "ci": "passed", "qa": {"verdict": "pass", "report_url": "https://linear.app/acme/issue/BIL-206#comment-5d1e0a2c"}, "gate": {"verdict": "escalate", "mode": "shadow", "agent_verdict": "approve"}, "change": {"files": 9, "additions": 412, "deletions": 38, "largest": []}}
+            "title": "Prorate by day or by second?",
+            "question": "Should a mid-cycle plan change prorate by day or by second?",
+            "why": "The billing provider supports both, and invoices differ by a few cents.",
+            "unblocks": "the proration change",
+            "est_minutes": 5,
+            "steps": [],
+            "options": [
+              {"label": "By day", "effect": "Invoices match the provider's dashboard.", "recommended": true},
+              {"label": "By second", "effect": "Invoices are exact; the dashboard rounds differently.", "recommended": false}
+            ],
+            "requested_at": "2026-10-07T12:49:00Z"
           }
         },
         {
@@ -4585,8 +4592,8 @@ Minimum endpoints:
 
 - `GET /api/v1/initiatives`
   - Returns the plan tickets (label `plan` or `breakdown`) the operator follows to done, for the Mac
-    app's Initiatives: active ones, then those in review (`In Review`, the human review state, the
-    Plan Review state or `Epic Review`), then those done in the last 7 days. A canceled plan, one in
+    app's Initiatives: active ones, then those in review (the Plan Review state, `Epic Review`, or a
+    draining review state for a straggler, Section 7.6), then those done in the last 7 days. A canceled plan, one in
     Backlog or Triage, and one done earlier are left out. Read-only, served like `/api/v1/state`,
     and it MUST make no tracker request: the implementation reads the tracker on its own poll and
     serves what it cached.
@@ -4598,16 +4605,17 @@ Minimum endpoints:
     (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `final_verification`, `counts`
     and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out and the `Final
-    verification:` sub-issue set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    order; a cycle is broken by creation order), canceled ones left out and a final verification
+    sub-issue left from before the drain set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
     `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
     state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
     Review, QA, Merging, CI Fix or Epic Review with nothing running) or `slot` (it can run and waits
     for a free slot).
-  - `final_verification` is the `Final verification:` sub-issue in the same shape plus
-    `open_tickets`, the number of sub-tickets not done yet; null without one.
+  - `final_verification` is, for an epic planned before the drain, its `Final verification:`
+    sub-issue in the same shape plus `open_tickets`, the number of sub-tickets not done yet; null
+    without one, as for every epic planned since.
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
   - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),
@@ -4788,19 +4796,21 @@ Minimum endpoints:
     its current state doesn't allow with `409` (`move_not_allowed` and a message that says why),
     posts its comment when it has one, makes the Linear move, writes a `director_move` audit record
     (`move`, `from_state`, `to_state`, the comment; `GET /api/v1/audit?type=director_move` lists
-    them) and answers `200` with the states it moved between:
+    them) and answers `200` with the states it moved between. A review state below is the Plan
+    Review state, where a plan parent waits for its plan's review, or a draining state, where a
+    straggler waits for a person's hand move (Section 7.6):
 
     | Move | From | To | Comment |
     | --- | --- | --- | --- |
-    | `approve_plan` | a plan in `In Review` or the Human Review state | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
+    | `approve_plan` | a plan in a review state | the waiting state | none; Symphony promotes its `Backlog` sub-tickets as for a person's approval |
     | `approve_pr` | a pull request in a review state | `Merging` | none |
     | `rework` | any ticket in a review state | `Rework` | `reason` (required), posted before the move |
-    | `restart` | any open ticket of a designed repo (409 on a legacy one) | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
-    | `decisions` | a plan in a review state | `In Review` from the Human Review state, else no move | one comment with `picks` (required, `[{"question", "answer"}]`), posted after the move |
-    | `sign_off` | a `Final verification:` ticket in a review state | `Done` | none |
+    | `restart` | any open ticket | `In Progress`, after the reset | `reason` (required), posted before the move; the reset (close the pull requests, remove the workspaces, supersede the workpad) runs first, and a reset that fails answers `502` `restart_incomplete` and makes no move |
+    | `decisions` | a plan in a review state | no move | one comment with `picks` (required, `[{"question", "answer"}]`) |
+    | `sign_off` | a `Final verification:` straggler in a draining state | `Done` | none |
     | `backlog` | any open ticket | `Backlog` | `note` (optional), posted before the move |
     | `unblock` | any ticket waiting on an access hold (an agent's block report) | no move; the hold clears and the ticket continues in place | one comment, posted after the hold clears |
-    | `decide` | any designed repo's ticket waiting on a `Needs Decision` hold | no move, else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
+    | `decide` | any ticket waiting on a `Needs Decision` hold, or a straggler a request parked in a draining state | no move (a straggler moves to `Todo`), else the state `move` names (`rework` or `done`), through the guard | the answer, posted as a reply under the request comment `request_comment_id` names; `picks` are required |
     | `undo` | the state the ticket's last move put it in | the state it came from | none |
 
   - The comments are the Director's, not Symphony's: none starts like a comment Symphony posts
@@ -4808,7 +4818,8 @@ Minimum endpoints:
     plan.
   - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
     still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
-    otherwise it answers `409`. A comment the move posted stays. A `restart` is never undoable: it
+    otherwise it answers `409`. A move out of a draining state is never taken back: no move may
+    enter one again. A comment the move posted stays. A `restart` is never undoable: it
     closed the pull request, removed the workspace and superseded the workpad, none of which comes
     back, so `undo` answers `409` and the ticket stays in `In Progress`.
   - `undo` of `approve_pr` reads the ticket's pull request first. One already merged answers `409`
@@ -4824,18 +4835,17 @@ Minimum endpoints:
   - When Linear takes the first of a move's two writes and refuses the second, the move answers
     `502` `move_incomplete` with a message that says what was already done, and still writes the
     audit record of what changed, with `failed` naming the write that didn't happen (`comment` or
-    `move`). Decisions moved to `In Review` without their comment keep their undo; sending them
-    again posts the comment. A `rework` or `backlog` comment posted without its move is not posted
+    `move`). A `rework` or `backlog` comment posted without its move is not posted
     again when the same move is sent again while the ticket is still in the same state.
   - Suggested response shape:
 
     ```json
     {
-      "move": "approve_pr",
+      "move": "approve_plan",
       "issue_id": "def456",
       "issue_identifier": "BIL-206",
-      "from_state": "In Review",
-      "to_state": "Merging",
+      "from_state": "Plan Review",
+      "to_state": "Waiting on sub-tickets",
       "moved": true,
       "commented": false,
       "undo_window_ms": 10000
@@ -5519,11 +5529,11 @@ infrastructure.
 - The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
   operator pause, blocked-by links and a `paused` usage-limit hold do
 - A forced plan parent waiting on its sub-issues forces one issue on its epic path at a
-  time, in blocked-by order and without labelling it, then its close-out run; a forced parent in
-  `In Review` is not moved
+  time, in blocked-by order and without labelling it, then its epic review; a forced parent in
+  the Plan Review state is not moved
 - The snapshot's `forced` rows report each forced issue's phase and what it waits on (an open
   blocker by identifier); a forced issue past `forced_stale_after_hours` is `stale` and notified
-  once; a forced issue entering `In Review` is notified; a forced issue that reaches a terminal
+  once; a forced plan parent entering the Plan Review state is notified; a forced issue that reaches a terminal
   state leaves the queue with reason `done` and loses its label
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
@@ -5538,23 +5548,25 @@ infrastructure.
   is terminal it is eligible
 - plan parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
   is eligible as a `breakdown` run and is not moved to the waiting state
-- a person's comment on a plan parent in `In Review` with an unapproved plan moves it to
-  `In Progress`; the service's own comments, a supervisor's notes (`Supervisor review:`,
-  `Supervisor note:`) and integration bots' comments move nothing; a person's comment on one in the
-  human review state moves nothing; a person's
-  comment made while the revision run worked moves it again once it is back in `In Review`; a
+- a person's comment on a plan parent in the Plan Review state with an unapproved plan moves it
+  to `Rework` and cancels none of its sub-issues; the service's own comments, a supervisor's notes
+  (`Supervisor review:`, `Supervisor note:`) and integration bots' comments move nothing; a
+  person's comment on a plan parent in any other state moves nothing; a person's
+  comment made while the revision run worked moves it again once it is back in the Plan Review
+  state; a
   top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
   thread or a comment from before the service started gets none
 - plan parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
   an issue in the waiting state is eligible only as a plan parent whose sub-issues are all
   terminal
-- plan parent moved from `In Review` to the waiting state has its `Backlog` sub-issues moved
+- plan parent moved from the Plan Review state to the waiting state has its `Backlog` sub-issues moved
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing
 - plan parent parked from `In Progress` to the waiting state has nothing promoted
-- plan parent the poll cache shows `In Progress` but a fresh read shows `In Review` is not
-  moved, and its `Backlog` sub-issues stay there
-- a waiting-state move the service made itself is never an approval, even from `In Review`
+- plan parent the poll cache shows `In Progress` but a fresh read shows the Plan Review state is
+  not moved, and its `Backlog` sub-issues stay there
+- a waiting-state move the service made itself is never an approval, even from the Plan Review
+  state
 - plan parent in `Rework` has the rejected plan's pre-`Rework` `Backlog` sub-issues
   cancelled, leaves a `Backlog` sub-issue a person created outside that run alone, is not held
   by its open sub-issues, and is not dispatched until the cancel succeeds
