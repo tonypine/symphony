@@ -2477,7 +2477,12 @@ Rules:
   and before the summary block, on the read that sees it: one entry per answered request, keyed by
   the request comment so a repeat writes nothing, numbered `D1`, `D2`… with the date, the question,
   the answer and what it means for scope (deferred to a named ticket, out of scope, in scope, or as
-  answered). Every byte outside the section, and the entries already in it, MUST stay unchanged.
+  answered). The key MUST be read from the entry's `<!-- symphony:decision:<id> -->` marker
+  wherever it stands, since Linear rewrites the markdown it stores (`*` bullets, escapes, blank
+  lines). Every byte outside the section, and the entries already in it, MUST stay unchanged, but
+  for an empty heading left right before the section or the summary block (Linear's reading of a
+  marker written above `---`). A section that holds a request more than once MUST be rewritten once,
+  each entry kept at its first place and numbered again.
   The reviewer and QA prompts MUST render the section with the rule that a finding contradicting a
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an

@@ -15,8 +15,11 @@ defmodule SymphonyElixir.Decisions do
         - **Scope:** Deferred to TP-891
 
   An entry carries the id of the request comment it answers, so writing the same answer again
-  changes nothing. New entries go at the end of the section; every byte outside it, and the entries
-  already in it, stay as they are, so a person's text is never rewritten.
+  changes nothing. The id is read from its marker wherever it stands in the section, since Linear
+  rewrites the markdown it stores (`*` bullets, escapes, blank lines). New entries go at the end of
+  the section; every byte outside it, and the entries already in it, stay as they are, so a person's
+  text is never rewritten. A section that holds an id more than once is rewritten once, each
+  decision kept at its first place and numbered again.
 
   A decision is recorded when a person answers it: `sync/2` writes the answered requests of a ticket
   the Inbox read (a reply under the request), and the Director's Decide writes its picks
@@ -33,8 +36,10 @@ defmodule SymphonyElixir.Decisions do
   @end_marker "<!-- symphony:decisions:end -->"
   @heading "### Decisions"
   @intro "_Symphony records a person's answer to each decision request here. Reviews, QA and later runs follow them._"
-  @entry_pattern ~r/^- \*\*(D\d+)\*\* · (\S+) · (.*?) <!-- symphony:decision:(\S+) -->$/
-  @field_pattern ~r/^\s+- \*\*(Question|Answer|Scope):\*\* (.*)$/
+  # Linear stores a list item written `- ` as `* `.
+  @entry_pattern ~r/^[-*+] \*\*(D\d+)\*\* · (\S+) · (.*?) <!-- symphony:decision:(\S+) -->\s*$/
+  @field_pattern ~r/^\s+[-*+] \*\*(Question|Answer|Scope):\*\* (.*)$/
+  @key_pattern ~r/<!-- symphony:decision:(\S+) -->/
   @identifier_pattern ~r/\b[A-Z][A-Z0-9]*-\d+\b/
   @defer_pattern ~r/\bdefer\w*\b/i
   @out_of_scope_pattern ~r/\b(defer\w*|out of scope|not in scope|leave (it|them|that) (out|for))\b/i
@@ -58,6 +63,7 @@ defmodule SymphonyElixir.Decisions do
   @type recorded :: %{
           id: String.t(),
           key: String.t(),
+          date: String.t(),
           title: String.t(),
           question: String.t(),
           answer: String.t(),
@@ -131,8 +137,8 @@ defmodule SymphonyElixir.Decisions do
   Writes `entries` into `description`: the ones whose request is not recorded yet go at the end of
   the section, numbered after the ones already there. A description with no section gets one,
   before the summary block or at the end. Returns the description unchanged when every entry is
-  already recorded. A start marker without an end marker is refused, since the section's end can't
-  be told from a person's text.
+  already recorded and the section holds each once. A start marker without an end marker is
+  refused, since the section's end can't be told from a person's text.
   """
   @spec put(String.t() | nil, [entry()]) :: {:ok, String.t()} | {:error, :decisions_block_unterminated}
   def put(description, entries) when is_list(entries) do
@@ -141,41 +147,59 @@ defmodule SymphonyElixir.Decisions do
     case split(description) do
       :none -> {:ok, insert(description, entries)}
       {:unterminated, _before} -> {:error, :decisions_block_unterminated}
-      {:block, before, block, rest} -> {:ok, before <> extend(block, entries) <> rest}
+      {:block, before, block, rest} -> {:ok, replace(description, before, block, extend(block, entries), rest)}
     end
   end
 
   defp insert(description, entries) do
     case missing(entries, []) do
       [] -> description
-      new -> place(description, Enum.join([@start_marker, @heading, "", @intro, "", render_entries(new, 1), @end_marker], "\n"))
+      new -> place(description, section(new))
     end
   end
+
+  defp replace(description, _before, block, block, _rest), do: description
+  defp replace(_description, before, _block, extended, rest), do: IssueSummary.drop_empty_heading(before) <> extended <> rest
 
   defp extend(block, entries) do
-    recorded = parse_entries(block)
+    keys = keys(block)
+    new = missing(entries, keys)
 
-    case missing(entries, recorded) do
-      [] ->
+    cond do
+      repeated?(keys) ->
+        section(Enum.uniq_by(parse_entries(block), & &1.key) ++ new)
+
+      new == [] ->
         block
 
-      new ->
+      true ->
         inner = String.trim_trailing(String.replace_suffix(block, @end_marker, ""))
-        inner <> "\n" <> render_entries(new, length(recorded) + 1) <> "\n" <> @end_marker
+        inner <> "\n" <> render_entries(new, length(keys) + 1) <> "\n\n" <> @end_marker
     end
   end
 
+  defp section(entries), do: Enum.join([@start_marker, @heading, "", @intro, "", render_entries(entries, 1), "", @end_marker], "\n")
+
+  # The ids of the requests the section records, as often as it holds them.
+  defp keys(block), do: @key_pattern |> Regex.scan(block, capture: :all_but_first) |> List.flatten()
+
+  defp repeated?(keys), do: length(keys) != length(Enum.uniq(keys))
+
   # The entries whose request has no entry yet, each once.
-  defp missing(entries, recorded) do
-    keys = MapSet.new(recorded, & &1.key)
+  defp missing(entries, keys) do
+    keys = MapSet.new(keys)
     entries |> Enum.reject(&MapSet.member?(keys, &1.key)) |> Enum.uniq_by(& &1.key)
   end
 
-  # Before the summary block, which stays the description's last part, or at the end.
+  # Before the summary block, which stays the description's last part, or at the end. The empty
+  # heading Linear may have made of the summary's marker line goes.
   defp place(description, section) do
     case :binary.split(description, IssueSummary.start_marker()) do
-      [before, after_start] -> place(before, section) <> "\n\n" <> IssueSummary.start_marker() <> after_start
-      [_none] -> String.trim_trailing(description) <> separator(description) <> section
+      [before, after_start] ->
+        place(IssueSummary.drop_empty_heading(before), section) <> "\n\n" <> IssueSummary.start_marker() <> after_start
+
+      [_none] ->
+        String.trim_trailing(description) <> separator(description) <> section
     end
   end
 
@@ -187,7 +211,7 @@ defmodule SymphonyElixir.Decisions do
     |> Enum.map_join("\n", fn {entry, index} ->
       Enum.join(
         [
-          "- **D#{index}** · #{Date.to_iso8601(entry.date)} · #{entry.title} <!-- symphony:decision:#{entry.key} -->",
+          "- **D#{index}** · #{date_text(entry.date)} · #{entry.title} <!-- symphony:decision:#{entry.key} -->",
           "  - **Question:** #{entry.question}",
           "  - **Answer:** #{entry.answer}",
           "  - **Scope:** #{entry.scope}"
@@ -197,11 +221,14 @@ defmodule SymphonyElixir.Decisions do
     end)
   end
 
-  @doc "The decisions recorded in `description`, in order, each with its `D<n>` label."
+  defp date_text(%Date{} = date), do: Date.to_iso8601(date)
+  defp date_text(date), do: date
+
+  @doc "The decisions recorded in `description`, in order and each once, with its `D<n>` label."
   @spec recorded(String.t() | nil) :: [recorded()]
   def recorded(description) when is_binary(description) do
     case split(description) do
-      {:block, _before, block, _rest} -> parse_entries(block)
+      {:block, _before, block, _rest} -> block |> parse_entries() |> Enum.uniq_by(& &1.key)
       _none -> []
     end
   end
@@ -213,8 +240,8 @@ defmodule SymphonyElixir.Decisions do
     |> String.split("\n")
     |> Enum.reduce([], fn line, acc ->
       case {Regex.run(@entry_pattern, line), Regex.run(@field_pattern, line), acc} do
-        {[_line, id, _date, title, key], _field, acc} ->
-          [%{id: id, key: key, title: title, question: "", answer: "", scope: ""} | acc]
+        {[_line, id, date, title, key], _field, acc} ->
+          [%{id: id, key: key, date: date, title: title, question: "", answer: "", scope: ""} | acc]
 
         {nil, [_line, field, value], [entry | rest]} ->
           [Map.put(entry, field_key(field), value) | rest]
@@ -330,23 +357,35 @@ defmodule SymphonyElixir.Decisions do
   @doc """
   Records the decisions answered on a ticket node (`answered/1`) in its description. The node's own
   description is checked first, so a ticket whose decisions are all recorded costs no Linear call;
-  otherwise `record/3` reads the description again and writes what is missing. A failure is logged
-  and returned, never raised: the next poll tries again.
+  otherwise `record/3` reads the description again and writes what is missing, or rewrites a
+  section that holds a decision more than once. A failure is logged and returned, never raised: the
+  next poll tries again.
   """
   @spec sync(map(), keyword()) :: :ok | {:error, term()}
   def sync(%{"id" => issue_id} = node, opts) when is_binary(issue_id) do
-    case missing(answered(node), recorded(node["description"])) do
-      [] -> :ok
-      entries -> record(issue_id, entries, opts)
+    keys = section_keys(node["description"])
+
+    case {missing(answered(node), keys), repeated?(keys)} do
+      {[], false} -> :ok
+      {entries, _repeated} -> record(issue_id, entries, opts)
     end
   end
 
   def sync(_node, _opts), do: :ok
 
+  defp section_keys(description) when is_binary(description) do
+    case split(description) do
+      {:block, _before, block, _rest} -> keys(block)
+      _none -> []
+    end
+  end
+
+  defp section_keys(_description), do: []
+
   @doc """
   Writes `entries` into the issue's description, read through the tracker right before the write
   so a person's edit since the last read survives. Nothing is written when every entry is already
-  recorded. `opts[:tracker]` overrides the tracker.
+  recorded and the section holds each once. `opts[:tracker]` overrides the tracker.
   """
   @spec record(String.t(), [entry()], keyword()) :: :ok | {:error, term()}
   def record(issue_id, entries, opts \\ []) when is_binary(issue_id) and is_list(entries) do
