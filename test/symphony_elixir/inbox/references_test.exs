@@ -401,6 +401,20 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
       assert resolved.context.earlier_decisions == [%{at: "2026-10-11T01:00:00Z", title: "New", answer: "No"}, %{at: nil, title: "Old", answer: "Yes"}]
     end
 
+    test "does not reuse a failed pull request read" do
+      item = item("TP-1", action("#448"))
+      url = "https://github.com/tonypine/symphony/pull/448"
+      failing = github(%{url => {:error, :timeout}})
+      {[_resolved], cache} = References.resolve([item], %{}, opts(linear([], []), failing))
+      assert_received {:github, ^url}
+      assert %{^url => {_at, {:error, :timeout}}} = cache
+
+      {[resolved], new_cache} = resolve([item], linear([], []), github(%{}), cache: cache, now_ms: @now + 1)
+      assert_received {:github, ^url}
+      assert resolved.references["#448"].kind == "pull_request"
+      assert %{^url => {_at, {:ok, _pr}}} = new_cache
+    end
+
     test "reuses a pull request read younger than two minutes, and reads at most 30 per poll" do
       item = item("TP-1", action("#448"))
       {[_resolved], cache} = References.resolve([item], %{}, opts(linear([], []), github(%{})))

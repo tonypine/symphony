@@ -515,8 +515,9 @@ defmodule SymphonyElixir.Inbox.References do
     end)
   end
 
-  defp fresh?({at, _result}, now), do: now - at < @pull_request_ttl_ms
-  defp fresh?(nil, _now), do: false
+  # Only a successful read is reused; a failed one is retried on the next poll.
+  defp fresh?({at, {:ok, _pr}}, now), do: now - at < @pull_request_ttl_ms
+  defp fresh?(_entry, _now), do: false
 
   defp fetch_pull_request(fetch, url) do
     case fetch.(url) do
