@@ -16,6 +16,20 @@ mise install
 mise exec -- mix setup
 ```
 
+### Xcode
+
+`.xcode-version` at the repo root pins the one Xcode every macOS workflow on `macos-26` builds
+the Mac app with (`macos.yml`, `macos-e2e.yml`), so CI and the release compile with the same
+Swift. The policy is the newest Xcode installed on GitHub's `macos-26` runner image.
+`scripts/ci/xcode-developer-dir.sh` prints its `/Applications/Xcode_<version>.app/Contents/Developer`
+for `DEVELOPER_DIR` and fails, naming the wanted version and the Xcodes found, when the runner
+lacks it; it never falls back to another version.
+
+To bump it when the image adds an Xcode, read the Xcode table in the
+[runner-images `macos-26` readme](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md),
+write the newest version exactly as its `/Applications/Xcode_<version>.app` name spells it, and
+fix any new Swift errors in `macos/` in the same pull request. The release workflows use it too.
+
 ## Pre-push hook
 
 `make setup` runs `git config core.hooksPath .githooks`, which turns on
@@ -154,15 +168,15 @@ itself changed.
 
 ## Packaging
 
-Packaged macOS binaries are built with Burrito and include the Erlang runtime:
+The packaged build is the plain `mix release`, Erlang runtime included:
 
 ```bash
-make package
+make release
 ```
 
-Release artifacts are written to `burrito_out/` such as `burrito_out/symphony-macos-arm64`. Set
-`BURRITO_TARGET=macos_arm64` to build only that one. Releases ship it inside `Symphony.app`; see
-[Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
+It writes `_build/prod/rel/symphony`. Releases ship it inside `Symphony.app`, in
+`Contents/Resources/symphony-release`, and run it in place through the launcher at
+`Contents/Resources/symphony`; see [Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
 
 ## Why Elixir?
 

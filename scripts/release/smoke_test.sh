@@ -1,5 +1,7 @@
 #!/bin/sh
-# Smoke-tests a Burrito-built `symphony` binary. Prints each command's full
+# Smoke-tests a packaged `symphony`: Symphony.app's launcher
+# (Contents/Resources/symphony, next to the release in symphony-release/) or a
+# release's bin/symphony-app. Prints each command's full
 # output and exit code, so a failing release run shows what the binary did.
 #
 #   1. `symphony --help` prints its usage and exits 1.
@@ -9,16 +11,17 @@
 #      node name symphony@127.0.0.1, `check` still prints "Config OK" and exits 0,
 #      and still exits 1 for broken YAML, an unknown key and a missing file.
 #
-# Each run gets a fresh HOME, so Burrito unpacks this binary's own payload
-# instead of reusing an install dir left by an earlier binary of the same version.
+# Each run gets a fresh HOME, so no state from an earlier run is reused. The
+# release runs in place: no run may leave a `.burrito` unpack folder in its HOME
+# (`Library/Application Support/.burrito`), and the release must be unchanged.
 # `check` rejects a `strategy: worktree` repo that doesn't exist, so each fresh
 # HOME gets an empty git repo at every `repo: ~/...` path CONFIG names.
 # The run uses its own epmd port, so a Symphony already running on this machine
 # neither blocks the service instance nor stands in for it.
 #
 # BINARY may also be the `mix escript.build` escript (bin/symphony), as PR CI
-# runs it. Only the Burrito binary takes the node name, so for an escript step 3
-# runs the error cases without a service.
+# runs it. Only the release takes the node name, so for an escript step 3 runs
+# the error cases without a service.
 #
 # Usage:
 #   scripts/release/smoke_test.sh BINARY CONFIG
@@ -41,11 +44,18 @@ export ERL_EPMD_PORT
 # for `repo: ~/Projects/symphony`.
 home_repos="$(sed -n 's|^[[:space:]]*repo:[[:space:]]*~/\([^[:space:]#]*\).*|\1|p' "$config")"
 add_home_repos=1
-# A Burrito binary is a native executable; the escript starts with a shebang.
-# The escript runs on the Erlang on PATH, found here with the real HOME: a
-# version manager's shims may not resolve under a fresh one.
+# The release's launcher sits next to symphony-release/ (in the app) or in the
+# release's bin/; anything else is the escript, which runs on the Erlang on PATH,
+# found here with the real HOME: a version manager's shims may not resolve under
+# a fresh one.
 escript=0
-if [ "$(head -c 2 "$binary")" = "#!" ]; then
+binary_dir="$(cd "$(dirname "$binary")" && pwd -P)"
+release=""
+if [ -f "$binary_dir/symphony-release/releases/start_erl.data" ]; then
+  release="$binary_dir/symphony-release"
+elif [ -f "$binary_dir/../releases/start_erl.data" ]; then
+  release="$(cd "$binary_dir/.." && pwd -P)"
+else
   escript=1
   PATH="$(erl -noshell -eval 'io:put_chars(code:root_dir()), halt().')/bin:$PATH"
   export PATH
@@ -70,6 +80,19 @@ create_home_repos() {
   done
 }
 
+# Fails the test when a run left a Burrito-style unpack folder under HOME.
+check_no_unpack() {
+  if [ -e "$1/Library/Application Support/.burrito" ]; then
+    echo "::error::symphony unpacked into $1/Library/Application Support/.burrito; it must run from the release in place."
+    failed=1
+  fi
+}
+
+# Lists the release's files with their sizes and modification times.
+release_fingerprint() {
+  find "$release" -type f -exec stat -f '%z %m %N' {} + | sort
+}
+
 # run EXPECTED_EXIT EXPECTED_TEXT ARGS...
 run() {
   expected_exit="$1"
@@ -87,6 +110,7 @@ run() {
   printf '%s\n' "$output"
   echo "exit code: $code"
   echo "::endgroup::"
+  check_no_unpack "$home"
   rm -rf "$home"
 
   if [ "$code" -ne "$expected_exit" ]; then
@@ -112,9 +136,6 @@ start_service() {
 
   attempt=0
   while [ "$attempt" -lt 120 ]; do
-    if [ -z "$epmd" ]; then
-      epmd="$(find "$service_home" -path '*/erts-*/bin/epmd' -type f 2>/dev/null | head -n 1)"
-    fi
     if [ -n "$epmd" ] && "$epmd" -names 2>/dev/null | grep -q '^name symphony '; then
       "$epmd" -names
       echo "::endgroup::"
@@ -132,6 +153,11 @@ start_service() {
   echo "::error::The symphony service did not register symphony@127.0.0.1 with epmd."
   return 1
 }
+
+if [ -n "$release" ]; then
+  epmd="$(find "$release" -path '*/erts-*/bin/epmd' -type f | head -n 1)"
+  release_fingerprint >"$work/release-before.txt"
+fi
 
 run 1 "Usage: symphony" --help
 run 0 "Config OK" check --config "$config"
@@ -158,6 +184,20 @@ elif start_service; then
   check_errors
 else
   failed=1
+fi
+
+if [ -n "$release" ]; then
+  if [ -n "$service_pid" ]; then
+    kill "$service_pid" 2>/dev/null || true
+    wait "$service_pid" 2>/dev/null || true
+    service_pid=""
+  fi
+  check_no_unpack "$work/service-home"
+  release_fingerprint >"$work/release-after.txt"
+  if ! diff -u "$work/release-before.txt" "$work/release-after.txt"; then
+    echo "::error::The release under $release changed while symphony ran; it must run in place, read-only."
+    failed=1
+  fi
 fi
 
 exit "$failed"
