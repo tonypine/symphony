@@ -32,11 +32,10 @@
     "claimed": 3,
     "conflicts": 0,
     "forced": 0,
-    "human_review": 0,
     "retrying": 0,
     "running": 3,
     "shipped_today": 3,
-    "waiting_on_you": 6,
+    "waiting_on_you": 5,
     "watching": 5
   },
   "dispatch_state": {
@@ -91,7 +90,6 @@
   },
   "forced": [],
   "generated_at": "2026-10-07T14:20:00Z",
-  "human_review": [],
   "linear_usage": {
     "callers": [
       {
@@ -331,7 +329,7 @@
       "issue_identifier": "SHOP-330",
       "kind": "plan",
       "repo_key": "web-shop",
-      "state": "In Review",
+      "state": "Plan Review",
       "title": "Gift cards at checkout",
       "url": "https://linear.app/acme/issue/SHOP-330",
       "waiting_seconds": 11520,
@@ -344,24 +342,11 @@
       "issue_identifier": "BIL-206",
       "kind": "pr",
       "repo_key": "api",
-      "state": "In Review",
+      "state": "QA",
       "title": "Prorate plan changes mid-cycle",
       "url": "https://linear.app/acme/issue/BIL-206",
       "waiting_seconds": 5460,
       "waiting_since": "2026-10-07T12:49:00Z"
-    },
-    {
-      "checks_green": false,
-      "headline": "Every requirement of BIL-200 checked on main; one supervisor check left.",
-      "issue_id": "i-200",
-      "issue_identifier": "BIL-213",
-      "kind": "final_verification",
-      "repo_key": "api",
-      "state": "In Review",
-      "title": "Final verification: Usage-based billing",
-      "url": "https://linear.app/acme/issue/BIL-213",
-      "waiting_seconds": 2700,
-      "waiting_since": "2026-10-07T13:35:00Z"
     },
     {
       "checks_green": false,
@@ -370,7 +355,7 @@
       "issue_identifier": "NOTE-90",
       "kind": "action",
       "repo_key": "docs",
-      "state": "Human Review",
+      "state": "In Progress",
       "title": "Sign the release build",
       "url": "https://linear.app/acme/issue/NOTE-90",
       "waiting_seconds": 1260,
@@ -433,7 +418,7 @@
       "pull_request_url": null,
       "repo_key": "docs",
       "seconds_since_last_run": 11520,
-      "state": "Human Review",
+      "state": "QA",
       "title": "Quick start rewrite",
       "url": "https://linear.app/acme/issue/DOCS-40"
     },
@@ -444,7 +429,7 @@
       "pull_request_url": null,
       "repo_key": "web-shop",
       "seconds_since_last_run": 2400,
-      "state": "Human Review",
+      "state": "QA",
       "title": "Address autocomplete",
       "url": "https://linear.app/acme/issue/SHOP-290"
     },

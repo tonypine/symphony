@@ -240,8 +240,6 @@ struct InboxReviewBody: View {
             case .pr:
                 if let pullRequest = item.review.pullRequest { ChecksCard(pullRequest: pullRequest) }
                 BriefSections(brief: item.review.brief)
-            case .finalVerification:
-                BriefSections(brief: item.review.brief)
             case .action:
                 if let action = item.review.action {
                     ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, answerable: action.commentID != nil && action.decision != nil)
@@ -403,11 +401,6 @@ private struct BriefSections: View {
                                 .font(DesignTokens.TypeStyle.body.font)
                         }
                     }
-                }
-            }
-            if let check = parsed.supervisorCheck {
-                Card(title: "Supervisor check") {
-                    Text(check).font(DesignTokens.TypeStyle.mono.font).textSelection(.enabled)
                 }
             }
         case let .raw(markdown):

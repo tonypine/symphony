@@ -164,26 +164,27 @@ defmodule SymphonyElixir.DependencyGate do
 
     %{
       title: "Approve the dependency changes on #{label}",
-      question: "#{label}'s pull request is blocked by the dependency audit. How should it continue?",
+      question: "#{label} adds or changes outside packages that Symphony's package check holds for approval. How should it continue?",
       why: finding_why(finding),
+      if_unanswered: "#{label} stays where it is and its pull request is not opened.",
       options: [
         %{
           label: "Allow them",
-          effect: "you allow the sources in `dependency_audit` in symphony.yml; the ticket continues and its next run opens the pull request",
+          effect: "you add these package sources to the repository's allowed list in Symphony's settings; the ticket continues and its next run opens the pull request",
           recommended: false
         },
-        %{label: "Drop them", effect: "the ticket continues and its next run removes the dependency changes before it opens the pull request", recommended: true}
+        %{label: "Drop them", effect: "the ticket continues and its next run removes the package changes before it opens the pull request", recommended: true}
       ],
-      est_minutes: 5
+      recommendation_reason: "The ticket can usually do without a new package, and nothing new enters the code without a review."
     }
   end
 
   defp finding_why({:hold, items}) do
     changes = Enum.map_join(items, ", ", &"#{Map.get(&1, :package)} (#{Map.get(&1, :reason)})")
-    "The dependency audit holds pull request creation until a person approves these changes: #{changes}."
+    "The package check holds the pull request until a person approves these changes: #{changes}."
   end
 
-  defp finding_why({:error, reason}), do: "The dependency audit could not run (#{inspect(reason)}), so pull request creation is blocked."
+  defp finding_why({:error, _reason}), do: "The package check could not run, so the pull request is held until a person decides."
 
   @doc """
   Build the structured failure response that mirrors `Codex.DynamicTool`

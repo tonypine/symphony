@@ -3,8 +3,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `Needs Decision` hold's label, is a `Final verification:` ticket, or carries a
-  deprecated request label (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
+  that carries the `Needs Decision` hold's label, or carries a deprecated request label
+  (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
 
   - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn or answered one is not listed;
@@ -23,7 +23,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
   alias SymphonyElixir.Linear.Client
-  alias SymphonyElixir.{PersonWait, RunKind, SubIssueWait}
+  alias SymphonyElixir.{PersonWait, SubIssueWait}
 
   @issue_first 50
   @comment_last 30
@@ -249,10 +249,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp filter(scope, settings) do
     labelled = Enum.map(PersonWait.legacy_request_labels(settings), &label_filter/1)
-    final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
     # A request leaves the ticket in its phase, so the hold's label is what finds it.
     held = label_filter(Hold.label(:needs_decision))
-    wanted = %{"or" => labelled ++ [final_verification, held]}
+    wanted = %{"or" => labelled ++ [held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -355,8 +354,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
       kind: :request,
       title: request.title,
       why: request.why,
+      if_unanswered: request.if_unanswered,
       unblocks: request.unblocks,
-      est_minutes: request.est_minutes,
       question: request.question,
       options: request.options,
       steps: request.steps,

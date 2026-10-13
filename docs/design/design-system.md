@@ -204,7 +204,7 @@ SF Symbols 7, hierarchical rendering, `.imageScale(.medium)` in rows. (The mock 
 | Audit | `list.bullet.clipboard` |
 | Repos | `square.stack.3d.up` |
 | Diagnostics | `stethoscope` |
-| Plan / PR / Action / Clarify / Final verification | `doc.text.magnifyingglass` / `arrow.triangle.pull` / `hand.raised` / `questionmark.bubble` / `checkmark.seal` |
+| Plan / PR / Action / Clarify / Blocked | `doc.text.magnifyingglass` / `arrow.triangle.pull` / `hand.raised` / `questionmark.bubble` / `hand.raised.slash` |
 
 ## 4. Patterns
 
@@ -223,8 +223,8 @@ When something is wrong it says how many things, and the list below names them.
 
 ### P2. Flow strip
 
-The stages a ticket passes through, left to right, as stat tiles joined by chevrons: Queued → Working → Auto Review →
-Waiting on you → Merging → Shipped today. Each tile is a count, a label and one line of context, and opens Tickets (or
+The stages a ticket passes through, left to right, as stat tiles joined by chevrons: Queued → Working → Code Review &
+QA → Waiting on you → Merging → Shipped today. Each tile is a count, a label and one line of context, and opens Tickets (or
 the Inbox) filtered to that stage. "Waiting on you" is the only tile with a status tint. Stages at 0 keep their place
 in `text.tertiary`. It replaces nine equal metric cards.
 
@@ -306,7 +306,7 @@ Each component names its SwiftUI base, its parts, its states and what VoiceOver 
 | C12 | Bar and column charts | Swift Charts `BarMark` / `RuleMark` | Bars ≤ 24 pt thick with 4 pt rounded data-ends; stacked segments split by a 2 pt gap; hairline grid; one reference line (budget); value on the last bar | Hover tooltip per bar; a table view behind **Show Data** | `AXChartDescriptor` with the series |
 | C13 | Sparkline | Swift Charts `LineMark`, no axes | 2 pt line in `text.tertiary`, last point in the accent with a surface ring | | Summarised in the tile label |
 | C14 | Run timeline | `List` of steps with a connecting line | Time, step symbol, step ("Implementation run", "QA pass", "Gate: approve"), result, duration, tokens; current step live | Done, current, failed, stopped | "13:03, implementation run 1, failed, 22 minutes" |
-| C15 | Review view | `ScrollView` of C10 sections | Headline, what to review (links), decisions (C16), sub-tickets or checks, what changed | Plan, PR, action, clarify, final verification | Headings per section |
+| C15 | Review view | `ScrollView` of C10 sections | Headline, what to review (links), decisions (C16), sub-tickets or checks, what changed | Plan, PR, action, clarify, blocked | Headings per section |
 | C16 | Decision card | `GroupBox` with a `Picker(.radioGroup)` | Question, options (A/B/C, one line each), "Recommended" badge on one, the pick | Recommended picked by default; changed (enables **Send Decisions**) | "Decision 1, where gift cards are bought, option A, recommended, selected" |
 | C17 | Consequence sheet | `.sheet` with `Form` | Title as a question, what happens, what stays, options, Cancel + verb | Default, working (spinner in the footer), error inline | Standard sheet |
 | C18 | Banner | Custom `HStack` on glass at the foot of the window, or tinted `surface.raised` inline | Symbol, text, actions (Undo), close | Info, warning, error, success with Undo | Announced once when it appears; not repeated on later polls |
@@ -330,7 +330,7 @@ Each component names its SwiftUI base, its parts, its states and what VoiceOver 
 ## 7. Content
 
 - Use the workflow's words: Todo, In Progress, Code Review, QA, Plan Review, Merging, Done, Rework, Backlog; and the
-  Director's words for stages: Queued, Working, Auto Review, Waiting on you, Merging, Shipped.
+  Director's words for stages: Queued, Working, Code Review & QA, Waiting on you, Merging, Shipped.
 - A ticket is always its identifier and its title together.
 - Durations are short and exact: "14 min", "3 h 12 min", "2 days". Times: relative in rows ("12 min ago"), absolute on
   hover ("Today 14:03").

@@ -184,9 +184,7 @@ public struct TicketList: Equatable {
         for ticket in state.watching {
             let stage: Stage
             let waitsOn: String
-            if Self.isState(ticket.state, "Human Review") {
-                (stage, waitsOn) = (.waitingOnYou, "you")
-            } else if Self.isState(ticket.state, "Merging") {
+            if Self.isState(ticket.state, "Merging") {
                 (stage, waitsOn) = (.merging, "CI")
             } else {
                 let qa = ticket.issueID.map(qaIDs.contains) == true || Self.isState(ticket.state, "QA")
@@ -232,6 +230,14 @@ public struct TicketList: Equatable {
                 identifier: blocked.identifier, issueID: blocked.issueID, title: blocked.title, repoKey: nil, state: blocked.state,
                 stage: .queued, waitsOn: waitsOn, since: nil, forced: false, needsAttention: false, url: nil,
                 facts: blocked.reason.map { [Fact(label: "Why", value: $0)] } ?? []
+            ))
+        }
+        // Passed over by a dispatch gate: it waits on that gate, since the pass first saw it.
+        for skipped in state.dispatchSkipped {
+            builder.add(Row(
+                identifier: skipped.identifier, issueID: skipped.issueID, title: skipped.title, repoKey: skipped.repoKey,
+                state: skipped.state, stage: .queued, waitsOn: skipped.reason ?? "a dispatch gate",
+                since: skipped.since, forced: false, needsAttention: false, url: nil, facts: []
             ))
         }
         for forced in state.snapshot.forced {

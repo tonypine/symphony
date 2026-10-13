@@ -20,7 +20,7 @@
     "pull_request_url": "https://github.com/acme/docs/pull/88",
     "repo_key": "docs",
     "seconds_since_last_run": 11520,
-    "state": "Human Review",
+    "state": "QA",
     "url": "https://linear.app/acme/issue/DOCS-40"
   },
   "workspace": null

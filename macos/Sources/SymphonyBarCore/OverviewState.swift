@@ -11,12 +11,12 @@ public struct OverviewState: Equatable {
     /// The repos Symphony has tickets in, for the scope pop-up.
     public var repos: [String]
     public var running: [Run]
-    /// Tickets Symphony ran and now watches in Linear: Code Review, QA, In Review, Human Review, Merging.
+    /// Tickets Symphony ran and now watches in Linear: Code Review, QA, Merging.
     public var watching: [Ticket]
-    /// Tickets in Human Review, which wait on the Director.
-    public var humanReview: [Ticket]
     public var retrying: [Retry]
     public var slotWaiting: [Waiting]
+    /// Tickets the last dispatch pass passed over, each with the gate that held it (`reason`) and since when.
+    public var dispatchSkipped: [Waiting]
     public var conflicts: [Conflict]
     /// Tickets Symphony saw reach Done today, newest first.
     public var shippedToday: [Ticket]
@@ -225,9 +225,9 @@ public struct OverviewState: Equatable {
         repos: [String] = [],
         running: [Run] = [],
         watching: [Ticket] = [],
-        humanReview: [Ticket] = [],
         retrying: [Retry] = [],
         slotWaiting: [Waiting] = [],
+        dispatchSkipped: [Waiting] = [],
         conflicts: [Conflict] = [],
         shippedToday: [Ticket] = [],
         shippedTodayCount: Int? = nil,
@@ -243,9 +243,9 @@ public struct OverviewState: Equatable {
         self.repos = repos
         self.running = running
         self.watching = watching
-        self.humanReview = humanReview
         self.retrying = retrying
         self.slotWaiting = slotWaiting
+        self.dispatchSkipped = dispatchSkipped
         self.conflicts = conflicts
         self.shippedToday = shippedToday
         self.shippedTodayCount = shippedTodayCount
@@ -284,7 +284,6 @@ public struct OverviewState: Equatable {
                 )
             },
             watching: (payload.watching ?? []).compactMap(ticket),
-            humanReview: (payload.humanReview ?? []).compactMap(ticket),
             retrying: (payload.retrying ?? []).compactMap { retry in
                 guard let identifier = retry.issueIdentifier ?? retry.issueId else { return nil }
                 return Retry(
@@ -297,18 +296,8 @@ public struct OverviewState: Equatable {
                     error: retry.error
                 )
             },
-            slotWaiting: (payload.slotWaiting ?? []).compactMap { waiting in
-                guard let identifier = waiting.issueIdentifier ?? waiting.issueId else { return nil }
-                return Waiting(
-                    issueID: waiting.issueId,
-                    identifier: identifier,
-                    title: waiting.title,
-                    repoKey: waiting.repoKey,
-                    state: waiting.state,
-                    reason: waiting.reason,
-                    since: waiting.since.flatMap(SymphonyState.parseDate)
-                )
-            },
+            slotWaiting: (payload.slotWaiting ?? []).compactMap(waiting),
+            dispatchSkipped: (payload.dispatchSkipped ?? []).compactMap(waiting),
             conflicts: (payload.conflicts ?? []).compactMap { conflict in
                 guard let identifier = conflict.issueIdentifier ?? conflict.issueId else { return nil }
                 return Conflict(
@@ -359,6 +348,19 @@ public struct OverviewState: Equatable {
             url: entry.url.flatMap(URL.init(string:)),
             secondsSinceLastRun: entry.secondsSinceLastRun,
             completedAt: entry.completedAt.flatMap(SymphonyState.parseDate)
+        )
+    }
+
+    private static func waiting(_ entry: Payload.Waiting) -> Waiting? {
+        guard let identifier = entry.issueIdentifier ?? entry.issueId else { return nil }
+        return Waiting(
+            issueID: entry.issueId,
+            identifier: identifier,
+            title: entry.title,
+            repoKey: entry.repoKey,
+            state: entry.state,
+            reason: entry.reason,
+            since: entry.since.flatMap(SymphonyState.parseDate)
         )
     }
 
@@ -472,9 +474,9 @@ public struct OverviewState: Equatable {
         let counts: Counts?
         let running: [Running]?
         let watching: [Ticket]?
-        let humanReview: [Ticket]?
         let retrying: [Retry]?
         let slotWaiting: [Waiting]?
+        let dispatchSkipped: [Waiting]?
         let conflicts: [Conflict]?
         let shippedToday: [Ticket]?
         let qa: Passes?

@@ -17,7 +17,6 @@ defmodule SymphonyElixir.RunKindTest do
              :implementation,
              :breakdown,
              :close_out,
-             :final_verification,
              :rework,
              :landing,
              :code_review,
@@ -36,7 +35,7 @@ defmodule SymphonyElixir.RunKindTest do
 
     assert RunKind.reserved_kinds() == [:pre_push_review]
     assert doc =~ "`pre_push_review` is never returned by `classify/2`"
-    assert doc =~ "Neither are `close_out` and `final_verification`"
+    assert doc =~ "Neither is `close_out`"
   end
 
   test "classify/2 can return every kind except the reserved and retired ones" do
@@ -57,14 +56,7 @@ defmodule SymphonyElixir.RunKindTest do
     end
 
     assert Enum.map(samples, &elem(&1, 0)) |> Enum.sort() ==
-             Enum.sort(RunKind.kinds() -- (RunKind.reserved_kinds() ++ [:close_out, :final_verification]))
-  end
-
-  test "the final-verification title prefix is exposed for callers that read the title" do
-    assert RunKind.final_verification_prefix() == "Final verification:"
-    assert RunKind.final_verification_title?("  Final verification: Run profiles")
-    refute RunKind.final_verification_title?("Plan the Final verification: later")
-    refute RunKind.final_verification_title?(nil)
+             Enum.sort(RunKind.kinds() -- (RunKind.reserved_kinds() ++ [:close_out]))
   end
 
   describe "classify/2" do
@@ -114,8 +106,10 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(parent, terminal_states: ["Shipped"]) == :epic_review
     end
 
-    test "a Final verification: title names no run kind" do
+    test "a Final verification: title names no run kind of its own" do
       assert RunKind.classify(issue(title: "Final verification: Run profiles")) == :implementation
+      assert RunKind.classify(issue(title: "Final verification: X", state: "Rework")) == :rework
+      assert RunKind.classify(breakdown_parent(title: "Final verification: X", sub_issues: [])) == :breakdown
     end
 
     test "Merging is a landing run and Rework a rework run, whatever the case" do

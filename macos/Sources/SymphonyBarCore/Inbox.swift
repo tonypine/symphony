@@ -41,7 +41,6 @@ public struct InboxItem: Equatable, Identifiable {
     public enum Kind: String, CaseIterable, Equatable {
         case plan
         case pr
-        case finalVerification = "final_verification"
         case action
         case clarify
         /// A ticket an access hold pauses in place, waiting on an Unblock.
@@ -52,7 +51,6 @@ public struct InboxItem: Equatable, Identifiable {
             switch self {
             case .plan: "Plans"
             case .pr: "Pull requests"
-            case .finalVerification: "Final verifications"
             case .action: "Actions"
             case .clarify: "Clarify"
             case .blocked: "Blocked"
@@ -64,7 +62,6 @@ public struct InboxItem: Equatable, Identifiable {
             switch self {
             case .plan: "Plan"
             case .pr: "Pull request"
-            case .finalVerification: "Final verification"
             case .action: "Action"
             case .clarify: "Clarify"
             case .blocked: "Blocked"
@@ -76,7 +73,6 @@ public struct InboxItem: Equatable, Identifiable {
             switch self {
             case .plan: "doc.text.magnifyingglass"
             case .pr: "arrow.triangle.pull"
-            case .finalVerification: "checkmark.seal"
             case .action: "hand.raised"
             case .clarify: "questionmark.bubble"
             case .blocked: "hand.raised.slash"
@@ -166,7 +162,7 @@ public struct InboxItem: Equatable, Identifiable {
 
 /// The review of an item (C15): which parts it has depends on its kind.
 public struct InboxReview: Equatable {
-    /// A plan's, PR's or final verification's `## Review brief`; nil when the ticket has none.
+    /// A plan's or PR's `## Review brief`; nil when the ticket has none.
     public var brief: Brief?
     /// A plan's sub-tickets, in landing order.
     public var subTickets: [SubTicket]
@@ -222,7 +218,6 @@ public struct InboxReview: Equatable {
         public var whatChanged: [String]
         public var decisions: [Decision]
         public var moves: [Move]
-        public var supervisorCheck: String?
     }
 
     public struct SubTicket: Equatable {
@@ -253,10 +248,14 @@ public struct InboxReview: Equatable {
         public var title: String?
         public var question: String?
         public var why: String?
+        /// What waits or repeats until someone answers; nil on an older request.
+        public var ifUnanswered: String? = nil
         public var unblocks: String?
         public var estMinutes: Int?
         public var steps: [String]
         public var options: [Option]
+        /// Why the recommended option is the one to pick; nil on an older request.
+        public var recommendationReason: String? = nil
         /// The id of the request comment a decision answers: its reply goes under it. Nil for a request Symphony
         /// can't answer from the Inbox.
         public var commentID: String?
@@ -268,6 +267,18 @@ public struct InboxReview: Equatable {
             public var label: String
             public var effect: String?
             public var recommended: Bool
+            /// Up to three things picking the option gains, costs or risks.
+            public var tradeoffs: [Tradeoff] = []
+        }
+
+        /// One line on what an option gains (`good`), costs (`cost`) or risks (`risk`).
+        public struct Tradeoff: Equatable {
+            public enum Kind: String, Equatable {
+                case good, cost, risk
+            }
+
+            public var kind: Kind
+            public var text: String
         }
 
         /// The request as one decision (C16), so the Inbox's picks answer it: its question and its options, the
@@ -367,7 +378,6 @@ public struct InboxReview: Equatable {
             let whatChanged: [String]?
             let decisions: [DecisionPayload]?
             let moves: [MovePayload]?
-            let supervisorCheck: String?
         }
 
         struct SubTicketPayload: Decodable {
@@ -388,13 +398,19 @@ public struct InboxReview: Equatable {
             let qa: QA?
         }
 
+        struct TradeoffPayload: Decodable {
+            let kind: String?
+            let text: String?
+        }
+
         struct OptionPayload: Decodable {
             let label: String?
             let effect: String?
             let recommended: Bool?
+            let tradeoffs: [TradeoffPayload]?
         }
 
-        // A plan, PR or final verification.
+        // A plan or PR.
         let brief: BriefPayload?
         let subTickets: [SubTicketPayload]?
         let pullRequest: PullRequestPayload?
@@ -402,10 +418,12 @@ public struct InboxReview: Equatable {
         let title: String?
         let question: String?
         let why: String?
+        let ifUnanswered: String?
         let unblocks: String?
         let estMinutes: Int?
         let steps: [String]?
         let options: [OptionPayload]?
+        let recommendationReason: String?
         /// The request comment a decision answers.
         let commentId: String?
         /// The state confirming the request moves the ticket to.
@@ -443,12 +461,24 @@ public struct InboxReview: Equatable {
                 title: payload.title,
                 question: payload.question,
                 why: payload.why,
+                ifUnanswered: payload.ifUnanswered,
                 unblocks: payload.unblocks,
                 estMinutes: payload.estMinutes,
                 steps: payload.steps ?? [],
                 options: (payload.options ?? []).compactMap { option in
-                    option.label.map { Action.Option(label: $0, effect: option.effect, recommended: option.recommended ?? false) }
+                    option.label.map {
+                        Action.Option(
+                            label: $0,
+                            effect: option.effect,
+                            recommended: option.recommended ?? false,
+                            tradeoffs: (option.tradeoffs ?? []).compactMap { tradeoff in
+                                guard let kind = tradeoff.kind.flatMap(Action.Tradeoff.Kind.init(rawValue:)), let text = tradeoff.text else { return nil }
+                                return Action.Tradeoff(kind: kind, text: text)
+                            }
+                        )
+                    }
                 },
+                recommendationReason: payload.recommendationReason,
                 commentID: payload.commentId,
                 confirm: payload.confirm
             ),
@@ -490,8 +520,7 @@ public struct InboxReview: Equatable {
             moves: (payload.moves ?? []).compactMap { move in
                 guard let name = move.move, let text = move.text else { return nil }
                 return Move(move: name, text: text)
-            },
-            supervisorCheck: payload.supervisorCheck
+            }
         ))
     }
 }
@@ -577,7 +606,7 @@ public enum InboxAction: Equatable {
     public static func actions(for item: InboxItem) -> [InboxAction] {
         let linear = item.url.map(InboxAction.openInLinear)
         switch item.kind {
-        case .plan, .finalVerification:
+        case .plan:
             return [linear].compactMap { $0 }
         case .pr:
             let pr = item.review.pullRequest?.url.map(InboxAction.openPR)

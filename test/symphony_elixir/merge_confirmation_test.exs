@@ -2,7 +2,7 @@ defmodule SymphonyElixir.MergeConfirmationTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Handoff, Hold, MergeConfirmation, RunStore, TicketSignals, Workflow}
-  alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "repo-a"
@@ -54,19 +54,21 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       request = MergeConfirmation.request(issue(), summary)
 
       assert request.title == "Merge TP-825"
-      assert request.question == "Merge TP-825 into its base branch?"
-      assert request.est_minutes == 1
+      assert request.question == "Merge TP-825 (T) into its base branch?"
+      assert request.if_unanswered == "TP-825 waits in QA and is not merged."
+      refute Map.has_key?(request, :est_minutes)
 
       assert request.why ==
-               "Recommendation: QA passed on 12 files · Code Review: the reviewer approved · QA: all checks green · " <>
-                 "PR: https://github.com/acme/web/pull/7"
+               "Recommendation: QA passed on 12 files · Code Review: the reviewer approved · QA: all checks green · PR #7"
 
       assert [merge, rework] = request.options
       assert %{label: "Merge", recommended: true} = merge
       assert merge.effect =~ "Merging"
       assert %{label: "Send to Rework", recommended: false} = rework
       assert rework.effect =~ "Rework"
-      assert rework.effect =~ "https://github.com/acme/web/pull/7"
+      assert rework.effect =~ "a run changes PR #7"
+      assert PlainWords.findings(request) == []
+      assert PlainWords.tokens(Request.render_hold(request, "QA")) == []
     end
 
     test "a summary part it has none of is left out, and a long one is collapsed and truncated" do
@@ -86,17 +88,22 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       request = MergeConfirmation.request(issue(%{identifier: nil}), parts(%{recommendation: :awaiting}))
 
       assert request.title == "Merge \"issue-1\""
-      assert request.question == "Merge \"issue-1\" into its base branch?"
+      assert request.question == "Merge \"issue-1\" (T) into its base branch?"
       assert request.why =~ "Recommendation: :awaiting"
+
+      bare = MergeConfirmation.request(issue(%{title: nil, state: nil}), parts(%{pr: "https://gitlab.example.com/acme/web/-/merge_requests/7"}))
+      assert bare.question == "Merge TP-825 into its base branch?"
+      assert bare.if_unanswered == "TP-825 waits and is not merged."
+      refute bare.why =~ "PR"
     end
 
     test "the attrs are the decision payload plus the move confirming performs" do
       request = MergeConfirmation.request(issue(), parts())
       attrs = MergeConfirmation.attrs(request)
 
-      assert attrs.reason == "Merge TP-825 into its base branch?"
+      assert attrs.reason == "Merge TP-825 (T) into its base branch?"
       assert attrs.clearing_condition == "when the decision is recorded"
-      assert attrs.decision.question == "Merge TP-825 into its base branch?"
+      assert attrs.decision.question == "Merge TP-825 (T) into its base branch?"
       assert attrs.decision.confirm == "Merging"
       assert [%{label: "Merge", recommended: true}, %{label: "Send to Rework", recommended: false}] = attrs.decision.options
     end
@@ -163,12 +170,12 @@ defmodule SymphonyElixir.MergeConfirmationTest do
 
       assert_received {:comment, @issue_id, body}
       assert body =~ "## Decision needed:"
-      assert body =~ "Merge TP-825 into its base branch?"
+      assert body =~ "Merge TP-825 (T) into its base branch?"
       assert body =~ "Recommendation: QA passed on 12 files"
       # The ticket is told it keeps its phase, as a hold's request does.
       assert body =~ "the ticket stays in QA until the decision is recorded"
 
-      assert %{reason: "Merge TP-825 into its base branch?"} = stored_hold()
+      assert %{reason: "Merge TP-825 (T) into its base branch?"} = stored_hold()
       assert Hold.held?(@repo_key, @issue_id, :needs_decision)
       assert MergeConfirmation.confirm_target(stored_hold()) == "Merging"
       assert log =~ "manual review is on, so the step into Merging waits"
@@ -179,7 +186,7 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       parsed = request |> Request.render_hold("QA") |> Request.parse(DateTime.utc_now())
 
       assert parsed.title == "Merge TP-825"
-      assert parsed.question == "Merge TP-825 into its base branch?"
+      assert parsed.question == "Merge TP-825 (T) into its base branch?"
       assert length(parsed.options) == 2
       assert Enum.any?(parsed.options, &(&1 =~ "Merge"))
     end

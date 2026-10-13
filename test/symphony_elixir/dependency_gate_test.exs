@@ -3,7 +3,9 @@ defmodule SymphonyElixir.DependencyGateTest do
 
   alias SymphonyElixir.DependencyAudit
   alias SymphonyElixir.DependencyGate
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.Tracker.Memory
 
   test "build/3 defaults the audit module and invalid gates allow by default" do
     gate = DependencyGate.build("/tmp/workspace", nil, nil)
@@ -33,6 +35,21 @@ defmodule SymphonyElixir.DependencyGateTest do
     assert capture_log(fn ->
              assert :ok = DependencyGate.react_to_hold(gate, [])
            end) =~ "Failed to hold dependency issue issue_id=issue-dependency-gate-failure on a Needs Decision hold"
+  end
+
+  test "pause/4 asks for the package changes in plain words, whatever the audit found" do
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    issue = %{id: "issue-dependency-gate-words", identifier: "ACME-GATE-WORDS", state: "In Progress"}
+    on_exit(fn -> RunStore.delete_ticket_state("repo-dep-words", issue.id) end)
+
+    for finding <- [{:hold, [%{package: "left_pad", reason: "new package"}]}, {:error, {:enoent, "/tmp/mix.lock"}}] do
+      assert :ok = DependencyGate.pause(issue, finding, "repo-dep-words", tracker: Memory)
+      assert_received {:memory_tracker_comment, "issue-dependency-gate-words", body}
+      assert body =~ "## Decision needed: Approve the dependency changes on ACME-GATE-WORDS"
+      assert body =~ "**If unanswered:** ACME-GATE-WORDS stays where it is and its pull request is not opened."
+      assert body =~ "**Why recommended:**"
+      assert PlainWords.tokens(body) == []
+    end
   end
 
   test "react_to_hold and react_to_audit_error never move a terminal issue" do

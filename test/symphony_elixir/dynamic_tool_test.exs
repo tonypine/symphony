@@ -450,48 +450,6 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 
-  describe "the comment registry" do
-    test "the comment registry tracks a run's `## Supervisor check` block as it is posted, edited and deleted" do
-      {:ok, registry} = CommentRegistry.start_link()
-
-      comment = fn tool, args ->
-        response =
-          DynamicTool.execute(tool, args,
-            issue: %Issue{id: "issue-current"},
-            comment_registry: registry,
-            linear_client: fn _query, _variables, _opts ->
-              {:ok,
-               %{
-                 "data" => %{
-                   "commentCreate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
-                   "commentUpdate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
-                   "commentDelete" => %{"success" => true}
-                 }
-               }}
-            end
-          )
-
-        assert response["success"] == true
-      end
-
-      # A brief without the block, or naming it only in passing, changes nothing.
-      comment.("linear_add_comment", %{"body" => "## Review brief\n\nSee the `## Supervisor check` below."})
-      refute CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\n  ## Supervisor check\n\n**Verify:** no crash on `main`."})
-      assert CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\nNothing left to check."})
-      refute CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Supervisor check\n\n**Verify:** no crash on `main`."})
-      assert CommentRegistry.supervisor_check?(registry)
-
-      comment.("linear_delete_comment", %{"comment_id" => "brief-1"})
-      refute CommentRegistry.supervisor_check?(registry)
-    end
-  end
-
   test "update_state allows Waiting on sub-tickets when the waiting state is turned off in config" do
     settings = Config.settings!()
     settings = %{settings | tracker: %{settings.tracker | waiting_on_sub_issues_state: nil}}
@@ -1419,15 +1377,23 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"description" => description, "inputSchema" => %{"properties" => properties, "required" => ["title", "why", "decision"]}} =
                Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_request_human_action"))
 
-      assert properties |> Map.keys() |> Enum.sort() == ["decision", "est_minutes", "title", "unblocks", "why"]
+      assert properties |> Map.keys() |> Enum.sort() == ["decision", "if_unanswered", "title", "unblocks", "why"]
 
-      assert %{"required" => ["question", "options"], "properties" => %{"options" => %{"minItems" => 2, "maxItems" => 4, "items" => option}}} =
-               properties["decision"]
+      assert %{
+               "required" => ["question", "options"],
+               "properties" => %{"options" => %{"minItems" => 2, "maxItems" => 4, "items" => option}, "recommendation_reason" => %{"type" => "string"}}
+             } = properties["decision"]
 
-      assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}}} = option
+      assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}, "tradeoffs" => tradeoffs}} = option
+      assert %{"maxItems" => 3, "items" => %{"required" => ["kind", "text"], "properties" => %{"kind" => %{"enum" => ["good", "cost", "risk"]}}}} = tradeoffs
       assert description =~ "a request without options is refused"
+      assert description =~ "The question stands alone"
+      assert description =~ "No file names or paths, code identifiers, branch names, commit hashes, template syntax or backticks"
+      assert description =~ "Before: \"How should TP-892 handle the legacy partials"
+      assert description =~ "After: \"TP-892 (Retire two old review steps)"
       assert description =~ "belongs to CI or a QA playbook"
       assert description =~ "leaves the issue in its phase on a Needs Decision hold"
+      refute description =~ "Supervisor check"
       refute "linear_request_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
       response =
@@ -1490,6 +1456,73 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       for _slot <- 1..5, do: CommentRegistry.reserve_human_action(registry, 5)
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert %{"error" => %{"code" => "human_action_cap_reached", "cap" => 5}} = Jason.decode!(response["output"])
+    end
+
+    test "refuses a question with a file name in it, then posts the rewritten request with what waits, trade-offs and why" do
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-current") end)
+      {:ok, registry} = CommentRegistry.start_link()
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        cond do
+          query =~ "SymphonyAgentHumanActionScope" ->
+            {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "state" => %{"name" => "Rework"}}}}}
+
+          query =~ "SymphonyAgentAddComment" ->
+            send(test_pid, {:comment, variables.body})
+            {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-1"}}}}}
+        end
+      end
+
+      opts = [
+        issue: %Issue{id: "issue-current", identifier: "TP-892", repo_key: "default"},
+        comment_registry: registry,
+        linear_client: client,
+        tracker: FakeTracker
+      ]
+
+      coded =
+        put_in(@request, ["decision", "question"], "How should TP-892 handle the legacy partials such as `parent_tickets.liquid` that Code Review keeps flagging?")
+
+      response = DynamicTool.execute("linear_request_human_action", coded, opts)
+      assert response["success"] == false
+      assert %{"error" => %{"code" => "invalid_human_action", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "`decision.question` has backticks \"`parent_tickets.liquid`\", the file name \"parent_tickets.liquid\""
+      assert message =~ "Rewrite it in plain words"
+      refute_received {:comment, _body}
+
+      rewritten = %{
+        "title" => "Leave the old text to TP-891",
+        "why" => "Code Review sent PR #448 back a second time. Its only finding is the old step's text.",
+        "if_unanswered" => "TP-892 stays in Rework, and each hand-back to Code Review is sent back for the same reason.",
+        "decision" => %{
+          "question" => "Should TP-892 (Retire two old review steps) leave the old text to TP-891 (Remove the retired review states), which deletes it anyway?",
+          "options" => [
+            %{
+              "label" => "Leave it to TP-891",
+              "effect" => "You add one line to TP-892's description. TP-892 goes back to Code Review with no code change.",
+              "recommended" => true,
+              "tradeoffs" => [%{"kind" => "good", "text" => "TP-892 can merge today."}]
+            },
+            %{
+              "label" => "Remove it now",
+              "effect" => "The next run deletes the old text and goes back to Code Review.",
+              "tradeoffs" => [%{"kind" => "risk", "text" => "TP-891's PR #454 changes the same text."}]
+            }
+          ],
+          "recommendation_reason" => "It is one line of text."
+        }
+      }
+
+      response = DynamicTool.execute("linear_request_human_action", rewritten, opts)
+      assert response["success"] == true
+      assert_received {:comment, body}
+      assert body =~ "## Decision needed: Leave the old text to TP-891"
+      assert body =~ "**If unanswered:** TP-892 stays in Rework"
+      assert body =~ "   - Good: TP-892 can merge today."
+      assert body =~ "   - Risk: TP-891's PR #454 changes the same text."
+      assert body =~ "**Why recommended:** It is one line of text."
+      refute body =~ "**Time:**"
     end
 
     test "tells the agent to check a CI job's UTC age before asking about it" do

@@ -14,8 +14,6 @@ public struct StateSnapshot: Equatable {
     public var updateUnblocks: Int
     /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
     public var forced: [ForcedTicket]
-    /// Tickets waiting in Human Review, which only the operator can move on; 0 when Symphony predates it.
-    public var humanReview: Int
     /// The running agents, in Symphony's order; empty when none runs.
     public var runs: [Run]
     /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
@@ -35,8 +33,6 @@ public struct StateSnapshot: Equatable {
             case plan
             /// A pull request to review.
             case pr
-            /// A `Final verification:` ticket to sign off.
-            case finalVerification
             /// A decision an agent asked for with `linear_request_human_action`.
             case action
             /// A ticket the quality gate held for clarification or skipped.
@@ -50,7 +46,6 @@ public struct StateSnapshot: Equatable {
                 switch text {
                 case "plan"?: self = .plan
                 case "pr"?: self = .pr
-                case "final_verification"?: self = .finalVerification
                 case "action"?: self = .action
                 case "clarify"?: self = .clarify
                 case "blocked"?: self = .blocked
@@ -63,7 +58,6 @@ public struct StateSnapshot: Equatable {
                 switch self {
                 case .plan: .plan
                 case .pr: .pr
-                case .finalVerification: .finalVerification
                 case .action: .action
                 case .clarify: .clarify
                 case .blocked: .blocked
@@ -269,7 +263,6 @@ public struct StateSnapshot: Equatable {
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
         forced: [ForcedTicket] = [],
-        humanReview: Int = 0,
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
         inboxRead: Bool = true,
@@ -282,7 +275,6 @@ public struct StateSnapshot: Equatable {
         self.budget = budget
         self.updateUnblocks = updateUnblocks
         self.forced = forced
-        self.humanReview = humanReview
         self.runs = runs
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
@@ -345,8 +337,7 @@ public enum SymphonyState {
         guard let counts = payload.counts else { return .failed("Symphony's state couldn't be read") }
 
         var snapshot = StateSnapshot(
-            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0,
-            humanReview: counts.humanReview ?? 0
+            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
         )
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
@@ -443,8 +434,6 @@ public enum SymphonyState {
         struct Counts: Decodable {
             let running: Int
             let retrying: Int?
-            /// Missing before Symphony had a Human Review state.
-            let humanReview: Int?
         }
 
         struct Pause: Decodable {

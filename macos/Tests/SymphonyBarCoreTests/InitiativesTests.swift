@@ -24,7 +24,6 @@ final class InitiativesTests: XCTestCase {
         ])
         XCTAssertEqual(initiative.subTickets[5].issueID, "i-206")
         XCTAssertEqual(initiative.subTickets[6].blockedBy, ["BIL-206"])
-        XCTAssertEqual(initiative.finalVerification?.line, "Waits on 4 tickets")
         XCTAssertEqual(initiative.slot?.line, "Holds a lane, running BIL-205")
         XCTAssertEqual(initiative.legend.map(\.stage), [.done, .working, .you, .blocked])
         XCTAssertEqual(initiative.legend.map(\.count), [4, 1, 1, 2])
@@ -72,10 +71,8 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(initiatives[1].slot?.line, "Queued for a lane, 1st")
         XCTAssertEqual(initiatives[1].subTickets[2].waits.line, "Waits on CI")
         XCTAssertEqual(initiatives[1].subTickets[3].waits.line, "Waits on a slot")
-        XCTAssertEqual(initiatives[1].finalVerification?.line, "Waits on 3 tickets")
         XCTAssertEqual(initiatives[2].sentence, "0 of 3 done. SHOP-331 waits on you, and 1 ticket waits on it. 2 more wait on you.")
         XCTAssertEqual(initiatives[3].sentence, "3 of 3 done. Every sub-ticket is done.")
-        XCTAssertEqual(initiatives[3].finalVerification?.line, "Passed")
         XCTAssertNil(initiatives[2].slot)
     }
 
@@ -114,15 +111,7 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(InitiativeStage.allCases.filter(\.isLight), [.blocked])
     }
 
-    func testFinalVerificationAndSlotLines() {
-        func final(_ wait: InitiativeWait, open: Int) -> String {
-            Initiative.FinalVerification(ticket: .init(identifier: "F-1", waits: wait), openTickets: open).line
-        }
-        XCTAssertEqual(final(.working, open: 0), "Running")
-        XCTAssertEqual(final(.you, open: 0), "Waits on you to sign off")
-        XCTAssertEqual(final(.blocker([]), open: 1), "Waits on 1 ticket")
-        XCTAssertEqual(final(.slot, open: 0), "Waits on a slot")
-
+    func testSlotLines() {
         XCTAssertEqual(Initiative.Slot(status: "running").line, "Holds a lane")
         XCTAssertEqual(Initiative.Slot(status: "waiting", identifier: "A-2").line, "Holds a lane for A-2")
         XCTAssertEqual(Initiative.Slot(status: "waiting").line, "Holds a lane")
@@ -141,13 +130,12 @@ final class InitiativesTests: XCTestCase {
         let partial = #"""
         {"initiatives":[{"issue_id":"p","identifier":"P-1","group":"active",
           "sub_tickets":[{"identifier":"T-1"},{"title":"no identifier"}],
-          "final_verification":{"title":"no identifier"},"slot":{"identifier":"X"}},
+          "slot":{"identifier":"X"}},
           {"identifier":"no id"},{"issue_id":"q","identifier":"Q-1","group":"later"}]}
         """#
         let payload = InitiativesPayload.decode(Data(partial.utf8))
         XCTAssertEqual(payload?.initiatives.count, 1)
         XCTAssertEqual(payload?.initiatives.first?.subTickets.map(\.waits), [.slot])
-        XCTAssertNil(payload?.initiatives.first?.finalVerification)
         XCTAssertNil(payload?.initiatives.first?.slot)
     }
 

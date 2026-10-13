@@ -336,9 +336,9 @@ final class RunProfilesConfigTests: XCTestCase {
     }
 
     func testEveryKindHasATitleAndTheSettingsOrder() {
-        XCTAssertEqual(RunProfilesConfig.scopes.count, 11)
+        XCTAssertEqual(RunProfilesConfig.scopes.count, 10)
         XCTAssertEqual(RunKind.allCases.map(\.title), [
-            "Breakdown", "Close-out", "Final verification", "Implementation", "Rework", "CI fix",
+            "Breakdown", "Close-out", "Implementation", "Rework", "CI fix",
             "Review feedback", "Landing", "Pre-push review", "QA",
         ])
         XCTAssertEqual(RunKind.ciFix.id, "ci_fix")
@@ -613,7 +613,7 @@ final class RunProfilesConfigTests: XCTestCase {
               command: claude
             auto_review:
               enabled: true
-              state: Auto Review
+              state: QA
               command: "claude --effort=low --dangerously-skip-permissions"  # QA
               max_turns: 20
 
@@ -628,7 +628,7 @@ final class RunProfilesConfigTests: XCTestCase {
                 qa: { model: claude-sonnet-5-5, effort: low }
             auto_review:
               enabled: true
-              state: Auto Review
+              state: QA
               command: "claude --dangerously-skip-permissions"  # QA
               max_turns: 20
 

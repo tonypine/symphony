@@ -3,6 +3,6 @@
   "issue_id": "i-330",
   "issue_identifier": "SHOP-330",
   "move": "undo",
-  "to_state": "In Review",
+  "to_state": "Plan Review",
   "undone": "approve_plan"
 }

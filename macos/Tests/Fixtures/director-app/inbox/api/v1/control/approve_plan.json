@@ -1,6 +1,6 @@
 {
   "commented": false,
-  "from_state": "In Review",
+  "from_state": "Plan Review",
   "issue_id": "i-330",
   "issue_identifier": "SHOP-330",
   "move": "approve_plan",

@@ -210,7 +210,7 @@ set (or, in Development mode, no checkout folder).
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
   overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
-  (breakdown, close-out, final verification, implementation, rework, CI fix, review feedback, landing,
+  (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
   pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
   the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
   inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
@@ -339,8 +339,8 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
 Open Logs opens `menubar-child.log`.
 
-While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans and PRs in
-`In Review` or `Human Review`, final verifications to sign off, open decisions, tickets the quality gate
+While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans in
+`Plan Review`, open decisions, tickets the quality gate
 holds or skipped, and tickets an access hold pauses in place), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
 each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
 ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
@@ -841,20 +841,19 @@ state. The window opens on the Inbox the first time.
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
-  **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
-  verification **Sign Off…**; an action asking a decision **Send Decision…** (its options are the picks) and,
+  **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); an action asking a decision **Send Decision…** (its options are the picks) and,
   under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access or
   dispatch-loop hold and lets it continue in place, and **Restart…** under ⋯. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
-  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `decide`, `unblock`), and what went wrong
+  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `decide`, `unblock`), and what went wrong
   shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
   Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
   seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow
-  Symphony's answer (`moved`, `to_state`), so decisions that moved a plan out of the workflow's Human Review
-  state, whatever its name, offer Undo too. Unblock moves no ticket, so its banner just says "Hold cleared" with
-  no Undo.
+  Symphony's answer (`moved`, `to_state`). Send Decisions posts its comment in place and leaves the plan in
+  `Plan Review`, so its banner just says "Sent your decisions" with no Undo. Unblock moves no ticket, so its banner
+  just says "Hold cleared" with no Undo.
 
 - **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), in three columns like the
   Inbox. The list groups the plan tickets as Active, In review and Done recently (a week after they are done),
@@ -908,8 +907,9 @@ state. The window opens on the Inbox the first time.
 
 - **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
   under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
-  moves from the app (approve, merge, rework, decisions, sign-off, Backlog, Stop Run) are recorded like any
-  other. The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  moves from the app (approve, merge, rework, decisions, Backlog, Stop Run) are recorded like any
+  other; older records may still show a sign-off, a move retired with `Final verification:` tickets.
+  The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
   it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
   whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
   that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the
@@ -1062,8 +1062,8 @@ Four more variables, read only in QA mode:
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and
-  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one and a
-  conflict), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
+  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
+  conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
   shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
   moves among them; Oct 7's chain verifies and Oct 6's breaks at its line 5, SHOP-298's PR opened, and SHOP-305's

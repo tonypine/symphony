@@ -6,6 +6,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   alias Mix.Tasks.Symphony.Audit
   alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketState}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -1115,6 +1116,43 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_received :request_refresh_called
   end
 
+  test "phoenix observability api serves a ticket waiting for a slot or passed over by a dispatch gate" do
+    orchestrator_name = Module.concat(__MODULE__, :WaitingIssueApiOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot(), refresh: :unavailable)
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{
+             "status" => "dispatch_skipped",
+             "issue_id" => "skip-http",
+             "repo_key" => "default",
+             "running" => nil,
+             "retry" => nil,
+             "dispatch_skipped" => %{
+               "state" => "Todo",
+               "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+               "since" => "2026-10-03T06:00:00Z"
+             },
+             "verdicts" => []
+           } = skipped = json_response(get(build_conn(), "/api/v1/MT-SKIP"), 200)
+
+    refute Map.has_key?(skipped, "slot_waiting")
+
+    assert %{
+             "status" => "slot_waiting",
+             "issue_id" => "wait-http",
+             "slot_waiting" => %{
+               "state" => "Todo",
+               "reason" => "a Merging issue is waiting for a slot",
+               "since" => "2026-10-03T06:00:00Z"
+             }
+           } = json_response(get(build_conn(), "/api/v1/MT-WAIT"), 200)
+
+    assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
+  end
+
   test "phoenix observability api serves a ticket's code review and qa verdicts, newest first" do
     reviewed = ~U[2026-10-12 09:00:00Z]
     passed = ~U[2026-10-12 10:00:00Z]
@@ -1502,7 +1540,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received {:linear, _query}
 
     assert %{
-             "counts" => %{"total" => 2, "pr" => 0, "clarify" => 1, "plan" => 1, "action" => 0, "final_verification" => 0},
+             "counts" => %{"total" => 2, "pr" => 0, "clarify" => 1, "plan" => 1, "action" => 0},
              "items" => [
                %{
                  "identifier" => "MT-HELD",
@@ -1585,8 +1623,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         [
           child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
           child.("MT-2", "Plan Review", "started", %{}),
-          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"}),
-          child.("MT-9", "Todo", "unstarted", %{"title" => "Final verification: the plan"})
+          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"})
         ],
         %{}
       ),
@@ -1647,11 +1684,11 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{"identifier" => "MT-2", "waits_on" => "you", "blocked_by" => [], "waiting_for" => []},
                %{"identifier" => "MT-3", "waits_on" => "blocker", "blocked_by" => ["MT-2"], "waiting_for" => ["MT-2"]},
                %{"identifier" => "MT-HTTP", "waits_on" => "working"}
-             ],
-             "final_verification" => %{"identifier" => "MT-9", "waits_on" => "slot", "open_tickets" => 3}
+             ]
            } = hd(listed)
 
-    assert %{"slot" => %{"status" => "queued", "position" => 1}, "final_verification" => nil} = Enum.at(listed, 1)
+    assert %{"slot" => %{"status" => "queued", "position" => 1}} = Enum.at(listed, 1)
+    refute Map.has_key?(hd(listed), "final_verification")
     assert %{"slot" => nil} = Enum.at(listed, 2)
 
     assert json_response(post(build_conn(), "/api/v1/initiatives", %{}), 405) ==
@@ -1669,6 +1706,73 @@ defmodule SymphonyElixir.ExtensionsTest do
     timeout_orchestrator = Module.concat(__MODULE__, :InitiativesTimeoutOrchestrator)
     {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
     assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.initiatives_payload(timeout_orchestrator, 1, initiatives)
+  end
+
+  test "the inbox api returns a decision's what-waits, trade-offs and why recommended, and no time estimate" do
+    inbox = {:test, make_ref()}
+
+    body =
+      Request.render_hold(
+        %{
+          title: "Leave the old text to TP-891",
+          question: "Should TP-892 (Retire two old review steps) leave the old text to TP-891?",
+          why: "Code Review sent PR #448 back a second time.",
+          if_unanswered: "TP-892 stays in Rework.",
+          options: [
+            %{label: "Leave it to TP-891", effect: "TP-892 goes back to Code Review.", recommended: true, tradeoffs: [%{kind: "good", text: "TP-892 can merge today."}]},
+            %{label: "Remove it now", effect: "The next run deletes the old text."}
+          ],
+          recommendation_reason: "It is one line of text."
+        },
+        "Rework"
+      )
+
+    action = %{
+      "id" => "issue-TP-892",
+      "identifier" => "TP-892",
+      "title" => "Retire two old review steps",
+      "url" => "https://linear.app/example/issue/TP-892",
+      "state" => %{"name" => "Rework"},
+      "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+      "children" => %{"nodes" => []},
+      "comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-01T10:00:00Z"}]},
+      "history" => %{"nodes" => []}
+    }
+
+    linear_client = fn query, _variables, _opts ->
+      if query =~ "SymphonyInboxList",
+        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-TP-892", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [action]}}}}
+    end
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxDecisionOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    assert %{"items" => [%{"identifier" => "TP-892", "kind" => "action", "review" => review}]} = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+
+    assert %{
+             "if_unanswered" => "TP-892 stays in Rework.",
+             "recommendation_reason" => "It is one line of text.",
+             "options" => [
+               %{"label" => "Leave it to TP-891", "recommended" => true, "tradeoffs" => [%{"kind" => "good", "text" => "TP-892 can merge today."}]},
+               %{"label" => "Remove it now", "recommended" => false, "tradeoffs" => []}
+             ]
+           } = review
+
+    refute Map.has_key?(review, "est_minutes")
   end
 
   test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do

@@ -119,7 +119,7 @@
       "pull_request_url": null,
       "repo_key": "symphony",
       "seconds_since_last_run": 4017,
-      "state": "In Review",
+      "state": "Code Review",
       "title": "Build MacOS wrapper for starting symphony",
       "url": "https://linear.app/tonypine/issue/TP-229/build-macos-wrapper-for-starting-symphony"
     }

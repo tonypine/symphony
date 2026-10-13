@@ -1,6 +1,6 @@
 # Ticket state machine (v0)
 
-- **Status:** approved (2026-10-10). Design only; no implementation yet.
+- **Status:** approved (2026-10-10); implemented on main by the TP-808 epic (2026-10-13).
 - **How this is used:** the design of record for the state-machine redesign: the contract the implementation follows and the reference for future changes to ticket flow. Behavior changes edit this document first.
 - **Scope:** the ticket lifecycle: states, holds, owners, entry signals, exits, guards, exceptions. Not in scope: run-loop internals (turns, sessions, retries), prompts, token accounting.
 - **State ownership:** Symphony's store is the canonical state — phases, holds, verdicts, CI state. Linear is a projected window. The long-term direction is to own the ticketing flow end-to-end, with Linear as an optional view.

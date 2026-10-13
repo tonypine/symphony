@@ -327,14 +327,17 @@ public struct Overview: Equatable {
             guard scope.includes(index.repoKey(issueID: id)) else { return nil }
             return index.identifier(issueID: id) ?? id
         }
+        // The Inbox's items, as the state lists them: the same count as the sidebar badge and the menu (US1).
+        let waitingOnYou = state.snapshot.waitingOnYou.filter { scope.includes($0.repoKey) }
+
+        // A ticket a decision holds in Code Review or QA waits on you, not on the review: it counts there only,
+        // as in Tickets.
+        let waitingIdentifiers = Set(waitingOnYou.map(\.identifier))
         let review = Self.unique(
             state.watching.filter { (Self.isState($0.state, "Code Review") || Self.isState($0.state, "QA")) && scope.includes($0.repoKey) }
                 .map(\.identifier)
                 + qaIdentifiers
-        )
-
-        // The Inbox's items, as the state lists them: the same count as the sidebar badge and the menu (US1).
-        let waitingOnYou = state.snapshot.waitingOnYou.filter { scope.includes($0.repoKey) }
+        ).filter { !waitingIdentifiers.contains($0) }
 
         let merging = Self.unique(
             state.watching.filter { Self.isState($0.state, "Merging") && scope.includes($0.repoKey) }.map(\.identifier)
@@ -794,7 +797,7 @@ private struct TicketIndex {
         for run in state.running {
             add(issueID: run.issueID, identifier: run.identifier, repoKey: run.repoKey, title: run.title, url: run.url)
         }
-        for ticket in state.watching + state.humanReview + state.shippedToday {
+        for ticket in state.watching + state.shippedToday {
             add(issueID: ticket.issueID, identifier: ticket.identifier, repoKey: ticket.repoKey, title: ticket.title, url: ticket.url)
         }
         for waiting in state.slotWaiting {

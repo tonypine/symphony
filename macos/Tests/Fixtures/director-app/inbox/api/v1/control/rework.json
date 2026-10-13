@@ -1,6 +1,6 @@
 {
   "commented": true,
-  "from_state": "In Review",
+  "from_state": "QA",
   "issue_id": "i-206",
   "issue_identifier": "BIL-206",
   "move": "rework",

@@ -65,14 +65,14 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2a · Inbox: a plan to review
 
-- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked (and Final verifications), each row with
+- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked, each row with
   identifier, title, one-line ask and age. The review: header with kind, wait and state badges; the brief's headline;
   **What to review** (the plan's Linear documents and HTML); **Decisions needed** as radio groups with the recommended
   option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker.
 - **Actions:** **Approve Plan…** (prominent), **Send Decisions** (enabled when a pick changes; posts one comment, which
   starts Symphony's plan revision run), **Open in Linear**, ⋯ **Send to Rework…**.
-- **States:** a final verification item shows its checklist with each requirement's evidence, and **Sign Off…** (moves
-  it to Done) instead of Approve. A scope that hides items says "2 more in other repos".
+- **States:** a scope that hides items says "2 more in other repos". (The final verification item and its
+  **Sign Off…** were retired with `Final verification:` tickets: an epic closes in its epic review.)
 - **Conventions:** three-column `NavigationSplitView` like Mail; after an answer the selection moves to the next item;
   ↑↓ and Return work in the list.
 - **Data:** the Inbox list and the review brief (section 2).
@@ -88,18 +88,19 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2b · Inbox: a pull request to approve
 
-- **Shows:** the PR's purpose in one sentence; **Checks**: CI, Auto Review QA (with its report), the acceptance gate's
-  verdict and its agreement record on this repo, the review agent; **Change**: files and lines, the largest files;
-  **QA screenshots**.
+- **Shows:** the PR's purpose in one sentence; **Checks**: CI, Code Review (the review agent's verdict and reasons), QA
+  (with its report); **Change**: files and lines, the largest files; **QA screenshots**.
 - **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub.
-- **States:** a red check turns its row red and makes Open PR the default button; with the gate in Enforce, the PR
-  reaches the Inbox only on the gate's escalations, and says so.
-- **Data:** the ticket's PR, CI checks, QA result and gate verdict (section 2).
+- **States:** a red check turns its row red and makes Open PR the default button; the PR reaches the Inbox only when
+  the repo's manual review holds the step into `Merging` for you, or Code Review escalates it, and says so.
+- **Data:** the ticket's PR, CI checks, Code Review verdict and QA result (section 2).
 
 #### D2c · Inbox: an action only the Director can do
 
-- **Shows:** a `linear_request_human_action` request: why, the numbered steps, about how long, what it unblocks, which
-  run asked. The banner at the bottom is the Undo after D12d.
+- **Shows:** a `linear_request_human_action` request: why, what waits if nobody answers, the question and its options
+  (each with its effect and up to three trade-offs, and why the recommended one), or the numbered steps of an older
+  request, what it unblocks, which run asked. Every field is written in the Director's words
+  ([the decision writing standard](../standards/decision-writing.md)). The banner at the bottom is the Undo after D12d.
 - **Actions:** **Open in Linear** (prominent), **Copy Steps**.
 - **Data:** the open human-action requests (section 2).
 
@@ -135,9 +136,9 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D1 · Overview: flowing
 
-- **Shows:** the status sentence (P1); the flow strip (P2): Queued → Working → Auto Review → Waiting on you → Merging →
-  Shipped today, each tile a count with one line of context, only Waiting on you tinted; **Now working** (agent runs,
-  QA passes and landings, with phase, turn, last activity, time and tokens); **Next up**; on the right **Today**
+- **Shows:** the status sentence (P1); the flow strip (P2): Queued → Working → Code Review & QA → Waiting on you →
+  Merging → Shipped today, each tile a count with one line of context, only Waiting on you tinted; **Now working** (agent
+  runs, QA passes and landings, with phase, turn, last activity, time and tokens); **Next up**; on the right **Today**
   (tokens against the daily budget and each provider's limit), **Initiatives** (progress by state), repos health in
   one line.
 - **States:** flowing (here), needs attention (J3), paused (J4), idle (below). Sections with nothing to say are not
@@ -255,7 +256,6 @@ later journeys point back to it. The mock draws every screen under its ID.
 | 1 | Opens Initiatives: BIL-200, 4 of 8 | D5 |
 | 2 | Reads its sub-tickets in landing order; BIL-206 waits on them | D5 |
 | 3 | Clicks Review on BIL-206 | D2b |
-| 4 | Sees the final verification waiting on 3 tickets | D5 |
 
 #### D5 · Initiatives
 
@@ -363,7 +363,7 @@ Most of the dashboard reads data `/api/v1/state` already serves. These are the g
 | --- | --- | --- | --- |
 | **Inbox list**: `In Review` and `Human Review` tickets, open human-action requests, quality-gate holds and skips, each with kind, ask and age | D1, D2, D13, D14 | `human_review` counts `Human Review` only; holds and skips are listed | A list endpoint: ADR 0001's "Waiting on you" (TP-617) plus the Clarify kind |
 | **Review content**: a plan's documents, decisions with options and recommendation, sub-tickets; a PR's checks, QA result, gate verdict and size | D2a, D2b | Agents write a `## Review brief` comment at each handoff (TP-723); it isn't served | The brief in a structured form, per ticket |
-| **Director's moves**: approve a plan, approve and merge a PR, send to Rework with a reason, send decisions, move to Backlog with a note, sign off a final verification | D2, D12c, D12d | Pause, resume, stop and force exist in the control API | New control API endpoints that make the Linear move and write the audit record (DD4) |
+| **Director's moves**: approve a plan, approve and merge a PR, send to Rework with a reason, send decisions, move to Backlog with a note | D2, D12c, D12d | Pause, resume, stop and force exist in the control API | New control API endpoints that make the Linear move and write the audit record (DD4) |
 | **Initiatives**: plan tickets with sub-tickets, states and blocked-by links | D5, D1 | `epic_lanes` (slots only) | An initiatives endpoint |
 | **History**: tokens per day and per ticket, merged tickets per day | D8, D9, D1 | Today's budget only | A history endpoint over the run records |
 

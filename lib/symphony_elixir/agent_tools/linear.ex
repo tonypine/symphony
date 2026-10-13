@@ -19,6 +19,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
@@ -27,7 +28,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PersonWait
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
-  alias SymphonyElixir.SupervisorCheck
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
 
@@ -49,7 +49,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # Requests for a human are deduplicated by title, so this only bounds a run that loops.
   @human_action_cap_per_run 5
   @human_action_options 2..4
-  @human_action_max_minutes 480
+  @human_action_max_tradeoffs 3
   # Documents hold a ticket's long-lived artifacts, edited over several runs; this bounds a run that loops.
   @document_cap_per_run 10
   @document_attachment_first 100
@@ -732,10 +732,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp record_supervisor_check(context, comment_id, body) do
-    CommentRegistry.record_supervisor_check(Map.get(context, :comment_registry), comment_id, SupervisorCheck.in_body?(body))
-  end
-
   @spec add_comment(context(), String.t()) :: {:ok, map()} | {:error, term()}
   def add_comment(context, body), do: add_comment(context, body, [])
 
@@ -748,7 +744,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment_id = get_in(response, ["data", "commentCreate", "comment", "id"])
       CommentRegistry.record(Map.get(context, :comment_registry), comment_id)
-      record_supervisor_check(context, comment_id, body)
       {:ok, response}
     end
   end
@@ -774,10 +769,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with :ok <- verify_comment_owner(context, comment_id),
          :ok <- reject_truncated_body(body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_update_comment", opts),
-         {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts),
-         {:ok, response} <- check_mutation_success(response, "commentUpdate") do
-      record_supervisor_check(context, comment_id, body)
-      {:ok, response}
+         {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts) do
+      check_mutation_success(response, "commentUpdate")
     end
   end
 
@@ -1112,7 +1105,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Marks the current issue blocked by existing issues: each identifier in `blocked_by` gets a
   `blocks` relation to the current issue, so Symphony holds it in `Todo` until every blocker is
-  terminal. A final verification uses it to wait on the gaps it filed. Every identifier is looked
+  terminal. Every identifier is looked
   up before any relation is created; unknown identifiers and the current issue itself are refused.
   """
   @spec add_blocked_by(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -1218,7 +1211,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   open on the issue is not posted again, but the issue still gains the hold. A request whose title
   or question a person already answered (`SymphonyElixir.Decisions`) is not posted at all: the
   result carries the recorded answer, which the run applies. Every field is
-  refused when it holds a secret pattern. At most #{@human_action_cap_per_run} per run.
+  refused when it holds a secret pattern, and when it holds code the Director does not read
+  (`SymphonyElixir.HumanActions.PlainWords`): the error names each token and its field. At most
+  #{@human_action_cap_per_run} per run.
   """
   @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def request_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1248,30 +1243,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp validate_human_action(attrs) do
-    %{"title" => title, "why" => why, "decision" => decision, "unblocks" => unblocks, "est_minutes" => est_minutes} =
-      Map.merge(%{"title" => nil, "why" => nil, "decision" => nil, "unblocks" => nil, "est_minutes" => nil}, attrs)
+    %{"title" => title, "why" => why, "decision" => decision, "unblocks" => unblocks, "if_unanswered" => if_unanswered} =
+      Map.merge(%{"title" => nil, "why" => nil, "decision" => nil, "unblocks" => nil, "if_unanswered" => nil}, attrs)
 
-    case Enum.find(human_action_checks(title, why, decision, unblocks, est_minutes), fn {valid?, _message} -> not valid?.() end) do
+    case Enum.find(human_action_checks(title, why, decision, unblocks, if_unanswered), fn {valid?, _message} -> not valid?.() end) do
       {_check, message} ->
         {:error, {:invalid_human_action, message}}
 
       nil ->
-        unblocks = if non_blank?(unblocks), do: unblocks
+        request = %{
+          title: Request.one_line(title),
+          why: why,
+          question: decision["question"],
+          options: Enum.map(decision["options"], &decision_option/1),
+          recommendation_reason: present_text(decision["recommendation_reason"]),
+          if_unanswered: present_text(if_unanswered),
+          unblocks: present_text(unblocks)
+        }
 
-        {:ok,
-         %{
-           title: Request.one_line(title),
-           why: why,
-           question: decision["question"],
-           options: Enum.map(decision["options"], &decision_option/1),
-           unblocks: unblocks,
-           est_minutes: est_minutes
-         }}
+        case PlainWords.check(request) do
+          :ok -> {:ok, request}
+          {:error, message} -> {:error, {:invalid_human_action, message}}
+        end
     end
   end
 
   # In order, and lazy: a later check relies on the earlier ones having passed.
-  defp human_action_checks(title, why, decision, unblocks, est_minutes) do
+  defp human_action_checks(title, why, decision, unblocks, if_unanswered) do
     [
       {fn -> non_blank?(title) end, "`title` must be a non-blank string."},
       {fn -> String.length(Request.one_line(title)) <= @title_max_length end, "`title` must be at most #{@title_max_length} characters."},
@@ -1286,21 +1284,55 @@ defmodule SymphonyElixir.AgentTools.Linear do
          "with no real choice to make, there is nothing to ask a person."},
       {fn -> Enum.all?(decision["options"], &valid_decision_option?/1) end, "Each of `decision.options` needs a non-blank `label` and `effect`."},
       {fn -> Enum.count(decision["options"], &(&1["recommended"] == true)) == 1 end, "Exactly one of `decision.options` must be `recommended`."},
-      {fn -> is_nil(unblocks) or is_binary(unblocks) end, "`unblocks` must be a string."},
-      {fn -> is_nil(est_minutes) or est_minutes in 1..@human_action_max_minutes end, "`est_minutes` must be an integer from 1 to #{@human_action_max_minutes}."}
+      {fn -> Enum.all?(decision["options"], &valid_tradeoffs?(&1["tradeoffs"])) end,
+       "Each option's `tradeoffs` lists at most #{@human_action_max_tradeoffs}, each with a `kind` (#{Enum.join(Request.tradeoff_kinds(), ", ")}) and a non-blank `text`."},
+      {fn -> optional_string?(decision["recommendation_reason"]) end, "`decision.recommendation_reason` must be a string."},
+      {fn -> optional_string?(unblocks) end, "`unblocks` must be a string."},
+      {fn -> optional_string?(if_unanswered) end, "`if_unanswered` must be a string."}
     ]
   end
 
   defp non_blank?(value), do: is_binary(value) and String.trim(value) != ""
 
+  defp optional_string?(value), do: is_nil(value) or is_binary(value)
+
+  defp present_text(value), do: if(non_blank?(value), do: value)
+
   defp valid_decision_option?(%{} = option), do: non_blank?(option["label"]) and non_blank?(option["effect"])
   defp valid_decision_option?(_option), do: false
 
-  defp decision_option(option), do: %{label: option["label"], effect: option["effect"], recommended: option["recommended"] == true}
+  defp valid_tradeoffs?(nil), do: true
+
+  defp valid_tradeoffs?(tradeoffs) when is_list(tradeoffs) and length(tradeoffs) <= @human_action_max_tradeoffs,
+    do: Enum.all?(tradeoffs, &valid_tradeoff?/1)
+
+  defp valid_tradeoffs?(_tradeoffs), do: false
+
+  defp valid_tradeoff?(%{"kind" => kind, "text" => text}), do: kind in Request.tradeoff_kinds() and non_blank?(text)
+  defp valid_tradeoff?(_tradeoff), do: false
+
+  defp decision_option(option) do
+    %{
+      label: option["label"],
+      effect: option["effect"],
+      recommended: option["recommended"] == true,
+      tradeoffs: for(tradeoff <- List.wrap(option["tradeoffs"]), do: %{kind: tradeoff["kind"], text: tradeoff["text"]})
+    }
+  end
 
   defp reject_human_action_secrets(request, context, opts) do
-    options = Enum.map_join(request.options, "\n", &"#{&1.label}: #{&1.effect}")
-    fields = [title: request.title, why: request.why, unblocks: request.unblocks, question: request.question, options: options]
+    options = Enum.map_join(request.options, "\n", fn option -> Enum.join(["#{option.label}: #{option.effect}" | Enum.map(option.tradeoffs, & &1.text)], "\n") end)
+
+    fields = [
+      title: request.title,
+      why: request.why,
+      unblocks: request.unblocks,
+      if_unanswered: request.if_unanswered,
+      question: request.question,
+      recommendation_reason: request.recommendation_reason,
+      options: options
+    ]
+
     SecretScanner.reject_fields_if_secret_pattern(fields, context, "linear_request_human_action", opts)
   end
 

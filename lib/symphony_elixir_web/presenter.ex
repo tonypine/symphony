@@ -129,7 +129,7 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
   in review, then done in the last 7 days, each with its sub-tickets in landing order, what each
-  waits on, its final verification, counts by stage and its slot line from `epic_lanes`. Read from
+  waits on, counts by stage and its slot line from `epic_lanes`. Read from
   what Symphony cached on its last poll: it makes no Linear request.
   """
   @spec initiatives_payload(GenServer.name(), timeout(), GenServer.name(), GenServer.name()) :: map()
@@ -177,8 +177,7 @@ defmodule SymphonyElixirWeb.Presenter do
       completed_at: initiative.completed_at,
       counts: initiative.counts,
       slot: initiative_slot(lanes, initiative.id),
-      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload/1),
-      final_verification: initiative.final_verification && initiative.final_verification |> sub_ticket_payload() |> Map.put(:open_tickets, initiative.final_verification.open_tickets)
+      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload/1)
     }
   end
 
@@ -228,7 +227,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
         %{
           generated_at: generated_at,
-          counts: Map.new(~w(plan pr final_verification action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          counts: Map.new(~w(plan pr action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
           items: Enum.map(items, &inbox_item_payload(&1, now))
         }
 
@@ -288,11 +287,12 @@ defmodule SymphonyElixirWeb.Presenter do
         running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
         retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
         watching = snapshot |> Map.get(:watching, []) |> Enum.find(&(&1.identifier == issue_identifier))
+        waiting = waiting_entry(snapshot, issue_identifier)
 
-        if is_nil(running) and is_nil(retry) and is_nil(watching) do
+        if is_nil(running) and is_nil(retry) and is_nil(watching) and is_nil(waiting) do
           untracked_issue_payload(issue_identifier)
         else
-          payload = issue_payload_body(issue_identifier, running, retry, watching)
+          payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
           record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
           {:ok, Map.put(payload, :verdicts, verdicts_payload(record))}
         end
@@ -300,6 +300,14 @@ defmodule SymphonyElixirWeb.Presenter do
       _ ->
         {:error, :issue_not_found}
     end
+  end
+
+  # A ticket waiting for a slot, or one the last dispatch pass passed over, as `{list, entry}`.
+  defp waiting_entry(snapshot, issue_identifier) do
+    Enum.find_value([:slot_waiting, :dispatch_skipped], fn list ->
+      entry = snapshot |> Map.get(list, []) |> Enum.find(&(&1.identifier == issue_identifier))
+      entry && {list, entry}
+    end)
   end
 
   # A ticket Symphony no longer runs or watches is still served while its ticket state record
@@ -310,10 +318,10 @@ defmodule SymphonyElixirWeb.Presenter do
         {:error, :issue_not_found}
 
       record ->
-        payload = issue_payload_body(issue_identifier, nil, nil, nil)
+        payload = issue_payload_body(issue_identifier, nil, nil, nil, nil)
 
         {:ok,
-         %{payload | repo_key: record.repo_key, issue_id: record.issue_id, status: "untracked"}
+         %{payload | repo_key: record.repo_key, issue_id: record.issue_id}
          |> Map.put(:verdicts, verdicts_payload(record))}
     end
   end
@@ -703,12 +711,14 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp truthy_param?(value), do: value in ["1", "true", "on", true]
 
-  defp issue_payload_body(issue_identifier, running, retry, watching) do
+  defp issue_payload_body(issue_identifier, running, retry, watching, waiting) do
+    entries = [running, retry, watching, waiting && elem(waiting, 1)]
+
     payload = %{
-      repo_key: repo_key_from_entries(running, retry, watching),
+      repo_key: repo_key_from_entries(entries),
       issue_identifier: issue_identifier,
-      issue_id: issue_id_from_entries(running, retry, watching),
-      status: issue_status(running, retry, watching),
+      issue_id: issue_id_from_entries(entries),
+      status: issue_status(running, retry, watching, waiting),
       workspace: workspace_payload(issue_identifier, running, retry),
       attempts: %{
         restart_count: restart_count(retry),
@@ -724,28 +734,32 @@ defmodule SymphonyElixirWeb.Presenter do
       tracked: %{}
     }
 
-    if watching do
-      Map.put(payload, :watching, watching_issue_payload(watching))
-    else
-      payload
-    end
+    payload
+    |> put_watching_issue_payload(watching)
+    |> put_waiting_issue_payload(waiting)
   end
 
-  defp issue_id_from_entries(running, retry, watching),
-    do: (running && running.issue_id) || (retry && retry.issue_id) || (watching && watching.issue_id)
+  defp put_watching_issue_payload(payload, nil), do: payload
+  defp put_watching_issue_payload(payload, watching), do: Map.put(payload, :watching, watching_issue_payload(watching))
 
-  defp repo_key_from_entries(running, retry, watching),
-    do: (running && Map.get(running, :repo_key)) || (retry && Map.get(retry, :repo_key)) || (watching && Map.get(watching, :repo_key))
+  defp put_waiting_issue_payload(payload, nil), do: payload
+  defp put_waiting_issue_payload(payload, {list, entry}), do: Map.put(payload, list, waiting_issue_payload(entry))
+
+  defp issue_id_from_entries(entries), do: Enum.find_value(entries, &(&1 && &1.issue_id))
+
+  defp repo_key_from_entries(entries), do: Enum.find_value(entries, &(&1 && Map.get(&1, :repo_key)))
 
   defp restart_count(retry), do: max(retry_attempt(retry) - 1, 0)
   defp retry_attempt(nil), do: 0
   defp retry_attempt(retry), do: retry.attempt || 0
 
-  defp issue_status(running, retry, _watching) do
+  defp issue_status(running, retry, watching, waiting) do
     cond do
       running -> "running"
       retry -> "retrying"
-      true -> "watching"
+      watching -> "watching"
+      waiting -> waiting |> elem(0) |> Atom.to_string()
+      true -> "untracked"
     end
   end
 
@@ -935,6 +949,11 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(retry, :worker_host),
       workspace_path: Map.get(retry, :workspace_path)
     }
+  end
+
+  # What a ticket waiting for a slot or passed over by a dispatch gate waits on, and since when.
+  defp waiting_issue_payload(entry) do
+    %{state: entry.state, reason: entry.reason, since: iso8601(Map.get(entry, :since))}
   end
 
   defp watching_issue_payload(watching) do

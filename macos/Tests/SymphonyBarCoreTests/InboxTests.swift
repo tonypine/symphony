@@ -7,7 +7,7 @@ final class InboxTests: XCTestCase {
 
     func testTheInboxFixtureHasOneItemOfEachKindWithItsReview() throws {
         let inbox = try payload("inbox")
-        XCTAssertEqual(inbox.items.map(\.kind), [.plan, .pr, .finalVerification, .action, .clarify, .blocked])
+        XCTAssertEqual(inbox.items.map(\.kind), [.plan, .pr, .action, .clarify, .blocked])
 
         let plan = inbox.items[0]
         XCTAssertEqual(plan.identifier, "SHOP-330")
@@ -27,25 +27,22 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(pr.qaReport?.absoluteString, "https://linear.app/acme/issue/BIL-206#comment-5d1e0a2c")
         XCTAssertFalse(pr.hasRedCheck)
 
-        guard case let .raw(text)? = inbox.items[2].review.brief else { return XCTFail("the final verification's brief should be raw") }
-        XCTAssertTrue(text.hasPrefix("## Review brief"))
-
-        let action = try XCTUnwrap(inbox.items[3].review.action)
+        let action = try XCTUnwrap(inbox.items[2].review.action)
         XCTAssertEqual(action.steps.count, 4)
         XCTAssertEqual(action.timeLine, "About 10 min")
         XCTAssertEqual(action.unblocks, "the Release workflow on main")
         XCTAssertEqual(action.copyText?.split(separator: "\n").first, "1. Export the Developer ID certificate from Keychain Access as a .p12 file.")
 
-        let clarify = try XCTUnwrap(inbox.items[4].review.clarify)
+        let clarify = try XCTUnwrap(inbox.items[3].review.clarify)
         XCTAssertTrue(clarify.held)
         XCTAssertEqual(clarify.scoreLine, "3 of 10, passes at 6")
         XCTAssertEqual(clarify.roundLine, "Round 1 of 2")
         XCTAssertEqual(clarify.questions.count, 2)
 
-        let blocked = try XCTUnwrap(inbox.items[5].review.blocked)
+        let blocked = try XCTUnwrap(inbox.items[4].review.blocked)
         XCTAssertEqual(blocked.reason, "The run reported a block")
         XCTAssertEqual(blocked.nextLine, "Clears when the block is resolved; a person clears an access hold.")
-        XCTAssertEqual(inbox.items[5].state, "In Progress")
+        XCTAssertEqual(inbox.items[4].state, "In Progress")
         XCTAssertEqual(InboxReview.Blocked(reason: "Needs a key").nextLine, "Symphony lifts the hold when what it waits on clears.")
     }
 
@@ -75,11 +72,11 @@ final class InboxTests: XCTestCase {
         guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
         let menu = StatusMenu.waitingMenu(.running(snapshot, external: true))
         XCTAssertEqual(menu.tickets.map(\.kind.symbol), [
-            "doc.text.magnifyingglass", "arrow.triangle.pull", "checkmark.seal", "hand.raised", "questionmark.bubble",
+            "doc.text.magnifyingglass", "arrow.triangle.pull", "hand.raised", "questionmark.bubble", "hand.raised.slash",
         ])
         XCTAssertEqual(menu.tickets.first?.issueID, "i-330")
         XCTAssertEqual(menu.tickets.first?.repoKey, "web-shop")
-        XCTAssertEqual(StatusMenu.waitingLine(menu.tickets[4]), "SHOP-341 · Clarify · Answer the quality gate's questions · 10m")
+        XCTAssertEqual(StatusMenu.waitingLine(menu.tickets[3]), "SHOP-341 · Clarify · Answer the quality gate's questions · 10m")
         XCTAssertEqual(StateSnapshot.WaitingTicket.Kind.other("audit").symbol, SymphonyView.inbox.symbol)
     }
 
@@ -132,7 +129,7 @@ final class InboxTests: XCTestCase {
             item("SHOP-330", .plan, title: "Gift cards", seconds: 11_520).accessibilityLabel,
             "SHOP-330, Gift cards, plan, 3 hours 12 minutes"
         )
-        XCTAssertEqual(item("BIL-9", .finalVerification, title: nil, seconds: nil).accessibilityLabel, "BIL-9, final verification")
+        XCTAssertEqual(item("BIL-9", .pr, title: nil, seconds: nil).accessibilityLabel, "BIL-9, pull request")
     }
 
     // MARK: - Actions
@@ -171,6 +168,39 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual([InboxAction.openInLinear(linear), .openPR(prURL), .copySteps(""), .editInLinear(linear)].map(\.title), [
             "Open in Linear", "Open PR", "Copy Steps", "Edit in Linear",
         ])
+    }
+
+    func testReadsADecisionsWhatWaitsTradeOffsAndWhyRecommendedAndAnOlderOneWithout() throws {
+        let json = """
+        {"items": [
+          {"identifier": "TP-892", "kind": "action", "review": {"comment_id": "c-1", "question": "Leave the old text to TP-891?",
+            "if_unanswered": "TP-892 stays in Rework.", "recommendation_reason": "It is one line of text.",
+            "options": [
+              {"label": "Leave it to TP-891", "effect": "TP-892 goes back to Code Review.", "recommended": true,
+               "tradeoffs": [{"kind": "good", "text": "TP-892 can merge today."}, {"kind": "cost", "text": "The old text stays a while."},
+                             {"kind": "nice", "text": "An unknown kind is skipped."}, {"kind": "risk"}]},
+              {"label": "Remove it now", "tradeoffs": [{"kind": "risk", "text": "It clashes with PR #454."}]}
+            ]}},
+          {"identifier": "NOTE-90", "kind": "action", "review": {"est_minutes": 10, "options": [{"label": "Add it", "recommended": true}, {"label": "Drop it"}]}}
+        ]}
+        """
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(json.utf8)))
+
+        let action = try XCTUnwrap(inbox.items[0].review.action)
+        XCTAssertEqual(action.ifUnanswered, "TP-892 stays in Rework.")
+        XCTAssertEqual(action.recommendationReason, "It is one line of text.")
+        XCTAssertEqual(action.options[0].tradeoffs, [
+            .init(kind: .good, text: "TP-892 can merge today."),
+            .init(kind: .cost, text: "The old text stays a while."),
+        ])
+        XCTAssertEqual(action.options[1].tradeoffs, [.init(kind: .risk, text: "It clashes with PR #454.")])
+        XCTAssertNil(action.estMinutes)
+
+        let older = try XCTUnwrap(inbox.items[1].review.action)
+        XCTAssertNil(older.ifUnanswered)
+        XCTAssertNil(older.recommendationReason)
+        XCTAssertEqual(older.options.map(\.tradeoffs), [[], []])
+        XCTAssertEqual(older.estMinutes, 10)
     }
 
     func testReadsAnItemWithMissingFieldsAndSkipsOneWithoutAKind() throws {
@@ -311,7 +341,7 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: NotificationPreferences.defaultsKey) as? [String], ["pr", "problem"])
         XCTAssertEqual(NotificationPreferences.load(from: defaults).off, [.pr, .problem])
 
-        XCTAssertEqual(NoticeKind.allCases.map(\.settingsTitle).count, 7)
+        XCTAssertEqual(NoticeKind.allCases.map(\.settingsTitle).count, 6)
     }
 
     func testKeepsOnlyTheNewestKeys() {

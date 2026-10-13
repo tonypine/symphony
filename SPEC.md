@@ -1838,9 +1838,10 @@ not require recognizing or validating extension fields unless that extension is 
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`,
-  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` and `final_verification`
-  named the retired close-out and final verification runs: an entry naming them still loads, and
-  no run uses it. Each field resolves, for the issue's routed
+  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` named the retired close-out run: an entry
+  naming it still loads, and no run uses it. `final_verification` (retired with
+  `Final verification:` tickets) and `acceptance_gate` load with a deprecation warning and do
+  nothing. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
   else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
   null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
@@ -2477,7 +2478,12 @@ Rules:
   and before the summary block, on the read that sees it: one entry per answered request, keyed by
   the request comment so a repeat writes nothing, numbered `D1`, `D2`… with the date, the question,
   the answer and what it means for scope (deferred to a named ticket, out of scope, in scope, or as
-  answered). Every byte outside the section, and the entries already in it, MUST stay unchanged.
+  answered). The key MUST be read from the entry's `<!-- symphony:decision:<id> -->` marker
+  wherever it stands, since Linear rewrites the markdown it stores (`*` bullets, escapes, blank
+  lines). Every byte outside the section, and the entries already in it, MUST stay unchanged, but
+  for an empty heading left right before the section or the summary block (Linear's reading of a
+  marker written above `---`). A section that holds a request more than once MUST be rewritten once,
+  each entry kept at its first place and numbered again.
   The reviewer and QA prompts MUST render the section with the rule that a finding contradicting a
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
@@ -3645,14 +3651,21 @@ Scoped Linear tool extension contract:
   never reads its own summary as requirements. The read-only reviewer and QA scopes MUST NOT
   advertise or execute it.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
-  `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
-  one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
-  exactly one of them `recommended`; a request without it, or with fewer than 2 options, MUST be
+  `why`, a `decision`, an optional `unblocks` and an optional `if_unanswered` (what waits or
+  repeats until someone answers). The `decision` holds one non-blank `question`, 2 to 4 `options`,
+  each with a non-blank `label` and `effect` and up to three `tradeoffs` (`kind` `good`, `cost` or
+  `risk`, and a non-blank `text`), exactly one of them `recommended`, and an optional
+  `recommendation_reason`; a request without it, or with fewer than 2 options, MUST be
   refused with an error that says so. A person only gets decisions: a check an agent can't run
   belongs to CI or a QA playbook instead. Every field MUST pass the
-  same secret scan as comments before any Linear call. It posts a
-  `## Decision needed: <title>` comment (the question, then the numbered options with the
-  recommended one marked, and no steps) that Symphony's human-action project updates list, and
+  same secret scan as comments before any Linear call, and MUST be refused when it holds code the
+  Director doesn't read (`docs/standards/decision-writing.md`): backticks, `{%` or `%}`, a path or a
+  file name with an extension, a 7 to 40 character hex run with a digit and a letter, or an
+  `auto/` or `origin/` branch. The error names each token and its field; ticket identifiers and PR
+  numbers (`PR #448`) pass. It posts a
+  `## Decision needed: <title>` comment (the question, the why, `**If unanswered:**`, then the
+  numbered options with the recommended one marked and each option's trade-offs indented under it
+  as `- Good:`, `- Cost:` or `- Risk:` lines, then `**Why recommended:**`, and no steps) that Symphony's human-action project updates list, and
   those updates still read a hand-written `## Action needed: <title>` comment. It MUST NOT move the
   current issue: it sets the `Needs Decision` hold, which pauses the issue in its phase, and adds
   no label of its own. The request stays open until a person answers it (a reply under it, or the
@@ -4593,12 +4606,13 @@ Minimum endpoints:
     - `plan`: `brief`, the latest `## Review brief` comment parsed into
       `headline`, `what_to_review` (`text` and `links`), `what_changed`, `decisions` (`question`,
       `options`, `recommendation`, `recommended`: the index of the recommended option, null when it
-      can't be told), `moves` (`approve`, `change`, `reject`) and `supervisor_check`, with `format`
+      can't be told), `moves` (`approve`, `change`, `reject`), with `format`
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, and `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order.
-    - `action`: `title`, `question`, `why`, `unblocks`, `est_minutes`, `steps`, `options` (`label`,
-      `effect`, `recommended`) and `requested_at`.
+    - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
+      (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
+      and `requested_at`.
     - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
       `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
       `questions`.
@@ -4610,7 +4624,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 1, "pr": 0, "final_verification": 0, "action": 0, "clarify": 1, "blocked": 0},
+      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0},
       "items": [
         {
           "issue_id": "i-330",
@@ -4624,7 +4638,7 @@ Minimum endpoints:
           "waiting_seconds": 5460,
           "url": "https://linear.app/acme/issue/SHOP-330",
           "review": {
-            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": [], "supervisor_check": null},
+            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": []
           }
         },
@@ -4650,20 +4664,16 @@ Minimum endpoints:
     their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
     the last list. Its Linear requests count as `initiatives`.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `final_verification`, `counts`
+    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `counts`
     and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out and a final verification
-    sub-issue left from before the drain set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
     `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
     state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
     Review, QA, Merging, CI Fix or Epic Review with nothing running) or `slot` (it can run and waits
     for a free slot).
-  - `final_verification` is, for an epic planned before the drain, its `Final verification:`
-    sub-issue in the same shape plus `open_tickets`, the number of sub-tickets not done yet; null
-    without one, as for every epic planned since.
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
   - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),
@@ -4749,6 +4759,10 @@ Minimum endpoints:
   - Issues in the `watching` list SHOULD resolve here with `status: "watching"` and a lightweight
     `watching` object containing `state`, `url`, and `last_ran_at`; they do not have active session
     fields.
+  - An issue listed under `slot_waiting` or `dispatch_skipped` in `/api/v1/state` SHOULD resolve here
+    with that list's name as its `status` (`slot_waiting` or `dispatch_skipped`) and an object under
+    the same key with its `state`, the `reason` it waits and `since`. A running, retrying or watched
+    issue keeps that status.
   - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
     first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
     reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with

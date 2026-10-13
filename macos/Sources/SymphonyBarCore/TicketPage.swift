@@ -216,6 +216,7 @@ public struct TicketPage: Equatable {
         let watching = state?.watching?.first(where: matches)
         let waitingOnYou = state?.waitingOnYou?.first(where: matches)
         let slot = state?.slotWaiting?.first(where: matches)
+        let skipped = state?.dispatchSkipped?.first(where: matches)
         let blocked = state?.blocked?.first(where: matches)
         let shipped = state?.shippedToday?.first(where: matches)
         let forced = state?.forced?.first(where: matches)
@@ -225,7 +226,7 @@ public struct TicketPage: Equatable {
         let sharedFiles = landing.flatMap(\.sharedFiles).map { " (shares \($0) \($0 == 1 ? "file" : "files"))" } ?? ""
         let history = (state?.runHistory ?? []).filter(matches)
         let records = runs.filter { $0.issueIdentifier == identifier }
-        let entries: [Entry?] = [running, retry, watching, waitingOnYou, slot, blocked, shipped, forced] + history.map { $0 }
+        let entries: [Entry?] = [running, retry, watching, waitingOnYou, slot, skipped, blocked, shipped, forced] + history.map { $0 }
 
         self.identifier = identifier
         title = entries.lazy.compactMap { $0?.title }.first
@@ -238,7 +239,9 @@ public struct TicketPage: Equatable {
         workspacePath = issue?.workspace?.path ?? running?.workspacePath ?? retry?.workspacePath
         lastMessage = running?.lastMessage?.nonEmpty ?? retry?.error?.nonEmpty ?? issue?.lastError?.nonEmpty
         isRunning = running != nil
-        isTracked = running != nil || retry != nil || watching != nil || issue != nil
+        // A ticket only waiting to be dispatched has no run, so no transcript yet.
+        isTracked = running != nil || retry != nil || watching != nil
+            || issue.map { !["slot_waiting", "dispatch_skipped"].contains($0.status ?? "") } ?? false
 
         let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl]
             .compactMap { $0.flatMap(URL.init(string:)) }.first
@@ -247,8 +250,8 @@ public struct TicketPage: Equatable {
         let qaQueued = (state?.qa?.queued ?? []).contains { $0.identifier == identifier || $0.issueId == watching?.issueId }
         // Split in two: a single `??` chain over all of these exceeds the type-checker's budget
         // on Xcode 26.3.
-        let liveState: String? = [running?.state, watching?.state, retry?.state, slot?.state, blocked?.state,
-                                  waitingOnYou?.state].lazy.compactMap { $0 }.first
+        let liveState: String? = [running?.state, watching?.state, retry?.state, slot?.state, skipped?.state,
+                                  blocked?.state, waitingOnYou?.state].lazy.compactMap { $0 }.first
         let ticketState: String? = liveState ?? (shipped == nil ? history.last?.state : "Done")
         let idle = running.flatMap { run in
             (run.lastEventAt ?? run.startedAt).flatMap(Self.date).map { Int(reference.timeIntervalSince($0)) }
@@ -260,11 +263,11 @@ public struct TicketPage: Equatable {
             phase = .working(stuck: stuck)
         } else if let shipped {
             phase = .done(pullRequest: pullRequest, mergedAt: shipped.completedAt.flatMap(Self.date))
-        } else if waitingOnYou != nil || Self.isState(watching?.state, "Human Review") {
+        } else if waitingOnYou != nil {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
             phase = .waiting(on: landingLeader.map { "\($0) to land\(sharedFiles)" } ?? "CI")
-        } else if let watching, ["In Review", "Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
+        } else if let watching, ["Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
             phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
             let due = retry.dueAt.flatMap(Self.date)
@@ -274,6 +277,8 @@ public struct TicketPage: Equatable {
             phase = .waiting(on: blockers.isEmpty ? (blocked.reason.map { "a blocker (\($0))" } ?? "a blocker") : "a blocker: \(blockers.joined(separator: ", "))")
         } else if let slot {
             phase = .waiting(on: slot.reason.map { "a slot (\($0))" } ?? "a slot")
+        } else if let skipped {
+            phase = .waiting(on: skipped.reason ?? "a dispatch gate")
         } else if watching != nil {
             phase = .waiting(on: watching?.state ?? "Linear")
         } else {
@@ -474,7 +479,6 @@ public struct TicketPage: Equatable {
         case "approve_pr": return "Moved to Merging by you"
         case "rework": return "Sent to Rework by you"
         case "decisions": return "Decisions sent by you"
-        case "sign_off": return "Signed off by you"
         case "backlog": return "Moved to Backlog by you"
         case "undo": return "Move undone by you"
         default: return "Moved to \(move.toState ?? "another state") by you"
@@ -497,7 +501,6 @@ public struct TicketPage: Equatable {
 
     private static func type(title: String?, inboxKind: String?) -> String {
         if inboxKind == "plan" { return "Plan" }
-        if title?.hasPrefix("Final verification:") == true || inboxKind == "final_verification" { return "Final verification" }
         return "Ticket"
     }
 
@@ -636,6 +639,7 @@ public struct TicketPage: Equatable {
         let watching: [Entry]?
         let waitingOnYou: [Entry]?
         let slotWaiting: [Entry]?
+        let dispatchSkipped: [Entry]?
         let blocked: [Entry]?
         let shippedToday: [Entry]?
         let forced: [Entry]?

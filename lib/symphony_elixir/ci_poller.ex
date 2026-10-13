@@ -13,6 +13,7 @@ defmodule SymphonyElixir.CiPoller do
 
   alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiState, Config, PrReviewPoller}
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.{NeedsDecisionHold, Notifications, Orchestrator, PersonWait, RunStore, Tracker}
   alias SymphonyElixir.TicketSignals
@@ -1283,17 +1284,22 @@ defmodule SymphonyElixir.CiPoller do
     %{
       title: "CI still fails on #{label}",
       question: "CI still fails on #{label} after #{settings.ci.max_retries} fix runs. How should it continue?",
-      why: "The CI Fix lane could not make the PR's checks pass#{pr_clause(Map.get(record, :pr_url))}.",
+      why: "Symphony's repair runs could not make the checks pass#{pr_clause(Map.get(record, :pr_url))}. A bigger change than a repair is needed.",
+      if_unanswered: "#{label} stays where it is with failing checks, and it can't merge.",
       options: [
-        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run makes the substantive fix on the same PR", recommended: true},
-        %{label: "Leave it", effect: "the ticket stays in its phase with red CI until a fix is pushed", recommended: false}
+        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run makes the bigger fix on the same pull request", recommended: true},
+        %{label: "Leave it", effect: "the ticket stays where it is with failing checks until someone pushes a fix", recommended: false}
       ],
-      est_minutes: 5
+      recommendation_reason: "A run in Rework can change the code as much as the fix needs."
     }
   end
 
-  defp pr_clause(pr_url) when is_binary(pr_url), do: " on #{pr_url}"
-  defp pr_clause(_pr_url), do: ""
+  defp pr_clause(pr_url) do
+    case Request.pull_request(pr_url) do
+      nil -> ""
+      pr -> " on #{pr}"
+    end
+  end
 
   defp complete_escalated_ci_failure(record, ci_status, failed_checks, context, log_excerpt, ci_failure) do
     %{

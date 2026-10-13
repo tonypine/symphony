@@ -229,11 +229,7 @@ struct InitiativeDetail: View {
                         if index > 0 { Divider() }
                         SubTicketRow(ticket: ticket, actions: actions)
                     }
-                    if let final = initiative.finalVerification {
-                        if !initiative.subTickets.isEmpty { Divider() }
-                        SubTicketRow(ticket: final.ticket, actions: actions, finalLine: final.line)
-                    }
-                    if initiative.subTickets.isEmpty && initiative.finalVerification == nil {
+                    if initiative.subTickets.isEmpty {
                         Text("No sub-tickets yet.").foregroundStyle(.secondary)
                     }
                 }
@@ -249,12 +245,10 @@ struct InitiativeDetail: View {
 private struct SubTicketRow: View {
     let ticket: Initiative.SubTicket
     let actions: InitiativeActions
-    /// The final verification's line, in place of what it waits on.
-    var finalLine: String?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Image(systemName: finalLine == nil ? ticket.waits.stage.symbol : "checkmark.seal")
+            Image(systemName: ticket.waits.stage.symbol)
                 .foregroundStyle(ticket.waits.stage.status.tint.opacity(ticket.waits.stage.isLight ? 0.6 : 1))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
@@ -263,7 +257,7 @@ private struct SubTicketRow: View {
                     if let title = ticket.title { Text(title).lineLimit(1) }
                 }
                 HStack(spacing: DesignTokens.Space.s2) {
-                    Text(finalLine ?? ticket.waits.line)
+                    Text(ticket.waits.line)
                         .foregroundStyle(ticket.waits == .you ? AnyShapeStyle(DesignTokens.Status.you.tint) : AnyShapeStyle(.secondary))
                     if !ticket.blockedBy.isEmpty && ticket.waits != .done {
                         Text("Blocked by").foregroundStyle(.tertiary)
@@ -293,8 +287,7 @@ private struct SubTicketRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(
-            finalLine.map { "\(ticket.identifier), final verification, \(Initiative.SubTicket.spoken($0))" }
-                ?? ticket.accessibilityLabel
+            ticket.accessibilityLabel
         )
         .accessibilityAction { primaryAction() }
         .accessibilityActions {
