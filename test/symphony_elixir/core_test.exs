@@ -1877,6 +1877,25 @@ defmodule SymphonyElixir.CoreTest do
       assert [%{name: "handoff_missing", details: %{held: true, quiet_runs: 2}} | _rest] = record.signals
     end
 
+    test "a quiet run waiting on its decision request is not counted or capped, and waits for the decision", %{issue_id: issue_id, completed: completed} do
+      :ok = SymphonyElixir.Hold.set("designed-repo", issue_id, :needs_decision, %{reason: "Is the drain report empty?"})
+
+      log =
+        capture_log(fn ->
+          pid = start_quiet_retry(:QuietDecision, issue_id, completed, %{issue_id => {nil, 1}})
+          state = wait_for_orchestrator_state(pid, &(not MapSet.member?(&1.claimed, issue_id)))
+
+          refute Map.has_key?(state.running, issue_id)
+          refute Map.has_key?(state.retry_attempts, issue_id)
+          refute Map.has_key?(state.quiet_handoff_runs, issue_id)
+        end)
+
+      refute log =~ "without the handoff signal"
+      record = RunStore.get_ticket_state("designed-repo", issue_id)
+      assert SymphonyElixir.TicketState.get_hold(record, :needs_decision)
+      refute SymphonyElixir.TicketState.get_hold(record, :blocked)
+    end
+
     test "a quiet count is dropped once the issue leaves the active states", %{issue_id: issue_id, completed: completed} do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [
         %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "Backlog", pull_request_url: completed.pull_request_url}
