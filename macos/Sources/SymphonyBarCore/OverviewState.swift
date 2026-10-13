@@ -11,10 +11,8 @@ public struct OverviewState: Equatable {
     /// The repos Symphony has tickets in, for the scope pop-up.
     public var repos: [String]
     public var running: [Run]
-    /// Tickets Symphony ran and now watches in Linear: Code Review, QA, In Review, Human Review, Merging.
+    /// Tickets Symphony ran and now watches in Linear: Code Review, QA, Merging.
     public var watching: [Ticket]
-    /// Tickets in Human Review, which wait on the Director.
-    public var humanReview: [Ticket]
     public var retrying: [Retry]
     public var slotWaiting: [Waiting]
     /// Tickets the last dispatch pass passed over, each with the gate that held it (`reason`) and since when.
@@ -227,7 +225,6 @@ public struct OverviewState: Equatable {
         repos: [String] = [],
         running: [Run] = [],
         watching: [Ticket] = [],
-        humanReview: [Ticket] = [],
         retrying: [Retry] = [],
         slotWaiting: [Waiting] = [],
         dispatchSkipped: [Waiting] = [],
@@ -246,7 +243,6 @@ public struct OverviewState: Equatable {
         self.repos = repos
         self.running = running
         self.watching = watching
-        self.humanReview = humanReview
         self.retrying = retrying
         self.slotWaiting = slotWaiting
         self.dispatchSkipped = dispatchSkipped
@@ -288,7 +284,6 @@ public struct OverviewState: Equatable {
                 )
             },
             watching: (payload.watching ?? []).compactMap(ticket),
-            humanReview: (payload.humanReview ?? []).compactMap(ticket),
             retrying: (payload.retrying ?? []).compactMap { retry in
                 guard let identifier = retry.issueIdentifier ?? retry.issueId else { return nil }
                 return Retry(
@@ -479,7 +474,6 @@ public struct OverviewState: Equatable {
         let counts: Counts?
         let running: [Running]?
         let watching: [Ticket]?
-        let humanReview: [Ticket]?
         let retrying: [Retry]?
         let slotWaiting: [Waiting]?
         let dispatchSkipped: [Waiting]?

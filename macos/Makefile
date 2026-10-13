@@ -103,7 +103,7 @@ bundle: app
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict --deep "$(APP)"
 
-# Builds the app with this checkout's Symphony embedded, for Auto Review's macos_app QA
+# Builds the app with this checkout's Symphony embedded, for the QA state's macos_app playbook
 # (see docs/configuration.md), so the app's `symphony check` runs this code. Symphony is
 # the checkout's escript with its shebang pointed at this Mac's Erlang, so it runs without
 # mise or PATH. It reports the commit in source-commit, which `git archive` fills in (a QA

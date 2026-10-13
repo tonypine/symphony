@@ -339,8 +339,8 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
 Open Logs opens `menubar-child.log`.
 
-While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans and PRs in
-`In Review` or `Human Review`, open decisions, tickets the quality gate
+While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans in
+`Plan Review`, open decisions, tickets the quality gate
 holds or skipped, and tickets an access hold pauses in place), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
 each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
 ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
@@ -851,9 +851,9 @@ state. The window opens on the Inbox the first time.
   shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
   Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
   seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow
-  Symphony's answer (`moved`, `to_state`), so decisions that moved a plan out of the workflow's Human Review
-  state, whatever its name, offer Undo too. Unblock moves no ticket, so its banner just says "Hold cleared" with
-  no Undo.
+  Symphony's answer (`moved`, `to_state`). Send Decisions posts its comment in place and leaves the plan in
+  `Plan Review`, so its banner just says "Sent your decisions" with no Undo. Unblock moves no ticket, so its banner
+  just says "Hold cleared" with no Undo.
 
 - **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), in three columns like the
   Inbox. The list groups the plan tickets as Active, In review and Done recently (a week after they are done),

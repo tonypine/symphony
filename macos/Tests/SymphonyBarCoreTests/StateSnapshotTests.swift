@@ -195,7 +195,7 @@ final class StateSnapshotTests: XCTestCase {
             ],
             [
                 "issue_id": "issue-100", "issue_identifier": "TP-100", "state": "Todo", "forced_for_seconds": 270_000,
-                "stale": true, "sub_issue": ["issue_id": "issue-101", "issue_identifier": "TP-101", "state": "In Review"],
+                "stale": true, "sub_issue": ["issue_id": "issue-101", "issue_identifier": "TP-101", "state": "Code Review"],
                 "phase": "waiting_for_human", "summary": "waiting for a human",
             ],
             // Without a phase Symphony sends no summary; without an identifier, the id names it.
@@ -249,15 +249,11 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns)))
     }
 
-    func testDecodesTheHumanReviewCount() throws {
-        // The recorded state predates the Human Review count, which then reads as none.
+    func testIgnoresTheRetiredHumanReviewCount() {
+        // A Symphony from before the state machine redesign still sends it; the state reads the same without it.
         XCTAssertEqual(
             SymphonyState.poll(data: Data(#"{"counts": {"running": 2, "retrying": 1, "human_review": 3}}"#.utf8), statusCode: 200),
-            .state(StateSnapshot(running: 2, retrying: 1, humanReview: 3))
-        )
-        XCTAssertEqual(
-            SymphonyState.poll(data: try recordedState(), statusCode: 200),
-            .state(StateSnapshot(running: 1, budget: recordedBudget, humanReview: 0, runs: recordedRuns))
+            .state(StateSnapshot(running: 2, retrying: 1))
         )
     }
 
@@ -265,7 +261,7 @@ final class StateSnapshotTests: XCTestCase {
         let data = try recordedState(replacing: "waiting_on_you", with: [
             [
                 "issue_id": "id-1", "issue_identifier": "TP-1", "repo_key": "symphony", "title": "Research issue template",
-                "url": "https://linear.app/tonypine/issue/TP-1", "state": "In Review", "kind": "plan",
+                "url": "https://linear.app/tonypine/issue/TP-1", "state": "Plan Review", "kind": "plan",
                 "headline": "The split", "waiting_since": "2026-10-02T12:16:02Z", "waiting_seconds": 7_200,
             ],
             ["issue_id": "id-2", "kind": "final_verification", "headline": NSNull(), "waiting_seconds": NSNull()],

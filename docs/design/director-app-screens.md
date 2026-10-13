@@ -88,13 +88,12 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2b · Inbox: a pull request to approve
 
-- **Shows:** the PR's purpose in one sentence; **Checks**: CI, Auto Review QA (with its report), the acceptance gate's
-  verdict and its agreement record on this repo, the review agent; **Change**: files and lines, the largest files;
-  **QA screenshots**.
+- **Shows:** the PR's purpose in one sentence; **Checks**: CI, Code Review (the review agent's verdict and reasons), QA
+  (with its report); **Change**: files and lines, the largest files; **QA screenshots**.
 - **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub.
-- **States:** a red check turns its row red and makes Open PR the default button; with the gate in Enforce, the PR
-  reaches the Inbox only on the gate's escalations, and says so.
-- **Data:** the ticket's PR, CI checks, QA result and gate verdict (section 2).
+- **States:** a red check turns its row red and makes Open PR the default button; the PR reaches the Inbox only when
+  the repo's manual review holds the step into `Merging` for you, or Code Review escalates it, and says so.
+- **Data:** the ticket's PR, CI checks, Code Review verdict and QA result (section 2).
 
 #### D2c · Inbox: an action only the Director can do
 
@@ -137,9 +136,9 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D1 · Overview: flowing
 
-- **Shows:** the status sentence (P1); the flow strip (P2): Queued → Working → Auto Review → Waiting on you → Merging →
-  Shipped today, each tile a count with one line of context, only Waiting on you tinted; **Now working** (agent runs,
-  QA passes and landings, with phase, turn, last activity, time and tokens); **Next up**; on the right **Today**
+- **Shows:** the status sentence (P1); the flow strip (P2): Queued → Working → Code Review & QA → Waiting on you →
+  Merging → Shipped today, each tile a count with one line of context, only Waiting on you tinted; **Now working** (agent
+  runs, QA passes and landings, with phase, turn, last activity, time and tokens); **Next up**; on the right **Today**
   (tokens against the daily budget and each provider's limit), **Initiatives** (progress by state), repos health in
   one line.
 - **States:** flowing (here), needs attention (J3), paused (J4), idle (below). Sections with nothing to say are not

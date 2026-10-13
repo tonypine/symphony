@@ -223,8 +223,8 @@ When something is wrong it says how many things, and the list below names them.
 
 ### P2. Flow strip
 
-The stages a ticket passes through, left to right, as stat tiles joined by chevrons: Queued → Working → Auto Review →
-Waiting on you → Merging → Shipped today. Each tile is a count, a label and one line of context, and opens Tickets (or
+The stages a ticket passes through, left to right, as stat tiles joined by chevrons: Queued → Working → Code Review &
+QA → Waiting on you → Merging → Shipped today. Each tile is a count, a label and one line of context, and opens Tickets (or
 the Inbox) filtered to that stage. "Waiting on you" is the only tile with a status tint. Stages at 0 keep their place
 in `text.tertiary`. It replaces nine equal metric cards.
 
@@ -330,7 +330,7 @@ Each component names its SwiftUI base, its parts, its states and what VoiceOver 
 ## 7. Content
 
 - Use the workflow's words: Todo, In Progress, Code Review, QA, Plan Review, Merging, Done, Rework, Backlog; and the
-  Director's words for stages: Queued, Working, Auto Review, Waiting on you, Merging, Shipped.
+  Director's words for stages: Queued, Working, Code Review & QA, Waiting on you, Merging, Shipped.
 - A ticket is always its identifier and its title together.
 - Durations are short and exact: "14 min", "3 h 12 min", "2 days". Times: relative in rows ("12 min ago"), absolute on
   hover ("Today 14:03").

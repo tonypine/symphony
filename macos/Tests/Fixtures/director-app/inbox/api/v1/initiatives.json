@@ -91,7 +91,7 @@
           "issue_id": "i-206",
           "identifier": "BIL-206",
           "title": "Prorate plan changes mid-cycle",
-          "state": "Human Review",
+          "state": "QA",
           "url": "https://linear.app/acme/issue/BIL-206",
           "blocked_by": [
             "BIL-204"
