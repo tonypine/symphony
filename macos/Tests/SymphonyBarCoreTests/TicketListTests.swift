@@ -97,7 +97,7 @@ final class TicketListTests: XCTestCase {
     func testEachFlowTileOpensItsStageAndWaitingOnYouOpensTheInbox() {
         XCTAssertEqual(TicketList.Filter(stage: .queued), .queued)
         XCTAssertEqual(TicketList.Filter(stage: .working), .working)
-        XCTAssertEqual(TicketList.Filter(stage: .autoReview), .review)
+        XCTAssertEqual(TicketList.Filter(stage: .review), .review)
         XCTAssertNil(TicketList.Filter(stage: .waitingOnYou))
         XCTAssertEqual(TicketList.Filter(stage: .merging), .merging)
         XCTAssertEqual(TicketList.Filter(stage: .shippedToday), .shipped)

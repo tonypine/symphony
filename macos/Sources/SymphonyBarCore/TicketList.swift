@@ -77,7 +77,7 @@ public struct TicketList: Equatable {
             switch stage {
             case .queued: self = .queued
             case .working: self = .working
-            case .autoReview: self = .review
+            case .review: self = .review
             case .waitingOnYou: return nil
             case .merging: self = .merging
             case .shippedToday: self = .shipped
