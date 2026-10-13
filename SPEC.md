@@ -4616,6 +4616,27 @@ Minimum endpoints:
     - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
       `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
       `questions`.
+  - Each item also has `references` and `context`, resolved on the same poll
+    (`SymphonyElixir.Inbox.References`):
+    - `references` maps each ticket identifier (`TP-891`) and pull request (`PR #448`, or a bare
+      `#448`, read as a pull request of the item's repo) the item's text mentions, written exactly as
+      in the text, to a `ticket` (`identifier`, `title`, `repo_key`, `state`, `summary`: its Symphony
+      status line, else its description's first sentence, plain text of at most 160 characters,
+      `url`, `parent` `{identifier, title}`, `pull_request` `{number, url, checks}`, `waiting_on`:
+      what it waits on in the ticket page's words, null while it runs or once done), a
+      `pull_request` (`number`, `repo_key`, `url`, `title`, `summary`: the first sentence of its
+      `## This PR` section, else of its body, `review_state` `open`/`changes_requested`/`approved`/
+      `merged`/`closed`, `review_rounds`: Symphony's Code Review rounds on it, `files`, `additions`,
+      `deletions`, `checks` `passed`/`failed`/`pending`/null, `ticket`), or `missing` with the best
+      guess at its `url` when it can't be read. A failed read never fails the item.
+    - `context` is where the item's ticket sits: `parent` (`identifier`, `title`, `done`, `total`,
+      `children`: each sub-ticket's Linear state type in landing order, canceled ones left out),
+      `pull_request` (`number`, `url`, `checks`, `sent_back`: how many times Code Review sent it
+      back), `blocked_by`, `blocks` and `related` (`identifier`, `title`, `state`), and
+      `earlier_decisions` (`at`, `title`, `answer`: the requests on the ticket a person answered,
+      newest first, at most 3).
+    - One Linear query per poll reads every item's ticket and every ticket mentioned; GitHub is read
+      once per pull request, and a read is reused for two minutes.
   - `counts` has `total` and the number of items of each kind.
   - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
     in place of the list, as `/api/v1/state` does.

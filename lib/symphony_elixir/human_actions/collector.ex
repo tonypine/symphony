@@ -328,6 +328,31 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @spec newest_request(map(), Schema.t()) :: Request.t() | nil
   def newest_request(node, settings), do: node |> newest_open_request(settings) |> then(&(&1 && elem(&1, 1)))
 
+  @doc """
+  The requests on the issue node a person answered, newest answer first: each one's title, the
+  answer (the `**Decision:**` lines of the Inbox's Decide, else the first reply on one line) and
+  when it was given. A withdrawn request was never answered and is left out.
+  """
+  @spec answered_requests(map()) :: [%{at: DateTime.t() | nil, title: String.t(), answer: String.t()}]
+  def answered_requests(node) do
+    replies = node |> comments() |> Enum.filter(&is_binary(&1["body"])) |> Enum.group_by(&get_in(&1, ["parent", "id"]))
+
+    for {comment_id, request} <- requests(node),
+        under = Enum.sort_by(Map.get(replies, comment_id, []), &(&1["createdAt"] || "")),
+        not Enum.any?(under, &Request.withdrawal?(&1["body"])),
+        %{"body" => body} = reply <- Enum.take(under, 1) do
+      %{at: parse_datetime(reply["createdAt"]), title: request.title, answer: answer(body)}
+    end
+    |> Enum.sort_by(&((&1.at && DateTime.to_unix(&1.at, :microsecond)) || 0), :desc)
+  end
+
+  defp answer(body) do
+    case Regex.scan(~r/^\s*\*\*Decision:\*\*\s*(.+)$/m, body) do
+      [] -> Request.one_line(body)
+      decisions -> Enum.map_join(decisions, "; ", fn [_, decision] -> Request.one_line(decision) end)
+    end
+  end
+
   defp withdrawn_ids(node) do
     for %{"parent" => %{"id" => parent_id}} = comment <- comments(node), Request.withdrawal?(comment["body"]), into: MapSet.new(), do: parent_id
   end

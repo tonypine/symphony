@@ -78,9 +78,9 @@ defmodule SymphonyElixir.InboxTest do
     )
   end
 
-  # A Linear stand-in serving `listed` (light nodes) and `details` (full nodes by id), and reporting
-  # each query to the test process.
-  defp linear(test_pid, listed_fun, details) do
+  # A Linear stand-in serving `listed` (light nodes), `details` (full nodes by id) and `references`
+  # (the nodes of the references query, by root), and reporting each query to the test process.
+  defp linear(test_pid, listed_fun, details, references \\ %{}) do
     fn query, variables, _opts ->
       send(test_pid, {:caller, Usage.current_caller()})
 
@@ -93,6 +93,10 @@ defmodule SymphonyElixir.InboxTest do
           ids = variables.filter["id"]["in"]
           send(test_pid, {:read, ids})
           {:ok, %{"data" => %{"issues" => %{"nodes" => Enum.flat_map(ids, &List.wrap(details[&1]))}}}}
+
+        query =~ "SymphonyInboxReferences" ->
+          send(test_pid, {:references, variables})
+          {:ok, %{"data" => Map.new(references, fn {root, nodes} -> {root, %{"nodes" => nodes}} end)}}
       end
     end
   end
@@ -108,13 +112,35 @@ defmodule SymphonyElixir.InboxTest do
             repos: fn -> {:ok, [@repo]} end,
             settings_fun: fn _repo -> %Schema{} end,
             scope_filter: fn _repo -> {:ok, %{"team" => %{"key" => %{"eq" => "SHOP"}}}} end,
-            linear_client: linear_client
+            linear_client: linear_client,
+            snapshot: fn -> %{} end,
+            github_repos: %{"shop" => "acme/shop"},
+            pull_request: &{:ok, pull_request(&1)}
           ],
           opts
         ),
       nodes: %{},
       timer: make_ref()
     }
+  end
+
+  defp pull_request(url, attrs \\ %{}) do
+    Map.merge(
+      %{
+        number: url |> String.split("/") |> List.last() |> String.to_integer(),
+        url: url,
+        title: "SHOP-7 Retry the importer",
+        body: "## This PR\n\nThe importer retries a failed page.",
+        state: "OPEN",
+        review_decision: nil,
+        changed_files: 3,
+        additions: 40,
+        deletions: 2,
+        head_ref_name: "auto/SHOP-7",
+        checks: "passed"
+      },
+      attrs
+    )
   end
 
   defp lookups(hold \\ nil), do: %{hold: fn _repo_key, _issue_id -> hold end}
@@ -514,6 +540,101 @@ defmodule SymphonyElixir.InboxTest do
       # Waits for the tick that read it to finish.
       _state = :sys.get_state(name)
       assert [%{identifier: "SHOP-7"}] = Inbox.cached(name)
+    end
+
+    test "resolves what every item mentions and where it sits in one Linear query per poll, the quality gate's tickets included" do
+      test_pid = self()
+
+      action =
+        issue_node("SHOP-92", %{
+          "state" => %{"name" => "In Progress"},
+          "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+          "history" => %{"nodes" => []},
+          "comments" => %{"nodes" => [comment("request", String.replace(request_body(), "Releases fail to sign.", "SHOP-5 fails to sign, see #7."), "2026-10-01T08:00:01Z")]}
+        })
+
+      plan = issue_node("SHOP-330", %{"comments" => %{"nodes" => [comment("brief", String.replace(@brief, "The retry fix", "SHOP-6, the retry fix"))]}})
+
+      held = %{
+        kind: :clarification,
+        issue_id: "id-SHOP-50",
+        identifier: "SHOP-50",
+        title: "Vague",
+        repo_key: "shop",
+        state: "Todo",
+        url: "https://linear.app/acme/issue/SHOP-50",
+        reason: "Like SHOP-5, it has no criteria.",
+        questions: [],
+        scored_at: ~U[2026-10-01 07:00:00Z]
+      }
+
+      references = %{
+        "own" => [%{"id" => "id-SHOP-92", "identifier" => "SHOP-92", "parent" => %{"identifier" => "SHOP-330", "title" => "Plan", "children" => %{"nodes" => []}}}],
+        "mentioned" => [issue_node("SHOP-5", %{"state" => %{"name" => "Todo", "type" => "unstarted"}, "description" => "Sign builds."})]
+      }
+
+      details = %{action["id"] => action, plan["id"] => plan}
+      client = linear(test_pid, fn _variables -> page([light(action), light(plan)]) end, details, references)
+      {:ok, reads} = Agent.start_link(fn -> 0 end)
+
+      state =
+        state(client,
+          settings_fun: fn _repo -> designed_settings() end,
+          snapshot: fn -> %{awaiting_clarification: [held]} end,
+          pull_request: fn url ->
+            Agent.update(reads, &(&1 + 1))
+            {:ok, pull_request(url)}
+          end
+        )
+
+      state = Inbox.run_once(state)
+      assert_received {:references, variables}
+      refute_received {:references, _second_query}
+      assert variables.own == %{"id" => %{"in" => ["id-SHOP-92", "id-SHOP-330", "id-SHOP-50"]}}
+      assert length(variables.mentioned["or"]) == 3
+
+      [action_item, plan_item] = Inbox.cached(state.opts[:name])
+      assert %{kind: "ticket", title: "Title of SHOP-5", summary: "Sign builds."} = action_item.references["SHOP-5"]
+      assert %{kind: "pull_request", number: 7, files: 3, ticket: "SHOP-7"} = action_item.references["#7"]
+      assert %{parent: %{identifier: "SHOP-330", total: 0}} = action_item.context
+      assert %{"SHOP-6" => %{kind: "missing", url: "https://linear.app/acme/issue/SHOP-6"}, "PR #7" => %{kind: "pull_request"}} = plan_item.references
+
+      # The held ticket is listed from the snapshot at GET time, with what the poll resolved for it,
+      # and each ticket reference says what it waits on now.
+      items = Inbox.items(%{awaiting_clarification: [held], running: [%{issue_id: "id-SHOP-5"}]}, state.opts[:name])
+      clarify = Enum.find(items, &(&1.kind == :clarify))
+      assert %{references: %{"SHOP-5" => %{kind: "ticket", waiting_on: nil} = shop5}} = clarify
+      assert %{parent: nil, earlier_decisions: []} = clarify.context
+      refute Map.has_key?(shop5, :facts)
+      assert Enum.find(Inbox.items(%{awaiting_clarification: [held]}, state.opts[:name]), &(&1.kind == :clarify)).references["SHOP-5"].waiting_on == "a slot"
+
+      # The next poll reuses the pull request it just read.
+      assert Agent.get(reads, & &1) == 1
+      _state = Inbox.run_once(state)
+      assert Agent.get(reads, & &1) == 1
+    end
+
+    test "reads each repo's GitHub repository once, and again when the repos change" do
+      test_pid = self()
+      pr = issue_node("SHOP-7")
+      base = state(linear(test_pid, fn _variables -> page([light(pr)]) end, %{pr["id"] => pr}))
+      state = %{base | opts: Keyword.delete(base.opts, :github_repos)}
+
+      state = Inbox.run_once(state)
+      assert state.github_repos == {[@repo], %{}}
+      assert Inbox.run_once(state).github_repos == {[@repo], %{}}
+
+      other = %{name: "other"}
+      changed = %{state | opts: Keyword.put(state.opts, :repos, fn -> {:ok, [other]} end)}
+      assert Inbox.run_once(changed).github_repos == {[other], %{}}
+    end
+
+    test "an unavailable orchestrator snapshot resolves no quality gate tickets" do
+      test_pid = self()
+      pr = issue_node("SHOP-7")
+      client = linear(test_pid, fn _variables -> page([light(pr)]) end, %{pr["id"] => pr})
+      Inbox.run_once(state(client, snapshot: fn -> :unavailable end))
+      assert_received {:references, %{own: %{"id" => %{"in" => ["id-SHOP-7"]}}}}
     end
 
     test "is on for a Linear tracker" do

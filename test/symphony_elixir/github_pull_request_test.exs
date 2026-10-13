@@ -1062,4 +1062,72 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, :invalid_pr_url} = PullRequest.commit_included?("not a url", "m1", "b", gh_runner: runner)
     end
   end
+
+  describe "fetch_summary/2" do
+    test "reads a pull request's title, body, state, review decision, size and checks in one gh call" do
+      test_pid = self()
+      pr_url = "https://github.com/acme/app/pull/448"
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        {Jason.encode!(%{
+           "number" => 448,
+           "url" => pr_url,
+           "title" => "TP-892 Retire two review steps",
+           "body" => "## This PR\n\nGone.",
+           "state" => "OPEN",
+           "reviewDecision" => "",
+           "changedFiles" => 12,
+           "additions" => 120,
+           "deletions" => 480,
+           "headRefName" => "auto/TP-892",
+           "headRefOid" => "abc",
+           "statusCheckRollup" => [
+             %{"name" => "test", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+             %{"name" => "lint", "status" => "IN_PROGRESS", "conclusion" => nil}
+           ]
+         }), 0}
+      end
+
+      assert {:ok,
+              %{
+                number: 448,
+                url: ^pr_url,
+                title: "TP-892 Retire two review steps",
+                body: "## This PR\n\nGone.",
+                state: "OPEN",
+                review_decision: nil,
+                changed_files: 12,
+                additions: 120,
+                deletions: 480,
+                head_ref_name: "auto/TP-892",
+                checks: "pending"
+              }} = PullRequest.fetch_summary(pr_url, gh_runner: runner)
+
+      assert_received {:gh, ["pr", "view", ^pr_url, "--json", fields]}
+      assert fields =~ "statusCheckRollup"
+    end
+
+    test "answers an error for a bad URL, a failed gh call or an unreadable payload" do
+      pr_url = "https://github.com/acme/app/pull/448"
+      assert {:error, :invalid_pr_url} = PullRequest.fetch_summary("https://example.com/x", gh_runner: fn _args, _opts -> flunk("no call") end)
+
+      answering = fn output, status ->
+        PullRequest.fetch_summary(pr_url, gh_runner: fn _args, _opts -> {output, status} end)
+      end
+
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = answering.("Not Found", 1)
+      assert {:error, :invalid_pr_payload} = answering.("[]", 0)
+      assert {:error, {:invalid_pr_payload, _message}} = answering.("not json", 0)
+      assert {:ok, %{url: ^pr_url, checks: nil}} = answering.("{}", 0)
+    end
+  end
+
+  test "a head's checks fail when one finished without passing, else wait while one runs, else pass" do
+    assert PullRequest.checks_outcome([]) == nil
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "COMPLETED", conclusion: "SKIPPED"}]) == "passed"
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "QUEUED", conclusion: nil}]) == "pending"
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "FAILURE"}, %{status: "QUEUED", conclusion: nil}]) == "failed"
+  end
 end
