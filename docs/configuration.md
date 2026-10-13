@@ -1131,8 +1131,12 @@ pull_requests:
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
   - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
-    context (an agent run). The approval covered the diff before the conflict, so the fix goes
-    back through review, and moving the ticket to `Merging` again turns auto-merge back on. The
+    context (an agent run; a `designed` repo's ticket enters `CI Fix`, which returns it to
+    `Merging`). The approval covered the diff before the conflict, so the fix goes back through
+    review, and moving the ticket to `Merging` again turns auto-merge back on. Auto-merge stays off
+    on the conflicting head meanwhile, even when GitHub briefly stops reporting the conflict after
+    the base branch moves. A ticket the conflict leaves in `Merging` (an agent run still marked
+    running, or the conflict retries spent) goes to the landing agent rather than waiting. The
     audit log (`auto_merge_disabled`, `reason: conflict`) and a ticket comment record it.
   - A red head first gets one flaky rerun of the same commit (`ci.flaky_retry`), with auto-merge
     left on. The CI-fix run after that turns auto-merge off before it starts, like a conflict: the
