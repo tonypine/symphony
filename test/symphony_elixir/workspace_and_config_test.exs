@@ -2485,7 +2485,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert variables == %{
              filter: %{
-               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
                "project" => %{"slugId" => %{"eq" => "project"}},
                "team" => %{"key" => %{"eq" => "Test"}},
                "assignee" => %{"id" => %{"in" => ["user-1"]}}
@@ -2564,7 +2564,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"key" => %{"eq" => "ACME"}}
            }
 
@@ -2584,7 +2584,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"id" => %{"eq" => team_id}}
            }
   end
@@ -2600,7 +2600,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"id" => %{"eq" => team_id}}
            }
   end
@@ -2616,7 +2616,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"key" => %{"eq" => team}}
            }
   end
@@ -2631,7 +2631,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       variables = capture_candidate_variables!()
 
       assert variables.filter == %{
-               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
                "team" => %{"key" => %{"eq" => "Test"}},
                "labels" => %{"some" => %{"name" => %{"in" => labels}}}
              }
@@ -2661,7 +2661,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"key" => %{"eq" => "ACME"}},
              "labels" => %{"some" => %{"name" => %{"in" => ["backend"]}}}
            }
@@ -2679,7 +2679,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "project" => %{"slugId" => %{"eq" => "project"}},
              "team" => %{"key" => %{"eq" => "ACME"}},
              "labels" => %{"some" => %{"name" => %{"in" => ["backend"]}}},
@@ -2736,7 +2736,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:candidate_query, ^query, api_variables}
 
     assert web_variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "project" => %{
                "or" => [
                  %{"name" => %{"in" => ["Project Alpha"]}},
@@ -2749,7 +2749,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     assert api_variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "project" => %{
                "or" => [
                  %{"name" => %{"in" => ["Project Beta"]}},
@@ -3556,6 +3556,37 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, :pending_tool_report_after_ms, bad))
       assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
       assert message =~ "watchdog.pending_tool_report_after_ms"
+    end
+  end
+
+  test "the dispatch-loop limits come from symphony.yml, positive and runs at most 50" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    assert %{
+             dispatch_loop_runs: 4,
+             dispatch_loop_window_ms: 600_000,
+             dispatch_loop_long_runs: 8,
+             dispatch_loop_long_window_ms: 3_600_000
+           } = Config.settings!().watchdog
+
+    watchdog = %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000}
+
+    limits = %{
+      dispatch_loop_runs: 3,
+      dispatch_loop_window_ms: 300_000,
+      dispatch_loop_long_runs: 6,
+      dispatch_loop_long_window_ms: 7_200_000
+    }
+
+    write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.merge(watchdog, limits))
+    assert ^limits = Map.take(Config.settings!().watchdog, Map.keys(limits))
+
+    bad_values = for key <- Map.keys(limits), bad <- [0, "often"], do: {key, bad}
+
+    for {key, bad} <- bad_values ++ [{:dispatch_loop_runs, 51}, {:dispatch_loop_long_runs, 51}] do
+      write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, key, bad))
+      assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+      assert message =~ "watchdog.#{key}"
     end
   end
 

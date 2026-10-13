@@ -11,7 +11,7 @@ Symphony runtime context:
 - Never launch an app, an `NSApplication`, or a window on the host, not even a throwaway harness to take a screenshot: the host is the operator's desktop, and its windows and crash dialogs land on their screen. The agent sandbox blocks the window server, so such a harness crashes instead of drawing.
 - Take UI screenshots offscreen only, with SwiftUI `ImageRenderer` (no `NSApplication`, no window), or leave them to the QA pass, which runs the app on its own QA machine.
 - Final message must report completed actions and blockers only. Do not include next steps for the user.
-- Repo key: `legacy`.
+- Repo key: `app`.
 - Follow the repository workflow below after this managed context.
 
 You are working on a Linear ticket `ABC-123`
@@ -183,16 +183,22 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 
 ## Status map
 
-- `Backlog` -> out of scope for this workflow; do not modify, except when an escape hatch returns the issue to `Backlog` for human input or external unblock.
+- `Backlog` -> out of scope for this workflow; do not modify, except when a person triages it to `Todo`.
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
-  - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `In Review`).
-- `In Progress` -> implementation actively underway.
-- `Waiting on sub-tickets` -> a plan ticket (label `plan`, or `breakdown`, its older name) whose plan a human approved, waiting on its sub-tickets; do nothing. Symphony promotes its `Backlog` sub-tickets to `Todo` on entry, and starts the parent's close-out run from here once every sub-ticket is terminal (see `Parent tickets`). Any other ticket lands here when its PR merges with a sub-ticket still open outside `Backlog`: Symphony moves it to `Done` itself, with no run, once every sub-ticket outside `Backlog` is terminal; do nothing. Its `Backlog` sub-tickets stay there for a person to promote. One a person moved here without its PR merging waits for them.
-- `In Review` -> PR is attached and validated (or, for a plan ticket, its plan is handed over in the review brief), or all that is left is a `## Supervisor check` an agent can't run; waiting on the supervisor or a human. A person's comment on a plan under review brings the parent back to `In Progress` for a plan revision run (see `Parent tickets`).
-- `Human Review` -> waiting on the operator only, apart from the supervisor's `In Review` queue. It is the one way to say a person needs to act; no label says it. It holds a plan whose ticket says a human reviews it, or an open `linear_request_human_action` decision (the tool moves the ticket here). It never holds a check to run: a check an agent can't run goes to `In Review` as a `## Supervisor check`. Symphony never dispatches it; do not change the issue or PR, wait. A person's move out of it counts like one out of `In Review` (to `Merging`, `Rework`, `Waiting on sub-tickets` or `Done`). A supervisor moves a ticket here when it needs the operator, and never approves out of it on their behalf.
-- `Merging` -> approved by a human; follow the repo's landing flow to merge (do not call `gh pr merge` directly).
-- `Rework` -> reviewer requested changes; planning + implementation required.
+  - Special case: if a PR is already attached, treat as feedback/rework loop (run the full PR feedback sweep, address or explicitly push back, revalidate, then hand off to `Code Review`).
+- `In Progress` -> implementation actively underway: net-new work on this ticket, or PR review comments addressed on the same PR and branch.
+  - Handing off is explicit: push the branch and open the pull request, and that push is the handoff signal that moves the ticket to `Code Review`. Do not ask for the state by hand — a `linear_update_state` call naming `Code Review` is refused. A run that ends without pushing and opening its PR never advances; the ticket stays here and is retried.
+- `Code Review` -> an agent reviews the PR: correctness, scope, acceptance criteria and intent. Approve moves the ticket to `QA` (or to `Merging` when QA is skipped by policy); a rework verdict returns it to `Rework`; a red head routes to `CI Fix`. Do not change the issue or PR while it is here. The reviewer runs on its own, once the head's checks are green, so there is nothing to start here — just wait.
+- `QA` -> an agent validates the change end to end as a user would, driven by the user journeys it delivers. Pass moves the ticket to `Merging`; fail returns it to `Rework`; a red head routes to `CI Fix`.
+- `Plan Review` -> an epic parent's plan waits on a person: designs, screens, user stories and proposed sub-tickets. Approval promotes the sub-tickets to `Todo` and moves the parent to `Waiting on sub-tickets`; changes go back through `Rework` to re-plan.
+- `Waiting on sub-tickets` -> a plan parent whose plan a person approved, waiting on its sub-tickets; do nothing. Symphony starts the parent's epic review from here once every sub-ticket is terminal.
+- `Epic Review` -> an automatic integrity check of an epic parent once its children are terminal: artifacts, comments and PRs verified against the epic's intent. Pass moves it to `Done`; gaps are filed as follow-ups in `Todo` within the same epic and the parent returns to `Waiting on sub-tickets`.
+- `Merging` -> the machine lands the merge; follow the repo's landing flow (do not call `gh pr merge` directly). A red head or a conflict routes to `CI Fix`.
+- `Rework` -> a reviewer or QA returned the work for changes; continue on the existing PR (never from scratch). Changes done hand off to `Code Review` (for an epic parent, to `Plan Review`).
+- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: minimal repair only — formatting, a rerun of a flaky check, a dependency bump, resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing.
 - `Done` -> terminal state; no further action required.
+
+`Blocked` and `Needs Decision` are labels, not states: they pause a ticket in its current phase and never move it. Do not change the issue or PR while a hold is set; it clears automatically when its condition clears (a dependency or fix ticket goes terminal, access is granted, or a decision is recorded) and the ticket continues from where it stopped.
 
 
 ## Step 0: Determine current ticket state and route
@@ -204,12 +210,16 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
-   - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop while any sub-ticket is open. Once every sub-ticket is terminal, run the close-out in `Parent tickets` below.
-   - `In Review` -> wait and poll for decision/review updates.
-   - `Human Review` -> waiting on the operator only; do not change the issue or PR, stop and wait.
-   - `Merging` -> Symphony normally lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
-   - `Rework` -> run rework flow (for a plan ticket, the re-plan run in `Parent tickets` below).
+   - `Code Review` -> the reviewer agent judges the PR on its green head; do not change the issue or PR, stop and wait for the verdict.
+   - `QA` -> a QA agent walks the change's user journeys end to end; do not change the issue or PR, stop and wait for the verdict.
+   - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: minimal repair on the same branch, or `Rework` when the repair is substantive.
+   - `Plan Review` -> a person reviews the plan; do nothing and stop.
+   - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop. Symphony moves it to `Epic Review` itself once every sub-ticket is terminal.
+   - `Epic Review` -> Symphony's epic review checks the epic against what shipped; do nothing and stop.
+   - `Merging` -> Symphony lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Rework` -> continue the existing PR with the rework flow (Step 4; for a plan ticket, the plan revision or re-plan run in `Parent tickets` below).
    - `Done` -> do nothing and shut down.
+   - A `Blocked` or `Needs Decision` label on the ticket -> a hold pauses it in its phase; do not change the issue or PR, stop and wait for it to clear.
 4. Check whether a PR already exists for the current branch and whether it is closed.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
    - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
@@ -218,7 +228,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
    - find/create `## Symphony Workpad` bootstrap comment
    - only then begin analysis/planning/implementation work.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.
-7. If the ticket has the `plan` label (or `breakdown`, its older name, still accepted), or its title starts with `Final verification:`, follow `Parent tickets` below in place of the implementation steps (Step 1 items 8-11 and Step 2). The `Todo` -> `In Progress` transition and the workpad still apply.
+7. If the ticket has the `plan` label (or `breakdown`, its older name, still accepted), follow `Parent tickets` below in place of the implementation steps (Step 1 items 8-11 and Step 2). The `Todo` -> `In Progress` transition and the workpad still apply.
 
 ## Step 1: Start/continue execution (Todo or In Progress)
 
@@ -247,7 +257,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
       When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
-    - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that blocks the parent's final verification and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
+    - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that the parent's epic review checks and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
 7.  Run a principal-style review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
 9.  Run the `pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
@@ -266,7 +276,8 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 
 ## PR feedback sweep protocol (required)
 
-When a ticket has an attached PR, run this before moving to `In Review`:
+When a ticket has an attached PR, run this before the push that hands it off to
+`Code Review`:
 
 1. Identify the PR number from issue links/attachments.
 2. Gather feedback from every channel: `github_get_pull_request()` (body/metadata),
@@ -301,37 +312,59 @@ Use this whenever pushed checks come back failing, at any push gate.
 5. If the failure is in unrelated pre-existing code, document it in the workpad and
    note it explicitly in the PR description.
 
+On this repo a red head is an attribute of the PR, not a state of your own run: once
+the ticket is past the handoff, a red head or a merge conflict moves it to `CI Fix`,
+and the run you get there is this protocol's mechanical lane.
 
-## Decisions for a person, checks for the supervisor (required behavior)
+- Make the minimal repair only: a formatting fix, a rerun of a flaky check, a
+  dependency bump, a resolved conflict. Push it to the same branch; a green head
+  returns the ticket to where it came from (`Code Review`, `QA`, `Merging` or
+  `Rework`) with its approvals carried forward.
+- When the repair needs a substantive change (new behaviour, a design change, more
+  than a mechanical fix), say why in the workpad, move the ticket to `Rework` with
+  `linear_update_state` (that move is the lane's substantive verdict), and stop: the
+  rework run makes the change and the new head is reviewed again.
+- When you cannot make the repair without access or a secret, ask with
+  `linear_request_human_action`; the `Needs Decision` hold keeps the ticket in
+  `CI Fix` until the answer.
+
+
+## Decisions for a person, checks for the machine (required behavior)
 
 A person only ever makes decisions. Never hand them a check to run or a runbook of
 steps.
 
 - When a manual check could be an automated test, write the test instead of asking
   anyone to check by hand.
-- When all that is left is verification an agent can't run (launching the app, a
-  host crash check, a check on a device), hand it to the supervisor, never to a
-  person and never to `Human Review`: leave a `## Supervisor check` block, in the
-  review brief or in its own comment, then move the ticket to `In Review`. The
-  supervisor runs the check per its policy.
-  Use this format:
-
-  ```md
-  ## Supervisor check
-
-  **Verify:** <what must hold, and on which commit or build>
-  **How:** <the exact check: the command, the app path, the device>
-  **Pass when:** <the result that clears it>
-  ```
-
+- A check an implementation run can't run — launching the app, a host crash check, a
+  check on a device or a database — is a coverage gap to close, never a handoff:
+  automate it in CI, or bring it into a QA playbook (`priv/qa_playbooks/*`) that the QA
+  state runs on its own VM, emulator and host driver. A check is never handed to a
+  person and never moves a ticket.
+- When such a check blocks the work, it is an environment block like any other: the
+  flow retries it boundedly, then the self-heal lane files the fix ticket for the broken
+  component and pauses the ticket on a `Blocked` hold that clears by itself when the fix
+  lands. Nothing waits on a person or a supervisor.
 - When the work turns out to be done already (another ticket shipped it), say so
   in the workpad with the commits, and hand over the call to close it as a
-  decision, or the check that is left as a supervisor check; never as steps.
+  decision; never as steps.
 - When only a person can decide (a product call, a missing secret or permission:
   add it or drop what needs it, an account to set up), ask with
   `linear_request_human_action`: one question in `decision`, 2 to 4 options, each
   with what it does, one of them recommended. A request without options is
-  refused.
+  refused. The tool sets the `Needs Decision` hold and the `Needs Decision` label
+  and leaves the ticket exactly where it is — a decision never moves a ticket — and
+  the run ends shortly after. The person answers with a reply under the request, or
+  in the Symphony Inbox; either records the decision and clears the hold, and the
+  ticket continues from where it stopped. An answer that directs a move (for
+  instance back to `Rework`) makes that move through the machine's guard. A
+  withdrawal clears the hold the same way; the ticket never moved.
+- Symphony writes each answer into the `Decisions` section of the issue
+  description (`D1`, `D2`…: the question, the answer and what it means for scope).
+  A recorded decision is part of the ticket's scope: follow it, never re-open it, and
+  never edit the section. The tool does not raise a question a person already
+  answered; it returns the recorded answer, which you apply. A review finding that
+  contradicts a recorded decision is not a finding: answer it by naming the decision.
 
 ## Blocked-access escape hatch (required behavior)
 
@@ -350,13 +383,14 @@ auth/permissions that cannot be resolved in-session.
   `linear_request_human_action` as a decision (title, why, the question and its
   options, what it unblocks; secret names only, never values) instead of
   `linear_add_comment`: Symphony then lists it in the project's update for that
-  person. A check on a device is not a blocker for a person: it is a
-  `## Supervisor check` (see above). The tool moves
-  the ticket to `Human Review` (`In Review` when the team has no such state) and
-  adds no label, and the move ends the run shortly after: first push your
-  committed work (open or update the PR if the rest of the ticket is done) and
-  record the blocker in the workpad, then call it, so the person finds the PR
-  waiting with the ticket. Never add a label to say a person must act.
+  person. A check on a device is not a blocker for a person: it belongs to CI or a QA
+  playbook (see above), and an environment block that keeps it from running goes to the
+  self-heal lane. The tool sets the `Needs Decision` hold, which pauses the ticket in
+  its phase — no state moves, so the ticket never looks like a validated PR review — and
+  the run ends shortly after: first push your committed work (open or update the PR if
+  the rest of the ticket is done) and record the blocker in the workpad, then call it,
+  so the person finds the PR waiting with the ticket. Never add a label to say a person
+  must act: `Needs Decision` is set by the tool, not by you.
 - Before requesting a human action for slow or stuck CI, compute the job's age
   from the API's UTC timestamps (`startedAt`, `createdAt`) against the current
   UTC time (`date -u`), never against local time. When the job is under 30
@@ -364,29 +398,29 @@ auth/permissions that cannot be resolved in-session.
 - When a request turns out not to be needed, withdraw it with
   `linear_withdraw_human_action` (the reason, plus the request's `title` when the
   issue has more than one). A comment saying it is no longer needed leaves it
-  listed.
+  listed. Withdrawing the last open request clears the hold, and the ticket
+  continues in place.
 - After a `linear_request_human_action` request, leave the review brief (see
   `Review brief`) pointing to the request, or edit the existing one in place.
-- Record the blocker comment URL in the workpad, move the ticket to `Backlog` (so
-  it does not look like a validated PR review), and stop. After a
-  `linear_request_human_action` request the ticket is already in `Human Review`,
-  and a move to `Backlog` lands there too, so the person finds the ticket waiting
-  on them. The request stays open until a person moves the ticket out of
-  `Human Review`, or you withdraw it; a withdrawal moves the ticket back to the
-  active state it came from.
+- Record the blocker comment URL in the workpad and stop. Do not move the ticket:
+  the hold pauses it where it stands, and the person finds it, and its request, on
+  the same ticket. The request stays open until the person answers it or you
+  withdraw it; a reply that is not a withdrawal is the answer.
 
 ## In-execution clarification escape hatch (required behavior)
 
 Use this only when planning reaches a fundamentally unclear specification and the
 issue description plus comments give no unambiguous acceptance criteria.
 
-1. Post a short Linear comment with the specific unanswered questions (an exception
-   to the single-workpad rule; do not create a second workpad).
+1. Post the specific unanswered questions as one `linear_request_human_action`
+   decision: one question in `decision`, 2 to 4 options, each with what it does,
+   one of them recommended. Ask it as the specification call it is — "which of
+   these readings is right?" is the decision; do not hand over a runbook.
 2. Record in the workpad: the unanswered questions, why planning could not proceed,
-   and the URL of the comment from step 1.
-3. Move the issue to `Backlog` — the documented exception to the status map's
-   `do not modify` rule for `Backlog`.
-4. Stop. Do not guess or implement against a half-spec.
+   and the URL of the request comment from step 1.
+3. Stop. Do not guess or implement against a half-spec. The `Needs Decision` hold
+   pauses the ticket in its phase, and the answer that picks a reading clears it, so
+   the run continues from here.
 
 
 ## Parent tickets (tickets with sub-tickets)
@@ -396,7 +430,7 @@ one PR, it does plan work and must be groomed into sub-tickets before any work
 starts. `breakdown` is the label's older name and is still accepted; read it as
 `plan` everywhere below. The label stays on the parent while its sub-tickets are
 worked. Follow this section instead of the normal implementation steps when the
-ticket has the `plan` label, and when its title starts with `Final verification:`.
+ticket has the `plan` label.
 
 Rules for every plan ticket run:
 
@@ -404,23 +438,35 @@ Rules for every plan ticket run:
   the parent. Its deliverables are its sub-tickets, and the Linear documents and
   the one HTML screens file the `Plan pipeline` asks for when the ticket has an
   `Artifacts wanted` section.
-- The plan is reviewed before any sub-ticket is worked. The plan run leaves
-  its sub-tickets in `Backlog` and moves the parent to `In Review` (Symphony puts
-  it in `Human Review` instead when the ticket says a human reviews the plan, such
-  as a `needs-human` label or "must not auto-approve"). A human
-  approves the plan by moving the parent from either state to `Waiting on sub-tickets`, and Symphony
-  then moves every sub-ticket still in `Backlog` to `Todo` in one batch; blocked-by
-  links keep the order. Never move the parent to `Waiting on sub-tickets` yourself:
-  `linear_update_state` refuses it because that move is the approval.
-- A human rejects the plan by moving the parent to `Rework`. Symphony cancels the
-  rejected plan's sub-tickets still in `Backlog` and starts a re-plan run. Each
-  batch Symphony promotes or cancels is listed in one comment on the parent.
+- The plan is reviewed before any sub-ticket is worked, and on this repo it is
+  reviewed in `Plan Review`. The plan run leaves its sub-tickets in `Backlog` and
+  hands the parent over with `linear_update_state` naming `Plan Review`: that
+  request is the plan handoff, Symphony validates it and moves the parent, and
+  `Plan Review` is where the reviewer finds it. Only a plan parent may name it. The
+  review brief is what the person reads.
+- A person approves the plan by moving the parent from `Plan Review` to
+  `Waiting on sub-tickets`, or with the same move from the Inbox's approve action.
+  Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch;
+  blocked-by links keep the order. Never move the parent to
+  `Waiting on sub-tickets` yourself: `linear_update_state` refuses it because that
+  move is the approval.
+- A person rejects the plan by moving the parent to `Rework`. Symphony cancels the
+  rejected plan's sub-tickets still in `Backlog`, lists them in one comment starting
+  `Cancelled for re-plan:`, and starts a re-plan run. Each batch Symphony promotes
+  or cancels is listed in one comment on the parent.
+- A person comments on the plan under review to ask for a change: Symphony moves the
+  parent to `Rework` itself, and the run revises the plan in place and hands it back
+  to `Plan Review`. That is a revision, not a rejection: the plan's sub-tickets stay,
+  and Symphony posts no `Cancelled for re-plan:` comment.
 - A plan is approved once a sub-ticket left `Backlog`. Symphony does not dispatch or
   continue a plan ticket outside `Rework` whose approved plan has a sub-issue
-  outside a terminal state, and dispatches the close-out run once every sub-issue is
-  terminal. A parent whose open sub-tickets are all still in `Backlog` was never
-  approved: in `Todo` or `In Progress` it gets a plan run, never the waiting
-  state.
+  outside a terminal state, and it closes the epic itself once every sub-issue is
+  terminal: the parent moves to `Epic Review` and the epic review runs (see
+  `The epic close` below). A parent whose open sub-tickets are all still in
+  `Backlog` was never approved: in `Todo` or `In Progress` it gets a plan run, never
+  the waiting state.
+- The epic needs no verification sub-ticket and no close-out run: never file one.
+  `The epic close` says how the epic closes itself.
 - Never promote a sub-ticket, and never edit or cancel one outside `Backlog`:
   `linear_update_subissue` refuses it, because a person already promoted it.
 - Keep the workpad as the single progress record, as for any ticket.
@@ -434,12 +480,16 @@ Which plan run this is:
   Read the workpad and the newest comments, keep every artifact document, comment
   and sub-ticket already made, do only what is left of the plan run below (never
   file a sub-ticket a second time), leave the review brief (see `Review brief`), and
-  move the parent to `In Review`.
-- **Revise:** Symphony moved the parent from `In Review` back to `In Progress`
-  because a person commented on the plan. Follow the plan revision run below.
-- **Re-plan:** the parent is in `Rework`. Follow the re-plan run below.
+  hand the parent over as the plan run's last step says.
+- **Revise:** the parent is in `Rework` because Symphony moved it there when a person
+  commented on the plan under review, and its plan's sub-tickets are all still there
+  (no `Cancelled for re-plan:` comment). Follow the plan revision run below: the plan
+  is revised in place, not rebuilt.
+- **Re-plan:** the parent is in `Rework` because a person rejected the plan.
+  Symphony's comment starting `Cancelled for re-plan:` lists the sub-tickets it took
+  out of `Backlog`. Follow the re-plan run below.
 
-### Plan run (no `Sub-issues` in the issue context, or the parent is in `Rework`)
+### Plan run (a new plan: no `Sub-issues` in the issue context, or the parent is in `Rework` after a rejection)
 
 1. Read the description and comments, and write the planned split in the workpad.
 2. Create each sub-ticket with `linear_create_subissue`, in the order they should
@@ -447,46 +497,43 @@ Which plan run this is:
    criteria and a line naming any earlier sub-ticket it depends on. For every
    sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
    records the blocked-by link and Symphony's dependency gate holds it back.
-3. Create one last sub-ticket titled `Final verification: <parent title>`, with
-   `blocked_by` listing every sibling sub-ticket. Its description lists every
-   requirement from the parent ticket and the acceptance criteria of each sibling
-   sub-ticket as a checklist, and says it should be promoted only after every
-   other sub-ticket is `Done`. When the parent has a `## User walkthrough`, copy
-   its numbered steps and expected results under a
-   `## Parent walkthrough` heading in this description.
+3. Keep the parent's own description the definition of done the epic review resolves:
+   its requirement rows and, when it has one, its `## User walkthrough`. The review
+   reads them off the parent, so a requirement no sub-ticket delivers is a plan gap —
+   fix the plan, not the checklist. File no verification sub-ticket: the epic
+   closes itself (`The epic close`).
 4. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
    review brief (see `Review brief`): one brief for the whole plan, linking every
    artifact, listing every sub-ticket and every decision needed, with the moves that
-   approve, change or reject it. Then move the parent to `In Review` with
-   `linear_update_state` and end the turn. The human reviewing the plan reads the
-   brief, not the workpad.
+   approve, change or reject it. Then hand the parent over to `Plan Review` with
+   `linear_update_state` and end the turn. The person reviewing the plan reads the brief, not the workpad.
 
-In `Rework` (a re-plan run), the human rejected the plan:
+When the parent is in `Rework` because a person rejected the plan (Symphony's
+`Cancelled for re-plan:` comment is on it):
 
 - Read every review comment and write in the workpad what the new plan changes.
 - Symphony has cancelled the rejected plan's sub-tickets that were still in
   `Backlog`, and listed them in a comment on the parent. A `Backlog` sub-ticket a
-  person added outside the plan run (a follow-up idea, a parked
-  `Final verification:`) stays; leave it alone and fold it into the new plan. Do not
-  create a replacement for a sub-ticket outside `Backlog` and `Canceled` (a human
-  already promoted it), and do not create one twice: a sub-ticket in `Backlog` that
-  was created after the parent moved to `Rework` belongs to this re-plan.
-- Then follow steps 2-4 for the new plan, including the `Final verification:`
-  sub-ticket. Edit the existing review brief in place with `linear_update_comment`,
-  with what the new plan changes under `What changed since the last brief`, and move
-  the parent to `In Review` again.
+  person added outside the plan run (a follow-up idea) stays; leave it alone and
+  fold it into the new plan. Do not create a replacement for a sub-ticket outside
+  `Backlog` and `Canceled` (a human already promoted it), and do not create one
+  twice: a sub-ticket in `Backlog` that was created after the parent moved to
+  `Rework` belongs to this re-plan.
+- Then follow steps 2-4 for the new plan. Edit the existing review brief in place
+  with `linear_update_comment`, with what the new plan changes under
+  `What changed since the last brief`, and hand the parent over again as step 4
+  says.
 
 ### Plan revision run (a person commented on the plan under review)
 
-When a person comments on a plan ticket in `In Review` whose plan is not
-approved yet, Symphony moves it to `In Progress` and starts this run. It changes the
-plan in place; it is not a re-plan.
+When a person comments on a plan ticket in `Plan Review` whose plan is not
+approved yet, Symphony moves it to `Rework` and starts this run. It changes the
+plan in place; it is not a re-plan, and the plan's sub-tickets stay as they are.
 
 What triggers it:
 
-- State: only `In Review`. A comment on a parent in `Human Review` starts nothing,
-  because Symphony never moves a ticket out of it; to have that plan revised, a
-  person moves the parent to `Rework` or back to `In Review`.
+- State: only `Plan Review`. A comment on a parent in any other state starts no
+  revision; to have that plan revised, a person moves the parent to `Rework`.
 - Openers: a comment starting with `Supervisor review:` or `Supervisor note:` never
   triggers a run, in any state, like Symphony's own comments (the workpad, the
   review brief, QA reports, `Action needed` requests, the promote and cancel lists,
@@ -506,61 +553,64 @@ What triggers it:
    changed.
 3. Bring the sub-tickets in line with `linear_update_subissue` and
    `linear_create_subissue`: update the description, title and blocked-by links of
-   `Backlog` sub-tickets, file new ones (keep the `Final verification:` sub-ticket's
-   checklist and `blocked_by` current), and cancel the ones the change drops with a
+   `Backlog` sub-tickets, file new ones, and cancel the ones the change drops with a
    `cancel_reason` saying why. Leave every sub-ticket outside `Backlog` as it is.
-4. Reply under each comment with `linear_add_comment` and its `parent_id`: what
+4. The parent's own description is the definition of done the epic review resolves, so
+   a change that adds or drops a requirement belongs in its rows and its
+   `## User walkthrough`. You cannot edit the description with your tools: state the
+   new wording in the review brief's `What changed since the last brief` and in your
+   reply under the comment, so the person approving the plan can set it.
+5. Reply under each comment with `linear_add_comment` and its `parent_id`: what
    changed, or why nothing did for a question or a pushback.
-5. Record the changes in the workpad `Notes`. Edit the existing review brief in place
+6. Record the changes in the workpad `Notes`. Edit the existing review brief in place
    with `linear_update_comment` (never post a second one): bring every part up to date
    and list under `What changed since the last brief` one line per change and the
-   comment it answers. Then move the parent to `In Review` with `linear_update_state`
-   and end the turn. Never move it to `Waiting on sub-tickets`
-   and never promote a sub-ticket: approval stays a person's move.
+   comment it answers. Then hand the parent back to `Plan Review` with
+   `linear_update_state` and end the turn. Never
+   move it to `Waiting on sub-tickets` and never promote a sub-ticket: approval stays
+   a person's move.
 
 A comment on an approved plan (the parent in `Waiting on sub-tickets`, or back in
-`In Review` with sub-tickets promoted) changes nothing. Under a new top-level comment
-Symphony replies once that, if it asks for a plan change, moving the parent to
-`Rework` re-plans it while keeping the sub-tickets already promoted.
+`Plan Review` with sub-tickets promoted) changes nothing. Under a new top-level
+comment Symphony replies once that, if it asks for a plan change, moving the parent
+to `Rework` re-plans it while keeping the sub-tickets already promoted.
 
-### Close-out run (every sub-issue is terminal)
+### The epic close (`Epic Review`; no run of yours)
 
-Symphony starts this run from `Waiting on sub-tickets` (or `In Progress`) once every
-sub-issue is terminal, outside `Rework`.
+No run of yours and no verification sub-ticket closes the epic. It closes itself:
 
-1. Confirm with `linear_get_subissues` that every sub-ticket is `Done` (or
-   deliberately cancelled) and that a `Final verification:` sub-ticket exists and is
-   `Done`. If there is none, create it as in the plan run and end the turn.
-2. Post one project update with `linear_create_project_update`: what shipped, the
-   sub-tickets that delivered it, and any follow-ups left open.
-3. Move the parent to `Done`.
+- The moment every sub-ticket is terminal (or deliberately cancelled), Symphony moves
+  the parent from `Waiting on sub-tickets` to `Epic Review` by itself and starts the
+  epic review there — no event, no person's move, no sign-off.
+- The review is machine-owned: Symphony runs the deterministic pre-checks and then a
+  QA agent against the **default branch**, at its head commit, and the agent never
+  moves the ticket. It walks the parent's `## User walkthrough` and its requirement
+  rows against what actually shipped, and it resolves each checklist row it finds.
+- A clean epic passes and lands in `Done`: on the board the path reads Plan Review ->
+  Waiting on sub-tickets -> Epic Review -> Done.
+- An epic with a gap comes back: the review files what it found as a sub-ticket in
+  `Todo` under this epic — never `Backlog`, which would not hold the parent — and the
+  parent returns to `Waiting on sub-tickets`, where those follow-ups hold it. The
+  review runs again when they land, and the epic closes itself at the first pass.
+- A review that cannot run (tooling, environment, a usage limit) is retried boundedly
+  and then goes to the self-heal lane, which files or reuses the fix ticket and holds
+  the epic on it. A person is asked only for what only a person can clear.
 
-### Final verification run (title starts with `Final verification:`)
+What that asks of a plan run:
 
-1. Do not open a PR. Check each requirement in the description against the default
-   branch (code, tests, docs, behaviour) and record a requirement-by-requirement
-   checklist with evidence in the workpad. For test status, cite CI's latest green
-   run on the default branch; do not run the test suite, coverage or static analysis
-   such as Dialyzer yourself.
-2. If anything is missing, file each gap with `linear_create_subissue` (or find the
-   existing ticket that covers it), mark this ticket blocked by every gap with
-   `linear_add_blocked_by`, list them in the workpad, move this ticket to `Todo`, and
-   end the turn. Symphony holds it there and runs it again once every gap is `Done`.
-   If a gap cannot be linked, move this ticket to `Backlog` instead and say why in
-   the workpad, so a human re-promotes it.
-3. When every requirement is met, move this ticket to `In Review` for a human to
-   sign off and move it to `Done`. When the requirements left need a check an agent
-   can't run (a real key, a device, launching the app), still move it to `In Review`,
-   never `Human Review`, with a `## Supervisor check` block for each (see
-   `Decisions for a person, checks for the supervisor`), and list them in the
-   workpad. Before the move, leave the review brief (see `Review brief`): the
-   requirements checked, the supervisor checks left, and the moves that sign it off
-   or send it back. The parent's close-out run follows.
+- Keep the parent's description the definition of done: the review resolves its
+  requirement rows and its `## User walkthrough`, so a requirement no sub-ticket
+  delivers belongs in the plan.
+- Never file a verification sub-ticket, and never move a parent into
+  `Epic Review` or out of it: `linear_update_state` refuses both, because those moves
+  are Symphony's.
+- Never plan a ticket for the close either: the epic needs no agent to close it, and a
+  follow-up the review files is the only sub-ticket that appears after the plan.
 
 
-In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting either builds its control in the macOS app or names a sibling sub-ticket that does; that sibling has a `## User walkthrough` and blocks the `Final verification:` sub-ticket.
+In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting either builds its control in the macOS app or names a sibling sub-ticket that does; that sibling has a `## User walkthrough` and is in the parent's plan, which the epic review checks.
 
-## Step 2: Execution phase (Todo -> In Progress -> In Review)
+## Step 2: Execution phase (Todo -> In Progress -> Code Review)
 
 1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
 2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
@@ -615,54 +665,48 @@ In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting e
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
-11. Before moving to `In Review`, poll PR feedback and checks:
+11. Before the handoff push, sweep PR feedback and checks:
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
-    - Confirm PR checks are passing (green) after the latest changes; if any are red, follow the `CI failure triage protocol`.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
-    - Repeat this check-address-verify loop until no outstanding comments remain and checks are fully passing.
-    - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-12. Only then move issue to `In Review`.
-    - No blocked-access exception: blocked issues must follow the blocked-access escape hatch and move to `Backlog` with a blocker comment.
-    - After the PR is attached and the issue is moved to `In Review`, end the turn. Do not continue ordinary implementation work unless Symphony injects reviewer, CI, or operator rework context.
+    - Re-open and refresh the workpad before the handoff so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
+12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
+    - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
+    - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
+    - A block is not a handoff: follow the blocked-access escape hatch, which sets a `Blocked` or `Needs Decision` hold and leaves the ticket in its phase.
+    - After the handoff push, end the turn. CI runs on the pushed head: a red head comes back to you through `CI Fix`, and the reviewer runs once the head is green. Do not continue ordinary implementation work unless Symphony injects reviewer, QA, CI or operator context.
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
-    - Ensure branch was pushed with any required updates.
-    - Then move to `In Review`.
+    - Then push the updates to the same branch; that push is the handoff to `Code Review`.
 
-## Step 3: In Review and merge handling
+## Step 3: Code Review, QA and merge handling
 
-1. When the issue is in `In Review`, do not code or change ticket content.
-2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
-3. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) are handled by Symphony: it moves the issue back to `In Progress` and re-activates you with the comments. Address them on the same PR and branch with the PR feedback sweep protocol, push, and return to `In Review`. Do not close the PR or reset the branch for review comments.
-4. If approved, a human moves the issue to `Merging`.
-5. When the issue is in `Merging`, Symphony turns on GitHub auto-merge for the PR, updates the branch when it falls behind the base branch, and moves the issue to `Done` once GitHub merges it; no agent runs. A merge conflict comes back as `In Progress` with the conflict context and auto-merge turned off, and a red head comes back as a CI-failure run with auto-merge turned off too (a flaky rerun of the same commit keeps it on).
-   - Your conflict resolution or CI fix goes back through review, and a fresh move to `Merging` turns auto-merge back on.
+1. After the handoff push the machine runs the review: do not code or change ticket content while the ticket is in `Code Review`, `QA` or `Merging`, or while a hold is set. Holds are requested, never performed: ask for a person with `linear_request_human_action` (a `Needs Decision` hold) or report a block (a `Blocked` hold), and Symphony sets and clears the label.
+2. `Code Review`: the reviewer agent judges the PR on its green head (correctness, scope, acceptance criteria, intent) and records its verdict against that head. Approve moves the ticket to `QA`, or straight to `Merging` when QA is skipped (a docs-only or internal-only change); a rework verdict moves it to `Rework` on the same PR; an escalation sets a `Needs Decision` hold.
+3. `QA`: a QA agent exercises the user journeys the change delivers, end to end, as a user would. Pass moves the ticket to `Merging`; fail moves it to `Rework` with the failing journey; a QA environment that cannot run is retried, then repaired through a fix ticket while a `Blocked` hold pauses the ticket.
+4. With the repo's manual review on, the step into `Merging` waits on a `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR link; a person's confirmation continues into `Merging`, a redirect sends it where the person says.
+5. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) bring the ticket back to `In Progress` on the same PR with the comments. Address them with the PR feedback sweep protocol and push: that push hands off to `Code Review` again. Do not close the PR or reset the branch for review comments.
+6. A red head or a merge conflict in `Code Review`, `QA`, `Merging` or `Rework` moves the ticket to `CI Fix` (see the `CI failure triage protocol`). A mechanical repair returns it to where it came from with its approvals carried forward; a substantive one goes through `Rework` and is reviewed again.
+7. When the issue is in `Merging`, Symphony turns on GitHub auto-merge for the PR, updates the branch when it falls behind the base branch, and moves the issue to `Done` once GitHub merges it; no agent runs. A merged ticket with started sub-tickets still open waits in `Waiting on sub-tickets` until they finish.
 
    Only when auto-merge can't be used does Symphony dispatch you in `Merging` (with a comment on the issue saying why): then open and follow `.agents/skills/land/SKILL.md`, and run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
    - When checks are still pending, and your runtime allows `gh` (Claude sessions deny it), wait for them inside the turn with one foreground `gh pr checks <pr-number> --watch` call that finishes under the 10-minute tool limit; waiting in a tool call costs no tokens. If they are still pending after that, or you cannot run `gh`, end the turn. Do not rely on `ScheduleWakeup`, `sleep` loops, or other in-session timers; they do nothing in unattended runs. Symphony keeps the issue in `Merging`, holds it until CI on the PR head settles, and then resumes the landing agent so it can merge without a second approval.
-6. After merge is complete, move the issue to `Done`.
 
 ## Step 4: Rework handling
 
-1. Treat `Rework` as a full approach reset, not incremental patching. A human moves the issue to `Rework` when the approach itself is wrong; ordinary review comments come back as `In Progress` on the same PR (see Step 3).
-2. Re-read the full issue body and all human comments; explicitly identify what will be done differently this attempt.
-3. Close the existing PR tied to the issue. There is no scoped tool to close a PR; if you cannot close it, note it in the workpad so the human closes it.
-4. Preserve the existing workpad as the audit trail — do not delete it. In the single workpad comment (`## Symphony Workpad`, or a legacy `## Codex Workpad` / `## Claude Workpad` header you should rewrite to `## Symphony Workpad`), move the prior `Plan`, `Acceptance Criteria`, and `Validation` content under a `### Superseded — attempt <n>` heading so the record of what was already tried stays on the issue.
-5. Create a fresh branch from `origin/main`.
-6. Start over from the normal kickoff flow:
-   - If current issue state is `Todo`, move it to `In Progress`; otherwise keep the current state.
-   - Write a fresh `Plan`, `Acceptance Criteria`, and `Validation` in the same workpad comment — do not create a second workpad — then execute end-to-end.
+1. `Rework` means the work came back for changes. Continue on the **same** pull request and the same branch: never close the PR, never cut a new branch, and never move the workpad's prior plan aside.
+2. Read what sent it back — the reviewer's verdict and reasons, the failing assertions, the user journey QA ran — and address it directly. The old verdict does not survive the change: the new head is reviewed again from scratch.
+3. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
+4. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
+5. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with an `## Action needed:` request rather than starting over on your own.
 
 ## Review brief
 
-The workpad is the agent's log, and the person reviewing never needs to read it. At
-every handoff to a person, leave one comment written for them, headed `## Review brief`.
-The handoffs are: a plan moved to `In Review` or `Human Review`, a PR moved to
-`In Review`, a `Final verification:`
-ticket moved to `In Review` or `Human Review`, a ticket moved to `In Review` with a
-`## Supervisor check` (put the block in the brief), and a `linear_request_human_action`
-decision.
+The workpad is the agent's log, and nobody reviewing needs to read it. At every
+handoff, leave one comment written for whoever judges the work next, headed
+`## Review brief`. The handoffs are: a PR handed off to `Code Review` (the reviewer
+agent reads it, and with manual review on so does the person confirming the merge),
+a plan handed off to `Plan Review`, and a `linear_request_human_action` decision.
 
 - One brief per ticket. Before writing, look for a comment starting `## Review brief`
   with `linear_get_comments`. When one exists, edit it in place with
@@ -677,11 +721,11 @@ decision.
   fill in `What changed since the last brief`; leave that part out of the first brief.
 - A plan's brief covers the whole plan in one review: link every artifact (each
   document or artifact comment, the HTML screens), list every sub-ticket with its
-  identifier and one line on what it delivers (the `Final verification:` one too), and
+  identifier and one line on what it delivers, and
   put every decision the plan leaves open under `Decisions needed`, so the person
   reviews everything at once.
-- A PR's brief links the PR and says what to check: the behaviour to try, the parts
-  that carry the risk, and the QA report when there is one.
+- A PR's brief links the PR and says what to check: the behaviour to try, the user
+  journeys QA should walk, and the parts that carry the risk.
 - Next to the brief, update the summary block at the end of the issue description
   with `linear_update_issue_summary`: the one-line `status` (where the ticket stands,
   what waits on whom), `links` with the brief's comment URL as `review_brief` and
@@ -719,42 +763,40 @@ Use this exact format:
 Write `None.` under `Decisions needed` when nothing is open. Fill in
 `How to approve / change / reject` with the moves for the ticket's kind:
 
-- **Plan review** (a plan parent in `In Review` or `Human Review`):
+- **Plan review** (a plan parent in `Plan Review`):
   - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
     `Backlog` sub-tickets to `Todo`.
-  - Change: comment on any part of the plan; a revision run edits it in place and
-    updates this brief. A parent in `Human Review` needs moving back to `In Review`
-    first.
+  - Change: comment on any part of the plan; Symphony moves the parent to `Rework`
+    and a revision run edits the plan in place and updates this brief.
   - Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets
     and plans again.
-- **PR review** (a PR in `In Review`):
-  - Approve: move the ticket to `Merging`; Symphony merges the PR.
+- **PR review** (a PR in `Code Review`): no person's move is needed. The reviewer
+  agent's verdict moves it on: approve to `QA` (or `Merging` when QA is skipped),
+  rework to `Rework` on the same PR. With manual review on, the step into `Merging`
+  waits on a `Needs Decision` hold whose confirmation is the approval.
+  - Approve: nothing to do, or confirm the merge decision when manual review is on.
   - Change: leave review comments on the PR; Symphony brings the ticket back to
     `In Progress` to address them on the same PR.
-  - Reject: move the ticket to `Rework`; the PR is closed and the work starts over.
-- **Human Review** (a ticket waiting on a `linear_request_human_action` decision; a
-  plan, PR or final verification in `Human Review` uses its own kind's moves):
-  - Approve: reply under the `## Decision needed:` comment with the option you pick,
-    then move the ticket to `Todo`; the next run carries it out.
-  - Change: reply under the request with what to do instead of the options, then move
-    the ticket to `Todo`.
+  - Reject: `Restart` from the Director app closes the PR and starts over.
+- **Decision** (a ticket on a `Needs Decision` hold from a
+  `linear_request_human_action` request):
+  - Approve: reply under the `## Decision needed:` comment with the option you pick;
+    the hold clears and the ticket continues where it stopped.
+  - Change: reply under the request with what to do instead of the options.
   - Reject: move the ticket to `Canceled` to drop the work.
-- **Final verification** (a `Final verification:` ticket in `In Review` or
-  `Human Review`):
-  - Approve: move the ticket to `Done`; the parent's close-out run follows.
-  - Change: comment naming what is missing and move the ticket to `Todo`; the next
-    verification run files the gap and checks again.
-  - Reject: move the parent to `Rework` to plan what is left again.
 
 
-## Completion bar before In Review
+## Completion bar before the handoff
+
+The handoff to `Code Review` is the push that opens or updates the PR; meet this bar
+before it, because the push is what moves the ticket on.
 
 - Step 1/2 checklist is fully complete and accurately reflected in the single workpad comment.
 - Acceptance criteria and required ticket-provided validation items are complete.
 - Validation/tests are green for the latest commit.
 - All PR review feedback has been addressed or explicitly answered, and no actionable comments remain.
-- PR checks are green, branch is pushed, and PR is linked on the issue.
-- The review brief is left before the move (see `Review brief`): it links the PR and says what to check. On a later handoff (review comments addressed, a CI fix), the existing brief is edited in place with `linear_update_comment`, with `What changed since the last brief` filled in; never a second one.
+- Branch is pushed, the PR is open and linked on the issue. CI runs on the pushed head: a red head goes to `CI Fix`, and the reviewer only runs once it is green.
+- The review brief is left before the push (see `Review brief`): it links the PR and says what to check. On a later handoff (review comments addressed, a rework verdict answered), the existing brief is edited in place with `linear_update_comment`, with `What changed since the last brief` filled in; never a second one.
 
 
 ## Guardrails
@@ -763,11 +805,11 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
 - Do not edit the issue body/description except through `linear_update_issue_summary`, which writes only Symphony's summary block at its end; plan and track progress in the workpad.
 - If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.
 - Temporary proof edits are allowed only for local verification and must be reverted before commit.
-- Do not move to `In Review` unless the `Completion bar before In Review` is satisfied.
-- In `In Review`, do not make changes; wait and poll.
+- Do not push the handoff unless the `Completion bar before the handoff` is satisfied.
+- In `Code Review`, `QA`, `Plan Review`, `Waiting on sub-tickets`, `Epic Review` and `Merging`, and while a `Blocked` or `Needs Decision` hold is set, do not make changes; the machine moves the ticket on.
 - If state is terminal (`Done`), do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.
-- If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action, move the issue to `Backlog`, and stop.
+- If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action, and stop; do not move the issue (see the blocked-access escape hatch).
 
 
 - When changing packages/dependencies, follow the dependency-change guardrail below; the lock file for this repo is `mix.lock`.
@@ -807,7 +849,7 @@ remaining issues in the workpad `Notes` for a human to file.
 - A ticket's priority means how important it is, not its place in the queue. Symphony uses it only to order tickets waiting for a normal slot.
 - Never raise a ticket's priority (this ticket, a sub-ticket or a blocker) to get it picked sooner. Set a new sub-ticket's `priority` by importance only.
 - Jumping the queue is a person's call: they add the `expedite` label or run `symphony force <ticket>`. Do not add or remove that label yourself. A forced ticket skips the slot limits (`max_total`, per-state caps, epic lanes, `finishing_max`, the daily token budget) but still waits for the operator's Pause, the Linear rate-limit and usage-limit pauses, its blocked-by links and the per-issue token cap.
-- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, `In Review` -> `Merging`, approving a plan, `Rework` and signing off a `Final verification:` stay with a person, and the review-agent verdict still applies: follow the status map as usual.
+- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, approving a plan, deciding a `Needs Decision` hold and `Restart` stay with a person, and the `Code Review` and `QA` verdicts still apply: follow the status map as usual.
 
 ## Dependency-change guardrail
 

@@ -231,6 +231,34 @@ final class TicketPageTests: XCTestCase {
         XCTAssertTrue(untracked.isTracked)
     }
 
+    func testAPullRequestThatLandsAfterAnotherSaysWhichAndHowManyFilesTheyShare() {
+        func page(_ state: [String: Any]) -> TicketPage {
+            var state = state
+            state["generated_at"] = "2026-10-07T14:20:00Z"
+            return TicketPage(identifier: "T-2", sources: TicketPage.Sources(state: json(state)), now: wallClock, timeZone: utc)
+        }
+        let wait: [String: Any] = ["issue_identifier": "T-2", "issue_id": "i-2", "shared_files": 3,
+                                   "waits_for": ["issue_identifier": "T-1", "state": "Merging"],
+                                   "reason": "waits for T-1 to land (shares 3 files)"]
+
+        let merging = page(["watching": [["issue_identifier": "T-2", "state": "Merging"]], "landing_waits": [wait]])
+        XCTAssertEqual(merging.phase, .waiting(on: "T-1 to land (shares 3 files)"))
+        XCTAssertEqual(merging.phaseSentence, "Waiting on T-1 to land (shares 3 files)")
+        XCTAssertEqual(merging.facts.first { $0.label == "Lands after" }?.value, "T-1 (shares 3 files)")
+
+        let inReview = page(["watching": [["issue_identifier": "T-2", "state": "Code Review"]],
+                             "landing_waits": [wait.merging(["shared_files": 1]) { $1 }]])
+        XCTAssertEqual(inReview.phase, .inReview(qa: nil))
+        XCTAssertEqual(inReview.facts.first { $0.label == "Lands after" }?.value, "T-1 (shares 1 file)")
+
+        let unnamed = page(["watching": [["issue_identifier": "T-2", "state": "Merging"]], "landing_waits": [["issue_identifier": "T-2"]]])
+        XCTAssertEqual(unnamed.phase, .waiting(on: "another pull request to land"))
+
+        let alone = page(["watching": [["issue_identifier": "T-2", "state": "Merging"]], "landing_waits": [wait.merging(["issue_identifier": "T-3"]) { $1 }]])
+        XCTAssertEqual(alone.phase, .waiting(on: "CI"))
+        XCTAssertNil(alone.facts.first { $0.label == "Lands after" })
+    }
+
     func testInReviewAndAFailingTicketSaysHowOften() throws {
         let state = json([
             "generated_at": "2026-10-07T14:20:00Z",
@@ -309,8 +337,6 @@ final class TicketPageTests: XCTestCase {
             "api/v1/audit?issue=SHOP-305&type=run_stopped&from=2026-09-24&to=2026-10-07",
             "api/v1/audit?issue=SHOP-305&type=director_move&from=2026-09-24&to=2026-10-07",
         ])
-        let base = try XCTUnwrap(URL(string: "http://127.0.0.1:4000"))
-        XCTAssertEqual(TicketPage.auditRecordsURL("SHOP-305", base: base)?.absoluteString, "http://127.0.0.1:4000/audit?issue=SHOP-305")
         XCTAssertEqual(TicketPage.pullRequestName(try XCTUnwrap(URL(string: "https://gitlab.com/a/b/-/merge_requests/3"))), "https://gitlab.com/a/b/-/merge_requests/3")
     }
 

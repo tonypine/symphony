@@ -61,7 +61,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. A retired state (Auto Review) is refused. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. A retired state (Auto Review, In Review, Human Review) is refused, and so are Code Review, QA and Epic Review, which only the machine enters. Plan Review is a plan parent's handoff. Asking for Backlog while the issue is In Progress or Rework sets a Blocked hold instead of moving it.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -148,7 +148,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Without `priority` it inherits the current issue's. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -311,7 +311,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) goes to the supervisor as a `## Supervisor check` block with the ticket moved to In Review, and a manual check that could be a test becomes a test. It moves the issue to Human Review (In Review when that state is off), where the person finds it, and Symphony lists the decision in a Linear project update until a person moves the issue on. It adds no label. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the move ends your run shortly after.",
+        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the hold ends your run shortly after.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -351,7 +351,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_withdraw_human_action",
       "description" =>
-        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request, so the next project update no longer lists it, and once no open request is left moves the issue from Human Review back to the active state it came from. A comment saying the request is not needed does not take it off the list; this does.",
+        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request, so the next project update no longer lists it, and once no open request is left clears the Needs Decision hold, so the issue continues in place. A comment saying the request is not needed does not take it off the list; this does.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -568,6 +568,55 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "pid" => @pid_property,
           "path" => @element_path_property,
           "value" => %{"type" => "string", "maxLength" => 10_000}
+        }
+      }
+    },
+    %{
+      "name" => "qa_ax_select",
+      "description" =>
+        "Select a table or outline row (an AXRow, or a cell inside one) of the launched app, the accessible way: rows answer no AXPress. The app comes to the front and the table takes keyboard focus, so qa_key can act on the selection (Return, arrows).",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "path"],
+        "properties" => %{"pid" => @pid_property, "path" => @element_path_property}
+      }
+    },
+    %{
+      "name" => "qa_click",
+      "description" =>
+        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app's window covers it. The click goes to the app alone.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "path"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => @element_path_property,
+          "clicks" => %{"type" => "integer", "minimum" => 1, "maximum" => 2, "default" => 1, "description" => "2 for a double click."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_key",
+      "description" =>
+        "Press a key, with modifiers, in the launched app's focused window (the app comes to the front first; the key goes to the app alone). Returns the focused window and element. For a keyboard shortcut such as ⌘[ pass key `[` and modifiers [\"command\"].",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "key"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "key" => %{
+            "type" => "string",
+            "description" =>
+              "return, enter, tab, space, escape, delete, forward_delete, up, down, left, right, home, end, page_up, page_down, or one lowercase letter, digit or one of [ ] , . / ; ' - = ` \\"
+          },
+          "modifiers" => %{
+            "type" => "array",
+            "items" => %{"type" => "string", "enum" => ~w(command shift option control)},
+            "uniqueItems" => true
+          }
         }
       }
     },
@@ -826,6 +875,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_ax_select" => ["pid", "path"],
+    "qa_click" => ["pid", "path", "clicks"],
+    "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],
@@ -2059,7 +2111,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "waiting_on_sub_issues_state_requires_human_approval",
         "message" =>
           "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a plan parent there " <>
-            "approves its plan and promotes its sub-tickets, so a human does it; move the parent to `In Review` instead."
+            "approves its plan and promotes its sub-tickets, so a human does it; hand the plan over to `Plan Review` instead."
       }
     }
   end
@@ -2075,24 +2127,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:review_requires_handoff_signal, state_name}) do
-    %{
-      "error" => %{
-        "code" => "review_requires_handoff_signal",
-        "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo the work is handed off " <>
-            "by pushing: push the branch and open the pull request, and Symphony moves the issue to Code Review; " <>
-            "do not change the state yourself."
-      }
-    }
-  end
-
   defp tool_error_payload({:plan_review_requires_handoff_signal, state_name}) do
     %{
       "error" => %{
         "code" => "plan_review_requires_handoff_signal",
         "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo only a plan parent's " <>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Only a plan parent's " <>
             "handoff enters #{inspect(state_name)}: this issue is not a plan parent, so it hands its work over with " <>
             "its pushed PR instead."
       }

@@ -110,13 +110,15 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 afterControl()
                 return result
             }
-            model.onOpenURL = { url in NSWorkspace.shared.open(url) }
+            model.onOpenURL = { url in URLOpener.open(url) }
             model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
                 self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
             }
             self.model = model
 
-            let hostingController = NSHostingController(rootView: SymphonyWindowView(model: model))
+            let hostingController = NSHostingController(
+                rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action)
+            )
             // SwiftUI's toolbar goes in the window's; the window keeps its own title.
             hostingController.sceneBridgingOptions = [.toolbars]
             // The window keeps the size the user set: the content's minimum never widens it, `contentMinSize` bounds it.
@@ -232,8 +234,11 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         case #selector(goForward(_:)): return model?.history.canGoForward ?? false
         case #selector(toggleInspector(_:)):
             menuItem.title = model?.inspectorShown == true ? "Hide Inspector" : "Show Inspector"
-            return model?.selection == .tickets && model?.shownTicket == nil
+            return model?.hasInspector ?? false
         case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
+        case #selector(searchTickets(_:)):
+            menuItem.title = model?.searchTitle ?? "Search Tickets"
+            return true
         default: return true
         }
     }

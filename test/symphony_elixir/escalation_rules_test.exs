@@ -35,15 +35,6 @@ defmodule SymphonyElixir.EscalationRulesTest do
 
   defp package_json(deps), do: Jason.encode!(%{"name" => "web", "dependencies" => deps})
 
-  test "ticket_reasons/2 checks only the ticket's label and pattern rules" do
-    assert EscalationRules.ticket_reasons(issue(), @rules) == []
-
-    assert [%{rule: :label}, %{rule: :ticket_pattern, detail: detail}] =
-             EscalationRules.ticket_reasons(issue(labels: ["needs-human"], description: "Needs a manual review."), @rules)
-
-    assert detail =~ "manual"
-  end
-
   test "a clean diff returns no reasons" do
     assert check([]) == []
     assert EscalationRules.check(issue(), diff([]), [], @rules) == []
@@ -60,10 +51,10 @@ defmodule SymphonyElixir.EscalationRulesTest do
     assert [
              %{
                rule: :ticket_pattern,
-               detail: "the ticket matches `(?i)\\b(human|manual(ly)?)\\s+review`"
+               detail: "the ticket matches `(?i)\\b(human|manual)\\s+review\\s+(is\\s+)?(required|needed)\\b`"
              }
            ] =
-             check(issue: issue(description: "Ship it after a Manual review of the copy."))
+             check(issue: issue(description: "Manual review required for the copy."))
 
     assert [%{rule: :ticket_pattern, detail: detail}] = check(issue: issue(title: "Needs human sign-off", description: nil))
     assert detail =~ "needs?[- ]human"
@@ -72,17 +63,18 @@ defmodule SymphonyElixir.EscalationRulesTest do
     assert check(issue: issue(title: nil, description: nil)) == []
   end
 
+  defp ticket_reasons(issue), do: EscalationRules.check(issue, diff([]), [], @rules)
+
   test "ticket pattern skips the review states' names, but not a request for a human review" do
-    opts = [review_states: ["In Review", "Human Review"]]
-    reasons = fn text, opts -> EscalationRules.ticket_reasons(issue(description: text, labels: []), @rules, opts) end
+    reasons = fn text -> ticket_reasons(issue(description: text, labels: [])) end
 
     names_state =
       "It moves it to Human Review, for a parent in `Human Review`, from **Human Review** into Human Review. " <>
         ~s(Human Review tickets wait on a person; "Human Review" and In Review / Human Review hold them. ) <>
         "Tickets in the human review state, the in review state or the `human review` states come first."
 
-    assert EscalationRules.ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: []), @rules, opts) == []
-    assert EscalationRules.check(issue(description: names_state), diff([]), [], @rules, opts) == []
+    assert ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: [])) == []
+    assert EscalationRules.check(issue(description: names_state), diff([]), [], @rules) == []
 
     for request <- [
           "This needs human review before merge.",
@@ -94,31 +86,67 @@ defmodule SymphonyElixir.EscalationRulesTest do
           "Needs Human Review before it ships.",
           "This requires a Human Review.",
           "Human review required for the copy.",
-          "Human review: check the migration.",
           "Have a human review this before merging.",
           "This should get a human review.",
           "Merge it after a human review.",
-          "Count the tickets waiting on human review."
+          "This needs a human review before merging.",
+          "Manual review needed before release.",
+          "It must be reviewed by a person.",
+          "A human must review the copy.",
+          "I want to manually review the plan.",
+          "This asks for a manual review."
         ] do
-      assert [%{rule: :ticket_pattern}] = reasons.(request, opts), request
+      assert [%{rule: :ticket_pattern}] = reasons.(request), request
     end
 
-    assert reasons.("It moves to `Human Review`.", opts) == []
-    assert reasons.("Tickets in the human review state wait.", opts) == []
+    # Naming the state, or manual review as a topic, isn't asking for one.
+    for topic <- [
+          "Human review: check the migration.",
+          "Count the tickets waiting on human review.",
+          "Remove the human review flow and its manual review prompts.",
+          "Agents move tickets to In Review / Human Review.",
+          "Remove the Human Review state.",
+          "`Human Review`",
+          "A run that calls `request_human_review` needs `manual review` copy."
+        ] do
+      assert reasons.(topic) == [], topic
+    end
 
-    # The names match case-sensitively, and only when configured.
-    assert [%{rule: :ticket_pattern}] = reasons.("Send it for human review, Human Review.", opts)
-    assert [%{rule: :ticket_pattern}] = reasons.("It moves it to Needs Human Review.", [])
-    assert reasons.("It moves it to Needs Human Review.", review_states: ["Needs Human Review"]) == []
-    assert [%{rule: :ticket_pattern}] = reasons.("It needs Human Review.", review_states: [nil, " ", "Human Review"])
+    assert reasons.("It moves to `Human Review`.") == []
+    assert reasons.("Tickets in the human review state wait.") == []
+
+    # The names match case-sensitively.
+    assert [%{rule: :ticket_pattern}] = reasons.("Send it for human review, Human Review.")
+    assert [%{rule: :ticket_pattern}] = reasons.("It moves it to Needs Human Review.")
   end
 
-  test "TP-617's description doesn't match the ticket patterns" do
-    opts = [review_states: ["In Review", "Human Review"]]
-    description = File.read!("test/fixtures/acceptance_gate/tp_617_description.md")
+  test "TP-886's ticket doesn't match the ticket patterns" do
+    tp_886 =
+      issue(
+        title: "Remove In Review and Human Review once the drain report is empty",
+        description: """
+        Remove In Review and Human Review from the workflow once the drain report is empty: agents
+        no longer move tickets to In Review / Human Review, and a ticket waiting on a person
+        carries a Needs Decision hold. The human review state and the `human_review_state` setting go.
 
-    assert EscalationRules.ticket_reasons(issue(title: ~s(Show a "Waiting on you" list in SymphonyBar and the dashboard), description: description, labels: []), @rules, opts) ==
-             []
+        ```text
+        In Review: 0 tickets
+        Human Review: 0 tickets, needs human review: 0
+        ```
+        """,
+        labels: []
+      )
+
+    assert ticket_reasons(tp_886) == []
+
+    asks = %{tp_886 | description: tp_886.description <> "\nThis needs a human review before merging."}
+    assert [%{rule: :ticket_pattern}] = ticket_reasons(asks)
+    assert [%{rule: :ticket_pattern}] = ticket_reasons(%{tp_886 | description: "Claude must not auto-approve this."})
+  end
+
+  test "an unclosed code fence blanks the rest of the description" do
+    assert ticket_reasons(issue(description: "Output:\n~~~\nneeds a human review\n", labels: [])) == []
+    assert [%{rule: :ticket_pattern}] = ticket_reasons(issue(description: "~~~\nlog\n~~~\nThis needs a human review.", labels: []))
   end
 
   test "path glob, ignoring docs and tests" do

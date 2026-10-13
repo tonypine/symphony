@@ -110,7 +110,9 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onCancelRestart = { [weak self] in self?.cancelRestart() }
             model.onFix = { [weak self] fix in self?.fix(fix) }
             self.model = model
-            let hostingController = NSHostingController(rootView: ReposView(model: model))
+            let hostingController = NSHostingController(
+                rootView: ReposView(model: model).environment(\.openURL, URLOpener.action)
+            )
             // Only the minimum: the window keeps the size it was left at.
             hostingController.sizingOptions = [.minSize]
             let window = NSWindow(contentViewController: hostingController)
@@ -364,7 +366,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private func fix(_ fix: RepoHealth.Fix) {
         switch fix {
         case let .openWorkflow(url), let .viewPullRequest(url), let .openOnGitHub(url), let .openInLinear(url):
-            NSWorkspace.shared.open(url)
+            URLOpener.open(url)
         case let .revealInFinder(path), let .revealWorktree(path):
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         case let .copyError(error):

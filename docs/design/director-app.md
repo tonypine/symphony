@@ -11,6 +11,18 @@
   `notes-app`, `docs-site`; tickets `BIL-`, `SHOP-`, `NOTE-`, `DOC-`).
 - **Screen IDs** (`D0`–`D14`) are defined in [Screens](director-app-screens.md). Each journey step names the screen
   that serves it.
+- **Since approval:** the ticket life cycle changed while the app was built (the
+  [ticket state machine](state-machine.md), TP-823 and TP-827). These documents and the mock keep the approved
+  wording; the app on `main` follows the new life cycle:
+  - The acceptance gate is retired. Quality's **Gate agreement** reads **Review agreement**: the Code Review
+    approvals that the next judge upheld (QA, or the Director at the merge when the repo's manual review is on).
+    **Change Gate…** reads **Change Review…** and opens the repo's Edit sheet with its Manual review control.
+    **Disagreements** are tickets where Code Review approved and QA or the Director decided otherwise.
+  - `In Review` and `Human Review` are retired. A plan waits on the Director in `Plan Review`, and an escalation or a
+    merge confirmation waits as a `Needs Decision` hold on the ticket, in whatever phase it is. The Inbox lists both,
+    and still lists a ticket left in a retired state until it drains.
+  - `Final verification:` tickets and their sign-off are retired: an epic closes itself through `Epic Review`. The
+    Inbox still lists, and Sign Off still moves, a `Final verification:` ticket planned before the change.
 
 ## 1. The Director
 
@@ -141,6 +153,11 @@ Done when:
 
 > As the Director, at the end of a day or a week, I want to see what shipped, grouped by initiative, what the crew
 > learned, and the audit record, so that I can report progress and spot patterns.
+
+Built by [TP-784](https://linear.app/tonypine/issue/TP-784/show-what-shipped-and-what-the-crew-learned-in-the-symphony-window)
+(Shipped and Learnings, D9) and
+[TP-785](https://linear.app/tonypine/issue/TP-785/browse-verify-and-export-the-audit-record-in-the-symphony-window) (Audit,
+D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
 
 ## 4. Journeys
 
@@ -280,6 +297,7 @@ Done when:
 | GitHub webhooks | Diagnostics (**D11**) | Debugging Symphony |
 | Agent lanes | Initiatives, one slot line per initiative (**D5**); capacity in Diagnostics (**D11**) | Lanes exist for initiatives |
 | Finishing runs, waiting to start, waiting on blockers, auto-merge status | Tickets "Waiting on" column (**D6**), ticket page (**D3**) | Why a ticket waits belongs to the ticket |
+| Landing order: the PR a ticket's PR lands after, and the files they share | Ticket page (**D3**): a Lands after fact, and a `Merging` ticket's "Waiting on MT-1 to land (shares 2 files)" | Why a ticket waits belongs to the ticket |
 | Auto Review: gate runner, agreement, recent verdicts | Quality (**D7**); the verdict per ticket on **D2b** and **D3** | |
 | Forced: phase, waiting on, forced for, stale | Tickets "Forced" (**D6**), ticket page (**D3**), Needs attention when stale (**D1**) | |
 | Running sessions: issue, state, session, runtime/turns, agent update, tokens | Now working (**D1**), Tickets (**D6**), ticket page (**D3**) | |

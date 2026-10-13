@@ -199,6 +199,13 @@ set (or, in Development mode, no checkout folder).
   it (for example a negative number) and keeps Save off until it passes. Save writes only the changed lines and
   keeps comments. Below them, today's usage comes from `/api/v1/state`'s `budget`: tokens used and left, when
   the count resets (UTC midnight, shown in local time), and a line while the daily cap has paused new runs.
+- **Dispatch loops** holds a ticket Symphony keeps dispatching without progress. **Hold a ticket after** is
+  `watchdog.dispatch_loop_runs` in `watchdog.dispatch_loop_window_ms` (4 runs in 10 minutes by default) and **Or
+  after** is `watchdog.dispatch_loop_long_runs` in `watchdog.dispatch_loop_long_window_ms` (8 runs in 60
+  minutes), each a stepper for the runs and one for the minutes. Once a ticket got that many runs of one kind
+  with no state change, new PR head or decision, Symphony starts no more and puts it on a Blocked hold whose
+  reason says why; the Inbox lists it with **Unblock…**, and **Restart…** under ⋯. Save runs `symphony check`
+  first and writes only the changed lines.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
@@ -828,15 +835,16 @@ state. The window opens on the Inbox the first time.
   landing order; a PR's checks (CI, and QA with its report), with **Open PR**; an action's why, numbered steps, time and what it
   unblocks, with **Copy Steps**; what the quality gate found in a ticket it holds, its score and round, with
   **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
-  the ticket in Linear; the review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
+  the ticket in Linear: in the Linear desktop app when it is installed (its `linear://` link, without starting the
+  browser), else in the browser. Every Linear link in the app opens the same way. The review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
   items says how many ("2 more in other repos").
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
   **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
   verification **Sign Off…**; an action asking a decision **Send Decision…** (its options are the picks) and,
-  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access hold and
-  lets it continue in place. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
+  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access or
+  dispatch-loop hold and lets it continue in place, and **Restart…** under ⋯. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
@@ -884,7 +892,7 @@ state. The window opens on the Inbox the first time.
   last message. It reads `/api/v1/:issue_identifier`, `/api/v1/runs` and `/api/v1/audit` besides the state;
   a done ticket, which Symphony no longer tracks, shows what the state and the run records still say. Its
   actions: **View Transcript**, **Open in Linear**, **Stop Run…**, and under ⋯ **Copy API URL**, **Show Audit
-  Records** (the web dashboard's Audit view, filtered to the ticket) and **Reveal Worktree**.
+  Records** (Audit, filtered to the ticket) and **Reveal Worktree**.
 - **View Transcript** opens the run's transcript in its own window (⌘-click opens another): the agent's
   messages, each tool call with its result and duration, and errors, grouped by turn, with **All**,
   **Messages**, **Tools** and **Errors**, a search field (⌘F) and **Copy Session ID**. The selected event shows
@@ -898,6 +906,16 @@ state. The window opens on the Inbox the first time.
   and row of the Overview (the sidebar badge still counts every repo), and the app remembers it across
   relaunches.
 
+- **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
+  under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
+  moves from the app (approve, merge, rework, decisions, sign-off, Backlog, Stop Run) are recorded like any
+  other. The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
+  whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
+  that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the
+  selected record in full. **Export…** saves every record under the filters and the search as NDJSON, one per
+  line as Symphony wrote it, from the API's export. With nothing to show it says "No audit records match." with
+  **Clear Filters**.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
@@ -1045,7 +1063,11 @@ Four more variables, read only in QA mode:
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and
   `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
-  conflict, and API-140, which a `tickets.priorities` filter passes over), and of the dispatch control's limit hold: `holding` (a Claude 5-hour limit). Ages in them count from the payload's `generated_at`, so they read the same
+  conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
+  merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
+  shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
+  moves among them; Oct 7's chain verifies and Oct 6's breaks at its line 5, SHOP-298's PR opened, and SHOP-305's
+  ticket page has a stop and a Backlog move). Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

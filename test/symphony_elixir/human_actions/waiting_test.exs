@@ -11,8 +11,8 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
         "identifier" => identifier,
         "title" => "Title of " <> identifier,
         "url" => "https://linear.app/acme/issue/" <> identifier,
-        "state" => %{"name" => "In Review"},
-        "labels" => %{"nodes" => []},
+        "state" => %{"name" => "Plan Review"},
+        "labels" => %{"nodes" => [%{"name" => "plan"}]},
         "comments" => %{"nodes" => []},
         "history" => %{"nodes" => []}
       },
@@ -45,9 +45,9 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
     options = [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop it", effect: "Unsigned."}]
 
     body =
-      Request.render(
+      Request.render_hold(
         %{title: "Add the signing secret", question: "Add it?", why: "Release fails.", unblocks: "Release", est_minutes: 5, options: options},
-        "Human Review"
+        "Code Review"
       )
 
     %{"id" => "request", "body" => body, "createdAt" => created_at}
@@ -55,41 +55,59 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
 
   defp entries(nodes), do: Waiting.entries(nodes, %Schema{})
 
-  test "lists a PR, a plan and a final verification in a review state, with the brief's headline and when it entered the state" do
-    pr =
-      node("TP-1", %{
-        "state" => %{"name" => "Human Review"},
-        "comments" => comments([brief("**What to review:** The retry fix in the poller")]),
-        "history" => history([moved("In Review", "2026-10-01T09:00:00Z"), moved("Human Review", "2026-10-01T11:00:00Z")])
-      })
-
+  test "lists a plan in Plan Review, with the brief's headline and when it entered the state" do
     plan =
       node("TP-2", %{
         "labels" => labels(["Plan"]),
         "comments" => comments([brief("**What to review:**\n\n- The split into four sub-tickets")]),
-        "history" => history([moved("In Review", "2026-10-01T08:00:00Z")])
+        "history" => history([moved("Todo", "2026-10-01T07:00:00Z"), moved("Plan Review", "2026-10-01T08:00:00Z")])
       })
-
-    verification = node("TP-3", %{"title" => "Final verification: Ship it"})
 
     assert [
              %{
-               issue_id: "id-TP-1",
-               identifier: "TP-1",
-               title: "Title of TP-1",
-               url: "https://linear.app/acme/issue/TP-1",
-               state: "Human Review",
-               kind: :pr,
-               waiting_since: ~U[2026-10-01 11:00:00Z],
-               headline: "The retry fix in the poller"
-             },
-             %{identifier: "TP-2", kind: :plan, waiting_since: ~U[2026-10-01 08:00:00Z], headline: "The split into four sub-tickets"},
-             %{identifier: "TP-3", kind: :final_verification, waiting_since: nil, headline: nil}
-           ] = entries([pr, plan, verification])
+               issue_id: "id-TP-2",
+               identifier: "TP-2",
+               title: "Title of TP-2",
+               url: "https://linear.app/acme/issue/TP-2",
+               state: "Plan Review",
+               kind: :plan,
+               waiting_since: ~U[2026-10-01 08:00:00Z],
+               headline: "The split into four sub-tickets"
+             }
+           ] = entries([plan])
+  end
+
+  test "a ticket that is not a plan waits on nobody in Plan Review, and neither does one in a retired state" do
+    pr = node("TP-1", %{"labels" => labels([]), "comments" => comments([brief("**What to review:** The retry fix in the poller")])})
+    verification = node("TP-3", %{"title" => "Final verification: Ship it", "labels" => labels([])})
+    in_review = node("TP-13", %{"state" => %{"name" => "In Review"}})
+
+    assert entries([pr, verification, in_review]) == []
+  end
+
+  test "a plan parent waiting in Plan Review is a plan, and nothing else is listed for that state" do
+    settings = %Schema{}
+
+    plan =
+      node("TP-20", %{
+        "state" => %{"name" => "Plan Review"},
+        "labels" => labels(["breakdown"]),
+        "history" => history([moved("Plan Review", "2026-10-01T08:00:00Z")])
+      })
+
+    not_a_plan = node("TP-21", %{"state" => %{"name" => "Plan Review"}, "labels" => labels([])})
+    approved = node("TP-22", %{"state" => %{"name" => "Waiting on sub-tickets"}, "labels" => labels(["plan"])})
+
+    assert [%{identifier: "TP-20", kind: :plan, state: "Plan Review", waiting_since: ~U[2026-10-01 08:00:00Z]}] =
+             Waiting.entries([plan, not_a_plan, approved], settings)
+
+    # With the Plan Review state turned off, no plan waits on a person.
+    off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
+    assert Waiting.entries([plan], off) == []
   end
 
   test "an open request makes the issue an action, waiting since the request when its history has no move" do
-    action = node("TP-4", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["plan"]), "comments" => comments([request_comment("2026-10-02T07:00:00Z")])})
+    action = node("TP-4", %{"state" => %{"name" => "Code Review"}, "labels" => labels([]), "comments" => comments([request_comment("2026-10-02T07:00:00Z")])})
 
     assert [%{identifier: "TP-4", kind: :action, waiting_since: ~U[2026-10-02 07:00:00Z], headline: nil}] = entries([action])
   end
@@ -105,17 +123,13 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
     assert [%{identifier: "TP-11", kind: :action, waiting_since: ~U[2026-10-02 07:00:00Z]}] = entries([held])
   end
 
-  test "a held ticket with no request waits since the move into its state" do
-    held =
-      node("TP-12", %{
-        "state" => %{"name" => "Human Review"},
-        "history" => history([moved("In Review", "2026-10-01T09:00:00Z"), moved("Human Review", "2026-10-01T11:00:00Z")])
-      })
+  test "a plan with no request waits since its latest move into Plan Review" do
+    plan = node("TP-12", %{"history" => history([moved("Plan Review", "2026-10-01T09:00:00Z"), moved("Plan Review", "2026-10-01T11:00:00Z")])})
 
-    assert [%{identifier: "TP-12", kind: :pr, waiting_since: ~U[2026-10-01 11:00:00Z]}] = entries([held])
+    assert [%{identifier: "TP-12", kind: :plan, waiting_since: ~U[2026-10-01 11:00:00Z]}] = entries([plan])
   end
 
-  test "skips issues outside a review state with no open request, and nodes without an id" do
+  test "skips issues outside Plan Review with no open request, and nodes without an id" do
     assert entries([node("TP-5", %{"state" => %{"name" => "Todo"}}), node("TP-6", %{"state" => nil}), %{"identifier" => "TP-7"}]) == []
   end
 
@@ -125,8 +139,8 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
         "history" =>
           history([
             moved("Todo", "2026-10-01T08:00:00Z"),
-            %{"createdAt" => "soon", "toState" => %{"name" => "In Review"}},
-            %{"createdAt" => nil, "toState" => %{"name" => "In Review"}},
+            %{"createdAt" => "soon", "toState" => %{"name" => "Plan Review"}},
+            %{"createdAt" => nil, "toState" => %{"name" => "Plan Review"}},
             %{"createdAt" => "2026-10-01T08:00:00Z", "toState" => %{"name" => nil}}
           ])
       })

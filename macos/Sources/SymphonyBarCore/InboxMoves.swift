@@ -74,16 +74,16 @@ public struct InboxToolbar: Equatable {
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
     /// recommendation) and ⋯ Send to Rework… and Restart…; a PR Approve and Merge… and Send to Rework…, with Open PR
     /// the default while a check is red (D2b), and ⋯ Restart…; a final verification Sign Off…; a blocked ticket
-    /// Unblock…. Actions and clarify items keep their links. Restart (the human-only full reset) sits under ⋯ on
-    /// both, so it takes a deliberate trip through the menu and its consequence sheet. An action carrying an
+    /// Unblock… and ⋯ Restart…, which also lifts a dispatch-loop hold. Actions and clarify items keep their links.
+    /// Restart (the human-only full reset) sits under ⋯ on all three, so it takes a deliberate trip through the menu
+    /// and its consequence sheet. An action carrying an
     /// answerable decision offers Send Decision…, with ⋯ Send to Rework… answering it as a redirect; another action,
     /// and a clarify item, keep their links, but an action whose options are listed in its card drops the Copy Steps
-    /// link that would only repeat them. An item whose repo runs the legacy machine offers no Restart: its Rework is
-    /// already the full reset, and Symphony refuses a restart there.
+    /// link that would only repeat them.
     public static func toolbar(for item: InboxItem, picks: DecisionPicks = DecisionPicks()) -> InboxToolbar {
         let links = InboxAction.actions(for: item).map { Button(command: .link($0), enabled: true) }
         func move(_ move: InboxMove, enabled: Bool = true) -> Button { Button(command: .move(move), enabled: enabled) }
-        let restart: [InboxCommand] = item.stateMachine == .legacy ? [] : [.move(.restart)]
+        let restart: [InboxCommand] = [.move(.restart)]
         switch item.kind {
         case .plan:
             let changed = picks.changed(item.review.decisions)
@@ -101,7 +101,7 @@ public struct InboxToolbar: Equatable {
         case .finalVerification:
             return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .blocked:
-            return InboxToolbar(buttons: [move(.unblock)] + links, overflow: [])
+            return InboxToolbar(buttons: [move(.unblock)] + links, overflow: restart)
         case .action:
             let action = item.review.action
             // A request's options are shown and picked in its card, so its Copy Steps link (which would list the

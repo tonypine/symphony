@@ -16,6 +16,8 @@ final class SymphonyWindowModel: ObservableObject {
             onSelect(selection)
             readHistoryIfDue()
             readQualityIfDue()
+            readShippedIfDue()
+            readAuditIfDue()
         }
     }
 
@@ -31,6 +33,9 @@ final class SymphonyWindowModel: ObservableObject {
         didSet {
             guard scope != oldValue else { return }
             onScopeChange(scope)
+            // Audit asks Symphony for the scope's records.
+            auditReadAt = nil
+            readAuditIfDue()
         }
     }
     /// The control request a view sent and Symphony hasn't answered yet.
@@ -71,6 +76,48 @@ final class SymphonyWindowModel: ObservableObject {
             readQualityIfDue()
         }
     }
+    /// Shipped's merged tickets for its period, read while Shipped shows (D9).
+    @Published var shipped: ShippedPayload?
+    /// What the last Shipped read got when it got none, nil after one that did.
+    @Published var shippedResult: EndpointResult?
+    /// Every stored learning, read while Shipped shows, for its Learnings tab.
+    @Published var learnings: LearningsPayload?
+    @Published var learningsResult: EndpointResult?
+    /// Shipped's segmented control: Shipped or Learnings.
+    @Published var shippedTab: Shipped.Tab = .shipped
+    /// Shipped's period; changing it reads again.
+    @Published var shippedPeriod: Shipped.Period = .week {
+        didSet {
+            guard shippedPeriod != oldValue else { return }
+            shippedReadAt = nil
+            readShippedIfDue()
+        }
+    }
+    /// The Learnings tab's repo and tag filters and search.
+    @Published var learningsFilter = Learnings.Filter()
+    /// Set by ⌘F on Shipped to put the focus in the Learnings search field.
+    @Published var learningsSearchRequested = false
+    /// Audit's records under the filters Symphony applies, read while Audit shows (D10), newest last as served.
+    @Published var auditRecords: [AuditRecord]?
+    /// The chain verification of the days Audit reads; nil while unknown.
+    @Published var auditVerification: AuditVerification?
+    /// What the last Audit read got when it got no records, nil after one that did.
+    @Published var auditResult: EndpointResult?
+    /// Audit's kind, date and ticket filters and search; a change in the first three reads again.
+    @Published var auditFilter = Audit.Filter() {
+        didSet {
+            guard auditFilter.query != oldValue.query else { return }
+            auditReadAt = nil
+            readAuditIfDue()
+        }
+    }
+    /// The audit record in the inspector, by id.
+    @Published var auditSelection: String?
+    /// Set by ⌘F on Audit to put the focus in its search field.
+    @Published var auditSearchRequested = false
+    /// True while Export… reads the records; what went wrong with it, shown under the filters.
+    @Published var auditExporting = false
+    @Published var auditExportError: String?
     /// The initiative shown, by issue id; nil shows the first.
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
@@ -134,6 +181,12 @@ final class SymphonyWindowModel: ObservableObject {
     private var qualityReadAt: Date?
     /// The history is read again at most this often.
     static let historyInterval: TimeInterval = 60
+    var readingShipped = false
+    /// When Shipped and Learnings were last read; the run records they come from change slowly.
+    var shippedReadAt: Date?
+    var readingAudit = false
+    /// When Audit was last read.
+    var auditReadAt: Date?
     var readingTicket = false
     /// When the ticket page last read its runs and audit records, which change slowly.
     var ticketSlowReadAt: Date?
@@ -157,6 +210,8 @@ final class SymphonyWindowModel: ObservableObject {
                 readInitiatives()
                 readHistoryIfDue()
                 readQualityIfDue()
+                readShippedIfDue()
+                readAuditIfDue()
                 readTicket()
             }
             .store(in: &cancellables)
@@ -536,6 +591,24 @@ struct SymphonyWindowView: View {
                         DispatchControlButton(model: model, client: client)
                     }
                     .sharedBackgroundVisibility(.hidden)
+                    if model.selection == .shipped, model.shownTicket == nil {
+                        ToolbarItem(placement: .principal) {
+                            Picker("Shipped or Learnings", selection: $model.shippedTab) {
+                                ForEach(Shipped.Tab.allCases) { Text($0.title).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .fixedSize()
+                        }
+                    }
+                    if model.selection == .audit, model.shownTicket == nil {
+                        ToolbarItem(placement: .automatic) {
+                            Button { model.exportAudit() } label: {
+                                Label(Audit.exportTitle, systemImage: "square.and.arrow.up")
+                            }
+                            .help("Export the filtered records as NDJSON")
+                            .disabled(model.auditExporting || model.auditRecords == nil)
+                        }
+                    }
                     if model.selection == .tickets, model.shownTicket == nil {
                         ToolbarItem(placement: .automatic) {
                             Button { model.openForceSheet() } label: {
@@ -712,6 +785,10 @@ struct SymphonyDetail: View {
                 UsageContent(model: model, client: client)
             case .quality:
                 QualityContent(model: model)
+            case .shipped:
+                ShippedContent(model: model)
+            case .audit:
+                AuditContent(model: model)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }
@@ -736,7 +813,8 @@ struct OverviewContent: View {
                     openTicket: model.openTicket,
                     openTickets: model.showTickets,
                     openInitiative: model.showInitiative,
-                    openUsage: model.showUsage
+                    openUsage: model.showUsage,
+                    openShipped: { model.showShipped() }
                 ),
                 initiatives: model.initiativesList?.active ?? []
             )

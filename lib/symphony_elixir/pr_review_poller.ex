@@ -6,13 +6,12 @@ defmodule SymphonyElixir.PrReviewPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiPoller, Config, HumanReview, Notifications, RunStore}
+  alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiPoller, Config, LandingOrder, Notifications, PersonWait, RunStore}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{StateMachine, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
+  alias SymphonyElixir.{NeedsDecisionHold, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
 
-  @in_review_state "In Review"
   @merging_state "Merging"
   @rework_state "Rework"
   @done_state "Done"
@@ -24,6 +23,9 @@ defmodule SymphonyElixir.PrReviewPoller do
   @closed_pr_states ["CLOSED"]
   @merged_pr_state "MERGED"
   @conflict_max_retries 3
+  # How long a conflict dispatch may still read as its old phase before a ticket there counts as back
+  # from CI Fix (`back_from_ci_fix_on_conflict?/3`), as the CI poller allows a red head's dispatch.
+  @conflict_dispatch_grace_ms 120_000
   @github_error_backoff_threshold 3
   @max_github_error_backoff_ms 300_000
   # Upper bound on the per-PR reply ledger we carry across cursor advances. The
@@ -524,13 +526,17 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered, merging_issue_ids, designed_phase_issue_ids} <-
+    with {:ok, discovered, issues, merging_issue_ids, phase_issue_ids, verdict_phase_issue_ids} <-
            discover_reviews(settings, run_store, tracker, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
       opts =
         opts
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
-        |> Keyword.put(:designed_phase_issue_ids, designed_phase_issue_ids)
+        |> Keyword.put(:phase_issue_ids, phase_issue_ids)
+        |> Keyword.put(:verdict_phase_issue_ids, verdict_phase_issue_ids)
+
+      {reviews, landing_waits} = refresh_landing_order(reviews, issues, settings, opts, now)
+      opts = Keyword.put(opts, :landing_waits, landing_waits)
 
       actions =
         reviews
@@ -581,15 +587,38 @@ defmodule SymphonyElixir.PrReviewPoller do
           do: issues |> Enum.filter(&(AutoMerge.merging?(&1) and issue_in_repo?(&1, repo_key))) |> MapSet.new(& &1.id),
           else: MapSet.new()
 
-      designed_phase_issue_ids =
-        issues |> Enum.filter(&issue_in_states?(&1, designed_phase_states(settings))) |> MapSet.new(& &1.id)
+      phase_issue_ids = issues |> Enum.filter(&issue_in_states?(&1, phase_states(settings))) |> MapSet.new(& &1.id)
 
       discovered =
         Enum.count(issues, &persist_discovered_review?(&1, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
-      {:ok, discovered, merging_issue_ids, designed_phase_issue_ids}
+      {:ok, discovered, issues, merging_issue_ids, phase_issue_ids, verdict_phase_ids(issues, settings)}
     end
   end
+
+  # The overlap map (see `SymphonyElixir.LandingOrder`): each record keeps the files its PR changes
+  # and the PR it waits for, written only when they change. Returns the records with their landing
+  # and the waits by issue id.
+  defp refresh_landing_order(reviews, issues, settings, opts, now) do
+    reviews =
+      reviews
+      |> LandingOrder.refresh(issues, settings, opts, now)
+      |> Enum.map(fn {record, landing} -> put_landing(record, landing, opts) end)
+
+    waits = for %{landing: %{waits_for: %{} = wait}} = record <- reviews, into: %{}, do: {Map.get(record, :issue_id), wait}
+    {reviews, waits}
+  end
+
+  defp put_landing(record, landing, opts) do
+    if Map.get(record, :landing) != landing do
+      # A failed write is logged; the poll still orders with what it read.
+      _result = update_review(opts, record, %{landing: landing})
+    end
+
+    Map.put(record, :landing, landing)
+  end
+
+  defp landing_wait(record, opts), do: opts |> Keyword.get(:landing_waits, %{}) |> Map.get(Map.get(record, :issue_id))
 
   # The tracker returns `Merging` issues from every repository; only this repository's are landed
   # here, so its auto-merge setting never applies to another's PRs. A missing repo_key means the
@@ -599,31 +628,29 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp issue_in_repo?(%Issue{}, repo_key), do: repo_key == Config.repo_key_or_nil()
 
-  # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
+  # With auto-merge on, `Merging` issues are watched: this poller lands them (see AutoMerge).
   #
-  # A designed repo's `Code Review`, `QA` and `Rework` issues are watched as well, so a PR that
-  # conflicts with its base while the ticket sits there is polled and routed into the CI Fix lane
-  # (`SymphonyElixir.CiFix`); without them a conflicting PR in those phases has no detection path.
-  # Their review activity is not this poller's to act on — each phase's own machinery decides its
-  # verdicts and review comments — so `limited_to_conflicts?/3` keeps those records on
-  # `:watching`, and only a conflict, a merged PR or a closed one is acted on.
+  # `Code Review`, `QA` and `Rework` issues are watched as well, so a PR that conflicts with its base
+  # while the ticket sits there is polled and routed into the CI Fix lane (`SymphonyElixir.CiFix`);
+  # without them a conflicting PR in those phases has no detection path. Their review activity is
+  # not this poller's to act on — each phase's own machinery decides its verdicts and review
+  # comments — so `limited_to_conflicts?/3` keeps those records on `:watching`, and only a conflict,
+  # a merged PR or a closed one is acted on.
   defp watched_states(settings) do
-    review_states = HumanReview.review_states(settings)
-
-    base =
-      if AutoMerge.enabled?(settings),
-        do: review_states ++ [@merging_state],
-        else: review_states
-
-    base ++ designed_phase_states(settings)
+    if AutoMerge.enabled?(settings),
+      do: [@merging_state | phase_states(settings)],
+      else: phase_states(settings)
   end
 
-  # The phase states a designed repo's CI Fix lane serves. `Merging` is not one of them: it is
-  # watched separately, for auto-merge.
-  defp designed_phase_states(settings) do
-    if StateMachine.designed?(settings),
-      do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state],
-      else: []
+  # The phase states the CI Fix lane serves. `Merging` is not one of them: it is watched separately,
+  # for auto-merge.
+  defp phase_states(settings), do: [settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
+
+  # The `Code Review` and `QA` issues: a conflict CI Fix already took is acted on again there
+  # (`back_from_ci_fix_on_conflict?/3`), since their runs wait for a green, conflict-free head.
+  defp verdict_phase_ids(issues, settings) do
+    verdict_states = [settings.tracker.code_review_state, settings.tracker.qa_state]
+    issues |> Enum.filter(&issue_in_states?(&1, verdict_states)) |> MapSet.new(& &1.id)
   end
 
   defp fetch_watched_issues(settings, tracker, opts) do
@@ -813,7 +840,8 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     attrs = clear_auto_merge_stay(attrs, record, opts)
 
-    action = review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now)
+    action =
+      review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, opts, now)
 
     with {:ok, attrs} <- turn_off_auto_merge_on_exit(attrs, record, activity, action, settings, opts, now) do
       act_on_review(action, record, attrs, activity, settings, opts, now)
@@ -828,16 +856,15 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # A designed phase's review record is watched for conflicts only: its verdicts and review comments
-  # belong to the phase's own machinery, not this poller, so nothing but a conflict, a merged PR or a
-  # closed one is acted on. Treating the rest as `:watching` also keeps the record — and the conflict
-  # detection it carries — from being aged out as stale. Legacy repos and review-state tickets are
-  # untouched.
+  # A phase's review record is watched for conflicts only: its verdicts and review comments belong
+  # to the phase's own machinery, not this poller, so nothing but a conflict, a merged PR or a closed
+  # one is acted on. Treating the rest as `:watching` also keeps the record — and the conflict
+  # detection it carries — from being aged out as stale.
   defp limited_to_conflicts?(action, record, opts),
-    do: designed_phase_issue?(record, opts) and action not in [:conflict, :merged, :closed]
+    do: phase_issue?(record, opts) and action not in [:conflict, :merged, :closed]
 
-  defp designed_phase_issue?(record, opts) do
-    MapSet.member?(Keyword.get(opts, :designed_phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
+  defp phase_issue?(record, opts) do
+    MapSet.member?(Keyword.get(opts, :phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
   end
 
   defp do_act_on_review(action, record, attrs, activity, settings, opts, now) do
@@ -859,14 +886,24 @@ defmodule SymphonyElixir.PrReviewPoller do
         maybe_transition_rework(record, attrs, settings, opts, now)
 
       :conflict ->
-        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, opts, now) do
-          maybe_transition_conflict(record, attrs, settings, opts, now)
-        end
+        act_on_conflict(record, attrs, activity, settings, opts, now)
 
       action when action in [:approved, :stale, :watching] ->
         if auto_merge_issue?(record, opts),
           do: run_auto_merge(record, attrs, activity, settings, opts, now),
           else: handle_review_action(action, record, attrs, opts, now)
+    end
+  end
+
+  defp act_on_conflict(record, attrs, activity, settings, opts, now) do
+    case landing_wait(record, opts) do
+      nil ->
+        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, opts, now) do
+          maybe_transition_conflict(record, attrs, settings, opts, now)
+        end
+
+      wait ->
+        wait_to_land(record, attrs, wait, opts)
     end
   end
 
@@ -970,6 +1007,85 @@ defmodule SymphonyElixir.PrReviewPoller do
       }
     end)
     |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+  end
+
+  @doc """
+  Every tracked PR that waits for another to land first (see `SymphonyElixir.LandingOrder`), with
+  the PR it waits for, how many files they share and the reason as the state API shows it.
+  """
+  @spec landing_waits(keyword()) :: [map()]
+  def landing_waits(opts \\ []) do
+    opts
+    |> landing_records()
+    |> Enum.flat_map(fn
+      %{landing: %{waits_for: %{} = wait} = landing} = record ->
+        [
+          %{
+            issue_id: Map.get(record, :issue_id),
+            issue_identifier: Map.get(record, :issue_identifier),
+            pr_url: Map.get(record, :pr_url),
+            state: landing.state,
+            waits_for: Map.take(wait, [:issue_id, :issue_identifier, :pr_url, :state]),
+            shared_files: wait.shared_files,
+            files: wait.files,
+            reason: LandingOrder.reason(wait),
+            since: landing.waits_since
+          }
+        ]
+
+      _record ->
+        []
+    end)
+    |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+  end
+
+  @doc """
+  The other open PRs the overlap map holds, for an agent's first prompt: with the issue's own PR
+  in the map, the ones that share files with it (`shared`) and the one it waits for; without it
+  (no PR yet), every other PR and the files it changes (`open`). Nil when there are none.
+  """
+  @spec open_pr_overlap(String.t(), keyword()) :: map() | nil
+  def open_pr_overlap(issue_id, opts \\ []) when is_binary(issue_id) do
+    {own, others} =
+      opts
+      |> landing_records()
+      |> Enum.filter(&match?(%{landing: %{files: [_ | _]}}, &1))
+      |> Enum.split_with(&(Map.get(&1, :issue_id) == issue_id))
+
+    case {own, others} do
+      {_own, []} -> nil
+      {[%{landing: landing} | _], others} -> overlap_with(landing, others)
+      {[], others} -> %{waits_for: nil, shared: [], open: Enum.map(others, &overlap_entry(&1, &1.landing.files))}
+    end
+  end
+
+  defp overlap_with(landing, others) do
+    shared =
+      for record <- others, files = LandingOrder.shared_files(landing.files, record.landing.files), files != [] do
+        overlap_entry(record, files)
+      end
+
+    if shared == [], do: nil, else: %{waits_for: landing.waits_for, shared: shared, open: []}
+  end
+
+  defp overlap_entry(record, files) do
+    %{
+      issue_identifier: Map.get(record, :issue_identifier),
+      state: record.landing.state,
+      pr_url: Map.get(record, :pr_url),
+      files: files
+    }
+  end
+
+  defp landing_records(opts) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.flat_map(repo_keys_from_opts(opts), fn repo_key ->
+      case list_pr_reviews(run_store, repo_key) do
+        {:ok, records} -> Enum.filter(records, &match?(%{landing: %{files: files}} when is_list(files), &1))
+        {:error, _reason} -> []
+      end
+    end)
   end
 
   defp auto_merge_status?(%{auto_merge: %{state: state}}) when is_binary(state), do: true
@@ -1120,7 +1236,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp run_auto_merge(record, attrs, activity, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
 
-    case AutoMerge.step(record, activity, settings, opts, now) do
+    case AutoMerge.step(record, activity, settings, Keyword.put(opts, :landing_wait, landing_wait(record, opts)), now) do
       {:ok, auto_merge} ->
         complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
 
@@ -1129,7 +1245,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         conflicted = Map.merge(activity, %{mergeable: @conflicting_mergeable, merge_state_status: @dirty_merge_state})
         attrs = maybe_put_conflict_attrs(attrs, record, conflicted, now)
 
-        case conflict_review_action(record, conflicted) do
+        case conflict_review_action(record, conflicted, opts, now) do
           :conflict -> transition_auto_merge_conflict(record, attrs, activity, auto_merge, settings, opts, now)
           _watching -> complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
         end
@@ -1262,7 +1378,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     {attrs, latest_activity_at, unaddressed_comments}
   end
 
-  defp review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now) do
+  defp review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, opts, now) do
     review_decision = normalize_decision(Map.get(activity, :review_decision))
     changes_requested? = changes_requested_decision?(review_decision, activity, ignored_users)
 
@@ -1281,13 +1397,14 @@ defmodule SymphonyElixir.PrReviewPoller do
           unaddressed_comments,
           changes_requested?,
           settings,
+          opts,
           now
         )
     end
   end
 
-  defp open_review_action(record, activity, latest_activity_at, unaddressed_comments, changes_requested?, settings, now) do
-    case conflict_review_action(record, activity) do
+  defp open_review_action(record, activity, latest_activity_at, unaddressed_comments, changes_requested?, settings, opts, now) do
+    case conflict_review_action(record, activity, opts, now) do
       nil ->
         reviewer_activity_action(
           activity,
@@ -1303,12 +1420,43 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp conflict_review_action(record, activity) do
+  defp conflict_review_action(record, activity, opts, now) do
     cond do
       not merge_conflict?(activity) -> nil
       unsupported_cross_repo?(activity) -> :watching
-      conflict_key(activity) in string_list(Map.get(record, :dispatched_conflict_keys, [])) -> :watching
+      conflict_escalated?(record, activity) -> :watching
+      conflict_dispatched?(record, activity) and not back_from_ci_fix_on_conflict?(record, opts, now) -> :watching
       true -> :conflict
+    end
+  end
+
+  defp conflict_dispatched?(record, activity), do: conflict_key(activity) in string_list(Map.get(record, :dispatched_conflict_keys, []))
+
+  # A conflict already on a Needs Decision hold (`escalate_conflict/5`) waits for the person's answer.
+  defp conflict_escalated?(record, activity) do
+    escalated = Map.get(record, :escalated_conflict_key)
+    is_binary(escalated) and escalated == conflict_key(activity)
+  end
+
+  # A conflict CI Fix already took counts as handled only while the ticket is in the lane. A repair
+  # that pushed nothing returns a `Code Review` or `QA` ticket to its phase on the same head, and the
+  # conflict's key (the head and the base commit GitHub pairs with it) stays the same as the base
+  # branch moves on, so nothing else would ever act on it: the reviewer and QA wait for a green,
+  # conflict-free head. Such a ticket enters CI Fix again, spending a conflict retry, until the
+  # retries run out and the conflict escalates. A dispatch inside its start grace is left alone, since
+  # this poll's read may still show the ticket in its old phase.
+  defp back_from_ci_fix_on_conflict?(record, opts, now) do
+    verdict_phase_issue?(record, opts) and not recently_dispatched_conflict?(record, now)
+  end
+
+  defp verdict_phase_issue?(record, opts) do
+    MapSet.member?(Keyword.get(opts, :verdict_phase_issue_ids, MapSet.new()), Map.get(record, :issue_id))
+  end
+
+  defp recently_dispatched_conflict?(record, now) do
+    case {Map.get(record, :last_action), datetime_field(record, :last_action_at)} do
+      {"conflict", %DateTime{} = at} -> DateTime.diff(now, at, :millisecond) < @conflict_dispatch_grace_ms
+      _other -> false
     end
   end
 
@@ -1366,32 +1514,103 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp transition_unless_parked(_result, record, attrs, ctx, opts, now) do
     if conflict_retry_count(record) >= @conflict_max_retries do
+      escalate_conflict(record, attrs, ctx, opts, now)
+    else
+      transition_issue_for_action(record, attrs, opts, now, "conflict", ctx)
+    end
+  end
+
+  # Conflict fixes that could not clear the conflict go to a person. A `Code Review`, `QA` or
+  # `Rework` ticket pauses where it is on a Needs Decision hold, once per conflict
+  # (`conflict_escalated?/2`). A `Merging` one is left to the landing agent, which takes a PR down
+  # the conflict path over (`AutoMerge.owns_issue?/2`); it, and an issue this poll could not read,
+  # only record the escalation.
+  defp escalate_conflict(record, attrs, ctx, opts, now) do
+    if conflict_hold_phase?(ctx) do
+      hold_conflict(record, attrs, ctx.origin_state, opts, now)
+    else
       complete_review_update(
         opts,
         record,
         Map.merge(attrs, %{
           status: "conflict_escalated",
           error: "merge conflict retry limit reached",
-          target_issue_state: @in_review_state,
+          target_issue_state: Map.get(ctx, :origin_state),
           updated_at: now
         }),
         {:conflict_escalated, Map.get(record, :issue_id), @conflict_max_retries}
       )
-    else
-      transition_issue_for_action(record, attrs, opts, now, "conflict", ctx)
     end
   end
 
-  # The state the issue was in when its PR was found conflicting, for the designed CI Fix lane to
-  # record as the origin it returns to. nil when this poll's read did not have the issue, which
-  # keeps the legacy conflict path.
+  # A follower whose leader still lands (see `SymphonyElixir.LandingOrder`) gets no conflict fix yet:
+  # the leader's merge would reopen the conflict. No move, no auto-merge change and no retry used;
+  # once the leader lands or leaves the group, the next poll takes the conflict path with its changes.
+  defp wait_to_land(record, attrs, wait, opts) do
+    issue_id = Map.get(record, :issue_id)
+
+    unless Map.get(record, :status) == "conflict_waiting_to_land" do
+      Logger.info(
+        "PR review #{Map.get(record, :issue_identifier)}: the PR conflicts with the base branch but #{LandingOrder.reason(wait)}; no conflict fix until then issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} leader_issue_id=#{wait.issue_id}"
+      )
+    end
+
+    complete_review_update(opts, record, Map.put(attrs, :status, "conflict_waiting_to_land"), {:landing_wait, issue_id, wait.issue_identifier})
+  end
+
+  defp conflict_hold_phase?(%{settings: settings, origin_state: state}) do
+    match?({:ok, signal, _origin} when signal != :ci_fix_enter_merging, CiFix.entry(state, settings))
+  end
+
+  defp hold_conflict(record, attrs, state, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+    issue = %{id: issue_id, state: state, repo_key: Map.get(record, :repo_key)}
+    tracker_opts = [tracker: Keyword.get(opts, :tracker, Tracker)]
+
+    case NeedsDecisionHold.pause(issue, conflict_escalation_request(record), tracker_opts, @rework_state) do
+      :ok ->
+        TicketSignals.record(Map.get(record, :repo_key), issue_id, "decision requested", %{to: state, reason: "merge_conflict"})
+
+        escalated = %{
+          status: "conflict_escalated",
+          error: "merge conflict retry limit reached",
+          target_issue_state: state,
+          escalated_conflict_key: Map.get(attrs, :last_conflict_key),
+          updated_at: now
+        }
+
+        complete_review_update(opts, record, Map.merge(attrs, escalated), {:conflict_escalated, issue_id, @conflict_max_retries})
+
+      {:error, reason} ->
+        record_transition_error(record, attrs, opts, now, "conflict", reason)
+    end
+  end
+
+  defp conflict_escalation_request(record) do
+    label = Map.get(record, :issue_identifier) || Map.get(record, :issue_id)
+    pr = if is_binary(Map.get(record, :pr_url)), do: " on #{Map.get(record, :pr_url)}", else: ""
+
+    %{
+      title: "Merge conflict persists on #{label}",
+      question: "The PR of #{label} still conflicts with its base branch after #{@conflict_max_retries} conflict fixes. How should it continue?",
+      why: "The CI Fix lane could not resolve the PR's merge conflict#{pr}.",
+      options: [
+        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run resolves the conflict on the same PR", recommended: true},
+        %{label: "Leave it", effect: "the ticket stays in its phase with the conflict until a fix is pushed", recommended: false}
+      ],
+      est_minutes: 5
+    }
+  end
+
+  # The state the issue was in when its PR was found conflicting, for the CI Fix lane to record as
+  # the origin it returns to. nil when this poll's read did not have the issue, which keeps the
+  # conflict → `In Progress` path.
   defp conflict_origin_state({:ok, %Issue{state: state}}), do: state
   defp conflict_origin_state(_result), do: nil
 
-  # An issue that waits on a person sits in the Human Review state, outside the active states
-  # with a label that asks for one, or, with that state off, in `In Review` with an open request
-  # (see `HumanReview.parked_for_person/3`). One outside the states the pollers watch (`Backlog`)
-  # waits for a person to promote it (`HumanReview.held_for_person/3`). A conflict-fix run
+  # An issue that waits on a person sits outside the active states with a label that asks for one.
+  # One outside the states the pollers watch (`Backlog`) waits for a person to promote it
+  # (`PersonWait.held?/3`). A conflict-fix run
   # can't do what the person must: it would merge the base branch, push and park the issue again.
   # The issue stays where it is, with no fix run or escalation and no retry spent, until a person
   # moves it on or removes the label; the next conflicting poll then takes the conflict path.
@@ -1407,7 +1626,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     complete_review_update(opts, record, Map.put(attrs, :status, "conflict_awaiting_human_action"), {:conflict_awaiting_human_action, issue_id})
   end
 
-  # This cycle's watched issues have the issue when it sits in a review state; any other issue
+  # This cycle's watched issues have the issue when it sits in a watched state; any other issue
   # (`Backlog`, an active state) is read by id. The issue comes back with a not-parked result, so
   # the caller can read the state a conflict routes the ticket out of.
   defp parked_for_person(record, settings, opts) do
@@ -1415,19 +1634,16 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     with {:ok, issues} <- watched_or_fetched_issue(issue_id, Keyword.get(opts, :tracker, Tracker), opts) do
       case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
-        %Issue{} = issue ->
-          held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
-          parked_result(issue, HumanReview.held_for_person(issue, settings, held_opts))
-
-        nil ->
-          :not_parked
+        %Issue{} = issue -> parked_result(issue, settings, opts)
+        nil -> :not_parked
       end
     end
   end
 
-  defp parked_result(issue, {:ok, true}), do: {:parked, issue}
-  defp parked_result(issue, {:ok, false}), do: {:ok, issue}
-  defp parked_result(_issue, {:error, reason}), do: {:error, reason}
+  defp parked_result(issue, settings, opts) do
+    held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
+    if PersonWait.held?(issue, settings, held_opts), do: {:parked, issue}, else: {:ok, issue}
+  end
 
   # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
   # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer
@@ -1465,7 +1681,8 @@ defmodule SymphonyElixir.PrReviewPoller do
       conflict_retry_count: 0,
       dispatched_conflict_keys: [],
       last_conflict_key: nil,
-      last_conflict_at: nil
+      last_conflict_at: nil,
+      escalated_conflict_key: nil
     })
   end
 
@@ -1524,7 +1741,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp conflict_prompt_pending?(record) do
     normalize_conflict_context(Map.get(record, :conflict_context)) != nil and
-      Map.get(record, :status) not in ["conflict_escalated", "cleanup_pending"]
+      Map.get(record, :status) not in ["conflict_escalated", "cleanup_pending", "conflict_waiting_to_land"]
   end
 
   defp normalize_conflict_context(context) when is_map(context) do
@@ -1658,17 +1875,17 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # The move an action performs. A rework, a merge and every legacy conflict keep the edge they
-  # always used; a designed repo's conflict in one of the phases the CI Fix lane serves enters that
-  # lane instead, carrying the origin the repair returns to and the settings the guard resolves the
-  # lane's state name from.
+  # The move an action performs. A rework, a merge and a conflict outside the CI Fix lane's phases
+  # take the `In Progress` edge; a conflict in one of the phases the lane serves enters the lane,
+  # carrying the origin the repair returns to and the settings the guard resolves the lane's state
+  # name from.
   defp transition_move(action, ctx) do
     with "conflict" <- action,
          settings when is_map(settings) <- Map.get(ctx, :settings),
          {:ok, signal, origin} <- CiFix.entry(Map.get(ctx, :origin_state), settings) do
       %{signal: signal, target: CiFix.state(settings), origin: origin, settings: settings}
     else
-      _legacy -> %{signal: :review_rework, target: @active_state, origin: nil, settings: Map.get(ctx, :settings)}
+      _in_progress -> %{signal: :review_rework, target: @active_state, origin: nil, settings: Map.get(ctx, :settings)}
     end
   end
 
@@ -1693,12 +1910,17 @@ defmodule SymphonyElixir.PrReviewPoller do
       record_review_action_signal(record, action, move.target)
       complete_transition_action(record, pending_attrs, opts, now, action, move.target)
     else
-      {:error, reason} -> record_transition_error(record, pending_attrs, opts, now, action, reason)
+      {:error, reason} -> record_transition_error(record, pending_attrs, opts, now, action, named_state(reason, move.target))
     end
   end
 
+  # Linear reports a state the team doesn't have without its name, so the error names the state the
+  # move asked for: the log then says which state to add or configure.
+  defp named_state(:state_not_found, target), do: {:state_not_found, target}
+  defp named_state(reason, _target), do: reason
+
   # The CI Fix lane's origin is recorded before the move, so a repair that cannot be recorded has
-  # nowhere to return and the move is not made: the next poll retries. The legacy paths record
+  # nowhere to return and the move is not made: the next poll retries. The `In Progress` edge records
   # nothing.
   defp record_transition_origin(_record, %{origin: nil}, _opts), do: :ok
 
@@ -2650,7 +2872,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # This cycle's watched issues already hold every In Review issue; only others cost a Linear read.
+  # This cycle's watched issues already hold every watched issue; only others cost a Linear read.
   defp watched_or_fetched_issue(issue_id, tracker, opts) do
     case opts |> Keyword.get(:watched_issues, []) |> Enum.filter(&match?(%Issue{id: ^issue_id}, &1)) do
       [] -> tracker.fetch_issue_states_by_ids([issue_id])
@@ -3255,7 +3477,6 @@ defmodule SymphonyElixir.PrReviewPoller do
         issue_identifier: Map.get(record, :issue_identifier),
         issue_url: Map.get(record, :issue_url),
         pr_url: Map.get(record, :pr_url),
-        state: @in_review_state,
         reason: "PR review polling failed #{consecutive_errors} consecutive times: #{inspect(reason)}",
         metadata: %{
           source: "pr_review_poller",

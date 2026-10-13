@@ -14,7 +14,7 @@ defmodule SymphonyElixir.InboxTest do
   @repo %{name: "shop"}
 
   defp designed_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
 
@@ -25,12 +25,12 @@ defmodule SymphonyElixir.InboxTest do
         "identifier" => identifier,
         "title" => "Title of " <> identifier,
         "url" => "https://linear.app/acme/issue/" <> identifier,
-        "state" => %{"name" => "In Review"},
-        "labels" => %{"nodes" => []},
+        "state" => %{"name" => "Plan Review"},
+        "labels" => %{"nodes" => [%{"name" => "plan"}]},
         "attachments" => %{"nodes" => []},
         "children" => %{"nodes" => []},
         "comments" => %{"nodes" => []},
-        "history" => %{"nodes" => [moved("In Review", "2026-10-01T10:00:00Z")]}
+        "history" => %{"nodes" => [moved("Plan Review", "2026-10-01T10:00:00Z")]}
       },
       attrs
     )
@@ -61,7 +61,7 @@ defmodule SymphonyElixir.InboxTest do
   defp comment(id, body, created_at \\ "2026-10-01T11:00:00Z"), do: %{"id" => id, "body" => body, "createdAt" => created_at}
 
   defp request_body do
-    Request.render(
+    Request.render_hold(
       %{
         title: "Add the signing secret",
         question: "Add the secret?",
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.InboxTest do
         est_minutes: 5,
         options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
       },
-      "Human Review"
+      "Code Review"
     )
   end
 
@@ -104,8 +104,7 @@ defmodule SymphonyElixir.InboxTest do
             repos: fn -> {:ok, [@repo]} end,
             settings_fun: fn _repo -> %Schema{} end,
             scope_filter: fn _repo -> {:ok, %{"team" => %{"key" => %{"eq" => "SHOP"}}}} end,
-            linear_client: linear_client,
-            ci: fn _issue_id, _repo_key -> nil end
+            linear_client: linear_client
           ],
           opts
         ),
@@ -114,58 +113,13 @@ defmodule SymphonyElixir.InboxTest do
     }
   end
 
-  defp lookups(ci \\ nil, hold \\ nil) do
-    %{
-      ci: fn _issue_id, _repo_key -> ci end,
-      hold: fn _repo_key, _issue_id -> hold end
-    }
-  end
+  defp lookups(hold \\ nil), do: %{hold: fn _repo_key, _issue_id -> hold end}
 
   describe "items from Linear" do
-    test "a PR with its brief, PR, CI and QA result" do
-      pr =
-        issue_node("SHOP-7", %{
-          "attachments" => %{"nodes" => [%{"url" => "https://example.com/doc"}, %{"url" => "https://github.com/acme/shop/pull/7"}]},
-          "comments" => %{
-            "nodes" => [
-              comment("brief", @brief),
-              comment("4f0a2b1c-aaaa-bbbb", "## Symphony QA Report\n\n**Verdict:** pass → In Review\n")
-            ]
-          }
-        })
-
-      assert %{
-               issue_id: "id-SHOP-7",
-               identifier: "SHOP-7",
-               repo_key: "shop",
-               state_machine: "legacy",
-               kind: :pr,
-               state: "In Review",
-               ask: "The retry fix for the importer.",
-               waiting_since: ~U[2026-10-01 10:00:00Z],
-               url: "https://linear.app/acme/issue/SHOP-7",
-               review: %{
-                 brief: %{format: "parsed", headline: "The retry fix for the importer.", moves: [%{move: "approve"}]},
-                 pull_request: %{
-                   url: "https://github.com/acme/shop/pull/7",
-                   ci: "passed",
-                   qa: %{verdict: "pass", report_url: "https://linear.app/acme/issue/SHOP-7#comment-4f0a2b1c"}
-                 }
-               }
-             } = Item.from_node(pr, "shop", %Schema{}, lookups("SUCCESS"))
-    end
-
-    test "a PR without a brief, a PR link, CI or QA" do
-      assert %{ask: "Review the pull request", review: %{brief: nil, pull_request: %{url: nil, ci: nil, qa: nil} = pull_request}} =
-               Item.from_node(issue_node("SHOP-8"), "shop", %Schema{}, lookups())
-
-      refute Map.has_key?(pull_request, :gate)
-    end
-
-    test "a plan with its sub-tickets in landing order, and a final verification" do
+    test "a plan with its brief and its sub-tickets in landing order" do
       plan =
         issue_node("SHOP-330", %{
-          "labels" => %{"nodes" => [%{"name" => "plan"}]},
+          "comments" => %{"nodes" => [comment("brief", @brief)]},
           "children" => %{
             "nodes" => [
               %{"identifier" => "SHOP-332", "title" => "Second", "url" => "u2", "createdAt" => "2026-10-01T09:02:00Z", "state" => %{"name" => "Backlog"}},
@@ -175,22 +129,43 @@ defmodule SymphonyElixir.InboxTest do
         })
 
       assert %{
+               issue_id: "id-SHOP-330",
+               identifier: "SHOP-330",
+               repo_key: "shop",
                kind: :plan,
-               ask: "Approve the plan",
-               review: %{brief: nil, sub_tickets: [%{identifier: "SHOP-331", title: "First", url: "u1", state: "Backlog"}, %{identifier: "SHOP-332"}]}
+               state: "Plan Review",
+               ask: "The retry fix for the importer.",
+               waiting_since: ~U[2026-10-01 10:00:00Z],
+               url: "https://linear.app/acme/issue/SHOP-330",
+               review: %{
+                 brief: %{format: "parsed", headline: "The retry fix for the importer.", moves: [%{move: "approve"}]},
+                 sub_tickets: [%{identifier: "SHOP-331", title: "First", url: "u1", state: "Backlog"}, %{identifier: "SHOP-332"}]
+               }
              } = Item.from_node(plan, "shop", %Schema{}, lookups())
 
-      verification = issue_node("SHOP-340", %{"title" => "Final verification: Gift cards"})
+      refute Map.has_key?(Item.from_node(plan, "shop", %Schema{}, lookups()), :state_machine)
+    end
 
-      assert %{kind: :final_verification, ask: "Sign off the final verification", review: %{brief: nil}} =
-               Item.from_node(verification, "shop", %Schema{}, lookups())
+    test "a plan without a brief asks for its approval" do
+      assert %{kind: :plan, ask: "Approve the plan", review: %{brief: nil, sub_tickets: []}} =
+               Item.from_node(issue_node("SHOP-331"), "shop", %Schema{}, lookups())
+    end
+
+    test "a pull request or a final verification sits in no state a person reviews in, so it waits on nobody" do
+      for node <- [
+            issue_node("SHOP-8", %{"labels" => %{"nodes" => []}}),
+            issue_node("SHOP-340", %{"title" => "Final verification: Gift cards", "labels" => %{"nodes" => []}}),
+            issue_node("SHOP-341", %{"state" => %{"name" => "In Review"}})
+          ] do
+        assert Item.from_node(node, "shop", %Schema{}, lookups()) == nil
+      end
     end
 
     test "an action with why, options, time and what it unblocks" do
       action =
         issue_node("SHOP-90", %{
-          "state" => %{"name" => "Human Review"},
-          "history" => %{"nodes" => [moved("Human Review", "2026-10-01T08:00:00Z")]},
+          "state" => %{"name" => "Code Review"},
+          "history" => %{"nodes" => [moved("Code Review", "2026-10-01T08:00:00Z")]},
           "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
         })
 
@@ -214,9 +189,9 @@ defmodule SymphonyElixir.InboxTest do
              } = Item.from_node(action, "shop", %Schema{}, lookups())
     end
 
-    test "a designed repo's held ticket waits in its phase, listed with the request's ask and age" do
-      # The hold pauses the ticket where it stands, so nothing in the review states would list it:
-      # the request on it does, and the decision is answerable from the Inbox with its comment id.
+    test "a held ticket waits in its phase, listed with the request's ask and age" do
+      # The hold pauses the ticket where it stands: the request on it lists it, and the decision is
+      # answerable from the Inbox with its comment id.
       held =
         issue_node("SHOP-91", %{
           "state" => %{"name" => "In Progress"},
@@ -237,7 +212,7 @@ defmodule SymphonyElixir.InboxTest do
     test "a merge confirmation's request names the move its confirmation performs" do
       held =
         issue_node("SHOP-92", %{
-          "state" => %{"name" => "In Review"},
+          "state" => %{"name" => "QA"},
           "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
           "history" => %{"nodes" => []},
           "comments" => %{"nodes" => [comment("request", request_body(), "2026-10-01T08:00:01Z")]}
@@ -246,25 +221,15 @@ defmodule SymphonyElixir.InboxTest do
       summary = %{recommendation: "merge", review: nil, qa: "pass", pr: nil}
       hold = MergeConfirmation.attrs(MergeConfirmation.request(%Issue{identifier: "SHOP-92"}, summary))
 
-      assert %{kind: :action, review: %{confirm: "Merging"}} = Item.from_node(held, "shop", %Schema{}, lookups(nil, hold))
+      assert %{kind: :action, review: %{confirm: "Merging"}} = Item.from_node(held, "shop", %Schema{}, lookups(hold))
     end
 
-    test "a pull request's checks are green when CI passed and QA does not object" do
-      green = %{kind: :pr, review: %{pull_request: %{ci: "passed", qa: %{verdict: "pass"}}}}
-      assert Item.checks_green?(green)
-      assert Item.checks_green?(%{green | review: %{pull_request: %{ci: "passed", qa: nil}}})
-
-      refute Item.checks_green?(put_in(green, [:review, :pull_request, :ci], "pending"))
-      refute Item.checks_green?(put_in(green, [:review, :pull_request, :qa], %{verdict: "blocked"}))
-      refute Item.checks_green?(%{green | kind: :plan})
-    end
-
-    test "nothing for an issue that left the review states" do
+    test "nothing for an issue that left Plan Review" do
       assert Item.from_node(issue_node("SHOP-9", %{"state" => %{"name" => "Todo"}}), "shop", %Schema{}, lookups()) == nil
     end
 
     test "a ticket an access hold pauses in place, with the reason the hold recorded" do
-      held = issue_node("SHOP-60", %{"state" => %{"name" => "In Progress"}})
+      held = issue_node("SHOP-60", %{"state" => %{"name" => "In Progress"}, "labels" => %{"nodes" => []}})
 
       hold = %{
         kind: :blocked,
@@ -279,7 +244,6 @@ defmodule SymphonyElixir.InboxTest do
                issue_id: "id-SHOP-60",
                identifier: "SHOP-60",
                repo_key: "shop",
-               state_machine: "designed",
                kind: :blocked,
                state: "In Progress",
                ask: "The run reported a block",
@@ -289,36 +253,58 @@ defmodule SymphonyElixir.InboxTest do
                  reason: "The run reported a block",
                  clearing_condition: "when the block is resolved; a person clears an access hold"
                }
-             } = Item.from_node(held, "shop", %Schema{state_machine: "designed"}, lookups(nil, hold))
+             } = Item.from_node(held, "shop", %Schema{}, lookups(hold))
 
       # A hold that clears on its own waits on nobody, and neither does a ticket with no hold at all
       # or a run whose lookups name no hold source.
-      assert Item.from_node(held, "shop", %Schema{}, lookups(nil, %{hold | waits_on: %{type: "dependency", keys: ["SHOP-1"]}})) == nil
+      assert Item.from_node(held, "shop", %Schema{}, lookups(%{hold | waits_on: %{type: "dependency", keys: ["SHOP-1"]}})) == nil
       assert Item.from_node(held, "shop", %Schema{}, lookups()) == nil
-      assert Item.from_node(held, "shop", %Schema{}, %{ci: fn _, _ -> nil end}) == nil
+      assert Item.from_node(held, "shop", %Schema{}, %{}) == nil
 
-      # A hold never displaces a review the ticket already waits on.
-      assert %{kind: :pr} = Item.from_node(held |> Map.put("state", %{"name" => "In Review"}), "shop", %Schema{}, lookups(nil, hold))
+      # A hold never displaces a plan review the ticket already waits on.
+      assert %{kind: :plan} = Item.from_node(issue_node("SHOP-60"), "shop", %Schema{}, lookups(hold))
 
       # A hold that recorded no reason still says what acting on it does.
       assert %{ask: "Unblock the ticket and it continues", review: %{reason: nil}} =
-               Item.from_node(held, "shop", %Schema{}, lookups(nil, %{hold | reason: nil, clearing_condition: nil}))
+               Item.from_node(held, "shop", %Schema{}, lookups(%{hold | reason: nil, clearing_condition: nil}))
     end
 
-    test "reads an option, a CI conclusion and a quality-gate entry" do
+    test "a ticket the dispatch-loop guard holds, with the loop in the reason" do
+      held = issue_node("SHOP-61", %{"state" => %{"name" => "Rework"}, "labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
+      run = %{kind: "rework", run_id: "run-1", state: "Rework", head: "abc", at: ~U[2026-10-01 05:58:00Z], outcome: %{exit: "ended normally", head: "abc", at: nil}}
+      attrs = SymphonyElixir.DispatchLoop.hold_attrs(%{kind: "rework", count: 4, window_ms: 600_000, runs: [run]}, [])
+      hold = Map.merge(attrs, %{kind: :blocked, decision: nil, set_at: ~U[2026-10-01 06:00:00Z]})
+
+      assert %{kind: :blocked, ask: ask, review: %{reason: ask, clearing_condition: "when a person unblocks or restarts it"}} =
+               Item.from_node(held, "shop", %Schema{}, lookups(hold))
+
+      assert ask =~ "dispatch_loop: 4 rework runs in 10 minutes without a state change, a new PR head or a decision"
+      assert ask =~ "started 05:58 UTC, ended normally, no new PR head, no handoff signal"
+    end
+
+    test "reads an option and a quality-gate entry" do
       assert Item.option("Plain text") == %{label: "Plain text", effect: nil, recommended: false}
       assert Item.option("**Keep** (recommended):") == %{label: "Keep", effect: nil, recommended: true}
-      assert Item.ci_result("FAILURE") == "failed"
-      assert Item.ci_result("IN_PROGRESS") == "pending"
-      assert Item.ci_result(nil) == nil
 
       assert %{kind: :clarify, ask: "The quality gate couldn't score the ticket", waiting_since: ~U[2026-10-01 07:00:00Z], review: %{held: false, found: "LLM call failed"}} =
                Item.from_quality_gate(%{kind: :error, issue_id: "id-1", reason: "LLM call failed", updated_at: ~U[2026-10-01 07:00:00Z]})
     end
   end
 
+  # The description a decision is written into, as Linear would hold it; the hold's label goes nowhere.
+  defmodule DescriptionTracker do
+    def set_machine_label(_issue_id, _name), do: :ok
+    def clear_machine_label(_issue_id, _name), do: :ok
+    def fetch_issue_description(_issue_id), do: {:ok, "Sign the release builds."}
+
+    def update_issue_description(issue_id, description) do
+      send(self(), {:description_written, issue_id, description})
+      :ok
+    end
+  end
+
   describe "the poller" do
-    test "a designed repo's read is also the one that sets and clears the Needs Decision hold" do
+    test "the read is also the one that sets and clears the Needs Decision hold" do
       test_pid = self()
 
       held =
@@ -345,10 +331,19 @@ defmodule SymphonyElixir.InboxTest do
         ])
 
       answered_client = linear(test_pid, fn _variables -> page([light(answered)]) end, %{answered["id"] => answered})
-      state = state(answered_client, settings_fun: fn _repo -> designed_settings() end) |> Inbox.run_once()
+
+      state =
+        answered_client
+        |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
+        |> Inbox.run_once()
 
       assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
       assert Inbox.cached(state.opts[:name]) == []
+
+      # The same read writes the answer into the ticket's scope.
+      assert_received {:description_written, "id-SHOP-92", description}
+      assert String.starts_with?(description, "Sign the release builds.\n\n")
+      assert [%{id: "D1", key: "request", title: "Add the signing secret", question: "Add the secret?"}] = SymphonyElixir.Decisions.recorded(description)
     end
 
     test "reads an issue in full once, and again only when it or a comment changed" do
@@ -359,8 +354,8 @@ defmodule SymphonyElixir.InboxTest do
       state = state(client)
 
       state = Inbox.run_once(state)
-      assert_received {:listed, %{"and" => [%{"team" => _}, %{"or" => [%{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}} | conditions]}]}}
-      # A designed repo's held ticket sits in its phase, so the hold's label lists it too.
+      assert_received {:listed, %{"and" => [%{"team" => _}, %{"or" => [%{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} | conditions]}]}}
+      # A held ticket sits in its phase, so the hold's label lists it.
       assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Blocked"}}}} in conditions
       assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}} in conditions
       assert_received {:read, ["id-SHOP-7"]}
@@ -377,6 +372,59 @@ defmodule SymphonyElixir.InboxTest do
       Agent.update(listed, fn _nodes -> [] end)
       state = Inbox.run_once(state)
       assert state.nodes == %{}
+      assert Inbox.cached(state.opts[:name]) == []
+    end
+
+    test "lists a designed repo's plan waiting in Plan Review, and drops it once it leaves" do
+      test_pid = self()
+
+      plan =
+        issue_node("SHOP-330", %{
+          "state" => %{"name" => "Plan Review"},
+          "labels" => %{"nodes" => [%{"name" => "plan"}]},
+          "history" => %{"nodes" => [moved("Plan Review", "2026-10-01T09:00:00Z")]},
+          "comments" => %{"nodes" => [comment("brief", @brief)]},
+          "children" => %{
+            "nodes" => [%{"identifier" => "SHOP-331", "title" => "First", "url" => "u1", "createdAt" => "2026-10-01T09:01:00Z", "state" => %{"name" => "Backlog"}}]
+          }
+        })
+
+      {:ok, listed} = Agent.start_link(fn -> [light(plan)] end)
+      client = linear(test_pid, fn _variables -> page(Agent.get(listed, & &1)) end, %{plan["id"] => plan})
+      state = state(client, settings_fun: fn _repo -> designed_settings() end)
+
+      state = Inbox.run_once(state)
+      assert_received {:listed, %{"and" => [_scope, %{"or" => conditions}]}}
+      assert %{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} in conditions
+
+      assert [
+               %{
+                 identifier: "SHOP-330",
+                 kind: :plan,
+                 state: "Plan Review",
+                 ask: "The retry fix for the importer.",
+                 waiting_since: ~U[2026-10-01 09:00:00Z],
+                 review: %{brief: %{headline: "The retry fix for the importer."}, sub_tickets: [%{identifier: "SHOP-331", state: "Backlog"}]}
+               }
+             ] = Inbox.cached(state.opts[:name])
+
+      # Approved: the parent moved on to `Waiting on sub-tickets`, which the list no longer finds.
+      Agent.update(listed, fn _nodes -> [] end)
+      state = Inbox.run_once(state)
+      assert Inbox.cached(state.opts[:name]) == []
+    end
+
+    test "lists nothing more with the Plan Review state turned off" do
+      test_pid = self()
+      settings = designed_settings()
+      off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
+      plan = issue_node("SHOP-330", %{"state" => %{"name" => "Plan Review"}, "labels" => %{"nodes" => [%{"name" => "plan"}]}})
+
+      client = linear(test_pid, fn _variables -> page([light(plan)]) end, %{plan["id"] => plan})
+      state = state(client, settings_fun: fn _repo -> off end) |> Inbox.run_once()
+
+      assert_received {:listed, %{"and" => [_scope, %{"or" => conditions}]}}
+      refute %{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} in conditions
       assert Inbox.cached(state.opts[:name]) == []
     end
 
@@ -478,8 +526,8 @@ defmodule SymphonyElixir.InboxTest do
           identifier: identifier,
           title: nil,
           repo_key: "shop",
-          kind: :pr,
-          state: "In Review",
+          kind: :plan,
+          state: "Plan Review",
           ask: "Review",
           waiting_since: hours_ago && DateTime.add(~U[2026-10-01 12:00:00Z], -hours_ago * 3_600),
           url: nil,
@@ -517,14 +565,14 @@ defmodule SymphonyElixir.InboxTest do
 
       snapshot = %{
         running: [%{issue_id: "id-SHOP-RUN"}],
-        watching: [%{issue_id: "id-SHOP-LEFT", state: "Merging"}, %{issue_id: "id-SHOP-HR", state: "Human Review"}],
+        watching: [%{issue_id: "id-SHOP-LEFT", state: "Merging"}, %{issue_id: "id-SHOP-HR", state: "plan review"}],
         awaiting_clarification: [held, %{held | issue_id: nil}],
         skipped: [skipped]
       }
 
       items = Inbox.items(snapshot, name)
       assert Enum.map(items, & &1.identifier) == ["SHOP-50", "SHOP-3", "SHOP-HR", "SHOP-1", "SHOP-51", "SHOP-2"]
-      assert %{state: "Human Review"} = Enum.find(items, &(&1.identifier == "SHOP-HR"))
+      assert %{state: "plan review"} = Enum.find(items, &(&1.identifier == "SHOP-HR"))
 
       assert %{
                kind: :clarify,
@@ -557,15 +605,47 @@ defmodule SymphonyElixir.InboxTest do
         }
       end
 
-      :persistent_term.put({Inbox, :items, name}, [entry.("SHOP-70", :blocked), entry.("SHOP-71", :pr)])
+      :persistent_term.put({Inbox, :items, name}, [entry.("SHOP-70", :blocked), %{entry.("SHOP-71", :plan) | state: "Plan Review"}])
 
       snapshot = %{
         running: [],
         watching: [%{issue_id: "id-SHOP-70", state: "In Progress"}, %{issue_id: "id-SHOP-71", state: "In Progress"}]
       }
 
-      # The hold is what waits on the Director; an item with no hold that left the review states does not.
+      # The hold is what waits on the Director; an item with no hold that left Plan Review does not.
       assert Enum.map(Inbox.items(snapshot, name), & &1.identifier) == ["SHOP-70"]
+    end
+
+    test "keeps a plan while the orchestrator still sees it in the state the read listed it in" do
+      name = {:test, make_ref()}
+
+      plan = fn identifier, state ->
+        %{
+          issue_id: "id-" <> identifier,
+          identifier: identifier,
+          title: nil,
+          repo_key: "shop",
+          kind: :plan,
+          state: state,
+          ask: "Approve the plan",
+          waiting_since: ~U[2026-10-01 12:00:00Z],
+          url: nil,
+          review: %{}
+        }
+      end
+
+      :persistent_term.put({Inbox, :items, name}, [plan.("SHOP-80", "Plan Review"), plan.("SHOP-81", "Plan Review"), plan.("SHOP-82", nil)])
+
+      snapshot = %{
+        running: [],
+        watching: [
+          %{issue_id: "id-SHOP-80", state: " plan review "},
+          %{issue_id: "id-SHOP-81", state: "Waiting on sub-tickets"},
+          %{issue_id: "id-SHOP-82", state: "QA"}
+        ]
+      }
+
+      assert [%{identifier: "SHOP-80", state: " plan review "}] = Inbox.items(snapshot, name)
     end
   end
 end

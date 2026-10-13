@@ -1,25 +1,25 @@
 defmodule SymphonyElixir.NeedsDecisionHold do
   @moduledoc """
-  The Needs Decision hold: a designed repo's ticket pauses in its phase with the question recorded,
-  and continues in place once the decision is made.
+  The Needs Decision hold: a ticket pauses in its phase with the question recorded, and continues in
+  place once the decision is made.
 
-  On a repo running the designed machine an agent's decision request
-  (`SymphonyElixir.HumanActions.Request`) no longer moves the ticket to a review state: the ticket
-  keeps its phase, gains the `Needs Decision` machine label, and the hold carries the decision
-  payload — the question, its options and what clears it. The Inbox loop runs `sweep/3` over the
-  tickets it read, reconciling each one's store hold against the requests Linear still reads as
-  open (`sync/3` does one ticket, and is a no-op on a legacy repo).
+  An agent's decision request (`SymphonyElixir.HumanActions.Request`) never moves the ticket: the
+  ticket keeps its phase, gains the `Needs Decision` machine label, and the hold carries the
+  decision payload — the question, its options and what clears it. The Inbox loop runs `sweep/3`
+  over the tickets it read, reconciling each one's store hold against the requests Linear still
+  reads as open (`sync/3` does one ticket).
 
   A request stops being open when the person answers it — a reply under it, or the Director's
-  Decide in the Inbox — or when the run withdraws it. The hold then clears and the ticket continues
+  Decide in the Inbox — or when the run withdraws it. An answer is written into the Decisions
+  section of the ticket's description on the read that sees it (`SymphonyElixir.Decisions`), so
+  the reviewer and later runs honour it. The hold then clears and the ticket continues
   from where it stopped; a merge confirmation's hold carries the move its confirmation performs, so
-  answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`). Legacy repos are
-  untouched: a request still moves the ticket to the Human Review state, and no hold is recorded.
+  answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, Handoff, Hold, MergeConfirmation, StateMachine, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{Config, Decisions, Handoff, Hold, MergeConfirmation, TicketSignals, TransitionGuard}
   alias SymphonyElixir.HumanActions.{Collector, Request}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
@@ -101,15 +101,14 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   Reconciles the Needs Decision hold of one ticket against the decision requests Linear still reads
   as open on it. `opts[:settings]` is the repo's resolved settings (the Inbox passes the one it
   resolved for the route); without it the repo is resolved through `Config.settings_for_repo/1`.
-  Returns `:skipped` on a repo that is not the designed machine, else the action taken (`:set`,
-  `:clear` or `:none`).
+  Returns `:skipped` when the repo can't be resolved, else the action taken (`:set`, `:clear` or
+  `:none`).
   """
   @spec sync(String.t() | term(), map() | term(), keyword()) :: :skipped | :set | :clear | :none
   def sync(repo_key, node, opts \\ []) do
     with repo_key when is_binary(repo_key) <- repo_key,
-         settings when is_map(settings) <- settings(repo_key, opts),
-         true <- StateMachine.designed?(settings) do
-      sync_designed(repo_key, node, settings, opts)
+         settings when is_map(settings) <- settings(repo_key, opts) do
+      sync_ticket(repo_key, node, settings, opts)
     else
       _skipped -> :skipped
     end
@@ -125,8 +124,10 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     if is_list(nodes), do: Enum.count(nodes, &(sync(repo_key, &1, opts) in [:set, :clear])), else: 0
   end
 
-  defp sync_designed(repo_key, %{"id" => issue_id} = node, settings, opts) when is_binary(issue_id) do
+  defp sync_ticket(repo_key, %{"id" => issue_id} = node, settings, opts) when is_binary(issue_id) do
     repair_drift(repo_key, issue_id, labels(node), opts)
+    # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
+    _ = Decisions.sync(node, Keyword.take(opts, [:tracker]))
     current = Hold.get(repo_key, issue_id, :needs_decision, opts)
 
     case desired(Collector.newest_request(node, settings), current) do
@@ -141,7 +142,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
     end
   end
 
-  defp sync_designed(_repo_key, _node, _settings, _opts), do: :none
+  defp sync_ticket(_repo_key, _node, _settings, _opts), do: :none
 
   defp apply_set(repo_key, issue_id, attrs, opts) do
     case Hold.set(repo_key, issue_id, :needs_decision, attrs, opts) do

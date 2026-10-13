@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.SelfHeal do
   @moduledoc """
-  The self-heal lane: a designed repo's flow blocked by tooling or environment repairs itself
+  The self-heal lane: a flow blocked by tooling or environment repairs itself
   instead of stopping for a person (`docs/design/state-machine.md`, principle 8 and §Guards
   "Self-heal on environment blocks", "Fix-ticket scope", "Repairs iterate on new information").
 
@@ -10,9 +10,10 @@ defmodule SymphonyElixir.SelfHeal do
     * names the broken **component** and the repo that owns its fix — Symphony for orchestration
       and structural causes, the managed project's repo for its own build/test/run setup
       (`scope/3`);
-    * files **one** high-priority fix ticket per broken component, deduplicated: an open fix ticket
-      for the same component is reused, not filed again, and the new failure is attached to it as
-      evidence;
+    * files **one** fix ticket per broken component — High, or Urgent for an Urgent affected
+      ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
+      component is reused, not filed again, keeping its priority, and the new failure is attached to
+      it as evidence;
     * links the affected ticket to the fix ticket as blocked-by and gives it a `Blocked` hold
       waiting on that ticket, which lifts on its own when the fix goes terminal
       (`SymphonyElixir.BlockedHold`) — no decision request and no check for a person;
@@ -22,7 +23,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
-  lifts. Legacy repos never reach this module — the QA run that calls it is designed-only.
+  lifts.
 
   Every effect is injectable: `opts[:store]` (the run store), `opts[:tracker]` and `opts[:fixer]`
   (the fix-ticket filer) default to the real ones and are fakes in tests.

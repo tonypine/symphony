@@ -60,7 +60,7 @@ defmodule SymphonyElixir.InitiativesTest do
 
   @done {"Done", "completed"}
   @todo {"Todo", "unstarted"}
-  @in_review {"In Review", "started"}
+  @in_review {"Plan Review", "started"}
   @in_progress {"In Progress", "started"}
 
   describe "from_node/4" do
@@ -130,12 +130,30 @@ defmodule SymphonyElixir.InitiativesTest do
     end
   end
 
+  describe "parent_of/2" do
+    test "names the plan that has the ticket among its sub-tickets or as its final verification" do
+      node =
+        plan("BIL-1", @in_progress, [
+          child("BIL-2", @done),
+          child("BIL-3", @todo, %{"title" => "Final verification: Plan BIL-1"})
+        ])
+
+      other = plan("BIL-9", @in_progress, [])
+      initiatives = Enum.map([other, node], &Initiative.from_node(&1, "billing", settings(), @now))
+
+      assert Initiatives.parent_of("id-BIL-2", initiatives) == %{identifier: "BIL-1", title: "Plan BIL-1"}
+      assert Initiatives.parent_of("id-BIL-3", initiatives) == %{identifier: "BIL-1", title: "Plan BIL-1"}
+      assert Initiatives.parent_of("id-BIL-4", initiatives) == nil
+      assert Initiatives.parent_of("id-BIL-2") == nil
+    end
+  end
+
   describe "live/2" do
     test "says what each sub-ticket waits on and counts the stages" do
       children = [
         child("BIL-2", @done),
         child("BIL-3", {"In Progress", "started"}),
-        child("BIL-4", {"Human Review", "started"}),
+        child("BIL-4", {"QA", "started"}),
         child("BIL-5", @todo, blocked_by([{"BIL-4", "started"}, {"BIL-2", "completed"}])),
         child("BIL-6", {"Code Review", "started"}),
         child("BIL-7", @todo),
@@ -145,7 +163,7 @@ defmodule SymphonyElixir.InitiativesTest do
         child("BIL-9", {"Todo", "unstarted"}, Map.merge(%{"title" => "Final verification: billing"}, blocked_by([{"BIL-7", "unstarted"}])))
       ]
 
-      settings = %Schema{tracker: %{kind: "memory", human_review_state: "Human Review"}}
+      settings = %Schema{tracker: %{kind: "memory", plan_review_state: "Plan Review"}}
 
       initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings, @now)
       live = Initiative.live(initiative, %{running: MapSet.new(["id-BIL-3"]), you: MapSet.new(["id-BIL-4"]), settings: settings})

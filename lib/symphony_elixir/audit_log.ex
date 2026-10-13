@@ -259,6 +259,25 @@ defmodule SymphonyElixir.AuditLog do
     end
   end
 
+  @doc """
+  The redacted record on `line` (1-based) of the daily file for `day`, so a chain break can be named;
+  nil when the day, the file or the line doesn't read as a JSON object. Options as for `verify_chain/2`.
+  """
+  @spec record_at(Date.t() | String.t(), pos_integer(), query_opts() | map()) :: map() | nil
+  def record_at(day, line, opts \\ []) when is_integer(line) do
+    with {:ok, date} <- normalize_date(day),
+         {^line, %{} = event} <-
+           opts
+           |> audit_dir()
+           |> event_path(Date.to_iso8601(date))
+           |> read_ndjson_lines()
+           |> List.keyfind(line, 0) do
+      redact_value(event, configured_secret_values(query_keyword_opts(opts)))
+    else
+      _ -> nil
+    end
+  end
+
   @spec verify_file(Path.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def verify_file(path) when is_binary(path) do
     path

@@ -19,6 +19,16 @@ for you on the host. They only act on this worktree's configured app and on apps
   types into a text field the way a person does and presses Tab to commit it, so the app
   saves what it shows; it fails with `text_not_entered` or `not_focused` when the text did not
   land.
+- `qa_ax_select`: selects a table or outline row (an `AXRow`, or a cell inside it) by its
+  `path`. Rows answer no `AXPress`, so use this to select one; the app comes to the front and the
+  table takes keyboard focus. `qa_ax_tree` marks the selected row `selected: true`.
+- `qa_key`: presses a `key` (`return`, `escape`, `tab`, `space`, `delete`, arrows such as `down`,
+  or one character such as `[`) with optional `modifiers` (`command`, `shift`, `option`,
+  `control`) in the app's focused window. A shortcut such as ⌘[ is `key: "["`,
+  `modifiers: ["command"]`. It returns the `window` and `focused` element the key went to.
+- `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
+  no accessibility action reaches. It fails with `covered` or `not_on_screen` when another app's
+  window is in front or the element is scrolled away.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
   usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
@@ -64,7 +74,13 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
    API from those files instead of a running Symphony. When the walkthrough checks what the app
    sent (`api-requests.jsonl`), call `qa_api_requests` after the action and judge its `requests`.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
-   buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act.
+   buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act. When an
+   element answers `qa_ax_press` with `unsupported`:
+   - a table or list row (`AXOutline` or `AXTable` > `AXRow`): select it with `qa_ax_select`, then
+     read `qa_ax_tree` again to check what the selection shows (an inspector, a detail pane);
+   - a step that names a key or shortcut (Return opens the selected item, ⌘[ goes back, Escape
+     closes): press it with `qa_key` after selecting what it acts on;
+   - any other control: `qa_click` it.
 4. Let every window settle before you judge it. A window can open at the right size and
    collapse seconds later, so a check right after opening proves nothing:
    - wait about 10 seconds after the window opens (`sleep 10` in your shell);

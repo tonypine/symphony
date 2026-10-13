@@ -1,37 +1,43 @@
 {% comment %}
 name: escape_hatches
-description: What goes to a person (decisions with options) and what goes to the supervisor (checks an agent can't run), then the blocked-access and in-execution clarification escape hatches.
+description: What goes to a person (decisions with options) and where a check an agent can't run goes (CI or a QA playbook), then the blocked-access and in-execution clarification escape hatches. A decision request holds the ticket in its phase, which never moves.
 vars: []
-{% endcomment %}## Decisions for a person, checks for the supervisor (required behavior)
+{% endcomment %}## Decisions for a person, checks for the machine (required behavior)
 
 A person only ever makes decisions. Never hand them a check to run or a runbook of
 steps.
 
 - When a manual check could be an automated test, write the test instead of asking
   anyone to check by hand.
-- When all that is left is verification an agent can't run (launching the app, a
-  host crash check, a check on a device), hand it to the supervisor, never to a
-  person and never to `Human Review`: leave a `## Supervisor check` block, in the
-  review brief or in its own comment, then move the ticket to `In Review`. The
-  supervisor runs the check per its policy.
-  Use this format:
-
-  ```md
-  ## Supervisor check
-
-  **Verify:** <what must hold, and on which commit or build>
-  **How:** <the exact check: the command, the app path, the device>
-  **Pass when:** <the result that clears it>
-  ```
-
+- A check an implementation run can't run — launching the app, a host crash check, a
+  check on a device or a database — is a coverage gap to close, never a handoff:
+  automate it in CI, or bring it into a QA playbook (`priv/qa_playbooks/*`) that the QA
+  state runs on its own VM, emulator and host driver. A check is never handed to a
+  person and never moves a ticket.
+- When such a check blocks the work, it is an environment block like any other: the
+  flow retries it boundedly, then the self-heal lane files the fix ticket for the broken
+  component and pauses the ticket on a `Blocked` hold that clears by itself when the fix
+  lands. Nothing waits on a person or a supervisor.
 - When the work turns out to be done already (another ticket shipped it), say so
   in the workpad with the commits, and hand over the call to close it as a
-  decision, or the check that is left as a supervisor check; never as steps.
+  decision; never as steps.
 - When only a person can decide (a product call, a missing secret or permission:
   add it or drop what needs it, an account to set up), ask with
   `linear_request_human_action`: one question in `decision`, 2 to 4 options, each
   with what it does, one of them recommended. A request without options is
-  refused.
+  refused. The tool sets the `Needs Decision` hold and the `Needs Decision` label
+  and leaves the ticket exactly where it is — a decision never moves a ticket — and
+  the run ends shortly after. The person answers with a reply under the request, or
+  in the Symphony Inbox; either records the decision and clears the hold, and the
+  ticket continues from where it stopped. An answer that directs a move (for
+  instance back to `Rework`) makes that move through the machine's guard. A
+  withdrawal clears the hold the same way; the ticket never moved.
+- Symphony writes each answer into the `Decisions` section of the issue
+  description (`D1`, `D2`…: the question, the answer and what it means for scope).
+  A recorded decision is part of the ticket's scope: follow it, never re-open it, and
+  never edit the section. The tool does not raise a question a person already
+  answered; it returns the recorded answer, which you apply. A review finding that
+  contradicts a recorded decision is not a finding: answer it by naming the decision.
 
 ## Blocked-access escape hatch (required behavior)
 
@@ -50,13 +56,14 @@ auth/permissions that cannot be resolved in-session.
   `linear_request_human_action` as a decision (title, why, the question and its
   options, what it unblocks; secret names only, never values) instead of
   `linear_add_comment`: Symphony then lists it in the project's update for that
-  person. A check on a device is not a blocker for a person: it is a
-  `## Supervisor check` (see above). The tool moves
-  the ticket to `Human Review` (`In Review` when the team has no such state) and
-  adds no label, and the move ends the run shortly after: first push your
-  committed work (open or update the PR if the rest of the ticket is done) and
-  record the blocker in the workpad, then call it, so the person finds the PR
-  waiting with the ticket. Never add a label to say a person must act.
+  person. A check on a device is not a blocker for a person: it belongs to CI or a QA
+  playbook (see above), and an environment block that keeps it from running goes to the
+  self-heal lane. The tool sets the `Needs Decision` hold, which pauses the ticket in
+  its phase — no state moves, so the ticket never looks like a validated PR review — and
+  the run ends shortly after: first push your committed work (open or update the PR if
+  the rest of the ticket is done) and record the blocker in the workpad, then call it,
+  so the person finds the PR waiting with the ticket. Never add a label to say a person
+  must act: `Needs Decision` is set by the tool, not by you.
 - Before requesting a human action for slow or stuck CI, compute the job's age
   from the API's UTC timestamps (`startedAt`, `createdAt`) against the current
   UTC time (`date -u`), never against local time. When the job is under 30
@@ -64,26 +71,26 @@ auth/permissions that cannot be resolved in-session.
 - When a request turns out not to be needed, withdraw it with
   `linear_withdraw_human_action` (the reason, plus the request's `title` when the
   issue has more than one). A comment saying it is no longer needed leaves it
-  listed.
+  listed. Withdrawing the last open request clears the hold, and the ticket
+  continues in place.
 - After a `linear_request_human_action` request, leave the review brief (see
   `Review brief`) pointing to the request, or edit the existing one in place.
-- Record the blocker comment URL in the workpad, move the ticket to `Backlog` (so
-  it does not look like a validated PR review), and stop. After a
-  `linear_request_human_action` request the ticket is already in `Human Review`,
-  and a move to `Backlog` lands there too, so the person finds the ticket waiting
-  on them. The request stays open until a person moves the ticket out of
-  `Human Review`, or you withdraw it; a withdrawal moves the ticket back to the
-  active state it came from.
+- Record the blocker comment URL in the workpad and stop. Do not move the ticket:
+  the hold pauses it where it stands, and the person finds it, and its request, on
+  the same ticket. The request stays open until the person answers it or you
+  withdraw it; a reply that is not a withdrawal is the answer.
 
 ## In-execution clarification escape hatch (required behavior)
 
 Use this only when planning reaches a fundamentally unclear specification and the
 issue description plus comments give no unambiguous acceptance criteria.
 
-1. Post a short Linear comment with the specific unanswered questions (an exception
-   to the single-workpad rule; do not create a second workpad).
+1. Post the specific unanswered questions as one `linear_request_human_action`
+   decision: one question in `decision`, 2 to 4 options, each with what it does,
+   one of them recommended. Ask it as the specification call it is — "which of
+   these readings is right?" is the decision; do not hand over a runbook.
 2. Record in the workpad: the unanswered questions, why planning could not proceed,
-   and the URL of the comment from step 1.
-3. Move the issue to `Backlog` — the documented exception to the status map's
-   `do not modify` rule for `Backlog`.
-4. Stop. Do not guess or implement against a half-spec.
+   and the URL of the request comment from step 1.
+3. Stop. Do not guess or implement against a half-spec. The `Needs Decision` hold
+   pauses the ticket in its phase, and the answer that picks a reading clears it, so
+   the run continues from here.

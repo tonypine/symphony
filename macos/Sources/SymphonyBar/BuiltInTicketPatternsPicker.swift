@@ -1,13 +1,13 @@
 import SwiftUI
 import SymphonyBarCore
 
-/// The repo's state-machine version as radio buttons, each with its one-line explanation under it.
-struct StateMachinePicker: View {
-    @Binding var choice: StateMachineChoice
+/// The repo's built-in ticket patterns setting as radio buttons, each with its one-line explanation under it.
+struct BuiltInTicketPatternsPicker: View {
+    @Binding var choice: BuiltInTicketPatternsChoice
 
     var body: some View {
-        Picker(StateMachine.pickerTitle, selection: $choice) {
-            ForEach(StateMachineChoice.allCases) { option in
+        Picker(BuiltInTicketPatterns.pickerTitle, selection: $choice) {
+            ForEach(BuiltInTicketPatternsChoice.allCases) { option in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.title)
                     Text(option.explanation)

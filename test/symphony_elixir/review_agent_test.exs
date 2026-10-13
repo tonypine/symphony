@@ -3,6 +3,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.ReviewAgent.Context
+  alias SymphonyElixir.TestSupport.Snapshot
 
   defmodule StreamingCodexReviewer do
     def start_session(workspace, opts), do: {:ok, %{workspace: workspace, opts: opts}}
@@ -481,6 +482,14 @@ defmodule SymphonyElixir.ReviewAgentTest do
   end
 
   describe "approval_prompt/2" do
+    test "lists the reviewer's disagreements with recorded decisions as notes, not changes" do
+      prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], decision_notes: ["Against decision D1: keep it."]})
+
+      assert prompt =~ "The reviewer disagreed with the ticket's recorded decisions below. The decisions stand: do not\nchange code for them."
+      assert prompt =~ "1. Against decision D1: keep it."
+      refute ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}) =~ "recorded decisions"
+    end
+
     test "lists advisory notes without asking for code changes" do
       prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], advisory_notes: ["[unverified] First.", "[unverified] Second."]})
 
@@ -549,23 +558,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert prompt =~ "`gh` or `git push`"
     end
 
-    test "keeps the move-to-review wording on legacy repos" do
-      write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "codex")
-
-      prompt =
-        ReviewAgent.approval_prompt(%{verdict: :approve, comments: []},
-          settings: Config.settings!()
-        )
-
-      assert prompt =~ "attach the PR URL with `linear_attach_url` before moving the issue to review"
-      refute prompt =~ "the push is the handoff"
-    end
-
     for {kind, attach_tool} <- [{"codex", "`linear_attach_url`"}, {"claude", "`mcp__symphony__linear_attach_url`"}] do
-      test "tells a designed #{kind} run the push is the handoff and to leave the state alone" do
+      test "tells a #{kind} run the push is the handoff and to leave the state alone" do
         write_workflow_file!(Workflow.workflow_file_path(), agent_kind: unquote(kind), agent_command: "#{unquote(kind)} app-server")
 
-        settings = %{Config.settings!() | state_machine: "designed"}
+        settings = Config.settings!()
         prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}, settings: settings)
 
         assert prompt =~ "attach the PR URL with #{unquote(attach_tool)}; the push is the handoff"
@@ -741,6 +738,114 @@ defmodule SymphonyElixir.ReviewAgentTest do
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)
+    end
+  end
+
+  describe "recorded decisions" do
+    # TP-892: a person deferred the legacy partials to TP-891, and the reviewer flagged them anyway.
+    defp decided_issue do
+      decision =
+        SymphonyElixir.Decisions.entry(
+          "comment-1",
+          ~D[2026-10-13],
+          "Keep the legacy prompt partials",
+          "Remove the legacy prompt partials here, or leave them for TP-891?",
+          "Defer to TP-891: don't make that change."
+        )
+
+      {:ok, description} = SymphonyElixir.Decisions.put("Reviewer findings need quoted evidence.", [decision])
+      %{issue() | description: description}
+    end
+
+    defp decided_finding(summary, decision) do
+      %{summary: summary, file: "feature.txt", line_range: {1, 1}, quoted_snippet: "grounded evidence line", suggested_fix: "Remove it."}
+      |> then(&if(decision, do: Map.put(&1, :decision, decision), else: &1))
+    end
+
+    test "the Code Review prompt carries the ticket's recorded decisions and the rule that a finding against one is no finding" do
+      test_root = unique_tmp("symphony-elixir-review-agent-decisions-prompt")
+
+      try do
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+        [_intro, issue_part] = String.split(prompt, "Issue (context for what the diff is for):\n", parts: 2)
+        [issue_part, _criteria] = String.split(issue_part, "Review criteria.", parts: 2)
+
+        Snapshot.assert_snapshot!(Path.join("review_agent", "decisions_prompt.md"), issue_part)
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a change request whose only findings name a recorded decision approves, keeping them as notes" do
+      test_root = unique_tmp("symphony-elixir-review-agent-decisions-approve")
+
+      try do
+        repo = git_repo_with_change!(test_root)
+
+        put_sequence_responses!([
+          ~s({"verdict":"request_changes","findings":[{"summary":"The legacy partials are still here.","file":"feature.txt","line_range":[1,1],"quoted_snippet":"grounded evidence line","suggested_fix":"Remove them.","decision":" d1 "}]})
+        ])
+
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+
+        assert {:ok, %{verdict: :approve, findings: [], decision_notes: [note], comments: [note]}} =
+                 ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
+
+        assert note =~ "Against decision D1, so a note, not a change request: The legacy partials are still here. (feature.txt:1-1)"
+        # No self-check turn: nothing is left to check.
+        assert_receive {:review_agent_sequence_call, 1, _prompt, _opts}
+        refute_receive {:review_agent_sequence_call, 2, _prompt, _opts}
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "honour_decisions/2 keeps a finding that names no recorded decision" do
+      findings = [decided_finding("Decided.", "D1"), decided_finding("Unknown decision.", "D9"), decided_finding("Plain.", nil)]
+      result = %{verdict: :request_changes, comments: ["raw"], findings: findings}
+
+      honoured = ReviewAgent.honour_decisions(result, decided_issue())
+
+      assert %{verdict: :request_changes, findings: [%{summary: "Unknown decision."}, %{summary: "Plain."}]} = honoured
+      assert %{comments: comments, decision_notes: [note]} = honoured
+
+      assert note =~ "Against decision D1"
+      assert comments == ["Unknown decision. (feature.txt:1-1) Suggested fix: Remove it.", "Plain. (feature.txt:1-1) Suggested fix: Remove it."]
+    end
+
+    test "honour_decisions/2 leaves a verdict alone when no finding names a recorded decision" do
+      result = %{verdict: :request_changes, comments: ["raw"], findings: [decided_finding("Plain.", nil)]}
+
+      assert ReviewAgent.honour_decisions(result, decided_issue()) == result
+      # Without a recorded decision, a finding that names one stays a finding.
+      undecided = %{result | findings: [decided_finding("Decided.", "D1")]}
+      assert ReviewAgent.honour_decisions(undecided, issue()) == undecided
+
+      approved = %{verdict: :approve, comments: []}
+      assert ReviewAgent.honour_decisions(approved, decided_issue()) == approved
+    end
+
+    test "a blank decision on a finding is no decision" do
+      assert {:ok, %{findings: [finding]}} =
+               ReviewAgent.parse_response(~s({"verdict":"request_changes","findings":[{"summary":"s","file":"f","line_range":[1,1],"quoted_snippet":"q","suggested_fix":"x","decision":" "}]}))
+
+      refute Map.has_key?(finding, :decision)
+
+      assert {:ok, %{findings: [finding]}} =
+               ReviewAgent.parse_response(~s({"verdict":"request_changes","findings":[{"summary":"s","file":"f","line_range":[1,1],"quoted_snippet":"q","suggested_fix":"x","decision":3}]}))
+
+      refute Map.has_key?(finding, :decision)
     end
   end
 

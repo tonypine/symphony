@@ -7,7 +7,8 @@ import Foundation
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
-/// `TokenLimits`, `OperationTimeouts`) write is here. Keep one string literal per line, sorted.
+/// `TokenLimits`, `OperationTimeouts`, `DispatchLoopLimits`, `BuiltInTicketPatterns`) write is here. Keep one string
+/// literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -20,6 +21,7 @@ public enum SettingsUIManifest {
         "agent.run_profiles",
         "agent.small_model",
         "agent.timeouts.mcp_tool_ms",
+        "auto_review.acceptance_gate.escalate.ticket_patterns_builtin",
         "auto_review.acceptance_gate.mode",
         "auto_review.command",
         "auto_review.effort",
@@ -32,6 +34,7 @@ public enum SettingsUIManifest {
         "pre_push_review.command",
         "pre_push_review.effort",
         "pre_push_review.model",
+        "repositories[].acceptance_gate.escalate.ticket_patterns_builtin",
         "repositories[].acceptance_gate.mode",
         "repositories[].agent.effort",
         "repositories[].agent.model",
@@ -45,13 +48,16 @@ public enum SettingsUIManifest {
         "repositories[].route.labels",
         "repositories[].route.projects",
         "repositories[].route.team",
-        "repositories[].state_machine",
         "repositories[].workflow",
         "repositories[].workspace.fetch_before_dispatch",
         "repositories[].workspace.repo",
         "repositories[].workspace.source",
         "repositories[].workspace.strategy",
         "tickets.priorities",
+        "watchdog.dispatch_loop_long_runs",
+        "watchdog.dispatch_loop_long_window_ms",
+        "watchdog.dispatch_loop_runs",
+        "watchdog.dispatch_loop_window_ms",
         "watchdog.pending_tool_report_after_ms",
         "workspaces.git_network_timeout_ms",
     ]

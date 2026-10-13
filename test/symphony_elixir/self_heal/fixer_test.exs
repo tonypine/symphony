@@ -77,6 +77,11 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
 
   defp repo(team, projects), do: [repo: fn _scope -> {:ok, %{team: team, projects: projects}} end]
 
+  defp created_input do
+    {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
+    input
+  end
+
   defp create_attrs do
     %{scope: @scope, component: "qa_environment", title: "Self-heal: repair the qa_environment block", description: "the evidence"}
   end
@@ -91,6 +96,28 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
       assert input["projectId"] == "p1"
       assert input["title"] == "Self-heal: repair the qa_environment block"
       assert input["priority"] == 2
+    end
+
+    test "an Urgent affected ticket files an Urgent fix ticket, so tickets.priorities dispatches it" do
+      assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, %Issue{priority: 1}), repo("TP", ["Fix Project"]))
+
+      assert created_input()["priority"] == 1
+    end
+
+    test "a High affected ticket files a High fix ticket" do
+      assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, %Issue{priority: 2}), repo("TP", ["Fix Project"]))
+
+      assert created_input()["priority"] == 2
+    end
+
+    test "an affected ticket with no priority, or a lower one, files a High fix ticket" do
+      for priority <- [nil, 0, 3, 4] do
+        Process.delete(:graphql_calls)
+
+        assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, %Issue{priority: priority}), repo("TP", ["Fix Project"]))
+
+        assert created_input()["priority"] == 2
+      end
     end
 
     test "an explicit priority and a repo with no project are carried through" do

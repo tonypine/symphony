@@ -327,10 +327,10 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       assert log =~ ~r/issue_id=epic-1 .* slot=forced forced=true/
     end
 
-    test "in In Review is left there, shown as waiting on a human, and forces none of its Backlog sub-tickets", ctx do
+    test "in Plan Review is left there, shown as waiting on a human, and forces none of its Backlog sub-tickets", ctx do
       write_forced_workflow!(ctx)
       backlog = issue("part-1", "MT-P1", "Backlog")
-      parent = %{parent([backlog]) | state: "In Review"}
+      parent = %{parent([backlog]) | state: "Plan Review"}
       tracked([parent, backlog])
 
       state = %{orchestrator_state(10) | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])}}
@@ -339,7 +339,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       assert state.forced_parts == %{}
       assert state.running == %{}
-      assert [%{state: "In Review", labels: ["breakdown", "expedite"]}, %{state: "Backlog", labels: []}] = tracked_issues()
+      assert [%{state: "Plan Review", labels: ["breakdown", "expedite"]}, %{state: "Backlog", labels: []}] = tracked_issues()
       assert [%{issue_id: "epic-1", waiting_on_human: true, sub_issue: nil}] = snapshot_of(state).forced
     end
 
@@ -530,7 +530,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
   end
 
   describe "the forced snapshot" do
-    test "a forced Todo started with every slot busy shows implementation · running, then waits for a human in In Review", ctx do
+    test "a forced Todo started with every slot busy shows implementation · running, then waits for a human in Plan Review", ctx do
       write_forced_workflow!(ctx, max_concurrent_agents: 1)
       :ok = Notifications.subscribe()
       forced = issue("forced-1", "MT-F1", "Todo", forced: true)
@@ -544,8 +544,8 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       assert [%{issue_id: "forced-1", phase: :implementation, running: true, waiting_on: nil, blockers: [], stale: false}] = snapshot.forced
       assert %{forced: true} = Enum.find(snapshot.running, &(&1.issue_id == "forced-1"))
 
-      # The run opens its PR and the ticket reaches In Review: a human gate, noticed once.
-      in_review = %{forced | state: "In Review"}
+      # The ticket reaches Plan Review: a human gate, noticed once.
+      in_review = %{forced | state: "Plan Review"}
       state = %{state | running: Map.delete(state.running, "forced-1")}
       state = refresh(state, [in_review])
 
@@ -558,7 +558,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       state = refresh(state, [in_review])
       refute_receive {:notification_event, %Notifications.Event{event: "forced_human_gate"}}, 50
 
-      # Sent back for rework, it is noticed again the next time it reaches In Review.
+      # Sent back for rework, it is noticed again the next time it reaches Plan Review.
       state = refresh(state, [%{forced | state: "Rework"}])
       assert [%{phase: :rework, waiting_on: nil}] = snapshot_of(state).forced
       refute Map.has_key?(state.forced["forced-1"], :human_gate_notified_at)
@@ -617,7 +617,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       assert %{waiting_on: :blocker, blockers: ["MT-Z"]} = Enum.find(snapshot_of(update_held).forced, &(&1.issue_id == "slot-1"))
 
       # Before a poll has seen it (just after a restart), what the queue recorded is used.
-      restored = %{orchestrator_state(1) | forced: %{"slot-1" => queue_entry(%{waiting | state: "In Review"}, ~U[2026-10-04 06:00:00Z])}}
+      restored = %{orchestrator_state(1) | forced: %{"slot-1" => queue_entry(%{waiting | state: "Plan Review"}, ~U[2026-10-04 06:00:00Z])}}
       assert [%{phase: :waiting_for_human, waiting_on: :human}] = snapshot_of(restored).forced
     end
 
@@ -671,24 +671,14 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       refute_receive {:notification_event, %Notifications.Event{event: "forced_stale"}}, 50
     end
 
-    test "a forced parent whose plan reaches In Review is noticed as waiting for review", ctx do
+    test "a forced parent whose plan reaches Plan Review is noticed as waiting for review", ctx do
       write_forced_workflow!(ctx)
       :ok = Notifications.subscribe()
-      parent = %{parent([issue("part-1", "MT-P1", "Backlog")]) | state: "In Review"}
+      parent = %{parent([issue("part-1", "MT-P1", "Backlog")]) | state: "Plan Review"}
       state = %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(%{parent | state: "Todo"}, DateTime.utc_now())}}
 
       refresh(state, [parent])
       assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-EPIC", reason: "MT-EPIC's plan is waiting for your review"}}
-    end
-
-    test "a forced parent whose plan reaches Human Review is noticed as waiting for review too", ctx do
-      write_forced_workflow!(ctx)
-      :ok = Notifications.subscribe()
-      parent = %{parent([issue("part-1", "MT-P1", "Backlog")]) | state: "Human Review"}
-      state = %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(%{parent | state: "Todo"}, DateTime.utc_now())}}
-
-      refresh(state, [parent])
-      assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-EPIC"}}
     end
   end
 

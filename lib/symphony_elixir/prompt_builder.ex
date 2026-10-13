@@ -3,17 +3,18 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, StateMachine, TicketState, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, LandingOrder, PromptSafety, ReviewAgent, TicketState, Workflow}
 
-  # The file system carries the repo's resolved state-machine version as its option, so `{% render %}`
-  # serves the version's partial variants (see `Playbook.fetch/2`).
-  defp render_opts(version) do
-    [
-      strict_variables: true,
-      strict_filters: true,
-      file_system: {SymphonyElixir.Playbook.FileSystem, version}
-    ]
-  end
+  @render_opts [
+    strict_variables: true,
+    strict_filters: true,
+    file_system: {SymphonyElixir.Playbook.FileSystem, nil}
+  ]
+
+  # The retired state-machine version switch left one machine; the variable stays, always
+  # `designed`, so an instruction file that still branches on it renders instead of failing the
+  # strict-variables check.
+  @state_machine "designed"
 
   @compact_comment_limit 5
   # CI log excerpts can reach 20k sanitized bytes, larger than the stdio soft
@@ -21,6 +22,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
   @ticket_state_limit 4_000
+  @open_pr_limit 10
+  @open_pr_file_limit 15
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -79,7 +82,6 @@ defmodule SymphonyElixir.PromptBuilder do
     {repo_key, workflow_source} = repo_context_for_prompt(issue, opts)
     agent_context = agent_context_for_prompt(opts, workflow_source)
     prompt_mode = prompt_mode(opts)
-    version = state_machine_version_for_prompt(opts, workflow_source)
 
     template =
       opts
@@ -89,28 +91,23 @@ defmodule SymphonyElixir.PromptBuilder do
       |> parse_template!()
 
     template
-    |> render_template!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "agent" => to_solid_value(agent_context),
-        "repo_key" => repo_key,
-        # The repo's resolved state-machine version. Instruction files branch on it — the
-        # designed `Rework` continues the pull request, the legacy one starts over — so it is a
-        # template variable, not only the file-system option that picks partial variants.
-        "state_machine" => version,
-        "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
-        "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
-        "reviewer_comments" => to_solid_value(reviewer_comments),
-        "ci_failure" => to_solid_value(ci_failure),
-        "pr_conflict" => to_solid_value(pr_conflict)
-      },
-      version
-    )
+    |> render_template!(%{
+      "attempt" => Keyword.get(opts, :attempt),
+      "agent" => to_solid_value(agent_context),
+      "repo_key" => repo_key,
+      "state_machine" => @state_machine,
+      "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
+      "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
+      "reviewer_comments" => to_solid_value(reviewer_comments),
+      "ci_failure" => to_solid_value(ci_failure),
+      "pr_conflict" => to_solid_value(pr_conflict)
+    })
     |> prepend_managed_context(prompt_mode, agent_context, repo_key)
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
     |> append_pr_conflict(pr_conflict)
+    |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -173,6 +170,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
     |> append_pr_conflict(pr_conflict)
+    |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -200,8 +198,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # an unknown playbook partial. `Solid.render!` would silently keep the file-system
   # fallback text (a missing partial is not a strict variable/filter error), so a
   # typo'd partial name must be caught here rather than shipped in the prompt.
-  defp render_template!(template, assigns, version) do
-    case Solid.render(template, assigns, render_opts(version)) do
+  defp render_template!(template, assigns) do
+    case Solid.render(template, assigns, @render_opts) do
       {:ok, result, errors} ->
         raise_on_partial_errors!(errors)
         IO.iodata_to_binary(result)
@@ -403,30 +401,6 @@ defmodule SymphonyElixir.PromptBuilder do
     end
   end
 
-  # The repo's resolved state-machine version, from the caller's settings when it passed them, else
-  # resolved from the repo's config the same way the agent kind is. Selects the partial variants the
-  # render serves.
-  defp state_machine_version_for_prompt(opts, workflow_source) do
-    case Keyword.get(opts, :settings) do
-      %{} = settings -> StateMachine.version(settings)
-      _unset -> state_machine_version_from_workflow_source(workflow_source)
-    end
-  end
-
-  defp state_machine_version_from_workflow_source({:repo, repo_key}) do
-    case Config.settings_for_repo(repo_key) do
-      {:ok, settings} -> StateMachine.version(settings)
-      {:error, _reason} -> StateMachine.default_version()
-    end
-  end
-
-  defp state_machine_version_from_workflow_source(:current) do
-    case Config.settings() do
-      {:ok, settings} -> StateMachine.version(settings)
-      {:error, _reason} -> StateMachine.default_version()
-    end
-  end
-
   defp agent_kind_from_settings(%{agent: %{kind: kind}}), do: present_string(kind)
   defp agent_kind_from_settings(_settings), do: nil
 
@@ -583,6 +557,61 @@ defmodule SymphonyElixir.PromptBuilder do
     prompt <> "\n\n" <> pr_conflict_section(pr_conflict)
   end
 
+  # The other open PRs that change this ticket's files (`PrReviewPoller.open_pr_overlap/2`), so the
+  # agent can stack on one instead of meeting the conflict after it lands. Paths and URLs come from
+  # GitHub: untrusted.
+  defp append_open_pr_overlap(prompt, %{shared: [_ | _] = shared} = overlap) do
+    lines = [
+      "Open pull requests that change the same files as this ticket's PR:",
+      "",
+      "BEGIN UNTRUSTED OPEN PULL REQUESTS",
+      open_pr_lines(shared),
+      "END UNTRUSTED OPEN PULL REQUESTS",
+      "",
+      open_pr_wait_line(Map.get(overlap, :waits_for)) <>
+        "When your change builds on one of them, you may stack this branch on that PR's branch rather than resolve the same files twice."
+    ]
+
+    prompt <> "\n\n" <> Enum.join(lines, "\n")
+  end
+
+  defp append_open_pr_overlap(prompt, %{open: [_ | _] = open}) do
+    lines = [
+      "Open pull requests other tickets are landing, and the files they change:",
+      "",
+      "BEGIN UNTRUSTED OPEN PULL REQUESTS",
+      open_pr_lines(open),
+      "END UNTRUSTED OPEN PULL REQUESTS",
+      "",
+      "If your change touches these files, each of those merges will reopen a conflict on your PR. When it builds on one of them, you may stack your branch on that PR's branch instead."
+    ]
+
+    prompt <> "\n\n" <> Enum.join(lines, "\n")
+  end
+
+  defp append_open_pr_overlap(prompt, _overlap), do: prompt
+
+  defp open_pr_lines(entries) do
+    entries
+    |> Enum.take(@open_pr_limit)
+    |> Enum.map_join("\n", fn entry ->
+      {listed, rest} = Enum.split(entry.files, @open_pr_file_limit)
+      more = if rest == [], do: "", else: " (and #{length(rest)} more)"
+
+      pr =
+        [blank_fallback(entry.issue_identifier, "untracked"), "(#{blank_fallback(entry.state, "unknown")})", blank_fallback(entry.pr_url, nil)]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
+
+      "- " <> PromptSafety.open_pull_request_field("#{pr}: #{Enum.join(listed, ", ")}#{more}")
+    end)
+  end
+
+  defp open_pr_wait_line(%{} = wait),
+    do: "This PR #{LandingOrder.reason(wait)}: Symphony sends it no conflict fix and doesn't update its branch until then. "
+
+  defp open_pr_wait_line(_wait), do: ""
+
   # The per-ticket machine record is injected as continuation context (D9), never read through a
   # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
   defp append_ticket_state(prompt, ticket_state) do
@@ -684,7 +713,7 @@ defmodule SymphonyElixir.PromptBuilder do
   defp append_feedback_protocol(prompt, %{pr_review: %{mode: mode}} = settings) when is_binary(mode) do
     pr_polling? = mode == "polling"
     ci_polling? = pr_polling? and ci_poller_enabled?(settings)
-    prompt <> "\n\n" <> feedback_protocol_section(pr_polling?, ci_polling?, StateMachine.designed?(settings))
+    prompt <> "\n\n" <> feedback_protocol_section(pr_polling?, ci_polling?)
   end
 
   defp append_feedback_protocol(prompt, _settings), do: prompt
@@ -692,26 +721,19 @@ defmodule SymphonyElixir.PromptBuilder do
   defp ci_poller_enabled?(%{ci: %{enabled: enabled}}), do: enabled == true
   defp ci_poller_enabled?(_settings), do: false
 
-  defp feedback_protocol_section(pr_polling?, ci_polling?, designed?) do
-    [
-      "PR feedback and CI delivery:",
-      "",
-      pr_feedback_protocol_line(pr_polling?),
-      ci_feedback_protocol_line(ci_polling?)
-    ]
-    |> Kernel.++(rework_protocol_lines(designed?))
-    |> Enum.join("\n")
+  # The Code Review and QA verdicts are what return work, as `Rework` on the same pull request.
+  defp feedback_protocol_section(pr_polling?, ci_polling?) do
+    Enum.join(
+      [
+        "PR feedback and CI delivery:",
+        "",
+        pr_feedback_protocol_line(pr_polling?),
+        ci_feedback_protocol_line(ci_polling?),
+        "- A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR, with the verdict's reasons in the continuation prompt. Fix it on the same branch and push; that push hands off to `Code Review` again. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
+      ],
+      "\n"
+    )
   end
-
-  # A designed repo's Code Review and QA verdicts are what return work, as `Rework` on the same pull
-  # request.
-  defp rework_protocol_lines(true) do
-    [
-      "- A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR, with the verdict's reasons in the continuation prompt. Fix it on the same branch and push; that push hands off to `Code Review` again. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
-    ]
-  end
-
-  defp rework_protocol_lines(false), do: []
 
   defp pr_feedback_protocol_line(true) do
     "- PR review feedback is delivered by Symphony re-activating you with the reviewer comments embedded in a continuation prompt; wait for that re-activation instead of polling for review feedback with `github_*` tools yourself."

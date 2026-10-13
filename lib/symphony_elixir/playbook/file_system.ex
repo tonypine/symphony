@@ -12,12 +12,10 @@ defmodule SymphonyElixir.Playbook.FileSystem do
 
   alias SymphonyElixir.Playbook
 
-  # `options` is the state-machine version the render is for (from `Solid`'s `file_system:
-  # {Module, options}` render option), selecting a version-specific partial variant when one exists.
   @impl Solid.FileSystem
   @spec read_template_file(binary(), any()) :: {:ok, String.t()} | {:error, Exception.t()}
-  def read_template_file(name, options) when is_binary(name) do
-    case Playbook.fetch(name, options) do
+  def read_template_file(name, _options) when is_binary(name) do
+    case Playbook.fetch(name) do
       {:ok, body} ->
         {:ok, body}
 

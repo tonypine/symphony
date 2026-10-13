@@ -780,6 +780,36 @@ defmodule SymphonyElixir.RunStore do
   def record_ticket_self_heal(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
 
   @doc """
+  Records a run Symphony dispatched for the ticket (`TicketState.record_dispatch/3`), creating the
+  record when none exists. The read-modify-write runs in one durable transaction.
+  """
+  @spec record_ticket_dispatch(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_dispatch(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_dispatch(repo_key, issue_id, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_dispatch(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Records how the dispatched run `run_id` ended (`TicketState.record_dispatch_outcome/4`). A record
+  the store does not have yet lists no run, so it is a no-op.
+  """
+  @spec record_ticket_dispatch_outcome(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_dispatch_outcome(_repo_key, _issue_id, _run_id, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
   Drops the stale fix-ticket pointer from the ticket's self-heal bookkeeping, keeping the broken
   component, the failure signature and the retry count, so a block that recurs after the fix landed
   is compared against the last failure instead of judged as a first one. A record the store does not
@@ -1587,6 +1617,34 @@ defmodule SymphonyElixir.RunStore do
     updated = TicketState.put_self_heal(record, attrs)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
+  end
+
+  defp write_ticket_dispatch(repo_key, issue_id, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.record_dispatch(record, attrs)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        updated = TicketState.record_dispatch_outcome(record, run_id, attrs)
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        :ok
+
+      [] ->
+        :ok
+    end
   end
 
   defp write_clear_ticket_fix_ticket(repo_key, issue_id) do

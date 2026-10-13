@@ -13,7 +13,8 @@ defmodule SymphonyElixir.QaAgent do
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
   `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
-  is left (`SymphonyElixir.HumanReview`). An answer without that object gets
+  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts). An
+  answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
@@ -42,6 +43,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
+  alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.Repo.Fetcher
@@ -172,7 +174,7 @@ defmodule SymphonyElixir.QaAgent do
 
   @doc """
   Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
-  `:epic_review` is the epic review of a designed repo's plan parent: `job.issue` is the epic
+  `:epic_review` is the epic review of a plan parent: `job.issue` is the epic
   itself, its worktree is at the base branch head, and its own acceptance criteria and user
   walkthrough are the checklist the review resolves (see `SymphonyElixir.EpicReview`).
   """
@@ -201,8 +203,8 @@ defmodule SymphonyElixir.QaAgent do
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
-    #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
+    #{decisions_rule(issue)}#{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -263,7 +265,7 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # The epic review of a designed repo's plan parent: the epic has to close itself, so the pass
+  # The epic review of a plan parent: the epic has to close itself, so the pass
   # judges the merged result against the epic's own plan, not against a PR.
   defp intro(%{epic_review: true} = job) do
     """
@@ -291,7 +293,7 @@ defmodule SymphonyElixir.QaAgent do
 
   # QA tests behaviour, not the code: CI already ran the full suite (QA starts only on green CI),
   # and re-running it in the sandbox takes many times longer and loads the shared host. A run with
-  # no PR checks to lean on — the epic review of a designed repo's plan parent
+  # no PR checks to lean on — the epic review of a plan parent
   # (`SymphonyElixir.EpicReview`) — cites CI's runs on the head of the base branch instead: a red
   # default branch must fail the verification, not pass as `skipped`.
   defp test_suite_rule(%{epic_review: true} = job), do: base_head_test_rule(job)
@@ -329,7 +331,7 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # The designed QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
+  # The QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
   # stories and journeys the change delivers or updates, from the epic plan where one exists and
   # otherwise from the ticket's walkthrough and acceptance criteria. Only a run carrying a `journey`
   # (the QA state's) gets this section.
@@ -395,7 +397,7 @@ defmodule SymphonyElixir.QaAgent do
   # An agent cannot write these paths (the sandbox denies it and CI's `protected-paths` job fails
   # an `auto/*` PR that changes them), so the executor hands such a criterion to a person in a
   # follow-up ticket. Failing the PR on it only burns fix runs before an escalation (TP-522). The
-  # epic review of a designed repo's plan parent tests the merged result, where a missing change is
+  # epic review of a plan parent tests the merged result, where a missing change is
   # a real gap.
   defp protected_path_rule(%{epic_review: true}), do: ""
 
@@ -446,6 +448,21 @@ defmodule SymphonyElixir.QaAgent do
 
   defp fixer(%{epic_review: true}), do: "a follow-up ticket"
   defp fixer(_job), do: "the executor"
+
+  # A person's answers to the ticket's decision requests are its scope: QA tests the change against
+  # them, never for what a decision put out of scope.
+  defp decisions_rule(issue) do
+    case Decisions.prompt_section(Map.get(issue, :description)) do
+      "" ->
+        ""
+
+      section ->
+        """
+        #{section}
+        Do not fail the change for work a recorded decision put out of scope or deferred, or for behaviour that follows what a decision chose. If you think a decision is wrong, say so in `summary`; it is not a defect.
+        """
+    end
+  end
 
   defp parent_section(%{} = parent) do
     """

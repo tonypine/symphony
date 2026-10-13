@@ -111,7 +111,6 @@ defmodule SymphonyElixir.Config.Schema do
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
       field(:waiting_on_sub_issues_state, :string, default: "Waiting on sub-tickets")
-      field(:human_review_state, :string, default: "Human Review")
       field(:code_review_state, :string, default: "Code Review")
       field(:qa_state, :string, default: "QA")
       field(:plan_review_state, :string, default: "Plan Review")
@@ -134,8 +133,7 @@ defmodule SymphonyElixir.Config.Schema do
       :memory_issues_file,
       :active_states,
       :terminal_states,
-      :waiting_on_sub_issues_state,
-      :human_review_state
+      :waiting_on_sub_issues_state
     ]
 
     @fields @lifecycle_fields ++ @machine_state_fields
@@ -149,8 +147,6 @@ defmodule SymphonyElixir.Config.Schema do
       |> normalize_string_list(:labels)
       |> normalize_optional_string(:waiting_on_sub_issues_state)
       |> put_waiting_on_sub_issues_state_active()
-      |> normalize_optional_string(:human_review_state)
-      |> validate_human_review_state_inactive()
       |> normalize_machine_states()
       |> validate_machine_states_distinct()
     end
@@ -175,16 +171,6 @@ defmodule SymphonyElixir.Config.Schema do
         end
       end)
       |> elem(1)
-    end
-
-    # Symphony never dispatches an issue waiting on a person's review.
-    defp validate_human_review_state_inactive(changeset) do
-      active_states = get_field(changeset, :active_states) || []
-      state = get_field(changeset, :human_review_state)
-
-      if is_binary(state) and Enum.any?(active_states, &(is_binary(&1) and String.downcase(String.trim(&1)) == String.downcase(state))),
-        do: add_error(changeset, :human_review_state, "must not be an active state"),
-        else: changeset
     end
 
     # Breakdown parents wait in this state and are dispatched from it for close-out, so it is active.
@@ -349,6 +335,12 @@ defmodule SymphonyElixir.Config.Schema do
       field(:stray_process_cpu_minutes, :integer, default: 10)
       # How long one of Symphony's own MCP tool calls must run before the snapshot reports it as pending.
       field(:pending_tool_report_after_ms, :integer, default: 60_000)
+      # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`): runs of one kind a ticket may get
+      # without progress within each window before it is held instead of dispatched again.
+      field(:dispatch_loop_runs, :integer, default: 4)
+      field(:dispatch_loop_window_ms, :integer, default: 600_000)
+      field(:dispatch_loop_long_runs, :integer, default: 8)
+      field(:dispatch_loop_long_window_ms, :integer, default: 3_600_000)
     end
 
     @fields [
@@ -356,7 +348,11 @@ defmodule SymphonyElixir.Config.Schema do
       :tick_interval_ms,
       :no_progress_threshold_ms,
       :stray_process_cpu_minutes,
-      :pending_tool_report_after_ms
+      :pending_tool_report_after_ms,
+      :dispatch_loop_runs,
+      :dispatch_loop_window_ms,
+      :dispatch_loop_long_runs,
+      :dispatch_loop_long_window_ms
     ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -367,6 +363,11 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
       |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
       |> validate_number(:pending_tool_report_after_ms, greater_than: 0)
+      # A ticket's record keeps its newest 50 runs (`SymphonyElixir.TicketState`), so a higher limit could never trip.
+      |> validate_number(:dispatch_loop_runs, greater_than: 0, less_than_or_equal_to: 50)
+      |> validate_number(:dispatch_loop_window_ms, greater_than: 0)
+      |> validate_number(:dispatch_loop_long_runs, greater_than: 0, less_than_or_equal_to: 50)
+      |> validate_number(:dispatch_loop_long_window_ms, greater_than: 0)
     end
   end
 
@@ -1703,7 +1704,6 @@ defmodule SymphonyElixir.Config.Schema do
       field(:log_excerpt_lines, :integer, default: @default_log_excerpt_lines)
       field(:flaky_retry, :boolean, default: true)
       field(:max_retries, :integer, default: @default_max_retries)
-      field(:escalation_state, :string, default: "In Review")
       field(:merging_wait_timeout_ms, :integer, default: @default_merging_wait_timeout_ms)
     end
 
@@ -1718,29 +1718,14 @@ defmodule SymphonyElixir.Config.Schema do
           :log_excerpt_lines,
           :flaky_retry,
           :max_retries,
-          :escalation_state,
           :merging_wait_timeout_ms
         ],
         empty_values: []
       )
-      |> normalize_escalation_state()
       |> validate_number(:poll_interval_ms, greater_than: 0)
       |> validate_number(:log_excerpt_lines, greater_than: 0)
       |> validate_number(:max_retries, greater_than_or_equal_to: 1)
       |> validate_number(:merging_wait_timeout_ms, greater_than: 0)
-    end
-
-    defp normalize_escalation_state(changeset) do
-      update_change(changeset, :escalation_state, fn
-        value when is_binary(value) ->
-          case String.trim(value) do
-            "" -> "In Review"
-            trimmed -> trimmed
-          end
-
-        _value ->
-          "In Review"
-      end)
     end
   end
 
@@ -2113,7 +2098,6 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @fields [
       :enabled,
-      :state,
       :kind,
       :command,
       :model,
@@ -2130,7 +2114,6 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
-      field(:state, :string, default: "Auto Review")
       field(:kind, :string)
       field(:command, :string)
       field(:model, :string)
@@ -2153,7 +2136,6 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast(attrs, @fields, empty_values: [])
       |> cast_embed(:android, with: &Android.changeset/2)
       |> cast_embed(:acceptance_gate, with: &DeprecatedGateSettings.changeset/2)
-      |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
@@ -2217,7 +2199,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: true)
-      # Deprecated: the retired label that marked an open request (`HumanReview.legacy_request_labels/1`).
+      # Deprecated: the retired label that marked an open request (`PersonWait.legacy_request_labels/1`).
       field(:label, :string)
       field(:interval_ms, :integer, default: 300_000)
       field(:min_update_interval_ms, :integer, default: 900_000)
@@ -2427,9 +2409,6 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   embedded_schema do
-    # The repo's state-machine version (`legacy` or `designed`); the per-repo override merges in
-    # from `repositories[].state_machine`. Resolved by `SymphonyElixir.StateMachine.version/1`.
-    field(:state_machine, :string, default: "legacy")
     # The repo's manual review setting (`on` or `off`); the per-repo override merges in from
     # `repositories[].manual_review`, and the deprecated acceptance-gate mode derives it when the
     # key is absent (`SymphonyElixir.SystemSchema.manual_review_for_gate_mode/1`). With it `on`, the
@@ -2651,8 +2630,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:state_machine, :manual_review], empty_values: [])
-    |> validate_inclusion(:state_machine, ["legacy", "designed"])
+    |> cast(attrs, [:manual_review], empty_values: [])
     |> validate_inclusion(:manual_review, ["on", "off"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:tickets, with: &Tickets.changeset/2)
@@ -2793,12 +2771,11 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp validate_openrouter_workers(_settings), do: :ok
 
-  # A designed repo's plan parents wait for a person in Plan Review, so dispatching from it would
-  # take the handoff away from them, as for the human review state.
-  defp validate_plan_review_state_inactive(%__MODULE__{state_machine: "designed", tracker: %Tracker{plan_review_state: state} = tracker})
-       when is_binary(state) do
+  # Plan parents wait for a person in Plan Review, so dispatching from it would take the handoff
+  # away from them.
+  defp validate_plan_review_state_inactive(%__MODULE__{tracker: %Tracker{plan_review_state: state} = tracker}) when is_binary(state) do
     if Enum.any?(tracker.active_states, &(String.downcase(String.trim(&1)) == String.downcase(state))),
-      do: {:error, "tracker.plan_review_state must not be an active state on a designed repo"},
+      do: {:error, "tracker.plan_review_state must not be an active state"},
       else: :ok
   end
 
@@ -3011,7 +2988,6 @@ defmodule SymphonyElixir.Config.Schema do
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
-  defp preserve_explicit_nil_path?(["tracker", "human_review_state"]), do: true
 
   defp preserve_explicit_nil_path?(["tracker", field])
        when field in ["code_review_state", "qa_state", "plan_review_state", "epic_review_state", "ci_fix_state"],

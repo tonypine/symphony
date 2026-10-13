@@ -4,11 +4,13 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   adapter (`SymphonyElixir.Linear.Adapter`).
 
   A fix ticket is created in **Todo** — not Backlog: it is work the machine is already waiting on —
-  at high priority, in the affected ticket's Linear team (else the team configured on the repo the
+  at the affected ticket's priority when that is more urgent than High (an Urgent ticket's fix is
+  Urgent, so `tickets.priorities` dispatches it like the ticket it unblocks), else at High, in the
+  affected ticket's Linear team (else the team configured on the repo the
   scope rule names, `SymphonyElixir.SelfHeal.scope/3`) and in the affected ticket's project when
   the fix belongs to its own repo, else the scope repo's first routed project. The affected
   ticket is linked to it as blocked-by, and a recurring failure attaches its evidence as a comment
-  on the fix ticket it already has.
+  on the fix ticket it already has. A reused fix ticket keeps the priority it was filed at.
 
   `SymphonyElixir.SelfHeal` takes this module through `opts[:fixer]`, so tests use a fake and no
   Linear call is made.
@@ -19,7 +21,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   alias SymphonyElixir.{Config, Linear}
   alias SymphonyElixir.Linear.Issue
 
-  # Linear's priority scale: 1 urgent, 2 high.
+  # Linear's priority scale: 0 none, 1 urgent, 2 high, 3 medium, 4 low.
   @priority 2
   @todo_state "Todo"
 
@@ -30,7 +32,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
       Linear.Adapter.create_issue(%{
         title: attrs.title,
         description: attrs.description,
-        priority: Keyword.get(opts, :priority, @priority),
+        priority: Keyword.get(opts, :priority, priority(Map.get(attrs, :issue))),
         team: team,
         project: project,
         state: @todo_state
@@ -73,6 +75,10 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
       end
     end
   end
+
+  # High, unless the affected ticket is more urgent: its fix must be dispatched wherever it is.
+  defp priority(%Issue{priority: priority}) when priority in 1..@priority, do: priority
+  defp priority(_issue), do: @priority
 
   defp issue_team(%Issue{team: %{key: key}}), do: key
   defp issue_team(_issue), do: nil

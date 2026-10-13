@@ -2,15 +2,12 @@ defmodule SymphonyElixir.PlanComments do
   @moduledoc """
   Acts on people's comments on a `breakdown` parent's plan.
 
-  A plan under review (the parent in a plan review state, none of its open sub-issues promoted out
-  of `Backlog`) is revised in place: a person's new comment sends the parent back to be re-planned,
-  where the breakdown run picks it up, edits the plan, answers the comment and returns the parent to
-  the review state (see `SymphonyElixir.Linear.Issue.unapproved_plan?/2`). On a legacy repo that
-  state is `In Progress`; on a designed repo it is `Rework`, the epic path's re-plan, which revises
-  the plan in place and keeps its sub-tickets. A legacy plan in the human review state waits for the
-  operator: Symphony never moves a parent out of it, so a comment there revises nothing (the operator
-  moves it to `Rework` or back to `In Review` for that). An approved plan (the parent in the waiting
-  state, or in a review state with sub-issues already promoted) is not changed from comments: under
+  A plan under review (the parent in `Plan Review`, none of its open sub-issues promoted out of
+  `Backlog`) is revised in place: a person's new comment sends the parent to `Rework`, the epic
+  path's re-plan, where the breakdown run picks it up, edits the plan, answers the comment and
+  returns the parent to `Plan Review`, keeping its sub-tickets (see
+  `SymphonyElixir.Linear.Issue.unapproved_plan?/2`). An approved plan (the parent in the waiting
+  state, or in `Plan Review` with sub-issues already promoted) is not changed from comments: under
   each new top-level comment Symphony replies once that, if it asks for a plan change, the change
   goes through `Rework`. Replies inside a thread get nothing.
 
@@ -22,7 +19,7 @@ defmodule SymphonyElixir.PlanComments do
   operator, and plan approval stays the operator's call.
   """
 
-  alias SymphonyElixir.{AgentLabels, BreakdownReview, HumanReview, SubIssueWait, Tracker}
+  alias SymphonyElixir.{AgentLabels, BreakdownReview, PlanReview, SubIssueWait, Tracker}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Report
@@ -64,21 +61,18 @@ defmodule SymphonyElixir.PlanComments do
   @type last_run :: %{started_at: DateTime.t() | nil, ended_at: DateTime.t() | nil, comment_ids: [String.t()] | nil}
 
   @doc """
-  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in a plan
-  review state (`HumanReview.plan_review_states/1`: `In Review` or Human Review on a legacy repo,
-  the configured `Plan Review` on a designed one) whose plan was not approved, `:answer` for one
-  whose plan was (in the waiting state, or back in a review state with sub-issues under way), nil
-  otherwise. A legacy parent in the human review state with its plan not approved waits for the
-  operator, and one whose sub-issues are all terminal is left to its close-out.
+  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in
+  `Plan Review` (`SymphonyElixir.PlanReview`) whose plan was not approved, `:answer` for one whose
+  plan was (in the waiting state, or back in `Plan Review` with sub-issues under way), nil
+  otherwise. One whose sub-issues are all terminal is left to its epic review.
   """
   @spec action(Issue.t() | term(), Enumerable.t(String.t()), term()) :: action() | nil
   def action(%Issue{state: state} = issue, terminal_states, settings) when is_binary(state) do
     cond do
       not Issue.breakdown?(issue) or Issue.close_out_ready?(issue, terminal_states) -> nil
       SubIssueWait.in_state?(issue, settings) -> :answer
-      not HumanReview.plan_review_state?(state, settings) -> nil
+      not PlanReview.in_state?(state, settings) -> nil
       Issue.waiting_on_sub_issues?(issue, terminal_states) -> :answer
-      HumanReview.in_state?(state, settings) -> nil
       true -> :revise
     end
   end

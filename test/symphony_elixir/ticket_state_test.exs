@@ -18,6 +18,7 @@ defmodule SymphonyElixir.TicketStateTest do
                signals: [],
                ci_fix_origin: nil,
                self_heal: nil,
+               dispatches: [],
                updated_at: nil
              }
     end
@@ -49,6 +50,7 @@ defmodule SymphonyElixir.TicketStateTest do
                signals: [],
                ci_fix_origin: nil,
                self_heal: nil,
+               dispatches: [],
                updated_at: nil
              }
     end
@@ -216,6 +218,70 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
+  describe "dispatches" do
+    test "records a dispatched run newest first, bounded to the newest" do
+      record =
+        Enum.reduce(1..55, TicketState.new("repo-a", "issue-1"), fn n, record ->
+          TicketState.record_dispatch(record, %{kind: :implementation, run_id: "run-#{n}", state: "In Progress", head: " "}, @at)
+        end)
+
+      assert length(TicketState.dispatches(record)) == 50
+      assert [%{kind: "implementation", run_id: "run-55", state: "In Progress", head: nil, at: @at, outcome: nil} | _rest] = record.dispatches
+      assert record.updated_at == @at
+      assert [%{kind: "qa"}] = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{kind: " qa "}).dispatches
+      assert [%{kind: ""}] = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{}).dispatches
+    end
+
+    test "records how a run ended, and drops one that counts no attempt" do
+      record =
+        TicketState.new("repo-a", "issue-1")
+        |> TicketState.record_dispatch(%{kind: "rework", run_id: "run-1", head: "a"}, @at)
+        |> TicketState.record_dispatch(%{kind: "rework", run_id: "run-2", head: "a"}, @at)
+
+      ended = TicketState.record_dispatch_outcome(record, "run-1", %{exit: "ended normally", head: "b"}, @at)
+      assert [%{run_id: "run-2", outcome: nil}, %{run_id: "run-1", outcome: %{exit: "ended normally", head: "b", at: @at}}] = ended.dispatches
+
+      assert [%{run_id: "run-1"}] = TicketState.record_dispatch_outcome(ended, "run-2", %{counted: false}, @at).dispatches
+      blank = TicketState.record_dispatch_outcome(ended, "run-2", %{}, @at)
+      assert [%{outcome: %{exit: "", head: nil}}, _run] = blank.dispatches
+      assert TicketState.record_dispatch_outcome(record, "run-9", %{exit: "x"}, @at) == record
+      assert TicketState.record_dispatch_outcome(record, nil, %{exit: "x"}, @at) == record
+      assert %DateTime{} = TicketState.record_dispatch_outcome(record, "run-1", %{exit: "x"}).updated_at
+    end
+
+    test "a stored record keeps its dispatches through normalization and drops malformed ones" do
+      record =
+        TicketState.normalize(%{
+          dispatches: [
+            %{kind: "qa", run_id: "run-1", at: @at, outcome: %{exit: "failed (boom)", head: "a", at: @at}},
+            %{kind: "qa", outcome: "junk"},
+            %{kind: :atom},
+            "junk"
+          ]
+        })
+
+      assert [%{kind: "qa", outcome: %{exit: "failed (boom)", head: "a", at: @at}}, %{kind: "qa", outcome: nil, at: nil}] =
+               record.dispatches
+
+      assert TicketState.normalize(%{dispatches: "junk"}).dispatches == []
+      assert TicketState.normalize(%{dispatches: [%{kind: "qa", outcome: %{}}]}).dispatches |> hd() |> Map.fetch!(:outcome) == %{exit: "", head: nil, at: nil}
+    end
+
+    test "a hold that lifts and a verdict end the count; clearing no hold keeps it" do
+      record = TicketState.record_dispatch(TicketState.new("repo-a", "issue-1"), %{kind: "implementation", run_id: "run-1"}, @at)
+
+      assert [_run] = TicketState.clear_hold(record, :blocked, @at).dispatches
+      assert record |> TicketState.set_hold(:blocked, %{reason: "loop"}) |> TicketState.dispatches() |> length() == 1
+
+      for kind <- [:blocked, :needs_decision] do
+        lifted = record |> TicketState.set_hold(kind, %{reason: "loop"}) |> TicketState.clear_hold(kind, @at)
+        assert TicketState.dispatches(lifted) == []
+      end
+
+      assert record |> TicketState.record_verdict("code_review", "a", "approve", @at) |> TicketState.dispatches() == []
+    end
+  end
+
   describe "CI states" do
     test "upserts the state of one head, newest first" do
       record = TicketState.new("repo-a", "issue-1")
@@ -363,5 +429,6 @@ defmodule SymphonyElixir.TicketStateTest do
     assert %DateTime{} = TicketState.record_ci_state(record, "sha", "green").updated_at
     assert %DateTime{} = TicketState.set_hold(record, :blocked).updated_at
     assert %DateTime{} = TicketState.record_signal(record, "handoff").updated_at
+    assert %DateTime{} = TicketState.record_dispatch(record, %{kind: "qa"}).updated_at
   end
 end

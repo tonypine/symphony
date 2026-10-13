@@ -8,6 +8,7 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketSignals
 
   @repo_key "repo-code-review"
   @issue_id "issue-code-review"
@@ -80,7 +81,6 @@ defmodule SymphonyElixir.CodeReviewTest do
       Map.merge(
         %{
           "tracker" => %{"kind" => "memory"},
-          "state_machine" => "designed",
           "review_agent" => %{"enabled" => true, "kind" => "codex", "command" => "codex app-server"}
         },
         extra
@@ -88,12 +88,12 @@ defmodule SymphonyElixir.CodeReviewTest do
     )
   end
 
-  defp reviewer_disabled_settings do
-    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+  defp own_ticket_patterns do
+    %{"auto_review" => %{"acceptance_gate" => %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["(?i)do not ship"]}}}}
   end
 
-  defp legacy_settings(extra \\ %{}) do
-    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
+  defp reviewer_disabled_settings do
+    settings!(%{"tracker" => %{"kind" => "memory"}})
   end
 
   defp issue(state \\ "Code Review") do
@@ -177,20 +177,17 @@ defmodule SymphonyElixir.CodeReviewTest do
   end
 
   describe "reviewer_run?/2" do
-    test "is true only for a designed repo's configured Code Review state" do
+    test "is true only for the configured Code Review state" do
       assert CodeReview.reviewer_run?(issue(), designed_settings())
       assert CodeReview.reviewer_run?(issue(" code review "), designed_settings())
       refute CodeReview.reviewer_run?(issue("In Progress"), designed_settings())
-      refute CodeReview.reviewer_run?(issue(), legacy_settings())
-      refute CodeReview.reviewer_run?(issue("Code Review"), legacy_settings())
       refute CodeReview.reviewer_run?(%Issue{id: "x", state: nil}, designed_settings())
     end
   end
 
   describe "run/3" do
-    test "skips every ticket that is not a designed repo's Code Review ticket" do
+    test "skips every ticket that is not a Code Review ticket" do
       assert :skip = run("/tmp/workspace", [settings: designed_settings()], "In Progress")
-      assert :skip = run("/tmp/workspace", settings: legacy_settings())
       refute_received {:reviewed, _, _}
     end
 
@@ -327,13 +324,91 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:moved, @issue_id, "QA"}
     end
 
-    test "a request_changes verdict moves to Rework" do
-      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: ["Rename this"], reason: nil}})
+    test "a request_changes verdict posts its findings on the ticket, then moves to Rework" do
+      {workspace, head} = git_workspace!()
+      findings = ["Rename this (lib/a.ex:1-2) Suggested fix: call it b", "Test the error path (lib/a.ex:9-9) Suggested fix: add a test"]
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: findings, reason: "the error path is untested"}})
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      assert_received {:commented, @issue_id, body}
+
+      assert body ==
+               "## Symphony Code Review\n\nCode Review requested changes on head `#{String.slice(head, 0, 12)}`. The ticket moves to Rework, " <>
+                 "and the rework run addresses these on the same pull request.\n\n**Reason:** the error path is untested\n\n**Findings:**\n\n" <>
+                 "- Rename this (lib/a.ex:1-2) Suggested fix: call it b\n- Test the error path (lib/a.ex:9-9) Suggested fix: add a test"
+
+      assert_received {:moved, @issue_id, "Rework"}
+      assert [%{outcome: "request_changes"}] = SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
+
+      assert [%{name: "code_review", details: %{signal: "code_review_rework", reason: "the error path is untested"}}] =
+               SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
+    end
+
+    # TP-892: the person deferred the legacy partials to TP-891, and the reviewer flagged them again.
+    test "a finding against a decision the person recorded ends in approval, not Rework or a new decision request" do
+      {workspace, _head} = git_workspace!()
+
+      decision =
+        SymphonyElixir.Decisions.entry(
+          "comment-1",
+          ~D[2026-10-13],
+          "Keep the legacy prompt partials",
+          "Remove the legacy prompt partials here, or leave them for TP-891?",
+          "Defer to TP-891: don't make that change."
+        )
+
+      {:ok, description} = SymphonyElixir.Decisions.put("Remove the Final verification flow.", [decision])
+
+      partials = %{
+        summary: "The legacy prompt partials are still here.",
+        file: "priv/playbook/legacy.liquid",
+        line_range: {1, 3},
+        quoted_snippet: "legacy",
+        suggested_fix: "Remove them.",
+        decision: "D1"
+      }
+
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, findings: [partials], comments: ["The legacy prompt partials are still here."], reason: nil}})
+
+      assert :ok =
+               CodeReview.run(%{issue() | description: description}, workspace,
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy,
+                 settings: designed_settings()
+               )
+
+      assert_received {:moved, @issue_id, "QA"}
+      refute_received {:moved, @issue_id, "Rework"}
+      refute_received {:commented, @issue_id, _body}
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert [%{outcome: "approve"}] = verdicts()
+    end
+
+    test "a request_changes verdict with no findings and no readable head still says why" do
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: [], reason: "out of scope"}})
 
       assert :ok = run("/tmp/workspace", settings: designed_settings())
-      assert_received {:moved, @issue_id, "Rework"}
 
-      assert [%{outcome: "request_changes"}] = SymphonyElixir.Handoff.verdicts(@repo_key, @issue_id, "code_review")
+      assert_received {:commented, @issue_id, body}
+
+      assert body ==
+               "## Symphony Code Review\n\nCode Review requested changes. The ticket moves to Rework, and the rework run addresses these on the same pull request." <>
+                 "\n\n**Reason:** out of scope"
+
+      assert_received {:moved, @issue_id, "Rework"}
+    end
+
+    test "findings Linear refuses are logged, and the verdict still routes to Rework" do
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: ["Rename this"], reason: nil}})
+      Process.put(:fake_tracker_comment_result, {:error, :rate_limited})
+
+      log = capture_log(fn -> assert :ok = run("/tmp/workspace", settings: designed_settings()) end)
+
+      assert log =~ "Failed to post the Code Review findings for TP-815: :rate_limited"
+      assert log =~ ~s(findings=["Rename this"])
+      assert_received {:moved, @issue_id, "Rework"}
     end
 
     test "a block verdict pauses the ticket on a Needs Decision hold, recommending Rework" do
@@ -592,9 +667,23 @@ defmodule SymphonyElixir.CodeReviewTest do
       refute_received {:moved, _, _}
 
       assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:commented, @issue_id, body}
+      assert body =~ "**Reason:** Rename this"
+      assert body =~ "**Findings:**\n\n- Rename this"
       assert_received {:moved, @issue_id, "Rework"}
 
       assert [%{outcome: "request_changes"}] = verdicts()
+    end
+
+    test "a deepening recorded before it carried findings still routes its request_changes" do
+      {workspace, head} = git_workspace!()
+      TicketSignals.record(@repo_key, @issue_id, "code_review_deepened", %{head: head, verdict: "request_changes", reason: "Rename this"})
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:commented, @issue_id, body}
+      refute body =~ "**Findings:**"
+      assert_received {:moved, @issue_id, "Rework"}
+      refute_received {:reviewed, _, _}
     end
 
     test "a deepened block escalates with the reason the second pass gave" do
@@ -729,6 +818,68 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{details: %{signal: "code_review_escalate"}}] = signals() |> Enum.filter(&(&1.name == "code_review"))
     end
 
+    test "a decided escalation continues into QA on the next dispatch without a second review of its head" do
+      {workspace, head} = git_workspace!()
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      labelled = %{issue() | labels: ["needs-human"], description: "Adds a widget."}
+
+      opts = [
+        settings: designed_settings(),
+        review_agent: FakeReviewAgent,
+        tracker: FakeTracker,
+        qa_policy: FakeQaPolicy
+      ]
+
+      assert :ok = CodeReview.run(labelled, workspace, opts)
+      assert_escalated("Continue to QA")
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert [%{details: %{signal: "code_review_escalate", head: ^head}}] = signals() |> Enum.filter(&(&1.name == "code_review"))
+
+      # The person's decision clears the hold, but its move into QA did not land: the ticket is
+      # dispatched again on the same head, and performs the decision instead of reviewing.
+      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      TicketSignals.record(@repo_key, @issue_id, "decision returned", %{move: "decide", from: "Code Review", to: "Code Review"})
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: ["A second opinion"], reason: "a second opinion"}})
+
+      assert :ok = CodeReview.run(labelled, workspace, opts)
+      assert_received {:moved, @issue_id, "QA"}
+      refute_received {:reviewed, _, _}
+      refute_received {:commented, _, _}
+
+      assert [%{details: %{signal: "code_review_approve", target: "QA", carried: true, reason: "a person decided its Code Review escalation"}} | _] =
+               signals() |> Enum.filter(&(&1.name == "code_review"))
+
+      # Performed once: a ticket brought back to Code Review on that head is reviewed again.
+      assert :ok = CodeReview.run(%{labelled | labels: []}, workspace, opts)
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:moved, @issue_id, "Rework"}
+    end
+
+    test "an escalation whose decision moved the ticket elsewhere is reviewed afresh when it returns on that head" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_review_result, {:ok, %{verdict: :block, comments: [], reason: "touches protected files"}})
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_escalated("Send to Rework")
+
+      :ok = Hold.clear(@repo_key, @issue_id, :needs_decision)
+      TicketSignals.record(@repo_key, @issue_id, "decision returned", %{move: "decide", from: "Code Review", to: "Rework"})
+      Process.put(:fake_review_result, {:ok, %{verdict: :approve, comments: [], reason: "looks good"}})
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:moved, @issue_id, "QA"}
+    end
+
+    test "an escalation on another head does not stand in for a review of this one" do
+      {workspace, _head} = git_workspace!()
+      TicketSignals.record(@repo_key, @issue_id, "code_review", %{signal: "code_review_escalate", reason: "earlier", head: "0000000"})
+
+      assert :ok = run(workspace, settings: designed_settings())
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      assert_received {:moved, @issue_id, "QA"}
+    end
+
     test "a ticket pattern is a person rule too, and wins over a risk rule" do
       Process.put(:fake_review_result, approve_result([risky_file()]))
       asked = %{issue() | description: "This must not auto-merge."}
@@ -737,6 +888,47 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert_escalated("Continue to QA")
       refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
+    end
+
+    test "with the built-in ticket patterns off, a ticket matching only a built-in one goes on to QA" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      asked = %{issue() | description: "This must not auto-merge."}
+
+      assert :ok =
+               CodeReview.run(asked, "/tmp/workspace",
+                 settings: designed_settings(own_ticket_patterns()),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
+               )
+
+      assert_received {:moved, @issue_id, "QA"}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+    end
+
+    test "with the built-in ticket patterns off, a configured one still pauses the ticket for a person" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      asked = %{issue() | description: "Do not ship this before the launch."}
+
+      assert :ok =
+               CodeReview.run(asked, "/tmp/workspace",
+                 settings: designed_settings(own_ticket_patterns()),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
+               )
+
+      assert assert_escalated("Continue to QA") =~ "ticket_pattern"
+    end
+
+    test "a ticket that only names the human review state isn't escalated" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      named = %{issue() | title: "Remove In Review and Human Review", description: "Tickets wait in `Human Review` until a person moves them out of the Human Review state."}
+
+      assert :ok = CodeReview.run(named, "/tmp/workspace", settings: designed_settings(), review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy)
+
+      assert_received {:moved, @issue_id, "QA"}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
     end
 
     test "a failed decision request is reported and nothing moves" do
