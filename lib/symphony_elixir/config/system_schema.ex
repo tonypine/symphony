@@ -1173,16 +1173,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   # CI the fix runs could not make green no longer moves to a configured state: it pauses the ticket
   # on a Needs Decision hold.
-  defp warn_retired_escalation_state(nil), do: nil
-
-  defp warn_retired_escalation_state(state) do
+  defp warn_retired_escalation_state(%{"escalate_to_state" => _state}) do
     deprecation_warning(
       "symphony.yml `pull_requests.checks.escalate_to_state` is deprecated and has no effect: CI the fix runs could not make green " <>
         "pauses the ticket on a Needs Decision hold. Remove it"
     )
-
-    state
   end
+
+  defp warn_retired_escalation_state(_checks), do: :ok
 
   # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
   defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do
@@ -1225,8 +1223,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("log_excerpt_lines", Map.get(checks, "log_excerpt_lines"))
         |> maybe_put("flaky_retry", Map.get(checks, "retry_failed_once"))
         |> maybe_put("max_retries", Map.get(checks, "max_fix_attempts"))
-        |> maybe_put("escalation_state", warn_retired_escalation_state(Map.get(checks, "escalate_to_state")))
         |> maybe_put("merging_wait_timeout_ms", Map.get(checks, "landing_wait_timeout_ms"))
+
+      warn_retired_escalation_state(checks)
 
       {:ok,
        %{}

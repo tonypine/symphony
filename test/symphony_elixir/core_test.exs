@@ -2,7 +2,6 @@ defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
   alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.Ci, as: CiConfig
   alias SymphonyElixir.Config.Schema.ReviewAgent, as: ReviewAgentConfig
   alias SymphonyElixir.Config.Schema.Tracker, as: TrackerConfig
   alias SymphonyElixir.Secret
@@ -134,7 +133,6 @@ defmodule SymphonyElixir.CoreTest do
     assert config.ci.log_excerpt_lines == 200
     assert config.ci.flaky_retry == true
     assert config.ci.max_retries == 3
-    assert config.ci.escalation_state == "In Review"
     assert config.ci.merging_wait_timeout_ms == 1_800_000
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
@@ -167,7 +165,6 @@ defmodule SymphonyElixir.CoreTest do
         log_excerpt_lines: 50,
         flaky_retry: false,
         max_retries: 1,
-        escalation_state: "Blocked",
         merging_wait_timeout_ms: 600_000
       }
     )
@@ -178,21 +175,12 @@ defmodule SymphonyElixir.CoreTest do
              log_excerpt_lines: 50,
              flaky_retry: false,
              max_retries: 1,
-             escalation_state: "Blocked",
              merging_wait_timeout_ms: 600_000
            } = Config.settings!().ci
 
     assert Config.settings!().pr_review.poll_interval_ms == 15_000
 
-    write_workflow_file!(Workflow.workflow_file_path(), ci: %{escalation_state: ""})
-    assert Config.settings!().ci.escalation_state == "In Review"
-
-    ci_config =
-      %CiConfig{}
-      |> CiConfig.changeset(%{escalation_state: nil})
-      |> Ecto.Changeset.apply_changes()
-
-    assert ci_config.escalation_state == "In Review"
+    refute Map.has_key?(Config.settings!().ci, :escalation_state)
 
     write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true, max_retries: 0})
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()

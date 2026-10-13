@@ -2122,7 +2122,7 @@ defmodule SymphonyElixir.CiPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1, escalation_state: "In Review"}
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1}
     )
 
     put_run(issue, now, "running")
