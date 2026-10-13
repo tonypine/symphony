@@ -4625,7 +4625,7 @@ Minimum endpoints:
           "waiting_seconds": 5460,
           "url": "https://linear.app/acme/issue/SHOP-330",
           "review": {
-            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": [], "supervisor_check": null},
+            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": []
           }
         },
