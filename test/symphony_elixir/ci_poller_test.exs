@@ -416,6 +416,41 @@ defmodule SymphonyElixir.CiPollerTest do
       assert_ci_fix_reentry("QA")
     end
 
+    test "a Code Review ticket back from CI Fix on the same red head enters CI Fix again despite comments on its PR" do
+      assert_ci_fix_entry("Code Review")
+      now = ~U[2026-05-06 09:05:00Z]
+      # The PR-review poller watches Code Review for conflicts only, so the comments it keeps on the
+      # record never become a rework; they must not hold the red head back.
+      put_pending_reviewer_comments(now)
+      Application.put_env(:symphony_elixir, :ci_test_issues, [%{in_review_issue() | state: "Code Review"}])
+      # The PR also conflicts with its base: a red head goes to CI Fix all the same.
+      Application.put_env(:symphony_elixir, :ci_test_status, Map.merge(failed_status("abc123"), %{mergeable: "CONFLICTING", merge_state_status: "DIRTY"}))
+
+      assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "CI Fix"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert_receive {:issue_state_update, "issue-2401", "CI Fix"}
+    end
+
+    test "a green head in Code Review clears the CI Fix dispatch despite comments on its PR" do
+      assert_ci_fix_entry("Code Review")
+      now = ~U[2026-05-06 09:05:00Z]
+      put_pending_reviewer_comments(now)
+      Application.put_env(:symphony_elixir, :ci_test_issues, [%{in_review_issue() | state: "Code Review"}])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status("abc123"))
+
+      assert {:ok, %{actions: [{:green, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert [%{status: "green", dispatched_shas: [], rerun_attempted_shas: []}] = RunStore.list_ci_checks()
+
+      # The same head red again (a flaky check, say) is a fresh failure, not one CI Fix already took.
+      Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+
+      assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 5, :minute))
+    end
+
     test "a Rework ticket on a red head CI Fix already took stays with its rework run" do
       assert_ci_fix_entry("Rework")
       now = ~U[2026-05-06 09:05:00Z]
@@ -2739,6 +2774,23 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert {:ok, %{actions: [{:already_handled, "issue-2401", "abc123"}]}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 15, :minute))
+  end
+
+  # Unaddressed reviewer comments on the issue's PR-review record.
+  defp put_pending_reviewer_comments(now) do
+    issue = in_review_issue()
+
+    assert :ok =
+             RunStore.put_pr_review(%{
+               repo_key: @repo_key,
+               issue_id: issue.id,
+               issue_identifier: issue.identifier,
+               pr_url: List.first(issue.pr_urls),
+               workspace_path: "/tmp/workspaces/ACME-2401",
+               status: "watching",
+               pending_reviewer_comments: [%{id: "comment-1", body: "Please adjust."}],
+               updated_at: now
+             })
   end
 
   defp put_run(issue, now, status \\ "success") do
