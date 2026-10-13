@@ -2448,8 +2448,9 @@ Rules:
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
   machine enters `Epic Review` and runs the QA agent against the default branch; it files follow-ups
-  in `Todo` under the epic, never in `Backlog`. The epic needs no verification sub-ticket and no
-  close-out run.
+  in `Todo` under the epic, never in `Backlog`, each with the epic's priority so
+  `tickets.priorities` dispatches them like the epic. The epic needs no verification sub-ticket and
+  no close-out run.
 - **Prompt.** Prompt assembly passes `state_machine` to the template as the constant `designed`,
   so a repo's instruction file that still branches on it renders this machine's text. A rendered
   prompt MUST NOT name a retired or draining state, supervisor checks or verification
@@ -3524,10 +3525,10 @@ Scoped Linear tool extension contract:
   Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
   one the run created earlier); otherwise the call MUST fail with an explicit error before the
   issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
-  after it. The new issue MUST land in the team's `Backlog`
-  state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
-  other agents; a human promotes it. Title and description MUST pass the same secret scan as
-  comments before any Linear call. Creation MUST NOT be capped per run; a title matching
+  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. The new
+  issue MUST land in the team's `Backlog` state (falling back to a `backlog`-type state), never an
+  active state, so an agent cannot start other agents; a human promotes it. Title and description
+  MUST pass the same secret scan as comments before any Linear call. Creation MUST NOT be capped per run; a title matching
   (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
   explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
   run has no state to check against.
