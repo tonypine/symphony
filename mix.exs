@@ -185,7 +185,7 @@ defmodule SymphonyElixir.MixProject do
         applications: [
           symphony_elixir: :permanent
         ],
-        steps: [:assemble, &Burrito.wrap/1],
+        steps: release_steps(),
         burrito: [
           targets: [
             macos_arm64: [os: :darwin, cpu: :aarch64],
@@ -194,6 +194,13 @@ defmodule SymphonyElixir.MixProject do
         ]
       ]
     ]
+  end
+
+  # SYMPHONY_PLAIN_RELEASE=1 assembles the plain release only, for the launcher's boot test.
+  defp release_steps do
+    if System.get_env("SYMPHONY_PLAIN_RELEASE") == "1",
+      do: [:assemble],
+      else: [:assemble, &Burrito.wrap/1]
   end
 
   # Burrito unpacks into a directory named after the release version and reuses

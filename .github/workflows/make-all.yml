@@ -27,6 +27,32 @@ jobs:
       - name: Check formatting
         run: time mix format --check-formatted
 
+  release-launcher:
+    name: release launcher
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The arguments ChildLaunch.swift, SymphonyRunner.swift and smoke_test.sh pass
+      # must reach the VM unchanged, after `-extra`.
+      - name: Test the release launcher's argument contract
+        run: scripts/release/launcher_test.sh
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install: true
+          cache: true
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      # Boots an assembled plain `mix release` through the launcher.
+      - name: Boot a real release through the launcher
+        run: time scripts/release/launcher_boot_test.sh
+
   audit:
     name: audit
     runs-on: ubuntu-latest

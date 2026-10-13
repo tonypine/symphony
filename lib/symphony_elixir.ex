@@ -29,7 +29,7 @@ defmodule SymphonyElixir.Application do
 
   @impl true
   def start(_type, _args) do
-    :ok = SymphonyElixir.CLI.maybe_configure_burrito_runtime()
+    :ok = SymphonyElixir.CLI.maybe_configure_packaged_runtime()
     :ok = SymphonyElixir.LogFile.configure()
 
     children = child_specs_for_runtime()
