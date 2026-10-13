@@ -43,6 +43,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
+  alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.Repo.Fetcher
@@ -202,8 +203,8 @@ defmodule SymphonyElixir.QaAgent do
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
-    #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
+    #{decisions_rule(issue)}#{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -447,6 +448,21 @@ defmodule SymphonyElixir.QaAgent do
 
   defp fixer(%{epic_review: true}), do: "a follow-up ticket"
   defp fixer(_job), do: "the executor"
+
+  # A person's answers to the ticket's decision requests are its scope: QA tests the change against
+  # them, never for what a decision put out of scope.
+  defp decisions_rule(issue) do
+    case Decisions.prompt_section(Map.get(issue, :description)) do
+      "" ->
+        ""
+
+      section ->
+        """
+        #{section}
+        Do not fail the change for work a recorded decision put out of scope or deferred, or for behaviour that follows what a decision chose. If you think a decision is wrong, say so in `summary`; it is not a defect.
+        """
+    end
+  end
 
   defp parent_section(%{} = parent) do
     """

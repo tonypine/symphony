@@ -23,7 +23,8 @@ defmodule SymphonyElixir.DirectorMoves do
     cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
     clears on its own, so it is refused;
   - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's answer as a reply
-    under the request comment, and the hold is cleared so the ticket continues in its phase. The
+    under the request comment, written into the Decisions section of the description
+    (`SymphonyElixir.Decisions`), and the hold is cleared so the ticket continues in its phase. The
     optional `:move` names a state the decision directs — `rework` or `done` — and the move goes
     through `SymphonyElixir.TransitionGuard`. A ticket with no such hold is refused.
 
@@ -50,6 +51,7 @@ defmodule SymphonyElixir.DirectorMoves do
     AuditLog,
     BreakdownReview,
     Config,
+    Decisions,
     Hold,
     MergeConfirmation,
     Orchestrator,
@@ -401,8 +403,8 @@ defmodule SymphonyElixir.DirectorMoves do
   # the ticket exactly as it would with manual review off, and one that picks nothing moves nothing;
   # an explicit `:move` (the Inbox's Send to Rework) directs its own move instead.
   defp decide(%Issue{} = issue, input, opts) do
-    case carried_move(issue, input.picks, opts) do
-      {:ok, carried} -> answer(issue, input, decide_target(input[:move], carried), opts)
+    case decision_hold(issue, opts) do
+      {:ok, hold} -> answer(issue, input, hold, decide_target(input[:move], picked_move(hold, input.picks)), opts)
       :error -> conflict("#{issue.identifier} is not waiting on a decision")
     end
   end
@@ -416,26 +418,41 @@ defmodule SymphonyElixir.DirectorMoves do
   # The target is resolved before anything is written: a decision directing a move into a state the
   # repo has not configured is refused while the request is still open and the hold still set,
   # rather than recorded, the hold cleared, and the move left to fail with the ticket in place.
-  defp answer(issue, input, to_state, opts) do
+  defp answer(issue, input, hold, to_state, opts) do
     if is_binary(to_state) and String.trim(to_state) == "" do
       {:error, {:invalid, "#{issue.identifier}'s decision moves it to a state not configured for repo #{issue.repo_key}; the hold stays"}}
     else
-      comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
+      picks = Enum.map(input.picks, &%{question: String.trim(&1.question), answer: String.trim(&1.answer)})
+      comment = decide_comment(picks)
 
       case reply_to_request(issue, input.request_comment_id, comment) do
-        :ok -> clear_decision_hold(issue, to_state, comment, opts)
-        {:error, reason} -> {:error, {:linear, reason}}
+        :ok ->
+          record_decision(issue, input.request_comment_id, hold, picks)
+          clear_decision_hold(issue, to_state, comment, opts)
+
+        {:error, reason} ->
+          {:error, {:linear, reason}}
       end
     end
   end
 
-  # The move the answers pick from the ticket's open Needs Decision hold; a ticket with no hold has
-  # no decision to answer.
-  defp carried_move(%Issue{repo_key: repo_key, id: issue_id}, picks, opts) do
+  # The ticket's open Needs Decision hold; a ticket with no hold has no decision to answer.
+  defp decision_hold(%Issue{repo_key: repo_key, id: issue_id}, opts) do
     case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
       nil -> :error
-      hold -> {:ok, picked_move(hold, picks)}
+      hold -> {:ok, hold}
     end
+  end
+
+  # The answer goes into the ticket's scope now, so the run the cleared hold lets through reads it.
+  # Best-effort: the decision is already recorded under the request, and the Inbox's next read
+  # writes it from there when this write fails (`SymphonyElixir.Decisions.sync/2`).
+  defp record_decision(issue, request_comment_id, hold, picks) do
+    title = get_in(hold, [:decision, :title])
+    question = get_in(hold, [:decision, :question]) || Enum.map_join(picks, " / ", & &1.question)
+    entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.map_join(picks, " / ", & &1.answer))
+    _ = Decisions.record(issue.id, [entry])
+    :ok
   end
 
   defp picked_move(hold, picks) do

@@ -345,6 +345,47 @@ defmodule SymphonyElixir.CodeReviewTest do
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
+    # TP-892: the person deferred the legacy partials to TP-891, and the reviewer flagged them again.
+    test "a finding against a decision the person recorded ends in approval, not Rework or a new decision request" do
+      {workspace, _head} = git_workspace!()
+
+      decision =
+        SymphonyElixir.Decisions.entry(
+          "comment-1",
+          ~D[2026-10-13],
+          "Keep the legacy prompt partials",
+          "Remove the legacy prompt partials here, or leave them for TP-891?",
+          "Defer to TP-891: don't make that change."
+        )
+
+      {:ok, description} = SymphonyElixir.Decisions.put("Remove the Final verification flow.", [decision])
+
+      partials = %{
+        summary: "The legacy prompt partials are still here.",
+        file: "priv/playbook/legacy.liquid",
+        line_range: {1, 3},
+        quoted_snippet: "legacy",
+        suggested_fix: "Remove them.",
+        decision: "D1"
+      }
+
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, findings: [partials], comments: ["The legacy prompt partials are still here."], reason: nil}})
+
+      assert :ok =
+               CodeReview.run(%{issue() | description: description}, workspace,
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy,
+                 settings: designed_settings()
+               )
+
+      assert_received {:moved, @issue_id, "QA"}
+      refute_received {:moved, @issue_id, "Rework"}
+      refute_received {:commented, @issue_id, _body}
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert [%{outcome: "approve"}] = verdicts()
+    end
+
     test "a request_changes verdict with no findings and no readable head still says why" do
       Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: [], reason: "out of scope"}})
 

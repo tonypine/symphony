@@ -2447,6 +2447,18 @@ Rules:
   review confirmation, and clears when the decision is recorded (a reply under the request, the
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
   directs a move.
+- **Decisions are scope.** A person's answer to a decision request (a reply under the request, or
+  the Inbox's Decide) MUST be written into the machine-owned Decisions section of the issue
+  description, between `<!-- symphony:decisions:start -->` and `<!-- symphony:decisions:end -->`
+  and before the summary block, on the read that sees it: one entry per answered request, keyed by
+  the request comment so a repeat writes nothing, numbered `D1`, `D2`… with the date, the question,
+  the answer and what it means for scope (deferred to a named ticket, out of scope, in scope, or as
+  answered). Every byte outside the section, and the entries already in it, MUST stay unchanged.
+  The reviewer and QA prompts MUST render the section with the rule that a finding contradicting a
+  recorded decision is not a finding; a reviewer finding that names a recorded decision
+  (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
+  approval. The implementation prompt reads the section in the description. A ruling a person
+  gives in a plain comment, not under a decision request, is not recorded.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
@@ -3591,7 +3603,8 @@ Scoped Linear tool extension contract:
   one it returns the document with its content secret-redacted and wrapped in prompt-safety
   boundary tags like comments. `linear_get_document` is read-only and available to the read-only
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
-- `linear_update_issue_summary` is the only tool that writes the current issue's description, and
+- `linear_update_issue_summary` is the only tool that writes the current issue's description (the
+  Decisions section is Symphony's own write, outside any tool), and
   it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
@@ -3620,7 +3633,9 @@ Scoped Linear tool extension contract:
   current issue: it sets the `Needs Decision` hold, which pauses the issue in its phase, and adds
   no label of its own. The request stays open until a person answers it (a reply under it, or the
   Inbox's Decide) or it is withdrawn. A request with the same title still open on the issue MUST
-  NOT be posted again. Requests
+  NOT be posted again. A request whose title or question a person already answered (the Decisions
+  section, or an answered request under the issue) MUST NOT be posted: the result carries the
+  recorded answer, which the run applies. Requests
   MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
   against, or when the issue's repository turned human actions off. The read-only reviewer scope
   MUST NOT advertise or execute it.
