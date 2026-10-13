@@ -418,6 +418,30 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 
+  test "update_state refuses In Review on a designed repo: the push hands the work to Code Review" do
+    settings = Config.settings!()
+    designed = %{settings | state_machine: "designed"}
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Review"},
+        issue: %Issue{id: "issue-current", state: "In Progress"},
+        settings: designed,
+        linear_client: update_state_client(self(), [%{"id" => "state-in-review", "name" => "In Review", "type" => "started"}])
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "review_requires_handoff_signal", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "cannot move the issue to \"In Review\""
+    assert message =~ "Symphony moves the issue to Code Review"
+    assert message =~ "do not change the state yourself"
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+  end
+
   test "update_state refuses Plan Review on a designed repo: the handoff enters it by asking for In Review" do
     settings = Config.settings!()
     designed = %{settings | state_machine: "designed"}
