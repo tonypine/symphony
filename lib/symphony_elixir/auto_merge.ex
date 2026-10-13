@@ -12,7 +12,8 @@ defmodule SymphonyElixir.AutoMerge do
   branch has no protection, or the repository doesn't allow it) but the PR is `CLEAN` with
   green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a finished
   workflow run), it is squash-merged right away. Merge conflicts take the PR poller's
-  conflict path, with auto-merge turned off first (see `disable_for_conflict/5`). Red CI takes
+  conflict path, with auto-merge turned off first (see `disable_for_conflict/5`) and kept off
+  for that head (see `conflict?/1`). Red CI takes
   the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see
   `disable_for_ci_fix/5`), while a flaky rerun of the same commit leaves it on.
 
@@ -68,10 +69,11 @@ defmodule SymphonyElixir.AutoMerge do
   @doc """
   True when auto-merge lands this issue, so the orchestrator must not dispatch a landing
   agent: the issue is in `Merging`, has a PR, auto-merge is on for its repository, and the
-  PR poller hasn't fallen back to the landing agent. A CI-failure hold (see `held?/1`) means
-  Symphony turned GitHub auto-merge off, so nothing lands the PR: a hold still in `Merging` is a
-  red head the CI-fix move never took out of it, and the landing agent takes it over rather than
-  every poll skipping it.
+  PR poller hasn't fallen back to the landing agent. A CI-failure hold (see `held?/1`) or a
+  conflict (see `conflict?/1`) means Symphony turned GitHub auto-merge off, so nothing lands the
+  PR: one still in `Merging` is a red or conflicting head the CI-fix move never took out of it
+  (an agent run still marked running, the conflict retries spent), and the landing agent takes it
+  over rather than every poll skipping it.
   """
   @spec owns_issue?(Issue.t(), keyword()) :: boolean()
   def owns_issue?(%Issue{} = issue, opts \\ []) do
@@ -80,7 +82,7 @@ defmodule SymphonyElixir.AutoMerge do
       not handed_off?(Keyword.get(opts, :lookup, &SymphonyElixir.PrReviewPoller.auto_merge/2).(issue.id, repo_opts(issue.repo_key)))
   end
 
-  defp handed_off?(auto_merge), do: fallback?(auto_merge) or held?(auto_merge)
+  defp handed_off?(auto_merge), do: fallback?(auto_merge) or held?(auto_merge) or conflict?(auto_merge)
 
   defp enabled_for_repo?(repo_key) do
     case Config.settings_for_repo(repo_key) do
@@ -105,7 +107,11 @@ defmodule SymphonyElixir.AutoMerge do
   def held?(%{state: "ci_failure"}), do: true
   def held?(_auto_merge), do: false
 
-  @doc "True while the PR is down the conflict path (see `conflict/3`)."
+  @doc """
+  True while the PR is down the conflict path (see `conflict/3`). Auto-merge stays off for that
+  head: only a new head (the fix's push) or dropping the state (`PrReviewPoller.release_auto_merge_hold/2`)
+  turns it on again.
+  """
   @spec conflict?(term()) :: boolean()
   def conflict?(%{state: "conflict"}), do: true
   def conflict?(_auto_merge), do: false
@@ -131,7 +137,7 @@ defmodule SymphonyElixir.AutoMerge do
 
     result =
       cond do
-        held?(current) -> {:ok, current}
+        held?(current) or conflict?(current) -> {:ok, current}
         not is_binary(head) or not is_binary(Map.get(activity, :pr_node_id)) -> {:ok, %{current | state: current.state || "waiting"}}
         true -> land(current, record, activity, settings, opts, now)
       end
@@ -161,8 +167,9 @@ defmodule SymphonyElixir.AutoMerge do
 
   defp for_head(_previous, head, now), do: %{empty(now) | head_sha: head}
 
-  # A new head starts over from "enabled". A fallback or a CI-fix hold stays until the issue
-  # leaves `Merging` (the PR poller clears it then), so pushes during that stay don't flip it back.
+  # A new head starts over from "enabled", a conflict's included: the fix pushed it. A fallback or
+  # a CI-fix hold stays until the issue leaves `Merging` (the PR poller clears it then), so pushes
+  # during that stay don't flip it back.
   defp next_head_state(state) when state in ["conflict", "merging", "updating_branch"], do: "enabled"
   defp next_head_state(state), do: state
 
@@ -338,7 +345,6 @@ defmodule SymphonyElixir.AutoMerge do
       merge_state(activity) != @behind_merge_state -> check_stalled(current, record, activity, settings, now)
       current.update_branch_head_sha != current.head_sha -> update_branch(current, record, activity, opts)
       # Already asked GitHub for this head; wait for the merge commit.
-      current.state == "conflict" -> {:ok, current}
       true -> {:ok, %{current | state: "updating_branch"}}
     end
   end

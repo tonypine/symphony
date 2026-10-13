@@ -89,6 +89,10 @@ defmodule SymphonyElixir.CodeReviewTest do
     )
   end
 
+  defp own_ticket_patterns do
+    %{"auto_review" => %{"acceptance_gate" => %{"escalate" => %{"ticket_patterns_builtin" => false, "ticket_patterns" => ["(?i)do not ship"]}}}}
+  end
+
   defp reviewer_disabled_settings do
     settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
   end
@@ -851,6 +855,37 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert_escalated("Continue to QA")
       refute Enum.any?(signals(), &(&1.name == "code_review_deepened"))
+    end
+
+    test "with the built-in ticket patterns off, a ticket matching only a built-in one goes on to QA" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      asked = %{issue() | description: "This must not auto-merge."}
+
+      assert :ok =
+               CodeReview.run(asked, "/tmp/workspace",
+                 settings: designed_settings(own_ticket_patterns()),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
+               )
+
+      assert_received {:moved, @issue_id, "QA"}
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+    end
+
+    test "with the built-in ticket patterns off, a configured one still pauses the ticket for a person" do
+      Process.put(:fake_review_result, approve_result([plain_file()]))
+      asked = %{issue() | description: "Do not ship this before the launch."}
+
+      assert :ok =
+               CodeReview.run(asked, "/tmp/workspace",
+                 settings: designed_settings(own_ticket_patterns()),
+                 review_agent: FakeReviewAgent,
+                 tracker: FakeTracker,
+                 qa_policy: FakeQaPolicy
+               )
+
+      assert assert_escalated("Continue to QA") =~ "ticket_pattern"
     end
 
     test "a ticket that only names the human review state isn't escalated" do

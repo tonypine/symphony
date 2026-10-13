@@ -148,6 +148,8 @@ public struct AddRepoDraft: Equatable {
     public var stateMachine: StateMachineChoice
     /// The repo's manual review setting, which only the Edit sheet shows.
     public var manualReview: ManualReviewChoice
+    /// Whether Code Review's built-in ticket patterns apply to the repo, which only the Edit sheet shows.
+    public var ticketPatternsBuiltIn: BuiltInTicketPatternsChoice
 
     public init(
         mode: Mode = .gitHub,
@@ -158,7 +160,8 @@ public struct AddRepoDraft: Equatable {
         project: String? = nil,
         labels: [String] = [],
         stateMachine: StateMachineChoice = .legacy,
-        manualReview: ManualReviewChoice = .off
+        manualReview: ManualReviewChoice = .off,
+        ticketPatternsBuiltIn: BuiltInTicketPatternsChoice = .inherit
     ) {
         self.mode = mode
         self.gitHubInput = gitHubInput
@@ -169,6 +172,7 @@ public struct AddRepoDraft: Equatable {
         self.labels = labels
         self.stateMachine = stateMachine
         self.manualReview = manualReview
+        self.ticketPatternsBuiltIn = ticketPatternsBuiltIn
     }
 
     /// `owner/repo` of the source the draft names, nil while it names none.

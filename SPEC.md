@@ -1945,7 +1945,8 @@ not require recognizing or validating extension fields unless that extension is 
   `off`), with a warning logged once per config
 - `auto_review.acceptance_gate.escalate`: deprecated, still read by Code Review (7.6, **Escalation
   rules**): `labels`, `ticket_patterns`, `paths`, `diff_patterns` (lists added to built-in defaults
-  that can't be removed), `dependencies` (`off`, `major` or `any`, default `major`),
+  that can't be removed, except the `ticket_patterns` that `ticket_patterns_builtin: false`, default
+  `true`, drops), `dependencies` (`off`, `major` or `any`, default `major`),
   `max_changed_lines` (default `1500`), `busy_files` (`top` `10`, `window_days` `14`, `max_lines`
   `300`)
 - `repositories[].acceptance_gate`: `mode` and `escalate` for that repository (`max_turns` and
