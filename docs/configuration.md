@@ -199,7 +199,7 @@ issues:
   - an agent moves a plan ticket to `In Review` and its ticket says a human reviews the plan:
     an `escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
-    "human review"; naming the `Human Review` state doesn't count, see
+    "needs a human review"; naming the `Human Review` state doesn't count, see
     [What escalates](acceptance_gate.md#what-escalates)), or a description in which its author
     says they review it ("I only want to review and validate the artifacts", "we'll approve the
     plan");

@@ -159,7 +159,7 @@ defmodule SymphonyElixir.HumanReview do
   @doc """
   True when the ticket says a person reviews it: an `auto_review.acceptance_gate.escalate` label
   other than `plan` and `breakdown` (every plan has one), a title or description matching one of its
-  `ticket_patterns` ("must not auto-approve", "needs human", "human review"), where naming this
+  `ticket_patterns` ("must not auto-approve", "needs human", "needs a human review"), where naming this
   state doesn't count (`EscalationRules.ticket_reasons/3`), or a description in which its author says
   they review it ("I only want to review and validate the artifacts").
   """

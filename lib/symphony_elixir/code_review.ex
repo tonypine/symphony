@@ -54,6 +54,7 @@ defmodule SymphonyElixir.CodeReview do
     Config,
     EscalationRules,
     Handoff,
+    HumanReview,
     MergeConfirmation,
     NeedsDecisionHold,
     QaPolicy,
@@ -348,7 +349,7 @@ defmodule SymphonyElixir.CodeReview do
     {diff, busy_files} = diff_summary(result, workspace, opts, rules)
 
     issue
-    |> EscalationRules.check(diff, busy_files, rules)
+    |> EscalationRules.check(diff, busy_files, rules, review_states: HumanReview.review_states(settings))
     |> Enum.split_with(&(&1.rule in EscalationRules.person_rules()))
   end
 
