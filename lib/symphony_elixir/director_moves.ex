@@ -15,13 +15,15 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
-    (`SymphonyElixir.Restart`);
+    (`SymphonyElixir.Restart`). A dispatch-loop hold is cleared with it, since the loop's attempt is
+    the one thrown away;
   - `:decisions`: a plan in `Plan Review` gets one comment with the picked options, in place, which
     starts Symphony's plan revision run (`SymphonyElixir.PlanComments`);
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
-  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
-    cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
-    clears on its own, so it is refused;
+  - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — or on a
+    dispatch-loop hold (`SymphonyElixir.DispatchLoop`) has the hold cleared by hand and continues
+    in place, with no state move. A dependency or fix-ticket hold clears on its own, so it is
+    refused;
   - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's answer as a reply
     under the request comment, and the hold is cleared so the ticket continues in its phase. The
     optional `:move` names a state the decision directs — `rework` or `done` — and the move goes
@@ -133,7 +135,7 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # Unblock is not a Linear move: it lifts an access hold in place, so no state is resolved.
+  # Unblock is not a Linear move: it lifts a hold in place, so no state is resolved.
   defp do_move(:unblock, issue, _input, opts), do: unblock(issue, opts)
 
   # Decide is a decision, not a state: it answers the request and clears the hold, and only moves
@@ -205,7 +207,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @spec backlog_comment(String.t()) :: String.t()
   def backlog_comment(note) when is_binary(note), do: "Moved to Backlog by the Director:\n\n#{note}"
 
-  @doc "The comment `:unblock` posts: the access hold is cleared and the ticket continues in place."
+  @doc "The comment `:unblock` posts: the hold is cleared and the ticket continues in place."
   @spec unblock_comment(String.t()) :: String.t()
   def unblock_comment(identifier) when is_binary(identifier),
     do: "Unblocked by the Director: #{identifier} continues in place."
@@ -334,8 +336,12 @@ defmodule SymphonyElixir.DirectorMoves do
   # what GitHub or Linear refused, and the ticket stays where it is until the person tries again.
   defp apply_move(:restart, issue, to_state, input, opts) do
     case Restart.perform(issue, restart_opts(opts)) do
-      :ok -> comment_then_move(:restart, issue, restart_comment(issue.identifier, String.trim(input[:reason])), to_state, opts)
-      {:error, {:restart, message}} -> {:error, {:restart, "#{issue.identifier} was not restarted: #{message}"}}
+      :ok ->
+        clear_dispatch_loop_hold(issue, opts)
+        comment_then_move(:restart, issue, restart_comment(issue.identifier, String.trim(input[:reason])), to_state, opts)
+
+      {:error, {:restart, message}} ->
+        {:error, {:restart, "#{issue.identifier} was not restarted: #{message}"}}
     end
   end
 
@@ -353,11 +359,22 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
 
-  # Unblock lifts an access hold in place: the store hold is cleared through `Hold` (the store
-  # first, then the `Blocked` label), so the ticket keeps its phase and the next poll dispatches it
-  # again. A hold waiting on anything else clears on its own, so it is refused.
+  # The attempt a dispatch loop held is the one Restart throws away, so its hold goes with it and the
+  # ticket starts again with its count at zero. A clear the store refuses is reported; the restart
+  # stands, and Unblock still lifts the hold.
+  defp clear_dispatch_loop_hold(issue, opts) do
+    with true <- issue |> blocked_hold(opts) |> Hold.dispatch_loop?(),
+         {:error, reason} <- Hold.clear(issue.repo_key, issue.id, :blocked, store_opts(opts)) do
+      Logger.warning("Restarted #{issue.identifier} but couldn't clear its dispatch-loop hold: #{inspect(reason)}")
+    end
+  end
+
+  # Unblock lifts an access or dispatch-loop hold in place: the store hold is cleared through `Hold`
+  # (the store first, then the `Blocked` label), so the ticket keeps its phase and the next poll
+  # dispatches it again — for a loop, with its count started again. A hold waiting on anything else
+  # clears on its own, so it is refused.
   defp unblock(%Issue{} = issue, opts) do
-    if issue |> access_hold(opts) |> Hold.access_wait?(),
+    if issue |> blocked_hold(opts) |> Hold.unblockable?(),
       do: clear_access_hold(issue, opts),
       else: access_conflict(issue)
   end
@@ -533,7 +550,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The Blocked hold in the store — the truth, whatever the board shows.
-  defp access_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
+  defp blocked_hold(%Issue{repo_key: repo_key, id: issue_id}, opts), do: Hold.get(repo_key, issue_id, :blocked, store_opts(opts))
 
   defp store_opts(opts), do: Keyword.take(opts, [:store])
 

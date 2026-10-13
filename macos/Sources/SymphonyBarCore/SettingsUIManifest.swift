@@ -7,8 +7,8 @@ import Foundation
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
-/// `TokenLimits`, `OperationTimeouts`, `BuiltInTicketPatterns`) write is here. Keep one string literal per line,
-/// sorted.
+/// `TokenLimits`, `OperationTimeouts`, `DispatchLoopLimits`, `BuiltInTicketPatterns`) write is here. Keep one string
+/// literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -54,6 +54,10 @@ public enum SettingsUIManifest {
         "repositories[].workspace.source",
         "repositories[].workspace.strategy",
         "tickets.priorities",
+        "watchdog.dispatch_loop_long_runs",
+        "watchdog.dispatch_loop_long_window_ms",
+        "watchdog.dispatch_loop_runs",
+        "watchdog.dispatch_loop_window_ms",
         "watchdog.pending_tool_report_after_ms",
         "workspaces.git_network_timeout_ms",
     ]

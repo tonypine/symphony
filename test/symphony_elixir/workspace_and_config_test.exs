@@ -3559,6 +3559,37 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "the dispatch-loop limits come from symphony.yml, positive and runs at most 50" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    assert %{
+             dispatch_loop_runs: 4,
+             dispatch_loop_window_ms: 600_000,
+             dispatch_loop_long_runs: 8,
+             dispatch_loop_long_window_ms: 3_600_000
+           } = Config.settings!().watchdog
+
+    watchdog = %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000}
+
+    limits = %{
+      dispatch_loop_runs: 3,
+      dispatch_loop_window_ms: 300_000,
+      dispatch_loop_long_runs: 6,
+      dispatch_loop_long_window_ms: 7_200_000
+    }
+
+    write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.merge(watchdog, limits))
+    assert ^limits = Map.take(Config.settings!().watchdog, Map.keys(limits))
+
+    bad_values = for key <- Map.keys(limits), bad <- [0, "often"], do: {key, bad}
+
+    for {key, bad} <- bad_values ++ [{:dispatch_loop_runs, 51}, {:dispatch_loop_long_runs, 51}] do
+      write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, key, bad))
+      assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+      assert message =~ "watchdog.#{key}"
+    end
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)

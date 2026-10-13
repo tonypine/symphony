@@ -1945,12 +1945,29 @@ watchdog:
   no_progress_threshold_ms: 600000
   stray_process_cpu_minutes: 10
   pending_tool_report_after_ms: 60000
+  dispatch_loop_runs: 4
+  dispatch_loop_window_ms: 600000
+  dispatch_loop_long_runs: 8
+  dispatch_loop_long_window_ms: 3600000
 ```
 
 `pending_tool_report_after_ms` (default `60000`, one minute; a positive integer) is how long one of
 Symphony's own MCP tool calls (`linear_*`, `github_*`, `qa_*`) must run before Symphony's state and
 the dashboard show the run as waiting on it. Settings in the macOS app edits it as "Show a pending
 tool call after", in minutes.
+
+The `dispatch_loop_*` keys (positive integers; the two `runs` at most 50) bound how often one ticket is dispatched without
+progress, whatever `enabled` says. Symphony records every run it starts in the ticket's store record
+and, before the next one, counts the runs of the same kind since the ticket last made progress: a
+state move, a new PR head, a recorded verdict, or a hold that lifted. A run stopped by a usage limit
+or an unreachable model API isn't counted. When those runs already reach `dispatch_loop_runs` within
+`dispatch_loop_window_ms` (4 in 10 minutes by default) or `dispatch_loop_long_runs` within
+`dispatch_loop_long_window_ms` (8 in an hour), Symphony starts no more. It puts the ticket on a
+`Blocked` hold whose reason names the run kind, the count, the window and how the last runs ended
+(exit, whether they left a new PR head, the handoff signal or its absence), logs one error line, and
+lists the ticket in the Inbox and in `waiting_on_you` of `/api/v1/state`. `Unblock` or `Restart`
+lifts the hold, and the count starts again. Settings in the macOS app edits the limits in its
+Dispatch loops section, as "Hold a ticket after" and "Or after", each a number of runs in minutes.
 
 On every tick the watchdog also reads the host's process table and warns about stray processes.
 A stray process runs in, or names on its command line, a folder under `workspaces.root`,

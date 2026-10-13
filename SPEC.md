@@ -1150,6 +1150,14 @@ Fields:
   - Default: `60000` (1 minute)
   - How long one of Symphony's own MCP tool calls must run before the runtime snapshot reports
     the run's oldest pending call (`pending_tool`).
+- `dispatch_loop_runs` (positive integer, at most `50`) and `dispatch_loop_window_ms` (positive integer)
+  - Default: `4` runs within `600000` (10 minutes)
+- `dispatch_loop_long_runs` (positive integer, at most `50`) and `dispatch_loop_long_window_ms` (positive integer)
+  - Default: `8` runs within `3600000` (1 hour)
+  - The dispatch-loop guard's two limits: how many runs of one kind a ticket may get since its last
+    progress within each window. The run past either limit is not dispatched; the ticket is held
+    `Blocked` instead (see the `Dispatch-loop guard` rule in the state machine section). These limits
+    apply whether or not `enabled` is set.
 
 #### 5.4.11 `workers` (object)
 
@@ -1882,6 +1890,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
 - `watchdog.pending_tool_report_after_ms`: positive integer, default `60000`
+- `watchdog.dispatch_loop_runs`: positive integer up to `50`, default `4`
+- `watchdog.dispatch_loop_window_ms`: positive integer, default `600000`
+- `watchdog.dispatch_loop_long_runs`: positive integer up to `50`, default `8`
+- `watchdog.dispatch_loop_long_window_ms`: positive integer, default `3600000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
@@ -2384,6 +2396,18 @@ Rules:
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Recording a decision also lifts a
   `handoff_missing` hold on the same ticket, so the ticket resumes with no other hold to clear.
+- **Dispatch-loop guard.** Every run dispatched for a ticket is recorded in its ticket-state record
+  with its run kind and the state and PR head it started on. Before the next dispatch, the runs of
+  the same kind since the ticket's last progress are counted against `watchdog.dispatch_loop_runs`
+  within `watchdog.dispatch_loop_window_ms` and `watchdog.dispatch_loop_long_runs` within
+  `watchdog.dispatch_loop_long_window_ms`. Progress is a state move or a new PR head (a run started on
+  another state or head is not counted), a recorded verdict, or a hold that lifts; a run a usage
+  limit or an unreachable model API stopped is not counted either. Past either limit the run MUST
+  NOT be dispatched: the ticket is held `Blocked` with `waits_on.type` `dispatch_loop` and a reason
+  naming the run kind, the count, the window and the last runs' outcomes (exit, whether they left a
+  new PR head, the handoff signal or its absence), one error line is logged, and the Inbox (and so
+  `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
+  `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its

@@ -335,6 +335,12 @@ defmodule SymphonyElixir.Config.Schema do
       field(:stray_process_cpu_minutes, :integer, default: 10)
       # How long one of Symphony's own MCP tool calls must run before the snapshot reports it as pending.
       field(:pending_tool_report_after_ms, :integer, default: 60_000)
+      # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`): runs of one kind a ticket may get
+      # without progress within each window before it is held instead of dispatched again.
+      field(:dispatch_loop_runs, :integer, default: 4)
+      field(:dispatch_loop_window_ms, :integer, default: 600_000)
+      field(:dispatch_loop_long_runs, :integer, default: 8)
+      field(:dispatch_loop_long_window_ms, :integer, default: 3_600_000)
     end
 
     @fields [
@@ -342,7 +348,11 @@ defmodule SymphonyElixir.Config.Schema do
       :tick_interval_ms,
       :no_progress_threshold_ms,
       :stray_process_cpu_minutes,
-      :pending_tool_report_after_ms
+      :pending_tool_report_after_ms,
+      :dispatch_loop_runs,
+      :dispatch_loop_window_ms,
+      :dispatch_loop_long_runs,
+      :dispatch_loop_long_window_ms
     ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -353,6 +363,11 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
       |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
       |> validate_number(:pending_tool_report_after_ms, greater_than: 0)
+      # A ticket's record keeps its newest 50 runs (`SymphonyElixir.TicketState`), so a higher limit could never trip.
+      |> validate_number(:dispatch_loop_runs, greater_than: 0, less_than_or_equal_to: 50)
+      |> validate_number(:dispatch_loop_window_ms, greater_than: 0)
+      |> validate_number(:dispatch_loop_long_runs, greater_than: 0, less_than_or_equal_to: 50)
+      |> validate_number(:dispatch_loop_long_window_ms, greater_than: 0)
     end
   end
 

@@ -4,8 +4,9 @@ defmodule SymphonyElixir.TicketState do
 
   A record holds everything the machine owns for one ticket: its current phase, the phase
   a CI Fix stay came from (so a mechanical repair can return it), the holds that pause it
-  (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records and its
-  signals ledger (the timeline both the machinery and agents read).
+  (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records, its
+  signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
+  last made progress, which `SymphonyElixir.DispatchLoop` counts.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -17,6 +18,8 @@ defmodule SymphonyElixir.TicketState do
   @max_signals 50
   @max_verdicts 50
   @max_ci_states 20
+  # The dispatch-loop limits are validated to at most this many runs (`Config.Schema.Watchdog`).
+  @max_dispatches 50
 
   @hold_kinds [:blocked, :needs_decision]
 
@@ -48,6 +51,19 @@ defmodule SymphonyElixir.TicketState do
   @typedoc "One entry of the signals ledger."
   @type signal :: %{name: String.t(), details: map(), at: DateTime.t()}
 
+  @typedoc """
+  One run Symphony dispatched for the ticket: its run kind, the state and PR head it started on, and
+  how it ended (`outcome`, nil while it runs): the exit, and the PR head it left.
+  """
+  @type dispatch :: %{
+          kind: String.t(),
+          run_id: String.t() | nil,
+          state: String.t() | nil,
+          head: String.t() | nil,
+          at: DateTime.t() | nil,
+          outcome: %{exit: String.t(), head: String.t() | nil, at: DateTime.t() | nil} | nil
+        }
+
   @typedoc "The CI state of one PR head."
   @type ci_state :: %{head_sha: String.t() | nil, status: String.t(), updated_at: DateTime.t() | nil}
 
@@ -77,6 +93,7 @@ defmodule SymphonyElixir.TicketState do
           verdicts: [verdict()],
           signals: [signal()],
           self_heal: self_heal() | nil,
+          dispatches: [dispatch()],
           updated_at: DateTime.t() | nil
         }
 
@@ -110,6 +127,7 @@ defmodule SymphonyElixir.TicketState do
       verdicts: normalize_verdicts(Map.get(record, :verdicts)),
       signals: normalize_signals(Map.get(record, :signals)),
       self_heal: normalize_self_heal(Map.get(record, :self_heal)),
+      dispatches: normalize_dispatches(Map.get(record, :dispatches)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -126,6 +144,7 @@ defmodule SymphonyElixir.TicketState do
       verdicts: [],
       signals: [],
       self_heal: nil,
+      dispatches: [],
       updated_at: nil
     }
   end
@@ -223,12 +242,19 @@ defmodule SymphonyElixir.TicketState do
     |> Map.put(:updated_at, at)
   end
 
-  @doc "Clears the hold of `kind`, if set; the ticket continues in place."
+  @doc """
+  Clears the hold of `kind`, if set; the ticket continues in place. A hold that lifts is progress —
+  a person unblocked it, answered its decision, or what it waited on landed — so the runs dispatched
+  before it are no longer counted as a loop.
+  """
   @spec clear_hold(t(), :blocked | :needs_decision, DateTime.t()) :: t()
   def clear_hold(record, kind, at \\ DateTime.utc_now()) when kind in @hold_kinds do
+    record = normalize(record)
+    held? = Enum.any?(record.holds, &(&1.kind == kind))
+
     record
-    |> normalize()
     |> Map.update!(:holds, &Enum.reject(&1, fn hold -> hold.kind == kind end))
+    |> Map.update!(:dispatches, &if(held?, do: [], else: &1))
     |> Map.put(:updated_at, at)
   end
 
@@ -244,7 +270,10 @@ defmodule SymphonyElixir.TicketState do
     record |> normalize() |> Map.fetch!(:holds) |> Enum.any?(&(&1.kind == kind))
   end
 
-  @doc "Records a verdict bound to the head SHA it judged."
+  @doc """
+  Records a verdict bound to the head SHA it judged. A verdict is a decision recorded, so the runs
+  dispatched before it are no longer counted as a loop.
+  """
   @spec record_verdict(t(), String.t(), String.t() | nil, String.t(), DateTime.t()) :: t()
   def record_verdict(record, kind, head_sha, outcome, at \\ DateTime.utc_now()) do
     verdict = %{
@@ -257,6 +286,7 @@ defmodule SymphonyElixir.TicketState do
     record
     |> normalize()
     |> Map.update!(:verdicts, &Enum.take([verdict | &1], @max_verdicts))
+    |> Map.put(:dispatches, [])
     |> Map.put(:updated_at, at)
   end
 
@@ -320,6 +350,51 @@ defmodule SymphonyElixir.TicketState do
     |> Map.fetch!(:ci_states)
     |> Enum.find(&(&1.head_sha == head_sha))
   end
+
+  @doc """
+  Records a run Symphony dispatched for the ticket at the head of its dispatches: `attrs` names its
+  `:kind` (an atom or a string), `:run_id`, and the `:state` and PR `:head` it starts on. The list is
+  bounded to the newest entries.
+  """
+  @spec record_dispatch(t(), map(), DateTime.t()) :: t()
+  def record_dispatch(record, attrs, at \\ DateTime.utc_now()) when is_map(attrs) do
+    dispatch = %{
+      kind: kind_string(Map.get(attrs, :kind)) || "",
+      run_id: map_string(attrs, :run_id),
+      state: map_string(attrs, :state),
+      head: map_string(attrs, :head),
+      at: at,
+      outcome: nil
+    }
+
+    record
+    |> normalize()
+    |> Map.update!(:dispatches, &Enum.take([dispatch | &1], @max_dispatches))
+    |> Map.put(:updated_at, at)
+  end
+
+  @doc """
+  Records how the dispatched run `run_id` ended: its `:exit` and the PR `:head` it left. A run that
+  `counted: false` names (one stopped by a usage limit, say) is dropped instead, so it never counts
+  towards a loop. A run the record does not list is ignored.
+  """
+  @spec record_dispatch_outcome(t(), String.t() | nil, map(), DateTime.t()) :: t()
+  def record_dispatch_outcome(record, run_id, attrs, at \\ DateTime.utc_now()) when is_map(attrs) do
+    record = normalize(record)
+    run_id = normalize_string(run_id)
+
+    if run_id && Enum.any?(record.dispatches, &(&1.run_id == run_id)) do
+      record
+      |> Map.update!(:dispatches, &put_dispatch_outcome(&1, run_id, attrs, at))
+      |> Map.put(:updated_at, at)
+    else
+      record
+    end
+  end
+
+  @doc "The runs dispatched since the ticket last made progress, newest first."
+  @spec dispatches(t()) :: [dispatch()]
+  def dispatches(record), do: record |> normalize() |> Map.fetch!(:dispatches)
 
   @doc "The newest `limit` signals, newest first, for prompt injection."
   @spec recent_signals(t(), non_neg_integer()) :: [signal()]
@@ -404,6 +479,44 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_signal(_signal), do: []
+
+  defp put_dispatch_outcome(dispatches, run_id, %{counted: false}, _at), do: Enum.reject(dispatches, &(&1.run_id == run_id))
+
+  defp put_dispatch_outcome(dispatches, run_id, attrs, at) do
+    outcome = %{exit: map_string(attrs, :exit) || "", head: map_string(attrs, :head), at: at}
+    Enum.map(dispatches, &if(&1.run_id == run_id, do: %{&1 | outcome: outcome}, else: &1))
+  end
+
+  defp normalize_dispatches(dispatches) when is_list(dispatches) do
+    dispatches
+    |> Enum.flat_map(&normalize_dispatch/1)
+    |> Enum.take(@max_dispatches)
+  end
+
+  defp normalize_dispatches(_dispatches), do: []
+
+  defp normalize_dispatch(%{kind: kind} = dispatch) when is_binary(kind) do
+    [
+      %{
+        kind: kind,
+        run_id: map_string(dispatch, :run_id),
+        state: map_string(dispatch, :state),
+        head: map_string(dispatch, :head),
+        at: map_datetime(dispatch, :at),
+        outcome: normalize_dispatch_outcome(Map.get(dispatch, :outcome))
+      }
+    ]
+  end
+
+  defp normalize_dispatch(_dispatch), do: []
+
+  defp normalize_dispatch_outcome(%{} = outcome),
+    do: %{exit: map_string(outcome, :exit) || "", head: map_string(outcome, :head), at: map_datetime(outcome, :at)}
+
+  defp normalize_dispatch_outcome(_outcome), do: nil
+
+  defp kind_string(kind) when is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind)
+  defp kind_string(kind), do: normalize_string(kind)
 
   # Self-heal bookkeeping keeps only a non-blank component: anything else is no bookkeeping at all.
   defp normalize_self_heal(attrs) when is_map(attrs), do: self_heal_from(attrs, map_datetime(attrs, :at))

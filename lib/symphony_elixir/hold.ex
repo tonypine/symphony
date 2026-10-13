@@ -22,7 +22,8 @@ defmodule SymphonyElixir.Hold do
 
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
   @kinds [:blocked, :needs_decision]
-  @access_type "access"
+  @dispatch_loop_type "dispatch_loop"
+  @unblockable_types ["access", @dispatch_loop_type]
 
   @typedoc "The holds the design defines."
   @type kind :: :blocked | :needs_decision
@@ -71,14 +72,19 @@ defmodule SymphonyElixir.Hold do
   end
 
   @doc """
-  Whether a hold is waiting on an access grant a person hands over — what an agent's block report
-  records. A dependency or fix-ticket hold clears on its own when what it waits on goes terminal;
-  an access hold is lifted by a person's `Unblock` (see `SymphonyElixir.DirectorMoves`), so it is
-  the one hold that never clears without a person.
+  Whether a hold waits on a person's `Unblock` (see `SymphonyElixir.DirectorMoves`): one waiting on
+  an access grant a person hands over — what an agent's block report records — or one the
+  dispatch-loop guard set (`SymphonyElixir.DispatchLoop`). A dependency or fix-ticket hold clears on
+  its own when what it waits on goes terminal; these two never clear without a person.
   """
-  @spec access_wait?(TicketState.hold() | term()) :: boolean()
-  def access_wait?(%{waits_on: %{type: @access_type}}), do: true
-  def access_wait?(_hold), do: false
+  @spec unblockable?(TicketState.hold() | term()) :: boolean()
+  def unblockable?(%{waits_on: %{type: type}}) when type in @unblockable_types, do: true
+  def unblockable?(_hold), do: false
+
+  @doc "Whether a hold is the one the dispatch-loop guard set (`SymphonyElixir.DispatchLoop`)."
+  @spec dispatch_loop?(TicketState.hold() | term()) :: boolean()
+  def dispatch_loop?(%{waits_on: %{type: @dispatch_loop_type}}), do: true
+  def dispatch_loop?(_hold), do: false
 
   @doc """
   Sets the hold of `kind` on `issue_id`: the store record first, then the machine label. Returns

@@ -11,16 +11,17 @@ defmodule SymphonyElixir.Inbox.Item do
     approval, with its sub-tickets in landing order;
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
     round and what the gate found;
-  - `:blocked`: a ticket an access hold pauses in place (`SymphonyElixir.Hold`), with the reason the
-    hold recorded and what clears it; the Director lifts it with `Unblock`.
+  - `:blocked`: a ticket an access or dispatch-loop hold pauses in place (`SymphonyElixir.Hold`),
+    with the reason the hold recorded and what clears it; the Director lifts it with `Unblock`.
 
   A plan carries its `## Review brief` comment parsed (`SymphonyElixir.Inbox.ReviewBrief`) as
   `review.brief`, nil when it has none.
 
   A hold only becomes a `:blocked` item when nothing else already waits on the ticket: `from_node/4`
   reads the store's hold after `SymphonyElixir.HumanActions.Waiting` found no entry, so an open
-  request or a plan review keeps its own, richer item. A dependency or fix-ticket hold clears on its own
-  and is not listed at all — only an access hold waits on a person.
+  request or a plan review keeps its own, richer item. A dependency or fix-ticket hold clears on its
+  own and is not listed at all — only an access or dispatch-loop hold waits on a person
+  (`Hold.unblockable?/1`).
   """
 
   alias SymphonyElixir.Config.Schema
@@ -73,12 +74,12 @@ defmodule SymphonyElixir.Inbox.Item do
     }
   end
 
-  # A ticket an access hold pauses in place waits on a person's Unblock, so it is listed with the
-  # reason the hold recorded even though no review covers it. A dependency or fix-ticket hold
-  # clears on its own, so it is not listed.
+  # A ticket an access or dispatch-loop hold pauses in place waits on a person's Unblock, so it is
+  # listed with the reason the hold recorded even though no review covers it. A dependency or
+  # fix-ticket hold clears on its own, so it is not listed.
   defp from_hold(node, repo_key, lookups) do
     with hold when is_map(hold) <- store_hold(repo_key, node["id"], lookups),
-         true <- Hold.access_wait?(hold) do
+         true <- Hold.unblockable?(hold) do
       %{
         issue_id: node["id"],
         identifier: node["identifier"],
