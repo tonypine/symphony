@@ -350,6 +350,35 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:issue_state_update, @issue_id, "Done"}
   end
 
+  test "a BEHIND PR that waits for another to land gets no update-branch until that one lands" do
+    now = ~U[2026-10-03 12:00:00Z]
+    settings = Config.settings!()
+    wait = %{issue_id: "issue-1", issue_identifier: "ACME-1", pr_url: "https://github.com/example/repo/pull/1", state: "Merging", shared_files: 2, files: ["a", "b"]}
+    behind = activity_map(head: "head-1", merge_state: "BEHIND", auto_merge_enabled: true)
+    record = %{issue_id: @issue_id, issue_identifier: "ACME-1780", pr_url: @pr_url}
+
+    assert {:ok, %{state: "waiting_to_land", reason: "waits for ACME-1 to land (shares 2 files)"} = waiting} =
+             AutoMerge.step(record, behind, settings, [github: FakeGitHub, landing_wait: wait], now)
+
+    refute_received {:update_branch, _url, _head}
+    assert AutoMerge.describe(waiting) == "`head-1` is behind the base branch and waits for ACME-1 to land (shares 2 files)"
+    assert AutoMerge.armed?(waiting) and AutoMerge.on?(waiting)
+
+    # Still waiting on the next poll; once the leader landed, the branch is updated once.
+    record = Map.put(record, :auto_merge, waiting)
+    assert {:ok, %{state: "waiting_to_land"}} = AutoMerge.step(record, behind, settings, [github: FakeGitHub, landing_wait: wait], now)
+    assert {:ok, %{state: "updating_branch", reason: nil}} = AutoMerge.step(record, behind, settings, [github: FakeGitHub], now)
+    assert_received {:update_branch, @pr_url, "head-1"}
+
+    # A waiting PR that is no longer behind waits for CI, as any other.
+    blocked = activity_map(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+    assert {:ok, %{state: "enabled", reason: nil}} = AutoMerge.step(record, blocked, settings, [github: FakeGitHub, landing_wait: wait], now)
+
+    # A new head starts over from enabled.
+    assert {:ok, %{state: "enabled", head_sha: "head-2"}} =
+             AutoMerge.step(record, activity_map(head: "head-2", merge_state: "BLOCKED", auto_merge_enabled: true), settings, [github: FakeGitHub], now)
+  end
+
   test "once update-branch moves the head, the stale head's CI runs are cancelled, once" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)

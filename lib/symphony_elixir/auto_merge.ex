@@ -7,7 +7,8 @@ defmodule SymphonyElixir.AutoMerge do
   at once when Symphony moves an issue into `Merging`). A PR that is already CLEAN with green or
   no checks is squash-merged right away, without auto-merge. Otherwise it turns
   on auto-merge once per head, and asks GitHub to merge the base branch in once per head when
-  the PR is `BEHIND`. GitHub merges the PR when the required checks pass; the poller then
+  the PR is `BEHIND`, unless it waits for another PR that shares its files to land first
+  (`SymphonyElixir.LandingOrder`). GitHub merges the PR when the required checks pass; the poller then
   moves the issue to `Done`. When GitHub refuses auto-merge (the PR can already merge, the
   branch has no protection, or the repository doesn't allow it) but the PR is `CLEAN` with
   green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a finished
@@ -28,7 +29,7 @@ defmodule SymphonyElixir.AutoMerge do
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, Config}
+  alias SymphonyElixir.{CiPoller, Config, LandingOrder}
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
@@ -118,7 +119,7 @@ defmodule SymphonyElixir.AutoMerge do
 
   @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
   @spec armed?(term()) :: boolean()
-  def armed?(%{state: state}) when state in ["enabled", "updating_branch", "merging", "conflict"], do: true
+  def armed?(%{state: state}) when state in ["enabled", "updating_branch", "waiting_to_land", "merging", "conflict"], do: true
   def armed?(_auto_merge), do: false
 
   @doc """
@@ -170,7 +171,7 @@ defmodule SymphonyElixir.AutoMerge do
   # A new head starts over from "enabled", a conflict's included: the fix pushed it. A fallback or
   # a CI-fix hold stays until the issue leaves `Merging` (the PR poller clears it then), so pushes
   # during that stay don't flip it back.
-  defp next_head_state(state) when state in ["conflict", "merging", "updating_branch"], do: "enabled"
+  defp next_head_state(state) when state in ["conflict", "merging", "updating_branch", "waiting_to_land"], do: "enabled"
   defp next_head_state(state), do: state
 
   defp empty(now) do
@@ -339,10 +340,16 @@ defmodule SymphonyElixir.AutoMerge do
   end
 
   # BEHIND: ask GitHub to merge the base branch in, once per head. CI then runs on the
-  # combined code and auto-merge fires when it passes.
+  # combined code and auto-merge fires when it passes. A PR that waits for another to land first
+  # (`opts[:landing_wait]`, see `SymphonyElixir.LandingOrder`) is left behind until then: that
+  # merge would put it behind again, so it merges the base branch once, after it.
   defp keep_up_to_date(current, record, activity, settings, opts, now) do
+    current = if current.state == "waiting_to_land", do: %{current | state: "enabled", reason: nil}, else: current
+    wait = Keyword.get(opts, :landing_wait)
+
     cond do
       merge_state(activity) != @behind_merge_state -> check_stalled(current, record, activity, settings, now)
+      is_map(wait) and current.update_branch_head_sha != current.head_sha -> {:ok, %{current | state: "waiting_to_land", reason: LandingOrder.reason(wait)}}
       current.update_branch_head_sha != current.head_sha -> update_branch(current, record, activity, opts)
       # Already asked GitHub for this head; wait for the merge commit.
       true -> {:ok, %{current | state: "updating_branch"}}
@@ -431,6 +438,7 @@ defmodule SymphonyElixir.AutoMerge do
   @spec describe(term()) :: String.t() | nil
   def describe(%{state: "enabled", head_sha: head}), do: "auto-merge on, waiting for CI on #{short_sha(head)}"
   def describe(%{state: "updating_branch", head_sha: head}), do: "updating branch (#{short_sha(head)} is behind the base branch)"
+  def describe(%{state: "waiting_to_land", head_sha: head, reason: reason}), do: "#{short_sha(head)} is behind the base branch and #{reason}"
   def describe(%{state: "merging", head_sha: head}), do: "merging #{short_sha(head)}"
   def describe(%{state: "conflict", head_sha: head, disabled_at: %DateTime{}}), do: "blocked: conflict on #{short_sha(head)}; auto-merge off until the fix is approved again"
   def describe(%{state: "conflict", head_sha: head}), do: "blocked: conflict on #{short_sha(head)}"
@@ -485,7 +493,7 @@ defmodule SymphonyElixir.AutoMerge do
   off since: a record `disable_for_exit/5` acts on once the issue leaves `Merging`.
   """
   @spec on?(term()) :: boolean()
-  def on?(%{state: state, enabled_head_sha: head}) when state in ["enabled", "updating_branch", "merging"], do: is_binary(head)
+  def on?(%{state: state, enabled_head_sha: head}) when state in ["enabled", "updating_branch", "waiting_to_land", "merging"], do: is_binary(head)
   def on?(_auto_merge), do: false
 
   @doc """

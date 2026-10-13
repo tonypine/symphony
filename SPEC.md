@@ -2199,6 +2199,11 @@ The poller:
   label or not), is
   recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
   and no retry used, until a person moves the issue on or removes the label;
+- orders the landing of tracked PRs that change the same files (the landing order below): a
+  conflict on a PR that waits for another to land first is recorded as `conflict_waiting_to_land`
+  with no state move, conflict-fix run, auto-merge change or retry used, and is no pending conflict
+  for an agent's prompt; the first poll after that PR lands or stops sharing files with it takes
+  the conflict path above, so the follower merges the base branch once, with the leader's changes;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle
@@ -2282,7 +2287,10 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   only after 3 such refusals in a row.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
-  head. A failed call other than a conflict is retried on the next poll.
+  head. A failed call other than a conflict is retried on the next poll. A PR that waits for
+  another to land first (the landing order below) is not updated: its state is `waiting_to_land`
+  ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
+  PR lands or leaves its way, and the first poll after that updates it once.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
   conflict context, and the fix returns through review. The approval covered the diff before the
@@ -2326,6 +2334,36 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   issue why. Either way it then drops the `auto_merge` state, so the next move to `Merging` turns
   auto-merge on again, even at the same head. While GitHub refuses, the poll records an error and
   the next poll tries again. An issue moved to `Done`, or a PR already merged or closed, keeps it.
+
+Landing order of PRs that change the same files:
+
+- On each poll of a repository with two or more tracked PRs, the PR review poller reads the
+  repository's open PRs and the paths each changes in one GraphQL query (the 100 most recently
+  updated, the first 100 paths of each), so the files follow every head. When the read fails it
+  logs it and keeps the paths each PR review record last had. A record keeps its overlap data under
+  `landing`: the paths, the head they were read at, the state the ticket was last read in and since
+  when, when its state or head last moved, and the PR it waits for and since when. It is written
+  only when it changes, and dropped for a PR that is no longer open.
+- Two tracked PRs overlap when they share a path; the weight of the overlap is the number of paths
+  they share. Tracked PRs land in this order: the ticket furthest along first (`Merging`, then the
+  QA state, then the Code Review state, then `Rework`, then any other state), then the one longest
+  in its state, then the lower PR number. A ticket whose state the poll didn't read (in `CI Fix`, for
+  example) keeps the state it was last read in.
+- A PR waits for the first PR above it in that order that shares a path with it and leads: a PR
+  on a hold (any kind) or whose state and head haven't moved for two hours doesn't lead, and a
+  PR that waits counts as moving on every poll it waits. A forced ticket never waits. The order is
+  total, so a group of overlapping PRs never deadlocks.
+- A waiting PR keeps working (review, QA, rework); only its sync with the base branch waits: no
+  conflict-fix run (above) and no update-branch (auto-merge, above).
+- `/api/v1/state` lists every waiting PR under `landing_waits`: `issue_id`, `issue_identifier`,
+  `pull_request_url`, `state`, `waits_for` (`issue_id`, `issue_identifier`, `pull_request_url`,
+  `state`), `shared_files` (the count), `files` (the first 10 shared paths), `reason` (`waits for
+  MT-1 to land (shares 2 files)`) and `since`.
+- The agent's first-turn prompt lists the other open PRs the poller holds, with their state, URL
+  and paths: the ones that share paths with the ticket's own PR (and the one it waits for), or,
+  for a ticket with no PR in the map yet, every one, so the agent can stack its branch on one
+  instead of meeting the conflict after it lands. The paths are GitHub's, so they are sanitized and
+  marked untrusted.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
@@ -4187,6 +4225,10 @@ Minimum endpoints:
     ticket, and after a restart from the time it noted that event on the ticket's run record. The
     Mac app's Overview shows the count as its Shipped today stage.
   - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
+  - `landing_waits` lists the tracked PRs that wait for another PR that shares their files to land
+    first, with the PR they wait for and the `reason` (Section 7.5). The Mac app's ticket page shows
+    it as a Lands after fact (`MT-1 (shares 2 files)`), and a `Merging` ticket's phase as `Waiting on
+    MT-1 to land (shares 2 files)`.
   - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
     for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
     MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,

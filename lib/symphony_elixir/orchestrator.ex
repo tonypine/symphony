@@ -7548,6 +7548,7 @@ defmodule SymphonyElixir.Orchestrator do
     skipped = error_skipped ++ cached_skipped
 
     {auto_merge, auto_merge_ms} = timed_part(&PrReviewPoller.auto_merge_statuses/0)
+    {landing_waits, landing_waits_ms} = timed_part(&PrReviewPoller.landing_waits/0)
     {run_history, run_history_ms} = timed_part(fn -> persisted_run_history(state.repo_key) end)
 
     awaiting_clarification =
@@ -7577,6 +7578,7 @@ defmodule SymphonyElixir.Orchestrator do
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
       auto_merge: auto_merge,
+      landing_waits: landing_waits,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
       dispatch_skipped: dispatch_skipped_snapshot(state.dispatch_skipped),
       shipped_today: ShippedToday.today(state.shipped, now),
@@ -7590,7 +7592,7 @@ defmodule SymphonyElixir.Orchestrator do
       }
     }
 
-    {snapshot, %{run_history: run_history_ms, auto_merge: auto_merge_ms}}
+    {snapshot, %{run_history: run_history_ms, auto_merge: auto_merge_ms, landing_waits: landing_waits_ms}}
   end
 
   defp concurrency_snapshot(%State{} = state) do
