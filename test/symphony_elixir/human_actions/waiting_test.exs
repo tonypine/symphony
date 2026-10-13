@@ -55,7 +55,7 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
 
   defp entries(nodes), do: Waiting.entries(nodes, %Schema{})
 
-  test "lists a PR and a plan in a review state, and reads a `Final verification:` title as a PR, with the brief's headline and when it entered the state" do
+  test "lists PRs and a plan in a review state, with the brief's headline and when each entered the state" do
     pr =
       node("TP-1", %{
         "state" => %{"name" => "Human Review"},
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
         "history" => history([moved("In Review", "2026-10-01T08:00:00Z")])
       })
 
-    verification = node("TP-3", %{"title" => "Final verification: Ship it"})
+    bare = node("TP-3", %{})
 
     assert [
              %{
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
              },
              %{identifier: "TP-2", kind: :plan, waiting_since: ~U[2026-10-01 08:00:00Z], headline: "The split into four sub-tickets"},
              %{identifier: "TP-3", kind: :pr, waiting_since: nil, headline: nil}
-           ] = entries([pr, plan, verification])
+           ] = entries([pr, plan, bare])
   end
 
   test "an open request makes the issue an action, waiting since the request when its history has no move" do
