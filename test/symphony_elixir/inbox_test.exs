@@ -269,6 +269,19 @@ defmodule SymphonyElixir.InboxTest do
                Item.from_node(held, "shop", %Schema{}, lookups(%{hold | reason: nil, clearing_condition: nil}))
     end
 
+    test "a ticket the dispatch-loop guard holds, with the loop in the reason" do
+      held = issue_node("SHOP-61", %{"state" => %{"name" => "Rework"}, "labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
+      run = %{kind: "rework", run_id: "run-1", state: "Rework", head: "abc", at: ~U[2026-10-01 05:58:00Z], outcome: %{exit: "ended normally", head: "abc", at: nil}}
+      attrs = SymphonyElixir.DispatchLoop.hold_attrs(%{kind: "rework", count: 4, window_ms: 600_000, runs: [run]}, [])
+      hold = Map.merge(attrs, %{kind: :blocked, decision: nil, set_at: ~U[2026-10-01 06:00:00Z]})
+
+      assert %{kind: :blocked, ask: ask, review: %{reason: ask, clearing_condition: "when a person unblocks or restarts it"}} =
+               Item.from_node(held, "shop", %Schema{}, lookups(hold))
+
+      assert ask =~ "dispatch_loop: 4 rework runs in 10 minutes without a state change, a new PR head or a decision"
+      assert ask =~ "started 05:58 UTC, ended normally, no new PR head, no handoff signal"
+    end
+
     test "reads an option and a quality-gate entry" do
       assert Item.option("Plain text") == %{label: "Plain text", effect: nil, recommended: false}
       assert Item.option("**Keep** (recommended):") == %{label: "Keep", effect: nil, recommended: true}

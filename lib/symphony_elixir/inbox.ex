@@ -13,7 +13,7 @@ defmodule SymphonyElixir.Inbox do
      their description, comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
   3. each becomes an `SymphonyElixir.Inbox.Item`, with, for a ticket no request or plan review
-     covers, the access hold its store record carries.
+     covers, the access or dispatch-loop hold its store record carries.
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
   `clarify`), drops an issue that is running or that the orchestrator saw leave the state the read
