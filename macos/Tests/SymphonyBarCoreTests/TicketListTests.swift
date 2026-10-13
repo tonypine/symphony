@@ -11,7 +11,7 @@ final class TicketListTests: XCTestCase {
         let list = try tickets("tickets")
         let rows = Dictionary(uniqueKeysWithValues: list.rows.map { ($0.identifier, $0) })
 
-        XCTAssertEqual(list.rows.count, 18)
+        XCTAssertEqual(list.rows.count, 19)
         XCTAssertEqual(rows["SHOP-305"]?.stage, .working)
         XCTAssertEqual(rows["SHOP-305"]?.waitsOn, "the agent")
         XCTAssertEqual(rows["SHOP-305"]?.sinceText, "22 min")
@@ -28,6 +28,9 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(rows["SHOP-320"]?.waitsOn, "a slot")
         XCTAssertEqual(rows["API-134"]?.waitsOn, "retry at 14:35")
         XCTAssertEqual(rows["SHOP-322"]?.waitsOn, "BIL-206")
+        XCTAssertEqual(rows["API-140"]?.stage, .queued)
+        XCTAssertEqual(rows["API-140"]?.waitsOn, "priority medium is not in tickets.priorities (urgent, high)")
+        XCTAssertEqual(rows["API-140"]?.sinceText, "7 min")
         XCTAssertEqual(rows["DOCS-41"]?.waitsOn, "one repo label")
         XCTAssertEqual(rows["SHOP-288"]?.stage, .shipped)
         // Stage by stage, oldest first.
@@ -50,17 +53,37 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(list.row("SHOP-311")?.facts.last, TicketList.Fact(label: "Last error", value: "mix test failed: 4 failures"))
     }
 
+    func testAPassedOverTicketWaitsOnItsDispatchGate() throws {
+        let state = try XCTUnwrap(OverviewState.decode(Data(contentsOf: fixture("tickets").appendingPathComponent("state.json"))))
+        XCTAssertEqual(state.dispatchSkipped, [OverviewState.Waiting(
+            issueID: "i-140", identifier: "API-140", title: "Webhook delivery log", repoKey: "api", state: "Todo",
+            reason: "priority medium is not in tickets.priorities (urgent, high)",
+            since: SymphonyState.parseDate("2026-10-07T14:13:00Z")
+        )])
+
+        // The inspector's facts: the reason it waits on and since when.
+        let row = try XCTUnwrap(TicketList(state: state, now: Date(), timeZone: utc).row("API-140"))
+        XCTAssertEqual(row.facts, [
+            TicketList.Fact(label: "Stage", value: "Queued"),
+            TicketList.Fact(label: "State", value: "Todo"),
+            TicketList.Fact(label: "Repo", value: "api"),
+            TicketList.Fact(label: "Waits on", value: "priority medium is not in tickets.priorities (urgent, high)"),
+            TicketList.Fact(label: "Since", value: "7 min ago"),
+            TicketList.Fact(label: "Forced", value: "No"),
+        ])
+    }
+
     func testTheScopeBarSearchAndRepoScopeFilter() throws {
         let list = try tickets("tickets")
         XCTAssertEqual(list.rows(filter: .working, search: "").map(\.identifier), ["SHOP-305", "API-131"])
         XCTAssertEqual(list.rows(filter: .review, search: "").count, 2)
         XCTAssertEqual(list.rows(filter: .waitingOnYou, search: "").map(\.identifier), ["DOCS-40", "SHOP-290"])
         XCTAssertEqual(list.rows(filter: .merging, search: "").count, 2)
-        XCTAssertEqual(list.count(.queued), 7)
+        XCTAssertEqual(list.count(.queued), 8)
         XCTAssertEqual(list.rows(filter: .needsAttention, search: "").map(\.identifier), ["DOCS-41", "SHOP-311"])
         XCTAssertEqual(list.rows(filter: .forced, search: "").map(\.identifier), ["SHOP-325"])
         XCTAssertEqual(list.count(.shipped), 3)
-        XCTAssertEqual(list.count(.all), 18)
+        XCTAssertEqual(list.count(.all), 19)
 
         XCTAssertEqual(list.rows(filter: .all, search: "bil-206").map(\.identifier), ["SHOP-322"])
         XCTAssertEqual(list.rows(filter: .all, search: "  checkout  express ").map(\.identifier), ["SHOP-325"])
@@ -117,6 +140,7 @@ final class TicketListTests: XCTestCase {
             running: [.init(identifier: "TP-5", repoKey: "r", runKind: "plan_revision", turnCount: 2, lastMessage: "Hi", lastEventAt: now.addingTimeInterval(-Overview.stuckAfter), totalTokens: 1_200)],
             watching: [.init(identifier: "TP-6", state: "QA"), .init(identifier: "TP-5", title: "From watching", repoKey: "other", url: URL(string: "https://x.test/TP-5"))],
             retrying: [.init(identifier: "TP-7")],
+            dispatchSkipped: [.init(identifier: "TP-12"), .init(identifier: "TP-9", reason: "blocked by TP-1", since: now)],
             blocked: [.init(identifier: "TP-8", reason: "waits for the app update"), .init(identifier: "TP-9")],
             autoMerge: [.init(identifier: "TP-10", state: "ci_failure", status: "auto-merge off"), .init(identifier: "TP-11")]
         )
@@ -143,6 +167,8 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(list.row("TP-7")?.waitsOn, "a retry")
         XCTAssertEqual(list.row("TP-8")?.waitsOn, "an app update")
         XCTAssertEqual(list.row("TP-9")?.waitsOn, "its blockers")
+        XCTAssertEqual(list.row("TP-9")?.since, now, "a blocked ticket takes its since from dispatch_skipped")
+        XCTAssertEqual(list.row("TP-12")?.waitsOn, "a dispatch gate")
         XCTAssertEqual(list.row("TP-10")?.waitsOn, "ci failure")
         XCTAssertEqual(list.row("TP-10")?.needsAttention, true)
         XCTAssertEqual(list.row("TP-11")?.waitsOn, "CI")

@@ -195,6 +195,8 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(phase(["retrying": with(["attempt": 1])]), .waiting(on: "a retry"))
         XCTAssertEqual(phase(["slot_waiting": with(["reason": "work slots full"])]), .waiting(on: "a slot (work slots full)"))
         XCTAssertEqual(phase(["slot_waiting": with([:])]), .waiting(on: "a slot"))
+        XCTAssertEqual(phase(["dispatch_skipped": with(["reason": "on a Needs Decision hold"])]), .waiting(on: "on a Needs Decision hold"))
+        XCTAssertEqual(phase(["dispatch_skipped": with([:])]), .waiting(on: "a dispatch gate"))
         XCTAssertEqual(phase(["blocked": with(["blocked_by": [["issue_identifier": "T-0", "state": "In Progress"]]])]), .waiting(on: "a blocker: T-0"))
         XCTAssertEqual(phase(["blocked": with(["reason": "waits for an app update", "blocked_by": []])]), .waiting(on: "a blocker (waits for an app update)"))
         XCTAssertEqual(phase(["blocked": with([:])]), .waiting(on: "a blocker"))
@@ -206,6 +208,27 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(phase(["watching": with(["state": "In Review"]), "qa": ["running": [], "queued": [["issue_id": "i-1"]]]]),
                        .inReview(qa: "QA pass queued"))
         XCTAssertEqual(phase(["shipped_today": with([:])]), .done(pullRequest: nil, mergedAt: nil))
+    }
+
+    func testAPassedOverTicketSaysItsGateAndHasNoTranscript() {
+        let reason = "priority medium is not in tickets.priorities (urgent, high)"
+        let state = json([
+            "generated_at": "2026-10-07T14:20:00Z",
+            "dispatch_skipped": [["issue_identifier": "T-1", "title": "Webhook delivery log", "repo_key": "api", "state": "Todo",
+                                  "reason": reason, "since": "2026-10-07T14:13:00Z"]],
+        ])
+        let issue = json(["repo_key": "api", "status": "dispatch_skipped",
+                          "dispatch_skipped": ["state": "Todo", "reason": reason, "since": "2026-10-07T14:13:00Z"]])
+        let page = TicketPage(identifier: "T-1", sources: TicketPage.Sources(state: state, issue: issue), now: wallClock, timeZone: utc)
+
+        XCTAssertEqual(page.phaseSentence, "Waiting on \(reason)")
+        XCTAssertEqual(page.badges.map(\.word), ["Waiting"])
+        XCTAssertEqual(page.title, "Webhook delivery log")
+        XCTAssertEqual(page.facts.first, TicketPage.Fact(label: "State", value: "Todo"))
+        XCTAssertFalse(page.isTracked)
+
+        let untracked = TicketPage(identifier: "T-1", sources: TicketPage.Sources(issue: json(["status": "untracked"])), now: wallClock, timeZone: utc)
+        XCTAssertTrue(untracked.isTracked)
     }
 
     func testInReviewAndAFailingTicketSaysHowOften() throws {

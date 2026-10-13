@@ -1044,8 +1044,8 @@ Four more variables, read only in QA mode:
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and
-  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one and a
-  conflict), and of the dispatch control's limit hold: `holding` (a Claude 5-hour limit). Ages in them count from the payload's `generated_at`, so they read the same
+  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
+  conflict, and API-140, which a `tickets.priorities` filter passes over), and of the dispatch control's limit hold: `holding` (a Claude 5-hour limit). Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

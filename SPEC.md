@@ -4643,6 +4643,10 @@ Minimum endpoints:
   - Issues in the `watching` list SHOULD resolve here with `status: "watching"` and a lightweight
     `watching` object containing `state`, `url`, and `last_ran_at`; they do not have active session
     fields.
+  - An issue listed under `slot_waiting` or `dispatch_skipped` in `/api/v1/state` SHOULD resolve here
+    with that list's name as its `status` (`slot_waiting` or `dispatch_skipped`) and an object under
+    the same key with its `state`, the `reason` it waits and `since`. A running, retrying or watched
+    issue keeps that status.
   - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
     first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
     reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with

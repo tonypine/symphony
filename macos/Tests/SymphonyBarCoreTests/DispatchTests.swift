@@ -14,7 +14,7 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(control.status, .done)
         XCTAssertEqual(control.working, ["SHOP-305 · Checkout total rounding", "API-131 · Rate limit headers"])
         XCTAssertEqual(control.queued.count, DispatchControl.listLimit)
-        XCTAssertEqual(control.moreQueued, 2)
+        XCTAssertEqual(control.moreQueued, 3)
         XCTAssertEqual(control.moreWorking, 0)
         XCTAssertEqual(control.accessibilityLabel, "Dispatch on, 2 working")
         XCTAssertTrue(control.canPause)
