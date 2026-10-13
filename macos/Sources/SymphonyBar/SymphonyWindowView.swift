@@ -16,6 +16,7 @@ final class SymphonyWindowModel: ObservableObject {
             onSelect(selection)
             readHistoryIfDue()
             readQualityIfDue()
+            readShippedIfDue()
         }
     }
 
@@ -71,6 +72,27 @@ final class SymphonyWindowModel: ObservableObject {
             readQualityIfDue()
         }
     }
+    /// Shipped's merged tickets for its period, read while Shipped shows (D9).
+    @Published var shipped: ShippedPayload?
+    /// What the last Shipped read got when it got none, nil after one that did.
+    @Published var shippedResult: EndpointResult?
+    /// Every stored learning, read while Shipped shows, for its Learnings tab.
+    @Published var learnings: LearningsPayload?
+    @Published var learningsResult: EndpointResult?
+    /// Shipped's segmented control: Shipped or Learnings.
+    @Published var shippedTab: Shipped.Tab = .shipped
+    /// Shipped's period; changing it reads again.
+    @Published var shippedPeriod: Shipped.Period = .week {
+        didSet {
+            guard shippedPeriod != oldValue else { return }
+            shippedReadAt = nil
+            readShippedIfDue()
+        }
+    }
+    /// The Learnings tab's repo and tag filters and search.
+    @Published var learningsFilter = Learnings.Filter()
+    /// Set by ⌘F on Shipped to put the focus in the Learnings search field.
+    @Published var learningsSearchRequested = false
     /// The initiative shown, by issue id; nil shows the first.
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
@@ -134,6 +156,9 @@ final class SymphonyWindowModel: ObservableObject {
     private var qualityReadAt: Date?
     /// The history is read again at most this often.
     static let historyInterval: TimeInterval = 60
+    var readingShipped = false
+    /// When Shipped and Learnings were last read; the run records they come from change slowly.
+    var shippedReadAt: Date?
     var readingTicket = false
     /// When the ticket page last read its runs and audit records, which change slowly.
     var ticketSlowReadAt: Date?
@@ -157,6 +182,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readInitiatives()
                 readHistoryIfDue()
                 readQualityIfDue()
+                readShippedIfDue()
                 readTicket()
             }
             .store(in: &cancellables)
@@ -536,6 +562,15 @@ struct SymphonyWindowView: View {
                         DispatchControlButton(model: model, client: client)
                     }
                     .sharedBackgroundVisibility(.hidden)
+                    if model.selection == .shipped, model.shownTicket == nil {
+                        ToolbarItem(placement: .principal) {
+                            Picker("Shipped or Learnings", selection: $model.shippedTab) {
+                                ForEach(Shipped.Tab.allCases) { Text($0.title).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .fixedSize()
+                        }
+                    }
                     if model.selection == .tickets, model.shownTicket == nil {
                         ToolbarItem(placement: .automatic) {
                             Button { model.openForceSheet() } label: {
@@ -712,6 +747,8 @@ struct SymphonyDetail: View {
                 UsageContent(model: model, client: client)
             case .quality:
                 QualityContent(model: model)
+            case .shipped:
+                ShippedContent(model: model)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }
@@ -736,7 +773,8 @@ struct OverviewContent: View {
                     openTicket: model.openTicket,
                     openTickets: model.showTickets,
                     openInitiative: model.showInitiative,
-                    openUsage: model.showUsage
+                    openUsage: model.showUsage,
+                    openShipped: { model.showShipped() }
                 ),
                 initiatives: model.initiativesList?.active ?? []
             )
