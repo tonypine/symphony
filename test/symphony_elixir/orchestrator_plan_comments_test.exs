@@ -62,7 +62,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test"]]
     )
 
     parent =

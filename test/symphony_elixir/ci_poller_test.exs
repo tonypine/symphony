@@ -401,7 +401,7 @@ defmodule SymphonyElixir.CiPollerTest do
       tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     Application.put_env(:symphony_elixir, :ci_test_issues, [])
@@ -1546,7 +1546,7 @@ defmodule SymphonyElixir.CiPollerTest do
       tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1},
-      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     put_run(issue, now)
@@ -2749,7 +2749,7 @@ defmodule SymphonyElixir.CiPollerTest do
       tracker_kind: "memory",
       pr_review_mode: "polling",
       ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
-      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
   end
 

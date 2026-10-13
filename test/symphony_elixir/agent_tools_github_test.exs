@@ -1980,7 +1980,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
-  test "a designed repo's push and pull request record the explicit handoff signal" do
+  test "a push and a pull request record the explicit handoff signal" do
     fixture = sync_fixture!("github-agent-handoff")
     repo_key = "github-agent-handoff-repo"
     issue_id = "issue-github-agent-handoff"
@@ -1994,9 +1994,9 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         |> Map.put(:issue, %{id: issue_id, repo_key: repo_key})
         |> Map.put(:command_security, command_security)
 
-      designed = %Schema{state_machine: "designed"}
+      settings = %Schema{}
 
-      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context, settings: designed)
+      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context, settings: settings)
 
       head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
       assert Handoff.emitted?(repo_key, issue_id, head)
@@ -2012,21 +2012,16 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
       assert {:ok, %{"url" => "https://github.com/acme/symphony/pull/9"}} =
                GitHub.create_pull_request(context, "Title", "Body", false,
-                 settings: designed,
+                 settings: settings,
                  git_runner: git_runner,
                  gh_runner: gh_runner
                )
 
       assert Handoff.emitted?(repo_key, issue_id, head)
 
-      # A legacy repo records nothing at all.
+      # A tool call made outside a configured repo records nothing.
       RunStore.delete_ticket_state(repo_key, issue_id)
-      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context, settings: %Schema{})
-      assert Handoff.signals(repo_key, issue_id) == []
-
-      # Nor does a tool call made outside a configured repo.
-      RunStore.delete_ticket_state(repo_key, issue_id)
-      assert {:ok, _result} = GitHub.push_branch(fixture.context, settings: designed)
+      assert {:ok, _result} = GitHub.push_branch(fixture.context, settings: settings)
       assert Handoff.signals(repo_key, issue_id) == []
     after
       File.rm_rf(fixture.root)
@@ -2047,8 +2042,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
             "name" => repo_key,
             "path" => Path.dirname(Workflow.workflow_file_path()),
             "workflow" => Path.basename(Workflow.workflow_file_path()),
-            "team" => "Test",
-            "state_machine" => "designed"
+            "team" => "Test"
           }
         ]
       )
@@ -2060,7 +2054,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         |> Map.put(:issue, %{id: issue_id, repo_key: repo_key})
         |> Map.update!(:command_security, &Map.put(&1, :origin_repo, "acme/symphony"))
 
-      # No `settings:` opt: the handoff resolves the repo's own designed config.
+      # No `settings:` opt: the handoff resolves the repo's own config.
       assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context)
 
       head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
@@ -2094,7 +2088,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         |> Map.put(:issue, %{repo_key: repo_key})
         |> Map.put(:issue_id, issue_id)
 
-      assert {:ok, _result} = GitHub.push_branch(bare, settings: %Schema{state_machine: "designed"})
+      assert {:ok, _result} = GitHub.push_branch(bare, settings: %Schema{})
       assert [%{name: "handoff", details: %{head: ^head}}] = Handoff.signals(repo_key, issue_id)
     after
       File.rm_rf(fixture.root)

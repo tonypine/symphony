@@ -2313,7 +2313,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
 2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
-**Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
+**Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
 ### 3. Approve the plan for MOT-40
 

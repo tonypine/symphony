@@ -7,13 +7,9 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   @project %{"id" => "project-1", "name" => "Cycle"}
   @scope %{"team" => %{"key" => %{"eq" => "MOT"}}}
 
-  # Most tests read issues a config that predates the Human Review state labelled: it still sets
+  # Most tests read issues a config that predates the Needs Decision hold labelled: it still sets
   # the deprecated `human_actions.label`.
   defp settings, do: put_in(%Schema{}.human_actions.label, "human-action")
-
-  # A repo on the designed machine, where a decision request sets a `Needs Decision` hold instead of
-  # moving the ticket.
-  defp designed_settings, do: %Schema{state_machine: "designed"}
 
   defp collect(nodes, opts \\ []) do
     test_pid = self()
@@ -58,9 +54,9 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     options = [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Releases ship unsigned."}]
 
     body =
-      Request.render(
+      Request.render_hold(
         %{title: title, question: "Add the signing secret?", why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, options: options},
-        "Human Review"
+        "In Progress"
       )
 
     %{"id" => id, "body" => body, "createdAt" => created_at}
@@ -80,7 +76,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
-  test "queries the route's scope for labelled, In Review, Human Review, final verification or held issues that are not terminal" do
+  test "queries the route's scope for labelled, draining, final verification or held issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -96,7 +92,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
                    %{"title" => %{"startsWith" => "Final verification:"}},
-                   # A designed repo's decision request leaves the ticket in its phase.
+                   # A decision request leaves the ticket in its phase.
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
                  ]
                },
@@ -105,7 +101,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            }
   end
 
-  test "with the default settings, queries no label, and lists a request on an unlabelled issue in Human Review" do
+  test "with the default settings, queries no label, and lists a request on an unlabelled straggler in Human Review" do
     issue =
       node("MOT-25", %{
         "state" => %{"name" => "Human Review"},
@@ -126,10 +122,9 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
              %Action{
                key: "request:comment-1",
                kind: :request,
-               human_review: true,
                steps: ["Add them."],
                options: [],
-               done_when: "you move MOT-25 out of Human Review once it is unblocked, or the agent withdraws the request."
+               done_when: "you reply to the request, or the agent withdraws the request."
              }
            ] = actions(collected)
 
@@ -180,19 +175,19 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                options: ["**Add it** (recommended): Releases sign again.", "**Drop signing**: Releases ship unsigned."],
                steps: [],
                issue: %{id: "id-MOT-24", identifier: "MOT-24", url: "https://linear.app/acme/issue/MOT-24", state: "Backlog"},
-               done_when: "you reply with your pick and move MOT-24 out of Backlog, or the agent withdraws the request."
+               done_when: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
              }
            ] = actions(collected)
   end
 
-  test "a designed repo's decision names the reply (or the Inbox) as enough, with no state move" do
+  test "a decision names the reply (or the Inbox) as enough, with no state move" do
     issue =
       node("MOT-90", %{
         "state" => %{"name" => "Human Review"},
         "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")])
       })
 
-    assert {:ok, collected} = collect([issue], settings: designed_settings())
+    assert {:ok, collected} = collect([issue], settings: %Schema{})
 
     assert [%Action{kind: :request, options: [_ | _], done_when: done_when}] = actions(collected)
 
@@ -200,21 +195,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     refute done_when =~ "move"
   end
 
-  test "the same line for a legacy request still names the state move" do
-    issue =
-      node("MOT-91", %{
-        "state" => %{"name" => "Human Review"},
-        "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")])
-      })
-
-    assert {:ok, collected} = collect([issue])
-
-    assert [%Action{kind: :request, options: [_ | _], done_when: done_when}] = actions(collected)
-
-    assert done_when == "you reply with your pick and move MOT-91 out of Human Review, or the agent withdraws the request."
-  end
-
-  test "a designed repo's hand-written steps request names the reply, with no state move" do
+  test "a hand-written steps request names the reply, with no state move" do
     issue =
       node("MOT-92", %{
         "state" => %{"name" => "Human Review"},
@@ -224,7 +205,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
           ])
       })
 
-    assert {:ok, collected} = collect([issue], settings: designed_settings())
+    assert {:ok, collected} = collect([issue], settings: %Schema{})
 
     assert [%Action{kind: :request, options: [], done_when: done_when}] = actions(collected)
 
@@ -272,7 +253,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
             request_comment("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
             request_comment("comment-2", "Add the release signing secrets", "2026-10-04T18:58:00.000Z"),
             withdrawal.("reply-1", "comment-1"),
-            %{"id" => "reply-2", "body" => "Still waiting on this.", "createdAt" => "2026-10-04T19:01:00.000Z", "parent" => %{"id" => "comment-2"}},
             Map.put(withdrawal.("comment-3", "comment-9"), "parent", nil)
           ])
       })
@@ -285,81 +265,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     assert {:ok, collected} = collect([partly, all_withdrawn])
     assert [%Action{key: "request:comment-2", title: "Add the release signing secrets"}] = actions(collected)
-  end
-
-  test "lists a breakdown parent waiting in In Review for its plan" do
-    parent = node("MOT-40", %{"state" => %{"name" => "In Review"}, "labels" => labels(["breakdown"])})
-
-    assert {:ok, collected} = collect([parent, node("MOT-41", %{"labels" => labels(["breakdown"])})])
-
-    assert [
-             %Action{
-               key: "plan:id-MOT-40",
-               kind: :plan_review,
-               title: "Approve the plan for MOT-40",
-               est_minutes: 10,
-               steps: [
-                 "Read the plan in the `## Symphony Workpad` comment on MOT-40.",
-                 "To approve, move MOT-40 to `Waiting on sub-tickets`; Symphony moves its sub-tickets to Todo.",
-                 "To reject it, comment what to change and move MOT-40 to `Rework`."
-               ],
-               done_when: "MOT-40 leaves In Review."
-             }
-           ] = actions(collected)
-
-    no_waiting_state = %Schema{tracker: %{settings().tracker | waiting_on_sub_issues_state: nil}}
-    assert {:ok, collected} = collect([parent], settings: no_waiting_state)
-    assert [%Action{steps: [_read, "To approve, move the sub-tickets you accept to Todo.", _reject]}] = actions(collected)
-  end
-
-  test "lists every issue in Human Review, marked so the update puts it first" do
-    plan = node("MOT-60", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["breakdown"])})
-
-    requested =
-      node("MOT-62", %{
-        "state" => %{"name" => "Human Review"},
-        "labels" => labels(["human-action"]),
-        "comments" => comments([request_comment("comment-1", "Add the OpenRouter key", "2026-10-03T10:00:00.000Z")]),
-        "history" => history([%{"createdAt" => "2026-10-03T10:05:00.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Human Review"}}])
-      })
-
-    plain = node("MOT-63", %{"state" => %{"name" => "Human Review"}})
-    in_review = node("MOT-64", %{"state" => %{"name" => "In Review"}, "labels" => labels(["breakdown"])})
-
-    assert {:ok, collected} = collect([plan, requested, plain, in_review])
-
-    assert [
-             %Action{key: "plan:id-MOT-60", kind: :plan_review, human_review: true, done_when: "MOT-60 leaves Human Review."},
-             %Action{key: "plan:id-MOT-64", kind: :plan_review, human_review: false},
-             %Action{key: "request:comment-1", kind: :request, human_review: true},
-             %Action{
-               key: "review:id-MOT-63",
-               kind: :human_review,
-               human_review: true,
-               title: "Review MOT-63",
-               why: "MOT-63 waits in Human Review: only you can move it on.",
-               est_minutes: 10,
-               steps: [_read, "Move MOT-63 to `Merging` to approve its PR, to `Rework` to send it back, or to `Done` to sign off a final verification."],
-               done_when: "MOT-63 leaves Human Review."
-             }
-           ] = actions(collected)
-  end
-
-  test "with human_review: null, queries and lists only In Review as before" do
-    no_human_review = %Schema{tracker: %{settings().tracker | human_review_state: nil}}
-
-    assert {:ok, collected} = collect([node("MOT-63", %{"state" => %{"name" => "Human Review"}})], settings: no_human_review)
-    # The deprecated label still counts.
-    no_human_review = put_in(no_human_review.human_actions.label, "human-action")
-    assert {:ok, ^collected} = collect([node("MOT-63", %{"state" => %{"name" => "Human Review"}})], settings: no_human_review)
-    assert collected == %{}
-
-    assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
-    assert [in_review, final_verification, held] = wanted
-    assert in_review == %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
-    assert final_verification == %{"title" => %{"startsWith" => "Final verification:"}}
-    # The hold's label lists a designed repo's request wherever in the workflow it sits.
-    assert held == %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
   end
 
   test "skips issues outside a project and merges what several routes return" do

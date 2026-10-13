@@ -2067,7 +2067,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     test "does not post the same open request twice" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       refute Linear.CommentRegistry.human_action_requested?(registry)
-      body = Request.render(decision_request("add the release  signing secrets"), "Human Review")
+      body = Request.render_hold(decision_request("add the release  signing secrets"), "Human Review")
 
       scope =
         human_action_scope(%{
@@ -2278,7 +2278,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     @withdrawal %{"reason" => "The dialyzer run had started minutes earlier, not 11 hours ago."}
 
     defp request_node(id, title, created_at) do
-      %{"id" => id, "body" => Request.render(decision_request(title), "Human Review"), "createdAt" => created_at}
+      %{"id" => id, "body" => Request.render_hold(decision_request(title), "Human Review"), "createdAt" => created_at}
     end
 
     defp withdrawal_scope(comments, issue \\ %{}) do
@@ -2926,7 +2926,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
 
     defp designed_settings do
-      assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+      assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
       settings
     end
 

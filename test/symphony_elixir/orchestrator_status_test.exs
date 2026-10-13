@@ -3565,7 +3565,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress"],
       repos: [
-        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]
       ]
     )
 
@@ -3589,7 +3589,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       tracker_active_states: ["Todo", "Plan Review"],
       repos: [
         [key: "legacy-repo", workflow: workflow, team: "Legacy"],
-        [key: "designed-repo", workflow: workflow, team: "Designed", state_machine: "designed"]
+        [key: "designed-repo", workflow: workflow, team: "Designed"]
       ]
     )
 

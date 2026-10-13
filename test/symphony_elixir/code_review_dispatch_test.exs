@@ -11,7 +11,7 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
 
   defp designed_repos do
     [
-      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"], state_machine: "designed"],
+      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"]],
       [key: @legacy_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["legacy"]]
     ]
   end

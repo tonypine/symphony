@@ -130,7 +130,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   describe "the designed handoff signal" do
     defp designed_repos do
-      [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     end
 
     test "a run that ends quietly with a PR open does not advance" do

@@ -204,7 +204,7 @@ defmodule SymphonyElixir.DependencyGate do
     if issue_terminal?(issue) do
       Logger.info("Skipping dependency hold for terminal issue issue_id=#{issue_id}")
     else
-      set_hold(issue, Map.get(gate, :repo_key) || Map.get(issue, :repo_key))
+      set_hold(issue, Map.get(issue, :repo_key) || Map.get(gate, :repo_key))
     end
   end
 
@@ -213,20 +213,20 @@ defmodule SymphonyElixir.DependencyGate do
   defp set_hold(%{id: issue_id} = issue, repo_key) do
     case Hold.set(repo_key, issue_id, :blocked, Hold.access_attrs(@hold_reason)) do
       :ok ->
-        record_hold_signal(issue, repo_key, issue_id)
+        record_hold_signal(repo_key, issue_id, Map.get(issue, :state))
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to hold dependency hold issue: #{inspect(reason)}")
+        Logger.warning("Failed to hold the issue for dependency approval issue_id=#{issue_id}: #{inspect(reason)}")
         :ok
     end
   end
 
   # Best-effort recording of the dependency hold into the ticket's signals ledger (inert; a store
   # failure never changes the hold). Runs only after the hold is set.
-  defp record_hold_signal(issue, repo_key, issue_id) do
-    TicketSignals.record(repo_key || Map.get(issue, :repo_key), issue_id, "blocked", %{
-      state: Map.get(issue, :state),
+  defp record_hold_signal(repo_key, issue_id, state) do
+    TicketSignals.record(repo_key, issue_id, "blocked", %{
+      state: state,
       reason: "dependency_source_requires_approval"
     })
   end

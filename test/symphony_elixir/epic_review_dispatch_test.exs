@@ -8,14 +8,12 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
   alias SymphonyElixir.SubIssueWait
 
   @designed_repo "designed-epic"
-  @legacy_repo "legacy-epic"
   @issue_id "issue-epic-review-dispatch"
   @waiting "Waiting on sub-tickets"
 
   defp repos do
     [
-      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"], state_machine: "designed"],
-      [key: @legacy_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["legacy"]]
+      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"]]
     ]
   end
 
@@ -33,15 +31,10 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
 
   defp state, do: %Orchestrator.State{}
 
-  defp settings(version) do
-    assert {:ok, settings} =
-             Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => version})
-
+  defp designed_settings do
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
-
-  defp designed_settings, do: settings("designed")
-  defp legacy_settings, do: settings("legacy")
 
   defp epic(repo_key, attrs \\ %{}) do
     struct!(
@@ -91,13 +84,6 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
 
       assert RunKind.classify(replanning, settings: designed_settings()) == :breakdown
       refute Orchestrator.should_dispatch_issue_for_test(replanning, state())
-    end
-
-    test "a legacy repo's parent keeps the close-out run" do
-      parent = epic(@legacy_repo)
-
-      assert RunKind.classify(parent, settings: legacy_settings()) == :close_out
-      assert Orchestrator.should_dispatch_issue_for_test(parent, state())
     end
   end
 end

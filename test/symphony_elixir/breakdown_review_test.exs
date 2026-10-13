@@ -532,7 +532,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       tracker_kind: "memory",
       repos: [
         [key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "Test"],
-        [key: "designed", workflow: Workflow.workflow_file_path(), team: "DesignedTeam", state_machine: "designed"]
+        [key: "designed", workflow: Workflow.workflow_file_path(), team: "DesignedTeam"]
       ]
     )
 

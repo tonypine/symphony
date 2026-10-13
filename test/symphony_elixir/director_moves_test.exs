@@ -190,7 +190,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     defp designed_workflow! do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
-        repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+        repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test"]]
       )
 
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())

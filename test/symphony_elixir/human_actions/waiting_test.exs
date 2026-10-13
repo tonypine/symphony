@@ -45,7 +45,7 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
     options = [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop it", effect: "Unsigned."}]
 
     body =
-      Request.render(
+      Request.render_hold(
         %{title: "Add the signing secret", question: "Add it?", why: "Release fails.", unblocks: "Release", est_minutes: 5, options: options},
         "Human Review"
       )

@@ -20,7 +20,7 @@ defmodule SymphonyElixir.HandoffTest do
   end
 
   defp designed_settings(extra \\ %{}) do
-    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"}, extra))
+    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
   end
 
   defp legacy_settings(extra \\ %{}) do

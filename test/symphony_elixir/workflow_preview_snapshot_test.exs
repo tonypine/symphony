@@ -19,7 +19,7 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     write_workflow_file!(path,
       repos: [
         %{"name" => "legacy", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["legacy"]},
-        %{"name" => "designed", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["designed"], "state_machine" => "designed"}
+        %{"name" => "designed", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["designed"]}
       ]
     )
 

@@ -14,7 +14,7 @@ defmodule SymphonyElixir.InboxTest do
   @repo %{name: "shop"}
 
   defp designed_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
 
@@ -61,7 +61,7 @@ defmodule SymphonyElixir.InboxTest do
   defp comment(id, body, created_at \\ "2026-10-01T11:00:00Z"), do: %{"id" => id, "body" => body, "createdAt" => created_at}
 
   defp request_body do
-    Request.render(
+    Request.render_hold(
       %{
         title: "Add the signing secret",
         question: "Add the secret?",
@@ -138,7 +138,6 @@ defmodule SymphonyElixir.InboxTest do
                issue_id: "id-SHOP-7",
                identifier: "SHOP-7",
                repo_key: "shop",
-               state_machine: "legacy",
                kind: :pr,
                state: "In Review",
                ask: "The retry fix for the importer.",
@@ -279,7 +278,6 @@ defmodule SymphonyElixir.InboxTest do
                issue_id: "id-SHOP-60",
                identifier: "SHOP-60",
                repo_key: "shop",
-               state_machine: "designed",
                kind: :blocked,
                state: "In Progress",
                ask: "The run reported a block",
@@ -289,7 +287,7 @@ defmodule SymphonyElixir.InboxTest do
                  reason: "The run reported a block",
                  clearing_condition: "when the block is resolved; a person clears an access hold"
                }
-             } = Item.from_node(held, "shop", %Schema{state_machine: "designed"}, lookups(nil, hold))
+             } = Item.from_node(held, "shop", %Schema{}, lookups(nil, hold))
 
       # A hold that clears on its own waits on nobody, and neither does a ticket with no hold at all
       # or a run whose lookups name no hold source.

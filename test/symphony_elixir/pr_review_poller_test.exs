@@ -1516,7 +1516,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     now = ~U[2026-05-01 09:00:00Z]
@@ -1548,7 +1548,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     now = ~U[2026-05-01 09:00:00Z]
@@ -1590,7 +1590,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     now = ~U[2026-05-01 09:00:00Z]
@@ -1654,7 +1654,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     now = ~U[2026-05-01 09:00:00Z]
@@ -1688,7 +1688,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     now = ~U[2026-05-01 09:00:00Z]

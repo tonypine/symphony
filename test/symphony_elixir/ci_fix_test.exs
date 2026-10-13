@@ -14,7 +14,7 @@ defmodule SymphonyElixir.CiFixTest do
   end
 
   defp designed_settings(extra \\ %{}) do
-    settings!(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"} |> Map.merge(extra))
+    settings!(%{"tracker" => %{"kind" => "memory"}} |> Map.merge(extra))
   end
 
   defp legacy_settings(extra \\ %{}) do

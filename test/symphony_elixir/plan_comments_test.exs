@@ -27,7 +27,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
   defp designed_settings! do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test", state_machine: "designed"]]
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test"]]
     )
 
     Config.settings!()

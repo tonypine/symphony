@@ -40,7 +40,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
   end
 
   defp designed_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
 
@@ -325,7 +325,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
     test "resolves the repo's settings from its key when the caller passes none" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
-        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
       )
 
       node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})

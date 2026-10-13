@@ -46,7 +46,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
   end
 
   defp designed_settings do
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "state_machine" => "designed"})
+    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
   end
 
@@ -163,7 +163,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
     test "resolves the repo's settings from its key when the caller passes none" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
-        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+        repos: [[key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]]
       )
 
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})

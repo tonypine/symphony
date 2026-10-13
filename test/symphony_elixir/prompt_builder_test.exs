@@ -170,7 +170,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     prompt =
       PromptBuilder.build_prompt(
         %Issue{identifier: "MT-127D", repo_key: "default"},
-        settings: %{agent: %{kind: "claude"}, pr_review: %{mode: "polling"}, state_machine: "designed"}
+        settings: %{agent: %{kind: "claude"}, pr_review: %{mode: "polling"}}
       )
 
     assert prompt =~ "A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR"
@@ -827,7 +827,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     designed =
       PromptBuilder.build_prompt(issue,
         workflow: workflow,
-        settings: %{agent: %{kind: "claude"}, state_machine: "designed"}
+        settings: %{agent: %{kind: "claude"}}
       )
 
     legacy = PromptBuilder.build_prompt(issue, workflow: workflow, settings: %{agent: %{kind: "claude"}})
@@ -942,7 +942,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
       write_workflow_file!(path,
         repos: [
           %{"name" => "legacy", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["legacy"]},
-          %{"name" => "designed", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["designed"], "state_machine" => "designed"}
+          %{"name" => "designed", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["designed"]}
         ]
       )
 

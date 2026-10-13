@@ -140,7 +140,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   test "restart resets the ticket and moves it to In Progress", %{moves: moves} do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     pr_url = "https://github.com/example/repo/pull/40"
@@ -169,7 +169,7 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   test "a reset GitHub refuses is a 502 restart_incomplete", %{moves: moves} do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]]
+      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test"]]
     )
 
     pr_url = "https://github.com/example/repo/pull/40"
