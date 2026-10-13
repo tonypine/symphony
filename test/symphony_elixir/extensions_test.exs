@@ -6,6 +6,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   alias Mix.Tasks.Symphony.Audit
   alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketState}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -1705,6 +1706,73 @@ defmodule SymphonyElixir.ExtensionsTest do
     timeout_orchestrator = Module.concat(__MODULE__, :InitiativesTimeoutOrchestrator)
     {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
     assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.initiatives_payload(timeout_orchestrator, 1, initiatives)
+  end
+
+  test "the inbox api returns a decision's what-waits, trade-offs and why recommended, and no time estimate" do
+    inbox = {:test, make_ref()}
+
+    body =
+      Request.render_hold(
+        %{
+          title: "Leave the old text to TP-891",
+          question: "Should TP-892 (Retire two old review steps) leave the old text to TP-891?",
+          why: "Code Review sent PR #448 back a second time.",
+          if_unanswered: "TP-892 stays in Rework.",
+          options: [
+            %{label: "Leave it to TP-891", effect: "TP-892 goes back to Code Review.", recommended: true, tradeoffs: [%{kind: "good", text: "TP-892 can merge today."}]},
+            %{label: "Remove it now", effect: "The next run deletes the old text."}
+          ],
+          recommendation_reason: "It is one line of text."
+        },
+        "Rework"
+      )
+
+    action = %{
+      "id" => "issue-TP-892",
+      "identifier" => "TP-892",
+      "title" => "Retire two old review steps",
+      "url" => "https://linear.app/example/issue/TP-892",
+      "state" => %{"name" => "Rework"},
+      "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+      "children" => %{"nodes" => []},
+      "comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-01T10:00:00Z"}]},
+      "history" => %{"nodes" => []}
+    }
+
+    linear_client = fn query, _variables, _opts ->
+      if query =~ "SymphonyInboxList",
+        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-TP-892", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [action]}}}}
+    end
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxDecisionOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    assert %{"items" => [%{"identifier" => "TP-892", "kind" => "action", "review" => review}]} = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+
+    assert %{
+             "if_unanswered" => "TP-892 stays in Rework.",
+             "recommendation_reason" => "It is one line of text.",
+             "options" => [
+               %{"label" => "Leave it to TP-891", "recommended" => true, "tradeoffs" => [%{"kind" => "good", "text" => "TP-892 can merge today."}]},
+               %{"label" => "Remove it now", "recommended" => false, "tradeoffs" => []}
+             ]
+           } = review
+
+    refute Map.has_key?(review, "est_minutes")
   end
 
   test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do

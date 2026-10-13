@@ -284,7 +284,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert_received {:memory_tracker_comment, @issue_id, request}
       assert request =~ "## Decision needed:"
-      assert request =~ "Merge TP-816 into its base branch?"
+      assert request =~ "Merge TP-816 (Land the QA state) into its base branch?"
       assert request =~ "Recommendation: every journey verified; ready to merge"
       assert request =~ "the ticket stays in QA until the decision is recorded"
 

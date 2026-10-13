@@ -14,7 +14,7 @@ defmodule SymphonyElixir.HumanActions.Action do
 
   @enforce_keys [:key, :kind, :title, :issue, :project]
   defstruct @enforce_keys ++
-              [:why, :unblocks, :est_minutes, :done_when, :question, options: [], steps: []]
+              [:why, :if_unanswered, :unblocks, :done_when, :question, options: [], steps: []]
 
   @type kind ::
           :request | :task | :ci_secret
@@ -23,8 +23,8 @@ defmodule SymphonyElixir.HumanActions.Action do
           kind: kind(),
           title: String.t(),
           why: String.t() | nil,
+          if_unanswered: String.t() | nil,
           unblocks: String.t() | nil,
-          est_minutes: pos_integer() | nil,
           done_when: String.t() | nil,
           question: String.t() | nil,
           options: [String.t()],

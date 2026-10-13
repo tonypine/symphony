@@ -67,7 +67,6 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
         question: "Add the signing secrets, or ship unsigned builds?",
         why: "Every Release run on main fails without them.",
         unblocks: "the Release workflow on main",
-        est_minutes: 10,
         options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}, %{label: "Ship unsigned", effect: "The agent drops the signing step."}],
         steps: [],
         created_at: nil

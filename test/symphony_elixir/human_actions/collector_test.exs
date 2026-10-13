@@ -54,7 +54,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     body =
       Request.render_hold(
-        %{title: title, question: "Add the signing secret?", why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, options: options},
+        %{title: title, question: "Add the signing secret?", why: "Release fails.", unblocks: "the Release workflow", if_unanswered: "Releases stay unsigned.", options: options},
         "Code Review"
       )
 
@@ -163,7 +163,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                title: "Add the release signing secrets",
                why: "Release fails.",
                unblocks: "the Release workflow",
-               est_minutes: 10,
+               if_unanswered: "Releases stay unsigned.",
                question: "Add the signing secret?",
                options: ["**Add it** (recommended): Releases sign again.", "**Drop signing**: Releases ship unsigned."],
                steps: [],

@@ -12,12 +12,12 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         key: "request:comment-1",
         kind: :request,
         title: "Add the release signing secrets",
-        why: "Every Release run on `main` fails at the signing step without them.",
-        unblocks: "the Release workflow on `main`",
-        est_minutes: 10,
+        why: "Every Release run on main fails at the signing step without them.",
+        if_unanswered: "Every Release run on main keeps failing, so no build ships.",
+        unblocks: "the Release workflow on main",
         question: "Add the signing secrets, or ship unsigned builds?",
         options: [
-          "**Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.",
+          "**Add the secrets** (recommended): you add the signing certificate and its password to the repository's Actions secrets; releases are signed again.",
           "**Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch."
         ],
         done_when: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.",
@@ -36,21 +36,23 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     ]
   end
 
-  test "renders the documented format, quickest first" do
+  test "renders the documented format, by issue" do
     {body, []} = Update.render(example_actions())
 
     assert body == """
-           **2 actions need you.** Quickest first.
+           **2 actions need you.**
 
            ### 1. Add the release signing secrets
 
-           **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
+           Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on main
 
-           **Why:** Every Release run on `main` fails at the signing step without them.
+           **Why:** Every Release run on main fails at the signing step without them.
+
+           **If unanswered:** Every Release run on main keeps failing, so no build ships.
 
            **Decide:** Add the signing secrets, or ship unsigned builds?
 
-           1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
+           1. **Add the secrets** (recommended): you add the signing certificate and its password to the repository's Actions secrets; releases are signed again.
            2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
            **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
@@ -80,7 +82,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
   test "renders a single action and the empty list" do
     [request | _rest] = example_actions()
-    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, question: nil, options: [], done_when: nil}])
+    {single, []} = Update.render([%{request | unblocks: nil, if_unanswered: nil, why: nil, question: nil, options: [], done_when: nil}])
 
     assert single =~ "**1 action needs you.**\n\n### 1. Add the release signing secrets\n\nUnblocks [MOT-24](https://linear.app/acme/issue/MOT-24) Make the Release workflow green\n\n---"
 
@@ -96,9 +98,8 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     ci_secret = %Action{
       key: "ci_secret:acme/cycle:Release:SIGNING_KEY",
       kind: :ci_secret,
-      title: "Add the `SIGNING_KEY` secret",
-      unblocks: "the `Release` workflow on `main` in acme/cycle",
-      est_minutes: 5,
+      title: "Add the SIGNING_KEY secret",
+      unblocks: "the Release workflow on main in the cycle repository",
       steps: ["Open https://github.com/acme/cycle/settings/secrets/actions."],
       done_when: "the next run of `Release` on `main` is green.",
       issue: nil,
@@ -108,9 +109,9 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     {body, []} = Update.render(example_actions() ++ [ci_secret])
 
     assert body =~ """
-           ### 1. Add the `SIGNING_KEY` secret
+           ### 1. Add the SIGNING_KEY secret
 
-           **~5 min** · Unblocks the `Release` workflow on `main` in acme/cycle
+           Unblocks the Release workflow on main in the cycle repository
 
            1. Open https://github.com/acme/cycle/settings/secrets/actions.
 

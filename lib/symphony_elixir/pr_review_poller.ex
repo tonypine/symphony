@@ -8,6 +8,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiPoller, Config, LandingOrder, Notifications, PersonWait, RunStore}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.{NeedsDecisionHold, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
@@ -1588,17 +1589,18 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp conflict_escalation_request(record) do
     label = Map.get(record, :issue_identifier) || Map.get(record, :issue_id)
-    pr = if is_binary(Map.get(record, :pr_url)), do: " on #{Map.get(record, :pr_url)}", else: ""
+    pr = Request.pull_request(Map.get(record, :pr_url)) || "its pull request"
 
     %{
       title: "Merge conflict persists on #{label}",
-      question: "The PR of #{label} still conflicts with its base branch after #{@conflict_max_retries} conflict fixes. How should it continue?",
-      why: "The CI Fix lane could not resolve the PR's merge conflict#{pr}.",
+      question: "The pull request of #{label} still clashes with changes merged since it was opened, after #{@conflict_max_retries} attempts to reconcile them. How should it continue?",
+      why: "Symphony's repair runs could not reconcile #{pr} with the latest merged work. A run that can rework the change is needed.",
+      if_unanswered: "#{label} stays where it is and can't merge until the clash is resolved.",
       options: [
-        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run resolves the conflict on the same PR", recommended: true},
-        %{label: "Leave it", effect: "the ticket stays in its phase with the conflict until a fix is pushed", recommended: false}
+        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run resolves the clash on the same pull request", recommended: true},
+        %{label: "Leave it", effect: "the ticket stays where it is with the clash until someone pushes a fix", recommended: false}
       ],
-      est_minutes: 5
+      recommendation_reason: "A run in Rework can change the code as much as resolving the clash needs."
     }
   end
 
