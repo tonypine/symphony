@@ -244,6 +244,8 @@ defmodule SymphonyElixir.SelfHeal do
         fixer(ctx.opts).create(
           %{
             scope: ctx.scope,
+            issue: ctx.issue,
+            repo_key: ctx.repo_key,
             component: ctx.component,
             title: fix_title(ctx.component),
             description: fix_description(ctx.issue, ctx.component, ctx.signature, ctx.outcome)
