@@ -140,6 +140,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   end
 
   defp start_linear!(watched) do
+    suspend_background_readers()
     issues = Enum.map(1..watched, &raw_issue/1)
     plug = {FakeLinear, recipient: self(), issues: issues}
     server = start_supervised!({Bandit, plug: plug, ip: :loopback, port: 0, startup_log: false})
@@ -160,6 +161,19 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
 
     Enum.each(1..watched, &put_run/1)
   end
+
+  # The application's own Linear readers poll on their timers and read the workflow this test
+  # points at the fake endpoint, so a tick during the test would add its reads to the counts.
+  defp suspend_background_readers do
+    for name <- [SymphonyElixir.Inbox, SymphonyElixir.Initiatives, SymphonyElixir.HumanActions],
+        pid = Process.whereis(name),
+        is_pid(pid) do
+      :ok = :sys.suspend(pid)
+      on_exit(fn -> resume(pid) end)
+    end
+  end
+
+  defp resume(pid), do: if(Process.alive?(pid), do: :sys.resume(pid))
 
   defp raw_issue(index) do
     %{
