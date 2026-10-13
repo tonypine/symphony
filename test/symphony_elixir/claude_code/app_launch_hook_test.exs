@@ -98,6 +98,47 @@ defmodule SymphonyElixir.ClaudeCode.AppLaunchHookTest do
     end
   end
 
+  test "refuses running what the same line builds from app sources", %{root: root, script: script} do
+    File.write!(Path.join(root, "app.swift"), "import AppKit\nlet app = NSApplication.shared\n")
+    File.write!(Path.join(root, "app.m"), "#import <AppKit/AppKit.h>\nint main() { [NSApplication sharedApplication]; }\n")
+    File.mkdir_p!(Path.join(root, "pkg/Sources/Demo"))
+    File.write!(Path.join(root, "pkg/Sources/Demo/main.swift"), "import SwiftUI\n@main struct Demo: App {}\n")
+
+    for command <- [
+          "swiftc -parse-as-library app.swift -o fresh && ./fresh",
+          "clang -framework AppKit app.m -o fresh2 && ./fresh2",
+          "xcrun --sdk macosx swiftc app.swift -o out/../fresh3; #{root}/fresh3",
+          "swiftc app.swift && ./app",
+          "cc app.m -framework AppKit && ./a.out",
+          "cat > new.swift <<'EOF'\nimport AppKit\nNSApplication.shared.run()\nEOF\nswiftc new.swift -o new && ./new",
+          "cat > new.swift <<'EOF'\nNSApplication.shared.run()\nEOF\nswift new.swift",
+          "cd pkg && swift build && ./.build/debug/Demo",
+          "swift build --package-path pkg -c release && pkg/.build/arm64-apple-macosx/release/Demo",
+          "swift run --package-path pkg",
+          "swift run --package-path pkg Demo"
+        ] do
+      refute File.exists?(Path.join(root, "fresh"))
+      assert {stderr, 2} = run(script, root, command), command
+      assert stderr =~ "starts a macOS app"
+    end
+
+    File.write!(Path.join(root, "tool.swift"), "print(1)\n")
+    File.mkdir_p!(Path.join(root, "pkg/Sources/Tool"))
+    File.write!(Path.join(root, "pkg/Sources/Tool/main.swift"), "print(1)\n")
+
+    for command <- [
+          "swiftc tool.swift -o tool && ./tool",
+          "swiftc app.swift -o fresh && ./other",
+          "swiftc -c app.swift",
+          "swiftc missing.swift -o missing && ./missing",
+          "cd pkg && swift build && ./.build/debug/Tool",
+          "swift run --package-path pkg Tool",
+          "xcrun"
+        ] do
+      assert {"", 0} = run(script, root, command), command
+    end
+  end
+
   test "lets through input that isn't a Bash command", %{root: root, script: script} do
     for input <- ["{bad", ~s({"tool_input": "x"}), ~s({"tool_input": {"command": ["./probe"]}})] do
       assert {"", 0} = hook(script, input)

@@ -11,6 +11,12 @@
 # each simple command in the line (after `VAR=value` and wrappers such as `env`, `exec` and
 # `timeout`), following `cd`, and at the products `swift run` would start.
 #
+# A program the same line builds isn't on disk yet, so the hook also remembers what an earlier
+# command builds from app sources: the output of `swiftc`, `clang`, `cc` or `gcc` (also through
+# `xcrun`), and the products of `swift build`. A source file the line writes itself (a heredoc)
+# isn't on disk either, so then the line's own text counts as the source. `swift run` of a
+# package that isn't built yet is judged by its sources.
+#
 # Claude Code passes the tool call as JSON on stdin. Exit 2 refuses the command and shows stderr to
 # the agent; anything else lets it run.
 use strict;
@@ -26,6 +32,8 @@ my @app_symbols = (
 );
 my $app_source = qr/\b(?:NSApplication|NSApplicationMain|NSApp|NSWindow|NSPanel|NSAlert|NSStatusBar|WindowGroup|MenuBarExtra)\b|:\s*App\s*\{/;
 my %wrappers = map { $_ => 1 } qw(env exec command time nohup nice timeout gtimeout caffeinate arch then do else ! sudo);
+my %compilers = map { $_ => 1 } qw(swiftc clang clang++ cc c++ gcc g++);
+my $source_file = qr/\.(?:swift|m|mm|c|cc|cpp)$/;
 my $chunk_size = 1 << 20;
 my $overlap = 64;
 
@@ -35,6 +43,10 @@ exit 0 unless ref $event eq 'HASH' && ref $event->{tool_input} eq 'HASH';
 my $command = $event->{tool_input}{command};
 exit 0 unless defined $command && !ref $command;
 my $cwd = defined $event->{cwd} && !ref $event->{cwd} ? $event->{cwd} : '.';
+# Paths an earlier command in the line builds from app sources.
+my %built_apps;
+# `[build dir, product]` pairs an earlier `swift build` builds from app sources.
+my @built_products;
 
 for my $segment (split /\|\||&&|\$\(|[;&|\n()`{}]/, $command) {
   my @words = shellwords($segment);
@@ -42,13 +54,18 @@ for my $segment (split /\|\||&&|\$\(|[;&|\n()`{}]/, $command) {
   my ($program, @args) = program(@words);
   next unless defined $program;
 
+  ($program, @args) = xcrun_tool(@args) if basename($program) eq 'xcrun';
+  next unless defined $program;
+
   if ($program eq 'cd') {
     $cwd = resolve($args[0], $cwd) if @args;
   } elsif (basename($program) eq 'swift') {
     check_swift($cwd, @args);
+  } elsif ($compilers{basename($program)}) {
+    compile($program, $cwd, @args);
   } elsif ($program =~ m{/}) {
     my $path = resolve($program, $cwd);
-    refuse($program) if app_binary($path);
+    refuse($program) if $built_apps{$path} || built_product($path) || app_binary($path);
   }
 }
 
@@ -74,6 +91,40 @@ sub program {
   return;
 }
 
+# The tool `xcrun [--sdk name] tool` runs.
+sub xcrun_tool {
+  my @args = @_;
+
+  while (@args && $args[0] =~ /^-/) {
+    my $flag = shift @args;
+    shift @args if $flag =~ /^(?:-sdk|--sdk|-toolchain|--toolchain)$/;
+  }
+
+  return @args;
+}
+
+# Remembers the output of a compiler run on app sources: `-o <path>`, or the compiler's default
+# (`swiftc` names it after the first source, the C compilers write `a.out`).
+sub compile {
+  my ($program, $dir, @args) = @_;
+  my ($output, @sources);
+
+  while (@args) {
+    my $arg = shift @args;
+
+    if ($arg eq '-o') {
+      $output = shift @args;
+    } elsif ($arg eq '-' || $arg =~ $source_file) {
+      push @sources, $arg;
+    }
+  }
+
+  return unless grep { app_source(resolve($_, $dir)) } @sources;
+
+  $output //= basename($program) eq 'swiftc' ? basename($sources[0], '.swift') : 'a.out';
+  $built_apps{resolve($output, $dir)} = 1;
+}
+
 # `swift run [product]` starts the package's executables; `swift <file>` runs a Swift script.
 sub check_swift {
   my ($dir, @args) = @_;
@@ -92,19 +143,30 @@ sub check_swift {
 
   return unless @plain;
 
-  if ($plain[0] eq 'run') {
+  if ($plain[0] eq 'run' || $plain[0] eq 'build') {
     my $package = defined $options{'--package-path'} ? resolve($options{'--package-path'}, $dir) : $dir;
     my $build = defined $options{'--scratch-path'} ? resolve($options{'--scratch-path'}, $dir) : "$package/.build";
     my $configuration = $options{'-c'} // $options{'--configuration'} // 'debug';
     my $products = "$build/$configuration";
-    my @candidates = defined $plain[1] ? ("$products/$plain[1]") : entries($products);
+    # A package's executable product is usually named after its target, a folder in `Sources`.
+    my @app_targets = grep { grep { contains_source($_) } files_under("$package/Sources/$_") } map { basename($_) } entries("$package/Sources");
 
+    if ($plain[0] eq 'build') {
+      push @built_products, map { [$build, $_] } @app_targets;
+      return;
+    }
+
+    my @candidates = defined $plain[1] ? ("$products/$plain[1]") : entries($products);
     for my $candidate (@candidates) {
       refuse("swift run " . basename($candidate)) if app_binary($candidate);
     }
+
+    # `swift run` builds the product first, so one that isn't built yet is judged by its sources.
+    my @unbuilt = defined $plain[1] ? grep { $_ eq $plain[1] } @app_targets : @app_targets;
+    refuse("swift run $unbuilt[0]") if @unbuilt;
   } elsif (my ($script) = grep { /\.swift$/ } @plain) {
     my $path = resolve($script, $dir);
-    refuse("swift $script") if -f $path && contains_source($path);
+    refuse("swift $script") if app_source($path);
   }
 }
 
@@ -116,6 +178,18 @@ sub entries {
   return @entries;
 }
 
+# A product of an earlier `swift build`, which lands in `<build>/<triple>/<configuration>`, with
+# `<build>/<configuration>` linking to it.
+sub built_product {
+  my ($path) = @_;
+  return grep { index($path, "$_->[0]/") == 0 && basename($path) eq $_->[1] } @built_products;
+}
+
+sub files_under {
+  my ($path) = @_;
+  return -f $path ? ($path) : map { files_under($_) } entries($path);
+}
+
 sub resolve {
   my ($path, $dir) = @_;
   my $home = $ENV{HOME} // '';
@@ -124,7 +198,11 @@ sub resolve {
   $path =~ s{\$\{?HOME\}?}{$home}g;
   $path =~ s{\$\{?TMPDIR\}?}{$tmp}g;
   $path =~ s{\$\{?PWD\}?}{$dir}g;
-  return $path =~ m{^/} ? $path : "$dir/$path";
+  $path = "$dir/$path" unless $path =~ m{^/};
+  # `./fresh` and `fresh` name the same file.
+  1 while $path =~ s{/\.(?=/|$)}{} || $path =~ s{//}{/};
+  1 while $path =~ s{/(?!\.\.(?:/|$))[^/]+/\.\.(?=/|$)}{};
+  return $path;
 }
 
 sub app_binary {
@@ -153,6 +231,13 @@ sub scan {
   }
 
   return 0;
+}
+
+# A source file that starts an app. One the line itself writes (a heredoc) or reads from stdin
+# isn't on disk yet, so the line's own text stands in for it.
+sub app_source {
+  my ($path) = @_;
+  return -f $path ? contains_source($path) : $command =~ $app_source;
 }
 
 sub contains_source {

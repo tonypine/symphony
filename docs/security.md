@@ -242,7 +242,11 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   SwiftUI's `App.main`, the products `swift run` would start, or a Swift script run with `swift`
   that uses one of them. It looks at the program of each command in the line, following `cd`, so
   `otool -L` or `codesign` on an app still run, and so does a program that only renders SwiftUI
-  views offscreen with `ImageRenderer`. The hook reads command lines, not what a script runs
+  views offscreen with `ImageRenderer`. A harness the same line builds isn't on disk yet, and its
+  first run is the one that crashes, so the hook also refuses to run what an earlier command in the
+  line builds from app sources (`swiftc`, `clang`, `cc` or `gcc`, also through `xcrun`, and
+  `swift build`), counts the line's own text as the source when the line writes it (a heredoc),
+  and judges a `swift run` of a package not built yet by its sources. The hook reads command lines, not what a script runs
   later, so the prompt rule still applies. Codex has no such hook.
 - The workflow runs the probe twice outside the sandbox first, to show that the runner draws the
   window and sees the check-in, then twice in the sandbox, plainly and made to crash. It fails if

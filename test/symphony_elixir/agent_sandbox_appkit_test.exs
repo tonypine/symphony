@@ -121,7 +121,10 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
 
     # The sandbox lets the probe check in, and its crash can show the dialog, so the hook keeps an
     # agent from starting it.
-    for command <- [probe, "#{probe} crash", "./probe crash"] do
+    # A harness the same line compiles isn't on disk yet, and its first run is the one that crashes.
+    fresh = "swiftc -O #{@probe_source} -o fresh-probe && ./fresh-probe crash"
+
+    for command <- [probe, "#{probe} crash", "./probe crash", fresh] do
       assert {stderr, 2} = app_launch_hook(root, command), "the hook let `#{command}` run"
       assert stderr =~ "starts a macOS app"
     end
