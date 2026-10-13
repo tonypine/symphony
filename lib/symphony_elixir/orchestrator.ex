@@ -1318,7 +1318,7 @@ defmodule SymphonyElixir.Orchestrator do
   # untouched. Resolving the repo's settings once here keeps it off the per-issue config read.
   defp sweep_blocked_holds(repo_name, issues, terminal_states) do
     case Config.settings_for_repo(repo_name) do
-      {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings)
+      {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings, repo_key: repo_name)
       {:error, _reason} -> 0
     end
   end

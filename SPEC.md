@@ -4630,6 +4630,10 @@ Minimum endpoints:
   - Issues in the `watching` list SHOULD resolve here with `status: "watching"` and a lightweight
     `watching` object containing `state`, `url`, and `last_ran_at`; they do not have active session
     fields.
+  - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
+    first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
+    reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with
+    `status: "untracked"`, while its ticket state record holds it.
   - Suggested response shape:
 
     ```json

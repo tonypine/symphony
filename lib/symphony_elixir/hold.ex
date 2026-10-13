@@ -86,7 +86,8 @@ defmodule SymphonyElixir.Hold do
     if label(kind) do
       store = Keyword.get(opts, :store, RunStore)
 
-      with :ok <- store.set_ticket_hold(repo_key, issue_id, kind, attrs) do
+      with :ok <- require_repo_key(repo_key, issue_id),
+           :ok <- store.set_ticket_hold(repo_key, issue_id, kind, attrs) do
         project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :set)
       end
     else
@@ -103,7 +104,8 @@ defmodule SymphonyElixir.Hold do
     if label(kind) do
       store = Keyword.get(opts, :store, RunStore)
 
-      with :ok <- store.clear_ticket_hold(repo_key, issue_id, kind) do
+      with :ok <- require_repo_key(repo_key, issue_id),
+           :ok <- store.clear_ticket_hold(repo_key, issue_id, kind) do
         project(Keyword.get(opts, :tracker, Tracker), issue_id, kind, :clear)
       end
     else
@@ -209,7 +211,21 @@ defmodule SymphonyElixir.Hold do
     end
   end
 
+  # A ticket read with no repo key would look like one with no hold, so say so instead of hiding it.
+  defp record(repo_key, issue_id, _opts) when is_binary(issue_id) and repo_key in [nil, ""] do
+    Logger.error("Read the holds of issue_id=#{issue_id} with no repo key; resolve the issue's repo before reading its holds")
+    TicketState.normalize(nil)
+  end
+
   defp record(_repo_key, _issue_id, _opts), do: TicketState.normalize(nil)
+
+  # A hold written with no repo key would land nowhere the readers look, so it is refused loudly.
+  defp require_repo_key(repo_key, _issue_id) when is_binary(repo_key) and repo_key != "", do: :ok
+
+  defp require_repo_key(_repo_key, issue_id) do
+    Logger.error("Refused a hold write on issue_id=#{issue_id} with no repo key; resolve the issue's repo first")
+    {:error, :missing_repo_key}
+  end
 
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
   defp normalize(_value), do: ""
