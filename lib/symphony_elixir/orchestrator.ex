@@ -1262,6 +1262,7 @@ defmodule SymphonyElixir.Orchestrator do
     update_hold_cache = state.update_hold_cache
 
     case start_async_task(fn ->
+           RetiredStates.refresh_if_due()
            repo_result = fetch_due_repo_if_needed(due_repo)
 
            {:repo_poll_result,
