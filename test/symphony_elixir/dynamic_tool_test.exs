@@ -922,6 +922,21 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("qa_resize_window", %{"pid" => 1, "x" => 0}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
+      response = DynamicTool.execute("qa_key", %{"pid" => 1, "key" => "return", "text" => "x"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      for {tool, args} <- [
+            {"qa_ax_select", %{"pid" => 1, "path" => "0.1"}},
+            {"qa_click", %{"pid" => 1, "path" => "0.1", "clicks" => 2}},
+            {"qa_key", %{"pid" => 1, "key" => "[", "modifiers" => ["command"]}}
+          ] do
+        response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+      end
+
+      key = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_key"))
+      assert %{"items" => %{"enum" => ["command", "shift", "option", "control"]}} = key["inputSchema"]["properties"]["modifiers"]
+
       response = DynamicTool.execute("qa_check_app", %{"pid" => 1, "page" => "Decide"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
 
