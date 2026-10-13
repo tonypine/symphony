@@ -148,7 +148,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Without `priority` it inherits the current issue's. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,

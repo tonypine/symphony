@@ -143,6 +143,7 @@ defmodule SymphonyElixir.EpicReviewTest do
              "data" => %{
                "issue" => %{
                  "id" => @issue_id,
+                 "priority" => 1,
                  "team" => %{"id" => "team-1", "states" => %{"nodes" => states}},
                  "children" => %{"nodes" => []}
                }
@@ -458,6 +459,8 @@ defmodule SymphonyElixir.EpicReviewTest do
 
       assert input["stateId"] == "state-todo"
       assert input["parentId"] == @issue_id
+      # The epic's Urgent priority, so `tickets.priorities: [urgent]` dispatches the follow-up.
+      assert input["priority"] == 1
       assert input["title"] == "Epic review fails: Settings shows the API key field"
       assert input["description"] =~ "The epic review of TP-823 (https://linear.test/TP-823) failed on commit `c0ffee001122`"
       assert input["description"] =~ "https://uploads.linear.test/s2.png"

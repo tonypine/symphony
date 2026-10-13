@@ -200,8 +200,9 @@ issues:
   and dispatch picks them up — `Code Review` for the reviewer run, `QA` for the
   QA pass, `CI Fix` for mechanical repair, and `Epic Review` for the automatic close of a plan
   parent whose sub-issues are all terminal (pass -> `Done`; gaps -> each one filed as a follow-up
-  sub-ticket in `Todo` under the same epic, with the parent back in `Waiting on sub-tickets`). They
-  sit in Linear's `started` group, beside `In Progress`, so they read as active columns;
+  sub-ticket in `Todo` under the same epic with the epic's priority, with the parent back in
+  `Waiting on sub-tickets`). They sit in Linear's `started` group, beside `In Progress`, so they
+  read as active columns;
   `states.plan_review` is the one person-owned state of the five: it is never dispatched, and an
   issue in it waits for the person reviewing the plan.
 
