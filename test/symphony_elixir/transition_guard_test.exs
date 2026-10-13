@@ -410,6 +410,15 @@ defmodule SymphonyElixir.TransitionGuardTest do
       refute TransitionGuard.retired_state?(nil)
     end
 
+    test "refuses a move whose target resolves to no state name without touching the tracker" do
+      for target <- [nil, "", "  "] do
+        assert {:error, {:unresolved_target, :director_move}} =
+                 TransitionGuard.perform("issue-8", :director_move, %{target: target}, tracker: FakeTracker)
+      end
+
+      refute_received {:moved, "issue-8", _state}
+    end
+
     test "defaults to the configured tracker" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
