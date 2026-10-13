@@ -654,6 +654,36 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute Hold.held?("repo-director", "pr", :needs_decision)
     end
 
+    test "a Code Review escalation answered Continue to QA moves the ticket into QA", %{opts: opts} do
+      put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
+      set_code_review_hold("QA")
+
+      continue = [%{question: "How should MOT-40 continue after Code Review escalated it?", answer: "Continue to QA"}]
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: continue, request_comment_id: "comment-1"}, opts)
+      assert %{moved: true, from_state: "Code Review", to_state: "QA", undo_window_ms: 10_000} = result
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      assert_received {:memory_tracker_state_update, "pr", "QA"}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert [%{name: "decision returned", details: %{move: "decide", from: "Code Review", to: "QA"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+    end
+
+    test "a decision directing a move into a state the repo has not configured is refused before anything is written", %{opts: opts} do
+      put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
+      set_code_review_hold("")
+
+      continue = [%{question: "How should MOT-40 continue after Code Review escalated it?", answer: "1"}]
+
+      assert {:error, {:invalid, message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: continue, request_comment_id: "comment-1"}, opts)
+
+      assert message == "MOT-40's decision moves it to a state not configured for repo repo-director; the hold stays"
+      # The request stays open and the hold set, so the person can decide again once the state is configured.
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+      assert audit_records() == []
+    end
+
     test "a merge confirmation answered with anything but an option moves nothing", %{opts: opts} do
       put_issues([%{pr("QA") | repo_key: "repo-director"}])
       set_merge_hold()
@@ -1056,6 +1086,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
           question: "Merge MOT-40 into its base branch?",
           options: [%{label: "Merge", effect: "the ticket moves to Merging"}, %{label: "Send to Rework", effect: "the ticket moves to Rework"}],
           confirm: "Merging"
+        }
+      })
+  end
+
+  # The hold `SymphonyElixir.CodeReview` sets on an escalation: its confirmation continues into the
+  # repo's QA state, as `NeedsDecisionHold.pause/4` records it.
+  defp set_code_review_hold(qa_state) do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "How should MOT-40 continue after Code Review escalated it?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{
+          title: "Code Review escalated MOT-40",
+          question: "How should MOT-40 continue after Code Review escalated it?",
+          options: [
+            %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: true},
+            %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: false}
+          ],
+          confirm: qa_state,
+          state: "Code Review"
         }
       })
   end
