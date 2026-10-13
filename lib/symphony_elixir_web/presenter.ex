@@ -105,6 +105,7 @@ defmodule SymphonyElixirWeb.Presenter do
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
+          dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&dispatch_skipped_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: app_update_payload(blocked),
@@ -1126,6 +1127,18 @@ defmodule SymphonyElixirWeb.Presenter do
       attempt: Map.get(entry, :attempt),
       since: iso8601(Map.get(entry, :since)),
       forced: Map.get(entry, :forced, false)
+    }
+  end
+
+  defp dispatch_skipped_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      repo_key: Map.get(entry, :repo_key),
+      title: Map.get(entry, :title),
+      state: entry.state,
+      reason: entry.reason,
+      since: iso8601(Map.get(entry, :since))
     }
   end
 

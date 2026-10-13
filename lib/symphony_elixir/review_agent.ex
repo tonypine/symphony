@@ -370,7 +370,7 @@ defmodule SymphonyElixir.ReviewAgent do
         - `mcp__symphony__github_create_pull_request`
 
         Use Claude's Symphony MCP Linear tools for tracker handoff:
-        - attach the PR URL with `mcp__symphony__linear_attach_url` before moving the issue to review
+        - #{attach_pr_url_guidance("`mcp__symphony__linear_attach_url`")}
         - update the existing workpad with `mcp__symphony__linear_update_comment`
         - do not use `mcp__symphony__linear_add_comment` for PR, CI, or completion summaries
 
@@ -389,7 +389,7 @@ defmodule SymphonyElixir.ReviewAgent do
         - `github_create_pull_request`
 
         Use Codex's scoped Symphony Linear tools for tracker handoff:
-        - attach the PR URL with `linear_attach_url` before moving the issue to review
+        - #{attach_pr_url_guidance("`linear_attach_url`")}
         - update the existing workpad with `linear_update_comment`
         - do not use `linear_add_comment` for PR, CI, or completion summaries
 
@@ -436,6 +436,13 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp finalize_verdict(verdict, source), do: {:ok, Map.put(verdict, :source, source)}
+
+  # The push is the handoff: Symphony moves the ticket to Code Review itself and its guard refuses
+  # an agent's own move, so the text names no state move at all.
+  defp attach_pr_url_guidance(tool) do
+    "attach the PR URL with #{tool}; the push is the handoff: Symphony moves the ticket to Code " <>
+      "Review itself, so do not change the issue's state"
+  end
 
   defp configured_agent_kind(%Schema{agent: %{kind: kind}}), do: AgentLabels.normalize_kind(kind)
   defp configured_agent_kind(%{agent: %{kind: kind}}), do: AgentLabels.normalize_kind(kind)
