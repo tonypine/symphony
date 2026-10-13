@@ -9,12 +9,7 @@ defmodule SymphonyElixir.HumanActions.Action do
     and `options`, or an older `## Action needed:` comment written by hand, with its `steps`;
   - `:task`: an issue carrying a deprecated request label (`HumanReview.legacy_request_labels/1`) with no request comment;
   - `:plan_review`: a plan parent waiting in `In Review` for its plan to be approved;
-  - `:qa_blocked`: the one step only the operator can take (an app update, a tool to install) to
-    clear the cause Auto Review was `blocked` on, for every issue blocked on it, so its `issue` is
-    nil and `unblocks` names them;
   - `:human_review`: an issue waiting in the Human Review state with no other action;
-  - `:verification_blocked`: a `Final verification:` ticket whose Auto Review parent walkthrough
-    was `blocked` (a QA host without its macOS permissions), listed on the parent's project;
   - `:ci_secret`: a workflow on a repository's base branch that keeps failing on a missing secret
     (see `SymphonyElixir.HumanActions.CiSecrets`). It belongs to no issue, so its `issue` is nil.
 
@@ -27,7 +22,7 @@ defmodule SymphonyElixir.HumanActions.Action do
               [:why, :unblocks, :est_minutes, :done_when, :question, options: [], steps: [], human_review: false]
 
   @type kind ::
-          :request | :task | :plan_review | :qa_blocked | :human_review | :verification_blocked | :ci_secret
+          :request | :task | :plan_review | :human_review | :ci_secret
   @type t :: %__MODULE__{
           key: String.t(),
           kind: kind(),

@@ -7,8 +7,7 @@ defmodule SymphonyElixir.SettingsUICoverage do
   (`macos/Sources/SymphonyBarCore/SettingsUIManifest.swift`); `config/settings_ui_exempt.yml`
   lists the keys that have no control, each with a reason. That file is write-protected for
   agents, so an agent can't exempt the setting it adds. `mix settings.ui_coverage` runs the check
-  in CI, and the acceptance gate's `:settings_ui` rule escalates a PR that changes the config
-  schema without the manifest.
+  in CI.
 
   A key is a dotted path from `SymphonyElixir.Config.SystemSchema.operator_key_paths/0`. An
   exemption names a key, or a prefix such as `watchdog.*` that covers every key under it,
@@ -17,7 +16,6 @@ defmodule SymphonyElixir.SettingsUICoverage do
 
   @manifest_path "macos/Sources/SymphonyBarCore/SettingsUIManifest.swift"
   @exempt_path "config/settings_ui_exempt.yml"
-  @schema_paths ["lib/symphony_elixir/config/schema.ex", "lib/symphony_elixir/config/system_schema.ex"]
 
   @type exemption :: %{keys: [String.t()], reason: String.t(), ticket: String.t() | nil}
 
@@ -35,10 +33,6 @@ defmodule SymphonyElixir.SettingsUICoverage do
   @doc "The exemption file, relative to the repository root."
   @spec exempt_path() :: String.t()
   def exempt_path, do: @exempt_path
-
-  @doc "The files that declare the `symphony.yml` settings, relative to the repository root."
-  @spec schema_paths() :: [String.t()]
-  def schema_paths, do: @schema_paths
 
   @doc """
   The key paths in the `keyPaths` list of the manifest's Swift source: its string literals, one

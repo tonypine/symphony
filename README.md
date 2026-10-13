@@ -13,8 +13,7 @@ professional work.
 **Direction:** run agents from more than one model provider (Claude already runs alongside Codex),
 bring in improvements from community forks, and shape the workflow to fit how I work.
 
-**Changes so far:** once a human, or the acceptance gate in `enforce` mode, moves an issue to
-`Merging`, Symphony lands its PR with GitHub auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
+**Changes so far:** once an issue reaches `Merging`, Symphony lands its PR with GitHub auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
 `github_merge_pull_request` tool.
 
 Symphony runs coding agents (Codex or Claude) on your Linear issues and GitHub pull requests, so
@@ -90,12 +89,13 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   `Rework` continuing the same PR, `CI Fix` repairing red heads and conflicts, and epic parents
   going `Plan Review` → `Waiting on sub-tickets` → `Epic Review`. `Blocked` and `Needs Decision`
   are labels that pause a ticket in place; a person only decides, and `Restart` from the Director
-  app is the full reset. Auto Review, `In Review`, `Human Review`, supervisor checks and
-  `Final verification:` tickets do not apply. See [docs/design/state-machine.md](docs/design/state-machine.md)
+  app is the full reset. `In Review`, `Human Review`, supervisor checks and
+  `Final verification:` tickets do not apply. The `Auto Review` state and the acceptance gate are
+  retired for every repo: their QA moved to the `QA` state, their judgment to `Code Review`, and
+  their escalation rules to a Needs Decision hold or a deeper Code Review. See [docs/design/state-machine.md](docs/design/state-machine.md)
   and SPEC §7.6.
-- **Human Review** — tickets only the operator can move on (a QA block that needs a secret or a hand
-  check, a plan the ticket says a human reviews, a `linear_request_human_action` request, a final
-  verification with manual checks left) wait in `Human Review` instead of `In Review`, so the board,
+- **Human Review** — tickets only the operator can move on (a plan the ticket says a human reviews,
+  a `linear_request_human_action` request) wait in `Human Review` instead of `In Review`, so the board,
   the dashboard and the menu bar show what waits on you apart from the supervisor's queue. Set
   `issues.states.human_review: null` to keep them in `In Review`.
 - **Parent tickets** — label a large ticket `plan` (`breakdown`, the label's older name, still works)
@@ -110,11 +110,9 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   a Linear project update. Any other ticket whose PR merges with a sub-ticket still open outside
   `Backlog` waits in `Waiting on sub-tickets` too instead of closing, and Symphony moves it to `Done`
   once every such sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each
-  ended. Its `Backlog` sub-tickets (the acceptance gate's follow-ups, or ones an agent filed) stay
+  ended. Its `Backlog` sub-tickets (ones an agent filed) stay
   there for a person to promote and never hold it: with only those open it goes to `Done` on merge.
-  With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
-  goes on the parent and each failing step becomes a new ticket that blocks the verification
-  ticket, which waits in `Todo` and runs again once those tickets are done. The design this flow
+  The design this flow
   is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
   Linear documents) is recorded in
   [ADR 0001: the Director workflow](docs/adr/0001-director-workflow.md).
@@ -130,17 +128,12 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
-- **Auto Review** — an optional QA agent uses each PR the way a user would before human review, with
+- **QA** — on a designed repo, the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
-  [`auto_review`](docs/configuration.md#auto_review).
-- **Acceptance gate** — after QA, an optional read-only agent checks the PR against the ticket's
-  acceptance criteria, scope and other open PRs, and fixed rules send risky changes to a person. In
-  `shadow` mode its verdict is advisory. In `enforce` mode, set per repository in `symphony.yml`, the
-  verdict moves the issue: `approve` to `Merging`, where auto-merge lands the PR; `rework` back to
-  `In Progress`; `escalate` to `In Review`. With the gate enforced, `In Review` holds the escalations
-  and `Merging` means approved by a person or by the gate. With it off or in `shadow`, every PR waits
-  in `In Review` as before. See [docs/acceptance_gate.md](docs/acceptance_gate.md).
+  [`auto_review`](docs/configuration.md#auto_review), which keeps the QA settings. The `Auto Review`
+  state and the acceptance gate are retired; the gate's escalation rules now act in Code Review
+  (see [docs/acceptance_gate.md](docs/acceptance_gate.md)).
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
   the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
@@ -363,7 +356,7 @@ QA-mode Symphony or app at it, and runs until stopped (see
 ### Priority vs expedite
 
 A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits
-for the same kind of normal slot: after the stage (`Merging`, Auto Review, `Rework`, a resume,
+for the same kind of normal slot: after the stage (`Merging`, `Rework`, a resume,
 `Todo`) and before age. Raising a ticket to Urgent does not get it a slot any sooner when the slots
 are full, and a board full of Urgents stops saying which work matters. To have a ticket worked now,
 force it: add the `expedite` label (`agent.concurrency.force_label`) or run `symphony force TP-123`.
@@ -377,7 +370,7 @@ A run already going then finishes as a normal run and gives the forced slot to t
 | `finishing_max`, and the hold on `Todo` while a finish waits | a Claude or Codex usage-limit pause (the runs would just fail) |
 | priority and age ordering (forced tickets go first, oldest forced first) | blocked-by links: a blocked ticket waits for its blocker |
 | the daily token budget (with a warning) and a usage-limit headroom hold | the per-issue token cap and the per-host worker cap |
-| the Auto Review QA queue (its pass goes first) | a failed setup, retry backoff, post-PR quiet, and the CI waits before merging |
+| | a failed setup, retry backoff, post-PR quiet, and the CI waits before merging |
 
 `agent.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
 second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one
@@ -390,13 +383,13 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | Transition | Who |
 | --- | --- |
 | `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
-| `In Review` or `Human Review` → `Merging` | a person approves the PR (an enforced acceptance gate moves its approvals from Auto Review itself) |
+| `In Review` or `Human Review` → `Merging` | a person approves the PR |
 | `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a plan |
 | any state → `Rework` | a person rejects the approach |
 | `Final verification:` `In Review` or `Human Review` → `Done` | a person signs it off |
 
-The review-agent verdict and the Auto Review QA verdict are still required: forcing never skips or
-changes them.
+The review-agent verdict, and on a designed repo the Code Review and QA verdicts, are still
+required: forcing never skips or changes them.
 
 ### Preview the assembled prompt
 
@@ -448,6 +441,13 @@ menu bar icon shows a dot while the list is not empty, and the app notifies each
 Symphony reads the list on its poll and serves it from that read, re-reading a ticket's comments only
 when the ticket changed, so a new ticket shows after the next poll.
 
+**Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each plan ticket (`plan`
+or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each
+with its sub-tickets in landing order (blocked-by order, then creation order), what each waits on
+(you, a blocker, CI, a slot), its `Final verification:` sub-ticket, counts by stage and its lane in
+`epic_lanes`. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
+makes no Linear request; the reads show as `initiatives` in the Linear usage table.
+
 You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick
 differs from the brief's recommendation), a PR **Approve and Merge…**, a final verification
 **Sign Off…**, and each **Send to Rework…** with a required reason. An action that asks a decision
@@ -490,10 +490,8 @@ When a run hits the Claude or Codex usage limit, Symphony holds new runs of that
 and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts
 again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it.
-An Auto Review QA pass that hits the limit is held the same way: it records no verdict, the issue
-stays where it is, and the pass runs again after the hold. On Linear a note on the issue says
-`QA is waiting for the usage limit to reset at 14:05` (local time); a pass held again edits it, and the
-pass that runs, or the PR closing or merging first, deletes it. Set
+A QA run that hits the limit is held the same way: it records no verdict, the issue stays where it
+is, and the run goes again after the hold. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as
@@ -508,7 +506,7 @@ When Claude or Codex can't reach its API at all (the network or DNS is down, so 
 on `API Error: Can't reach the API server … (ENOTFOUND)` or Codex gives up on
 `error sending request … dns error`), Symphony holds that provider's runs the same way,
 `auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
-is parked. The pre-push reviewer, QA and the acceptance gate hold too, so a push never goes ahead
+is parked. The pre-push reviewer and QA hold too, so a push never goes ahead
 without a review and no verdict is recorded. One held run probes the API after a minute, then after
 twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
 `Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show

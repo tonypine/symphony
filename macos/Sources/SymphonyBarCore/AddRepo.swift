@@ -144,8 +144,6 @@ public struct AddRepoDraft: Equatable {
     /// The name of the Linear project picked.
     public var project: String?
     public var labels: [String]
-    /// The repo's acceptance gate mode, which only the Edit sheet shows.
-    public var acceptanceGate: AcceptanceGateChoice
     /// The repo's state-machine version, which only the Edit sheet shows.
     public var stateMachine: StateMachineChoice
     /// The repo's manual review setting, which only the Edit sheet shows.
@@ -159,7 +157,6 @@ public struct AddRepoDraft: Equatable {
         baseBranch: String = AddRepo.defaultBaseBranch,
         project: String? = nil,
         labels: [String] = [],
-        acceptanceGate: AcceptanceGateChoice = .inherit,
         stateMachine: StateMachineChoice = .legacy,
         manualReview: ManualReviewChoice = .off
     ) {
@@ -170,7 +167,6 @@ public struct AddRepoDraft: Equatable {
         self.baseBranch = baseBranch
         self.project = project
         self.labels = labels
-        self.acceptanceGate = acceptanceGate
         self.stateMachine = stateMachine
         self.manualReview = manualReview
     }

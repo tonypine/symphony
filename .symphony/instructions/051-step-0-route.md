@@ -18,7 +18,6 @@
    - `Done` -> do nothing and shut down.
    - A `Blocked` or `Needs Decision` label on the ticket -> a hold pauses it in its phase; do not change the issue or PR, stop and wait for it to clear.{% else %}
    - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop while any sub-ticket is open. Once every sub-ticket is terminal, run the close-out in `Parent tickets` below.
-   - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, stop and wait.
    - `In Review` -> wait and poll for decision/review updates.
    - `Human Review` -> waiting on the operator only; do not change the issue or PR, stop and wait.
    - `Merging` -> Symphony normally lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.

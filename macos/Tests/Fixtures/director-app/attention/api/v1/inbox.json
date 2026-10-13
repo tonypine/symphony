@@ -49,18 +49,7 @@
           ]
         },
         "pull_request": {
-          "change": {
-            "additions": 120,
-            "deletions": 40,
-            "files": 4,
-            "largest": []
-          },
           "ci": "passed",
-          "gate": {
-            "agent_verdict": "approve",
-            "mode": "shadow",
-            "verdict": "escalate"
-          },
           "qa": {
             "report_url": null,
             "verdict": "pass"
@@ -114,18 +103,7 @@
           ]
         },
         "pull_request": {
-          "change": {
-            "additions": 120,
-            "deletions": 40,
-            "files": 4,
-            "largest": []
-          },
           "ci": "passed",
-          "gate": {
-            "agent_verdict": "approve",
-            "mode": "shadow",
-            "verdict": "approve"
-          },
           "qa": {
             "report_url": null,
             "verdict": "pass"

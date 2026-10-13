@@ -6,5 +6,5 @@
 {% if state_machine == "designed" -%}
 - Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, approving a plan, deciding a `Needs Decision` hold and `Restart` stay with a person, and the `Code Review` and `QA` verdicts still apply: follow the status map as usual.
 {%- else -%}
-- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, `In Review` -> `Merging`, approving a plan, `Rework` and signing off a `Final verification:` stay with a person, and the review-agent verdict and Auto Review QA still apply: follow the status map as usual.
+- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, `In Review` -> `Merging`, approving a plan, `Rework` and signing off a `Final verification:` stay with a person, and the review-agent verdict still applies: follow the status map as usual.
 {%- endif %}

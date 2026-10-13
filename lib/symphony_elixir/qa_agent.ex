@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.QaAgent do
   @moduledoc """
-  Runs the Auto Review QA agent against a PR head and parses its verdict.
+  Runs the QA agent against a PR head (the `QA` state's run, `SymphonyElixir.QaVerification`) or
+  the head of the base branch (the epic review, `SymphonyElixir.EpicReview`) and parses its verdict.
 
   Each pass gets a fresh detached git worktree at the PR head SHA, created from the
   issue workspace under `<workspace.root>/.qa/<repo>/` and removed afterwards, so the
@@ -93,7 +94,6 @@ defmodule SymphonyElixir.QaAgent do
           optional(:run_profile) => SymphonyElixir.RunKind.profile(),
           optional(:dev_server_url) => String.t() | nil,
           optional(:host_ports) => [pos_integer()],
-          optional(:verification_issue) => Issue.t(),
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
           optional(:journey) => %{source: String.t(), text: String.t() | nil}
@@ -147,12 +147,11 @@ defmodule SymphonyElixir.QaAgent do
   @doc """
   The temp folders a QA pass in `worktree` may use, one under each of `bases`: the pass takes
   the first one it can create. Named after a short hash of the worktree, so the path stays
-  short (Claude Code keeps sockets under it) and `SymphonyElixir.QaRunner` can name the
-  folders of a pass in flight. `/tmp` comes first; a sandboxed Symphony that can't write there
-  falls back to its own temp folder.
+  short (Claude Code keeps sockets under it). `/tmp` comes first; a sandboxed Symphony that can't
+  write there falls back to its own temp folder.
   """
   @spec tmp_dirs(Path.t(), [Path.t()]) :: [Path.t()]
-  def tmp_dirs(worktree, bases \\ AgentTmpDir.default_bases()) do
+  def tmp_dirs(worktree, bases) do
     AgentTmpDir.paths(@tmp_dir_prefix, worktree, bases)
   end
 
@@ -173,8 +172,6 @@ defmodule SymphonyElixir.QaAgent do
 
   @doc """
   Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
-  `:verification_issue` is a parent walkthrough: `job.issue` is the parent and the worktree is at
-  the base branch head (see `SymphonyElixir.AutoReview.ParentWalkthrough`). A job with
   `:epic_review` is the epic review of a designed repo's plan parent: `job.issue` is the epic
   itself, its worktree is at the base branch head, and its own acceptance criteria and user
   walkthrough are the checklist the review resolves (see `SymphonyElixir.EpicReview`).
@@ -205,7 +202,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{verification_section(job)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -281,23 +278,9 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  defp intro(%{verification_issue: %Issue{identifier: identifier}} = job) do
-    """
-    You are the QA agent in Symphony's Auto Review step, running the parent walkthrough.
-
-    Every sub-ticket of this parent Linear issue has merged, and #{identifier} asks for a final check
-    of the parent as a whole. There is no PR: test the merged result the way a user would, judged on
-    the parent's acceptance criteria and user walkthrough and on the verification checklist below,
-    and report what happened. You are in a fresh, disposable worktree checked out at `#{job.sha}`,
-    the head of `#{Map.get(job, :base_ref)}`. Do not edit tracked files, commit, push, open PRs,
-    move issues, or post comments: Symphony writes the QA report from your answer and files each
-    failing step as a new ticket.\
-    """
-  end
-
   defp intro(job) do
     """
-    You are the QA agent in Symphony's Auto Review step.
+    You are the QA agent in Symphony's QA state.
 
     The executor agent opened a PR for this Linear issue and CI is green. Test the change the way a
     user would and report what happened. You are in a fresh, disposable worktree checked out at the
@@ -306,12 +289,11 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # QA tests behaviour, not the code: CI already ran the full suite (Auto Review starts only on
-  # green CI), and re-running it in the sandbox takes many times longer and loads the shared host.
-  # A run with no PR checks to lean on — a parent walkthrough, or the epic review of a designed
-  # repo's plan parent (`SymphonyElixir.EpicReview`) — cites CI's runs on the head of the base branch
-  # instead: a red default branch must fail the verification, not pass as `skipped`.
-  defp test_suite_rule(%{verification_issue: %Issue{}} = job), do: base_head_test_rule(job)
+  # QA tests behaviour, not the code: CI already ran the full suite (QA starts only on green CI),
+  # and re-running it in the sandbox takes many times longer and loads the shared host. A run with
+  # no PR checks to lean on — the epic review of a designed repo's plan parent
+  # (`SymphonyElixir.EpicReview`) — cites CI's runs on the head of the base branch instead: a red
+  # default branch must fail the verification, not pass as `skipped`.
   defp test_suite_rule(%{epic_review: true} = job), do: base_head_test_rule(job)
 
   defp test_suite_rule(_job) do
@@ -350,7 +332,7 @@ defmodule SymphonyElixir.QaAgent do
   # The designed QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
   # stories and journeys the change delivers or updates, from the epic plan where one exists and
   # otherwise from the ticket's walkthrough and acceptance criteria. Only a run carrying a `journey`
-  # (the QA state's) gets this section; Auto Review's jobs carry none, so their prompt is unchanged.
+  # (the QA state's) gets this section.
   # The epic review has no parent to read the journeys from: they are the epic's own plan. The epic
   # carries them in its description, its plan documents and its comments, and the review accounts for
   # all of them, not only for the code.
@@ -412,10 +394,9 @@ defmodule SymphonyElixir.QaAgent do
 
   # An agent cannot write these paths (the sandbox denies it and CI's `protected-paths` job fails
   # an `auto/*` PR that changes them), so the executor hands such a criterion to a person in a
-  # follow-up ticket. Failing the PR on it only burns fix runs before an escalation (TP-522). A
-  # parent walkthrough tests the merged result, where a missing change is a real gap, and so does the
-  # epic review of a designed repo's plan parent.
-  defp protected_path_rule(%{verification_issue: %Issue{}}), do: ""
+  # follow-up ticket. Failing the PR on it only burns fix runs before an escalation (TP-522). The
+  # epic review of a designed repo's plan parent tests the merged result, where a missing change is
+  # a real gap.
   defp protected_path_rule(%{epic_review: true}), do: ""
 
   defp protected_path_rule(_job) do
@@ -436,37 +417,9 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  # The checklist is the verification ticket's whole purpose, so a `pass` that skipped its rows
-  # is not accepted (TP-545): `SymphonyElixir.AutoReview.ParentWalkthrough` counts the
-  # `checklist` steps.
-  defp verification_section(%{verification_issue: %Issue{} = verification} = job) do
-    """
-
-    Verification checklist (#{verification.identifier}, the parent's final verification sub-ticket):
-    #{PromptSafety.linear_issue_title(verification.title || "")}
-    #{PromptSafety.linear_issue_body(verification.description || "")}
-
-    Every row of this checklist is a required step. Report each row as its own step with
-    `"checklist": true` and the status `pass` or `fail`, with the evidence in `details`. A row the
-    merged result does not meet on `#{Map.get(job, :base_ref)}` is a gap: mark it `fail` and put the
-    gap in `findings`. Expand a row that groups several IDs (such as "UC1 to UC8", or a range of
-    sub-tickets) into one step per ID, named after the ID, with its own verdict. Reuse the evidence
-    that already exists: the merged sub-tickets (`linear_get_subissues`) and their commits in
-    `git log`, the tests that cover the row, and the code. Mark a row `skipped` only for a reason
-    you state in `details` that this QA host cannot get past, such as a check only a person or a
-    device this host lacks can do, and set `needs_person` when that is why. The number of rows, or
-    not having walked them one by one, is not a reason. Symphony does not accept `pass` when no
-    checklist row is reported or most of them are skipped: it reports the walkthrough as `blocked`
-    and hands the ticket to a person.
-    """
-  end
-
-  defp verification_section(_job), do: ""
-
   # The epic review's checklist is the epic's own: the acceptance criteria and user walkthrough the
-  # plan wrote into its description, which the review resolves row by row. Same contract as the
-  # verification ticket's above — `SymphonyElixir.EpicReview` counts the `checklist` steps and does
-  # not accept a `pass` that skipped them.
+  # plan wrote into its description, which the review resolves row by row. `SymphonyElixir.EpicReview`
+  # counts the `checklist` steps and does not accept a `pass` that skipped them.
   defp epic_section(%{epic_review: true} = job) do
     """
     Epic checklist (#{job.issue.identifier}, this epic's own acceptance criteria and user walkthrough):
@@ -488,11 +441,9 @@ defmodule SymphonyElixir.QaAgent do
 
   defp epic_section(_job), do: ""
 
-  defp checklist_field(%{verification_issue: %Issue{}}), do: ~s(,\n      "checklist": true | false)
   defp checklist_field(%{epic_review: true}), do: ~s(,\n      "checklist": true | false)
   defp checklist_field(_job), do: ""
 
-  defp fixer(%{verification_issue: %Issue{}}), do: "a follow-up ticket"
   defp fixer(%{epic_review: true}), do: "a follow-up ticket"
   defp fixer(_job), do: "the executor"
 
@@ -1055,9 +1006,6 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  # In a parent walkthrough `job.issue` already is the parent.
-  defp fetch_parent(%{verification_issue: %Issue{}}, _worktree, _settings, _opts), do: nil
-
   defp fetch_parent(job, worktree, settings, opts) do
     case parent_issue(job.issue, worktree, settings, opts) do
       {:ok, %{} = parent} ->
@@ -1084,6 +1032,55 @@ defmodule SymphonyElixir.QaAgent do
       module -> {:ok, module}
     end
   end
+
+  @doc """
+  The hold info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, or by
+  a model API the agent couldn't reach (`source: :api_unreachable`), else nil.
+  """
+  @spec usage_limit(term()) :: map() | nil
+  def usage_limit({:qa_agent_failed, reason}), do: usage_limit(reason)
+  def usage_limit({:usage_limited, %{} = info}), do: info
+  def usage_limit({:model_api_unreachable, %{} = info}), do: info
+  def usage_limit(_reason), do: nil
+
+  @doc """
+  The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error, or for the
+  PR's changed files that git could not list (`{:changed_files_unlisted, reason}`).
+  """
+  @spec blocked_reason(term()) :: String.t()
+  def blocked_reason({:qa_token_limit, total, limit}),
+    do: "the QA agent reached the per-issue token limit (#{total} of #{limit} tokens)"
+
+  def blocked_reason({:remote_worker_unsupported, host}), do: "QA does not run on remote workers yet (#{host})"
+
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
+    do: "the dev server failed its health check, so the web playbook could not run"
+
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, cause}}}),
+    do:
+      "the dev server did not start: Seatbelt on this Mac could not keep it from opening a TCP listener, " <>
+        "so Symphony did not run it unconfined (#{inspect(cause)})"
+
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, socket}}}),
+    do:
+      "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (#{socket}): on macOS its sandbox allows " <>
+        "no TCP listener, so it must listen on that unix socket, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT"
+
+  def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+
+  def blocked_reason({:qa_host_tunnel_failed, reason}),
+    do: "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: #{reason}"
+
+  def blocked_reason({:qa_browser_mcp_unavailable, :no_npx}),
+    do: "`npx` (Node.js) is not on Symphony's PATH, so the web playbook's browser could not start"
+
+  def blocked_reason({:qa_browser_mcp_unavailable, package}),
+    do: "`#{package}` is not installed on the Symphony host; run `npx -y #{package} --version` there once"
+
+  def blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
+  def blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
+  def blocked_reason({:changed_files_unlisted, reason}), do: "could not list the PR's changed files: #{inspect(reason)}"
+  def blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
 
   @doc false
   @spec agent_module(String.t() | nil) :: {:ok, module()} | {:error, term()}

@@ -7,8 +7,11 @@ defmodule SymphonyElixir.Handoff do
   never when a run merely goes quiet. The signal is emitted mechanically by the push and
   pull-request tool hooks (`SymphonyElixir.AgentTools.GitHub`), recorded in the ticket's signals
   ledger bound to the head it handed off, and read back by the runner before it performs any move
-  into `Code Review`. A run that ends without it records a `handoff_missing` event and is left
-  where it is, for the retry machinery to pick up.
+  into `Code Review`. A run that stops quiet with its PR already on its workspace HEAD has nothing
+  to push, so the runner records the signal for that head itself and hands off. A run that ends
+  without it records a `handoff_missing` event and is left where it is, for the retry machinery
+  to pick up; its quiet successors back off and, after two on the same head, the ticket is held
+  `Blocked` with `handoff_missing`.
 
   A `legacy` repo neither emits nor consults the signal, so its behavior is unchanged. This module
   is the one place that decides the handoff's target state, so the guard table, the runner and the
@@ -20,6 +23,9 @@ defmodule SymphonyElixir.Handoff do
   @signal "handoff"
   @missing_signal "handoff_missing"
   @origins ["In Progress", "Rework"]
+  # A legacy repo hands a PR off to In Review: Auto Review is retired, and In Review retires with
+  # the legacy machine once its tickets drain.
+  @legacy_target "In Review"
 
   @doc "The ledger signal name a session's handoff is recorded under."
   @spec signal() :: String.t()
@@ -36,11 +42,7 @@ defmodule SymphonyElixir.Handoff do
   @doc "The state a repo hands a finished implementation off to."
   @spec target_state(map()) :: String.t()
   def target_state(settings) do
-    if designed?(settings) do
-      settings.tracker.code_review_state
-    else
-      SymphonyElixir.AutoReview.post_pr_state(settings)
-    end
+    if designed?(settings), do: settings.tracker.code_review_state, else: @legacy_target
   end
 
   @doc """

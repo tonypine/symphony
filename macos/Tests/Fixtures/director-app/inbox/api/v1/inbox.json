@@ -178,24 +178,7 @@
           ]
         },
         "pull_request": {
-          "change": {
-            "additions": 412,
-            "deletions": 38,
-            "files": 9,
-            "largest": [
-              {
-                "additions": 180,
-                "deletions": 4,
-                "path": "lib/billing/proration.ex"
-              }
-            ]
-          },
           "ci": "passed",
-          "gate": {
-            "agent_verdict": "approve",
-            "mode": "shadow",
-            "verdict": "escalate"
-          },
           "qa": {
             "report_url": "https://linear.app/acme/issue/BIL-206#comment-5d1e0a2c",
             "verdict": "pass"

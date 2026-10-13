@@ -3,10 +3,9 @@ defmodule SymphonyElixir.QaVerification do
   The `QA` state's verification run.
 
   A designed repo's `QA` ticket is dispatched by the poll loop like any other active ticket; this
-  module turns that dispatch into a QA pass instead of an executor run. It re-homes the QA
-  machinery the Auto Review step uses (`SymphonyElixir.QaAgent` and its playbook selection,
-  `SymphonyElixir.Verification`'s dev server) into the designed flow's QA state, so a designed repo
-  runs exactly the same QA agent, on the change's own worktree, from the user's point of view.
+  module turns that dispatch into a QA pass instead of an executor run: the QA agent
+  (`SymphonyElixir.QaAgent` and its playbook selection, `SymphonyElixir.Verification`'s dev server)
+  runs on the change's own worktree, from the user's point of view.
 
   The run is only ever started on a green head (the orchestrator gates dispatch on the ticket's
   recorded CI state) and its verdict is recorded bound to the head SHA it judged, then performed
@@ -22,7 +21,7 @@ defmodule SymphonyElixir.QaVerification do
   (the epic plan, where one exists, is the parent the QA agent reads with its Linear tools), and the
   agent judges the outcome as a careful engineer testing their own feature, not by executing a
   script. A legacy repo never reaches this module: `run/3` returns `:skip` for anything but a
-  designed repo's `QA` ticket, so the Auto Review path is untouched.
+  designed repo's `QA` ticket.
   """
 
   require Logger

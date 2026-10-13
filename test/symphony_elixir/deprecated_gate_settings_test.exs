@@ -1,8 +1,8 @@
-defmodule SymphonyElixir.AcceptanceGateConfigTest do
+defmodule SymphonyElixir.DeprecatedGateSettingsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.AcceptanceGate.Settings
-  alias SymphonyElixir.AcceptanceGate.Settings.Escalate
+  alias SymphonyElixir.Config.DeprecatedGateSettings, as: Settings
+  alias SymphonyElixir.Config.Escalate
   alias SymphonyElixir.Config.{RepoWorkflowSchema, Schema, SystemSchema}
 
   defp symphony(sections, repo_fields \\ %{}) do
@@ -139,7 +139,7 @@ defmodule SymphonyElixir.AcceptanceGateConfigTest do
       assert %Settings{mode: "off", kind: nil, model: nil, max_turns: 12, timeout_ms: 900_000, max_concurrent: 2} = gate
 
       assert %Escalate{dependencies: "major", max_changed_lines: 1500, inconclusive_limit: 2} = gate.escalate
-      assert gate.escalate.busy_files == %Settings.BusyFiles{top: 10, window_days: 14, max_lines: 300}
+      assert gate.escalate.busy_files == %Escalate.BusyFiles{top: 10, window_days: 14, max_lines: 300}
 
       for {field, values} <- Escalate.built_in(), do: assert(Map.fetch!(gate.escalate, field) == values)
       assert "needs-human" in gate.escalate.labels
@@ -199,36 +199,80 @@ defmodule SymphonyElixir.AcceptanceGateConfigTest do
     end
   end
 
-  describe "run profile" do
-    test "agent.run_profiles.acceptance_gate is accepted and acceptance_gate_profile/1 resolves it" do
-      unset = settings!(%{})
-      assert Config.acceptance_gate_profile(unset) == %{kind: :acceptance_gate, model: nil, effort: nil, provider: "anthropic"}
+  describe "deprecation of the retired Auto Review and acceptance gate keys" do
+    # The warnings are logged once per distinct config, so each test parses its own config.
+    defp parse_log(sections, repo_fields \\ %{}) do
+      capture_log(fn -> assert {:ok, _system} = SystemSchema.parse(symphony(sections, repo_fields)) end)
+    end
 
+    test "Auto Review's own flow keys load and warn once each, naming what replaced them" do
+      log =
+        parse_log(%{
+          "auto_review" => %{
+            "enabled" => true,
+            "state" => "Auto Review",
+            "max_fix_attempts" => 3,
+            "run_on" => "first_pass",
+            "max_concurrent" => 2,
+            "playbooks" => %{"cli" => %{"enabled" => true}}
+          }
+        })
+
+      assert log =~ "`auto_review.enabled` is deprecated and has no effect: Auto Review is retired; a designed repo runs QA in its QA state"
+      assert log =~ "`auto_review.state` is deprecated and has no effect: Auto Review is retired; `issues.states.qa` names the QA state"
+      assert log =~ "`auto_review.max_fix_attempts` is deprecated"
+      assert log =~ "`auto_review.run_on` is deprecated"
+      assert log =~ "`auto_review.max_concurrent` is deprecated"
+      # The QA settings that moved with the QA state still act and say nothing.
+      refute log =~ "`auto_review.playbooks`"
+    end
+
+    test "the gate agent's settings, its escalate block and inconclusive_limit warn; the block still loads" do
+      log =
+        parse_log(
+          gate(%{
+            "runtime" => "codex",
+            "max_turns" => 9,
+            "escalate" => %{"labels" => ["risky"], "inconclusive_limit" => 4}
+          }),
+          %{"acceptance_gate" => %{"timeout_ms" => 60_000}}
+        )
+
+      assert log =~ "`auto_review.acceptance_gate.runtime` is deprecated and has no effect: the acceptance gate is retired"
+      assert log =~ "`auto_review.acceptance_gate.max_turns` is deprecated"
+      assert log =~ "`repositories[app].acceptance_gate.timeout_ms` is deprecated"
+      assert log =~ "`auto_review.acceptance_gate.escalate` is deprecated and will move"
+      assert log =~ "`labels` and `ticket_patterns` pause the ticket on a Needs Decision hold"
+      assert log =~ "`auto_review.acceptance_gate.escalate.inconclusive_limit` is deprecated and has no effect"
+
+      assert settings!(gate(%{"escalate" => %{"labels" => ["also-risky"]}})).auto_review.acceptance_gate.escalate.labels ==
+               Escalate.built_in().labels ++ ["also-risky"]
+    end
+
+    test "agent.run_profiles.acceptance_gate and a repository's still load, warn and are dropped" do
       agent = %{
         "runtime" => "claude",
         "command" => "claude --dangerously-skip-permissions",
-        "model" => "claude-sonnet-5-5",
-        "effort" => "medium",
-        "run_profiles" => %{"acceptance_gate" => %{"model" => "claude-opus-5-5"}}
+        "run_profiles" => %{"acceptance_gate" => %{"model" => "claude-opus-5-5"}, "qa" => %{"effort" => "high"}}
       }
 
-      settings = settings!(%{"agent" => agent})
-      assert Config.acceptance_gate_profile(settings) == %{kind: :acceptance_gate, model: "claude-opus-5-5", effort: "medium", provider: "anthropic"}
-      assert Config.run_profile_key(settings, :acceptance_gate, :model) == "agent.run_profiles.acceptance_gate.model"
+      log =
+        capture_log(fn ->
+          assert {:ok, system} =
+                   SystemSchema.parse(symphony(%{"agent" => agent}, %{"agent" => %{"run_profiles" => %{"acceptance_gate" => %{"effort" => "low"}}}}))
 
-      settings = settings!(Map.merge(%{"agent" => agent}, gate(%{"effort" => "xhigh"})))
-      assert Config.acceptance_gate_profile(settings) == %{kind: :acceptance_gate, model: "claude-opus-5-5", effort: "xhigh", provider: "anthropic"}
-      assert Config.run_profile_key(settings, :acceptance_gate, :effort) == "auto_review.acceptance_gate.effort"
+          assert {:ok, settings} = Schema.parse(SystemSchema.to_config_map(system))
+          assert settings.agent.run_profiles == %{"qa" => %{"effort" => "high"}}
+        end)
+
+      assert log =~ "`agent.run_profiles.acceptance_gate` is deprecated and has no effect"
+      assert log =~ "`repositories[app].agent.run_profiles.acceptance_gate` is deprecated and has no effect"
     end
 
-    test "a repository's agent.run_profiles.acceptance_gate applies below the gate's own fields" do
-      write_repos!(
-        [Map.put(repo("api", ["api"], nil), "agent", %{"run_profiles" => %{"acceptance_gate" => %{"model" => "claude-haiku-4-5", "effort" => "low"}}})],
-        auto_review: %{"acceptance_gate" => %{"effort" => "high"}}
-      )
+    test "pull_requests.checks.escalate_to_state still loads and warns that it does nothing" do
+      log = parse_log(%{"pull_requests" => %{"checks" => %{"escalate_to_state" => "Blocked"}}})
 
-      assert Config.acceptance_gate_profile(Config.settings_for_repo!("api")) ==
-               %{kind: :acceptance_gate, model: "claude-haiku-4-5", effort: "high", provider: "anthropic"}
+      assert log =~ "`pull_requests.checks.escalate_to_state` is deprecated and has no effect"
     end
   end
 end
