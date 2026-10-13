@@ -80,6 +80,9 @@ defmodule SymphonyElixir.ForceIssueTest do
         not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref)
       end)
 
+      # The open blocker puts each Todo ticket on a Blocked hold.
+      for id <- ["id-1", "id-2", "id-5"], do: assert_received({:memory_tracker_label_added, ^id, "Blocked"})
+
       start_test_endpoint(orchestrator: name)
 
       %{pid: pid, clock: clock}
@@ -88,13 +91,13 @@ defmodule SymphonyElixir.ForceIssueTest do
     test "forces a ticket, queues a second one behind it and clears it", %{pid: pid, clock: clock} do
       assert {{:halt, 0}, "MT-1 forced (slot 1 of 1)\n"} = force(["MT-1"])
       assert_received {:memory_tracker_label_added, "id-1", "expedite"}
-      assert labels("id-1") == ["expedite"]
+      assert labels("id-1") == ["Blocked", "expedite"]
       assert %{"id-1" => %{forced_since: @now}} = :sys.get_state(pid).forced
       assert %{"id-1" => %{}} = RunStore.get_forced(Config.repo_key!())
 
       Agent.update(clock, &DateTime.add(&1, 60))
       assert {{:halt, 0}, "MT-2 forced (queued #2; MT-1 holds the forced slot)\n"} = force(["MT-2"])
-      assert labels("id-2") == ["bug", "expedite"]
+      assert labels("id-2") == ["bug", "Blocked", "expedite"]
 
       # Forcing a ticket that already carries the label leaves Linear alone.
       assert {{:halt, 0}, "MT-1 forced (slot 1 of 1)\n"} = force(["MT-1"])
@@ -102,7 +105,7 @@ defmodule SymphonyElixir.ForceIssueTest do
 
       assert {{:halt, 0}, "MT-2 no longer forced\n"} = force(["--clear", "MT-2"])
       assert_received {:memory_tracker_label_removed, "id-2", "expedite"}
-      assert labels("id-2") == ["bug"]
+      assert labels("id-2") == ["bug", "Blocked"]
       assert Map.keys(:sys.get_state(pid).forced) == ["id-1"]
 
       # Clearing a ticket without the label changes nothing.
@@ -160,7 +163,7 @@ defmodule SymphonyElixir.ForceIssueTest do
       conn = post_force(%{"clear" => false}, control_token())
       assert conn.status == 422
       assert %{"error" => %{"code" => "invalid_request", "message" => "identifier is required"}} = json_response(conn, 422)
-      assert labels("id-1") == []
+      assert labels("id-1") == ["Blocked"]
     end
 
     test "the control API answers 503 while the orchestrator is down", %{pid: pid} do
