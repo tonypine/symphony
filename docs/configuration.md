@@ -247,7 +247,8 @@ tickets:
   when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
   example on `[urgent, high]` only. It never stops a forced ticket (`agent.concurrency.force_label`)
   or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
-  `null` turns the filter off.
+  `null` turns the filter off. `/api/v1/state` lists each ticket it holds back under
+  `dispatch_skipped` (`priority medium is not in tickets.priorities (urgent, high)`).
 
 ### `repositories`
 
@@ -813,7 +814,10 @@ agent:
   and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
   `waiting for CI on <sha>`; it doesn't count as waiting for a slot, so it doesn't hold back `Todo`.
   `/api/v1/state` also lists the issue ids Symphony holds a claim on (`claimed`); a claim with no
-  running agent, retry or slot wait is released at the end of the next poll.
+  running agent, retry or slot wait is released at the end of the next poll. Every other candidate
+  the last poll passed over is listed under `dispatch_skipped` with the gate that held it (`blocked
+  by MT-2`, `on a Needs Decision hold`, a usage limit, the `tickets.priorities` filter, ...) and
+  since when.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker

@@ -738,6 +738,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "forced" => false
                }
              ],
+             "dispatch_skipped" => [
+               %{
+                 "issue_id" => "skip-http",
+                 "issue_identifier" => "MT-SKIP",
+                 "repo_key" => "default",
+                 "title" => "Skipped",
+                 "state" => "Todo",
+                 "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+                 "since" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "shipped_today" => [
                %{
                  "issue_id" => "shipped-http",
@@ -4155,6 +4166,17 @@ defmodule SymphonyElixir.ExtensionsTest do
           attempt: nil,
           since: ~U[2026-10-03 06:00:00Z],
           repo_key: "default"
+        }
+      ],
+      dispatch_skipped: [
+        %{
+          issue_id: "skip-http",
+          identifier: "MT-SKIP",
+          title: "Skipped",
+          state: "Todo",
+          repo_key: "default",
+          reason: "priority medium is not in tickets.priorities (urgent, high)",
+          since: ~U[2026-10-03 06:00:00Z]
         }
       ],
       shipped_today: [
