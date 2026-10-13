@@ -234,10 +234,10 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   runtimes don't let Symphony turn off. So the `appkit-dialog` workflow checks, on a disposable
   macOS runner, that a minimal `NSApplication` + `NSWindow` program started under the agent
   profile with Symphony's settings puts no window and no "quit unexpectedly" dialog on screen:
-  it runs once plainly and once made to crash. Two runs outside the sandbox first show that the runner draws the window and shows the dialog.
-  The job summary records what each run showed. The workflow runs weekly, to catch an SRT or
-  macOS release, and on pull requests that change the probe or the agent's SRT settings. The
-  prompt rule still applies.
+  it runs once plainly and once made to crash. Two runs outside the sandbox first show that the
+  runner draws the window and shows the dialog. The job summary records what each run showed.
+  The workflow runs weekly, to catch an SRT or macOS release, and on pull requests that change
+  the probe or the agent's SRT settings. The prompt rule still applies.
 
 ### Optional outer sandbox (Codex + SRT)
 
