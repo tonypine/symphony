@@ -2732,8 +2732,6 @@ defmodule SymphonyElixir.Orchestrator do
     clear_quality_gate_blocking_cache_entries(state, [issue_id])
   end
 
-  defp clear_quality_gate_blocking_cache_entry(state, _issue_id), do: state
-
   defp clear_quality_gate_blocking_cache_entries(%State{quality_gate_cache: cache} = state, issue_ids)
        when is_map(cache) and is_list(issue_ids) do
     {cache, changed?} =
@@ -7000,10 +6998,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp new_run_id(issue_id) when is_binary(issue_id) do
     "#{issue_id}-#{System.system_time(:microsecond)}-#{System.unique_integer([:positive])}"
-  end
-
-  defp new_run_id(_issue_id) do
-    "run-#{System.system_time(:microsecond)}-#{System.unique_integer([:positive])}"
   end
 
   defp attempt_count(attempt) when is_integer(attempt) and attempt > 0, do: attempt
