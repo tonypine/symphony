@@ -4512,17 +4512,18 @@ Minimum endpoints:
     last), for the Mac app's Inbox. Read-only, served like `/api/v1/state`, and it MUST make no
     tracker request: the implementation reads the tracker on its own poll and serves what it cached.
   - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
-    one query per repository route lists the issues in its scope in `In Review` or the human review
-    state with their `updatedAt` and the last edit of their newest comment; only an issue whose
-    pair changed since the last read is read again in full (comments, state history, labels,
-    attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
+    one query per repository route lists the issues in its scope in `In Review`, the human review
+    state or the Plan Review state (`issues.states.plan_review`, where a designed repo's plan waits
+    for approval; not queried when it is `null`) with their `updatedAt` and the last edit of their
+    newest comment; only an issue whose pair changed since the last read is read again in full
+    (comments, state history, labels, attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
     `inbox`.
-  - One item per issue in a review state, with `kind` `action` (an open
-    `linear_request_human_action` request, whatever else it is), else `final_verification` (title
-    starts `Final verification:`), else `plan` (label `plan` or `breakdown`), else `pr`; and one
-    item per quality-gate hold or skip (`awaiting_clarification`, `skipped`), with `kind`
-    `clarify`. An issue the orchestrator sees running, or watches outside the review states, is
-    dropped.
+  - One item per issue in a review state, and per plan parent (label `plan` or `breakdown`) in the
+    Plan Review state, with `kind` `action` (an open `linear_request_human_action` request,
+    whatever else it is), else `final_verification` (title starts `Final verification:`), else
+    `plan` (label `plan` or `breakdown`), else `pr`; and one item per quality-gate hold or skip
+    (`awaiting_clarification`, `skipped`), with `kind` `clarify`. An issue the orchestrator sees running, or watches outside the review states (for a
+    plan, outside the Plan Review state it was listed in), is dropped.
   - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
     the review brief's `**What to review:**` line, the request's title, or what the quality gate
     asks), `waiting_since` (the later of the latest move into its state and its newest open
