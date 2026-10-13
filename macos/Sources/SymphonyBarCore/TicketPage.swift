@@ -476,6 +476,7 @@ public struct TicketPage: Equatable {
     static func moveTitle(_ move: AuditRecord) -> String {
         switch move.move {
         case "approve_plan": return "Plan approved by you"
+        // A move Symphony retired; older audit records still name it.
         case "approve_pr": return "Moved to Merging by you"
         case "rework": return "Sent to Rework by you"
         case "decisions": return "Decisions sent by you"
