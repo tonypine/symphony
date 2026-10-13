@@ -74,6 +74,17 @@ defmodule SymphonyElixir.HoldTest do
       assert labels() == []
     end
 
+    test "refuses a write with no repo key, touching neither the store nor the label" do
+      log =
+        capture_log(fn ->
+          assert Hold.set(nil, @issue_id, :blocked) == {:error, :missing_repo_key}
+          assert Hold.clear("", @issue_id, :needs_decision) == {:error, :missing_repo_key}
+        end)
+
+      assert log =~ "Refused a hold write on issue_id=#{@issue_id} with no repo key"
+      assert labels() == []
+    end
+
     test "refuses a kind it does not know" do
       assert Hold.set(@repo_key, @issue_id, :unknown, %{reason: "x"}) == {:error, {:unknown_hold_kind, :unknown}}
       assert Hold.clear(@repo_key, @issue_id, :unknown) == {:error, {:unknown_hold_kind, :unknown}}
@@ -111,10 +122,16 @@ defmodule SymphonyElixir.HoldTest do
   end
 
   describe "get/4 and held?/4" do
-    test "read nothing without a repo key or an issue id" do
-      refute Hold.held?(nil, @issue_id, :blocked)
+    test "read nothing without a repo key or an issue id, and say so for a ticket read with no repo key" do
+      log =
+        capture_log(fn ->
+          refute Hold.held?(nil, @issue_id, :blocked)
+          assert Hold.get("", @issue_id, :blocked) == nil
+        end)
+
+      assert log =~ "Read the holds of issue_id=#{@issue_id} with no repo key"
       refute Hold.held?(@repo_key, nil, :blocked)
-      assert Hold.get(nil, @issue_id, :blocked) == nil
+      refute Hold.held?(@repo_key, 42, :blocked)
     end
 
     test "a store read error is reported and treated as no hold" do

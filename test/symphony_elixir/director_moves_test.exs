@@ -559,6 +559,27 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "decide" do
+    test "a ticket fetched with no repo key is answered and unblocked under the repo its project routes to", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [
+          [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Checkout"]],
+          [key: "repo-other", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Search"]]
+        ]
+      )
+
+      put_issues([%{pr("In Progress") | team: %{key: "MOT"}, project: %{name: "Checkout"}}])
+      set_decision_hold()
+
+      assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+
+      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
     test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       set_decision_hold()
