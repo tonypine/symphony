@@ -79,13 +79,13 @@ public struct Overview: Equatable {
 
     /// A stage of the flow strip (P2), left to right.
     public enum StageKind: String, CaseIterable, Equatable {
-        case queued, working, autoReview, waitingOnYou, merging, shippedToday
+        case queued, working, review, waitingOnYou, merging, shippedToday
 
         public var title: String {
             switch self {
             case .queued: "Queued"
             case .working: "Working"
-            case .autoReview: "Auto Review"
+            case .review: "Code Review & QA"
             case .waitingOnYou: "Waiting on you"
             case .merging: "Merging"
             case .shippedToday: "Shipped today"
@@ -307,8 +307,9 @@ public struct Overview: Equatable {
             guard scope.includes(index.repoKey(issueID: id)) else { return nil }
             return index.identifier(issueID: id) ?? id
         }
-        let autoReview = Self.unique(
-            state.watching.filter { Self.isState($0.state, "Auto Review") && scope.includes($0.repoKey) }.map(\.identifier)
+        let review = Self.unique(
+            state.watching.filter { (Self.isState($0.state, "Code Review") || Self.isState($0.state, "QA")) && scope.includes($0.repoKey) }
+                .map(\.identifier)
                 + qaIdentifiers
         )
 
@@ -341,9 +342,9 @@ public struct Overview: Equatable {
                 spoken: working.isEmpty || paused ? nil : longestRun.map { "longest \(Self.spokenDuration($0))" }
             ),
             Stage(
-                kind: .autoReview,
-                count: autoReview.count,
-                context: autoReview.isEmpty ? "None" : scopedQA.isEmpty ? "waiting on checks"
+                kind: .review,
+                count: review.count,
+                context: review.isEmpty ? "None" : scopedQA.isEmpty ? "waiting on checks"
                     : scopedQA.count == 1 ? "1 QA pass running" : "\(scopedQA.count) QA passes running"
             ),
             Stage(
@@ -368,7 +369,7 @@ public struct Overview: Equatable {
         problems = Self.problems(state: state, scope: scope, index: index, reference: reference, timeZone: timeZone)
 
         // The sentence and its context line (P1).
-        let inProgress = Self.unique(queued + working + autoReview + waitingOnYou.map(\.identifier) + merging)
+        let inProgress = Self.unique(queued + working + review + waitingOnYou.map(\.identifier) + merging)
         if let pause = state.snapshot.pause {
             mood = .paused
             sentence = Self.pauseSentence(pause, reference: reference, timeZone: timeZone)

@@ -20,7 +20,6 @@ defmodule SymphonyElixir.PromptBuilder do
   # limit that forced the compact prompt in the first place. Keep only the tail
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
-  @qa_findings_limit 10_000
   @ticket_state_limit 4_000
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
@@ -111,7 +110,6 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
-    |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
@@ -174,7 +172,6 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
-    |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
@@ -580,12 +577,6 @@ defmodule SymphonyElixir.PromptBuilder do
     prompt <> "\n\n" <> ci_failure_section(ci_failure)
   end
 
-  defp append_qa_failure(prompt, %{} = qa_failure) do
-    prompt <> "\n\n" <> qa_failure_section(qa_failure)
-  end
-
-  defp append_qa_failure(prompt, _qa_failure), do: prompt
-
   defp append_pr_conflict(prompt, nil), do: prompt
 
   defp append_pr_conflict(prompt, pr_conflict) when is_map(pr_conflict) do
@@ -706,22 +697,21 @@ defmodule SymphonyElixir.PromptBuilder do
       "PR feedback and CI delivery:",
       "",
       pr_feedback_protocol_line(pr_polling?),
-      ci_feedback_protocol_line(ci_polling?),
-      acceptance_gate_protocol_line(designed?)
+      ci_feedback_protocol_line(ci_polling?)
     ]
+    |> Kernel.++(rework_protocol_lines(designed?))
     |> Enum.join("\n")
   end
 
-  # The acceptance gate comes back as `In Progress`, never as a rework phase. A designed repo has no
-  # acceptance gate: its Code Review and QA verdicts are what return work, as `Rework` on the same
-  # pull request, so its line says that instead.
-  defp acceptance_gate_protocol_line(false) do
-    "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not treat it as `Rework`, which still means closing the PR and starting over."
+  # A designed repo's Code Review and QA verdicts are what return work, as `Rework` on the same pull
+  # request.
+  defp rework_protocol_lines(true) do
+    [
+      "- A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR, with the verdict's reasons in the continuation prompt. Fix it on the same branch and push; that push hands off to `Code Review` again. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
+    ]
   end
 
-  defp acceptance_gate_protocol_line(true) do
-    "- A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR, with the verdict's reasons in the continuation prompt. Fix it on the same branch and push; that push hands off to `Code Review` again. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
-  end
+  defp rework_protocol_lines(false), do: []
 
   defp pr_feedback_protocol_line(true) do
     "- PR review feedback is delivered by Symphony re-activating you with the reviewer comments embedded in a continuation prompt; wait for that re-activation instead of polling for review feedback with `github_*` tools yourself."
@@ -775,54 +765,6 @@ defmodule SymphonyElixir.PromptBuilder do
       "",
       "#{names} is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it by adding the `#{CiPoller.waiver_label()}` label. Do not edit or revert the protected change; fix only the other failed checks."
     ]
-  end
-
-  # QA findings come from an agent that ran the PR's code, so they are fenced as data.
-  defp qa_failure_section(qa_failure) do
-    findings =
-      qa_failure
-      |> get_field(:findings)
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
-      |> Enum.map_join("\n", &("- " <> &1))
-
-    [
-      qa_failure_intro(string_field(qa_failure, :source), blank_fallback(string_field(qa_failure, :commit_sha), "unknown")),
-      "",
-      "BEGIN UNTRUSTED QA FINDINGS",
-      PromptSafety.linear_block(qa_findings_text(findings, qa_failure), "qa_findings", @qa_findings_limit),
-      "END UNTRUSTED QA FINDINGS"
-    ]
-    |> Enum.join("\n")
-  end
-
-  # An enforced acceptance gate `rework` comes back through the same continuation as a QA fail.
-  defp qa_failure_intro("acceptance_gate", commit_sha) do
-    Enum.join(
-      [
-        "Auto Review acceptance gate rework:",
-        "",
-        "The acceptance gate judged commit #{commit_sha} against the ticket and sent it back: the acceptance criteria or the scope below are not met yet.",
-        "Fix them on the same branch and PR, then push. Symphony runs QA and the gate again once CI is green."
-      ],
-      "\n"
-    )
-  end
-
-  defp qa_failure_intro(_source, commit_sha) do
-    Enum.join(
-      [
-        "Auto Review QA failure:",
-        "",
-        "The QA agent tested commit #{commit_sha} and found the behaviour below.",
-        "Fix it on the same branch and PR, then push. Symphony runs QA again once CI is green."
-      ],
-      "\n"
-    )
-  end
-
-  defp qa_findings_text(findings, qa_failure) do
-    blank_fallback(findings, blank_fallback(string_field(qa_failure, :summary), "No findings were recorded."))
   end
 
   defp pr_conflict_section(pr_conflict) do

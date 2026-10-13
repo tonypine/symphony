@@ -11,8 +11,8 @@ public struct TicketPage: Equatable {
         case working(stuck: Bool)
         /// It waits on something: "you", "CI", "a blocker", "a slot", "a retry at 14:32".
         case waiting(on: String)
-        /// In review: Auto Review's QA pass and the gate's verdict, when known.
-        case inReview(gate: String?, qa: String?)
+        /// In review: Code Review or QA, with the QA pass when it is running or queued.
+        case inReview(qa: String?)
         /// Done: its pull request and when it merged, when known.
         case done(pullRequest: URL?, mergedAt: Date?)
         /// Symphony says nothing about it now.
@@ -65,7 +65,7 @@ public struct TicketPage: Equatable {
         public var time: Date
         /// "13:03", or "Oct 6, 13:03" before today.
         public var timeText: String
-        /// "Implementation run 1", "Gate: approve", "Stopped by you".
+        /// "Implementation run 1", "QA run 1", "Stopped by you".
         public var title: String
         public var result: Result
         /// "failed", "done", "running"; nil when the title says it.
@@ -164,8 +164,8 @@ public struct TicketPage: Equatable {
         case .working(stuck: false): return "Working"
         case .working(stuck: true): return "Working, but no agent activity for a while"
         case let .waiting(on): return "Waiting on \(on)"
-        case let .inReview(gate, qa):
-            return (["In review"] + [qa, gate].compactMap { $0 }).joined(separator: " · ")
+        case let .inReview(qa):
+            return (["In review"] + [qa].compactMap { $0 }).joined(separator: " · ")
         case .done: return "Done"
         case .unknown: return "Symphony isn't working on \(identifier) right now"
         }
@@ -241,11 +241,9 @@ public struct TicketPage: Equatable {
         isRunning = running != nil
         isTracked = running != nil || retry != nil || watching != nil || issue != nil
 
-        let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl,
-                           issue?.acceptanceGate?.prUrl]
+        let pullRequest = [running?.pullRequestUrl, watching?.pullRequestUrl, issue?.watching?.pullRequestUrl]
             .compactMap { $0.flatMap(URL.init(string:)) }.first
             ?? records.reversed().lazy.compactMap { $0.pullRequestUrl.flatMap(URL.init(string:)) }.first
-        let gate = issue?.acceptanceGate.flatMap(Self.gateWord)
         let qaRunning = (state?.qa?.running ?? []).contains { $0.identifier == identifier || $0.issueId == watching?.issueId }
         let qaQueued = (state?.qa?.queued ?? []).contains { $0.identifier == identifier || $0.issueId == watching?.issueId }
         // Split in two: a single `??` chain over all of these exceeds the type-checker's budget
@@ -267,8 +265,8 @@ public struct TicketPage: Equatable {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
             phase = .waiting(on: "CI")
-        } else if let watching, Self.isState(watching.state, "In Review") || Self.isState(watching.state, "Auto Review") {
-            phase = .inReview(gate: gate.map { "Gate: \($0)" }, qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
+        } else if let watching, ["In Review", "Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
+            phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
             let due = retry.dueAt.flatMap(Self.date)
             phase = .waiting(on: due.map { "a retry at \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))" } ?? "a retry")
@@ -369,14 +367,6 @@ public struct TicketPage: Equatable {
             self.now = nil
         }
 
-        if let verdict = issue?.acceptanceGate, let judged = verdict.judgedAt.flatMap(Self.date), let word = Self.gateWord(verdict) {
-            steps.append(Step(
-                id: "gate-\(judged.timeIntervalSince1970)", time: judged, timeText: clock(judged), title: "Gate: \(word)",
-                result: verdict.verdict == "rework" ? .failed : .done, resultWord: nil, durationSeconds: nil, tokens: nil,
-                detail: (verdict.reasons ?? []).first
-            ))
-        }
-
         steps += Self.eventSteps(audit: audit, stops: sources.stops.filter { $0.identifier == identifier }, clock: clock)
 
         if let shipped, let merged = shipped.completedAt.flatMap(Self.date) {
@@ -398,7 +388,6 @@ public struct TicketPage: Equatable {
         facts.append(Fact(label: "Type", value: Self.type(title: title, inboxKind: waitingOnYou?.kind)))
         if let initiative { facts.append(Fact(label: "Initiative", value: initiative)) }
         if let pullRequest { facts.append(Fact(label: "Pull request", value: Self.pullRequestName(pullRequest), url: pullRequest)) }
-        if let gate { facts.append(Fact(label: "Gate verdict", value: gate)) }
         if case let .done(_, mergedAt?) = phase {
             mergedText = clock(mergedAt)
             facts.append(Fact(label: "Merged", value: clock(mergedAt)))
@@ -478,13 +467,6 @@ public struct TicketPage: Equatable {
         case let other?:
             return (.failed, other == "failure" || other == "error" ? "failed" : other.replacingOccurrences(of: "_", with: " "))
         }
-    }
-
-    /// "approve", "rework", "escalate", with "(shadow)" when the gate only watches.
-    private static func gateWord(_ gate: IssuePayload.Gate) -> String? {
-        guard let verdict = gate.verdict?.nonEmpty else { return nil }
-        let word = verdict.replacingOccurrences(of: "_", with: " ")
-        return gate.mode == "shadow" ? "\(word) (shadow)" : word
     }
 
     private static func type(title: String?, inboxKind: String?) -> String {
@@ -647,21 +629,12 @@ public struct TicketPage: Equatable {
             let pullRequestUrl: String?
         }
 
-        struct Gate: Decodable {
-            let verdict: String?
-            let mode: String?
-            let judgedAt: String?
-            let reasons: [String]?
-            let prUrl: String?
-        }
-
         let repoKey: String?
         let status: String?
         let workspace: Workspace?
         let running: Running?
         let watching: Watching?
         let lastError: String?
-        let acceptanceGate: Gate?
     }
 
     private struct RunsPayload: Decodable {

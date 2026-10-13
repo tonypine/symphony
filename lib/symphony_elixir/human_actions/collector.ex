@@ -11,22 +11,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
   - an issue with a deprecated request label and no request comment is itself a `:task`;
   - a plan parent in a review state is a `:plan_review`;
-  - an issue in a review state whose `## Symphony QA Report` says `blocked` for a cause only the
-    operator can clear (the running app lacks a QA tool, a tool missing on the Symphony host, the
-    QA host's macOS permissions) is a `:qa_blocked`, unless it is a `Final verification:` ticket.
-    It asks for that one step, never for a test by hand, and the issues blocked on the same cause
-    share one action. A block for any other cause, a QA tool the PR itself adds among them, is the
-    supervisor's: nothing is listed for it, not even as a `:human_review`;
-  - a `Final verification:` ticket, in any state, whose parent walkthrough report says `blocked`
-    is a `:verification_blocked` on its parent's project, while the ticket stays in the state the
-    walkthrough moved it to;
   - an issue in the Human Review state with none of the above is a `:human_review`.
 
   Every action on an issue in the Human Review state is marked `human_review`, so the update lists
   it first.
-
-  Neither lists a `blocked` verdict whose QA agent was stopped by the provider's usage limit: that
-  pass runs again once the limit resets.
 
   An issue's comments and history are read in full, past the first page the issue query returns,
   up to ten more pages of 100 each.
@@ -42,7 +30,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
   alias SymphonyElixir.{HumanReview, RunKind, StateMachine, SubIssueWait}
   alias SymphonyElixir.Linear.{Client, Issue}
-  alias SymphonyElixir.QaAgent.Report
 
   @issue_first 50
   @comment_last 30
@@ -54,24 +41,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @max_task_steps 12
   @plan_review_minutes 10
   @human_review_minutes 10
-  @verdict_pattern ~r/^\*\*Verdict:\*\*\s*(\w+)/m
-  @reason_pattern ~r/^Reason:\s*(.+)$/m
-  # The `blocked` reason of a QA agent that hit the provider's usage limit, as older QA reports
-  # wrote it: `the QA agent could not finish: {:qa_agent_failed, {:usage_limited, ...}}`.
-  @usage_limit_pattern ~r/:usage_limited\b/
-  # A parent walkthrough's report names the verification ticket and the state it moved it to.
-  @walkthrough_target_pattern ~r/^\*\*Verdict:\*\*\s*\w+\s*→\s*(\S+)\s+(.+?)\s*$/m
-  @blocked_step_pattern ~r/^- \*\*blocked\*\* (.+?)(?: \(evidence: .*\))?$/m
-  @permission_pattern ~r/permission|privacy & security|screen recording/i
-  # The causes of a QA block only the operator can clear, read from the QA report's reason. A tool
-  # the PR itself adds is not one: the running app gets it once the PR merges.
-  @pr_adds_tool_pattern ~r/\b(this|the) PR\b[^.;]*\badds?\b|\badded (by|in) (this|the) PR\b/i
-  @app_update_pattern ~r/\b(running|installed) (Symphony )?(app|build)\b|\bapp update\b|\bupdate (the |Symphony(?:'s)? )?app\b/i
-  @host_tool_pattern ~r/`([^`]+)` is not installed on the Symphony host; run `([^`]+)` there once/
-  @npx_missing_pattern ~r/`npx` \(Node\.js\) is not on Symphony's PATH/
-  @qa_permission_pattern ~r/screen recording|accessibility permission|privacy & security/i
-  @qa_cause_minutes 5
-  @gap_state "Todo"
 
   @query """
   query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
@@ -156,7 +125,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
     |> case do
       {:ok, nodes} ->
         nodes = Enum.uniq_by(nodes, & &1["id"])
-        actions = nodes |> Enum.flat_map(&issue_actions(&1, settings)) |> merge_qa_blocked()
+        actions = Enum.flat_map(nodes, &issue_actions(&1, settings))
         {:ok, by_project(actions), Waiting.entries(nodes, settings)}
 
       error ->
@@ -320,21 +289,14 @@ defmodule SymphonyElixir.HumanActions.Collector do
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
     in_review? = HumanReview.review_state?(issue.state, settings)
     human_review? = HumanReview.in_state?(issue.state, settings)
-    final_verification? = RunKind.classify(%Issue{title: issue.title}) == :final_verification
-
     legacy_labelled? = Enum.any?(HumanReview.legacy_request_labels(settings), &(&1 in labels))
-
-    qa_blocked? = in_review? and not final_verification? and qa_blocked?(context.node)
 
     actions =
       request_actions(context, legacy_labelled?) ++
-        plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1)) ++
-        qa_blocked_actions(context, qa_blocked?) ++
-        verification_blocked_actions(context, final_verification?)
+        plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1))
 
-    # A QA block is the operator's one step, or the supervisor's: never a review left to a person.
     actions
-    |> human_review_actions(context, human_review? and not qa_blocked?)
+    |> human_review_actions(context, human_review?)
     |> Enum.map(&%{&1 | human_review: human_review?})
   end
 
@@ -483,99 +445,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
     ]
   end
 
-  defp qa_blocked_actions(_context, false), do: []
-
-  # A block with a cause only the operator can clear is listed as that one step, merged with the
-  # other issues blocked on the same cause by `merge_qa_blocked/1`. Any other block is the
-  # supervisor's, so nothing is listed for it.
-  defp qa_blocked_actions(%{issue: issue} = context, true) do
-    reason = latest_qa_report(context.node).reason
-
-    case qa_cause(reason) do
-      %{} = cause ->
-        [
-          action(context, %{
-            key: "qa:#{cause.id}:#{issue.id}",
-            kind: :qa_blocked,
-            title: cause.title,
-            why: String.trim_trailing(reason, "."),
-            est_minutes: @qa_cause_minutes,
-            steps: [cause.step]
-          })
-        ]
-
-      nil ->
-        []
-    end
-  end
-
-  # A pass that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
-  defp qa_blocked?(node), do: match?(%{verdict: "blocked", usage_limited?: false}, latest_qa_report(node))
-
-  defp qa_cause(reason) when is_binary(reason) do
-    cond do
-      Regex.match?(@pr_adds_tool_pattern, reason) ->
-        nil
-
-      Regex.match?(@app_update_pattern, reason) ->
-        %{id: "app_update", title: "Update the Symphony app", step: "Update the Symphony app to its latest release."}
-
-      match = Regex.run(@host_tool_pattern, reason) ->
-        [_, tool, command] = match
-        %{id: "tool:#{tool}", title: "Install `#{tool}` on the Symphony host", step: "Run `#{command}` on the Symphony host once."}
-
-      Regex.match?(@npx_missing_pattern, reason) ->
-        %{id: "tool:npx", title: "Install Node.js on the Symphony host", step: "Install Node.js on the Symphony host, so `npx` is on Symphony's PATH."}
-
-      Regex.match?(@qa_permission_pattern, reason) ->
-        %{
-          id: "qa_permissions",
-          title: "Grant the QA host's permissions",
-          step: "On the QA host, open System Settings > Privacy & Security and grant Screen Recording and Accessibility to the app the QA reports name."
-        }
-
-      true ->
-        nil
-    end
-  end
-
-  defp qa_cause(_reason), do: nil
-
-  # One action per cause and project, naming every issue blocked on it.
-  defp merge_qa_blocked(actions) do
-    {blocked, others} = Enum.split_with(actions, &(&1.kind == :qa_blocked))
-
-    merged =
-      blocked
-      |> Enum.group_by(&{&1.project.id, &1.title})
-      |> Enum.map(fn {_cause, group} -> merge_qa_group(Enum.sort_by(group, & &1.issue.identifier)) end)
-
-    others ++ merged
-  end
-
-  defp merge_qa_group([first | _] = group) do
-    issues = Enum.map(group, & &1.issue)
-
-    %{
-      first
-      | key: String.replace_suffix(first.key, ":" <> first.issue.id, ":") <> Enum.map_join(issues, ",", & &1.id),
-        issue: nil,
-        human_review: false,
-        why: Enum.map_join(group, " ", &"#{&1.issue.identifier}: #{&1.why}."),
-        unblocks: "the QA of " <> join_words(Enum.map(issues, &issue_link/1)),
-        done_when: qa_done_when(Enum.map(issues, & &1.identifier))
-    }
-  end
-
-  defp qa_done_when([identifier]), do: "#{identifier} leaves its review state, or its next QA report is not blocked."
-  defp qa_done_when(identifiers), do: "#{join_words(identifiers)} each leave their review state, or their next QA reports are not blocked."
-
-  defp issue_link(%{identifier: identifier, url: url}) when is_binary(url), do: "[#{identifier}](#{url})"
-  defp issue_link(%{identifier: identifier}), do: identifier
-
-  defp join_words([one]), do: one
-  defp join_words(words), do: Enum.join(Enum.drop(words, -1), ", ") <> " and " <> List.last(words)
-
   # An issue in the Human Review state is waiting on a person even when nothing else names what for.
   defp human_review_actions([], %{issue: issue} = context, true) do
     [
@@ -597,87 +466,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp human_review_actions(actions, _context, _human_review?), do: actions
 
-  defp verification_blocked_actions(_context, false), do: []
-
-  # The verdict line says where the walkthrough left the ticket: `In Review`, or `Todo` when the
-  # failing steps it could run were filed as gap tickets.
-  # A walkthrough that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
-  defp verification_blocked_actions(%{issue: issue} = context, true) do
-    with %{verdict: "blocked", usage_limited?: false, body: body} = report <- latest_qa_report(context.node),
-         [_, target, target_state] <- Regex.run(@walkthrough_target_pattern, body),
-         true <- target == issue.identifier and state_is?(issue.state, target_state) do
-      [verification_blocked_action(context, report, target_state)]
-    else
-      _not_blocked -> []
-    end
-  end
-
-  defp verification_blocked_action(%{issue: issue, node: node} = context, report, target_state) do
-    parent = node["parent"] || %{}
-    of_parent = "the final verification of #{parent["identifier"] || issue.identifier}"
-    blocked_steps = @blocked_step_pattern |> Regex.scan(report.body, capture: :all_but_first) |> List.flatten()
-    permissions? = Regex.match?(@permission_pattern, Enum.join([report.reason || "" | blocked_steps], "\n"))
-
-    {title, fix} =
-      if permissions?,
-        do:
-          {"Grant the QA host's permissions for #{of_parent}",
-           "On the QA host, open System Settings > Privacy & Security and grant Screen Recording and Accessibility to the app the reason above names."},
-        else: {"Unblock #{of_parent}", "Fix the cause above, on the machine QA runs on."}
-
-    rerun =
-      if state_is?(target_state, @gap_state),
-        do: "#{issue.identifier} runs the walkthrough again by itself once the gap tickets that block it are done.",
-        else: "Then move #{issue.identifier} to `#{@gap_state}` so the walkthrough runs again."
-
-    project =
-      case parent["project"] do
-        %{"id" => project_id} = project when is_binary(project_id) -> %{id: project_id, name: project["name"]}
-        _no_project -> context.project
-      end
-
-    action(%{context | project: project}, %{
-      key: "verification:#{issue.id}",
-      kind: :verification_blocked,
-      title: title,
-      why: "The Auto Review walkthrough could not test everything: #{report.reason || "see the QA report on #{issue.identifier}"}#{blocked_steps_text(blocked_steps)}",
-      unblocks: of_parent,
-      steps: [fix, rerun],
-      done_when: "#{issue.identifier} leaves #{target_state}, or its next walkthrough is not blocked."
-    })
-  end
-
-  defp blocked_steps_text([]), do: ""
-  defp blocked_steps_text(steps), do: " Blocked steps: #{Enum.join(steps, "; ")}."
-
-  defp latest_qa_report(node) do
-    node
-    |> comments()
-    |> Enum.filter(&(is_binary(&1["body"]) and String.starts_with?(String.trim(&1["body"]), Report.heading())))
-    |> Enum.max_by(&(&1["createdAt"] || ""), fn -> nil end)
-    |> case do
-      %{"body" => body} ->
-        reason = capture(@reason_pattern, body)
-
-        %{
-          verdict: capture(@verdict_pattern, body),
-          reason: reason,
-          usage_limited?: is_binary(reason) and Regex.match?(@usage_limit_pattern, reason),
-          body: body
-        }
-
-      nil ->
-        nil
-    end
-  end
-
-  defp capture(pattern, body) do
-    case Regex.run(pattern, body) do
-      [_, value] -> String.trim(value)
-      nil -> nil
-    end
-  end
-
   defp action(context, attrs), do: struct!(Action, Map.merge(attrs, %{issue: context.issue, project: context.project}))
 
   defp comments(node), do: node |> get_in(["comments", "nodes"]) |> List.wrap()
@@ -692,12 +480,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   # States Symphony or an agent moves an issue out of; leaving any other state is a person
   # moving the issue on.
   defp owned_states(settings) do
-    [SubIssueWait.state(settings), settings.auto_review.state | settings.tracker.active_states]
+    [SubIssueWait.state(settings) | settings.tracker.active_states]
     |> Enum.filter(&is_binary/1)
   end
-
-  defp state_is?(state, expected) when is_binary(state), do: String.downcase(String.trim(state)) == String.downcase(expected)
-  defp state_is?(_state, _expected), do: false
 
   defp parse_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do

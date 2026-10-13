@@ -60,6 +60,42 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   @doc """
+  Pauses `issue` in its phase on a decision the machine needs: posts `request` as the
+  `## Decision needed:` comment (rendered to say the ticket stays where it is) and sets the Needs
+  Decision hold carrying it. The hold is set before the comment is posted, so a retry after a
+  failure never posts the comment twice. `confirm`, when given, is the state a confirmation continues into, as
+  a merge confirmation's does (`SymphonyElixir.MergeConfirmation.confirm_target/1`); without it the
+  ticket continues in place once the decision is recorded.
+
+  `issue` needs `:id` and `:state`, and `:repo_key` unless `opts[:repo_key]` names it.
+  `opts[:tracker]` and `opts[:store]` override the tracker and the run store (tests, a fake).
+  """
+  @spec pause(map(), map(), keyword(), String.t() | nil) :: :ok | {:error, term()}
+  def pause(%{id: issue_id} = issue, request, opts, confirm \\ nil) do
+    tracker = Keyword.get(opts, :tracker, SymphonyElixir.Tracker)
+    repo_key = Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
+
+    hold_opts = Keyword.take(opts, [:store])
+
+    # The hold first: a hold that can't be set posts nothing, so the caller's retry never posts a
+    # second `## Decision needed:` comment. A comment that can't be posted takes the hold back.
+    with {:hold, :ok} <- {:hold, Hold.set(repo_key, issue_id, :needs_decision, confirming(attrs(request), confirm), hold_opts)},
+         {:post, :ok} <- {:post, tracker.create_comment(issue_id, Request.render_hold(request, Map.get(issue, :state)))} do
+      :ok
+    else
+      {:hold, {:error, reason}} ->
+        {:error, {:decision_hold_failed, reason}}
+
+      {:post, {:error, reason}} ->
+        Hold.clear(repo_key, issue_id, :needs_decision, hold_opts)
+        {:error, {:decision_request_failed, reason}}
+    end
+  end
+
+  defp confirming(attrs, nil), do: attrs
+  defp confirming(attrs, confirm), do: %{attrs | decision: Map.put(attrs.decision, :confirm, confirm)}
+
+  @doc """
   Reconciles the Needs Decision hold of one ticket against the decision requests Linear still reads
   as open on it. `opts[:settings]` is the repo's resolved settings (the Inbox passes the one it
   resolved for the route); without it the repo is resolved through `Config.settings_for_repo/1`.

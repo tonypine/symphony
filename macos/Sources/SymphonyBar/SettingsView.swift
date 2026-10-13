@@ -300,35 +300,6 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    AcceptanceGatePicker(
-                        choice: Binding(
-                            get: { .mode(model.acceptanceGateMode) },
-                            set: { if case let .mode(mode) = $0 { model.acceptanceGateMode = mode } }
-                        ),
-                        pending: $model.pendingAcceptanceGate,
-                        choices: AcceptanceGateMode.allCases.map { .mode($0) },
-                        inherited: model.acceptanceGateMode
-                    )
-                    .disabled(!model.canEditAcceptanceGate)
-                    if let error = model.acceptanceGateError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                    ForEach(model.acceptanceGateLines, id: \.self) { line in
-                        Text(line).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text(AcceptanceGate.sectionTitle)
-                } footer: {
-                    SectionFooter(
-                        "The gate judges each PR against its ticket after QA. Each repository's Edit… sheet in "
-                            + "Repos… can set its own mode, and the status menu switches an enforced repository to "
-                            + "Shadow or Off at once. Save checks symphony.yml with symphony check first; Symphony "
-                            + "reads the mode on its next poll, no restart needed. The stats cover each repository's "
-                            + "last 50 verdicts a person decided."
-                    )
-                }
-
-                Section {
                     if model.isLoadingSecrets {
                         HStack {
                             ProgressView().controlSize(.small)
@@ -420,9 +391,6 @@ struct SettingsView: View {
                 }
                 if let error = model.tokenLimitsError {
                     CheckErrorText(message: error)
-                }
-                if model.acceptanceGateError != nil {
-                    Text("symphony check rejected the acceptance gate's mode; see Acceptance gate.").foregroundStyle(.red)
                 }
                 if model.timeoutsError != nil {
                     Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)

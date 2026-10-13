@@ -13,7 +13,6 @@ defmodule SymphonyElixir.Orchestrator do
     AgentTelemetry,
     AuditLog,
     AutoMerge,
-    AutoReview,
     BlockedHold,
     BreakdownReview,
     BuildInfo,
@@ -29,9 +28,9 @@ defmodule SymphonyElixir.Orchestrator do
     PlanComments,
     PrReviewPoller,
     PrRun,
-    QaRunner,
     Quality,
     QualityGate,
+    RetiredStates,
     RunKind,
     RunStore,
     Secret,
@@ -711,7 +710,6 @@ defmodule SymphonyElixir.Orchestrator do
 
       false ->
         complete_pr_review_comment_cursor(issue_id, running_entry_repo_key(running_entry))
-        complete_pending_qa_failure(issue_id, running_entry_repo_key(running_entry))
         complete_active_agent_run(state, issue_id, running_entry, session_id)
     end
   end
@@ -3381,17 +3379,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Candidates go out forced first, then closest-to-done, each epic lane's tickets nearest the epic
-  # first. Once a Merging or Auto Review issue is left waiting for a slot, or a QA pass waits for a
-  # finishing slot, no Todo issue starts in this pass, except on the forced allowance; its
-  # `slot_waiting` reason names the issue it waits for. A QA pass that waits only on
-  # `auto_review.max_concurrent` holds nothing back. `slot_waiting` is rebuilt from the pass,
+  # first. Once a Merging issue is left waiting for a slot, no Todo issue starts in this pass,
+  # except on the forced allowance; its `slot_waiting` reason names the issue it waits for.
+  # `slot_waiting` is rebuilt from the pass,
   # keeping the attempt of any retry that was waiting for a slot; with `keep_waiting: true` the
   # entries of issues outside this pass stay as they were.
   defp dispatch_chosen_issues(issues, state, opts \\ []) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
     previous_waiting = state.slot_waiting || %{}
-    auto_review_state = Config.settings!() |> AutoReview.state() |> normalize_issue_state()
 
     slot_waiting =
       if Keyword.get(opts, :keep_waiting, false),
@@ -3401,9 +3397,9 @@ defmodule SymphonyElixir.Orchestrator do
     {state, _hold} =
       issues
       |> sort_issues_for_dispatch()
-      |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state, auto_review_state) end))
+      |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state) end))
       |> forced_first(state)
-      |> Enum.reduce({%{state | slot_waiting: slot_waiting}, qa_finishing_hold()}, fn issue, acc ->
+      |> Enum.reduce({%{state | slot_waiting: slot_waiting}, nil}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
 
@@ -3503,8 +3499,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp forced_running_identifiers(%State{running: running}) do
-    qa_identifiers = for pass <- forced_qa_passes(), do: "#{pass.identifier} (QA)"
-    Enum.sort(for({_issue_id, entry} <- running, forced_entry?(entry), do: entry.identifier) ++ qa_identifiers)
+    Enum.sort(for({_issue_id, entry} <- running, forced_entry?(entry), do: entry.identifier))
   end
 
   # Forced tickets go first, in `forced_since` order; one the queue has not recorded yet follows
@@ -3551,49 +3546,35 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp sort_issues_for_dispatch(issues) when is_list(issues) do
-    auto_review_state = Config.settings!() |> AutoReview.state() |> normalize_issue_state()
-
     Enum.sort_by(issues, fn
       %Issue{} = issue ->
-        {stage_rank(issue.state, auto_review_state), priority_rank(issue.priority), issue_created_at_sort_key(issue), issue.identifier || issue.id || ""}
+        {stage_rank(issue.state), priority_rank(issue.priority), issue_created_at_sort_key(issue), issue.identifier || issue.id || ""}
 
       _ ->
-        {stage_rank(nil, auto_review_state), priority_rank(nil), issue_created_at_sort_key(nil), ""}
+        {stage_rank(nil), priority_rank(nil), issue_created_at_sort_key(nil), ""}
     end)
   end
 
-  # Closest to done first: Merging, Auto Review, Rework, other active states (resumes), then Todo.
-  defp stage_rank(state_name, auto_review_state) when is_binary(state_name) do
+  # Closest to done first: Merging, Rework, other active states (resumes), then Todo.
+  defp stage_rank(state_name) when is_binary(state_name) do
     case normalize_issue_state(state_name) do
       @merging_state -> 0
-      ^auto_review_state -> 1
       "rework" -> 2
       "todo" -> 4
       _resume -> 3
     end
   end
 
-  defp stage_rank(_state_name, _auto_review_state), do: 4
+  defp stage_rank(_state_name), do: 4
 
-  defp fresh_issue?(%Issue{state: state_name}), do: stage_rank(state_name, nil) == 4
+  defp fresh_issue?(%Issue{state: state_name}), do: stage_rank(state_name) == 4
 
-  # Merging and Auto Review: the issues "never start fresh work while a finish waits" protects.
+  # Merging: the issues "never start fresh work while a finish waits" protects.
   defp finishing_hold(%Issue{state: state_name} = issue) do
-    if stage_rank(state_name, Config.settings!() |> AutoReview.state() |> normalize_issue_state()) <= 1 do
+    if stage_rank(state_name) == 0 do
       slot = if finishing_issue?(issue), do: "finishing", else: "work"
       "#{issue.identifier} (#{state_name}) is waiting for a #{slot} slot"
     end
-  end
-
-  # A QA pass held back by `auto_review.max_concurrent` would not start any sooner for an idle agent
-  # slot, so only one waiting on `finishing_max` holds Todo work back.
-  defp qa_finishing_hold do
-    case Enum.find(QaRunner.queued_passes(), &(&1.waiting_on == :finishing_max)) do
-      %{identifier: identifier} -> "QA pass for #{identifier} is waiting for a finishing slot"
-      nil -> nil
-    end
-  catch
-    :exit, _reason -> nil
   end
 
   defp priority_rank(priority) when is_integer(priority) and priority in 1..4, do: priority
@@ -3840,12 +3821,10 @@ defmodule SymphonyElixir.Orchestrator do
       Enum.each(changes, &record_forced_change(&1, state.repo_key))
     end
 
-    previously_forced = forced_ids(state)
     state = %{state | forced: forced}
 
     %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
     |> release_unforced_runs()
-    |> release_unforced_qa_passes(previously_forced)
   end
 
   # A run on the forced allowance gives it back once its ticket is no longer forced (its label was
@@ -3860,20 +3839,6 @@ defmodule SymphonyElixir.Orchestrator do
 
     %{state | running: Map.merge(running, released)}
   end
-
-  # An Auto Review QA pass on the forced allowance gives it back the same way. Only the tickets that
-  # just left the forced queue (or stopped being a forced parent's part) are released: a ticket
-  # labelled while in Auto Review is not in the queue, and its pass keeps the allowance.
-  defp release_unforced_qa_passes(%State{} = state, previously_forced) do
-    case Enum.reject(previously_forced, &forced_queued?(&1, state)) do
-      [] -> :ok
-      issue_ids -> QaRunner.release_forced(issue_ids)
-    end
-
-    state
-  end
-
-  defp forced_ids(%State{forced: forced, forced_parts: parts}), do: Map.keys(forced) ++ for({_parent_id, part} <- parts, do: part.issue_id)
 
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error rather than a null issue.
   defp fetch_issue_to_force(identifier) do
@@ -4017,16 +3982,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp forced_slot_free?(%State{running: running}) do
     forced_runs = Enum.count(running, fn {_issue_id, entry} -> forced_entry?(entry) end)
-    forced_runs + length(forced_qa_passes()) < Config.settings!().agent.forced_max
-  end
-
-  # Auto Review QA passes on the forced allowance count toward `forced_max` too.
-  defp forced_qa_passes, do: Enum.filter(qa_snapshot().running, & &1.forced)
-
-  defp qa_snapshot do
-    QaRunner.snapshot()
-  catch
-    :exit, _reason -> %{running: [], queued: []}
+    forced_runs < Config.settings!().agent.forced_max
   end
 
   # With the normal slots full, a poll still runs the dispatch pass for a forced candidate the
@@ -4039,17 +3995,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A forced `breakdown` parent waiting on its sub-tickets is one forced unit: its current part, the
-  # first ticket on its epic path that can run or is in Auto Review, counts as forced without the
-  # label being written on it. Parts are picked in EpicLanes order (stage, then nearest the epic,
-  # then dispatch order), so a blocked sub-ticket waits for its blocker. A part stays the parent's
-  # while it runs, waits on a retry or is in Auto Review, so no second one takes the forced
-  # allowance meanwhile. Rebuilt from every poll's candidates.
+  # first ticket on its epic path that can run, counts as forced without the label being written on
+  # it. Parts are picked in EpicLanes order (stage, then nearest the epic, then dispatch order), so a
+  # blocked sub-ticket waits for its blocker. A part stays the parent's while it runs or waits on a
+  # retry, so no second one takes the forced allowance meanwhile. Rebuilt from every poll's
+  # candidates.
   defp put_forced_parts(%State{} = state, issues) do
     settings = Config.settings!()
     active_states = active_state_set()
     terminal_states = terminal_state_set()
-    auto_review_state = settings |> AutoReview.state() |> normalize_issue_state()
-    states = {active_states, terminal_states, auto_review_state}
+    states = {active_states, terminal_states}
     ordered = issues |> sort_issues_for_dispatch() |> Enum.with_index()
 
     parts =
@@ -4065,12 +4020,10 @@ defmodule SymphonyElixir.Orchestrator do
       end)
       |> Map.new()
 
-    previously_forced = forced_ids(state)
     state = %{state | forced_parts: parts}
 
     %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
     |> release_unforced_runs()
-    |> release_unforced_qa_passes(previously_forced)
   end
 
   defp forced_waiting_parent?(%Issue{} = issue, settings, terminal_states) do
@@ -4089,37 +4042,20 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A sub-ticket in Auto Review is the part while its QA pass waits or runs, so that pass is forced
-  # too (see `AutoReview.on_green/5`): its run's PR keeps it from dispatching, and when Auto Review
-  # is not an active state it is known only from its sub-issue link.
-  defp next_forced_part(%Issue{id: parent_id}, members, ordered, %State{} = state, {active_states, terminal_states, auto_review_state}) do
-    candidates =
-      for {%Issue{id: issue_id} = issue, index} <- ordered, is_map_key(members, issue_id) do
-        member = Map.fetch!(members, issue_id)
-        {{stage_rank(issue.state, auto_review_state), member.depth, index}, issue, member}
-      end
-
-    candidate_ids = MapSet.new(candidates, fn {_rank, issue, _member} -> issue.id end)
-
-    in_auto_review =
-      for {issue_id, member} <- members,
-          not MapSet.member?(candidate_ids, issue_id),
-          auto_review_issue?(member.state, auto_review_state) do
-        {{stage_rank(member.state, auto_review_state), member.depth, length(ordered)}, %Issue{id: issue_id, identifier: member.identifier, state: member.state}, member}
-      end
-
-    (candidates ++ in_auto_review)
+  defp next_forced_part(%Issue{id: parent_id}, members, ordered, %State{} = state, {active_states, terminal_states}) do
+    for {%Issue{id: issue_id} = issue, index} <- ordered, is_map_key(members, issue_id) do
+      member = Map.fetch!(members, issue_id)
+      {{stage_rank(issue.state), member.depth, index}, issue, member}
+    end
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.find_value(fn {_rank, issue, member} ->
       # Judged as the parent's part, so a usage-limit headroom hold does not rule it out.
       as_part = %{state | forced_parts: Map.put(state.forced_parts, parent_id, %{issue_id: issue.id})}
 
-      if auto_review_issue?(issue.state, auto_review_state) or dispatch_eligible?(issue, as_part, active_states, terminal_states),
+      if dispatch_eligible?(issue, as_part, active_states, terminal_states),
         do: forced_part_entry(issue.id, member)
     end)
   end
-
-  defp auto_review_issue?(state_name, auto_review_state), do: is_binary(state_name) and normalize_issue_state(state_name) == auto_review_state
 
   defp forced_part_entry(issue_id, member), do: %{issue_id: issue_id, identifier: member.identifier, state: member.state}
 
@@ -4139,12 +4075,12 @@ defmodule SymphonyElixir.Orchestrator do
   # ticket waits for a person (not yet approved, or In Review) rather than for Symphony, its phase
   # and what it waits on (worked out on the part when a forced parent has one), and how long it has
   # been forced.
-  defp forced_snapshot(%State{forced: forced}, _qa, _auto_merge) when map_size(forced) == 0, do: []
+  defp forced_snapshot(%State{forced: forced}, _auto_merge) when map_size(forced) == 0, do: []
 
-  defp forced_snapshot(%State{} = state, qa, auto_merge) do
+  defp forced_snapshot(%State{} = state, auto_merge) do
     now = state.clock.()
     stale_after_hours = Config.settings!().agent.forced_stale_after_hours
-    context = %{qa: qa, auto_merge_ids: MapSet.new(auto_merge, & &1.issue_id)}
+    context = %{auto_merge_ids: MapSet.new(auto_merge, & &1.issue_id)}
 
     for entry <- ForcedQueue.snapshot(state.forced) do
       part = Map.get(state.forced_parts, entry.issue_id)
@@ -4184,9 +4120,7 @@ defmodule SymphonyElixir.Orchestrator do
         repo_key = dispatch_repo_key(state, issue)
 
         %{
-          qa: forced_qa_status(issue_id, context.qa),
           state: issue.state,
-          auto_review_state: AutoReview.state(settings),
           human_review_state: HumanReview.state(settings),
           kind: AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind,
           merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
@@ -4205,14 +4139,6 @@ defmodule SymphonyElixir.Orchestrator do
       issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_label/1)
     else
       state.update_holds |> Map.get(issue.id, %{blockers: []}) |> Map.fetch!(:blockers) |> Enum.map(&blocker_label/1)
-    end
-  end
-
-  defp forced_qa_status(issue_id, %{running: running, queued: queued}) do
-    cond do
-      Enum.any?(running, &(&1.issue_id == issue_id)) -> :running
-      Enum.any?(queued, &(&1.issue_id == issue_id)) -> :queued
-      true -> nil
     end
   end
 
@@ -5172,17 +5098,18 @@ defmodule SymphonyElixir.Orchestrator do
 
     case Config.repos() do
       {:ok, repos} ->
-        teams = AutoReview.configured_teams(settings, repos)
+        teams = StateProvisioning.configured_teams(settings, repos)
         # The machine-owned states and labels are created before the checks that read them, so a
         # state a later feature needs exists by the time that feature looks for it.
         StateProvisioning.provision(settings, teams)
-        AutoReview.check_tracker_state(settings, teams)
         SubIssueWait.check_tracker_state(settings, teams)
         HumanReview.check_tracker_state(settings, teams)
 
       {:error, reason} ->
-        Logger.warning("Skipping the Auto Review, waiting-on-sub-issues and human review state checks; failed to load repositories: #{inspect(reason)}")
+        Logger.warning("Skipping the waiting-on-sub-issues and human review state checks; failed to load repositories: #{inspect(reason)}")
     end
+
+    RetiredStates.report()
   end
 
   defp startup_candidate_issues_result do
@@ -6693,21 +6620,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp complete_pr_review_comment_cursor(_issue_id, _repo_key), do: :ok
 
-  # The fix run for a failed Auto Review QA pass has finished; the next QA pass on
-  # the new head decides whether the finding is fixed.
-  defp complete_pending_qa_failure(issue_id, repo_key) when is_binary(issue_id) do
-    case CiPoller.complete_pending_qa_failure(issue_id, repo_key_opt(repo_key)) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("Failed to clear the pending QA failure issue_id=#{issue_id}: #{inspect(reason)}")
-        :ok
-    end
-  end
-
-  defp complete_pending_qa_failure(_issue_id, _repo_key), do: :ok
-
   defp persist_quality_eval_async(%{run_id: run_id} = running_entry, status, error)
        when is_binary(run_id) and is_binary(status) do
     start_quality_eval_task(running_entry, status, error)
@@ -7122,12 +7034,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc """
-  Holds the provider's runs for a usage-limit `info` hit outside an agent run (an Auto Review QA
-  pass), as if a run of `identifier` had hit it. Returns the hold.
+  Holds the provider's runs for a usage-limit `info` hit outside an agent run, as if a run of
+  `identifier` had hit it. Returns the hold.
   """
-  @spec hold_for_usage_limit(map(), String.t() | nil) :: {:ok, UsageLimit.entry()} | :unavailable
-  def hold_for_usage_limit(info, identifier), do: hold_for_usage_limit(__MODULE__, info, identifier)
-
   @spec hold_for_usage_limit(GenServer.server(), map(), String.t() | nil) :: {:ok, UsageLimit.entry()} | :unavailable
   def hold_for_usage_limit(server, info, identifier) when is_map(info) do
     if server_available?(server) do
@@ -7650,7 +7559,6 @@ defmodule SymphonyElixir.Orchestrator do
 
     skipped = error_skipped ++ cached_skipped
 
-    {qa, qa_ms} = timed_part(&qa_snapshot/0)
     {auto_merge, auto_merge_ms} = timed_part(&PrReviewPoller.auto_merge_statuses/0)
     {run_history, run_history_ms} = timed_part(fn -> persisted_run_history(state.repo_key) end)
 
@@ -7677,10 +7585,9 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       blocked: state.blocked || [],
-      forced: forced_snapshot(state, qa, auto_merge),
+      forced: forced_snapshot(state, auto_merge),
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
-      qa: qa,
       auto_merge: auto_merge,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
       shipped_today: ShippedToday.today(state.shipped, now),
@@ -7694,7 +7601,7 @@ defmodule SymphonyElixir.Orchestrator do
       }
     }
 
-    {snapshot, %{run_history: run_history_ms, qa: qa_ms, auto_merge: auto_merge_ms}}
+    {snapshot, %{run_history: run_history_ms, auto_merge: auto_merge_ms}}
   end
 
   defp concurrency_snapshot(%State{} = state) do
@@ -8686,7 +8593,7 @@ defmodule SymphonyElixir.Orchestrator do
     |> schedule_immediate_tick()
   end
 
-  # An unreachable-API hold with no run held on it (QA, the acceptance gate, a PR run) has no
+  # An unreachable-API hold with no run held on it (a hold taken outside an agent run) has no
   # canary: it is released so the next run probes the API, and remembered so a run that finds
   # the outage again continues it. The outage ends, with its resumed event, when no run has found
   # it again for `UsageLimit.outage_memory_seconds/1`.
@@ -9278,8 +9185,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp pending_rework_signal?(%Issue{} = issue, completed_metadata) do
     issue_updated_after_last_run?(issue, completed_metadata) or
       pending_reviewer_comments?(issue.id, repo_key_from(completed_metadata)) or
-      pending_ci_failure?(issue.id, repo_key_from(completed_metadata)) or
-      pending_qa_failure?(issue.id, repo_key_from(completed_metadata))
+      pending_ci_failure?(issue.id, repo_key_from(completed_metadata))
   end
 
   defp issue_updated_after_last_run?(%Issue{updated_at: %DateTime{} = updated_at}, %{last_ran_at: %DateTime{} = last_ran_at}) do
@@ -9299,12 +9205,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp pending_ci_failure?(_issue_id, _repo_key), do: false
-
-  defp pending_qa_failure?(issue_id, repo_key) when is_binary(issue_id) do
-    not is_nil(CiPoller.pending_qa_failure(issue_id, repo_key_opt(repo_key)))
-  end
-
-  defp pending_qa_failure?(_issue_id, _repo_key), do: false
 
   defp repo_key_opt(repo_key) when is_binary(repo_key) and repo_key != "", do: [repo_key: repo_key]
   defp repo_key_opt(_repo_key), do: []

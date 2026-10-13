@@ -43,12 +43,12 @@ defmodule SymphonyElixir.HandoffTest do
       assert Handoff.target_state(configured) == "Peer Review"
     end
 
-    test "a legacy repo keeps the Auto Review post-PR state" do
+    test "a legacy repo hands off to In Review, whatever its retired Auto Review settings say" do
       refute Handoff.designed?(legacy_settings())
       assert Handoff.target_state(legacy_settings()) == "In Review"
 
       auto_review = legacy_settings(%{"auto_review" => %{"enabled" => true, "state" => "QA"}})
-      assert Handoff.target_state(auto_review) == "QA"
+      assert Handoff.target_state(auto_review) == "In Review"
     end
   end
 

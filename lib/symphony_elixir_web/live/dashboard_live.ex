@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.{Config, ForcedStatus, Sessions, URLUtils, UsageLimit}
+  alias SymphonyElixir.{Config, ForcedStatus, URLUtils, UsageLimit}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
   @dashboard_reload_task :dashboard_reload
@@ -464,22 +464,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
-              <h2 class="section-title">Auto Review passes</h2>
-              <p class="section-copy">
-                <%= case review_passes(@payload) do %>
-                  <% [] -> %>
-                    No QA or acceptance gate pass is running.
-                  <% passes -> %>
-                    Running: <%= Enum.map_join(passes, ", ", &"#{&1.issue_identifier} (#{Sessions.label(&1.kind)})") %>
-                <% end %>
-              </p>
-            </div>
-          </div>
-        </section>
-
-        <section class="section-card">
-          <div class="section-header">
-            <div>
               <h2 class="section-title">Finishing runs</h2>
               <p class="section-copy">
                 Landing runs use their own slots, outside the agent slots and lanes: <span class="numeric"><%= @payload.finishing.used %>/<%= @payload.finishing.slots %></span> in use.
@@ -535,28 +519,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </tbody>
               </table>
             </div>
-          <% end %>
-        </section>
-
-        <section class="section-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">Auto Review</h2>
-              <p class="section-copy">
-                Acceptance gate: <%= gate_runner_line(@payload.acceptance_gate) %>
-              </p>
-              <p :for={{repo_key, stats} <- Enum.sort(@payload.acceptance_gate.agreement)} class="section-copy">
-                <%= gate_agreement_line(repo_key, stats) %>
-              </p>
-            </div>
-          </div>
-
-          <%= if @payload.acceptance_gate.recent == [] do %>
-            <p class="empty-state">The acceptance gate has not judged a ticket yet.</p>
-          <% else %>
-            <p :for={entry <- @payload.acceptance_gate.recent} class="section-copy">
-              <%= gate_verdict_line(entry) %>
-            </p>
           <% end %>
         </section>
 
@@ -1089,32 +1051,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> assign(:visible_payload, filter_payload(payload, repo_filter))
   end
 
-  defp gate_runner_line(%{running: running, queued: queued}) do
-    names = if running == [], do: "", else: " (#{Enum.map_join(running, ", ", & &1.identifier)})"
-    "#{length(running)} running#{names}, #{length(queued)} queued."
-  end
-
-  defp gate_verdict_line(entry) do
-    agent = if entry.agent_verdict in [nil, entry.verdict], do: "", else: " (agent: #{entry.agent_verdict})"
-    reasons = if entry.reasons == [], do: "", else: " · reasons: #{Enum.map_join(entry.reasons, ", ", & &1.rule)}"
-    %{met: met, unmet: unmet, unclear: unclear} = entry.criteria
-
-    "#{entry.issue_identifier}: #{entry.verdict}#{agent} · #{met} met, #{unmet} unmet, #{unclear} unclear#{reasons} · " <>
-      "#{entry.mode} · human: #{entry.human_decision || "waiting"}"
-  end
-
-  defp gate_agreement_line(repo_key, stats) do
-    readiness = if stats.ready_to_enforce, do: "ready to enforce", else: "not ready to enforce: #{stats.unmet_condition}"
-
-    "#{repo_key}: #{stats.judged} judged, #{stats.agreed} agreed (#{rate_label(stats.agreement_rate)}), " <>
-      "#{stats.unsafe_approvals} unsafe approvals, #{stats.false_reworks} false reworks, " <>
-      "#{stats.escalations} escalations (#{stats.escalations_merged_unchanged} merged unchanged), " <>
-      "gate tokens median #{stats.tokens.median || "n/a"}, p90 #{stats.tokens.p90 || "n/a"} · #{readiness}"
-  end
-
-  defp rate_label(nil), do: "n/a"
-  defp rate_label(rate), do: "#{round(rate * 100)}%"
-
   defp lane_status_label("running"), do: "Running"
   defp lane_status_label("yielded"), do: "Yielded"
   defp lane_status_label(_status), do: "Idle, reserved"
@@ -1130,9 +1066,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp lane_part_via(%{relation: "blocks", identifier: identifier}), do: ", blocks #{identifier}"
   defp lane_part_via(%{relation: "sub_ticket_of", identifier: identifier}), do: ", sub-ticket of #{identifier}"
   defp lane_part_via(_via), do: ""
-
-  # The sessions that aren't agent runs: Auto Review QA passes and acceptance gate passes.
-  defp review_passes(payload), do: payload |> Map.get(:sessions, []) |> Enum.filter(&Sessions.pass?/1)
 
   defp filter_payload(%{error: _} = payload, _repo_filter), do: payload
 

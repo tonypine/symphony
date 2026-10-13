@@ -11,9 +11,7 @@ defmodule SymphonyElixir.EpicReview do
   there, and a start that finds the commit under review already decided replays that verdict rather
   than reviewing the same commit twice — and rather than filing its follow-ups a second time.
 
-  The review is machine-owned, like the `QA` state's (`SymphonyElixir.QaVerification`) and the
-  parent walkthrough it replaces on designed repos
-  (`SymphonyElixir.AutoReview.ParentWalkthrough`): the machine runs the deterministic pre-checks,
+  The review is machine-owned, like the `QA` state's (`SymphonyElixir.QaVerification`): the machine runs the deterministic pre-checks,
   the agent pass and the verdict, and the agent never moves the ticket. It cannot: an agent has no
   tool that files a child in `Todo` (the Linear tool files in `Backlog`, where a follow-up would
   freeze the epic unnoticed), none that enters the waiting state, and none that records a verdict.
@@ -59,7 +57,7 @@ defmodule SymphonyElixir.EpicReview do
 
   alias SymphonyElixir.{
     AgentTools,
-    AutoReview,
+    Config,
     Handoff,
     QaVerification,
     SelfHeal,
@@ -193,7 +191,7 @@ defmodule SymphonyElixir.EpicReview do
   end
 
   defp review_epic(issue, workspace, opts, settings, checks) do
-    branch = AutoReview.base_branch(repo_key(issue, opts))
+    branch = Config.base_branch(repo_key(issue, opts))
     base_ref = "origin/" <> branch
 
     outcome =
@@ -227,7 +225,7 @@ defmodule SymphonyElixir.EpicReview do
   # or host it happened on, not to Symphony. `attrs` wins on `:reason` for a block whose reason is
   # its own (an unreadable base branch), not the agent's.
   defp blocked_outcome(cause, attrs) do
-    %{verdict: :blocked, sha: nil, cause: cause, reason: AutoReview.blocked_reason(cause)}
+    %{verdict: :blocked, sha: nil, cause: cause, reason: QaAgent.blocked_reason(cause)}
     |> Map.merge(attrs)
   end
 
@@ -235,7 +233,7 @@ defmodule SymphonyElixir.EpicReview do
 
   # The commit the review judges is the base branch head: the merged result of the epic's
   # sub-tickets, which is what the epic's intent is checked against. It is fetched into the
-  # workspace that hosts the run, as the parent walkthrough does.
+  # workspace that hosts the run.
   defp base_commit(workspace, branch, git) do
     with {_output, 0} <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", branch], workspace) end),
          {sha, 0} <- git.(["rev-parse", "--verify", "refs/remotes/origin/#{branch}^{commit}"], workspace) do
@@ -665,12 +663,12 @@ defmodule SymphonyElixir.EpicReview do
   # limit resets, anything else is a block (retried boundedly, then self-healed, which classifies the
   # block by its cause — `SymphonyElixir.SelfHeal`).
   defp error_outcome(reason, tokens, checks) do
-    case AutoReview.usage_limit(reason) do
+    case QaAgent.usage_limit(reason) do
       %{} = info ->
         %{usage_limit: info}
 
       nil ->
-        %{verdict: :blocked, cause: reason, reason: AutoReview.blocked_reason(reason), tokens: tokens, checks: checks}
+        %{verdict: :blocked, cause: reason, reason: QaAgent.blocked_reason(reason), tokens: tokens, checks: checks}
     end
   end
 

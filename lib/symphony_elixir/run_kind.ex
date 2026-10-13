@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.RunKind do
-  # The kinds `classify/2` never returns: they name the reviewer and acceptance gate runs,
-  # which Symphony starts itself. The moduledoc interpolates these names, so the documented
-  # set cannot drift from the code.
-  @reserved_kinds [:pre_push_review, :acceptance_gate]
+  # The kinds `classify/2` never returns: they name the pre-push reviewer run, which Symphony
+  # starts itself. The moduledoc interpolates these names, so the documented set cannot drift from
+  # the code.
+  @reserved_kinds [:pre_push_review]
   @reserved_kind_names Enum.map_join(@reserved_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
 
   @moduledoc """
@@ -42,8 +42,8 @@ defmodule SymphonyElixir.RunKind do
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
 
-  #{@reserved_kind_names} are never returned by `classify/2`; they name the reviewer and
-  acceptance gate runs, which Symphony starts itself. The designed machine's configured
+  #{@reserved_kind_names} is never returned by `classify/2`; it names the pre-push reviewer run,
+  which Symphony starts itself. The designed machine's configured
   `code_review_state`, `qa_state`, `epic_review_state` and `ci_fix_state` *are* returned, as
   `code_review`, `qa`, `epic_review` and `ci_fix`.
   """
@@ -64,7 +64,6 @@ defmodule SymphonyElixir.RunKind do
           | :review_feedback
           | :pre_push_review
           | :qa
-          | :acceptance_gate
 
   @typedoc "The provider that serves a run's model."
   @type provider :: String.t()
@@ -84,8 +83,7 @@ defmodule SymphonyElixir.RunKind do
     :ci_fix,
     :review_feedback,
     :pre_push_review,
-    :qa,
-    :acceptance_gate
+    :qa
   ]
 
   @final_verification_prefix "Final verification:"

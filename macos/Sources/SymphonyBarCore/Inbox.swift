@@ -248,21 +248,10 @@ public struct InboxReview: Equatable {
         public var ci: Result?
         public var qaVerdict: String?
         public var qaReport: URL?
-        public var gateVerdict: String?
-        public var gateMode: String?
-        public var files: Int?
-        public var additions: Int?
-        public var deletions: Int?
 
-        /// A red check: CI failed, QA failed or blocked, or the gate asked for rework.
+        /// A red check: CI failed, or QA failed or blocked.
         public var hasRedCheck: Bool {
-            ci == .failed || ["fail", "blocked"].contains(qaVerdict ?? "") || gateVerdict == "rework"
-        }
-
-        /// "3 files, +120 −4", nil while the gate hasn't measured it.
-        public var changeLine: String? {
-            guard let files else { return nil }
-            return "\(files) file\(files == 1 ? "" : "s"), +\(additions ?? 0) −\(deletions ?? 0)"
+            ci == .failed || ["fail", "blocked"].contains(qaVerdict ?? "")
         }
     }
 
@@ -400,22 +389,9 @@ public struct InboxReview: Equatable {
                 let reportUrl: String?
             }
 
-            struct Gate: Decodable {
-                let verdict: String?
-                let mode: String?
-            }
-
-            struct Change: Decodable {
-                let files: Int?
-                let additions: Int?
-                let deletions: Int?
-            }
-
             let url: String?
             let ci: String?
             let qa: QA?
-            let gate: Gate?
-            let change: Change?
         }
 
         struct OptionPayload: Decodable {
@@ -466,12 +442,7 @@ public struct InboxReview: Equatable {
                     url: pr.url.flatMap(URL.init(string:)),
                     ci: pr.ci.flatMap(PullRequest.Result.init(rawValue:)),
                     qaVerdict: pr.qa?.verdict,
-                    qaReport: pr.qa?.reportUrl.flatMap(URL.init(string:)),
-                    gateVerdict: pr.gate?.verdict,
-                    gateMode: pr.gate?.mode,
-                    files: pr.change?.files,
-                    additions: pr.change?.additions,
-                    deletions: pr.change?.deletions
+                    qaReport: pr.qa?.reportUrl.flatMap(URL.init(string:))
                 )
             },
             action: payload.steps == nil && payload.options == nil && payload.why == nil ? nil : Action(

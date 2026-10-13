@@ -43,10 +43,12 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     end
   end
 
-  test "the legacy preview keeps today's states" do
+  test "the legacy preview keeps today's states, without the retired Auto Review and acceptance gate" do
     assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "legacy")
 
-    for word <- ["Auto Review", "In Review", "Human Review", "Final verification:"], do: assert(prompt =~ word)
+    for word <- ["In Review", "Human Review", "Final verification:"], do: assert(prompt =~ word)
     refute prompt =~ "`Code Review`"
+    refute prompt =~ "Auto Review"
+    refute prompt =~ "acceptance gate"
   end
 end
