@@ -18,7 +18,9 @@ on:
       - "mix.lock"
       - "scripts/release/**"
       - "scripts/zig-sdk-shim/**"
-      - "scripts/ci/xcode26-developer-dir.sh"
+      - "scripts/ci/xcode-developer-dir.sh"
+      - "scripts/ci/xcode-developer-dir-test.sh"
+      - ".xcode-version"
       - "lib/symphony_elixir/tracker/memory.ex"
       - ".github/workflows/macos-e2e.yml"
 
@@ -52,8 +54,8 @@ jobs:
       - name: Install minisign
         run: brew install minisign
 
-      - name: Select Xcode 26
-        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_ENV"
+      - name: Select the pinned Xcode
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
 
       - name: Show toolchain
         run: |

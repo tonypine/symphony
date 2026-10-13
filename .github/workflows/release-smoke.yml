@@ -25,7 +25,7 @@ on:
       - "lib/symphony_elixir/release_cookie.ex"
       - "scripts/release/**"
       - "scripts/zig-sdk-shim/**"
-      - "scripts/ci/xcode26-developer-dir.sh"
+      - "scripts/ci/macos15-xcode-developer-dir.sh"
       - "macos/Package.swift"
       - "macos/Info.plist"
       - "macos/Makefile"
@@ -77,7 +77,7 @@ jobs:
 
       - name: Find Xcode 26
         id: xcode
-        run: echo "developer_dir=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "developer_dir=$(sh scripts/ci/macos15-xcode-developer-dir.sh)" >> "$GITHUB_OUTPUT"
 
       # As `release` builds it, signed ad hoc: the signing certificate is a release secret.
       - name: Build Symphony.app

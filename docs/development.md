@@ -16,6 +16,21 @@ mise install
 mise exec -- mix setup
 ```
 
+### Xcode
+
+`.xcode-version` at the repo root pins the one Xcode every macOS workflow on `macos-26` builds
+the Mac app with (`macos.yml`, `macos-e2e.yml`), so CI and the release compile with the same
+Swift. The policy is the newest Xcode installed on GitHub's `macos-26` runner image.
+`scripts/ci/xcode-developer-dir.sh` prints its `/Applications/Xcode_<version>.app/Contents/Developer`
+for `DEVELOPER_DIR` and fails, naming the wanted version and the Xcodes found, when the runner
+lacks it; it never falls back to another version.
+
+To bump it when the image adds an Xcode, read the Xcode table in the
+[runner-images `macos-26` readme](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md),
+write the newest version exactly as its `/Applications/Xcode_<version>.app` name spells it, and
+fix any new Swift errors in `macos/` in the same pull request. The release workflows still run on
+`macos-15` with `scripts/ci/macos15-xcode-developer-dir.sh` until they move to `macos-26`.
+
 ## Pre-push hook
 
 `make setup` runs `git config core.hooksPath .githooks`, which turns on
