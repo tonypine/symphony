@@ -110,6 +110,7 @@ defmodule SymphonyElixir.ReviewAgent.Context do
          diff_truncated?: summarized?(coverage),
          review_coverage: coverage,
          file_contents: evidence_file_contents(inventory, git_fun),
+         head_file: &head_file(git_fun, &1),
          context_pack: context_pack
        }}
     end
@@ -119,6 +120,9 @@ defmodule SymphonyElixir.ReviewAgent.Context do
   Returns every evidence source for a cited file: the cited range from each of the
   diff, the full file and the adjacent windows, plus the file's numbered lines merged
   from all three so a quote can be found outside the cited range.
+
+  A file the diff did not change is read at the reviewed head, so a finding on a file
+  the change missed (a leftover pin, a config entry) can still be grounded.
   """
   @spec grounding_evidence(map(), String.t(), line_range()) ::
           {:ok, %{path: String.t(), cited: [evidence_lookup()], lines: [{pos_integer(), String.t()}]}}
@@ -127,7 +131,7 @@ defmodule SymphonyElixir.ReviewAgent.Context do
       when is_map(source) and is_binary(path) and is_integer(start_line) and is_integer(end_line) and start_line > 0 and
              end_line >= start_line do
     with {:ok, normalized_path} <- normalize_lookup_path(path),
-         :ok <- path_known_to_context?(source, normalized_path) do
+         {:ok, source} <- with_path_in_context(source, normalized_path) do
       cited =
         [
           diff_evidence(source, normalized_path, start_line, end_line),
@@ -197,13 +201,29 @@ defmodule SymphonyElixir.ReviewAgent.Context do
     end
   end
 
-  defp path_known_to_context?(source, path) do
-    if path in changed_paths(source) or path in adjacent_paths(source) do
-      :ok
-    else
-      {:error, {:file_not_in_review_context, path}}
+  defp with_path_in_context(source, path) do
+    cond do
+      path in changed_paths(source) or path in adjacent_paths(source) ->
+        {:ok, source}
+
+      contents = read_head_file(source, path) ->
+        {:ok, Map.update(source, :file_contents, %{path => contents}, &Map.put(&1, path, contents))}
+
+      true ->
+        {:error, {:file_not_in_review_context, path}}
     end
   end
+
+  defp read_head_file(%{head_file: head_file}, path) when is_function(head_file, 1) do
+    case head_file.(path) do
+      {:ok, contents} when byte_size(contents) <= @max_evidence_file_bytes -> contents
+      _too_large_or_missing -> nil
+    end
+  end
+
+  defp read_head_file(_source, _path), do: nil
+
+  defp head_file(git_fun, path), do: git_fun.(["show", "HEAD:#{path}"])
 
   defp changed_paths(source) do
     source

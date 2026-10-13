@@ -82,6 +82,12 @@ defmodule SymphonyElixir.ReviewAgent.ContextTest do
       assert {:error, {:file_not_in_review_context, "missing.txt"}} =
                Context.grounding_evidence(source, "missing.txt", {1, 1})
 
+      assert {:error, {:file_not_in_review_context, "missing.txt"}} =
+               Context.grounding_evidence(Map.delete(source, :head_file), "missing.txt", {1, 1})
+
+      too_large = Map.put(source, :head_file, fn _path -> {:ok, String.duplicate("x", 200_001)} end)
+      assert {:error, {:file_not_in_review_context, "big.txt"}} = Context.grounding_evidence(too_large, "big.txt", {1, 1})
+
       assert {:error, :absolute_file_not_allowed} = Context.grounding_evidence(source, "/etc/passwd", {1, 1})
       assert {:error, :invalid_file} = Context.grounding_evidence(source, " ", {1, 1})
       assert {:error, :invalid_line_range} = Context.grounding_evidence(source, "feature.txt", {2, 1})
