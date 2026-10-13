@@ -1464,7 +1464,7 @@ defmodule SymphonyElixir.AgentRunner do
         cond do
           post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
-            {:done, refreshed_issue}
+            hand_off_quiet_pr_head(issue, refreshed_issue, run_context)
 
           waiting_on_sub_issues?(refreshed_issue) ->
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
@@ -1540,6 +1540,40 @@ defmodule SymphonyElixir.AgentRunner do
 
       nil ->
         false
+    end
+  end
+
+  # A designed repo advances only on the handoff signal, which the push and PR tool hooks emit. A
+  # run that finds its PR already on the workspace HEAD (an interrupted run's successor, a park and
+  # unpark) has nothing to push, so no hook fires and every successor would stop the same way. The
+  # ticket is then exactly where a signal for that head would put it, so the signal is recorded for
+  # the head and the run hands off. A HEAD or PR head that can't be read hands nothing off; the
+  # orchestrator caps those quiet runs.
+  defp hand_off_quiet_pr_head(%Issue{} = previous_issue, %Issue{} = issue, run_context) do
+    settings = Keyword.fetch!(run_context.opts, :settings)
+    pr_url = URLUtils.pull_request_url(issue) || URLUtils.pull_request_url(previous_issue)
+
+    with true <- Handoff.required?(issue.state, settings),
+         head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
+         true <- pr_url_head?(pr_url, head, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: pr_url, source: "pushed_pr_head"})
+      run_context = put_in(run_context.progress.head, head)
+
+      case move_to_post_pr_state(issue, post_pr_state(run_context), "with its PR already on its head", run_context) do
+        :ok -> {:done, issue}
+        {:error, reason} -> {:error, {:pushed_pr_head_handoff_failed, reason}}
+      end
+    else
+      _no_handoff -> {:done, issue}
+    end
+  end
+
+  defp pr_url_head?(pr_url, head, run_context) do
+    github = Keyword.get(run_context.opts, :github, PullRequest)
+
+    case github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      {:ok, %{commit_sha: ^head}} -> true
+      _other -> false
     end
   end
 
