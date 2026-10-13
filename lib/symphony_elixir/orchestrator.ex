@@ -58,6 +58,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  # Quiet runs a designed ticket gets on one head before it is held with `handoff_missing`.
+  @max_quiet_handoff_runs 2
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
@@ -120,6 +122,7 @@ defmodule SymphonyElixir.Orchestrator do
       running: %{},
       completed: MapSet.new(),
       completed_run_metadata: %{},
+      quiet_handoff_runs: %{},
       shipped: %{},
       watching: %{},
       conflicts: %{},
@@ -4961,10 +4964,12 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
 
       post_pr_quiet_active_issue?(issue, state) ->
-        case keep_unpushed_issue_active(state, issue, metadata) do
-          {:unpushed, state} -> handle_retry_issue_lookup(issue, state, issue_id, attempt, metadata)
-          :pushed -> handle_post_pr_quiet_active_issue(state, issue, issue_id, attempt, metadata)
-        end
+        on_pushed = &handle_post_pr_quiet_active_issue(&1, issue, issue_id, attempt, metadata)
+        handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed)
+
+      designed_quiet_continuation?(issue, state, metadata) ->
+        on_pushed = &handle_designed_quiet_handoff(&1, issue, attempt, metadata)
+        handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed)
 
       active_retry_issue?(issue, terminal_states) ->
         issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}))
@@ -4987,6 +4992,15 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_retry_issue_lookup(nil, state, issue_id, _attempt, _metadata) do
     Logger.debug("Issue no longer visible, removing claim issue_id=#{issue_id}")
     {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
+  end
+
+  # A quiet issue whose workspace holds unpushed commits is looked up again, now marked, so it is
+  # dispatched to push them; one with everything pushed takes `on_pushed`.
+  defp handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed) do
+    case keep_unpushed_issue_active(state, issue, metadata) do
+      {:unpushed, state} -> handle_retry_issue_lookup(issue, state, issue_id, attempt, metadata)
+      :pushed -> on_pushed.(state)
+    end
   end
 
   # The run that last worked on the PR ended with commits in its workspace that no remote has, so
@@ -5021,6 +5035,57 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The handoff target comes from the issue's own repo: `state_machine` is set per repo, so the
   # global settings would send a designed repo's ticket to Auto Review instead of Code Review.
+  # A designed ticket whose run went quiet on its PR without the handoff signal. The runner hands off
+  # a run whose PR is on its workspace HEAD, so one left here could not show that; each successor
+  # would stop the same way, so instead of continuing every second its runs back off and, after
+  # `@max_quiet_handoff_runs` on the same head, it is held with `handoff_missing` until a person
+  # unblocks it. A new commit starts the count again.
+  defp designed_quiet_continuation?(%Issue{} = issue, %State{} = state, metadata) do
+    metadata[:continuation] == true and designed_issue?(issue) and Handoff.origin?(issue.state) and
+      quiet_post_pr_issue?(issue, state)
+  end
+
+  defp handle_designed_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, attempt, metadata) do
+    completed_metadata = Map.get(state.completed_run_metadata, issue_id, %{})
+    workspace = metadata[:workspace_path] || Map.get(completed_metadata, :workspace_path)
+    head = WorkspaceHead.read(workspace, metadata[:worker_host] || Map.get(completed_metadata, :worker_host))
+
+    quiet_runs =
+      case Map.get(state.quiet_handoff_runs, issue_id) do
+        {^head, count} -> count + 1
+        _other_head -> 1
+      end
+
+    if quiet_runs >= @max_quiet_handoff_runs do
+      hold_quiet_handoff(state, issue, head, quiet_runs)
+    else
+      Logger.warning("#{issue_context(issue)} went quiet on its PR without the handoff signal (#{quiet_runs} of #{@max_quiet_handoff_runs}); backing off")
+      state = %{state | quiet_handoff_runs: Map.put(state.quiet_handoff_runs, issue_id, {head, quiet_runs})}
+      retry_metadata = metadata |> Map.drop([:continuation, :delay_type]) |> Map.put(:error, Handoff.missing_signal())
+
+      {:noreply, schedule_issue_retry(state, issue_id, max(attempt, quiet_runs) + 1, retry_metadata)}
+    end
+  end
+
+  defp hold_quiet_handoff(%State{} = state, %Issue{id: issue_id} = issue, head, quiet_runs) do
+    repo_key = issue_repo_key(issue)
+
+    attrs = %{
+      reason: "#{Handoff.missing_signal()}: #{quiet_runs} runs went quiet on the PR without handing it off",
+      clearing_condition: "when a person unblocks it",
+      waits_on: %{type: Handoff.missing_signal(), keys: Enum.reject([head], &is_nil/1)}
+    }
+
+    # A store write that fails is as best-effort as the ledger's: the claim is released either way.
+    _ = Hold.set(repo_key, issue_id, :blocked, attrs)
+    Logger.warning("Holding #{issue_context(issue)}: #{attrs.reason}")
+
+    record_ticket_signal(issue, Handoff.missing_signal(), %{head: head, quiet_runs: quiet_runs, held: true})
+    state = %{state | quiet_handoff_runs: Map.delete(state.quiet_handoff_runs, issue_id)}
+
+    {:noreply, release_issue_claim(state, issue_id)}
+  end
+
   defp post_pr_handoff_state(%Issue{} = issue) do
     case issue_repo_key(issue) && Config.settings_for_repo(issue_repo_key(issue)) do
       {:ok, settings} -> Handoff.target_state(settings)

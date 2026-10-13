@@ -161,6 +161,34 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
     end
 
+    test "an In Progress run whose PR is already on its head hands off to Code Review after one quiet turn" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: []}})
+
+      assert :ok = run_issue!("In Progress", heads: ["sha-pushed"], repos: designed_repos())
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff", %{to: "Code Review", reason: "with its PR already on its head", head: "sha-pushed", move: true})
+    end
+
+    test "a quiet In Progress run whose PR head can't be read hands nothing off" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:error, :unavailable})
+
+      assert :ok = run_issue!("In Progress", heads: ["sha-pushed"], repos: designed_repos())
+
+      assert turns() == 1
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+    end
+
+    test "a failed move after the quiet handoff fails the run" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: []}})
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
+
+      assert_raise RuntimeError, ~r/pushed_pr_head_handoff_failed/, fn ->
+        run_issue!("In Progress", heads: ["sha-pushed"], repos: designed_repos())
+      end
+    end
+
     test "an earlier run's own move record does not advance a later head" do
       # First cycle: a real handoff signal advances the ticket to Code Review, and the run records
       # its own move in the ledger.
