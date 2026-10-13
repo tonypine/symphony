@@ -2685,7 +2685,7 @@ defmodule SymphonyElixir.CoreTest do
              "priority" => 2,
              "state" => %{"name" => "Todo"},
              "team" => %{"key" => "ACME", "name" => "Acme Team"},
-             "project" => %{"id" => "project-1", "name" => "Harness"},
+             "project" => %{"id" => "project-1", "name" => "Harness", "slugId" => "f00dfeed1234"},
              "branchName" => "acme-1-run-one-issue",
              "url" => "https://linear.app/example/issue/ACME-1",
              "attachments" => %{"nodes" => []},
@@ -2706,6 +2706,8 @@ defmodule SymphonyElixir.CoreTest do
 
     assert query =~ "SymphonyLinearIssueByIdentifier"
     assert %Issue{id: "issue-1", identifier: "ACME-1", state: "Todo", labels: ["backend"]} = issue
+    assert issue.project == %{id: "project-1", name: "Harness", slug_id: "f00dfeed1234"}
+    assert query =~ ~r/project\s*\{\s*id\s*name\s*slugId\s*\}/
   end
 
   test "linear client enriches issue comments and linked issues" do
