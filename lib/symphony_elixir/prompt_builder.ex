@@ -11,8 +11,9 @@ defmodule SymphonyElixir.PromptBuilder do
     file_system: {SymphonyElixir.Playbook.FileSystem, nil}
   ]
 
-  # The retired per-repo state-machine switch. Symphony runs one machine, so the variable is a
-  # constant: a repo's instruction file that still branches on it renders that machine's text.
+  # The retired state-machine version switch left one machine; the variable stays, always
+  # `designed`, so an instruction file that still branches on it renders instead of failing the
+  # strict-variables check.
   @state_machine "designed"
 
   @compact_comment_limit 5

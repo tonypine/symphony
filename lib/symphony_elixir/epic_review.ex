@@ -36,14 +36,16 @@ defmodule SymphonyElixir.EpicReview do
            again when it does, so the epic closes itself once it is whole; the loop ends at the
            first pass.
          * `blocked` (tooling, environment, an answer that did not resolve the checklist, gaps none
-           of which could be filed, or a run dispatched to a remote worker, where the flow
-           does not run the QA agent) -> retried boundedly on the same commit, then handed to the
+           of which could be filed, or a run dispatched to a remote worker, where the flow does
+           not run the QA agent) -> retried boundedly on the same commit, then handed to the
            self-heal lane (`SymphonyElixir.SelfHeal`), which classifies the block by its cause,
            files or reuses the fix ticket and holds the parent on it — no check and no decision for
            a person. A block only a person can clear keeps the access hold a person lifts.
     5. The **report**: one `## Symphony QA Report` on the epic, carrying the pre-checks, the steps,
        the tickets filed and the reason, so the epic's history says what the review checked and why
        it ended where it did.
+
+  `run/3` returns `:skip` for anything but an epic parent.
 
   Every effect is injectable: `opts[:qa_agent]`, `opts[:tracker]`, `opts[:git]`,
   `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]` default to the real ones and are fakes
@@ -125,7 +127,7 @@ defmodule SymphonyElixir.EpicReview do
   sub-issues (or children still open) belongs to the executor run.
   """
   @spec epic_review_run?(Issue.t(), map()) :: boolean()
-  def epic_review_run?(%Issue{} = issue, settings) do
+  def epic_review_run?(%Issue{} = issue, settings) when is_map(settings) do
     Issue.breakdown?(issue) and not Issue.replanning?(issue) and
       (in_state?(issue, state(settings)) or Issue.close_out_ready?(issue, terminal_states(settings)))
   end

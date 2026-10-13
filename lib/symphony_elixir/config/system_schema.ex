@@ -41,6 +41,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   @primary_key false
   @deprecations_key {__MODULE__, :deprecation_warnings}
+  # What replaced the keys of the retired legacy state machine (`drop_retired_key/4`).
+  @retired_state_machine "there is one ticket state machine (`docs/design/state-machine.md`), so no repository picks a version"
+  @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
+                                "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
     agent auto_review dashboard dependency_audit github human_actions issue_gate issues notifications poller pre_push_review
     pull_requests
@@ -73,6 +77,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issues.memory" => ~w(issues_file),
     "issues.linear" => ~w(endpoint api_key assignee scope),
     "issues.linear.scope" => ~w(project_slug team labels),
+    # `human_review` is retired: it still loads, with a deprecation warning, and is dropped
+    # (`drop_retired_key/4`).
     "issues.states" => ~w(active terminal waiting_on_sub_issues human_review code_review qa plan_review epic_review ci_fix),
     "tickets" => ~w(priorities),
     "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate manual_review),
@@ -508,6 +514,17 @@ defmodule SymphonyElixir.Config.SystemSchema do
     Process.put(@deprecations_key, [message | Process.get(@deprecations_key, [])])
   end
 
+  # A key the retired legacy state machine read: it still loads, says once per config that it does
+  # nothing now, and is dropped before the section's keys are checked.
+  defp drop_retired_key(section, key, path, replacement) do
+    if Map.has_key?(section, key) do
+      deprecation_warning("symphony.yml `#{path}.#{key}` is deprecated and has no effect: #{replacement}. Remove it")
+      Map.delete(section, key)
+    else
+      section
+    end
+  end
+
   defp finalize(system_config) do
     with {:ok, system_config} <- system_config |> finalize_repos() |> parse_repo_agents() do
       merge_repo_acceptance_gates(system_config)
@@ -728,9 +745,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, scope} <- section_map(Map.get(linear, "scope", %{}), "issues.linear.scope"),
          :ok <- reject_unknown_section_keys(scope, section_keys("issues.linear.scope"), "issues.linear.scope"),
          {:ok, states} <- section_map(Map.get(config, "states", %{}), "issues.states"),
+         states = drop_retired_key(states, "human_review", "issues.states", @retired_human_review_state),
          :ok <- reject_unknown_section_keys(states, section_keys("issues.states"), "issues.states") do
-      warn_retired_human_review_state(states)
-
       tracker =
         %{}
         |> maybe_put("kind", Map.get(config, "provider"))
@@ -795,7 +811,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     path = "repositories[#{index}]"
 
     with {:ok, repo} <- section_map(repo, path),
-         repo = drop_retired_state_machine(repo, repo_path(Map.get(repo, "key"), index)),
+         repo = drop_retired_key(repo, "state_machine", repo_path(Map.get(repo, "key"), index), @retired_state_machine),
          :ok <- reject_unknown_section_keys(repo, section_keys("repositories[]"), path),
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
          :ok <- reject_unknown_section_keys(route, section_keys("repositories[].route"), path <> ".route"),
@@ -826,20 +842,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
       {:ok, normalized}
     end
   end
-
-  # The per-repo state-machine switch is retired: Symphony runs one machine
-  # (`docs/design/state-machine.md`). The key still loads, says once per config that it does
-  # nothing, and is dropped before the repository's keys are checked.
-  defp drop_retired_state_machine(%{"state_machine" => _version} = repo, path) do
-    deprecation_warning(
-      "symphony.yml `#{path}.state_machine` is deprecated and has no effect: every repository runs the one ticket state machine " <>
-        "(docs/design/state-machine.md). Remove it"
-    )
-
-    Map.delete(repo, "state_machine")
-  end
-
-  defp drop_retired_state_machine(repo, _path), do: repo
 
   defp repo_agent_path(key, index), do: repo_path(key, index) <> ".agent"
 
@@ -1050,7 +1052,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
       {:ok,
        config
-       |> Map.drop(["runtime", "acceptance_gate", "state"])
+       |> Map.drop(["runtime", "acceptance_gate"])
        |> maybe_put("kind", Map.get(config, "runtime"))
        |> maybe_put("acceptance_gate", acceptance_gate)}
     end
@@ -1079,12 +1081,12 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp warn_legacy_escalate_label(labels, path) when is_list(labels) do
-    legacy = SymphonyElixir.HumanReview.legacy_request_label()
+    legacy = SymphonyElixir.PersonWait.legacy_request_label()
 
     if Enum.any?(labels, &(is_binary(&1) and String.downcase(String.trim(&1)) == legacy)) do
       deprecation_warning(
         "symphony.yml `#{path}.escalate.labels` lists the deprecated `#{legacy}` label: an action request now pauses its issue " <>
-          "on a Needs Decision hold, which needs no label. Remove `#{legacy}` from the list"
+          "on a Needs Decision hold without the label. Remove `#{legacy}` from the list"
       )
     end
   end
@@ -1092,8 +1094,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp warn_legacy_escalate_label(_labels, _path), do: :ok
 
   # The acceptance gate is being retired in favour of the per-repo `manual_review` setting: a config
-  # that still sets a mode loads unchanged (a legacy repo keeps the gate exactly as it is today) and
-  # says once per config what its mode now means, and where the setting it maps to lives.
+  # that still sets a mode loads unchanged and says once per config what its mode now means, and
+  # where the setting it maps to lives.
   defp warn_deprecated_gate_mode(mode, path) when is_binary(mode) do
     deprecation_warning(
       "symphony.yml `#{path}.mode` is deprecated and will be removed: review authority is now the per-repo " <>
@@ -1110,7 +1112,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # `effort`, `max_turns`, `timeout_ms`, `skip_globs`, `playbooks`, `worker_host`, `android`) still
   # act and do not warn.
   @retired_auto_review_keys [
-    {"enabled", "QA runs in its QA state"},
+    {"enabled", "QA runs in the QA state"},
     {"state", "`issues.states.qa` names the QA state"},
     {"max_fix_attempts", "a QA fail returns the ticket to Rework on the same pull request"},
     {"run_on", "QA runs on every head that reaches the QA state"},
@@ -1180,17 +1182,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp warn_retired_escalation_state(_checks), do: :ok
 
-  # The Human Review state is retired (`docs/design/state-machine.md` §Retired): a decision is a
-  # Needs Decision hold that keeps the ticket in its phase, and a plan waits in `Plan Review`.
-  defp warn_retired_human_review_state(%{"human_review" => _state}) do
-    deprecation_warning(
-      "symphony.yml `issues.states.human_review` is deprecated and has no effect: the Human Review state is retired; a decision " <>
-        "is a Needs Decision hold that keeps the ticket in its phase, and a plan waits in `issues.states.plan_review`. Remove it"
-    )
-  end
-
-  defp warn_retired_human_review_state(_states), do: :ok
-
   # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
   defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do
     if "runtime" in allowed_keys do
@@ -1213,7 +1204,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, learnings} <- section_map(Map.get(config, "learnings", %{}), "pull_requests.learnings"),
          :ok <- reject_unknown_section_keys(learnings, section_keys("pull_requests.learnings"), "pull_requests.learnings"),
          {:ok, mode} <- pr_review_mode(Map.get(config, "enabled")) do
-      warn_retired_escalation_state(checks)
       pr_enabled = mode
 
       pr_review =
@@ -1234,6 +1224,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("flaky_retry", Map.get(checks, "retry_failed_once"))
         |> maybe_put("max_retries", Map.get(checks, "max_fix_attempts"))
         |> maybe_put("merging_wait_timeout_ms", Map.get(checks, "landing_wait_timeout_ms"))
+
+      warn_retired_escalation_state(checks)
 
       {:ok,
        %{}
@@ -1271,16 +1263,16 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  # `label` is retired: the Human Review state says a person needs to act. A config that still
+  # `label` is retired: the Needs Decision hold says a person needs to act. A config that still
   # sets it loads, and an issue carrying the label counts as one with an open request
-  # (`SymphonyElixir.HumanReview.legacy_request_labels/1`).
+  # (`SymphonyElixir.PersonWait.legacy_request_labels/1`).
   defp normalize_human_actions(config) do
     with {:ok, config} <- section_map(config, "human_actions"),
          :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
       if Map.has_key?(config, "label") do
         deprecation_warning(
           "symphony.yml `human_actions.label` is deprecated and will be removed: an action request now moves its issue " <>
-            "to the Human Review state and adds no label. An issue carrying the label still counts as an open request"
+            "on a Needs Decision hold and adds no label. An issue carrying the label still counts as an open request"
         )
       end
 

@@ -882,7 +882,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
     test "a ticket that only names the human review state isn't escalated" do
       Process.put(:fake_review_result, approve_result([plain_file()]))
-      named = %{issue() | title: "Remove In Review and Human Review", description: "Tickets wait in Human Review until a person moves them."}
+      named = %{issue() | title: "Remove In Review and Human Review", description: "Tickets wait in `Human Review` until a person moves them out of the Human Review state."}
 
       assert :ok = CodeReview.run(named, "/tmp/workspace", settings: designed_settings(), review_agent: FakeReviewAgent, tracker: FakeTracker, qa_policy: FakeQaPolicy)
 

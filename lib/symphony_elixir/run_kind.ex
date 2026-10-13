@@ -4,6 +4,9 @@ defmodule SymphonyElixir.RunKind do
   # the code.
   @reserved_kinds [:pre_push_review]
   @reserved_kind_names Enum.map_join(@reserved_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
+  # The legacy machine's kinds, which `classify/2` never returns either; see the moduledoc.
+  @retired_kinds [:close_out, :final_verification]
+  @retired_kind_names Enum.map_join(@retired_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
 
   @moduledoc """
   Classifies what kind of agent run Symphony is about to start, so each kind can
@@ -23,8 +26,8 @@ defmodule SymphonyElixir.RunKind do
        reviewer run, which judges the PR head and records a verdict.
     7. `qa`: the issue is in the configured `qa_state`: the poll-dispatched QA run, which
        exercises the change from the user's point of view and records a verdict.
-    8. `epic_review`: the issue is in the configured `epic_review_state`: the poll-dispatched
-       epic review, which the tick starts again if the run that moved the parent there stopped.
+    8. `epic_review`: the issue is in the configured `epic_review_state`: the poll-dispatched epic
+       review, which the tick starts again if the run that moved the parent there stopped.
     9. `ci_fix`: the issue is in the configured `ci_fix_state` (the mechanical repair lane a red
        head or a conflict routes to), or the run continues after a red CI run (`:ci_failure`
        signal).
@@ -36,9 +39,9 @@ defmodule SymphonyElixir.RunKind do
   parent-ticket steps whatever their state.
 
   #{@reserved_kind_names} is never returned by `classify/2`; it names the pre-push reviewer run,
-  which Symphony starts itself. `close_out` and `final_verification` are never returned either:
-  the epic path reviews the epic in `Epic Review` instead. They stay known kinds so an
-  `agent.run_profiles` entry that names them still loads.
+  which Symphony starts itself. Neither are #{@retired_kind_names}: the legacy machine's close-out
+  run and `Final verification:` tickets are retired with it (the epic path reviews the epic in
+  `Epic Review`), and the names stay only so an `agent.run_profiles` that still sets them loads.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -102,16 +105,16 @@ defmodule SymphonyElixir.RunKind do
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
 
-  @doc "The title prefix of a retired `Final verification:` ticket."
+  @doc "The title prefix of a `Final verification:` ticket, which the Director signs off."
   @spec final_verification_prefix() :: String.t()
   def final_verification_prefix, do: @final_verification_prefix
 
-  @doc "Whether `issue`'s title starts with the retired `Final verification:` prefix."
-  @spec final_verification_title?(Issue.t() | map()) :: boolean()
-  def final_verification_title?(%{title: title}) when is_binary(title),
+  @doc "True when `title` starts with `final_verification_prefix/0`."
+  @spec final_verification_title?(String.t() | nil) :: boolean()
+  def final_verification_title?(title) when is_binary(title),
     do: title |> String.trim_leading() |> String.starts_with?(@final_verification_prefix)
 
-  def final_verification_title?(_issue), do: false
+  def final_verification_title?(_title), do: false
 
   @doc """
   A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.
@@ -137,7 +140,8 @@ defmodule SymphonyElixir.RunKind do
       (default: the `issues.states.terminal` default).
     * `:ci_failure` - the pending red CI context, or nil.
     * `:reviewer_comments` - the pending PR review comments, or `[]`.
-    * `:settings` - the repo's settings, for its configured phase state names.
+    * `:settings` - the repo's settings, whose configured phase state names the issue's state is
+      matched against (the machine defaults when absent).
   """
   @spec classify(Issue.t(), keyword()) :: t()
   def classify(%Issue{} = issue, signals \\ []) do
@@ -155,9 +159,8 @@ defmodule SymphonyElixir.RunKind do
     end
   end
 
-  # An epic parent closes by reviewing the epic, not by a close-out run: the parent's epic review is
-  # started from `Waiting on sub-tickets` once every sub-issue is terminal
-  # (`SymphonyElixir.EpicReview`).
+  # An epic parent is closed by reviewing the epic: the parent's epic review is started from
+  # `Waiting on sub-tickets` once every sub-issue is terminal (`SymphonyElixir.EpicReview`).
   defp parent_kind(%Issue{} = issue, terminal_states) do
     if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue),
       do: :epic_review,
@@ -167,8 +170,8 @@ defmodule SymphonyElixir.RunKind do
   # The verdict phases classify to their own run kinds: the configured `code_review_state` is the
   # poll-dispatched reviewer run, the configured `qa_state` the poll-dispatched QA run, the
   # configured `epic_review_state` the poll-dispatched epic review, and the configured
-  # `ci_fix_state` the mechanical repair lane a red head or a conflict routes to. The configured name
-  # is what the rest of the flow routes on (`QaVerification.qa_run?/2`,
+  # `ci_fix_state` the mechanical repair lane a red head or a conflict routes to. The configured
+  # name is what the rest of the flow routes on (`QaVerification.qa_run?/2`,
   # `EpicReview.epic_review_run?/2`, the transition guard), so a repo that renames a phase state
   # still classifies its runs correctly.
   defp phase_kind(issue, settings) do
@@ -182,7 +185,7 @@ defmodule SymphonyElixir.RunKind do
   end
 
   # The phase state's configured name, falling back to the machine default when settings does not
-  # carry it (a caller with no settings).
+  # carry it.
   defp phase_state(settings, field, default) do
     case settings && Map.get(settings, :tracker) do
       tracker when is_map(tracker) -> Map.get(tracker, field) || default

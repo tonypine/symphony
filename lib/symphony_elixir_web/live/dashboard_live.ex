@@ -906,7 +906,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <div class="section-header">
             <div>
               <h2 class="section-title">Drain report</h2>
-              <p class="section-copy">Tickets still in a retired or draining state (Auto Review, In Review, Human Review), with what each waits on and the move that frees it.</p>
+              <p class="section-copy">Tickets still in a retired state (Auto Review, In Review, Human Review), with what each waits on and the move that frees it.</p>
             </div>
           </div>
 
@@ -1281,10 +1281,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp format_ago(_seconds), do: "n/a"
 
   defp waiting_kind_label("plan"), do: "Plan"
-  defp waiting_kind_label("pr"), do: "PR"
-  defp waiting_kind_label("final_verification"), do: "Final verification"
   defp waiting_kind_label("action"), do: "Decision"
   defp waiting_kind_label("clarify"), do: "Clarify"
+  defp waiting_kind_label("blocked"), do: "Blocked"
 
   defp github_webhooks(%{pollers: %{ci: %{webhooks: %{} = webhooks}}}), do: webhooks
   defp github_webhooks(_payload), do: nil

@@ -62,86 +62,83 @@ defmodule SymphonyElixir.PlaybookTest do
   end
 
   describe "the one machine's partials" do
-    test "status_map's partial parses, names itself and names the Code Review phase" do
-      assert {:ok, designed} = Playbook.fetch("status_map")
-      assert {:ok, _template} = Solid.parse(designed)
-      assert designed =~ "name: status_map\n"
-      assert designed =~ "`Code Review`"
-      refute designed =~ "`Auto Review`"
+    test "status_map names the phases and holds, and none of the retired states" do
+      assert {:ok, body} = Playbook.fetch("status_map")
+
+      assert body =~ "`Code Review`"
+      assert body =~ "`Plan Review`"
+      assert body =~ "`Blocked` and `Needs Decision` are labels, not states"
+      refute body =~ "`Auto Review`"
+      refute body =~ "In Review"
+      refute body =~ "Human Review"
     end
 
-    test "escape_hatches' designed partial parses, names itself and holds the ticket instead of moving it" do
-      assert {:ok, designed} = Playbook.fetch("escape_hatches")
-      assert {:ok, _template} = Solid.parse(designed)
-      assert designed =~ "name: escape_hatches\n"
-      assert designed =~ "The tool sets the `Needs Decision` hold and the `Needs Decision` label\n  and leaves the ticket exactly where it is"
-      assert designed =~ "Do not move the ticket"
+    test "escape_hatches holds the ticket instead of moving it, and hands a person no check" do
+      assert {:ok, body} = Playbook.fetch("escape_hatches")
 
-      # The machine leaves no `## Supervisor check` for a person to run: a check an agent
-      # can't run is a coverage gap (CI or a QA playbook), and the block that keeps it from running
-      # goes to the self-heal lane.
-      assert designed =~ "A check is never handed to a\n  person and never moves a ticket."
-      refute designed =~ "Supervisor check"
-      assert designed =~ "the self-heal lane"
+      assert body =~ "The tool sets the `Needs Decision` hold and the `Needs Decision` label\n  and leaves the ticket exactly where it is"
+      assert body =~ "Do not move the ticket"
+
+      # No `## Supervisor check` for a person to run: a check an agent can't run is a coverage gap
+      # (CI or a QA playbook), and the block that keeps it from running goes to the self-heal lane.
+      assert body =~ "A check is never handed to a\n  person and never moves a ticket."
+      refute body =~ "Supervisor check"
+      assert body =~ "the self-heal lane"
     end
 
-    test "parent_tickets' designed partial hands over to Plan Review and sends a change through Rework" do
-      assert {:ok, designed} = Playbook.fetch("parent_tickets")
-      assert {:ok, _template} = Solid.parse(designed)
-      assert designed =~ "name: parent_tickets\n"
-      assert designed =~ "hands the parent over with `linear_update_state` naming `Plan Review`"
-      assert designed =~ "Only a plan parent may name it."
-      refute designed =~ "In Review"
-      refute designed =~ "Human Review"
-      refute designed =~ "Final verification:"
-      assert designed =~ "Symphony moves the\n  parent to `Rework` itself, and the run revises the plan in place"
-      assert designed =~ "State: only `Plan Review`"
+    test "parent_tickets hands over to Plan Review and sends a change through Rework" do
+      assert {:ok, body} = Playbook.fetch("parent_tickets")
+
+      assert body =~ "hands the parent over with `linear_update_state` naming `Plan Review`"
+      assert body =~ "Only a plan parent may name it."
+      refute body =~ "In Review"
+      refute body =~ "Human Review"
+      refute body =~ "Final verification:"
+      assert body =~ "Symphony moves the\n  parent to `Rework` itself, and the run revises the plan in place"
+      assert body =~ "State: only `Plan Review`"
     end
 
-    test "plan_pipeline's partial files no verification sub-ticket: the epic closes itself" do
-      assert {:ok, designed} = Playbook.fetch("plan_pipeline")
-      assert {:ok, _template} = Solid.parse(designed)
-      assert designed =~ "name: plan_pipeline\n"
-      assert designed =~ "The split files no verification sub-ticket: the epic closes"
-      refute designed =~ "Final verification:"
-      refute designed =~ "sub-ticket last)"
+    test "plan_pipeline files no verification sub-ticket: the epic closes itself" do
+      assert {:ok, body} = Playbook.fetch("plan_pipeline")
+
+      assert body =~ "The split files no verification sub-ticket: the epic closes"
+      refute body =~ "Final verification:"
+      refute body =~ "sub-ticket last)"
     end
 
-    # The partials that hand work over: each parses, keeps its name and names none of the retired
-    # states, checks or tickets.
-    for {name, designed_says} <- [
+    # The partials that once handed off to `In Review`: each names none of the retired states,
+    # checks or tickets.
+    for {name, says} <- [
           {"pr_feedback_sweep", "before the push that hands it off to\n`Code Review`"},
           {"ci_triage", "moves it to `CI Fix`"},
           {"review_brief", "a PR handed off to `Code Review`"},
           {"completion_bar", "## Completion bar before the handoff"},
           {"guardrails", "while a `Blocked` or `Needs Decision` hold is set, do not make changes"}
         ] do
-      test "#{name}'s partial hands off to Code Review" do
-        assert {:ok, designed} = Playbook.fetch(unquote(name))
-        assert {:ok, _template} = Solid.parse(designed)
-        assert designed =~ "name: #{unquote(name)}\n"
-        assert designed =~ unquote(designed_says)
+      test "#{name} hands off to the machine" do
+        assert {:ok, body} = Playbook.fetch(unquote(name))
+        assert body =~ unquote(says)
 
         for word <- ["Auto Review", "In Review", "Human Review", "Supervisor check", "Final verification"] do
-          refute designed =~ word
+          refute body =~ word
         end
       end
     end
 
-    test "the file system serves each partial, and refuses an unknown one" do
+    test "the file system serves the partial whatever its options say" do
+      assert FileSystem.read_template_file("status_map", "legacy") == Playbook.fetch("status_map")
       assert FileSystem.read_template_file("status_map", nil) == Playbook.fetch("status_map")
       assert {:error, %Solid.FileSystem.Error{}} = FileSystem.read_template_file("not_a_partial", nil)
     end
   end
 
-  test "parent_tickets ends a plan run in Plan Review and leaves the approval to a human" do
+  test "parent_tickets hands a plan over to Plan Review and leaves the approval to a person" do
     assert {:ok, body} = Playbook.fetch("parent_tickets")
     flat = String.replace(body, ~r/\s+/, " ")
 
     assert flat =~ "Then hand the parent over to `Plan Review` with `linear_update_state` and end the turn."
     assert flat =~ "Never move the parent to `Waiting on sub-tickets` yourself"
     assert flat =~ "Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch"
-    assert flat =~ "**Re-plan:** the parent is in `Rework` because a person rejected the plan."
     refute flat =~ "A human promotes the sub-tickets to `Todo`."
   end
 
@@ -152,9 +149,9 @@ defmodule SymphonyElixir.PlaybookTest do
 
     assert prompt =~ "The `plan` label is a human's signal that a ticket is a plan ticket"
     assert prompt =~ "`breakdown` is the label's older name and is still accepted"
-    assert prompt =~ "`Waiting on sub-tickets` -> a plan parent whose plan a person approved, waiting on its sub-tickets"
+    assert prompt =~ "Follow this section instead of the normal implementation steps when the ticket has the `plan` label."
+    assert prompt =~ "`Waiting on sub-tickets` -> a plan parent whose plan a person approved"
     assert prompt =~ "### Plan run (a new plan: no `Sub-issues` in the issue context"
-    refute prompt =~ "Final verification:"
     refute prompt =~ "The `breakdown` label is"
   end
 
@@ -223,13 +220,14 @@ defmodule SymphonyElixir.PlaybookTest do
       assert body =~ kind
     end
 
-    for retired <- ["**Human Review**", "**Final verification**"], do: refute(body =~ retired)
-
+    refute body =~ "**Human Review**"
+    refute body =~ "**Final verification**"
     assert flat =~ "Approve: move the parent to `Waiting on sub-tickets`"
     assert flat =~ "Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
     assert flat =~ "Approve: nothing to do, or confirm the merge decision when manual review is on."
-    assert flat =~ "Approve: reply under the `## Decision needed:` comment with the option you pick; the hold clears"
+    assert flat =~ "Approve: reply under the `## Decision needed:` comment with the option you pick; the hold clears and the ticket continues where it stopped."
     refute flat =~ "do the steps"
+    assert flat =~ "Reject: `Restart` from the Director app closes the PR and starts over."
   end
 
   test "the playbook aggregate renders review_brief between the repo's Step 4 and the completion bar" do
@@ -285,17 +283,18 @@ defmodule SymphonyElixir.PlaybookTest do
 
     assert prompt =~ "\n## Decisions for a person, checks for the machine (required behavior)\n"
     assert flat =~ "A person only ever makes decisions. Never hand them a check to run or a runbook of steps."
-    assert flat =~ "A check is never handed to a person and never moves a ticket."
     assert flat =~ "When a manual check could be an automated test, write the test instead of asking anyone to check by hand."
 
     # TP-612: work already on main becomes a decision, never steps.
     assert flat =~ "hand over the call to close it as a decision; never as steps."
 
-    # A request for a person is a decision with options, and a check on a device is not one.
+    # A request for a person is a decision with options.
     assert flat =~ "one question in `decision`, 2 to 4 options, each with what it does, one of them recommended. A request without options is refused."
     assert flat =~ "A check on a device is not a blocker for a person: it belongs to CI or a QA playbook"
 
-    for retired <- ["Auto Review", "Human Review", "## Supervisor check", "exact steps"], do: refute(flat =~ retired)
+    for word <- ["Supervisor check", "Auto Review", "In Review", "Human Review", "exact steps"] do
+      refute flat =~ word
+    end
   end
 
   test "scoped_tools lists the document tools for a ticket's long-lived artifacts" do
@@ -402,7 +401,8 @@ defmodule SymphonyElixir.PlaybookTest do
 
       {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
 
-      # The tag is left-trimmed in the render, leaving the blank line `plan_pipeline` expects.
+      # The repo's Step 4 closes with its Restart line; `{%-` left-trims the blank line before the
+      # tag, and the partial renders its own when it renders anything.
       assert body =~ "rather than starting over on your own.\n\n" <> @plan_pipeline_tag <> ~s(\n\n{% render "review_brief" %})
     end
 
@@ -425,7 +425,7 @@ defmodule SymphonyElixir.PlaybookTest do
 
       for label <- ["plan", "breakdown"] do
         prompt = render(body, [label], @plan_description)
-        assert prompt =~ ~r/rather than starting over on your own\.\n\n## Plan pipeline\n/
+        assert prompt =~ ~r/starting over on your own\.\n\n## Plan pipeline\n/
         assert prompt =~ ~r/updates the brief\.\n\n## Review brief\n/
       end
     end
@@ -601,7 +601,9 @@ defmodule SymphonyElixir.PlaybookTest do
       "sub_issues" => []
     }
 
-    assigns = %{"issue" => issue, "attempt" => nil, "agent" => %{"workpad_heading" => "## Symphony Workpad"}}
+    # `state_machine` is always assigned at runtime (`PromptBuilder`, always `designed`), so an
+    # instruction file that still branches on it renders.
+    assigns = %{"issue" => issue, "attempt" => nil, "agent" => %{"workpad_heading" => "## Symphony Workpad"}, "state_machine" => "designed"}
     assert {:ok, rendered, []} = Solid.render(Solid.parse!(source), assigns, @render_opts)
     IO.iodata_to_binary(rendered)
   end

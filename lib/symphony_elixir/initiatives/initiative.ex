@@ -9,7 +9,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
 
   - `done`: the sub-ticket is completed;
   - `working`: an agent, QA pass or landing runs it;
-  - `you`: it waits on the Director (an Inbox item, a review state, or Backlog: not promoted yet);
+  - `you`: it waits on the Director (an Inbox item, `Plan Review`, or Backlog: not promoted yet);
   - `blocker`: an open sub-ticket or ticket it is blocked by;
   - `ci`: a machine-owned phase (Code Review, QA, Merging, CI Fix) with nothing running yet;
   - `slot`: it can run and waits for a free slot.
@@ -21,7 +21,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   than the read returns: the counts and landing order then cover only what was read.
   """
 
-  alias SymphonyElixir.{HumanReview, TransitionGuard}
+  alias SymphonyElixir.PlanReview
 
   @final_verification_prefix "final verification:"
   @machine_states MapSet.new(["code review", "qa", "merging", "ci fix", "epic review"])
@@ -123,8 +123,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   defp recent?(_completed_at, _now), do: false
 
   defp in_review?(state, settings) do
-    TransitionGuard.retired_state?(state) or HumanReview.plan_review_state?(state, settings) or
-      normalize(state) == "epic review"
+    PlanReview.in_state?(state, settings) or normalize(state) == "epic review"
   end
 
   defp sub_ticket(node) do
@@ -228,7 +227,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
     cond do
       MapSet.member?(live.running, id) -> "working"
       MapSet.member?(live.you, id) or type in ["backlog", "triage"] -> "you"
-      TransitionGuard.retired_state?(state) or HumanReview.plan_review_state?(state, live.settings) -> "you"
+      PlanReview.in_state?(state, live.settings) -> "you"
       open_blockers != [] -> "blocker"
       MapSet.member?(@machine_states, normalize(state)) -> "ci"
       true -> "slot"

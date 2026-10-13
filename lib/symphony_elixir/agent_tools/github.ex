@@ -693,7 +693,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
          {:ok, _settings} <- handoff_settings(repo_key, opts) do
       Handoff.emit(repo_key, issue_id, Map.put(details, :head, workspace_head(context, opts)))
     else
-      _no_handoff -> :ok
+      _not_a_handoff -> :ok
     end
   end
 

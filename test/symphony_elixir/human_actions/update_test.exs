@@ -120,7 +120,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
            """
   end
 
-  test "lists at most 25 actions and points to the Inbox for the rest" do
+  test "lists at most 25 actions and points to the held issues for the rest" do
     [request | _rest] = example_actions()
     actions = for index <- 1..27, do: %{request | key: "request:#{index}", title: "Action #{index}"}
 
@@ -129,7 +129,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert body =~ "**27 actions need you.**"
     assert body =~ "### 25. "
     refute body =~ "### 26. "
-    assert body =~ "_…and 2 more: see the Symphony Inbox._"
+    assert body =~ "_…and 2 more: see the issues labelled `Needs Decision`._"
   end
 
   test "never renders a secret value from any field" do

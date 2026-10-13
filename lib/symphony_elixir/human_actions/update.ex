@@ -11,8 +11,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   - the why, then the question and its options for a decision, or the steps of any other action,
     as a numbered list, one per line (no tables, which scroll sideways on a phone);
   - a closing **Done when** line, so it is clear how the action leaves the list;
-  - actions on issues in the Human Review state first, since those issues wait on nobody else, then
-    quickest first, so a short session clears the small ones;
+  - quickest first, so a short session clears the small ones;
   - a footer with the list id (a hash of the action keys), which lets Symphony recognise its own
     last update after a restart instead of posting the same list again.
 
@@ -23,6 +22,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   """
 
   alias SymphonyElixir.AgentTools.SecretScanner
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request}
 
   @max_actions 25
@@ -52,8 +52,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   def health(_actions), do: "atRisk"
 
   @doc """
-  Renders the update body and the secret patterns redacted from it. An update with more actions
-  than it lists points at the Symphony Inbox for the rest.
+  Renders the update body and the secret patterns redacted from it.
   """
   @spec render([Action.t()]) :: {String.t(), [atom()]}
   def render(actions) do
@@ -127,7 +126,7 @@ defmodule SymphonyElixir.HumanActions.Update do
   defp done_line(_done_when), do: nil
 
   defp more([]), do: []
-  defp more(hidden), do: "_…and #{length(hidden)} more: see the Symphony Inbox._"
+  defp more(hidden), do: "_…and #{length(hidden)} more: see the issues labelled `#{Hold.label(:needs_decision)}`._"
 
   defp footer(list_id), do: "---\n_Symphony posts a new update when this list changes · list `#{list_id}`_"
 end

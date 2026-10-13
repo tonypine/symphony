@@ -480,7 +480,7 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     log = capture_log(fn -> assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "CI Fix"}]}} = poll(DateTime.add(now, 30)) end)
 
-    # Auto-merge goes off, and the ticket hears why, before the move to In Progress dispatches the fix run.
+    # Auto-merge goes off, and the ticket hears why, before the move to CI Fix dispatches the fix run.
     assert [
              {:disable_auto_merge, @pr_url, "PR_node"},
              {:issue_comment, @issue_id, comment},
@@ -645,7 +645,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert log =~ "Failed to comment that auto-merge was turned off for a conflict"
   end
 
-  test "an update-branch conflict turns off the auto-merge this poll turned on, then goes to In Progress" do
+  test "an update-branch conflict turns off the auto-merge this poll turned on, then goes to CI Fix" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
     track([issue("Merging")])
@@ -666,7 +666,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert %{state: "conflict", update_branch_head_sha: "head-1", enabled_head_sha: nil} = PrReviewPoller.auto_merge(@issue_id)
 
     # The fix run owns it now: the poller only watches.
-    track([issue("In Progress")])
+    track([issue("CI Fix")])
     assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 30))
     assert mailbox() == []
   end
@@ -688,7 +688,7 @@ defmodule SymphonyElixir.AutoMergeTest do
         assert {:ok, %{actions: [{:state_transitioned, @issue_id, :ci_failure, "CI Fix"}]}} = ci_poll(DateTime.add(now, 10))
       end)
 
-    # Auto-merge goes off, and the ticket hears why, before the move to In Progress dispatches the fix run.
+    # Auto-merge goes off, and the ticket hears why, before the move to CI Fix dispatches the fix run.
     assert [
              {:disable_auto_merge, @pr_url, "PR_node"},
              {:issue_comment, @issue_id, comment},
@@ -1134,8 +1134,8 @@ defmodule SymphonyElixir.AutoMergeTest do
       assert %{state: "enabled", enabled_head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
       refute_received {:issue_comment, _issue_id, _body}
 
-      # Outside the watched states the ticket is read by id.
-      track([issue("Todo")])
+      # Out of the states the poller reads in bulk, the ticket is read by id.
+      track([issue("In Progress")])
       Application.put_env(:symphony_elixir, :auto_merge_test_fetch_result, {:error, :linear_down})
       capture_log(fn -> assert {:ok, %{actions: [{:poll_error, @issue_id, :linear_down}]}} = poll(DateTime.add(now, 600)) end)
       assert %{state: "enabled"} = PrReviewPoller.auto_merge(@issue_id)
@@ -1308,7 +1308,7 @@ defmodule SymphonyElixir.AutoMergeTest do
   test "a Merging PR with no run on record is still watched and landed" do
     now = ~U[2026-10-03 12:00:00Z]
     merging = issue("Merging")
-    track([merging, %{issue("In Review") | id: "issue-no-run", pr_urls: ["https://github.com/example/repo/pull/9"]}])
+    track([merging, %{issue("Code Review") | id: "issue-no-run", pr_urls: ["https://github.com/example/repo/pull/9"]}])
     activity(head: "head-1", merge_state: "BLOCKED")
 
     assert AutoMerge.owns_issue?(merging)

@@ -13,9 +13,8 @@ defmodule SymphonyElixir.CiPoller do
 
   alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiState, Config, PrReviewPoller}
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
-  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{NeedsDecisionHold, Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.{NeedsDecisionHold, Notifications, Orchestrator, PersonWait, RunStore, Tracker}
   alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.TransitionGuard
 
@@ -556,21 +555,15 @@ defmodule SymphonyElixir.CiPoller do
   # Merging issues have an open PR waiting on CI: the orchestrator holds a landing agent that ended
   # its turn on pending checks until this poller sees the head settle.
   #
-  # Code Review and QA issues are watched too: their agent runs only dispatch on a
-  # green head, and a ticket enters Code Review straight from In Progress, so nothing else would ever
-  # record CI for them. Watching those states here is what lets `green_head?/1` see their heads'
-  # checks.
+  # Code Review and QA issues are watched too: their agent runs only dispatch on a green head, and a
+  # ticket enters Code Review straight from In Progress, so nothing else would ever record CI for
+  # them. Watching those states here is what lets `green_head?/1` see their heads' checks.
   #
-  # `Rework` is watched because every phase whose head goes red routes to the CI
-  # Fix lane (`SymphonyElixir.CiFix`), and Rework is one of them: without it here, a rework's red head
-  # would go unnoticed until its run ended.
-  #
-  # The draining review states (`TransitionGuard.draining_states/0`) are watched too, so a straggler
-  # left there finishes on the path it started on (`SymphonyElixir.RetiredStates`); one that waits on
-  # a person's decision is parked (`HumanReview.parked_for_person?/2`).
+  # `Rework` is watched because every phase whose head goes red routes to the CI Fix lane
+  # (`SymphonyElixir.CiFix`), and Rework is one of them: without it here, a rework's red head would
+  # go unnoticed until its run ended.
   defp watched_states(settings) do
-    TransitionGuard.draining_states() ++
-      [@merging_state, settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
+    [@merging_state, settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
   end
 
   defp issue_in_states?(%Issue{state: state}, states) when is_binary(state),
@@ -794,15 +787,15 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # The state the issue was in when its head went red, for the CI Fix lane to record as the origin
-  # it returns to. nil when this poll's read did not have the issue (`parked_for_person/3` could not
-  # find it), which dispatches the fix run in `In Progress`.
+  # The state the issue was in when its head went red, for the CI Fix lane to record as the origin it
+  # returns to. nil when this poll's read did not have the issue (`parked_for_person/3` could not
+  # find it), which keeps the red → `In Progress` fix loop.
   defp origin_state({:ok, %Issue{state: state}}), do: state
   defp origin_state(_result), do: nil
 
-  # An issue that waits on a person sits outside the active states with a label that asks for one
-  # (see `HumanReview.parked_for_person?/2`); one outside the states the pollers watch (`Backlog`)
-  # waits for a person to promote it (`HumanReview.held_for_person?/3`). A fix run can't do
+  # An issue that waits on a person sits outside the active states with a label that asks for one;
+  # one outside the states the pollers watch (`Backlog`) waits for a person to promote it
+  # (`PersonWait.held?/3`). A fix run can't do
   # what the person must: it would only merge the base branch, push a new head and park the issue
   # again. The issue stays where it is, with no rerun, fix run or escalation and no fix attempt
   # spent, until a person moves it on or removes the label, or the head turns green.
@@ -833,7 +826,7 @@ defmodule SymphonyElixir.CiPoller do
         # routes to the CI Fix lane; an issue in one of them is not waiting on a person.
         held_opts = Keyword.put(opts, :watched_states, watched_states(settings))
 
-        if HumanReview.held_for_person?(issue, settings, held_opts), do: {:parked, issue}, else: {:ok, issue}
+        if PersonWait.held?(issue, settings, held_opts), do: {:parked, issue}, else: {:ok, issue}
 
       {:ok, nil} ->
         :not_parked
@@ -1030,10 +1023,9 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   # Where a red head sends the ticket. In one of the phases the CI Fix lane serves, the origin is
-  # recorded on the ticket *before* the edge is performed, so the repair has somewhere to return
-  # to; the origin is load-bearing, so failing to record it is a poll error the next pass retries
-  # rather than a move into a lane with no way out. Every other state keeps the `In Progress`
-  # fix-run edge.
+  # recorded on the ticket *before* the edge is performed, so the repair has somewhere to return to;
+  # the origin is load-bearing, so failing to record it is a poll error the next pass retries rather
+  # than a move into a lane with no way out. Every other state keeps the `In Progress` edge.
   defp ci_fix_entry(record, settings, origin_state, opts) do
     case CiFix.entry(origin_state, settings) do
       :none ->
@@ -1200,8 +1192,8 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   # CI that the fix runs could not make green goes to a person: the ticket pauses where it is on a
-  # Needs Decision hold (`escalate_issue/2`), so `escalation_state` is the state the ticket stays in
-  # (nil when this poll's read did not have the issue).
+  # Needs Decision hold (`escalate_issue/2`), so `escalation_state` is the state the ticket stays
+  # in (nil when this poll could not read it).
   defp escalate_ci_failure(record, ci_status, failed_checks, settings, opts, now, origin) do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)

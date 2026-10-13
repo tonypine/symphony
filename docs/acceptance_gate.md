@@ -2,7 +2,7 @@
 
 The acceptance gate is retired (`docs/design/state-machine.md` §Retired). It ran after the
 retired `Auto Review` QA pass, judged each PR against its ticket with its own agent, and approved,
-reworked or escalated it. Its duties now live in the designed machine: the `Code Review` run
+reworked or escalated it. Its duties now live in the ticket state machine: the `Code Review` run
 judges the PR against the ticket's acceptance criteria, scope and intent; the `QA` state tests it
 from the user's point of view; and its deterministic **escalation rules** were migrated per
 decision D12 of the state-machine plan:
@@ -120,14 +120,12 @@ A ticket that asks for a person's review escalates; one that only names a review
 discusses manual review as a topic, doesn't. The built-in `ticket_patterns` match request
 phrasing only ("needs a human review", "human review required", "must be manually reviewed",
 "have a human review this", "must not auto-approve"), not "human review" on its own. Before
-`ticket_patterns` match, the rule blanks fenced code blocks and backticked spans, then
-`In Review`, `Human Review` and `issues.states.human_review` wherever the text names them: bare,
-in bold or in quotes. The names match case-sensitively, so "Merge it after a human review" still
-escalates; before `state` or `states` they match in any case ("the human review state"). A name
-right after `need`, `require` or `want` ("Needs Human Review") stays, since it asks for one.
-`In Review` and `Human Review` are blanked even with `issues.states.human_review: null`. The same
-applies in Code Review and when Symphony checks whether a plan's ticket asks for a human review.
-The Symphony summary block at the end of a description is never read.
+`ticket_patterns` match, the rule blanks fenced code blocks and backticked spans, then the retired
+`In Review` and `Human Review` states' names wherever the text names them: bare, in bold or in
+quotes. The names match case-sensitively, so "Merge it after a human review" still escalates;
+before `state` or `states` they match in any case ("the human review state"). A name right after
+`need`, `require` or `want` ("Needs Human Review") stays, since it asks for one. The Symphony
+summary block at the end of a description is never read.
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,

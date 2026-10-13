@@ -3,32 +3,23 @@ defmodule SymphonyElixir.LinearClientStateMachineTest do
 
   alias SymphonyElixir.Linear.Client
 
-  # Dispatch polls the tracker's active states plus the machine-owned phase states, for every repo.
+  # Every repo polls the machine-owned phase states on top of the tracker's active states.
   describe "per-repo dispatch states" do
-    test "every repo polls the phase states on top of the active states" do
+    test "every repo polls the active states and the phase states" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "linear",
         repos: [
-          %{key: "app", workflow: Workflow.workflow_file_path(), default: true, team: "APP"},
-          %{key: "web", workflow: Workflow.workflow_file_path(), team: "WEB"}
+          %{key: "first_repo", workflow: Workflow.workflow_file_path(), default: true, team: "FIRST"},
+          %{key: "second_repo", workflow: Workflow.workflow_file_path(), team: "SECOND"}
         ]
       )
 
       assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())
 
-      phases = ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
-      assert poll_states_by_team() == %{"APP" => phases, "WEB" => phases}
-    end
-
-    test "Plan Review is never polled: it is a person's state" do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "linear",
-        repos: [%{key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "TEAM"}]
-      )
-
-      assert {:ok, []} = Client.fetch_candidate_issues_for_test(graphql_fun())
-
-      refute "Plan Review" in poll_states_by_team()["TEAM"]
+      states = poll_states_by_team()
+      phase_states = ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
+      assert states == %{"FIRST" => phase_states, "SECOND" => phase_states}
+      refute "Plan Review" in states["FIRST"]
     end
   end
 

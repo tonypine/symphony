@@ -2058,28 +2058,26 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       Linear.request_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
     end
 
-    test "posts the request, holds the issue in its phase, adds no label itself, and asks Symphony to list it" do
+    test "posts the request, holds the issue in place, adds no label of its own, and asks Symphony to list it" do
+      :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24"}, comment_registry: registry}
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
 
-      assert {:ok, %{"requested" => true, "commentId" => "comment-new", "url" => "https://linear.app/c", "state" => "In Progress", "held" => true} = result} =
+      assert {:ok, %{"requested" => true, "commentId" => "comment-new", "url" => "https://linear.app/c", "state" => "In Progress"} = result} =
                request_human_action(context, human_action_scope())
 
       refute Map.has_key?(result, "label")
       assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "issue-24"}}
       assert_received {:linear_called, "SymphonyAgentAddComment", %{issueId: "issue-24", body: body}}
-      # The hold is the machine's: its label goes on through the hold's projection, and nothing moves.
       refute_received {:tracker_moved, _issue_id, _state}
-      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
       refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
       refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
       refute_received {:linear_called, "SymphonyAgentCreateLabel", _variables}
+      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
       assert_received :refreshed
       assert body =~ "## Decision needed: Add the release signing secrets"
       assert body =~ "1. **Add the secrets** (recommended): Releases are signed again.\n2. **Ship unsigned**: The agent drops the signing step."
-      assert body =~ "the ticket stays in In Progress until the decision is recorded."
       refute body =~ "Steps:"
-      refute body =~ "label"
 
       assert %{
                title: "Add the release signing secrets",
@@ -2095,29 +2093,19 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert Linear.CommentRegistry.human_action_requested?(registry)
     end
 
-    # Drains the mailbox in order: both the tool's Linear calls and the tracker moves, so a test
-    # can assert the order a run makes them in.
-    defp linear_and_tracker_calls(acc \\ []) do
-      receive do
-        {:linear_called, name, variables} -> linear_and_tracker_calls([{name, variables} | acc])
-        {:tracker_moved, issue_id, state} -> linear_and_tracker_calls([{:tracker_moved, issue_id, state} | acc])
-      after
-        0 -> Enum.reverse(acc)
-      end
-    end
-
-    test "gives the slot back when Linear refuses any step" do
+    test "gives the slot back when Linear refuses any step, or the hold can't be set" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue_id: "issue-24", comment_registry: registry}
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
       scope = human_action_scope()
       refused = fn field -> {:ok, %{"data" => %{field => %{"success" => false}}}} end
 
-      for {overrides, tracker_result, expected} <- [
-            {%{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, :ok, {:error, :linear_down}},
-            {%{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, :ok, {:error, :issue_not_found}},
-            {%{"SymphonyAgentAddComment" => refused.("commentCreate")}, :ok, {:error, {:linear_mutation_failed, "commentCreate", :_}}}
+      for {context, overrides, expected} <- [
+            {context, %{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
+            {context, %{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
+            {context, %{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}},
+            # A hold needs the repo it is recorded under.
+            {%{issue_id: "issue-24", comment_registry: registry}, %{}, {:error, :missing_repo_key}}
           ] do
-        Process.put(:linear_tool_tracker_result, tracker_result)
         result = request_human_action(context, scope, overrides)
 
         case expected do
@@ -2129,7 +2117,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         end
       end
 
-      Process.delete(:linear_tool_tracker_result)
       refute_received :refreshed
       assert Agent.get(registry, & &1.human_actions) == 0
       refute Linear.CommentRegistry.human_action_requested?(registry)
@@ -2163,8 +2150,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         option = &Map.merge(%{"label" => "Keep it", "effect" => "Nothing changes."}, &1)
 
         decision_required =
-          "`decision` is required: one `question` and 2 to 4 `options`. A person only makes decisions; a check an agent can't run belongs " <>
-            "to CI or a QA playbook, and a manual check that could be a test becomes a test."
+          "`decision` is required: one `question` and 2 to 4 `options`. A person only makes decisions; a check an agent can't run belongs to " <>
+            "CI or a QA playbook, and a manual check that could be a test becomes a test."
 
         options_count =
           "`decision.options` must list 2 to 4 options, each with a `label` and an `effect`; with no real choice to make, there is nothing to ask a person."
@@ -2209,14 +2196,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     test "reads the settings of the issue's repository when none are given" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       client = human_action_client(self(), human_action_scope())
+      context = %{issue: %Issue{id: "issue-24", repo_key: Config.repo_key!()}, comment_registry: registry}
 
-      for context <- [%{issue_id: "issue-24"}, %{issue: %Issue{id: "issue-24", repo_key: nil}}] do
-        assert {:ok, %{"requested" => true, "state" => "In Progress", "held" => true}} =
-                 Linear.request_human_action(Map.put(context, :comment_registry, registry), @human_action,
-                   linear_client: client,
-                   tracker: FakeTracker
-                 )
-      end
+      assert {:ok, %{"requested" => true, "state" => "In Progress", "held" => true}} =
+               Linear.request_human_action(context, @human_action, linear_client: client, tracker: FakeTracker)
     end
   end
 
@@ -2224,7 +2207,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     @withdrawal %{"reason" => "The dialyzer run had started minutes earlier, not 11 hours ago."}
 
     defp request_node(id, title, created_at) do
-      %{"id" => id, "body" => Request.render_hold(decision_request(title), "Human Review"), "createdAt" => created_at}
+      %{"id" => id, "body" => Request.render_hold(decision_request(title), "In Progress"), "createdAt" => created_at}
     end
 
     defp withdrawal_scope(comments, issue \\ %{}) do
@@ -2235,7 +2218,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       Linear.withdraw_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
     end
 
-    test "replies with the reason under the request, clears the hold in place, and drops it from the next update" do
+    test "replies with the reason under the request, leaves the issue where it is, and drops it from the next update" do
       requests = [request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:27.000Z")]
       scope = withdrawal_scope(requests)
 
@@ -2246,7 +2229,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                 "replyCommentIds" => ["reply-to-comment-1"],
                 "remaining" => 0,
                 "state" => "In Progress"
-              }} = withdraw_human_action(%{issue: %Issue{id: "MOT-24", identifier: "MOT-24"}}, scope)
+              }} = withdraw_human_action(%{issue: %Issue{id: "MOT-24", identifier: "MOT-24", repo_key: "repo-a"}}, scope)
 
       assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "MOT-24"}}
       assert_received {:linear_called, "SymphonyAgentAddReply", %{issueId: "issue-24", parentId: "comment-1", body: reply}}
@@ -2266,7 +2249,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       again = put_in(scope, ["data", "issue"], after_withdrawal)
 
       assert {:ok, %{"requested" => true}} =
-               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, again, %{}, %{
+               request_human_action(%{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}, again, %{}, %{
                  "title" => "Re-run the stuck dialyzer job",
                  "why" => "x",
                  "decision" => @human_action["decision"]
@@ -2274,6 +2257,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
 
     test "withdraws only the request named by title, and keeps the hold for the others" do
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}}
+
       scope =
         withdrawal_scope([
           request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
@@ -2281,36 +2266,37 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         ])
 
       assert {:ok, %{"withdrawn" => true, "requestCommentIds" => ["comment-1"], "remaining" => 1, "state" => "In Progress"}} =
-               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{}, Map.put(@withdrawal, "title", " re-run the stuck  DIALYZER job "))
+               withdraw_human_action(context, scope, %{}, Map.put(@withdrawal, "title", " re-run the stuck  DIALYZER job "))
 
       assert_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-1"}}
       refute_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-2"}}
-      refute_received {:tracker_moved, _issue_id, _state}
       refute_received {:machine_label_cleared, _issue_id, _name}
 
       # Without a title, every open request goes, and the hold with them; the issue stays put.
       assert {:ok, %{"requestCommentIds" => ["comment-1", "comment-2"], "replyCommentIds" => ["reply-to-comment-1", "reply-to-comment-2"], "remaining" => 0, "state" => "In Progress"}} =
-               withdraw_human_action(%{issue_id: "issue-24"}, scope)
+               withdraw_human_action(context, scope)
 
-      refute_received {:tracker_moved, _issue_id, _state}
       assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
+      refute_received {:tracker_moved, _issue_id, _state}
     end
 
-    test "the issue stays where it is, and a deprecated request label comes off" do
+    test "a deprecated request label comes off with the last request" do
       legacy = put_in(Config.settings!().human_actions.label, "human-action")
       labels = %{"nodes" => [%{"id" => "label-on-issue", "name" => "Human-Action"}, %{"id" => "label-other", "name" => "bug"}]}
       scope = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => labels})
       client = human_action_client(self(), scope)
 
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}}
+
       assert {:ok, %{"withdrawn" => true, "remaining" => 0, "state" => "In Progress"}} =
-               Linear.withdraw_human_action(%{issue_id: "issue-24"}, @withdrawal, human_action_opts(client, settings: legacy))
+               Linear.withdraw_human_action(context, @withdrawal, human_action_opts(client, settings: legacy))
 
       assert_received {:linear_called, "SymphonyAgentRemoveLabel", %{issueId: "issue-24", labelId: "label-on-issue"}}
       refute_received {:linear_called, "SymphonyAgentRemoveLabel", %{labelId: "label-other"}}
       refute_received {:tracker_moved, _issue_id, _state}
 
       # Without the deprecated setting, the label is left alone.
-      assert {:ok, %{"withdrawn" => true}} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
+      assert {:ok, %{"withdrawn" => true}} = withdraw_human_action(context, scope)
       refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
     end
 
@@ -2318,10 +2304,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       open = request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z")
       withdrawn = %{"id" => "reply-1", "body" => Request.render_withdrawal("Not needed."), "parent" => %{"id" => "comment-1"}}
 
-      moved_on = %{"history" => %{"nodes" => [%{"createdAt" => "2026-10-04T19:00:00.000Z", "fromState" => %{"name" => "Human Review"}, "toState" => %{"name" => "Rework"}}]}}
+      answered = %{"id" => "reply-2", "body" => "Add the secrets", "parent" => %{"id" => "comment-1"}}
 
       for {scope, attrs} <- [
-            {withdrawal_scope([open], moved_on), @withdrawal},
+            {withdrawal_scope([open, answered]), @withdrawal},
             {withdrawal_scope([open, withdrawn]), @withdrawal},
             {withdrawal_scope([]), @withdrawal},
             {withdrawal_scope([open]), Map.put(@withdrawal, "title", "Something else")}
@@ -2336,7 +2322,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
 
     test "returns Linear's error when a step fails" do
-      scope = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"state" => %{"name" => "Human Review"}})
+      scope = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")])
       refused = fn field -> {:ok, %{"data" => %{field => %{"success" => false}}}} end
 
       assert {:error, :linear_down} = withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentHumanActionScope" => {:error, :linear_down}})
@@ -2348,6 +2334,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentAddReply" => refused.("commentCreate")})
 
       refute_received {:tracker_moved, _issue_id, _state}
+
+      # The hold the withdrawal clears needs the repo it is recorded under.
+      assert {:error, :missing_repo_key} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
 
       legacy = put_in(Config.settings!().human_actions.label, "human-action")
       labelled = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => %{"nodes" => [%{"id" => "l-1", "name" => "human-action"}]}})
@@ -2830,7 +2819,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
-    test "a designed repo turns an agent's Backlog request into a Blocked hold, without a move" do
+    test "turns an agent's Backlog request into a Blocked hold, without a move" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
@@ -2854,8 +2843,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
     end
 
-    # A plan parent: the plan run hands over by naming `Plan Review`; the retired `In Review` is
-    # refused.
+    # A plan parent: the plan run hands over by naming `Plan Review`, and the guard performs the move
+    # into the repo's configured `Plan Review` state.
     defp plan_review_client(extra \\ []) do
       states =
         [%{"id" => "state-review", "name" => "In Review"}, %{"id" => "state-plan-review", "name" => "Plan Review"}] ++ extra
@@ -2879,11 +2868,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
-    test "a plan parent naming the retired In Review is refused" do
+    test "a plan parent naming the retired In Review is refused: the handoff names Plan Review" do
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
 
       for asked <- ["In Review", " in review "] do
-        assert {:error, {:retired_state, _name}} =
+        assert {:error, {:retired_state, "In Review"}} =
                  Linear.update_state(context, asked, linear_client: plan_review_client(), settings: designed_settings())
 
         refute_received {:moved_to, _state_id}
@@ -3021,7 +3010,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
 
       assert_received :refreshed
-      assert Linear.CommentRegistry.human_action_requested?(context.comment_registry)
     end
 
     test "a request the ticket already has is the one the hold records, and nothing is posted again" do
@@ -3051,6 +3039,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
       refute_received {:tracker_moved, _issue_id, _state}
+      # The open request still waits on a person, so the run does not count it as idle.
+      assert Linear.CommentRegistry.human_action_requested?(context.comment_registry)
 
       assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets"}}]} =
                SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")

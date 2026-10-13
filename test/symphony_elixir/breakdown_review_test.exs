@@ -98,7 +98,8 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       subs = [history_sub("c1", "Backlog")]
       approved = history([approval()], subs)
 
-      # Symphony parking a parent that was already Plan Review leaves the same history entry a person's approval does.
+      # Symphony parking a parent that was already in Plan Review leaves the same history entry a
+      # person's approval does.
       assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, @approved) == []
       assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, -60)) == []
       assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, 60)) == []
@@ -108,7 +109,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings, nil)) == ["c1"]
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
 
-      # A rejection at Symphony's own recorded move is the machine's own revise of the plan, not
+      # A rejection at Symphony's own recorded move is Symphony's own revise of the plan, not
       # a person's: it cancels nothing. A person's rejection at another time still cancels the plan.
       rejected = history(rejection(), subs)
       assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved) == []
@@ -117,33 +118,21 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, nil)) == ["c1"]
     end
 
-    test "reads the plan review state for the approval and the rejection" do
-      settings = designed_settings!()
+    test "approves and rejects only from the plan review state" do
+      settings = Config.settings!()
       subs = [history_sub("c1", "Backlog")]
 
-      # The plan is reviewed in `Plan Review`: the approval promotes from there.
-      approved = history([change("In Progress", "Plan Review", @reviewed), change("Plan Review", @waiting, @approved)], subs)
-      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
-      # Symphony parking an In Progress parent approves nothing.
-      parked = history([change("In Progress", @waiting, @approved)], subs)
-      assert BreakdownReview.sub_issues_to_move(:promote, parked, settings) == []
+      # A move out of a retired review state approves and rejects nothing.
+      retired_approval = history([change("In Review", @waiting, @approved)], subs)
+      assert BreakdownReview.sub_issues_to_move(:promote, retired_approval, settings) == []
 
-      # A person's move from `Plan Review` to `Rework` rejects the plan.
-      rejected =
-        history(
-          [change("Todo", "In Progress", @started), change("In Progress", "Plan Review", @reviewed), change("Plan Review", "Rework", @approved)],
-          subs
-        )
+      retired_rejection = [change("In Progress", "Human Review", @reviewed), change("Human Review", "Rework", @approved)]
+      assert BreakdownReview.sub_issues_to_move(:replace, history(retired_rejection, subs), settings) == []
 
-      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings)) == ["c1"]
-
-      # The same move at Symphony's own record of it is the machine revising the plan in place.
-      assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved) == []
-
-      # With the state turned off there is no plan review to approve or reject from.
+      # With the state turned off nothing approves or rejects a plan.
       off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
-      assert BreakdownReview.sub_issues_to_move(:promote, approved, off) == []
-      assert BreakdownReview.sub_issues_to_move(:replace, rejected, off) == []
+      assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), off) == []
+      assert BreakdownReview.sub_issues_to_move(:replace, history(rejection(), subs), off) == []
     end
 
     test "a rejection replaces the rejected plan's sub-issues in Backlog since before the move to Rework" do
@@ -506,19 +495,6 @@ defmodule SymphonyElixir.BreakdownReviewTest do
   end
 
   defp review(issues, state, opts \\ []), do: Orchestrator.review_breakdown_parents_for_test(issues, state, opts)
-
-  # A repo on the designed machine: plan review happens in `Plan Review`.
-  defp designed_settings! do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      repos: [
-        [key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "Test"],
-        [key: "designed", workflow: Workflow.workflow_file_path(), team: "DesignedTeam"]
-      ]
-    )
-
-    Config.settings_for_repo!("designed")
-  end
 
   defp parent(state, sub_issues) do
     %Issue{id: "parent", identifier: "MT-1", title: "Groom into sub-tickets", state: state, labels: ["breakdown"], sub_issues: sub_issues}

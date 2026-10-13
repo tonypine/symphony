@@ -80,11 +80,8 @@ public enum EditRepo {
             entry.route.labels = labels.isEmpty ? nil : labels
         }
 
-        // The state machine changes only when its picker moved, so a value Symphony rejects stays until
-        // another one is picked; Legacy removes the key.
-
-        // Manual review follows the same rule: it changes only when its picker moved, and Off removes the
-        // key, leaving the repo on the default.
+        // Manual review changes only when its picker moved, so a value Symphony rejects stays until another
+        // one is picked; Off removes the key, leaving the repo on the default.
         if draft.manualReview != ManualReviewChoice(override: original.manualReview) {
             entry.manualReview = draft.manualReview.override
         }

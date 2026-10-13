@@ -20,11 +20,10 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   Symphony finds the request again on every poll and after a restart. It also reads the older
   `## Action needed:` comment, with its `**Steps:**` list, which a supervisor or a person may still
-  write by hand. Only the heading is required; `parse/1` reads whatever else is there. The issue
-  never moves, so the request is answered instead — see
-  `SymphonyElixir.HumanActions.Collector.open_requests/2`. A request is closed too once a person
-  moves its issue on: after the request, the issue leaves a state outside `issues.states.active`
-  (`Backlog` back to `Todo`, say).
+  write by hand. Only the heading is required; `parse/1` reads whatever else is there. A request
+  is closed once a person answers it — see `SymphonyElixir.HumanActions.Collector.open_requests/2` —
+  or once a person moves its issue on: after the request, the issue leaves a state outside
+  `issues.states.active` (`Code Review` to `Rework`, `Backlog` back to `Todo`).
 
   A request is also closed once it is withdrawn: a reply under it that starts with
   `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.
@@ -63,7 +62,8 @@ defmodule SymphonyElixir.HumanActions.Request do
   def headings, do: [@decision_heading, @action_heading]
 
   @doc """
-  Renders a decision request, which sets the `Needs Decision` hold instead of moving the issue: the closing line says the ticket stays in `state` and names the
+  Renders a decision request, which sets the `Needs Decision` hold instead of moving the issue: the
+  closing line says the ticket stays in `state` and names the
   Inbox as the other way to answer, so whoever reads the comment knows the ticket is not going
   anywhere while it waits.
   """

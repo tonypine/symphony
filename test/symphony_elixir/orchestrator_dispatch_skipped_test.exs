@@ -39,7 +39,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     parts = for n <- 1..6, do: issue("p#{n}", "MT-#{n}1", "Todo", blocked_by: blocked_by)
     epics = for {part, n} <- Enum.with_index(parts, 1), do: epic("e#{n}", "MT-#{n}0", [part])
     fix = issue("fix", "MT-99", "In Progress")
-    yielded = epic("ey", "MT-90", [%{id: "y1", identifier: "MT-91", state: "In Review"}])
+    yielded = epic("ey", "MT-90", [%{id: "y1", identifier: "MT-91", state: "Plan Review"}])
     standalone = issue("standalone", "MT-888", "Todo", priority: 3)
     candidates = epics ++ [yielded, fix, standalone | parts]
     tracked([standalone])

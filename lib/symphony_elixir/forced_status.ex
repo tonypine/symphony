@@ -10,8 +10,7 @@ defmodule SymphonyElixir.ForcedStatus do
       `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `final_verification`,
       `code_review`, `qa`, `epic_review`) and waits on nothing;
     * a `Merging` ticket held while CI runs on its head is `waiting_on_ci` (`ci`);
-    * a ticket in one of the `:human_states` signal's states (`Plan Review`, a draining review
-      state) is `waiting_for_human` (`human`);
+    * a plan in `Plan Review` is `waiting_for_human` (`human`);
     * a ticket in `Backlog` or `Triage` keeps the phase its next run would have and waits on
       `backlog`;
     * otherwise the phase is the next run's kind, waiting on its open `blocker`s, the operator's
@@ -39,7 +38,7 @@ defmodule SymphonyElixir.ForcedStatus do
   @type signals :: %{
           optional(:running_kind) => atom() | nil,
           optional(:state) => String.t() | nil,
-          optional(:human_states) => [String.t()],
+          optional(:plan_review_state) => String.t() | nil,
           optional(:kind) => atom() | nil,
           optional(:merging_ci_wait?) => boolean(),
           optional(:auto_merge?) => boolean(),
@@ -157,7 +156,7 @@ defmodule SymphonyElixir.ForcedStatus do
   defp classify(signals, state) do
     cond do
       state == nil -> {next_phase(signals), false, waiting_on(signals)}
-      Enum.any?(Map.get(signals, :human_states, []), &(normalize(&1) == state)) -> {:waiting_for_human, false, :human}
+      state == normalize(Map.get(signals, :plan_review_state)) -> {:waiting_for_human, false, :human}
       true -> {next_phase(signals), false, waiting_on(signals)}
     end
   end

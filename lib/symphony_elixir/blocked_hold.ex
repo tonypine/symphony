@@ -15,8 +15,8 @@ defmodule SymphonyElixir.BlockedHold do
   back after the repair is compared against the failure the repair was for rather than judged as a
   fresh one that files another fix ticket.
 
-  Only the holds that lift themselves are cleared here — one waiting on an access grant
-  is lifted by a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
+  Only the holds that lift themselves are cleared here — one waiting on an access grant is lifted by
+  a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
   """
 
   require Logger
@@ -73,7 +73,7 @@ defmodule SymphonyElixir.BlockedHold do
   resolved settings (the poll loop passes it once per repo); without it the issue's repo is
   resolved through `Config.settings_for_repo/1`. A polled issue carries no repo key, so
   `opts[:repo_key]` names the repo it was polled for, and the hold is read and written under it.
-  Returns `:skipped` when the repo's settings can't be resolved, else the action taken (`:set`,
+  Returns `:skipped` when the issue's repo can't be resolved, else the action taken (`:set`,
   `:clear` or `:none`).
   """
   @spec sync(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :skipped | :set | :clear | :none

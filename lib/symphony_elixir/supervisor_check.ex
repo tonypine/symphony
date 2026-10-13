@@ -3,8 +3,8 @@ defmodule SymphonyElixir.SupervisorCheck do
   The `## Supervisor check` block an agent leaves when all that is left of a ticket is a check
   an agent can't run: launching the app, a host crash check, a check on a device.
 
-  The check never goes to a person: the agent moves the ticket to `In Review`, the supervisor's
-  queue, and the supervisor runs the check per its policy. The block says what to verify and how:
+  The check never goes to a person: the supervisor finds the block on the ticket and runs the check
+  per its policy. The block says what to verify and how:
 
       ## Supervisor check
 

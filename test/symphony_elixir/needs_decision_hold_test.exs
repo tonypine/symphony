@@ -441,7 +441,7 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert NeedsDecisionHold.sweep(@repo_key, [answered, other], settings: designed_settings()) == 1
     end
 
-    test "counts nothing without a list, or for a repo whose settings can't be resolved" do
+    test "counts nothing without a list" do
       open = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
 
       assert NeedsDecisionHold.sweep(@repo_key, :not_a_list, settings: designed_settings()) == 0

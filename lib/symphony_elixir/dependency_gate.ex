@@ -4,17 +4,14 @@ defmodule SymphonyElixir.DependencyGate do
 
   Both paths must block `github_create_pull_request` (and the equivalent
   `gh pr create` shell approval) when the dependency audit reports a hold or
-  fails. The gate also pauses the Linear issue in its phase on a Blocked hold a
-  person lifts (`SymphonyElixir.Hold.access_attrs/1`) and emits an
-  operator-visible notification so dependency holds are surfaced before any PR
-  is opened.
+  fails. The gate also pauses the Linear issue in its phase on a Needs Decision
+  hold (`pause/4`) and emits an operator-visible notification so dependency
+  holds are surfaced before any PR is opened.
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, DependencyAudit, Hold, Notifications, TicketSignals, Tracker}
-
-  @hold_reason "dependency changes need a person's approval before the pull request opens"
+  alias SymphonyElixir.{Config, DependencyAudit, NeedsDecisionHold, Notifications, TicketSignals, Tracker}
 
   @type gate :: %{
           workspace: Path.t(),
@@ -30,10 +27,6 @@ defmodule SymphonyElixir.DependencyGate do
           :allow
           | {:hold, [map()], map()}
           | {:audit_error, term(), map()}
-
-  @doc "The reason the Blocked hold a dependency hold sets records."
-  @spec hold_reason() :: String.t()
-  def hold_reason, do: @hold_reason
 
   @doc """
   Build a gate map from the standard agent options keyword list.
@@ -113,8 +106,8 @@ defmodule SymphonyElixir.DependencyGate do
   @doc """
   Returns true when the tracker reports the issue in a terminal state.
 
-  Used before any dependency hold is set, so an issue that already reached a
-  terminal state (for example `Done` after its PR merged) is never held.
+  Used before any dependency hold moves state, so an issue that already reached
+  a terminal state (for example `Done` after its PR merged) is never reopened.
   Lookup failures report false so a hold still applies when the state is unknown.
   """
   @spec issue_terminal?(term()) :: boolean()
@@ -131,26 +124,66 @@ defmodule SymphonyElixir.DependencyGate do
   def issue_terminal?(_issue, _issue_state_fetcher), do: false
 
   @doc """
-  Pause the gated issue on a Blocked hold and emit the
+  Pause the gated issue on a Needs Decision hold and emit the
   `dependency_pending_approval` notification with the audit items as metadata.
   """
   @spec react_to_hold(gate(), [map()]) :: :ok
   def react_to_hold(gate, items) do
-    hold_issue(gate)
+    hold_issue(gate, {:hold, items})
     emit_hold_event(gate, items)
     :ok
   end
 
   @doc """
-  Pause the gated issue on a Blocked hold and emit the
+  Pause the gated issue on a Needs Decision hold and emit the
   `dependency_pending_approval` notification with the audit error inspected.
   """
   @spec react_to_audit_error(gate(), term()) :: :ok
   def react_to_audit_error(gate, error) do
-    hold_issue(gate)
+    hold_issue(gate, {:error, error})
     emit_audit_failure_event(gate, error)
     :ok
   end
+
+  @doc """
+  Pauses `issue` in its phase on a Needs Decision hold for what the dependency audit found: the
+  changes it holds for approval (`{:hold, items}`) or the failure that kept it from running
+  (`{:error, reason}`). The `## Decision needed:` comment asks whether to allow the changes or drop
+  them; the decision clears the hold and the ticket continues in place
+  (`SymphonyElixir.NeedsDecisionHold`). `repo_key` names the repo the hold is recorded under when
+  the issue carries none; `opts` go to `NeedsDecisionHold.pause/4` (`:tracker`, `:store`).
+  """
+  @spec pause(map(), {:hold, [map()]} | {:error, term()}, String.t() | nil, keyword()) :: :ok | {:error, term()}
+  def pause(issue, finding, repo_key, opts \\ []) do
+    opts = if is_binary(repo_key), do: Keyword.put(opts, :repo_key, repo_key), else: opts
+    NeedsDecisionHold.pause(issue, decision_request(issue, finding), opts)
+  end
+
+  defp decision_request(issue, finding) do
+    label = Map.get(issue, :identifier) || Map.get(issue, :id)
+
+    %{
+      title: "Approve the dependency changes on #{label}",
+      question: "#{label}'s pull request is blocked by the dependency audit. How should it continue?",
+      why: finding_why(finding),
+      options: [
+        %{
+          label: "Allow them",
+          effect: "you allow the sources in `dependency_audit` in symphony.yml; the ticket continues and its next run opens the pull request",
+          recommended: false
+        },
+        %{label: "Drop them", effect: "the ticket continues and its next run removes the dependency changes before it opens the pull request", recommended: true}
+      ],
+      est_minutes: 5
+    }
+  end
+
+  defp finding_why({:hold, items}) do
+    changes = Enum.map_join(items, ", ", &"#{Map.get(&1, :package)} (#{Map.get(&1, :reason)})")
+    "The dependency audit holds pull request creation until a person approves these changes: #{changes}."
+  end
+
+  defp finding_why({:error, reason}), do: "The dependency audit could not run (#{inspect(reason)}), so pull request creation is blocked."
 
   @doc """
   Build the structured failure response that mirrors `Codex.DynamicTool`
@@ -200,34 +233,33 @@ defmodule SymphonyElixir.DependencyGate do
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp hold_issue(%{issue: %{id: issue_id} = issue} = gate) when is_binary(issue_id) do
+  defp hold_issue(%{issue: %{id: issue_id} = issue} = gate, finding) when is_binary(issue_id) do
     if issue_terminal?(issue) do
       Logger.info("Skipping dependency hold for terminal issue issue_id=#{issue_id}")
     else
-      # A missing repo key means the primary repository, as in `Config.settings_for_repo/1`.
-      set_hold(issue, Map.get(issue, :repo_key) || Map.get(gate, :repo_key) || Config.repo_key_or_nil())
+      pause_issue(issue, finding, Map.get(gate, :repo_key))
     end
   end
 
-  defp hold_issue(_gate), do: :ok
+  defp hold_issue(_gate, _finding), do: :ok
 
-  defp set_hold(%{id: issue_id} = issue, repo_key) do
-    case Hold.set(repo_key, issue_id, :blocked, Hold.access_attrs(@hold_reason)) do
+  defp pause_issue(%{id: issue_id} = issue, finding, repo_key) do
+    case pause(issue, finding, repo_key) do
       :ok ->
-        record_hold_signal(repo_key, issue_id, Map.get(issue, :state))
+        record_hold_signal(issue, issue_id, repo_key)
         :ok
 
       {:error, reason} ->
-        Logger.warning("Failed to hold the issue for dependency approval issue_id=#{issue_id}: #{inspect(reason)}")
+        Logger.warning("Failed to hold dependency issue issue_id=#{issue_id} on a Needs Decision hold: #{inspect(reason)}")
         :ok
     end
   end
 
   # Best-effort recording of the dependency hold into the ticket's signals ledger (inert; a store
   # failure never changes the hold). Runs only after the hold is set.
-  defp record_hold_signal(repo_key, issue_id, state) do
-    TicketSignals.record(repo_key, issue_id, "blocked", %{
-      state: state,
+  defp record_hold_signal(issue, issue_id, repo_key) do
+    TicketSignals.record(Map.get(issue, :repo_key) || repo_key, issue_id, "decision requested", %{
+      hold: "needs_decision",
       reason: "dependency_source_requires_approval"
     })
   end
@@ -246,12 +278,17 @@ defmodule SymphonyElixir.DependencyGate do
       issue,
       %{
         repo_key: gate.repo_key,
-        state: Map.get(issue || %{}, :state),
+        state: issue_state(issue),
         reason: "dependency_source_requires_approval",
         metadata: DependencyAudit.approval_metadata(items)
       }
     )
   end
+
+  # The hold pauses the issue in place, so the event names the state it stays in (none without an
+  # issue).
+  defp issue_state(%{state: state}), do: state
+  defp issue_state(_issue), do: nil
 
   defp emit_audit_failure_event(%{issue: issue} = gate, error) do
     Notifications.emit_issue_event(
@@ -259,7 +296,7 @@ defmodule SymphonyElixir.DependencyGate do
       issue,
       %{
         repo_key: gate.repo_key,
-        state: Map.get(issue || %{}, :state),
+        state: issue_state(issue),
         reason: "dependency_audit_failed",
         metadata: %{audit_error: inspect(error)}
       }

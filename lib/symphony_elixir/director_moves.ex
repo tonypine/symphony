@@ -7,33 +7,25 @@ defmodule SymphonyElixir.DirectorMoves do
   (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
   move, writes a `director_move` audit record and answers with the states it moved between:
 
-  A review state is `Plan Review`, where a plan parent waits for its plan's review, or one of the
-  draining states (`SymphonyElixir.TransitionGuard.draining_states/0`), where a straggler waits for
-  a person's hand move (`SymphonyElixir.RetiredStates`).
-
-  - `:approve_plan`: a plan (label `plan` or `breakdown`) in a review state moves to the waiting
+  - `:approve_plan`: a plan (label `plan` or `breakdown`) in `Plan Review` moves to the waiting
     state (`Waiting on sub-tickets`). It is a person's move, so Symphony promotes the plan's
-    `Backlog` sub-tickets as it does today (`SymphonyElixir.BreakdownReview`);
-  - `:approve_pr`: a pull request in a review state moves to `Merging`;
-  - `:rework`: a ticket in a review state gets the reason as a comment, then moves to `Rework`,
-    which continues the existing pull request; the full reset is `:restart`;
+    `Backlog` sub-tickets (`SymphonyElixir.BreakdownReview`);
+  - `:rework`: a plan in `Plan Review` gets the reason as a comment, then moves to `Rework`, which
+    rejects the plan; the full reset is `:restart`;
   - `:restart`: the full reset, and only a person makes it (design doc D7). It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
     (`SymphonyElixir.Restart`);
-  - `:decisions`: a plan in a review state gets one comment with the picked options, in place, so
-    the comment starts Symphony's plan revision run (`SymphonyElixir.PlanComments`);
-  - `:sign_off`: a `Final verification:` ticket in a review state moves to `Done`;
+  - `:decisions`: a plan in `Plan Review` gets one comment with the picked options, in place, which
+    starts Symphony's plan revision run (`SymphonyElixir.PlanComments`);
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — has the hold
     cleared by hand and continues in place, with no state move. A dependency or fix-ticket hold
     clears on its own, so it is refused;
-  - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's
-    answer as a reply under the request comment, and the hold is cleared so the ticket continues in
-    its phase. The optional `:move` names a state the decision directs — `rework` or `done` — and
-    the move goes through `SymphonyElixir.TransitionGuard`. A ticket with no such hold that a
-    request parked in a draining state gets the reply too, then moves to `Todo` (or the directed
-    state). Any other ticket with no hold is refused.
+  - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's answer as a reply
+    under the request comment, and the hold is cleared so the ticket continues in its phase. The
+    optional `:move` names a state the decision directs — `rework` or `done` — and the move goes
+    through `SymphonyElixir.TransitionGuard`. A ticket with no such hold is refused.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
@@ -46,8 +38,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   `undo/2` takes back the last move on a ticket within 10 s of it, and only while
   the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
-  promoted its sub-tickets. A move out of a draining state is never taken back: no move may enter
-  one again. The last move per ticket is kept in this module's Agent, so a restart forgets it.
+  promoted its sub-tickets. The last move per ticket is kept in this module's Agent, so a restart
+  forgets it.
   """
 
   use Agent
@@ -59,11 +51,10 @@ defmodule SymphonyElixir.DirectorMoves do
     BreakdownReview,
     Config,
     Hold,
-    HumanReview,
     MergeConfirmation,
     Orchestrator,
+    PlanReview,
     Restart,
-    RunKind,
     SubIssueWait,
     TicketSignals,
     Tracker,
@@ -84,11 +75,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
   @type move ::
           :approve_plan
-          | :approve_pr
           | :rework
           | :restart
           | :decisions
-          | :sign_off
           | :backlog
           | :unblock
           | :decide
@@ -110,7 +99,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
-  @moves [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
+  @moves [:approve_plan, :rework, :restart, :decisions, :backlog, :unblock, :decide]
   @decide_targets %{"rework" => @rework_state, "done" => @done_state, "merging" => @merging_state, "todo" => @todo_state}
 
   @spec start_link(keyword()) :: Agent.on_start()
@@ -166,9 +155,7 @@ defmodule SymphonyElixir.DirectorMoves do
   it. A comment the move posted stays. Takes the options of `move/4`.
 
   `:restart` is never taken back: it closed the pull request and removed the workspace, so the
-  ticket stays in `In Progress`. Nor is a move out of a draining state
-  (`SymphonyElixir.TransitionGuard.draining_states/0`): the transition guard refuses every move
-  into one, so an `:approve_pr` stays in `Merging`.
+  ticket stays in `In Progress`.
   """
   @spec undo(String.t(), keyword()) :: result()
   def undo(identifier, opts \\ []) when is_binary(identifier) do
@@ -286,8 +273,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The state a move takes the ticket to (nil when it stays), or why the workflow doesn't allow it.
   defp target(:approve_plan, issue, settings) do
-    with :ok <- require_kind(issue, :plan, "approve_plan"),
-         :ok <- require_review(issue, settings) do
+    with :ok <- require_plan(issue, "approve_plan"),
+         :ok <- require_plan_review(issue, settings) do
       case SubIssueWait.enabled?(settings) && SubIssueWait.state(settings) do
         state when is_binary(state) -> {:ok, state}
         _off -> conflict("the waiting state is turned off, so a plan can't be approved from the app")
@@ -295,33 +282,21 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp target(:approve_pr, issue, settings) do
-    with :ok <- require_kind(issue, :pr, "approve_pr"),
-         :ok <- require_review(issue, settings),
-         do: {:ok, @merging_state}
-  end
-
   defp target(:rework, issue, settings) do
-    with :ok <- require_review(issue, settings), do: {:ok, @rework_state}
+    with :ok <- require_plan_review(issue, settings), do: {:ok, @rework_state}
   end
 
-  # The full reset (design doc D7).
   defp target(:restart, %Issue{state: state} = issue, settings) do
     if Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)),
       do: conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted"),
       else: {:ok, @in_progress_state}
   end
 
+  # The comment goes in place: a person's comment on a plan under review starts its revision run.
   defp target(:decisions, issue, settings) do
-    with :ok <- require_kind(issue, :plan, "decisions"),
-         :ok <- require_review(issue, settings),
+    with :ok <- require_plan(issue, "decisions"),
+         :ok <- require_plan_review(issue, settings),
          do: {:ok, nil}
-  end
-
-  defp target(:sign_off, issue, settings) do
-    with :ok <- require_kind(issue, :final_verification, "sign_off"),
-         :ok <- require_review(issue, settings),
-         do: {:ok, @done_state}
   end
 
   defp target(:backlog, %Issue{state: state} = issue, settings) do
@@ -332,41 +307,26 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp require_kind(issue, kind, move) do
-    case kind(issue) do
-      ^kind -> :ok
-      other -> conflict("#{issue.identifier} is #{kind_phrase(other)}; #{move} is for #{kind_phrase(kind)}")
-    end
+  defp require_plan(issue, move) do
+    if Issue.breakdown?(issue), do: :ok, else: conflict("#{issue.identifier} is not a plan; #{move} is for a plan")
   end
 
-  defp kind(issue) do
-    cond do
-      RunKind.final_verification_title?(issue) -> :final_verification
-      Issue.breakdown?(issue) -> :plan
-      true -> :pr
+  # The Director answers a plan a person is reviewing: one in `Plan Review`.
+  defp require_plan_review(%Issue{state: state} = issue, settings) do
+    case PlanReview.state(settings) do
+      plan_review when is_binary(plan_review) ->
+        if PlanReview.in_state?(state, settings),
+          do: :ok,
+          else: conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{plan_review}")
+
+      nil ->
+        conflict("the Plan Review state is turned off, so the Director can't answer #{issue.identifier} from the app")
     end
   end
-
-  defp kind_phrase(:plan), do: "a plan"
-  defp kind_phrase(:pr), do: "a pull request"
-  defp kind_phrase(:final_verification), do: "a final verification"
-
-  # The Director answers a ticket a person is reviewing: a plan parent in `Plan Review`, or a
-  # straggler in a draining state.
-  defp require_review(%Issue{state: state} = issue, settings) do
-    if Enum.any?(TransitionGuard.draining_states(), &same_state?(&1, state)) or HumanReview.plan_review_state?(state, settings) do
-      :ok
-    else
-      conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{Enum.join(answerable_states(settings), " or ")}")
-    end
-  end
-
-  defp answerable_states(settings), do: TransitionGuard.draining_states() ++ HumanReview.plan_review_states(settings)
 
   defp conflict(message), do: {:error, {:conflict, message}}
 
-  # The comment goes before the move, so the run the move starts reads it; the decisions comment
-  # goes after the move to In Review, so the plan revision trigger counts it.
+  # The comment goes before the move, so the run the move starts reads it.
   defp apply_move(:rework, issue, to_state, %{reason: reason}, opts),
     do: comment_then_move(:rework, issue, rework_comment(String.trim(reason)), to_state, opts)
 
@@ -385,7 +345,7 @@ defmodule SymphonyElixir.DirectorMoves do
       else: comment_then_move(:backlog, issue, nil, to_state, opts)
   end
 
-  defp apply_move(:decisions, issue, _to_state, %{picks: picks}, _opts) do
+  defp apply_move(:decisions, issue, nil, %{picks: picks}, _opts) do
     comment = picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decisions_comment()
 
     with :ok <- post_comment(issue, comment), do: {:ok, comment}
@@ -442,8 +402,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # an explicit `:move` (the Inbox's Send to Rework) directs its own move instead.
   defp decide(%Issue{} = issue, input, opts) do
     case carried_move(issue, input.picks, opts) do
-      {:ok, carried} -> answer(issue, input, decide_target(input[:move], carried), :held, opts)
-      :parked -> answer(issue, input, decide_target(input[:move], @todo_state), :parked, opts)
+      {:ok, carried} -> answer(issue, input, decide_target(input[:move], carried), opts)
       :error -> conflict("#{issue.identifier} is not waiting on a decision")
     end
   end
@@ -457,27 +416,24 @@ defmodule SymphonyElixir.DirectorMoves do
   # The target is resolved before anything is written: a decision directing a move into a state the
   # repo has not configured is refused while the request is still open and the hold still set,
   # rather than recorded, the hold cleared, and the move left to fail with the ticket in place.
-  defp answer(issue, input, to_state, held, opts) do
+  defp answer(issue, input, to_state, opts) do
     if is_binary(to_state) and String.trim(to_state) == "" do
       {:error, {:invalid, "#{issue.identifier}'s decision moves it to a state not configured for repo #{issue.repo_key}; the hold stays"}}
     else
       comment = input.picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decide_comment()
 
       case reply_to_request(issue, input.request_comment_id, comment) do
-        :ok when held == :held -> clear_decision_hold(issue, to_state, comment, opts)
-        :ok -> decision_finish(issue, to_state, comment, opts)
+        :ok -> clear_decision_hold(issue, to_state, comment, opts)
         {:error, reason} -> {:error, {:linear, reason}}
       end
     end
   end
 
-  # The move the answers pick from the ticket's open Needs Decision hold, if any. A ticket with no hold has a
-  # request to answer only when the request parked it in a draining state, before the hold
-  # replaced the move: `:parked`, and answering it moves the ticket to `Todo`, as the request's
-  # review brief says, so the next run carries it out.
-  defp carried_move(%Issue{repo_key: repo_key, id: issue_id} = issue, picks, opts) do
+  # The move the answers pick from the ticket's open Needs Decision hold; a ticket with no hold has
+  # no decision to answer.
+  defp carried_move(%Issue{repo_key: repo_key, id: issue_id}, picks, opts) do
     case Hold.get(repo_key, issue_id, :needs_decision, store_opts(opts)) do
-      nil -> if Enum.any?(TransitionGuard.draining_states(), &same_state?(&1, issue.state)), do: :parked, else: :error
+      nil -> :error
       hold -> {:ok, picked_move(hold, picks)}
     end
   end
@@ -664,10 +620,6 @@ defmodule SymphonyElixir.DirectorMoves do
 
           not same_state?(issue.state, last.to_state) ->
             conflict("#{issue.identifier} moved on to #{issue.state} since; move it in Linear instead")
-
-          # No move may enter a retired or draining state again (`TransitionGuard.retired_state?/1`).
-          TransitionGuard.retired_state?(last.from_state) ->
-            conflict("#{issue.identifier} came from #{last.from_state}, a retired state, so it can't go back there")
 
           # An approved plan whose sub-tickets Symphony promoted would come back to review approved.
           BreakdownReview.backlog_sub_issue_ids(issue) != last.backlog ->

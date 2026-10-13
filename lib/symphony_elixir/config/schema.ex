@@ -2083,6 +2083,7 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @fields [
       :enabled,
+      :state,
       :kind,
       :command,
       :model,
@@ -2099,6 +2100,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
+      field(:state, :string, default: "Auto Review")
       field(:kind, :string)
       field(:command, :string)
       field(:model, :string)
@@ -2121,6 +2123,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast(attrs, @fields, empty_values: [])
       |> cast_embed(:android, with: &Android.changeset/2)
       |> cast_embed(:acceptance_gate, with: &DeprecatedGateSettings.changeset/2)
+      |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
@@ -2184,7 +2187,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: true)
-      # Deprecated: the retired label that marked an open request (`HumanReview.legacy_request_labels/1`).
+      # Deprecated: the retired label that marked an open request (`PersonWait.legacy_request_labels/1`).
       field(:label, :string)
       field(:interval_ms, :integer, default: 300_000)
       field(:min_update_interval_ms, :integer, default: 900_000)
@@ -2758,8 +2761,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   # Plan parents wait for a person in Plan Review, so dispatching from it would take the handoff
   # away from them.
-  defp validate_plan_review_state_inactive(%__MODULE__{tracker: %Tracker{plan_review_state: state} = tracker})
-       when is_binary(state) do
+  defp validate_plan_review_state_inactive(%__MODULE__{tracker: %Tracker{plan_review_state: state} = tracker}) when is_binary(state) do
     if Enum.any?(tracker.active_states, &(String.downcase(String.trim(&1)) == String.downcase(state))),
       do: {:error, "tracker.plan_review_state must not be an active state"},
       else: :ok

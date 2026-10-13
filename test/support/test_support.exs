@@ -740,6 +740,7 @@ defmodule SymphonyElixir.TestSupport do
       [
         "---",
         issues_yaml(%{
+          plan_review: Keyword.fetch(config, :tracker_plan_review_state),
           kind: tracker_kind,
           endpoint: tracker_endpoint,
           memory_issues_file: tracker_memory_issues_file,
@@ -886,6 +887,9 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
+  defp plan_review_yaml({:ok, state}), do: "    plan_review: #{yaml_value(state)}"
+  defp plan_review_yaml(:error), do: nil
+
   defp issues_yaml(config) do
     [
       "issues:",
@@ -902,7 +906,8 @@ defmodule SymphonyElixir.TestSupport do
       config.memory_issues_file && "  memory:\n    issues_file: #{yaml_value(config.memory_issues_file)}",
       "  states:",
       "    active: #{yaml_value(config.active_states)}",
-      "    terminal: #{yaml_value(config.terminal_states)}"
+      "    terminal: #{yaml_value(config.terminal_states)}",
+      plan_review_yaml(config.plan_review)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")

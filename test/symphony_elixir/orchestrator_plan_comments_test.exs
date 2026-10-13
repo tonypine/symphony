@@ -53,15 +53,15 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
              RunStore.get_ticket_state(repo_key, "parent").signals
   end
 
-  test "a designed repo's comment sends the parent through Rework and records the move as Symphony's own" do
+  test "a comment sends the parent through Rework and records the move as Symphony's own" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       tracker_active_states: ["Todo", "In Progress", "Rework"],
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), default: true, team: "Test"]]
+      repos: [[key: "default", workflow: Workflow.workflow_file_path(), default: true, team: "Test"]]
     )
 
     parent =
-      %{parent("Plan Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:00Z]]) | repo_key: "designed"}
+      %{parent("Plan Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:00Z]]) | repo_key: "default"}
 
     put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "Plan Review")], [
       comment("c1", "Split MOT-31 in two", ~U[2026-10-04 12:10:00Z])
@@ -95,7 +95,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
                  }
                ]
              },
-             Config.settings_for_repo!("designed"),
+             Config.settings_for_repo!("default"),
              moved_at
            ) == []
 
@@ -109,8 +109,8 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
   end
 
   test "the Director's decisions from the app, sent on a plan in Plan Review, start the plan revision run" do
-    # DirectorMoves.move(:decisions, ...) posted the picks on the plan in place at 12:10:01; the run
-    # that left the plan for review knew its own comments.
+    # DirectorMoves.move(:decisions, ...) posted the picks at 12:10:01, in place; the run that left
+    # the plan for review knew its own comments.
     parent = parent("Plan Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:01Z]])
     body = DirectorMoves.decisions_comment([%{question: "Where are gift cards bought?", answer: "B. In the app only"}])
 
@@ -131,10 +131,10 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     assert PlanComments.human?(comment("rework", DirectorMoves.rework_comment("Split MOT-31"), ~U[2026-10-04 12:11:00Z]))
   end
 
-  test "a person's comment on an unapproved plan in Human Review starts no run and leaves the parent there" do
+  test "a person's comment on an unapproved plan left in the retired Human Review state starts no run" do
     parent = parent("Human Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:00Z]])
 
-    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "Plan Review", "Human Review")], [
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "Human Review")], [
       comment("c1", "Split MOT-31 in two", ~U[2026-10-04 12:10:00Z])
     ])
 
@@ -189,17 +189,17 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     refute_received {:memory_tracker_state_update, _issue_id, _state}
   end
 
-  test "a person's comment made while a revision run worked is picked up once the parent is back in In Review" do
+  test "a person's comment made while a revision run worked is picked up once the parent is back in Plan Review" do
     parent = parent("Plan Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:40:00Z]])
 
     # The revision run started at 12:20, read c1, answered it at 12:35 and moved the parent back to
-    # In Review at 12:38. Tony commented at 12:30, while the parent was In Progress.
+    # Plan Review at 12:38. Tony commented at 12:30, while the parent was in Rework.
     put_feedback(
       "parent",
       [
         change(~U[2026-10-04 12:00:00Z], "In Progress", "Plan Review"),
-        change(~U[2026-10-04 12:15:00Z], "Plan Review", "In Progress"),
-        change(~U[2026-10-04 12:38:00Z], "In Progress", "Plan Review")
+        change(~U[2026-10-04 12:15:00Z], "Plan Review", "Rework"),
+        change(~U[2026-10-04 12:38:00Z], "Rework", "Plan Review")
       ],
       [
         comment("c1", "Split MOT-32 in two", ~U[2026-10-04 12:10:00Z]),
@@ -220,7 +220,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:40:00Z]}
 
     # Once the next run answers c2 under its thread, the run's own comments start nothing.
-    put_feedback("parent", [change(~U[2026-10-04 12:58:00Z], "In Progress", "Plan Review")], [
+    put_feedback("parent", [change(~U[2026-10-04 12:58:00Z], "Rework", "Plan Review")], [
       comment("c2", "Also rename MOT-31", ~U[2026-10-04 12:30:00Z]),
       comment("run-2-reply", "Done: MOT-31 is renamed.", ~U[2026-10-04 12:55:00Z], parent_id: "c2")
     ])

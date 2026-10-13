@@ -7,8 +7,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   @project %{"id" => "project-1", "name" => "Cycle"}
   @scope %{"team" => %{"key" => %{"eq" => "MOT"}}}
 
-  # Most tests read issues a config that predates the Needs Decision hold labelled: it still sets
-  # the deprecated `human_actions.label`.
+  # Most tests read issues a config labelled that still sets the deprecated `human_actions.label`.
   defp settings, do: put_in(%Schema{}.human_actions.label, "human-action")
 
   defp collect(nodes, opts \\ []) do
@@ -56,7 +55,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     body =
       Request.render_hold(
         %{title: title, question: "Add the signing secret?", why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, options: options},
-        "In Progress"
+        "Code Review"
       )
 
     %{"id" => id, "body" => body, "createdAt" => created_at}
@@ -68,15 +67,15 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   end
 
   test "collect_all/2 also lists the issues waiting on a person, from the same read" do
-    nodes = [node("MOT-1", %{"state" => %{"name" => "In Review"}}), node("MOT-2", %{})]
+    nodes = [node("MOT-1", %{"state" => %{"name" => "Plan Review"}, "labels" => labels(["plan"])}), node("MOT-2", %{})]
     client = fn _query, _variables, _opts -> {:ok, page(nodes, %{"hasNextPage" => false})} end
     opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
 
-    assert {:ok, %{}, [%{identifier: "MOT-1", kind: :pr}]} = Collector.collect_all([:repo], opts)
+    assert {:ok, %{}, [%{identifier: "MOT-1", kind: :plan}]} = Collector.collect_all([:repo], opts)
     assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
-  test "queries the route's scope for labelled, draining, final verification or held issues that are not terminal" do
+  test "queries the route's scope for labelled, final verification or held issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -89,8 +88,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                %{
                  "or" => [
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
-                   %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
-                   %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
                    %{"title" => %{"startsWith" => "Final verification:"}},
                    # A decision request leaves the ticket in its phase.
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
@@ -101,16 +98,16 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            }
   end
 
-  test "with the default settings, queries no label, and lists a request on an unlabelled straggler in Human Review" do
+  test "with the default settings, queries no label, and lists a request on an unlabelled issue in its phase" do
     issue =
       node("MOT-25", %{
-        "state" => %{"name" => "Human Review"},
+        "state" => %{"name" => "Code Review"},
         # A request a supervisor wrote by hand, in the older format, still lists.
         "comments" =>
           comments([
             %{"id" => "comment-1", "body" => "## Action needed: Add the release signing secrets\n\n**Steps:**\n1. Add them.", "createdAt" => "2026-10-03T10:00:00.000Z"}
           ]),
-        "history" => history([%{"createdAt" => "2026-10-03T10:00:05.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Human Review"}}])
+        "history" => history([%{"createdAt" => "2026-10-03T09:00:05.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Code Review"}}])
       })
 
     # Without the deprecated setting, the label marks nothing.
@@ -131,8 +128,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
 
     assert wanted == [
-             %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
-             %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
              %{"title" => %{"startsWith" => "Final verification:"}},
              %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
            ]
@@ -183,7 +178,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   test "a decision names the reply (or the Inbox) as enough, with no state move" do
     issue =
       node("MOT-90", %{
-        "state" => %{"name" => "Human Review"},
+        "state" => %{"name" => "Code Review"},
         "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")])
       })
 
@@ -198,7 +193,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   test "a hand-written steps request names the reply, with no state move" do
     issue =
       node("MOT-92", %{
-        "state" => %{"name" => "Human Review"},
+        "state" => %{"name" => "Code Review"},
         "comments" =>
           comments([
             %{"id" => "comment-1", "body" => "## Action needed: Add the release signing secrets\n\n**Steps:**\n1. Add them.", "createdAt" => "2026-10-03T10:00:00.000Z"}
@@ -240,7 +235,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            ] = actions(collected)
   end
 
-  test "drops a withdrawn request, and lists a labelled issue whose requests were all withdrawn as nothing" do
+  test "drops a withdrawn or answered request, and lists a labelled issue whose requests were all withdrawn as nothing" do
     withdrawal = fn id, parent_id ->
       %{"id" => id, "body" => Request.render_withdrawal("Not needed."), "createdAt" => "2026-10-04T19:00:00.000Z", "parent" => %{"id" => parent_id}}
     end
@@ -265,6 +260,11 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     assert {:ok, collected} = collect([partly, all_withdrawn])
     assert [%Action{key: "request:comment-2", title: "Add the release signing secrets"}] = actions(collected)
+
+    # A person's reply under a request answers it, so it closes too.
+    answer = %{"id" => "reply-2", "body" => "Add it.", "createdAt" => "2026-10-04T19:01:00.000Z", "parent" => %{"id" => "comment-2"}}
+    answered = %{partly | "comments" => comments(partly["comments"]["nodes"] ++ [answer])}
+    assert {:ok, %{}} = collect([answered])
   end
 
   test "skips issues outside a project and merges what several routes return" do
@@ -337,7 +337,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     defp long_lived_node do
       node("MOT-9", %{
-        "state" => %{"name" => "In Review"},
+        "state" => %{"name" => "Plan Review"},
+        "labels" => labels(["plan"]),
         "comments" => %{"nodes" => filler_comments(30), "pageInfo" => %{"hasPreviousPage" => true, "startCursor" => "comments-1"}},
         "history" => %{"nodes" => filler_history(50), "pageInfo" => %{"hasNextPage" => true, "endCursor" => "history-1"}}
       })
@@ -369,7 +370,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     test "reads the rest of them, so its waiting_since and headline survive" do
       brief = %{"id" => "brief", "body" => "## Review brief\n\n**What to review:** The login fix PR\n", "createdAt" => "2026-09-20T00:00:00Z"}
-      moved = %{"createdAt" => "2026-09-21T08:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "In Review"}}
+      moved = %{"createdAt" => "2026-09-21T08:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Plan Review"}}
 
       more = fn
         :comments, %{cursor: "comments-1"} -> connection("comments", [brief | filler_comments(5)], %{"hasPreviousPage" => false})

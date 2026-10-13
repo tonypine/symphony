@@ -63,48 +63,47 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "approve_plan" do
-    test "moves a plan in In Review or Human Review to the waiting state and writes an audit record", %{opts: opts} do
-      for state <- ["In Review", "Human Review"] do
-        put_issues([plan(state)])
+    test "moves a plan in Plan Review to the waiting state and writes an audit record", %{opts: opts} do
+      put_issues([plan("Plan Review")])
 
-        assert {:ok, result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+      assert {:ok, result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
 
-        assert result == %{
-                 move: "approve_plan",
-                 issue_id: "plan",
-                 issue_identifier: "MOT-30",
-                 from_state: state,
-                 to_state: @waiting,
-                 moved: true,
-                 commented: false,
-                 undo_window_ms: 10_000
-               }
+      assert result == %{
+               move: "approve_plan",
+               issue_id: "plan",
+               issue_identifier: "MOT-30",
+               from_state: "Plan Review",
+               to_state: @waiting,
+               moved: true,
+               commented: false,
+               undo_window_ms: 10_000
+             }
 
-        assert_received {:memory_tracker_state_update, "plan", @waiting}
-        refute_received {:memory_tracker_comment, _id, _body}
-      end
+      assert_received {:memory_tracker_state_update, "plan", @waiting}
+      refute_received {:memory_tracker_comment, _id, _body}
 
-      assert [%{"move" => "approve_plan", "issue_identifier" => "MOT-30", "from_state" => "In Review", "to_state" => @waiting}, %{"from_state" => "Human Review"}] =
+      assert [%{"move" => "approve_plan", "issue_identifier" => "MOT-30", "from_state" => "Plan Review", "to_state" => @waiting}] =
                audit_records()
     end
 
     test "records the move's signal in the ticket's signals ledger", %{opts: opts} do
       RunStore.delete_ticket_state("repo-director", "plan")
-      put_issues([%{plan("In Review") | repo_key: "repo-director"}])
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
 
       assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
 
-      assert [%{name: "decision returned", details: %{move: "approve_plan", from: "In Review", to: @waiting}}] =
+      assert [%{name: "decision returned", details: %{move: "approve_plan", from: "Plan Review", to: @waiting}}] =
                RunStore.get_ticket_state("repo-director", "plan").signals
     end
 
-    test "refuses a plan outside the review states, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
-      put_issues([plan("In Progress"), pr("In Review")])
+    test "refuses a plan outside Plan Review, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
+      put_issues([plan("In Progress"), pr("Plan Review"), %{plan(nil) | id: "stateless", identifier: "MOT-31"}])
       assert {:error, {:conflict, message}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
-      assert message == "MOT-30 is In Progress; the Director answers it only from In Review or Human Review or Plan Review"
-      assert {:error, {:conflict, "MOT-40 is a pull request; approve_plan is for a plan"}} = DirectorMoves.move(:approve_plan, "MOT-40", %{}, opts)
+      assert message == "MOT-30 is In Progress; the Director answers it only from Plan Review"
+      assert {:error, {:conflict, "MOT-31 is in no state; the Director answers it only from Plan Review"}} = DirectorMoves.move(:approve_plan, "MOT-31", %{}, opts)
+      assert {:error, {:conflict, "MOT-40 is not a plan; approve_plan is for a plan"}} = DirectorMoves.move(:approve_plan, "MOT-40", %{}, opts)
 
-      put_issues([plan("In Review")])
+      put_issues([plan("Plan Review")])
       settings = Config.settings!()
       disable = fn -> :disabled = SubIssueWait.check_tracker_state(settings, [], tracker: MissingStateTracker) end
       capture_log(disable)
@@ -114,57 +113,26 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert audit_records() == []
     end
 
-    test "answers a designed repo's plan in Plan Review, and names Plan Review when it is elsewhere", %{opts: opts} do
-      designed_workflow!()
-
+    test "refuses every plan while the Plan Review state is turned off", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_plan_review_state: nil)
       put_issues([plan("Plan Review")])
-      assert {:ok, %{from_state: "Plan Review", to_state: @waiting}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
-      assert_received {:memory_tracker_state_update, "plan", @waiting}
 
-      put_issues([plan("In Progress")])
-      assert {:error, {:conflict, message}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
-      assert message == "MOT-30 is In Progress; the Director answers it only from In Review or Human Review or Plan Review"
-    end
-  end
-
-  describe "approve_pr" do
-    test "moves a pull request in review to Merging", %{opts: opts} do
-      put_issues([pr("Human Review")])
-
-      assert {:ok, %{to_state: "Merging", from_state: "Human Review"}} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      assert_received {:memory_tracker_state_update, "pr", "Merging"}
-    end
-
-    test "refuses a plan, a final verification and a pull request already merging", %{opts: opts} do
-      put_issues([plan("In Review"), final_verification("In Review"), pr("Merging")])
-
-      assert {:error, {:conflict, "MOT-30 is a plan; approve_pr is for a pull request"}} = DirectorMoves.move(:approve_pr, "MOT-30", %{}, opts)
-      assert {:error, {:conflict, "MOT-50 is a final verification; approve_pr is for a pull request"}} = DirectorMoves.move(:approve_pr, "MOT-50", %{}, opts)
-      assert {:error, {:conflict, "MOT-40 is Merging;" <> _}} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      refute_received {:memory_tracker_state_update, _id, _state}
+      assert {:error, {:conflict, "the Plan Review state is turned off, so the Director can't answer MOT-30 from the app"}} =
+               DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
     end
   end
 
   describe "rework" do
-    test "posts the reason, then moves the ticket to Rework", %{opts: opts} do
-      put_issues([pr("In Review")])
-
-      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "  The totals are wrong  "}, opts)
-      assert_received {:memory_tracker_comment, "pr", "Sent to Rework by the Director:\n\nThe totals are wrong"}
-      assert_received {:memory_tracker_state_update, "pr", "Rework"}
-      assert [%{"move" => "rework", "comment" => "Sent to Rework by the Director:\n\nThe totals are wrong"}] = audit_records()
-    end
-
-    test "rejects a designed repo's plan from Plan Review", %{opts: opts} do
-      designed_workflow!()
+    test "posts the reason, then rejects a plan from Plan Review", %{opts: opts} do
       put_issues([plan("Plan Review")])
 
       assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "  Split MOT-31 differently  "}, opts)
       assert_received {:memory_tracker_comment, "plan", "Sent to Rework by the Director:\n\nSplit MOT-31 differently"}
       assert_received {:memory_tracker_state_update, "plan", "Rework"}
+      assert [%{"move" => "rework", "comment" => "Sent to Rework by the Director:\n\nSplit MOT-31 differently"}] = audit_records()
     end
 
-    test "needs a reason and a ticket in review", %{opts: opts} do
+    test "needs a reason and a plan in Plan Review", %{opts: opts} do
       put_issues([pr("In Progress")])
 
       assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "  "}, opts)
@@ -181,21 +149,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
       Keyword.merge(opts, github: FakeGitHub, workspace: FakeWorkspace)
     end
 
-    defp designed_workflow! do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
-        repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test"]]
-      )
-
-      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-    end
-
     defp restart_issue(fields \\ []) do
       struct(%{pr("Rework") | pr_urls: [@restart_pr_url]}, fields)
     end
 
     test "closes the pull request, removes the workspace and moves the ticket to In Progress", %{opts: opts} do
-      designed_workflow!()
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
 
@@ -226,7 +184,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "records the restart in the ticket's signals ledger", %{opts: opts} do
-      designed_workflow!()
       github_activity(state: "OPEN")
       RunStore.delete_ticket_state("repo-restart", "pr")
       put_issues([%{restart_issue() | repo_key: "repo-restart"}])
@@ -238,7 +195,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a ticket with no pull request restarts just the same", %{opts: opts} do
-      designed_workflow!()
       put_issues([%{pr("In Progress") | pr_urls: []}])
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
@@ -247,7 +203,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a restart can't be undone: it closed the pull request and removed the workspace", %{opts: opts} do
-      designed_workflow!()
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
 
@@ -264,7 +219,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a terminal ticket is refused", %{opts: opts} do
-      designed_workflow!()
       put_issues([%{restart_issue() | state: "Done"}])
 
       assert {:error, {:conflict, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
@@ -273,7 +227,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "needs a reason", %{opts: opts} do
-      designed_workflow!()
       put_issues([restart_issue()])
 
       assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "  "}, restart_opts(opts))
@@ -282,7 +235,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a reset GitHub refuses stops the move, so nothing is half-done", %{opts: opts} do
-      designed_workflow!()
       github_activity(state: "OPEN")
       Application.put_env(:symphony_elixir, :director_moves_test_close, {:error, :forbidden})
       put_issues([restart_issue()])
@@ -297,7 +249,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a workspace that cannot be removed stops the move", %{opts: opts} do
-      designed_workflow!()
       github_activity(state: "OPEN")
       Application.put_env(:symphony_elixir, :director_moves_test_workspace, {:error, :busy})
       put_issues([restart_issue()])
@@ -309,7 +260,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a move Linear refuses after the reset is a partial move", %{opts: opts} do
-      designed_workflow!()
       github_activity(state: "OPEN")
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
       put_issues([restart_issue()])
@@ -328,11 +278,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   describe "decisions" do
-    test "posts one comment with the picks on a plan in In Review, and leaves it there", %{opts: opts} do
-      put_issues([plan("In Review")])
+    test "posts one comment with the picks on a plan in Plan Review, and leaves it there", %{opts: opts} do
+      put_issues([plan("Plan Review")])
       picks = [%{question: " Where are gift cards bought? ", answer: "B. In the app only"}, %{question: "Who pays?", answer: "A. The buyer"}]
 
-      assert {:ok, %{moved: false, commented: true, to_state: "In Review", undo_window_ms: nil}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+      assert {:ok, %{moved: false, commented: true, to_state: "Plan Review", undo_window_ms: nil}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
 
       assert_received {:memory_tracker_comment, "plan", body}
 
@@ -344,51 +294,52 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "there is no move on MOT-30 to undo"}} = DirectorMoves.undo("MOT-30", opts)
     end
 
-    test "needs picks, on a plan in review", %{opts: opts} do
-      put_issues([plan("In Review"), pr("In Review")])
+    test "needs picks, on a plan in Plan Review", %{opts: opts} do
+      put_issues([plan("Plan Review"), pr("Plan Review")])
 
       for input <- [%{}, %{picks: []}, %{picks: nil}, %{picks: [%{question: "Q", answer: " "}]}, %{picks: ["B"]}] do
         assert {:error, {:invalid, "picks must list each decision's question and answer"}} = DirectorMoves.move(:decisions, "MOT-30", input, opts)
       end
 
-      assert {:error, {:conflict, "MOT-40 is a pull request; decisions is for a plan"}} =
+      assert {:error, {:conflict, "MOT-40 is not a plan; decisions is for a plan"}} =
                DirectorMoves.move(:decisions, "MOT-40", %{picks: [%{question: "Q", answer: "B"}]}, opts)
     end
 
-    test "a refused comment is Linear's error alone: nothing moves, from any review state", %{opts: opts} do
-      put_issues([plan("Human Review")])
+    test "a comment Linear refuses is Linear's error alone", %{opts: opts} do
+      put_issues([plan("Plan Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
       assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
+      refute_received {:memory_tracker_state_update, _id, _state}
       assert audit_records() == []
     end
   end
 
   describe "a move Linear takes only half of" do
     test "a rework comment whose move Linear refuses is recorded, and not posted twice when sent again", %{opts: opts} do
-      put_issues([pr("In Review")])
+      put_issues([plan("Plan Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
 
-      assert {:error, {:partial, message}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+      assert {:error, {:partial, message}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
 
       assert message ==
-               "posted the comment on MOT-40, but Linear refused the move to Rework (:state_failed); send it again to make the move without posting the comment twice"
+               "posted the comment on MOT-30, but Linear refused the move to Rework (:state_failed); send it again to make the move without posting the comment twice"
 
-      assert_received {:memory_tracker_comment, "pr", "Sent to Rework by the Director:\n\nNo"}
+      assert_received {:memory_tracker_comment, "plan", "Sent to Rework by the Director:\n\nNo"}
 
-      assert [%{"move" => "rework", "from_state" => "In Review", "to_state" => "In Review", "comment" => "Sent to Rework by the Director:\n\nNo", "failed" => "move"}] =
+      assert [%{"move" => "rework", "from_state" => "Plan Review", "to_state" => "Plan Review", "comment" => "Sent to Rework by the Director:\n\nNo", "failed" => "move"}] =
                audit_records()
 
-      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
       refute_received {:memory_tracker_comment, _id, _body}
-      assert_received {:memory_tracker_state_update, "pr", "Rework"}
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
 
       # Once the move went through, the same reason later is a new comment.
-      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
-      assert_received {:memory_tracker_comment, "pr", _body}
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
+      assert_received {:memory_tracker_comment, "plan", _body}
     end
 
     test "a different reason, or the ticket in another state, posts the comment again", %{opts: opts} do
-      put_issues([pr("In Review")])
+      put_issues([pr("Code Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
       assert {:error, {:partial, _message}} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
       assert_received {:memory_tracker_comment, "pr", _body}
@@ -402,16 +353,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([pr("In Progress")])
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
       assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nLater"}
-    end
-  end
-
-  describe "sign_off" do
-    test "moves a final verification in review to Done, and refuses anything else", %{opts: opts} do
-      put_issues([final_verification("Human Review"), pr("In Review")])
-
-      assert {:ok, %{to_state: "Done"}} = DirectorMoves.move(:sign_off, "MOT-50", %{}, opts)
-      assert_received {:memory_tracker_state_update, "verify", "Done"}
-      assert {:error, {:conflict, "MOT-40 is a pull request; sign_off is for a final verification"}} = DirectorMoves.move(:sign_off, "MOT-40", %{}, opts)
     end
   end
 
@@ -670,43 +611,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
 
-      # A legacy ticket never carries the hold, so a decision never lands on one.
-      put_issues([pr("In Progress")])
-
-      assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
-               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
-
       refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
-    end
-
-    test "answers a request that parked the ticket in Human Review with no hold, then moves it to Todo", %{opts: opts} do
-      # A legacy repo's request, and one made before the repo moved to the designed machine.
-      for issue <- [pr("Human Review"), %{pr("Human Review") | repo_key: "repo-director"}] do
-        put_issues([issue])
-
-        assert {:ok, %{moved: true, from_state: "Human Review", to_state: "Todo"}} =
-                 DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
-
-        assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
-        assert_received {:memory_tracker_state_update, "pr", "Todo"}
-      end
-
-      put_issues([pr("Human Review")])
-
-      assert {:ok, %{to_state: "Rework"}} =
-               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
-
-      assert_received {:memory_tracker_state_update, "pr", "Rework"}
-    end
-
-    test "a reply Linear refuses on a parked request moves nothing", %{opts: opts} do
-      put_issues([pr("Human Review")])
-      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :reply_failed})
-
-      assert {:error, {:linear, :reply_failed}} =
-               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
-
-      refute_received {:memory_tracker_state_update, _issue_id, _state}
     end
 
     test "a reply Linear refuses leaves the hold in place", %{opts: opts} do
@@ -800,19 +705,19 @@ defmodule SymphonyElixir.DirectorMovesTest do
   describe "errors" do
     test "an unknown ticket is not found", %{opts: opts} do
       put_issues([])
-      assert {:error, :issue_not_found} = DirectorMoves.move(:approve_pr, "MOT-404", %{}, opts)
+      assert {:error, :issue_not_found} = DirectorMoves.move(:backlog, "MOT-404", %{}, opts)
       assert {:error, :issue_not_found} = DirectorMoves.undo("MOT-404", opts)
     end
 
     test "Linear's errors come back, and a failed comment leaves the state alone", %{opts: opts} do
-      put_issues([pr("In Review")])
+      put_issues([plan("Plan Review")])
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :comment_failed})
 
-      assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+      assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
       refute_received {:memory_tracker_state_update, _id, _state}
 
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
-      assert {:error, {:linear, :state_failed}} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
+      assert {:error, {:linear, :state_failed}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
       assert audit_records() == []
     end
 
@@ -829,7 +734,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
             {{:error, :timeout}, {:error, {:linear, :timeout}}}
           ] do
         Application.put_env(:symphony_elixir, :director_moves_test_fetch, response)
-        assert DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts) == expected
+        assert DirectorMoves.move(:backlog, "MOT-40", %{}, opts) == expected
       end
     after
       Application.delete_env(:symphony_elixir, :linear_client_module)
@@ -839,46 +744,36 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   describe "undo" do
     test "moves the ticket back within 10 s, once", %{opts: opts, clock: clock} do
-      put_issues([plan("Plan Review")])
-      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
-      assert_received {:memory_tracker_state_update, "plan", "Rework"}
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Backlog"}
 
-      put_issues([plan("Rework")])
+      put_issues([pr("Backlog")])
       :counters.put(clock, 1, 10_000)
 
-      assert {:ok, %{move: "undo", undone: "rework", from_state: "Rework", to_state: "Plan Review"}} = DirectorMoves.undo("MOT-30", opts)
-      assert_received {:memory_tracker_state_update, "plan", "Plan Review"}
-      assert [%{"move" => "rework"}, %{"move" => "undo", "from_state" => "Rework", "to_state" => "Plan Review"}] = audit_records()
+      assert {:ok, %{move: "undo", undone: "backlog", from_state: "Backlog", to_state: "In Progress"}} = DirectorMoves.undo("MOT-40", opts)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      assert [%{"move" => "backlog"}, %{"move" => "undo", "from_state" => "Backlog", "to_state" => "In Progress"}] = audit_records()
 
-      assert {:error, {:conflict, "there is no move on MOT-30 to undo"}} = DirectorMoves.undo("MOT-30", opts)
+      assert {:error, {:conflict, "there is no move on MOT-40 to undo"}} = DirectorMoves.undo("MOT-40", opts)
     end
 
     test "refuses after 10 s", %{opts: opts, clock: clock} do
-      put_issues([plan("Plan Review")])
-      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
-      put_issues([plan("Rework")])
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      put_issues([pr("Backlog")])
       :counters.put(clock, 1, 10_001)
 
-      assert {:error, {:conflict, "the move on MOT-30 is more than 10 s old; move it in Linear instead"}} = DirectorMoves.undo("MOT-30", opts)
-      refute_received {:memory_tracker_state_update, "plan", "Plan Review"}
+      assert {:error, {:conflict, "the move on MOT-40 is more than 10 s old; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+      refute_received {:memory_tracker_state_update, "pr", "In Progress"}
     end
 
     test "refuses once the ticket moved on", %{opts: opts} do
-      put_issues([plan("Plan Review")])
-      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
-      put_issues([plan("Done")])
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      put_issues([pr("Todo")])
 
-      assert {:error, {:conflict, "MOT-30 moved on to Done since; move it in Linear instead"}} = DirectorMoves.undo("MOT-30", opts)
-    end
-
-    test "refuses a move out of a draining state: no move may enter one again", %{opts: opts} do
-      put_issues([pr("In Review")])
-      assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts)
-      put_issues([pr("Merging")])
-      mailbox()
-
-      assert {:error, {:conflict, "MOT-40 came from In Review, a retired state, so it can't go back there"}} = DirectorMoves.undo("MOT-40", opts)
-      assert [] = mailbox()
+      assert {:error, {:conflict, "MOT-40 moved on to Todo since; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
     end
 
     test "refuses an approved plan once Symphony promoted its sub-tickets", %{opts: opts} do
@@ -896,13 +791,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "fails when Linear refuses the move back, and keeps the move to undo", %{opts: opts} do
-      put_issues([plan("Plan Review")])
-      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "Split it"}, opts)
-      put_issues([plan("Rework")])
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      put_issues([pr("Backlog")])
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :boom}])
 
-      assert {:error, {:linear, :boom}} = DirectorMoves.undo("MOT-30", opts)
-      assert {:ok, _result} = DirectorMoves.undo("MOT-30", opts)
+      assert {:error, {:linear, :boom}} = DirectorMoves.undo("MOT-40", opts)
+      assert {:ok, _result} = DirectorMoves.undo("MOT-40", opts)
     end
   end
 
@@ -924,22 +819,22 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     put_issues([])
-    assert {:error, :issue_not_found} = DirectorMoves.move(:approve_pr, "MOT-404", %{})
+    assert {:error, :issue_not_found} = DirectorMoves.move(:backlog, "MOT-404", %{})
     assert {:error, :issue_not_found} = DirectorMoves.undo("MOT-404")
   end
 
   test "lists its moves and its undo window" do
-    assert DirectorMoves.moves() == [:approve_plan, :approve_pr, :rework, :restart, :decisions, :sign_off, :backlog, :unblock, :decide]
+    assert DirectorMoves.moves() == [:approve_plan, :rework, :restart, :decisions, :backlog, :unblock, :decide]
     assert DirectorMoves.undo_window_ms() == 10_000
   end
 
   test "an audit log that can't be written still makes the move", %{opts: opts} do
-    put_issues([pr("In Review")])
+    put_issues([pr("In Progress")])
     blocker = Path.join(System.tmp_dir!(), "director-moves-blocker-#{System.unique_integer([:positive])}")
     File.write!(blocker, "")
     Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(blocker, "audit"))
 
-    log = capture_log(fn -> assert {:ok, _result} = DirectorMoves.move(:approve_pr, "MOT-40", %{}, opts) end)
+    log = capture_log(fn -> assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts) end)
     assert log =~ "Failed to record director_move audit event"
   after
     Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(System.tmp_dir!(), "unused"))
@@ -947,12 +842,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defp github_activity(fields) do
     Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @restart_pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
-  end
-
-  defp mailbox do
-    {:messages, messages} = Process.info(self(), :messages)
-    Enum.each(messages, fn message -> receive do: (^message -> :ok) end)
-    messages
   end
 
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
@@ -1004,7 +893,6 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   defp plan(state), do: %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: state, labels: ["plan"]}
   defp pr(state), do: %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: state, labels: []}
-  defp final_verification(state), do: %Issue{id: "verify", identifier: "MOT-50", title: "Final verification: Plan an MVP", state: state}
 
   defp audit_records do
     {:ok, stream} = AuditLog.query(event_type: "director_move")

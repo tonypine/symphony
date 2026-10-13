@@ -65,8 +65,8 @@ defmodule SymphonyElixir.QaVerification do
   def run(_issue, _workspace, _opts), do: :skip
 
   @doc """
-  Whether `issue` is the ticket this module verifies: one in the configured QA state. Every other
-  ticket belongs to the executor run (or another state's own run).
+  Whether `issue` is the ticket this module verifies: one in the configured QA state. Every
+  other ticket belongs to the executor run (or another state's own run).
   """
   @spec qa_run?(Issue.t(), map()) :: boolean()
   def qa_run?(%Issue{state: state}, settings) when is_binary(state) do
@@ -409,8 +409,8 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # Every move goes through the one writer. `run/3` only ever gets here for a ticket already in the
-  # configured QA state (`qa_run?/2`), which is the origin of each of these edges in the
-  # table; the table itself is what defines them, and is tested directly.
+  # configured QA state (`qa_run?/2`), which is the origin of each of these edges in the table;
+  # the table itself is what defines them, and is tested directly.
   defp move(issue, opts, settings, signal, extra) do
     ctx = Map.merge(%{settings: settings}, extra)
     target = TransitionGuard.target(signal, ctx)

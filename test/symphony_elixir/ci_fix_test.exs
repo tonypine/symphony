@@ -40,13 +40,13 @@ defmodule SymphonyElixir.CiFixTest do
 
   describe "in_state?/2" do
     test "is true only for a CI Fix ticket" do
-      settings = designed_settings()
+      designed = designed_settings()
 
-      assert CiFix.in_state?(issue("CI Fix"), settings)
-      assert CiFix.in_state?(" ci fix ", settings)
-      refute CiFix.in_state?(issue("Code Review"), settings)
-      refute CiFix.in_state?(nil, settings)
-      # Without settings the state keeps its default name.
+      assert CiFix.in_state?(issue("CI Fix"), designed)
+      assert CiFix.in_state?(" ci fix ", designed)
+      refute CiFix.in_state?(issue("Code Review"), designed)
+      refute CiFix.in_state?(nil, designed)
+      # Without settings the lane is the default `CI Fix` state.
       assert CiFix.in_state?("CI Fix", nil)
     end
   end
@@ -71,7 +71,7 @@ defmodule SymphonyElixir.CiFixTest do
       assert CiFix.entry("Verification", settings) == {:ok, :ci_fix_enter_qa, "Verification"}
     end
 
-    test "is :none for every state the lane is not entered from, and without settings" do
+    test "is :none for every state the lane is not entered from" do
       assert CiFix.entry("In Progress", designed_settings()) == :none
       assert CiFix.entry("In Review", designed_settings()) == :none
       assert CiFix.entry(nil, designed_settings()) == :none

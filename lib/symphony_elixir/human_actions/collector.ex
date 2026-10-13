@@ -3,10 +3,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `Needs Decision` hold label, sits in a draining review state
-  (`SymphonyElixir.TransitionGuard.draining_states/0`), is a `Final verification:` ticket, or
-  carries a deprecated request label (`SymphonyElixir.HumanReview.legacy_request_labels/1`). From
-  those:
+  that carries the `Needs Decision` hold's label, is a `Final verification:` ticket, or carries a
+  deprecated request label (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
 
   - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn or answered one is not listed;
@@ -24,8 +22,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
-  alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait, TransitionGuard}
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.{PersonWait, RunKind, SubIssueWait}
 
   @issue_first 50
   @comment_last 30
@@ -250,12 +248,11 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp merge_pages("history", nodes, pages), do: Enum.concat([nodes | pages])
 
   defp filter(scope, settings) do
-    labelled = Enum.map(HumanReview.legacy_request_labels(settings), &label_filter/1)
-    draining = Enum.map(TransitionGuard.draining_states(), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+    labelled = Enum.map(PersonWait.legacy_request_labels(settings), &label_filter/1)
     final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
     # A request leaves the ticket in its phase, so the hold's label is what finds it.
     held = label_filter(Hold.label(:needs_decision))
-    wanted = %{"or" => labelled ++ draining ++ [final_verification, held]}
+    wanted = %{"or" => labelled ++ [final_verification, held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -280,7 +277,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
     context = %{node: node, issue: issue, project: %{id: project_id, name: project["name"]}, settings: settings}
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
-    legacy_labelled? = Enum.any?(HumanReview.legacy_request_labels(settings), &(&1 in labels))
+    legacy_labelled? = Enum.any?(PersonWait.legacy_request_labels(settings), &(&1 in labels))
 
     request_actions(context, legacy_labelled?)
   end

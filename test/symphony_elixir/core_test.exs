@@ -180,6 +180,8 @@ defmodule SymphonyElixir.CoreTest do
 
     assert Config.settings!().pr_review.poll_interval_ms == 15_000
 
+    refute Map.has_key?(Config.settings!().ci, :escalation_state)
+
     write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true, max_retries: 0})
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
     assert message =~ "pull_requests.checks.max_fix_attempts"
@@ -5077,14 +5079,11 @@ defmodule SymphonyElixir.CoreTest do
 
       assert_receive {:issue_state_fetch, ["issue-dep-hold"]}
       refute_receive {:issue_state_fetch, _ids}, 50
-      # The issue is held in place on a Blocked hold a person lifts, not moved.
-      assert_receive {:memory_tracker_label_added, "issue-dep-hold", "Blocked"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-dep-hold", "Needs Decision"}, 500
       refute_received {:memory_tracker_state_update, "issue-dep-hold", _state}
 
-      assert [%{name: "blocked", details: %{state: "In Progress", reason: "dependency_source_requires_approval"}}] =
+      assert [%{name: "decision requested", details: %{hold: "needs_decision", reason: "dependency_source_requires_approval"}}] =
                RunStore.get_ticket_state(Config.repo_key!(), "issue-dep-hold").signals
-
-      assert %{waits_on: %{type: "access"}} = SymphonyElixir.Hold.get(Config.repo_key!(), "issue-dep-hold", :blocked)
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

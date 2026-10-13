@@ -46,6 +46,15 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(InboxToolbar.toolbar(for: unlinked).defaultCommand, .move(.approveAndMerge))
     }
 
+    func testEveryPlanAndPROffersRestart() throws {
+        XCTAssertEqual(InboxToolbar.toolbar(for: try shipped("SHOP-330")).overflow, [.move(.sendToRework), .move(.restart)])
+
+        var pr = try shipped("BIL-206")
+        XCTAssertEqual(InboxToolbar.toolbar(for: pr).overflow, [.move(.restart)])
+        pr.review.pullRequest?.ci = .failed
+        XCTAssertEqual(InboxToolbar.toolbar(for: pr).overflow, [.move(.restart)])
+    }
+
     func testAFinalVerificationOffersSignOffAndTheOtherKindsKeepTheirLinks() {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.finalVerification)).buttons.map(\.command), [.move(.signOff), .link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.action)).buttons.map(\.command), [.link(.openInLinear(linear))])

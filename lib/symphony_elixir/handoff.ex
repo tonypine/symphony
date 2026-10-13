@@ -3,8 +3,8 @@ defmodule SymphonyElixir.Handoff do
   The explicit handoff signal: how a session says its implementation is done and its PR is ready
   for review.
 
-  The machine advances `In Progress` (or `Rework`) to `Code Review` only on this signal —
-  never when a run merely goes quiet. The signal is emitted mechanically by the push and
+  The machine advances `In Progress` (or `Rework`) to `Code Review` only on this signal — never
+  when a run merely goes quiet. The signal is emitted mechanically by the push and
   pull-request tool hooks (`SymphonyElixir.AgentTools.GitHub`), recorded in the ticket's signals
   ledger bound to the head it handed off, and read back by the runner before it performs any move
   into `Code Review`. A run that stops quiet with its PR already on its workspace HEAD has nothing
@@ -31,18 +31,14 @@ defmodule SymphonyElixir.Handoff do
   @spec missing_signal() :: String.t()
   def missing_signal, do: @missing_signal
 
-  @doc "The state a finished implementation is handed off to: the configured `Code Review` state."
+  @doc "The state a repo hands a finished implementation off to: its `Code Review` state."
   @spec target_state(map()) :: String.t()
   def target_state(settings), do: settings.tracker.code_review_state
 
   @doc """
-  Whether a move out of `state` needs the handoff signal first: a move from an origin state
-  (`In Progress`, `Rework`) into `Code Review`.
+  Whether `state` is an origin the handoff signal may fire from (`In Progress`, `Rework`): a move
+  out of it into `Code Review` needs the signal first.
   """
-  @spec required?(String.t() | nil) :: boolean()
-  def required?(state), do: origin?(state)
-
-  @doc "Whether `state` is an origin the handoff signal may fire from."
   @spec origin?(String.t() | nil) :: boolean()
   def origin?(state) when is_binary(state), do: Enum.any?(@origins, &matches?(state, &1))
   def origin?(_state), do: false

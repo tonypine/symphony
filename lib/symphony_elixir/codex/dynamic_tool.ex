@@ -61,7 +61,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. A retired state (Auto Review, In Review, Human Review) is refused, and so are Code Review, QA and Epic Review, which the machine enters itself. A plan parent hands its plan over by naming Plan Review. Asking for Backlog from In Progress or Rework does not move the issue: it sets a Blocked hold that keeps the issue in its state with the reason recorded.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. A retired state (Auto Review, In Review, Human Review) is refused, and so are Code Review, QA and Epic Review, which only the machine enters. Plan Review is a plan parent's handoff. Asking for Backlog while the issue is In Progress or Rework sets a Blocked hold instead of moving it.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -311,7 +311,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It never moves the issue: it posts the `## Decision needed:` comment and sets the Needs Decision hold, which pauses the issue in its current state until the person answers (a reply under the request, or the Symphony Inbox) or the request is withdrawn; Symphony lists the decision in a Linear project update until then. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the hold ends your run shortly after.",
+        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the hold ends your run shortly after.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -351,7 +351,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_withdraw_human_action",
       "description" =>
-        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request, so the next project update no longer lists it, and once no open request is left clears the Needs Decision hold, so the issue continues in its state. A comment saying the request is not needed does not take it off the list; this does.",
+        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request, so the next project update no longer lists it, and once no open request is left clears the Needs Decision hold, so the issue continues in place. A comment saying the request is not needed does not take it off the list; this does.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -2111,7 +2111,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "waiting_on_sub_issues_state_requires_human_approval",
         "message" =>
           "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a plan parent there " <>
-            "approves its plan and promotes its sub-tickets, so a human does it; move the parent to `Plan Review` instead."
+            "approves its plan and promotes its sub-tickets, so a human does it; hand the plan over to `Plan Review` instead."
       }
     }
   end
@@ -2132,7 +2132,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "plan_review_requires_handoff_signal",
         "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. On this repo only a plan parent's " <>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Only a plan parent's " <>
             "handoff enters #{inspect(state_name)}: this issue is not a plan parent, so it hands its work over with " <>
             "its pushed PR instead."
       }

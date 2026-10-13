@@ -4,7 +4,8 @@ defmodule SymphonyElixir.CiFix do
 
   Every phase carries a CI attribute (`SymphonyElixir.CiState`). When a head goes red — or a PR
   conflicts with its base branch — while the ticket sits in `Code Review`, `QA`, `Merging` or
-  `Rework`, the ticket enters this lane. The two pollers detect it
+  `Rework`, the ticket enters this lane. A red head or a conflict in any other state takes the
+  red → `In Progress` fix loop. The two pollers detect it
   (`SymphonyElixir.CiPoller`, `SymphonyElixir.PrReviewPoller`), call `entry/2` to pick the edge for
   the state the ticket is in, and call `record_origin/4` before performing that edge through
   `SymphonyElixir.TransitionGuard`. The origin is recorded on the ticket
@@ -23,9 +24,6 @@ defmodule SymphonyElixir.CiFix do
   `SymphonyElixir.QaVerification`). A repair the fixing agent judges substantive is the agent's own
   move to `Rework`; one it cannot make without access or a secret is a Needs Decision hold. Both are
   recorded here as a `fix verdict`.
-
-  A red head in any other state (`In Progress`) keeps the red → `In Progress` fix run: `entry/2`
-  answers `:none` there.
   """
 
   alias SymphonyElixir.{
@@ -59,14 +57,11 @@ defmodule SymphonyElixir.CiFix do
 
   def state(_settings), do: @default_state
 
-  @doc """
-  Whether `issue` (or the state name itself) is a CI Fix ticket.
-  """
+  @doc "Whether `issue` (or the state name itself) sits in the configured CI Fix state."
   @spec in_state?(Issue.t() | String.t() | nil, map() | nil) :: boolean()
   def in_state?(%Issue{state: state}, settings), do: in_state?(state, settings)
 
-  def in_state?(state, settings) when is_binary(state),
-    do: matches?(state, state(settings))
+  def in_state?(state, settings) when is_binary(state), do: matches?(state, state(settings))
 
   def in_state?(_state, _settings), do: false
 
@@ -75,7 +70,7 @@ defmodule SymphonyElixir.CiFix do
   phase's *configured* name, so a repo that renames `Code Review` or `QA` still returns there).
 
   `:none` for every state the lane is not entered from — including `In Progress`, whose red heads
-  dispatch a fix run in place.
+  keep the red → `In Progress` fix loop.
   """
   @spec entry(String.t() | nil, map() | nil) :: {:ok, TransitionGuard.signal(), origin()} | :none
   def entry(origin_state, settings) when is_binary(origin_state) and is_map(settings) do

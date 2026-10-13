@@ -81,16 +81,6 @@ defmodule SymphonyElixir.Hold do
   def access_wait?(_hold), do: false
 
   @doc """
-  The attributes of a Blocked hold waiting on a person: the reason, and an access wait that a
-  person lifts with `Unblock` (`access_wait?/1`). The machine pauses a ticket this way when only a
-  person can let it continue — a blocked run, a dependency that needs approval.
-  """
-  @spec access_attrs(String.t()) :: map()
-  def access_attrs(reason) when is_binary(reason) do
-    %{reason: reason, clearing_condition: "a person clears this hold with Unblock", waits_on: %{type: @access_type, keys: []}}
-  end
-
-  @doc """
   Sets the hold of `kind` on `issue_id`: the store record first, then the machine label. Returns
   `{:error, reason}` only when the store write failed (the hold did not land); a failed label
   write is reported and does not undo the hold.

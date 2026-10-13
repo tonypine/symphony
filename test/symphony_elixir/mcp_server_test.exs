@@ -867,6 +867,7 @@ defmodule SymphonyElixir.McpServerTest do
 
     issue = %Issue{
       id: "issue-mcp-hold",
+      repo_key: "default",
       identifier: "ACME-MCP-HOLD",
       title: "MCP hold",
       description: "Block risky dependency PR from MCP",
@@ -908,7 +909,8 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:git_called, _args, _opts}, 100
       refute_receive {:gh_called, _args, _opts}, 100
 
-      assert_receive {:memory_tracker_label_added, "issue-mcp-hold", "Blocked"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-mcp-hold", "Needs Decision"}, 500
+      refute_received {:memory_tracker_state_update, "issue-mcp-hold", _state}
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{
@@ -956,6 +958,7 @@ defmodule SymphonyElixir.McpServerTest do
 
     issue = %Issue{
       id: "issue-mcp-audit-error",
+      repo_key: "default",
       identifier: "ACME-MCP-AUDIT-ERROR",
       title: "MCP audit error",
       description: "Block PR when MCP dependency audit fails",
@@ -997,7 +1000,8 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:git_called, _args, _opts}, 100
       refute_receive {:gh_called, _args, _opts}, 100
 
-      assert_receive {:memory_tracker_label_added, "issue-mcp-audit-error", "Blocked"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-mcp-audit-error", "Needs Decision"}, 500
+      refute_received {:memory_tracker_state_update, "issue-mcp-audit-error", _state}
 
       assert_receive {:notification_event,
                       %SymphonyElixir.Notifications.Event{

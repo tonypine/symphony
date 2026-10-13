@@ -9,9 +9,7 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
   @issue_id "issue-code-review-dispatch"
 
   defp designed_repos do
-    [
-      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"]]
-    ]
+    [[key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"]]]
   end
 
   setup do
@@ -22,10 +20,8 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
       repos: designed_repos()
     )
 
-    for repo <- [@designed_repo] do
-      RunStore.delete_ticket_state(repo, @issue_id)
-      on_exit(fn -> RunStore.delete_ticket_state(repo, @issue_id) end)
-    end
+    RunStore.delete_ticket_state(@designed_repo, @issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@designed_repo, @issue_id) end)
 
     :ok
   end
@@ -137,8 +133,8 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
     end
   end
 
-  describe "a quiet run with its PR open" do
-    test "is never advanced by a catch-handler: it stays dispatchable" do
+  describe "the post-PR quiet catch-handler" do
+    test "never advances a quiet run" do
       quiet = %{pull_request_url: "https://github.com/acme/symphony/pull/9"}
 
       state = %Orchestrator.State{completed_run_metadata: %{@issue_id => quiet}}

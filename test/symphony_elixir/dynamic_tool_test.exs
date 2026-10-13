@@ -15,8 +15,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       Process.get(:linear_tool_tracker_result, :ok)
     end
 
-    def set_machine_label(_issue_id, _name), do: :ok
-    def clear_machine_label(_issue_id, _name), do: :ok
+    def set_machine_label(issue_id, name) do
+      send(self(), {:machine_label_set, issue_id, name})
+      :ok
+    end
+
+    def clear_machine_label(issue_id, name) do
+      send(self(), {:machine_label_cleared, issue_id, name})
+      :ok
+    end
   end
 
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
@@ -273,28 +280,24 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 
-  test "update_state refuses the retired and draining review states and allows other states" do
+  test "update_state refuses the retired Auto Review state and allows other states" do
     states = [
       %{"id" => "state-auto-review", "name" => "Auto Review", "type" => "started"},
-      %{"id" => "state-in-review", "name" => "In Review", "type" => "started"},
-      %{"id" => "state-human-review", "name" => "Human Review", "type" => "started"},
       %{"id" => "state-progress", "name" => "In Progress", "type" => "started"}
     ]
 
-    for retired <- ["auto review", "In Review", "Human Review"] do
-      response =
-        DynamicTool.execute(
-          "linear_update_state",
-          %{"state_name_or_id" => retired},
-          issue: %Issue{id: "issue-current"},
-          linear_client: update_state_client(self(), states, [%{"name" => "plan"}])
-        )
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "auto review"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: update_state_client(self(), states)
+      )
 
-      assert response["success"] == false
-      assert %{"error" => %{"code" => "retired_state", "message" => message}} = Jason.decode!(response["output"])
-      assert message =~ "that state is retired. A PR hands off to Code Review when it is pushed"
-      refute_received {:linear_client_called, _query, %{stateId: _state_id}}
-    end
+    assert response["success"] == false
+    assert %{"error" => %{"code" => "retired_state", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "that state is retired. A PR hands off to Code Review when it is pushed"
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
 
     response =
       DynamicTool.execute(
@@ -347,7 +350,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                Jason.decode!(response["output"])
 
       assert message =~ "approves its plan and promotes its sub-tickets"
-      assert message =~ "move the parent to `Plan Review` instead"
+      assert message =~ "hand the plan over to `Plan Review` instead"
       refute_received {:linear_client_called, _query, %{stateId: _state_id}}
     end
 
@@ -377,7 +380,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   end
 
   test "update_state refuses Code Review: entering it is the handoff signal's job" do
-    designed = Config.settings!()
+    settings = Config.settings!()
+    designed = settings
 
     response =
       DynamicTool.execute(
@@ -399,8 +403,32 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
 
-  test "update_state refuses Plan Review for any ticket but a plan parent" do
-    designed = Config.settings!()
+  test "update_state refuses the retired In Review: the push hands the work to Code Review" do
+    settings = Config.settings!()
+    designed = settings
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Review"},
+        issue: %Issue{id: "issue-current", state: "In Progress"},
+        settings: designed,
+        linear_client: update_state_client(self(), [%{"id" => "state-in-review", "name" => "In Review", "type" => "started"}])
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "retired_state", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "cannot move the issue to \"In Review\": that state is retired"
+    assert message =~ "A PR hands off to Code Review when it is pushed"
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+  end
+
+  test "update_state refuses Plan Review from a ticket that is not a plan parent" do
+    settings = Config.settings!()
+    designed = settings
 
     response =
       DynamicTool.execute(
@@ -417,7 +445,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              Jason.decode!(response["output"])
 
     assert message =~ "cannot move the issue to \"Plan Review\""
-    assert message =~ "only a plan parent's handoff enters \"Plan Review\""
+    assert message =~ "Only a plan parent's handoff enters \"Plan Review\""
     assert message =~ "hands its work over with its pushed PR instead"
     refute_received {:linear_client_called, _query, %{stateId: _state_id}}
   end
@@ -1399,10 +1427,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}}} = option
       assert description =~ "a request without options is refused"
       assert description =~ "belongs to CI or a QA playbook"
-      assert description =~ "It never moves the issue"
-      assert description =~ "sets the Needs Decision hold"
-      refute description =~ "Supervisor check"
-      refute description =~ "Human Review"
+      assert description =~ "leaves the issue in its phase on a Needs Decision hold"
       refute "linear_request_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
       response =
@@ -1415,6 +1440,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
 
     test "records the request and returns explicit error payloads" do
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-current") end)
       {:ok, registry} = CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -1425,25 +1451,18 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                "data" => %{
                  "issue" => %{
                    "id" => "issue-current",
-                   "state" => %{"name" => "In Progress"},
-                   "team" => %{"states" => %{"nodes" => [%{"id" => "state-human", "name" => "Human Review"}]}}
+                   "state" => %{"name" => "In Progress"}
                  }
                }
              }}
 
           query =~ "SymphonyAgentAddComment" ->
             {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-1"}}}}}
-
-          query =~ "SymphonyAgentUpdateIssueState" ->
-            {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
         end
       end
 
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("dynamic-tool-human-action", "issue-current") end)
-
       opts = [
-        issue: %Issue{id: "issue-current", identifier: "MOT-24", repo_key: "dynamic-tool-human-action"},
-        settings: Config.settings!(),
+        issue: %Issue{id: "issue-current", identifier: "MOT-24", repo_key: "default"},
         comment_registry: registry,
         linear_client: client,
         tracker: FakeTracker
@@ -1451,8 +1470,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert response["success"] == true
-      assert %{"requested" => true, "commentId" => "comment-1", "state" => "In Progress", "held" => true} = Jason.decode!(response["output"])
-      assert SymphonyElixir.Hold.held?("dynamic-tool-human-action", "issue-current", :needs_decision)
+      assert %{"requested" => true, "commentId" => "comment-1", "state" => "In Progress", "hold" => "Needs Decision"} = Jason.decode!(response["output"])
+      assert_received {:machine_label_set, "issue-current", "Needs Decision"}
 
       response = DynamicTool.execute("linear_request_human_action", put_in(@request, ["decision", "options"], []), opts)
 
@@ -1498,6 +1517,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
 
     test "withdraws the request and returns explicit error payloads" do
+      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("default", "issue-current") end)
       request = %{"id" => "comment-1", "body" => "## Action needed: Re-run CI", "createdAt" => "2026-10-04T18:57:00.000Z"}
 
       client = fn query, _variables, _opts ->
@@ -1519,14 +1539,11 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         end
       end
 
-      on_exit(fn -> SymphonyElixir.RunStore.delete_ticket_state("dynamic-tool-withdraw", "issue-current") end)
-
       opts = [
-        issue: %Issue{id: "issue-current", identifier: "MOT-24", repo_key: "dynamic-tool-withdraw"},
-        settings: Config.settings!(),
+        issue: %Issue{id: "issue-current", identifier: "MOT-24", repo_key: "default"},
         linear_client: client,
-        refresh_human_actions: fn -> :ok end,
-        tracker: FakeTracker
+        tracker: FakeTracker,
+        refresh_human_actions: fn -> :ok end
       ]
 
       response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => "The run had just started."}, opts)

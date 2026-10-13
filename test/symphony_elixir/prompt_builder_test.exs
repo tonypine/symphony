@@ -164,7 +164,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     refute prompt =~ "check it yourself"
   end
 
-  test "prompt builder teaches Rework-as-continuation" do
+  test "prompt builder teaches Rework-as-continuation on a designed repo" do
     write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
 
     prompt =
@@ -812,7 +812,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "github_list_pr_review_comments()"
   end
 
-  test "the Rework instructions continue the pull request" do
+  test "the Rework instructions continue the same pull request" do
     repo_root = Path.expand("../..", __DIR__)
     dir = Path.join(System.tmp_dir!(), "prompt-playbook-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -924,43 +924,19 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
   end
 
-  describe "the one machine" do
-    test "every repo renders the same status map, with the phase states and none of the retired ones" do
-      path = Workflow.workflow_file_path()
-
-      write_workflow_file!(path,
-        repos: [
-          %{"name" => "app", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["app"]},
-          %{"name" => "web", "path" => Path.dirname(path), "workflow" => Path.basename(path), "team" => "Test", "labels" => ["web"]}
-        ]
-      )
-
-      app = status_map_prompt(Config.settings_for_repo!("app"))
-      assert app == status_map_prompt(Config.settings_for_repo!("web"))
-
-      assert app =~ "`Code Review`"
-      assert app =~ "`QA`"
-      refute app =~ "`Auto Review`"
-      refute app =~ "`In Review`"
-    end
-
-    test "a template that still branches on the retired switch renders the one machine's text" do
-      template = ~s({% if state_machine == "designed" %}one machine{% else %}legacy{% endif %})
-      workflow = {:ok, %{config: %{}, prompt: template, prompt_template: template}}
-      issue = %Issue{identifier: "ABC-1", title: "T", state: "In Progress", repo_key: "default"}
-
-      prompt = PromptBuilder.build_prompt(issue, settings: %{agent: %{kind: "claude"}}, workflow: workflow)
-
-      assert prompt =~ "one machine"
-      refute prompt =~ "legacy"
-    end
-
-    defp status_map_prompt(settings) do
+  describe "the status map" do
+    test "renders the one state machine" do
       template = ~s({% render "status_map" %})
       workflow = {:ok, %{config: %{}, prompt: template, prompt_template: template}}
       issue = %Issue{identifier: "ABC-1", title: "T", state: "In Progress", repo_key: "default"}
 
-      PromptBuilder.build_prompt(issue, settings: settings, workflow: workflow)
+      prompt = PromptBuilder.build_prompt(issue, settings: Config.settings!(), workflow: workflow)
+
+      assert prompt =~ "`Code Review`"
+      assert prompt =~ "`QA`"
+      refute prompt =~ "`Auto Review`"
+      refute prompt =~ "`In Review`"
+      refute prompt =~ "Human Review"
     end
   end
 

@@ -7,20 +7,19 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.SubIssueWait
 
-  @designed_repo "designed-epic"
+  @designed_repo "epic-repo"
   @issue_id "issue-epic-review-dispatch"
   @waiting "Waiting on sub-tickets"
 
   defp repos do
     [
-      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"]]
+      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["epic"]]
     ]
   end
 
   setup do
     # The poll loop is what dispatches an epic parent: the waiting state is active, and the tick that
-    # finds every sub-ticket terminal picks the parent up with no event wiring. The designed repo is
-    # what makes the run an epic review rather than a close-out.
+    # finds every sub-ticket terminal picks the parent up with no event wiring.
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: repos())
     SubIssueWait.reset_for_test(@waiting)
 
@@ -52,7 +51,7 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
   end
 
   describe "the epic review dispatch gate" do
-    test "a designed epic whose sub-tickets are all terminal dispatches from the waiting state as the epic review" do
+    test "an epic whose sub-tickets are all terminal dispatches from the waiting state as the epic review" do
       parent = epic(@designed_repo)
 
       assert RunKind.classify(parent, settings: designed_settings()) == :epic_review

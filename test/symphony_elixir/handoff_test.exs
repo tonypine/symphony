@@ -31,18 +31,15 @@ defmodule SymphonyElixir.HandoffTest do
   end
 
   describe "target_state/1" do
-    test "hands off to the configured Code Review state, whatever the retired Auto Review settings say" do
+    test "hands off to the configured Code Review state" do
       assert Handoff.target_state(settings()) == "Code Review"
 
       configured = settings(%{"tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"}})
       assert Handoff.target_state(configured) == "Peer Review"
-
-      auto_review = settings(%{"auto_review" => %{"enabled" => true}})
-      assert Handoff.target_state(auto_review) == "Code Review"
     end
   end
 
-  describe "origin?/1 and required?/1" do
+  describe "origin?/1" do
     test "only In Progress and Rework are origins, case- and space-insensitively" do
       assert Handoff.origin?("In Progress")
       assert Handoff.origin?(" rework ")
@@ -50,12 +47,6 @@ defmodule SymphonyElixir.HandoffTest do
       refute Handoff.origin?("Todo")
       refute Handoff.origin?(nil)
       refute Handoff.origin?(5)
-    end
-
-    test "the signal is required only from the origin states" do
-      assert Handoff.required?("In Progress")
-      assert Handoff.required?("Rework")
-      refute Handoff.required?("Todo")
     end
   end
 

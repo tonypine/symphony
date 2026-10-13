@@ -2054,7 +2054,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         |> Map.put(:issue, %{id: issue_id, repo_key: repo_key})
         |> Map.update!(:command_security, &Map.put(&1, :origin_repo, "acme/symphony"))
 
-      # No `settings:` opt: the handoff resolves the repo's own config.
+      # No `settings:` opt: the handoff resolves the repo's own designed config.
       assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context)
 
       head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()

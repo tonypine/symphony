@@ -223,7 +223,7 @@ defmodule SymphonyElixir.EpicReviewTest do
   end
 
   describe "epic_review_run?/2" do
-    test "is true only for a designed repo's epic parent, in the review state or ready for it" do
+    test "is true only for an epic parent, in the review state or ready for it" do
       assert EpicReview.epic_review_run?(epic(), settings!())
       assert EpicReview.epic_review_run?(epic(%{state: "Epic Review"}), settings!())
 

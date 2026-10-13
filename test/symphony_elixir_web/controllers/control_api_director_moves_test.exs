@@ -18,9 +18,8 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Human Review", labels: ["plan"]},
-      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Review", labels: []},
-      %Issue{id: "verify", identifier: "MOT-50", title: "Final verification: Plan an MVP", state: "In Review"}
+      %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Plan Review", labels: ["plan"]},
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Progress", labels: []}
     ])
 
     server = :"director_moves_api_#{System.unique_integer([:positive])}"
@@ -30,11 +29,8 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
   test "each move answers with the states it moved between", %{moves: moves} do
     for {action, params, identifier, to_state} <- [
-          {:approve_plan, %{}, "MOT-30", "Waiting on sub-tickets"},
-          {:approve_pr, %{}, "MOT-40", "Merging"},
-          {:rework, %{"reason" => "Totals are wrong"}, "MOT-40", "Rework"},
-          {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Human Review"},
-          {:sign_off, %{}, "MOT-50", "Done"},
+          {:decisions, %{"picks" => [%{"question" => "Where?", "answer" => "B"}]}, "MOT-30", "Plan Review"},
+          {:rework, %{"reason" => "Split it differently"}, "MOT-30", "Rework"},
           {:backlog, %{"note" => "Later"}, "MOT-40", "Backlog"}
         ] do
       conn = post(action, Map.put(params, "issue_identifier", identifier), moves)
@@ -43,6 +39,14 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
       assert %{"move" => move, "issue_identifier" => ^identifier, "to_state" => ^to_state} = Jason.decode!(conn.resp_body)
       assert move == Atom.to_string(action)
     end
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Plan Review", labels: ["plan"]}
+    ])
+
+    conn = post(:approve_plan, %{"issue_identifier" => "MOT-30"}, moves)
+    assert conn.status == 200
+    assert %{"move" => "approve_plan", "to_state" => "Waiting on sub-tickets"} = Jason.decode!(conn.resp_body)
   end
 
   test "unblock clears an access hold in place, and refuses one that isn't an access hold", %{moves: moves} do
@@ -144,33 +148,27 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   test "undo takes the last move back", %{moves: moves} do
-    plan = %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Plan Review", labels: ["plan"]}
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [plan])
-    assert post(:rework, %{"issue_identifier" => "MOT-30", "reason" => "Split it"}, moves).status == 200
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{plan | state: "Rework"}])
+    assert post(:backlog, %{"issue_identifier" => "MOT-40"}, moves).status == 200
+    parked = %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Backlog"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [parked])
 
-    conn = post(:undo, %{"issue_identifier" => "MOT-30"}, moves)
+    conn = post(:undo, %{"issue_identifier" => "MOT-40"}, moves)
 
     assert conn.status == 200
-    assert %{"move" => "undo", "undone" => "rework", "to_state" => "Plan Review"} = Jason.decode!(conn.resp_body)
-    assert error(post(:undo, %{"issue_identifier" => "MOT-30"}, moves)) == {409, "move_not_allowed", "there is no move on MOT-30 to undo"}
+    assert %{"move" => "undo", "undone" => "backlog", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
+    assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) == {409, "move_not_allowed", "there is no move on MOT-40 to undo"}
   end
 
   test "a move the ticket's state doesn't allow is a 409", %{moves: moves} do
-    assert error(post(:approve_pr, %{"issue_identifier" => "MOT-30"}, moves)) ==
-             {409, "move_not_allowed", "MOT-30 is a plan; approve_pr is for a pull request"}
+    assert error(post(:approve_plan, %{"issue_identifier" => "MOT-40"}, moves)) ==
+             {409, "move_not_allowed", "MOT-40 is not a plan; approve_plan is for a plan"}
   end
 
   test "restart resets the ticket and moves it to In Progress", %{moves: moves} do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test"]]
-    )
-
     pr_url = "https://github.com/example/repo/pull/40"
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url], repo_key: "designed"}
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url], repo_key: "default"}
     ])
 
     conn =
@@ -186,11 +184,6 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   test "a reset GitHub refuses is a 502 restart_incomplete", %{moves: moves} do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      repos: [[key: "designed", workflow: Workflow.workflow_file_path(), team: "Test"]]
-    )
-
     pr_url = "https://github.com/example/repo/pull/40"
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
@@ -224,11 +217,9 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   test "a missing identifier, reason, picks or request comment is a 422", %{moves: moves} do
     actions = [
       :approve_plan,
-      :approve_pr,
       :rework,
       :restart,
       :decisions,
-      :sign_off,
       :backlog,
       :unblock,
       :decide,
@@ -254,17 +245,17 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
   end
 
   test "an unknown ticket is a 404 and a Linear failure a 502", %{moves: moves} do
-    assert error(post(:approve_pr, %{"issue_identifier" => "MOT-404"}, moves)) == {404, "issue_not_found", "MOT-404 was not found in Linear"}
+    assert error(post(:backlog, %{"issue_identifier" => "MOT-404"}, moves)) == {404, "issue_not_found", "MOT-404 was not found in Linear"}
 
     Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
-    assert error(post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves)) == {502, "linear_error", "Linear request failed: :boom"}
+    assert error(post(:backlog, %{"issue_identifier" => "MOT-40"}, moves)) == {502, "linear_error", "Linear request failed: :boom"}
   end
 
   test "a move Linear took only half of is a 502 that says what was done", %{moves: moves} do
-    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
+    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :boom}])
 
-    assert error(post(:rework, %{"issue_identifier" => "MOT-40", "reason" => "No"}, moves)) ==
-             {502, "move_incomplete", "posted the comment on MOT-40, but Linear refused the move to Rework (:boom); send it again to make the move without posting the comment twice"}
+    assert error(post(:rework, %{"issue_identifier" => "MOT-30", "reason" => "Split it"}, moves)) ==
+             {502, "move_incomplete", "posted the comment on MOT-30, but Linear refused the move to Rework (:boom); send it again to make the move without posting the comment twice"}
   end
 
   defp post(action, params, moves) do

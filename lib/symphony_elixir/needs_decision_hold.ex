@@ -1,13 +1,13 @@
 defmodule SymphonyElixir.NeedsDecisionHold do
   @moduledoc """
-  The Needs Decision hold: a ticket pauses in its phase with the question recorded, and continues
-  in place once the decision is made.
+  The Needs Decision hold: a ticket pauses in its phase with the question recorded, and continues in
+  place once the decision is made.
 
-  An agent's decision request (`SymphonyElixir.HumanActions.Request`) never moves the ticket: it
-  keeps its phase, gains the `Needs Decision` machine label, and the hold carries the decision
-  payload — the question, its options and what clears it. The Inbox loop runs `sweep/3` over the
-  tickets it read, reconciling each one's store hold against the requests Linear still reads as
-  open (`sync/3` does one ticket).
+  An agent's decision request (`SymphonyElixir.HumanActions.Request`) never moves the ticket: the
+  ticket keeps its phase, gains the `Needs Decision` machine label, and the hold carries the
+  decision payload — the question, its options and what clears it. The Inbox loop runs `sweep/3`
+  over the tickets it read, reconciling each one's store hold against the requests Linear still
+  reads as open (`sync/3` does one ticket).
 
   A request stops being open when the person answers it — a reply under it, or the Director's
   Decide in the Inbox — or when the run withdraws it. The hold then clears and the ticket continues
@@ -99,8 +99,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   Reconciles the Needs Decision hold of one ticket against the decision requests Linear still reads
   as open on it. `opts[:settings]` is the repo's resolved settings (the Inbox passes the one it
   resolved for the route); without it the repo is resolved through `Config.settings_for_repo/1`.
-  Returns `:skipped` when the repo's settings can't be resolved, else the action taken (`:set`,
-  `:clear` or `:none`).
+  Returns `:skipped` when the repo can't be resolved, else the action taken (`:set`, `:clear` or
+  `:none`).
   """
   @spec sync(String.t() | term(), map() | term(), keyword()) :: :skipped | :set | :clear | :none
   def sync(repo_key, node, opts \\ []) do

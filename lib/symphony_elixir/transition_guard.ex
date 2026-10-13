@@ -17,32 +17,28 @@ defmodule SymphonyElixir.TransitionGuard do
   Linear tool's state-scanning test keeps it the only such site.
 
   `edges/0` is the legal-edge table: one row per named signal, naming the origin states the signal
-  may fire from and the target state it moves to. It is initialised in parity with the machine as
-  it behaves today — the same targets, the same refusals, the same redirects — so this module
-  changes nothing observable. Later flow tickets change behavior by editing this table, never by
-  moving a ticket somewhere else.
+  may fire from and the target state it moves to. Flow tickets change behavior by editing this
+  table, never by moving a ticket somewhere else. There is one table: the `legacy` machine and its
+  rows into `In Review` and `Human Review` are gone with those states.
 
   Targets are either a literal state name, `:requested` (the caller supplies the target it computed
   in `ctx.target`), or one of the machine's config-derived states resolved from `ctx.settings`:
   `:code_review_state`, `:qa_state`, `:epic_review_state`, `:ci_fix_state` and
   `:waiting_on_sub_issues`.
 
-  No move may enter a retired state (`docs/design/state-machine.md` §Retired): `Auto Review` is
-  gone with the acceptance gate (`retired_states/0`), and `In Review` and `Human Review` only drain
-  (`draining_states/0`). `perform/4` and `resolve_request/2` refuse all three whatever the signal,
-  so no ticket can enter one again; `SymphonyElixir.RetiredStates` reports the tickets still in one.
+  No move may enter a retired state (`retired_states/0`): `Auto Review`, `In Review` and
+  `Human Review` are gone (`docs/design/state-machine.md` §Retired), so `perform/4` and
+  `resolve_request/2` refuse them whatever the signal, and no ticket can enter one again. Startup
+  fails loud while one still holds a ticket (`SymphonyElixir.RetiredStates`).
   """
 
-  alias SymphonyElixir.{HumanReview, SubIssueWait, Tracker}
+  alias SymphonyElixir.{PlanReview, SubIssueWait, Tracker}
 
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
   @backlog_state "Backlog"
-  # The retired states: nothing dispatches or moves on from one.
-  @retired_states ["Auto Review"]
-  # The states that retire once the tickets left in them drain: each waits on a person's hand move.
-  @draining_states ["In Review", "Human Review"]
+  @retired_states ["Auto Review", "In Review", "Human Review"]
 
   @typedoc "A named transition the machine can perform."
   @type signal :: atom()
@@ -78,7 +74,8 @@ defmodule SymphonyElixir.TransitionGuard do
   # deterministic docs-only/internal-only diff — the caller picks the row and records the reason); and
   # a rework verdict returns it to `Rework`. An escalation has no row: it is a Needs Decision hold
   # (`SymphonyElixir.NeedsDecisionHold.pause/3`), which pauses the ticket in Code Review and never
-  # moves it, and so is CI that could not be fixed.
+  # moves it, and so is CI that could not be fixed, a dependency that needs approval and an agent's
+  # decision request.
   #
   # The `:qa_*` rows are the QA run's verdicts (`SymphonyElixir.QaVerification`): pass carries the
   # ticket to `Merging`, fail returns it to `Rework`, and a skip — the same hybrid rule seen from the
@@ -87,17 +84,8 @@ defmodule SymphonyElixir.TransitionGuard do
   # The `:ci_fix_enter_*` rows are the CI Fix lane's entries (`SymphonyElixir.CiFix`): one row per
   # phase whose head can go red or conflict, so each origin is its own legal edge and the caller
   # records that origin on the ticket. `:ci_fix_mechanical` is the return — the target is the origin
-  # the caller read back from the ticket, so the lane never has to name a state itself.
-  #
-  # The `:epic_review_*` rows are the epic path's close (`SymphonyElixir.EpicReview`). An epic
-  # parent whose sub-issues are all terminal enters `Epic Review` from the waiting state, and the
-  # review's verdict either closes the epic or sends it back: `Done` when the epic's intent holds,
-  # and the waiting state when gaps were found, with the gaps filed as follow-ups in `Todo` inside
-  # the same epic — never `Backlog`, which would freeze the epic with nobody noticing. The parent's
-  # own open follow-up holds it waiting until that follow-up lands, and the review runs again.
-  # `:epic_review_enter`'s target is the repo's configured Epic Review state and
-  # `:epic_review_gaps`'s the configured waiting state, so a repo that names either differently
-  # still lands where the design says.
+  # the caller read back from the ticket, so the lane never has to name a state itself. A red head
+  # or a conflict outside those phases takes `:ci_fix_dispatch` or `:review_rework` to `In Progress`.
   #
   # The lane's other two exits have no row, because they are not machine moves: a repair the fixing
   # agent judges substantive is the agent's own request to set `Rework` (an agent state request is
@@ -105,11 +93,21 @@ defmodule SymphonyElixir.TransitionGuard do
   # make without access or a secret is a Needs Decision hold (`SymphonyElixir.Hold`), which never
   # moves the ticket at all. Both are recorded as a `fix verdict`.
   #
-  # `:plan_revise` revises a plan parent through `Rework` — the epic path's re-plan, which continues
-  # in place and hands the plan back to `Plan Review`. The row names the epic path's `Plan Review`
-  # literally; the move itself is the machine's own, recorded with `RunStore.put_own_state_move/2`,
-  # so `SymphonyElixir.BreakdownReview` never reads it as a person's rejection of the plan (only a
-  # person's move to `Rework` cancels the plan's sub-tickets).
+  # The `:epic_review_*` rows are the epic path's close (`SymphonyElixir.EpicReview`). An epic
+  # parent whose sub-issues are all terminal enters `Epic Review` from the waiting state, and the
+  # review's verdict either closes the epic or sends it back: `Done` when the epic's intent holds,
+  # and the waiting state when gaps were found, with the gaps filed as follow-ups in `Todo` inside the
+  # same epic — never `Backlog`, which would freeze the epic with nobody noticing. The parent's own
+  # open follow-up holds it waiting until that follow-up lands, and the review runs again.
+  # `:epic_review_enter`'s target is the repo's configured Epic Review state and
+  # `:epic_review_gaps`'s the configured waiting state, so a repo that names either differently
+  # still lands where the design says.
+  #
+  # `:plan_revise` sends a plan parent a person commented on back through `Rework` — the epic path's
+  # re-plan, which continues in place and hands the plan back to `Plan Review`. The move is the
+  # machine's own, recorded with `RunStore.put_own_state_move/2`, so `SymphonyElixir.BreakdownReview`
+  # never reads it as a person's rejection of the plan (only a person's move to `Rework` cancels the
+  # plan's sub-tickets).
   #
   # `confirm: true` marks the three rows whose move is a *verdict* carrying the ticket into `Merging`:
   # with the repo's manual review `on`, each waits for a person instead
@@ -121,12 +119,10 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :claim, from: ["Todo"], to: "In Progress"},
     # A person commented on a plan under review: the parent goes to Rework to revise it in place.
     %{signal: :plan_revise, from: ["Plan Review"], to: "Rework"},
-    # A plan parent left In Progress with open sub-issues waits on them.
+    # A plan parent whose approved sub-issues are open waits on them (`SubIssueWait.park?/3`).
     %{signal: :plan_approve, from: ["In Progress"], to: :waiting_on_sub_issues},
     # A red head outside the CI Fix lane's phases: dispatch a CI fix run in In Progress.
     %{signal: :ci_fix_dispatch, from: :any, to: "In Progress"},
-    # The PR review poller's target (Done or In Progress).
-    %{signal: :pr_review_target, from: :any, to: :requested},
     # A landing run's PR merged: Done.
     %{signal: :landing_done, from: ["Merging"], to: "Done"},
     # The poller sends an issue back for changes.
@@ -169,17 +165,13 @@ defmodule SymphonyElixir.TransitionGuard do
     %{name: @merging_state, error: :merging_requires_human_approval}
   ]
 
-  @doc "The retired states: nothing dispatches or moves on from one, and no move may enter one."
+  @doc "The states no move may enter: they are retired."
   @spec retired_states() :: [String.t()]
   def retired_states, do: @retired_states
 
-  @doc "The states that retire once their tickets drain: no move may enter one."
-  @spec draining_states() :: [String.t()]
-  def draining_states, do: @draining_states
-
-  @doc "Whether `state` names a retired or draining state, which no move may enter."
+  @doc "Whether `state` names a retired state (`retired_states/0`)."
   @spec retired_state?(String.t() | nil) :: boolean()
-  def retired_state?(state), do: Enum.any?(@retired_states ++ @draining_states, &state_name_matches?(state, &1))
+  def retired_state?(state), do: Enum.any?(@retired_states, &state_name_matches?(state, &1))
 
   @doc "The legal-edge table."
   @spec edges() :: [edge()]
@@ -229,8 +221,7 @@ defmodule SymphonyElixir.TransitionGuard do
   """
   @spec target(signal(), context()) :: String.t() | nil
   def target(signal, ctx) do
-    signal
-    |> edge()
+    edge(signal)
     |> case do
       nil -> raise ArgumentError, "unknown transition signal: #{inspect(signal)}"
       %{to: to} -> resolve(to, ctx)
@@ -240,9 +231,9 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Performs the move `signal` names for `issue_id`, resolving its target from `ctx`. This is the one
   caller of `Tracker.update_issue_state/2`; `opts[:tracker]` overrides the tracker (tests, a fake).
-  A move into a retired or draining state is refused with `{:error, {:retired_state, target}}`, and
-  one whose target resolves to no state name (a requested or configured state that is nil or blank)
-  with `{:error, {:unresolved_target, signal}}`, before Linear is asked.
+  A move into a retired state is refused with `{:error, {:retired_state, target}}`, and one whose
+  target resolves to no state name (a requested or configured state that is nil or blank) with
+  `{:error, {:unresolved_target, signal}}`, before Linear is asked.
   A move into `Merging` asks the PR poller to poll now (`opts[:on_merging]` overrides it), so a PR
   that is already green merges at once instead of on the next timer, by when its head may be behind.
   """
@@ -276,15 +267,16 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Validates an agent's request to set the state `state` (its resolved Linear state map). Applies
   the machine's refusals in order — the retired-state refusal, the Plan Review entry refusal, the
-  human-only refusal, the restart refusal, the Code Review entry refusal, the QA entry refusal, the
-  Epic Review entry refusal, then the waiting-state refusal — and returns `{:ok, state}` or
-  `{:error, reason}`. An agent asking to enter `Code Review` or `QA` by hand is refused: `Code Review`
-  is the handoff signal's to enter and `QA` the verdict's, never the tool's. So is an agent asking
-  for `In Progress` from a phase past implementation (`Rework`, `Code Review`, `QA` or `Merging`):
-  that is a `Restart`, which only a person performs. `Epic Review` is refused the same way: the
-  machine enters it once an epic parent's sub-issues are all terminal and its review's verdict
-  leaves it. `Plan Review` is a plan parent's handoff: an agent naming it for any other ticket is
-  refused.
+  human-only refusal, the restart refusal, the Code Review entry refusal, the QA entry refusal,
+  the Epic Review entry refusal, then the waiting-state refusal — and returns `{:ok, state}` or
+  `{:error, reason}` with the tuple the Linear tool's `refused_agent_action` audit path records.
+
+  An agent asking to enter `Code Review` or `QA` by hand is refused: `Code Review` is the handoff
+  signal's to enter and `QA` the verdict's, never the tool's. So is an agent asking for
+  `In Progress` from a phase past implementation (`Rework`, `Code Review`, `QA` or `Merging`): that
+  is a `Restart`, which only a person performs. `Epic Review` is refused the same way: the machine
+  enters it once an epic parent's sub-issues are all terminal and its review's verdict leaves it.
+  `Plan Review` is the plan handoff's: only a plan parent (`ctx`'s `:plan_parent?`) may name it.
 
   An agent asking to park its issue in `Backlog` while it is `In Progress` or `Rework` is not a
   move: the guard returns `{:hold, :blocked, attrs}`, which pauses the ticket in its phase with a
@@ -306,7 +298,7 @@ defmodule SymphonyElixir.TransitionGuard do
         with :ok <- refuse_retired_state(state_name),
              :ok <- refuse_plan_review_entry(state_name, ctx, settings),
              :ok <- refuse_human_only(state),
-             :ok <- refuse_restart_state(state, ctx),
+             :ok <- refuse_restart_state(state, ctx, settings),
              :ok <- refuse_code_review_entry(state, settings),
              :ok <- refuse_qa_entry(state, settings),
              :ok <- refuse_epic_review_entry(state, settings),
@@ -348,21 +340,21 @@ defmodule SymphonyElixir.TransitionGuard do
     end
   end
 
-  # Entering `Code Review` is the handoff signal's job, so an agent's request to
-  # set the state by hand is refused. The handoff is emitted mechanically by the push and PR tool
-  # hooks and performed by the runner, never by an agent asking for the state.
+  # Entering `Code Review` is the handoff signal's job, so an agent's request to set the state by
+  # hand is refused. The handoff is emitted mechanically by the push and PR tool hooks and performed
+  # by the runner, never by an agent asking for the state.
   defp refuse_code_review_entry(%{"name" => state_name}, settings) do
     if state_name_matches?(state_name, settings.tracker.code_review_state),
       do: {:error, {:code_review_requires_handoff_signal, state_name}},
       else: :ok
   end
 
-  # `Plan Review` is a plan parent's handoff: the plan run hands the plan over by naming
-  # `Plan Review`. Any other ticket naming it is refused, so the state belongs to the plan handoff,
-  # not to the tool.
+  # `Plan Review` is the plan handoff: the plan run hands the plan over by naming it. Any other
+  # ticket naming `Plan Review` is refused, so the state belongs to the plan handoff, not to the
+  # tool.
   defp refuse_plan_review_entry(state_name, ctx, settings) do
     with false <- Map.get(ctx, :plan_parent?, false),
-         plan_review when is_binary(plan_review) <- HumanReview.plan_review_state(settings),
+         plan_review when is_binary(plan_review) <- PlanReview.state(settings),
          true <- state_name_matches?(state_name, plan_review) do
       {:error, {:plan_review_requires_handoff_signal, state_name}}
     else
@@ -375,9 +367,7 @@ defmodule SymphonyElixir.TransitionGuard do
   # asking for `In Progress` from a post-implementation phase is asking for that restart without its
   # reset, so it is refused; the claim from `Todo` and every move the machine makes itself are
   # unaffected.
-  defp refuse_restart_state(%{"name" => state_name}, ctx) do
-    settings = Map.fetch!(ctx, :settings)
-
+  defp refuse_restart_state(%{"name" => state_name}, ctx, settings) do
     if state_name_matches?(state_name, @in_progress_state) and restart_origin?(Map.get(ctx, :from_state), settings),
       do: {:error, {:restart_requires_human_approval, state_name}},
       else: :ok
@@ -392,18 +382,17 @@ defmodule SymphonyElixir.TransitionGuard do
     )
   end
 
-  # Entering `QA` is the QA verdict's job (a pass, or the Code Review approve that
-  # skips it), so an agent's request to set the state by hand is refused the same way the Code Review
-  # entry is.
+  # Entering `QA` is the QA verdict's job (a pass, or the Code Review approve that skips it), so an
+  # agent's request to set the state by hand is refused the same way the Code Review entry is.
   defp refuse_qa_entry(%{"name" => state_name}, settings) do
     if state_name_matches?(state_name, settings.tracker.qa_state),
       do: {:error, {:qa_requires_verdict, state_name}},
       else: :ok
   end
 
-  # Entering `Epic Review` is the epic path's own move: the machine enters it when an epic parent
-  # has every sub-issue terminal, and the review's verdict leaves it. An agent's request to
-  # set the state by hand is refused the same way the Code Review and QA entries are.
+  # Entering `Epic Review` is the epic path's own move: the machine enters it when a parent has
+  # every sub-issue terminal, and the review's verdict leaves it. An agent's request to set the
+  # state by hand is refused the same way the Code Review and QA entries are.
   defp refuse_epic_review_entry(%{"name" => state_name}, settings) do
     if state_name_matches?(state_name, settings.tracker.epic_review_state),
       do: {:error, {:epic_review_requires_machine_move, state_name}},

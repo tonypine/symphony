@@ -395,7 +395,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "discovers in-review PRs and persists workspace tracking metadata" do
     now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
+    issue = in_review_issue(updated_at: now, state: "Code Review")
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
 
@@ -428,7 +428,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "a poll's run-store cost doesn't grow with the store" do
     now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
+    issue = in_review_issue(updated_at: now, state: "Code Review")
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     activity = open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
     Application.put_env(:symphony_elixir, :pr_review_test_activity, activity)
@@ -499,7 +499,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         id: "issue-pin-84",
         identifier: "PIN4WOO-84",
         pr_url: "https://github.com/woocommerce/pinterest-for-woocommerce/pull/1185",
-        updated_at: now
+        updated_at: now,
+        state: "Code Review"
       )
 
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
@@ -532,7 +533,14 @@ defmodule SymphonyElixir.PrReviewPollerTest do
                })
              )
 
-    assert {:ok, %{discovered: 1, processed: 1, actions: [{:state_transitioned, "issue-pin-84", :rework, "In Progress"}]}} =
+    # Found in Code Review, whose review comments are the reviewer run's to act on: watched only.
+    assert {:ok, %{discovered: 1, processed: 1, actions: [{:watching, "issue-pin-84"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    # Once the ticket left the phase, the comment sends it back to work on the same PR.
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{issue | state: "In Progress"}])
+
+    assert {:ok, %{processed: 1, actions: [{:state_transitioned, "issue-pin-84", :rework, "In Progress"}]}} =
              PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
     assert_receive {:issue_state_update, "issue-pin-84", "In Progress"}
@@ -558,7 +566,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         "id" => "issue-malicious",
         "identifier" => "ACME-MAL",
         "title" => "Malicious attachment",
-        "state" => %{"name" => "In Review"},
+        "state" => %{"name" => "Code Review"},
         "url" => "https://linear.app/example/issue/ACME-MAL",
         "attachments" => %{
           "nodes" => [
@@ -595,7 +603,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "discovers workspace from newest completed run regardless of store order" do
     now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
+    issue = in_review_issue(updated_at: now, state: "Code Review")
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
 
@@ -735,39 +743,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert PrReviewPoller.pending_pr_head_ref("issue-1780") == "auto/ACME-1780"
   end
 
-  test "discovers a straggler's PR in either draining review state" do
-    now = ~U[2026-05-01 09:00:00Z]
-    issue = %{in_review_issue(updated_at: now) | state: "Human Review"}
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
-
-    assert :ok =
-             RunStore.put_run(%{
-               repo_key: @repo_key,
-               run_id: "run-1",
-               issue_id: issue.id,
-               issue_identifier: issue.identifier,
-               status: "success",
-               workspace_path: "/tmp/workspaces/ACME-1780",
-               worker_host: nil,
-               started_at: DateTime.add(now, -120, :second),
-               ended_at: DateTime.add(now, -60, :second)
-             })
-
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      pr_review_mode: "polling",
-      pr_review_auto_merge: false,
-      pr_review_cooldown_minutes: 30,
-      pr_review_stale_days: 7
-    )
-
-    assert {:ok, %{discovered: 1}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    assert [%{issue_id: "issue-1780", status: "watching"}] = RunStore.list_pr_reviews()
-  end
-
   test "cross-repo reviewer comments remain watching and do not expose a PR head ref" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_comment_at = DateTime.add(now, -31, :minute)
@@ -876,11 +851,12 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     refute_receive {:notification_event, %Event{event: "reviewer_commented"}}, 50
   end
 
-  test "backfills legacy issue title before reviewer_commented notification" do
+  test "backfills a missing issue title before the reviewer_commented notification" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_comment_at = DateTime.add(now, -31, :minute)
 
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    issue = in_review_issue(updated_at: now, state: "Code Review")
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
 
     :ok =
       now
@@ -907,6 +883,15 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     )
 
     assert :ok = SymphonyElixir.Notifications.subscribe()
+
+    # Discovery in Code Review backfills the title; the comments there are the reviewer run's.
+    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert [%{issue_title: "Review manager"}] = RunStore.list_pr_reviews()
+
+    # Once the ticket left the phase, the comment sends it back to work, titled.
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{issue | state: "In Progress"}])
 
     assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :rework, "In Progress"}]}} =
              PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
@@ -1674,7 +1659,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [%{status: "watching"}] = RunStore.list_pr_reviews()
   end
 
-  test "a conflict on a straggler in In Review keeps its fix-run path" do
+  test "a conflict on a designed repo's In Review ticket keeps the legacy path" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
@@ -1776,6 +1761,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              %{
                status: "conflict_escalated",
                conflict_retry_count: 3,
+               # The ticket stays where the conflict found it.
+               target_issue_state: "In Progress",
                error: "merge conflict retry limit reached"
              }
            ] = RunStore.list_pr_reviews()
@@ -1867,7 +1854,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "a parked issue's conflict waits even with the conflict retries spent" do
     now = ~U[2026-05-01 09:00:00Z]
-    parked = %{in_review_issue(updated_at: now) | labels: ["Needs-Human", "breakdown"]}
+    parked = %{in_review_issue(updated_at: now, state: "Merging") | labels: ["Needs-Human", "breakdown"]}
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [parked])
     :ok = put_review(now, %{conflict_retry_count: 3, dispatched_conflict_keys: ["old-head|base-sha"]})
 
@@ -3777,7 +3764,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         id: "issue-fail",
         identifier: "ACME-FAIL",
         pr_url: "https://github.com/example/repo/pull/1",
-        updated_at: now
+        updated_at: now,
+        state: "Code Review"
       )
 
     ok_issue =
@@ -3785,7 +3773,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         id: "issue-ok",
         identifier: "ACME-OK",
         pr_url: "https://github.com/example/repo/pull/2",
-        updated_at: now
+        updated_at: now,
+        state: "Code Review"
       )
 
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [failing_issue, ok_issue])
@@ -4250,7 +4239,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       identifier: identifier,
       title: "Review manager",
       description: "Poll PR state",
-      state: Keyword.get(opts, :state, "In Review"),
+      state: Keyword.get(opts, :state, "In Progress"),
       url: "https://linear.app/example/issue/#{identifier}",
       pr_urls: [pr_url],
       comments: Keyword.get(opts, :comments, []),

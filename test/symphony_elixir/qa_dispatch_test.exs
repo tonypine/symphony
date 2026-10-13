@@ -5,22 +5,20 @@ defmodule SymphonyElixir.QaDispatchTest do
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.RunStore
 
-  @designed_repo "designed-repo"
+  @designed_repo "qa-repo"
   @issue_id "issue-qa-dispatch"
 
   defp repos do
     [
-      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["designed"]]
+      [key: @designed_repo, workflow: Workflow.workflow_file_path(), team: "Test", labels: ["qa"]]
     ]
   end
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", repos: repos())
 
-    for repo <- [@designed_repo] do
-      RunStore.delete_ticket_state(repo, @issue_id)
-      on_exit(fn -> RunStore.delete_ticket_state(repo, @issue_id) end)
-    end
+    RunStore.delete_ticket_state(@designed_repo, @issue_id)
+    on_exit(fn -> RunStore.delete_ticket_state(@designed_repo, @issue_id) end)
 
     :ok
   end

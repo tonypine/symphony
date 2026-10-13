@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.StateMachineTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.{Schema, SystemSchema}
   alias SymphonyElixir.StateMachine
 
   describe "active_states/1" do
@@ -27,7 +26,7 @@ defmodule SymphonyElixir.StateMachineTest do
       assert StateMachine.tracker_active_states(%{tracker | plan_review_state: nil}) == ["Todo", " plan review ", "QA"]
     end
 
-    test "reads a string-keyed tracker" do
+    test "reads string-keyed active states" do
       assert StateMachine.active_states(%{"tracker" => %{"active_states" => ["Todo"]}}) == ["Todo"]
     end
 
@@ -38,6 +37,11 @@ defmodule SymphonyElixir.StateMachineTest do
     test "settings that are not a map yield no states" do
       assert StateMachine.active_states(nil) == []
       assert StateMachine.phase_states(nil) == []
+    end
+
+    test "the runtime settings dispatch from the default phase states" do
+      assert StateMachine.active_states(Config.settings!()) ==
+               ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]
     end
   end
 
@@ -52,38 +56,6 @@ defmodule SymphonyElixir.StateMachineTest do
       }
 
       assert StateMachine.phase_states(settings) == ["Code Review", "QA", "CI Fix"]
-    end
-  end
-
-  describe "the retired repositories[].state_machine key" do
-    defp symphony(repo_fields) do
-      %{
-        "issues" => %{"provider" => "memory"},
-        "agent" => %{"runtime" => "claude", "command" => "claude --dangerously-skip-permissions"},
-        "repositories" => [
-          Map.merge(%{"key" => "app", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}, repo_fields)
-        ]
-      }
-    end
-
-    test "still loads, whatever its value, and warns that it does nothing" do
-      for value <- ["legacy", "designed", "sideways"] do
-        log =
-          capture_log(fn ->
-            assert {:ok, system} = SystemSchema.parse(symphony(%{"state_machine" => value}))
-            refute Map.has_key?(hd(system.repos), :state_machine)
-            assert {:ok, settings} = Schema.parse(SystemSchema.to_config_map(system))
-            refute Map.has_key?(settings, :state_machine)
-          end)
-
-        assert log =~ "`repositories[app].state_machine` is deprecated and has no effect"
-      end
-    end
-
-    test "a repository without it loads without the warning" do
-      log = capture_log(fn -> assert {:ok, _system} = SystemSchema.parse(symphony(%{"base_branch" => "trunk"})) end)
-
-      refute log =~ "state_machine"
     end
   end
 end

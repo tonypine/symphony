@@ -108,27 +108,13 @@ like an edit to `WORKFLOW.md`. See [security](security.md#workflow-and-instructi
 `symphony workflow preview` shows the assembled prompt, instruction files included,
 read from the disk next to the `WORKFLOW.md` it renders.
 
-### One playbook, two state machines
+### One playbook, one state machine
 
-A repo's `repositories[].state_machine` (`legacy` by default, or `designed`) picks
-the prompt it gets. Partials that differ on the designed machine (`status_map`,
-`escape_hatches`, `parent_tickets`, `plan_pipeline`, `pr_feedback_sweep`,
-`ci_triage`, `review_brief`, `completion_bar`, `guardrails`) have a `designed`
-variant, `priv/playbook/<name>.designed.liquid`, served in place of the base body;
-every other partial renders the same on both. Instruction files branch on the
-`state_machine` variable:
-
-```liquid
-{% if state_machine == "designed" -%}
-designed text
-{%- else -%}
-legacy text
-{%- endif %}
-```
-
-A `-%}` trims the indentation of the line after it, so wrap an indented list item
-with untrimmed tags at the end of the line before it. `symphony workflow preview
---repo <key>` renders the prompt for that repo's machine.
+Every repo runs the one ticket state machine (`docs/design/state-machine.md`), so every
+partial renders the same for every repo. The `repositories[].state_machine` switch and the
+`<name>.designed.liquid` partial variants are gone with the legacy machine; a `symphony.yml`
+that still sets the key loads with a deprecation warning. Instruction files still get a
+`state_machine` variable, always `designed`, so one that branches on it keeps rendering.
 
 ## Available partials
 
@@ -155,7 +141,7 @@ with untrimmed tags at the end of the line before it. `symphony workflow preview
 | `workpad_template` | `agent` | Canonical structure for the persistent workpad comment. |
 
 The plan flow in `parent_tickets` (plan run, single plan review, approval
-through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
+through `Waiting on sub-tickets`, epic review) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.
 

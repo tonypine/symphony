@@ -19,11 +19,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
-  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.PersonWait
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.SupervisorCheck
@@ -1211,11 +1211,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Records that the current issue needs something only a human can do: posts an
   `## Decision needed:` comment (`SymphonyElixir.HumanActions.Request`), which Symphony lists in
   the project's human-action update, and leaves the issue in its phase with the `Needs Decision`
-  hold set (`SymphonyElixir.NeedsDecisionHold`). It never moves the issue and never adds a label
-  itself. The request stays open until a person answers it, or the agent withdraws it. A request
-  with the same title still open on the issue is not posted again, but the issue still gains the
-  hold. Every field is refused when it holds a
-  secret pattern. At most #{@human_action_cap_per_run} per run.
+  hold set (`SymphonyElixir.NeedsDecisionHold`). It never adds a label itself. The request stays
+  open until a person answers it, or the agent withdraws it. A request with the same title still
+  open on the issue is not posted again, but the issue still gains the hold. Every field is
+  refused when it holds a secret pattern. At most #{@human_action_cap_per_run} per run.
   """
   @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def request_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1226,7 +1225,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- reject_human_action_secrets(request, context, opts),
          {:ok, settings} <- human_actions_settings(context, opts),
          :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
-      case post_human_action(issue_id, hold_repo_key(context), request, settings, opts) do
+      case post_human_action(issue_id, issue_repo_key(context), request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
           CommentRegistry.record_human_action_request(registry)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
@@ -1312,10 +1311,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
   defp issue_repo_key(_context), do: nil
 
-  # The repo a decision hold is recorded under: the issue's own, or the primary repository when the
-  # run's issue carries none, as in `Config.settings_for_repo/1`.
-  defp hold_repo_key(context), do: issue_repo_key(context) || Config.repo_key_or_nil()
-
   @doc """
   The open human-action requests on the current issue (`SymphonyElixir.HumanActions.Request`),
   as `{comment_id, request}`: requests with no withdrawal reply that the issue hasn't moved on
@@ -1334,8 +1329,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp post_human_action(issue_id, repo_key, request, settings, opts) do
     with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      open = open_request_titled(issue, request.title, settings)
-      hold_request(repo_key, issue, open, request, settings, opts)
+      hold_request(repo_key, issue, open_request_titled(issue, request.title, settings), request, settings, opts)
     end
   end
 
@@ -1403,9 +1397,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Withdraws open human-action requests on the current issue that are no longer needed: replies
   `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
   next human-action update drops them. Once no open request is left, a deprecated request label
-  (`HumanReview.legacy_request_labels/1`) comes off and the `Needs Decision` hold is cleared, so
-  the ticket continues in place. An issue with no open
-  request is left as it is. The reason is refused when it holds a secret pattern.
+  (`PersonWait.legacy_request_labels/1`) comes off and the `Needs Decision` hold is cleared so the
+  ticket continues in place. An issue with no open request is left as it is. The reason is refused
+  when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1419,11 +1413,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # The withdrawal landed: the hold it releases goes first, so an issue that no longer waits on a
-  # person is cleared before the run's own record of the request is dropped and the human-action
-  # list refreshed. Anything else `post_withdrawal` returned passes through.
+  # person is cleared before the human-action list is refreshed. Anything else `post_withdrawal`
+  # returned passes through.
   defp settle_withdrawal({:ok, %{"withdrawn" => true} = withdrawal} = result, context, issue_id, opts) do
     with :ok <- release_decision_hold(context, issue_id, withdrawal, opts) do
-      forget_human_action_request(context, withdrawal)
       Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
       result
     end
@@ -1431,17 +1424,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp settle_withdrawal(other, _context, _issue_id, _opts), do: other
 
-  # The request moved nothing, so its `Needs Decision` hold is what the withdrawal clears: the store
+  # A request moved nothing, so its `Needs Decision` hold is what the withdrawal clears: the store
   # first, then the label, and the ticket continues in place. Another request still open means the
   # ticket still waits, so the hold stays.
   defp release_decision_hold(_context, _issue_id, %{"remaining" => remaining}, _opts) when remaining != 0, do: :ok
-  defp release_decision_hold(context, issue_id, _withdrawal, opts), do: Hold.clear(hold_repo_key(context), issue_id, :needs_decision, opts)
-
-  # With no open request left on the issue, the run's issue no longer waits on a person.
-  defp forget_human_action_request(context, %{"remaining" => 0}),
-    do: CommentRegistry.clear_human_action_request(Map.get(context, :comment_registry))
-
-  defp forget_human_action_request(_context, _withdrawal), do: :ok
+  defp release_decision_hold(context, issue_id, _withdrawal, opts), do: Hold.clear(issue_repo_key(context), issue_id, :needs_decision, opts)
 
   defp validate_withdrawal(attrs) do
     reason = Map.get(attrs, "reason")
@@ -1471,27 +1458,30 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp withdrawing?(_request, nil), do: true
   defp withdrawing?({_comment_id, request}, title), do: Request.normalize_title(request.title) == Request.normalize_title(title)
 
-  # Replies first: a withdrawn request stays out of the update even if removing a label fails.
+  # Replies first: a withdrawn request stays out of the update even if removing its label fails.
   defp withdraw_requests(issue, withdrawing, remaining, reason, settings, opts) do
     with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts),
-         :ok <- release_issue(issue, remaining, settings, opts) do
+         {:ok, state} <- release_issue(issue, remaining, settings, opts) do
       {:ok,
        %{
          "withdrawn" => true,
          "requestCommentIds" => Enum.map(withdrawing, fn {comment_id, _request} -> comment_id end),
          "replyCommentIds" => reply_ids,
          "remaining" => length(remaining),
-         "state" => get_in(issue, ["state", "name"])
+         "state" => state
        }}
     end
   end
 
-  # Another open request still waits on a person: its labels stay.
-  defp release_issue(_issue, [_open | _rest], _settings, _opts), do: :ok
-  defp release_issue(issue, [], settings, opts), do: remove_legacy_request_labels(issue, settings, opts)
+  # Another open request still waits on a person: the issue stays where it is.
+  defp release_issue(issue, [_open | _rest], _settings, _opts), do: {:ok, get_in(issue, ["state", "name"])}
+
+  defp release_issue(issue, [], settings, opts) do
+    with :ok <- remove_legacy_request_labels(issue, settings, opts), do: {:ok, get_in(issue, ["state", "name"])}
+  end
 
   defp remove_legacy_request_labels(issue, settings, opts) do
-    legacy = HumanReview.legacy_request_labels(settings)
+    legacy = PersonWait.legacy_request_labels(settings)
 
     issue
     |> get_in(["labels", "nodes"])
@@ -1899,9 +1889,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp guard_state(state, settings, issue) do
     from_state = get_in(issue, ["state", "name"])
 
-    request = %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}
+    ctx = %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}
 
-    case TransitionGuard.resolve_request(state, request) do
+    case TransitionGuard.resolve_request(state, ctx) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
       {:hold, _kind, _attrs} = hold -> hold
       {:error, _reason} = error -> error

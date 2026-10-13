@@ -23,7 +23,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
   defp state(name, id \\ "state-id"), do: %{"id" => id, "name" => name}
 
   defp designed_settings(extra \\ %{}) do
-    settings!(%{"tracker" => %{"kind" => "memory"}} |> Map.merge(extra))
+    settings!(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
   end
 
   describe "edges/0 and signals/0" do
@@ -39,9 +39,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
       for edge <- edges do
         assert is_atom(edge.signal)
         assert edge.from == :any or (is_list(edge.from) and edge.from != [])
-
-        assert is_binary(edge.to) or
-                 edge.to in [:requested, :waiting_on_sub_issues, :code_review_state, :qa_state, :ci_fix_state, :epic_review_state]
+        assert is_binary(edge.to) or edge.to in [:requested, :waiting_on_sub_issues, :code_review_state, :qa_state, :epic_review_state, :ci_fix_state]
       end
     end
 
@@ -52,14 +50,13 @@ defmodule SymphonyElixir.TransitionGuardTest do
     end
   end
 
-  describe "the one edge table" do
-    test "lists the machine's edges, and no move into a retired or draining state" do
+  describe "the edge table" do
+    test "is the one machine's table, in order" do
       assert TransitionGuard.edges() == [
                %{signal: :claim, from: ["Todo"], to: "In Progress"},
                %{signal: :plan_revise, from: ["Plan Review"], to: "Rework"},
                %{signal: :plan_approve, from: ["In Progress"], to: :waiting_on_sub_issues},
                %{signal: :ci_fix_dispatch, from: :any, to: "In Progress"},
-               %{signal: :pr_review_target, from: :any, to: :requested},
                %{signal: :landing_done, from: ["Merging"], to: "Done"},
                %{signal: :review_rework, from: :any, to: "In Progress"},
                %{signal: :merge_ready, from: ["Rework", "In Progress"], to: "Merging"},
@@ -86,33 +83,32 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
                %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}
              ]
-
-      for %{to: to} <- TransitionGuard.edges(), is_binary(to), do: refute(TransitionGuard.retired_state?(to))
     end
 
-    test "names the retired and the draining states, and refuses both" do
-      assert TransitionGuard.retired_states() == ["Auto Review"]
-      assert TransitionGuard.draining_states() == ["In Review", "Human Review"]
+    test "has no row into a retired state: escalations, decisions and dependency approvals are holds, not moves" do
+      retired = [
+        :ci_escalate,
+        :dependency_review,
+        :dependency_hold,
+        :human_action_request,
+        :human_action_release,
+        :post_pr_handoff,
+        :review_agent_blocked
+      ]
 
-      for state <- ["Auto Review", " in review ", "HUMAN REVIEW"], do: assert(TransitionGuard.retired_state?(state))
-      for state <- ["Code Review", "Plan Review", nil], do: refute(TransitionGuard.retired_state?(state))
+      for signal <- retired do
+        refute signal in TransitionGuard.signals(), inspect(signal)
+      end
+
+      for %{to: to} <- TransitionGuard.edges(), is_binary(to) do
+        refute TransitionGuard.retired_state?(to), to
+      end
     end
 
     test "the plan revise fires from Plan Review and moves through Rework" do
       assert TransitionGuard.target(:plan_revise, %{settings: designed_settings()}) == "Rework"
       assert TransitionGuard.legal?(:plan_revise, "Plan Review", "Rework")
       refute TransitionGuard.legal?(:plan_revise, "In Review")
-    end
-
-    test "legal?/3 reads the table" do
-      assert TransitionGuard.legal?(:claim, "Todo", "In Progress")
-      refute TransitionGuard.legal?(:claim, "In Progress")
-    end
-
-    test "target/2 needs no settings for a literal target" do
-      assert TransitionGuard.target(:claim, %{settings: designed_settings()}) == "In Progress"
-      assert TransitionGuard.target(:claim, %{}) == "In Progress"
-      assert TransitionGuard.target(:claim, %{repo_key: "missing-repo"}) == "In Progress"
     end
   end
 
@@ -136,7 +132,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.target(:handoff, %{settings: settings}) == "Peer Review"
     end
 
-    test "the reviewer's verdicts are edges out of Code Review" do
+    test "the reviewer's verdicts are designed edges out of Code Review" do
       designed = designed_settings()
 
       assert TransitionGuard.legal?(:code_review_approve, "Code Review", nil)
@@ -162,7 +158,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert TransitionGuard.target(:code_review_approve_skip, %{settings: settings}) == "Merging"
     end
 
-    test "the QA run's verdicts are edges out of QA" do
+    test "the QA run's verdicts are designed edges out of QA" do
       designed = designed_settings()
 
       assert TransitionGuard.legal?(:qa_pass, "QA", nil)
@@ -208,7 +204,6 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
       assert TransitionGuard.legal?(:ci_fix_mechanical, "CI Fix", nil)
       refute TransitionGuard.legal?(:ci_fix_mechanical, "Merging", nil)
-      # Designed-only, like the entry rows.
 
       for origin <- ["Code Review", "QA", "Merging", "Rework"] do
         assert TransitionGuard.target(:ci_fix_mechanical, %{target: origin, settings: designed}) == origin
@@ -305,7 +300,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
     test "reads a requested target from ctx" do
       assert TransitionGuard.target(:director_move, %{target: "Todo"}) == "Todo"
-      assert TransitionGuard.target(:pr_review_target, %{target: "Done"}) == "Done"
+      assert TransitionGuard.target(:ci_fix_mechanical, %{target: "QA"}) == "QA"
     end
 
     test "resolves the waiting state from settings, and nil when it is turned off" do
@@ -364,12 +359,16 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
       refute_received {:moved, "issue-4", _state}
 
-      for draining <- ["In Review", "Human Review"] do
-        assert {:error, {:retired_state, ^draining}} =
-                 TransitionGuard.perform("issue-4", :director_move, %{target: draining}, tracker: FakeTracker)
+      for retired <- ["In Review", "Human Review"] do
+        assert {:error, {:retired_state, ^retired}} =
+                 TransitionGuard.perform("issue-4", :director_move, %{target: retired}, tracker: FakeTracker)
       end
 
       refute_received {:moved, "issue-4", _state}
+      assert TransitionGuard.retired_states() == ["Auto Review", "In Review", "Human Review"]
+      assert TransitionGuard.retired_state?(" auto review ")
+      assert TransitionGuard.retired_state?("human review")
+      refute TransitionGuard.retired_state?(nil)
     end
 
     test "refuses a move whose target resolves to no state name without touching the tracker" do
@@ -407,12 +406,20 @@ defmodule SymphonyElixir.TransitionGuardTest do
                TransitionGuard.resolve_request(state, %{settings: memory_settings()})
     end
 
-    test "refuses an agent's move to the retired Auto Review state" do
+    test "refuses an agent's move to a retired state, a plan parent's included" do
       assert {:error, {:retired_state, "Auto Review"}} =
                TransitionGuard.resolve_request(state("Auto Review"), %{settings: memory_settings()})
 
       assert {:error, {:retired_state, "auto review"}} =
                TransitionGuard.resolve_request(state("auto review"), %{settings: designed_settings()})
+
+      for {name, from} <- [{"In Review", "In Progress"}, {"in review", "Rework"}, {"Human Review", "In Progress"}] do
+        assert {:error, {:retired_state, ^name}} =
+                 TransitionGuard.resolve_request(state(name), %{settings: designed_settings(), from_state: from})
+      end
+
+      assert {:error, {:retired_state, "In Review"}} =
+               TransitionGuard.resolve_request(state("In Review"), %{settings: designed_settings(), plan_parent?: true})
     end
 
     test "refuses a hand move into Plan Review, except a plan parent's handoff" do
@@ -444,19 +451,6 @@ defmodule SymphonyElixir.TransitionGuardTest do
                TransitionGuard.resolve_request(state("Code Review"), %{settings: designed_settings()})
     end
 
-    test "refuses an agent's move into In Review or Human Review, a plan parent's included" do
-      # The push hands the work to Code Review, and a plan parent hands over to Plan Review: both
-      # review states only drain, from whichever phase the request comes.
-      for {name, from, plan_parent?} <- [{"In Review", "In Progress", false}, {"in review", "Rework", false}, {"Human Review", "In Progress", true}] do
-        assert {:error, {:retired_state, ^name}} =
-                 TransitionGuard.resolve_request(state(name), %{
-                   settings: designed_settings(),
-                   from_state: from,
-                   plan_parent?: plan_parent?
-                 })
-      end
-    end
-
     test "refuses an agent's move to In Progress from a phase past implementation" do
       # Every one of these phases has the work on a pull request, so
       # entering In Progress can only mean a Restart, which is a person's move.
@@ -474,7 +468,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
                TransitionGuard.resolve_request(state("In Progress"), %{settings: designed_settings(), from_state: "Todo"})
 
       assert {:ok, %{"name" => "In Progress"}} =
-               TransitionGuard.resolve_request(state("In Progress"), %{settings: designed_settings(), from_state: "In Review"})
+               TransitionGuard.resolve_request(state("In Progress"), %{settings: designed_settings(), from_state: nil})
     end
 
     test "the restart signal moves a ticket from any state to In Progress" do
@@ -483,6 +477,11 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
       assert TransitionGuard.legal?(:restart, "Merging", "In Progress")
       refute TransitionGuard.legal?(:restart, "Merging", "Rework")
+    end
+
+    test "refuses an agent's hand move into Epic Review" do
+      assert {:error, {:epic_review_requires_machine_move, "Epic Review"}} =
+               TransitionGuard.resolve_request(state("Epic Review"), %{settings: designed_settings()})
     end
 
     test "refuses an agent's hand move into QA" do
@@ -505,7 +504,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
   end
 
   describe "resolve_request/2 and the Blocked hold" do
-    test "an agent's Backlog request while working is a Blocked hold" do
+    test "turns an agent's Backlog request while working into a Blocked hold" do
       state = state("Backlog")
 
       assert {:hold, :blocked, attrs} =
