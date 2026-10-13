@@ -153,6 +153,7 @@ struct AuditView: View {
     var body: some View {
         VStack(spacing: 0) {
             AuditHeader(audit: audit, filter: $filter, today: today, exportError: exportError)
+                .layoutPriority(1)
             Divider()
             if let empty = audit.empty {
                 EmptyState(
@@ -206,8 +207,9 @@ struct AuditHeader: View {
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s2)
+        // No vertical fixedSize: the split view measures the detail at a near-zero width, where a fixed-height
+        // header wraps a letter per line and grows the window's content taller than the window.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -261,10 +263,11 @@ struct AuditChainLineView: View {
             Image(systemName: line.symbol)
                 .foregroundStyle(line.verified ? DesignTokens.Status.done.tint : DesignTokens.Status.problem.tint)
                 .accessibilityHidden(true)
-            Text(line.day).font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+            Text(line.day).font(DesignTokens.TypeStyle.callout.font.weight(.semibold)).lineLimit(1)
             Text(line.text)
                 .font(DesignTokens.TypeStyle.callout.font)
                 .foregroundStyle(line.verified ? .secondary : .primary)
+                .lineLimit(3)
                 .textSelection(.enabled)
         }
         .accessibilityElement(children: .combine)
