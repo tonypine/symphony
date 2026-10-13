@@ -13,7 +13,8 @@ defmodule SymphonyElixir.QaAgent do
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
   `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
-  is left (`SymphonyElixir.HumanReview`). An answer without that object gets
+  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts). An
+  answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
