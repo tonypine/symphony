@@ -61,9 +61,13 @@ defmodule SymphonyElixir.Hold do
   the flow the same way, whatever set it, so a dispatch gate asks this rather than naming a kind.
   """
   @spec held_any?(String.t() | nil, String.t() | nil, keyword()) :: boolean()
-  def held_any?(repo_key, issue_id, opts \\ []) do
+  def held_any?(repo_key, issue_id, opts \\ []), do: held_kinds(repo_key, issue_id, opts) != []
+
+  @doc "The kinds of hold the ticket carries, in display order, read from the store in one go."
+  @spec held_kinds(String.t() | nil, String.t() | nil, keyword()) :: [kind()]
+  def held_kinds(repo_key, issue_id, opts \\ []) do
     record = record(repo_key, issue_id, opts)
-    Enum.any?(@kinds, &TicketState.hold?(record, &1))
+    Enum.filter(@kinds, &TicketState.hold?(record, &1))
   end
 
   @doc """
