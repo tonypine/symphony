@@ -3987,7 +3987,8 @@ SHOULD return:
 - running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
   runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
   forced parent's current part
-- `forced` rows SHOULD include `sub_issue` (a forced plan parent's current part, or null)
+- `forced` rows SHOULD include `title`, `repo_key` (null when Symphony hasn't routed the issue yet),
+  `sub_issue` (a forced plan parent's current part, or null)
   and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
 - `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
   `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
@@ -4323,6 +4324,7 @@ Minimum endpoints:
           "issue_id": "vwx234",
           "issue_identifier": "MT-657",
           "title": "Fix the release build",
+          "repo_key": "web",
           "state": "In Progress",
           "forced_since": "2026-02-24T19:00:00Z",
           "forced_for_seconds": 7380,
