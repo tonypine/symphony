@@ -1412,7 +1412,7 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
-  @claim_holding_tracker_task_kinds [:retry_refresh, :post_pr_transition, :blocked_transition]
+  @claim_holding_tracker_task_kinds [:retry_refresh, :blocked_transition]
 
   defp claim_holding_tracker_task_issue_ids(%State{tracker_tasks: tasks}) do
     for {_ref, %{kind: kind, issue_ids: issue_ids}} <- tasks,
@@ -3428,19 +3428,6 @@ defmodule SymphonyElixir.Orchestrator do
     waiting = Map.get(previous_waiting, issue.id, %{})
 
     cond do
-      # Its PR showed up after its retry started waiting; the move takes no slot.
-      Map.has_key?(previous_waiting, issue.id) and post_pr_quiet_active_issue?(issue, state) ->
-        metadata = Map.take(waiting, [:repo_key, :worker_host])
-
-        case keep_unpushed_issue_active(state, issue, metadata) do
-          {:unpushed, state} ->
-            maybe_dispatch_chosen_issue(issue, {state, hold}, previous_waiting, active_states, terminal_states)
-
-          :pushed ->
-            {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
-            {state, hold}
-        end
-
       not dispatch_gates_open?(issue, state, active_states, terminal_states) ->
         {note_blocked_flow_head(state, issue), hold}
 
@@ -3623,13 +3610,11 @@ defmodule SymphonyElixir.Orchestrator do
       priority_allowed?(issue, state)
   end
 
-  # The gates the review flow owns: a legacy repo's run that went quiet with its PR open (the
-  # catch-handler below), a designed repo's Code Review ticket whose head is not green yet, one
-  # whose repo has no reviewer enabled to run, and a designed repo's QA ticket whose head is not
-  # green yet. The QA agent, like the reviewer, only runs on a green head.
-  defp review_flow_hold?(%Issue{} = issue, %State{} = state) do
-    post_pr_quiet_active_issue?(issue, state) or
-      code_review_head_blocked?(issue) or
+  # The gates the review flow owns: a designed repo's Code Review ticket whose head is not green
+  # yet, one whose repo has no reviewer enabled to run, and a designed repo's QA ticket whose head
+  # is not green yet. The QA agent, like the reviewer, only runs on a green head.
+  defp review_flow_hold?(%Issue{} = issue, %State{} = _state) do
+    code_review_head_blocked?(issue) or
       code_review_reviewer_disabled?(issue) or
       qa_head_blocked?(issue)
   end
@@ -4875,7 +4860,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
     # A refetched issue carries no repo key; without the retry's, a designed repo's ticket would
-    # read as legacy and take the quiet post-PR move into Auto Review.
+    # read as legacy and skip the quiet-run backoff.
     issue = freeze_issue_repo_key(issue, issue_repo_key(issue) || retry_repo_key(state, metadata, %{}))
 
     cond do
@@ -4889,10 +4874,6 @@ defmodule SymphonyElixir.Orchestrator do
         |> cleanup_issue_workspace(metadata[:worker_host])
 
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
-
-      post_pr_quiet_active_issue?(issue, state) ->
-        on_pushed = &handle_post_pr_quiet_active_issue(&1, issue, issue_id, attempt, metadata)
-        handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed)
 
       designed_quiet_continuation?(issue, state, metadata) ->
         on_pushed = &handle_designed_quiet_handoff(&1, issue, attempt, metadata)
@@ -4949,15 +4930,6 @@ defmodule SymphonyElixir.Orchestrator do
         completed_metadata = Map.put(completed_metadata, :unpushed_head, head)
         {:unpushed, %{state | completed_run_metadata: Map.put(state.completed_run_metadata, issue_id, completed_metadata)}}
     end
-  end
-
-  # The move runs in a task; the claim stays held until it lands.
-  defp handle_post_pr_quiet_active_issue(%State{} = state, %Issue{} = issue, issue_id, attempt, metadata) do
-    post_pr_state = post_pr_handoff_state(issue)
-    Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
-
-    context = %{kind: :post_pr_transition, issue_ids: [issue_id], issue: issue, attempt: attempt, metadata: metadata}
-    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state, issue_repo_key(issue)) end)}
   end
 
   # A designed ticket whose run went quiet on its PR without the handoff signal. The runner hands off
@@ -5018,55 +4990,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp move_post_pr_issue(issue_id, post_pr_state, repo_key) do
-    Usage.with_caller(:post_pr_transition, fn ->
-      TransitionGuard.perform(issue_id, :post_pr_handoff, %{target: post_pr_state, repo_key: repo_key})
-    end)
-  end
-
-  defp finish_post_pr_transition(%State{} = state, %{issue: %Issue{} = issue, attempt: attempt, metadata: metadata, post_pr_state: post_pr_state}, result) do
-    issue_id = issue.id
-
-    case result do
-      :ok ->
-        record_ticket_signal(issue, "handoff", %{to: post_pr_state, move: true})
-        reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
-
-        state
-        |> put_watching_issue(reviewed_issue)
-        |> release_issue_claim(issue_id)
-
-      {:error, reason} ->
-        Logger.warning("Failed to move post-PR issue to #{post_pr_state}: #{issue_context(issue)} reason=#{inspect(reason)}")
-
-        schedule_issue_retry(
-          state,
-          issue_id,
-          attempt,
-          metadata
-          |> Map.merge(%{
-            identifier: issue.identifier,
-            title: issue.title,
-            error: post_pr_move_error(post_pr_state, reason)
-          })
-          |> linear_wait_metadata(reason)
-        )
-    end
-  end
-
   defp dispatch_refresh_error(reason) do
     if TransientRetry.transient?(reason) do
       "waiting for Linear before dispatch: #{inspect(reason)}"
     else
       "retry issue refresh failed: #{inspect(reason)}"
-    end
-  end
-
-  defp post_pr_move_error(post_pr_state, reason) do
-    if TransientRetry.transient?(reason) do
-      "waiting for Linear to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
-    else
-      "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
     end
   end
 
@@ -6665,7 +6593,6 @@ defmodule SymphonyElixir.Orchestrator do
     state
   end
 
-  defp handle_tracker_task_result(%State{} = state, %{kind: :post_pr_transition} = context, result), do: finish_post_pr_transition(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :blocked_transition} = context, result), do: finish_blocked_transition(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :breakdown_review} = context, result), do: finish_breakdown_review(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :plan_comments} = context, result), do: finish_plan_comments(state, context, result)
@@ -8942,16 +8869,9 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The run that opens the PR was dispatched without one, so the PR attached to the refetched
-  # issue counts too.
-  #
-  # A designed repo never takes this catch-handler: its handoff is the session's explicit signal,
-  # performed by the run itself (`SymphonyElixir.Handoff`), so a run that goes quiet without it
-  # leaves the ticket where it is instead of advancing it.
-  defp post_pr_quiet_active_issue?(%Issue{} = issue, %State{} = state) do
-    not designed_issue?(issue) and quiet_post_pr_issue?(issue, state)
-  end
-
+  # A run that went quiet on its PR. The run that opens the PR was dispatched without one, so the
+  # PR attached to the refetched issue counts too. Quiet never advances a ticket: a move takes the
+  # session's explicit handoff signal (`SymphonyElixir.Handoff`).
   defp quiet_post_pr_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
     completed_metadata = Map.get(state.completed_run_metadata, issue_id)

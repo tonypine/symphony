@@ -2684,7 +2684,7 @@ Forced allowance:
 - A usage-limit headroom hold (Section 8.4.2) does not hold a forced issue's run. A `paused` or
   `canary` hold still does, and when a hold resumes a held forced retry is chosen as the canary.
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
-  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
+  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff,
   and the auto-merge / `Merging` CI waits.
 - A forced plan parent is one forced unit; its plan, re-plan and close-out runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
