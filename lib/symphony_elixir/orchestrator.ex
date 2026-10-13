@@ -24,6 +24,7 @@ defmodule SymphonyElixir.Orchestrator do
     Handoff,
     Hold,
     HumanReview,
+    Initiatives,
     Notifications,
     PlanComments,
     PrReviewPoller,
@@ -5373,13 +5374,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_emit_issue_completed(%State{} = state, %Issue{state: issue_state} = issue, source) do
     if done_state?(issue_state) do
-      maybe_emit_lifecycle_event(state, :issue_completed, issue, source, close_watch: true)
+      attrs = completion_attrs(issue)
+      maybe_emit_lifecycle_event(state, :issue_completed, issue, source, close_watch: true, attrs: attrs)
     else
       state
     end
   end
 
   defp maybe_emit_issue_completed(state, _issue, _source), do: state
+
+  # The plan the ticket belongs to, kept on its run record for `/api/v1/shipped` after the plan
+  # leaves the Initiatives cache.
+  defp completion_attrs(%Issue{id: issue_id}), do: put_present(%{}, :initiative, Initiatives.parent_of(issue_id))
 
   defp maybe_emit_lifecycle_event(state, event, issue, source, opts \\ [])
 
@@ -5492,6 +5498,7 @@ defmodule SymphonyElixir.Orchestrator do
         updated_at: now
       }
       |> maybe_put_watch_closed_at(now, Keyword.get(opts, :close_watch, false))
+      |> Map.merge(Keyword.get(opts, :attrs, %{}))
 
     persist_lifecycle_event_marker(state, metadata, attrs)
     update_completed_run_metadata(state, issue_id, attrs, Keyword.get(opts, :close_watch, false))

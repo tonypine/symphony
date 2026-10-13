@@ -4630,6 +4630,33 @@ Minimum endpoints:
   - The response also has `days`, `from`, `to`, `daily_budget` (`agent.max_tokens_per_day`) and
     `per_ticket_cap`.
 
+- `GET /api/v1/shipped?days=N`
+  - The tickets merged over the last `N` local days of the host ending today (default 7, at most
+    90; any other value returns `400` `invalid_days`), for the Mac app's Shipped view. Read from the
+    run records, the tickets' signals ledger and the cached initiatives; it MUST make no Linear
+    request. `/api/v1/history`'s `merged_per_day` only counts merges per UTC day, so the list is its
+    own endpoint.
+  - A ticket counts as merged when Symphony noted its completion, on the host's local day, as
+    `shipped_today` in `/api/v1/state` counts it.
+  - `tickets` lists each, newest first: `issue_id`, `identifier`, `title`, `repo_key`,
+    `initiative` (the plan ticket's `identifier` and `title`, kept on the run when the completion
+    was noted, else the cached plan that lists it; null when none), `pr_url`, `merged_at`, `date`
+    (its local day), `todo_at` and `todo_to_done_seconds`: from Symphony's first claim of the ticket
+    (its move out of Todo), else its first run, to the merge.
+  - `shipped_per_day` has one entry per day (`date`, `shipped`). The response also has `days`,
+    `from`, `to` and `total`.
+
+- `GET /api/v1/learnings?repo=&tag=&q=`
+  - The learnings of every configured repo, from the learnings store the web dashboard's
+    `/learnings` reads, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
+    whose rule, evidence, tags or ticket identifier contain the text, in any case; a blank filter is
+    ignored.
+  - Each record has `id`, `repo_key`, `repo`, `rule`, `tags`, `evidence_quote`,
+    `issue_identifier`, `issue_url`, `pr_number`, `pr_url`, `run_id` and `created_at`. `pr_url` is
+    set only for a canonical GitHub host and `issue_url` only for an HTTPS `linear.app` link.
+  - The response also has `filters` (the filters applied) and `repos` and `tags`: every repo key
+    and tag the records have, before filtering.
+
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
     the implementation tracks that is useful for debugging.
