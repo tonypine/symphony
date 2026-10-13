@@ -234,6 +234,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             menuItem.title = model?.inspectorShown == true ? "Hide Inspector" : "Show Inspector"
             return model?.selection == .tickets && model?.shownTicket == nil
         case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
+        case #selector(searchTickets(_:)):
+            menuItem.title = model?.searchesLearnings == true ? "Search Learnings" : "Search Tickets"
+            return true
         default: return true
         }
     }

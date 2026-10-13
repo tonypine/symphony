@@ -16,9 +16,10 @@ defmodule SymphonyElixir.Inbox do
      covers, the access hold its store record carries.
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
-  `clarify`), drops an issue that is running or that the orchestrator saw leave `Plan Review`
-  since, and sorts the list oldest first. A held ticket is kept whatever state the orchestrator
-  reports: the hold is what waits on the Director. A failed read keeps the last list.
+  `clarify`), drops an issue that is running or that the orchestrator saw leave the state the read
+  listed it in (`Plan Review` for a plan) since, and sorts the list oldest first. A held ticket is
+  kept whatever state the orchestrator reports: the hold is what waits on the Director. A failed
+  read keeps the last list.
 
   Each read also reconciles the read tickets' `Needs Decision` holds
   (`SymphonyElixir.NeedsDecisionHold`): a decision request pauses its ticket in place, and the
@@ -130,15 +131,31 @@ defmodule SymphonyElixir.Inbox do
 
     server
     |> cached()
-    |> Enum.reject(fn item ->
-      MapSet.member?(running_ids, item.issue_id) or
-        (item.kind != :blocked and Map.has_key?(watched_states, item.issue_id) and not PlanReview.in_state?(watched_states[item.issue_id]))
-    end)
+    |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states)))
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> Enum.concat(clarify)
     |> Enum.uniq_by(& &1.issue_id)
     |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
   end
+
+  # Whether the orchestrator saw the ticket leave what the read listed it for: `Plan Review`, or for
+  # a plan, which waits in its repo's own plan review state, where the read found it. A hold is what
+  # waits on the Director, whatever the state.
+  defp left_review?(%{kind: :blocked}, _watched_states), do: false
+
+  defp left_review?(item, watched_states) do
+    case Map.fetch(watched_states, item.issue_id) do
+      {:ok, state} -> not (PlanReview.in_state?(state) or listed_plan?(item, state))
+      :error -> false
+    end
+  end
+
+  defp listed_plan?(item, state), do: item.kind == :plan and same_state?(state, item.state)
+
+  defp same_state?(state, other) when is_binary(state) and is_binary(other),
+    do: String.downcase(String.trim(state)) == String.downcase(String.trim(other))
+
+  defp same_state?(_state, _other), do: false
 
   defp sort_key(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
   defp sort_key(_at), do: 0

@@ -1179,6 +1179,7 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       title: entry.title,
+      repo_key: Map.get(entry, :repo_key),
       state: entry.state,
       forced_since: iso8601(entry.forced_since),
       forced_for_seconds: Map.get(entry, :forced_for_seconds),

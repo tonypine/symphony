@@ -726,7 +726,7 @@ agent:
   restarts); a ticket labelled in another state, such as `Backlog` or `Plan Review`, joins once it
   moves into an active state. Once queued it stays listed in any non-terminal state (`Plan Review`,
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
-  queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
+  `title`, `repo_key`, queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
   `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
@@ -2153,7 +2153,8 @@ recorded and what clears it), `headline` (its one-line ask: the text after `**Wh
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
 or watches outside `Plan Review`, is dropped — unless a hold pauses it, which is what waits on the
-Director. It doesn't depend on `human_actions.enabled`.
+Director. A plan that leaves `Plan Review` (approved, or sent to `Rework`) drops out on the next
+read. It doesn't depend on `human_actions.enabled`.
 `inbox_read` is false while Symphony has not yet read Linear for the list (the first read starts a
 second after startup), and true from its first successful read on, or when the tracker isn't Linear.
 The Mac app waits for it before it remembers what already waits, so nothing that was there notifies.

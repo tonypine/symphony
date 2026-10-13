@@ -85,6 +85,27 @@ defmodule SymphonyElixir.HumanActions.WaitingTest do
     assert entries([pr, verification, in_review]) == []
   end
 
+  test "a plan parent waiting in Plan Review is a plan, and nothing else is listed for that state" do
+    settings = %Schema{}
+
+    plan =
+      node("TP-20", %{
+        "state" => %{"name" => "Plan Review"},
+        "labels" => labels(["breakdown"]),
+        "history" => history([moved("Plan Review", "2026-10-01T08:00:00Z")])
+      })
+
+    not_a_plan = node("TP-21", %{"state" => %{"name" => "Plan Review"}, "labels" => labels([])})
+    approved = node("TP-22", %{"state" => %{"name" => "Waiting on sub-tickets"}, "labels" => labels(["plan"])})
+
+    assert [%{identifier: "TP-20", kind: :plan, state: "Plan Review", waiting_since: ~U[2026-10-01 08:00:00Z]}] =
+             Waiting.entries([plan, not_a_plan, approved], settings)
+
+    # With the Plan Review state turned off, no plan waits on a person.
+    off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
+    assert Waiting.entries([plan], off) == []
+  end
+
   test "an open request makes the issue an action, waiting since the request when its history has no move" do
     action = node("TP-4", %{"state" => %{"name" => "Code Review"}, "labels" => labels([]), "comments" => comments([request_comment("2026-10-02T07:00:00Z")])})
 

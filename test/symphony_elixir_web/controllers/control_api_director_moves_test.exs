@@ -96,6 +96,48 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:decide, params, moves)) == {409, "move_not_allowed", "MOT-60 is not waiting on a decision"}
   end
 
+  test "Continue to QA on a Code Review escalation moves the ticket into QA; an unconfigured target is a 422 that keeps the hold", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Escalated", state: "Code Review", repo_key: "repo-api"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+
+    params = %{
+      "issue_identifier" => "MOT-60",
+      "request_comment_id" => "comment-1",
+      "picks" => [%{"question" => "How should MOT-60 continue?", "answer" => "1"}]
+    }
+
+    :ok = Hold.set("repo-api", "held", :needs_decision, escalation_hold(""))
+
+    assert error(post(:decide, params, moves)) ==
+             {422, "invalid_request", "MOT-60's decision moves it to a state not configured for repo repo-api; the hold stays"}
+
+    assert Hold.held?("repo-api", "held", :needs_decision)
+    refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+
+    :ok = Hold.set("repo-api", "held", :needs_decision, escalation_hold("QA"))
+    conn = post(:decide, params, moves)
+
+    assert conn.status == 200
+    assert %{"move" => "decide", "moved" => true, "from_state" => "Code Review", "to_state" => "QA"} = Jason.decode!(conn.resp_body)
+    assert_received {:memory_tracker_state_update, "held", "QA"}
+    refute Hold.held?("repo-api", "held", :needs_decision)
+  end
+
+  defp escalation_hold(qa_state) do
+    %{
+      reason: "How should MOT-60 continue?",
+      clearing_condition: "when the decision is recorded",
+      decision: %{
+        title: "Code Review escalated MOT-60",
+        options: [
+          %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts"},
+          %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons"}
+        ],
+        confirm: qa_state
+      }
+    }
+  end
+
   test "a hold the store refuses to clear is a 502", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])

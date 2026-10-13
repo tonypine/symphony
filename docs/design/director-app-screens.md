@@ -471,9 +471,10 @@ The sub-tickets of TP-747, in landing order. Each is one PR with its own accepta
 | 7 | [TP-780](https://linear.app/tonypine/issue/TP-780/list-every-ticket-and-steer-dispatch-from-the-symphony-window) List every ticket and steer dispatch from the Symphony window | D6 with the inspector; the dispatch control, D12a, D12b | TP-779 |
 | 8 | [TP-781](https://linear.app/tonypine/issue/TP-781/follow-initiatives-in-the-symphony-window) Follow initiatives in the Symphony window | The initiatives endpoint; D5; the Overview's Initiatives card | TP-779 |
 | 9 | [TP-782](https://linear.app/tonypine/issue/TP-782/show-quality-and-usage-and-point-the-web-dashboard-to-the-mac-app) Show Quality and Usage, and point the web dashboard to the Mac app | The history endpoint; D7, D8; the DD6 banner | TP-780, TP-781 |
-| 10 | [TP-783](https://linear.app/tonypine/issue/TP-783/final-verification-create-a-native-foreground-dashboard-to-the-macos) Final verification | Checks every requirement and acceptance criterion on `main` | TP-774 to TP-782 |
+| 10 | [TP-784](https://linear.app/tonypine/issue/TP-784/show-what-shipped-and-what-the-crew-learned-in-the-symphony-window) Show what shipped and what the crew learned in the Symphony window | The shipped and learnings endpoints; D9 with its Learnings tab; the sidebar's Records group; the Overview's Shipped today tile and Show Shipped open D9 | TP-782 |
+| 11 | [TP-785](https://linear.app/tonypine/issue/TP-785/browse-verify-and-export-the-audit-record-in-the-symphony-window) Browse, verify and export the audit record in the Symphony window | D10 | TP-784 |
+| 12 | [TP-783](https://linear.app/tonypine/issue/TP-783/final-verification-create-a-native-foreground-dashboard-to-the-macos) Final verification | Checks every requirement and acceptance criterion on `main` | TP-774 to TP-782, TP-784, TP-785 |
 
-**Deferred:** US9 (Could): D9 Shipped and Learnings, D10 Audit, and the sidebar's Records group. One run files at most
-10 sub-tickets, and the stories rank US9 "later". Until they are built, the web dashboard keeps `/learnings` and
-`/audit` (DD6), and the app links to them (the ticket page's Show Audit Records opens the web audit page). The
-Overview's idle state leaves out Show Shipped until D9 exists.
+US9 (Could) was first deferred: one run files at most 10 sub-tickets, and the stories rank US9 "later". The Director
+asked on 2026-10-07 to build it now, so TP-784 and TP-785 deliver it. The web dashboard keeps `/learnings` and `/audit`
+(DD6).

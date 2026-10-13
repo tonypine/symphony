@@ -89,13 +89,14 @@ defmodule SymphonyElixir.ForcedQueueTest do
       assert %{state: "Merging", forced_since: @now} = entries["a"]
       assert %{state: "Todo", forced_since: @now} = entries["b"]
 
-      {entries, [{:start, "d", _d}]} = ForcedQueue.reconcile(entries, [issue("d", "MT-4", "Todo", ["expedite"])], [], settings, @now)
+      routed = %{issue("d", "MT-4", "Todo", ["expedite"]) | repo_key: "web"}
+      {entries, [{:start, "d", _d}]} = ForcedQueue.reconcile(entries, [routed], [], settings, @now)
       entries = Map.update!(entries, "d", &%{&1 | forced_since: later})
 
       assert [
                %{issue_id: "a", identifier: "MT-1", position: 1},
                %{issue_id: "b", identifier: "MT-2", position: 2},
-               %{issue_id: "d", identifier: "MT-4", position: 3, forced_since: ^later, title: "Ticket MT-4", state: "Todo"}
+               %{issue_id: "d", identifier: "MT-4", position: 3, forced_since: ^later, title: "Ticket MT-4", state: "Todo", repo_key: "web"}
              ] = ForcedQueue.snapshot(entries)
 
       {entries, changes} =

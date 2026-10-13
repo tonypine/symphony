@@ -219,7 +219,7 @@ defmodule SymphonyElixir.TransitionGuard do
   The state `signal` moves to, resolved from `ctx`. `ctx.settings` is required for the
   config-derived targets and `ctx.target` for a requested one.
   """
-  @spec target(signal(), context()) :: String.t()
+  @spec target(signal(), context()) :: String.t() | nil
   def target(signal, ctx) do
     edge(signal)
     |> case do
@@ -231,7 +231,9 @@ defmodule SymphonyElixir.TransitionGuard do
   @doc """
   Performs the move `signal` names for `issue_id`, resolving its target from `ctx`. This is the one
   caller of `Tracker.update_issue_state/2`; `opts[:tracker]` overrides the tracker (tests, a fake).
-  A move into a retired state is refused with `{:error, {:retired_state, target}}`.
+  A move into a retired state is refused with `{:error, {:retired_state, target}}`, and one whose
+  target resolves to no state name (a requested or configured state that is nil or blank) with
+  `{:error, {:unresolved_target, signal}}`, before Linear is asked.
   A move into `Merging` asks the PR poller to poll now (`opts[:on_merging]` overrides it), so a PR
   that is already green merges at once instead of on the next timer, by when its head may be behind.
   """
@@ -239,17 +241,26 @@ defmodule SymphonyElixir.TransitionGuard do
   def perform(issue_id, signal, ctx \\ %{}, opts \\ []) do
     target = target(signal, ctx)
 
-    if retired_state?(target) do
-      {:error, {:retired_state, target}}
-    else
-      case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target) do
-        :ok when target == @merging_state ->
-          Keyword.get(opts, :on_merging, &SymphonyElixir.PrReviewPoller.poll_now/0).()
-          :ok
+    cond do
+      not is_binary(target) or String.trim(target) == "" ->
+        {:error, {:unresolved_target, signal}}
 
-        result ->
-          result
-      end
+      retired_state?(target) ->
+        {:error, {:retired_state, target}}
+
+      true ->
+        update_state(issue_id, target, opts)
+    end
+  end
+
+  defp update_state(issue_id, target, opts) do
+    case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target) do
+      :ok when target == @merging_state ->
+        Keyword.get(opts, :on_merging, &SymphonyElixir.PrReviewPoller.poll_now/0).()
+        :ok
+
+      result ->
+        result
     end
   end
 
