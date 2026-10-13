@@ -8,16 +8,19 @@ defmodule SymphonyElixir.PathsTest do
   @logs_keys [:logs_root_override, :logs_root, :log_file]
   @release_keys [:running_as_release]
   @burrito_env "__BURRITO"
+  @release_root_env "SYMPHONY_RELEASE_ROOT"
 
   setup do
     previous_state_env = System.get_env("SYMPHONY_STATE_ROOT")
     previous_logs_env = System.get_env("SYMPHONY_LOGS_ROOT")
     previous_burrito_env = System.get_env(@burrito_env)
+    previous_release_root_env = System.get_env(@release_root_env)
     previous_env = Map.new(@state_keys ++ @logs_keys ++ @release_keys, &{&1, Application.get_env(@app, &1)})
 
     System.delete_env("SYMPHONY_STATE_ROOT")
     System.delete_env("SYMPHONY_LOGS_ROOT")
     System.delete_env(@burrito_env)
+    System.delete_env(@release_root_env)
     Enum.each(@state_keys ++ @logs_keys ++ @release_keys, &Application.delete_env(@app, &1))
     Application.put_env(@app, :running_as_release, false)
 
@@ -25,6 +28,7 @@ defmodule SymphonyElixir.PathsTest do
       restore_env("SYMPHONY_STATE_ROOT", previous_state_env)
       restore_env("SYMPHONY_LOGS_ROOT", previous_logs_env)
       restore_env(@burrito_env, previous_burrito_env)
+      restore_env(@release_root_env, previous_release_root_env)
 
       Enum.each(previous_env, fn
         {key, nil} -> Application.delete_env(@app, key)
@@ -76,6 +80,21 @@ defmodule SymphonyElixir.PathsTest do
 
     assert Paths.state_root() == Path.join([System.user_home!(), "Library", "Application Support", "symphony"])
     assert Paths.logs_root() == Path.join([System.user_home!(), "Library", "Logs", "symphony"])
+  end
+
+  test "release builds can be detected from the release launcher's environment" do
+    Application.delete_env(@app, :running_as_release)
+    System.put_env(@release_root_env, "/Applications/Symphony.app/Contents/Resources/symphony-release")
+
+    assert Paths.state_root() ==
+             Path.join([System.user_home!(), "Library", "Application Support", "symphony", "release"])
+
+    assert Paths.logs_root() ==
+             Path.join([System.user_home!(), "Library", "Logs", "symphony", "release"])
+
+    System.put_env(@release_root_env, "")
+
+    assert Paths.state_root() == Path.join([System.user_home!(), "Library", "Application Support", "symphony"])
   end
 
   test "logs root precedence is flag override, env, app env, default" do

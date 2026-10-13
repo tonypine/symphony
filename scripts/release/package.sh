@@ -116,9 +116,9 @@ shown=200
   echo "## Verifying"
   echo
   if [ "$signed" = true ]; then
-    echo "Symphony.app and its embedded \`symphony\` binary are signed with the Symphony code-signing certificate."
+    echo "Symphony.app and its embedded Symphony release are signed with the Symphony code-signing certificate."
   else
-    echo "Symphony.app and its embedded \`symphony\` binary are signed ad hoc: no code-signing certificate is configured yet."
+    echo "Symphony.app and its embedded Symphony release are signed ad hoc: no code-signing certificate is configured yet."
   fi
   echo
   echo '```bash'
