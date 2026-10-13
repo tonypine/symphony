@@ -17,7 +17,7 @@ defmodule SymphonyElixir.HumanReview do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.StateMachine
+  alias SymphonyElixir.{RetiredStates, StateMachine, TransitionGuard}
 
   @merging_state "Merging"
   # Asks for a person whatever the `escalate.labels` say (see `parked_for_person?/2`).
@@ -57,17 +57,22 @@ defmodule SymphonyElixir.HumanReview do
   True when an issue waits on a person: it sits outside `tracker.active_states` with a label that
   asks for one (`needs-human`, a `legacy_request_labels/1` label, or an
   `auto_review.acceptance_gate.escalate` label other than `plan` and `breakdown`, which every plan
-  carries). Labels and states compare case-insensitively.
+  carries), or it is a straggler the drain report reads as an open decision
+  (`SymphonyElixir.RetiredStates.wait/1`). Labels and states compare case-insensitively.
 
   A fix run (CI or merge conflict) can't do what the person must, so the pollers leave such an
   issue where it is until the label goes or it moves to an active state.
   """
   @spec parked_for_person?(Issue.t(), Schema.t()) :: boolean()
-  def parked_for_person?(%Issue{state: issue_state, labels: labels}, %Schema{} = settings) do
+  def parked_for_person?(%Issue{state: issue_state, labels: labels} = issue, %Schema{} = settings) do
     wanted = MapSet.new(person_labels(settings), &normalize/1)
 
     not active_state?(issue_state, settings) and
-      Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize(&1))))
+      (Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize(&1)))) or open_decision_straggler?(issue))
+  end
+
+  defp open_decision_straggler?(%Issue{state: issue_state} = issue) do
+    TransitionGuard.retired_state?(issue_state) and match?({:open_decision, _waits_on, _move}, RetiredStates.wait(issue))
   end
 
   @doc """

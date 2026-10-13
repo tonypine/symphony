@@ -564,8 +564,13 @@ defmodule SymphonyElixir.CiPoller do
   # `Rework` is watched because every phase whose head goes red routes to the CI
   # Fix lane (`SymphonyElixir.CiFix`), and Rework is one of them: without it here, a rework's red head
   # would go unnoticed until its run ended.
+  #
+  # The draining review states (`TransitionGuard.draining_states/0`) are watched too, so a straggler
+  # left there finishes on the path it started on (`SymphonyElixir.RetiredStates`); one that waits on
+  # a person's decision is parked (`HumanReview.parked_for_person?/2`).
   defp watched_states(settings) do
-    [@merging_state, settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
+    TransitionGuard.draining_states() ++
+      [@merging_state, settings.tracker.code_review_state, settings.tracker.qa_state, @rework_state]
   end
 
   defp issue_in_states?(%Issue{state: state}, states) when is_binary(state),

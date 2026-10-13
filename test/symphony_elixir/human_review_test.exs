@@ -101,11 +101,13 @@ defmodule SymphonyElixir.HumanReviewTest do
       refute HumanReview.parked_for_person?(%{parked | labels: nil}, settings)
     end
 
-    test "a draining review state with no label is not parked by itself" do
+    test "a straggler the drain report reads as an open decision is parked; one with a PR to review is not" do
       settings = Config.settings!()
 
-      refute HumanReview.parked_for_person?(%Issue{state: "Human Review", labels: []}, settings)
+      assert HumanReview.parked_for_person?(%Issue{state: "Human Review", labels: []}, settings)
+      assert HumanReview.parked_for_person?(%Issue{state: "In Review", labels: ["Needs Decision"]}, settings)
       refute HumanReview.parked_for_person?(%Issue{state: "In Review", labels: []}, settings)
+      refute HumanReview.parked_for_person?(%Issue{state: "Human Review", labels: ["plan"]}, settings)
     end
   end
 

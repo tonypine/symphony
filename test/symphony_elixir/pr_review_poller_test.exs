@@ -733,7 +733,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert PrReviewPoller.pending_pr_head_ref("issue-1780") == "auto/ACME-1780"
   end
 
-  test "discovers a Human Review issue's PR like an In Review one, unless human_review is null" do
+  test "discovers a straggler's PR in either draining review state" do
     now = ~U[2026-05-01 09:00:00Z]
     issue = %{in_review_issue(updated_at: now) | state: "Human Review"}
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
@@ -751,18 +751,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
                started_at: DateTime.add(now, -120, :second),
                ended_at: DateTime.add(now, -60, :second)
              })
-
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_human_review_state: nil,
-      pr_review_mode: "polling",
-      pr_review_auto_merge: false,
-      pr_review_cooldown_minutes: 30,
-      pr_review_stale_days: 7
-    )
-
-    assert {:ok, %{discovered: 0}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -1684,7 +1672,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [%{status: "watching"}] = RunStore.list_pr_reviews()
   end
 
-  test "a conflict on a designed repo's In Review ticket keeps the legacy path" do
+  test "a conflict on a straggler in In Review keeps its fix-run path" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
@@ -1786,7 +1774,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              %{
                status: "conflict_escalated",
                conflict_retry_count: 3,
-               target_issue_state: "In Review",
                error: "merge conflict retry limit reached"
              }
            ] = RunStore.list_pr_reviews()
@@ -1893,46 +1880,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     refute_receive {:issue_state_update, _issue_id, _state}, 50
     assert [%{status: "conflict_awaiting_human_action", conflict_retry_count: 3}] = RunStore.list_pr_reviews()
-  end
-
-  test "with human_review: null a conflict on an In Review issue with an open request waits for the person" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_human_review_state: nil,
-      pr_review_mode: "polling",
-      pr_review_cooldown_minutes: 30,
-      pr_review_stale_days: 7
-    )
-
-    now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-    :ok = put_review(now)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
-    )
-
-    request = %{"id" => "c1", "body" => "## Action needed: Add the signing secrets", "createdAt" => "2026-05-01T08:00:00.000Z"}
-
-    linear_client = fn query, %{id: issue_id}, _opts ->
-      assert query =~ "SymphonyAgentHumanActionScope"
-      issue_node = %{"id" => issue_id, "comments" => %{"nodes" => [request]}, "history" => %{"nodes" => []}}
-      {:ok, %{"data" => %{"issue" => issue_node}}}
-    end
-
-    assert {:ok, %{actions: [{:conflict_awaiting_human_action, "issue-1780"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, linear_client: linear_client, now: now)
-
-    refute_receive {:issue_state_update, _issue_id, _state}, 50
-
-    failing = fn _query, _variables, _opts -> {:error, :linear_unavailable} end
-
-    assert {:ok, %{actions: [{:poll_error, "issue-1780", {:issue_read_failed, :linear_unavailable}}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, linear_client: failing, now: now)
-
-    refute_receive {:issue_state_update, _issue_id, _state}, 50
   end
 
   test "a merge conflict on an issue in an active state with a person's label takes the conflict path" do
@@ -4284,7 +4231,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       identifier: identifier,
       title: "Review manager",
       description: "Poll PR state",
-      state: "In Review",
+      state: Keyword.get(opts, :state, "In Review"),
       url: "https://linear.app/example/issue/#{identifier}",
       pr_urls: [pr_url],
       comments: Keyword.get(opts, :comments, []),

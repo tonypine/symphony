@@ -606,9 +606,12 @@ defmodule SymphonyElixir.PrReviewPoller do
   # Their review activity is not this poller's to act on — each phase's own machinery decides its
   # verdicts and review comments — so `limited_to_conflicts?/3` keeps those records on
   # `:watching`, and only a conflict, a merged PR or a closed one is acted on.
+  #
+  # The draining review states (`TransitionGuard.draining_states/0`) are watched too, so a straggler
+  # left there finishes on the path it started on (`SymphonyElixir.RetiredStates`).
   defp watched_states(settings) do
     merging = if AutoMerge.enabled?(settings), do: [@merging_state], else: []
-    merging ++ phase_states(settings)
+    TransitionGuard.draining_states() ++ merging ++ phase_states(settings)
   end
 
   # The phase states the CI Fix lane serves. `Merging` is not one of them: it is watched

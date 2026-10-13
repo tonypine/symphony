@@ -370,30 +370,14 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:memory_tracker_comment, _, _}
   end
 
-  test "In Review, Human Review and Merging issues are watched" do
+  test "the draining review states, Merging and the phases the CI Fix lane serves are watched" do
     now = ~U[2026-05-06 09:00:00Z]
     Application.put_env(:symphony_elixir, :ci_test_issues, [])
 
     assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
-    assert_receive {:fetch_issues_by_states, ["In Review", "Human Review", "Merging"]}
-  end
-
-  test "with human_review: null only In Review and Merging issues are watched" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_human_review_state: nil,
-      pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3}
-    )
-
-    Application.put_env(:symphony_elixir, :ci_test_issues, [])
-
-    assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
-             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: ~U[2026-05-06 09:00:00Z])
-
-    assert_receive {:fetch_issues_by_states, ["In Review", "Merging"]}
+    assert_receive {:fetch_issues_by_states, ["In Review", "Human Review", "Merging", "Code Review", "QA", "Rework"]}
   end
 
   test "a designed repo's Code Review state is watched so its head can be called green" do
@@ -489,10 +473,11 @@ defmodule SymphonyElixir.CiPollerTest do
     assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 2, :minute))
 
-    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} =
+    # A red head in Merging enters the CI Fix lane.
+    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "CI Fix"}]}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 3, :minute))
 
-    assert_receive {:issue_state_update, "issue-2401", "In Progress"}
+    assert_receive {:issue_state_update, "issue-2401", "CI Fix"}
     assert CiPoller.observed_head("issue-2401") == %{commit_sha: "def456", conclusion: "FAILURE"}
   end
 
@@ -1208,44 +1193,6 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:issue_state_update, _issue_id, _state}
   end
 
-  test "with human_review: null an In Review issue with an open request waits for the person" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_human_review_state: nil,
-      pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3}
-    )
-
-    now = ~U[2026-05-06 09:00:00Z]
-    issue = %{in_review_issue() | labels: []}
-    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
-    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
-    put_run(issue, now)
-
-    # The request moved the issue to In Review and added no label: only the comment says it waits.
-    request = %{"id" => "c1", "body" => "## Action needed: Add the signing secrets", "createdAt" => "2026-05-06T08:00:00.000Z"}
-
-    linear_client = fn query, %{id: issue_id}, _opts ->
-      assert query =~ "SymphonyAgentHumanActionScope"
-      issue_node = %{"id" => issue_id, "comments" => %{"nodes" => [request]}, "history" => %{"nodes" => []}}
-      {:ok, %{"data" => %{"issue" => issue_node}}}
-    end
-
-    poll_opts = [tracker: StateFilteringTracker, github: FakeGitHub, linear_client: linear_client, now: now]
-    assert {:ok, %{actions: [{:awaiting_human_action, "issue-2401", "abc123"}]}} = CiPoller.poll_once(poll_opts)
-
-    refute_receive {:rerun_failed, _run_id}
-    refute_receive {:issue_state_update, _issue_id, _state}
-
-    # The requests can't be read: nothing moves the issue until they can.
-    failing = fn _query, _variables, _opts -> {:error, :linear_unavailable} end
-
-    assert {:ok, %{actions: [{:poll_error, "issue-2401", {:issue_read_failed, :linear_unavailable}}]}} =
-             CiPoller.poll_once(tracker: StateFilteringTracker, github: FakeGitHub, linear_client: failing, now: DateTime.add(now, 5, :minute))
-
-    refute_receive {:issue_state_update, _issue_id, _state}
-  end
-
   test "an issue in an active state with a person's label still gets the normal CI flow" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = %{in_review_issue() | state: "In Progress", labels: ["needs-human", "breakdown"]}
@@ -1502,7 +1449,7 @@ defmodule SymphonyElixir.CiPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1, escalation_state: "In Review"}
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1}
     )
 
     put_run(issue, now)
@@ -1527,8 +1474,10 @@ defmodule SymphonyElixir.CiPollerTest do
     assert {:ok, %{actions: [{:escalated, "issue-2401", "In Review"}]}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
 
-    assert_receive {:issue_state_update, "issue-2401", "In Review"}
-    assert_receive {:notification_event, %{event: "ci_escalated", state: "In Review", metadata: %{max_retries: 1, escalation_state: "In Review"}}}
+    # The escalation pauses the ticket where it is on a Needs Decision hold: no state move.
+    assert_receive {:issue_comment, "issue-2401", "## Decision needed: CI still fails on ACME-2401" <> _rest}
+    refute_received {:issue_state_update, "issue-2401", _state}
+    assert_receive {:notification_event, %{event: "ci_escalated", state: "In Review", metadata: %{max_retries: 1}}}
 
     assert [%{status: "escalated", ci_retry_count: 1}] = RunStore.list_ci_checks()
 
@@ -1588,7 +1537,7 @@ defmodule SymphonyElixir.CiPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1, escalation_state: "In Review"}
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1}
     )
 
     put_run(issue, now)
@@ -1618,9 +1567,10 @@ defmodule SymphonyElixir.CiPollerTest do
                now: DateTime.add(now, 1, :minute)
              )
 
-    assert_receive {:ci_failure_at_transition, "issue-2401", %{commit_sha: "def456", log_excerpt: log_excerpt}}
-    assert is_binary(log_excerpt) and log_excerpt != ""
-    assert_receive {:issue_state_update, "issue-2401", "In Review"}
+    # The escalation pauses the ticket where it is on a Needs Decision hold: no state move.
+    assert_receive {:issue_comment, "issue-2401", "## Decision needed: CI still fails on ACME-2401" <> _rest}
+    refute_received {:ci_failure_at_transition, "issue-2401", _ci_failure}
+    refute_received {:issue_state_update, "issue-2401", _state}
     refute_receive {:notification_event, %{event: "ci_escalated"}}
 
     assert [
@@ -2148,7 +2098,7 @@ defmodule SymphonyElixir.CiPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1, escalation_state: "In Review"}
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1}
     )
 
     put_run(issue, now)
@@ -2172,7 +2122,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert {:ok, %{actions: [{:escalated, "issue-2401", "In Review"}]}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
 
-    assert_receive {:issue_state_update, "issue-2401", "In Review"}
+    # The escalation pauses the ticket where it is on a Needs Decision hold: no state move.
+    assert_receive {:issue_comment, "issue-2401", "## Decision needed: CI still fails on ACME-2401" <> _rest}
+    refute_received {:issue_state_update, "issue-2401", _state}
     assert [%{status: "escalated", ci_retry_count: 1}] = RunStore.list_ci_checks()
   end
 
@@ -2185,7 +2137,7 @@ defmodule SymphonyElixir.CiPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1, escalation_state: "In Review"}
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1}
     )
 
     put_run(issue, now, "running")
@@ -2222,7 +2174,7 @@ defmodule SymphonyElixir.CiPollerTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       pr_review_mode: "polling",
-      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1, escalation_state: "In Review"}
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 1}
     )
 
     # No running agent yet: the orchestrator has not picked up the In Progress
@@ -2258,7 +2210,9 @@ defmodule SymphonyElixir.CiPollerTest do
     assert {:ok, %{actions: [{:escalated, "issue-2401", "In Review"}]}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 3, :minute))
 
-    assert_receive {:issue_state_update, "issue-2401", "In Review"}
+    # The escalation pauses the ticket where it is on a Needs Decision hold: no state move.
+    assert_receive {:issue_comment, "issue-2401", "## Decision needed: CI still fails on ACME-2401" <> _rest}
+    refute_received {:issue_state_update, "issue-2401", _state}
     assert [%{status: "escalated", ci_retry_count: 1}] = RunStore.list_ci_checks()
   end
 
@@ -2394,7 +2348,8 @@ defmodule SymphonyElixir.CiPollerTest do
 
       deliver_webhook("check_suite", check_suite_completed("abc123"), 202)
 
-      assert_receive {:issue_state_update, "issue-2401", "In Progress"}, 5_000
+      # A red head in Merging enters the CI Fix lane.
+      assert_receive {:issue_state_update, "issue-2401", "CI Fix"}, 5_000
 
       send(name, :poll)
       assert_receive {:fetch_ci_status, _pr_url}, 5_000
