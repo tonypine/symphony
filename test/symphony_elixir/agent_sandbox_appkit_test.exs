@@ -4,8 +4,9 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
   # under the agent profile: the one an SRT install generates from Symphony's SRT settings. Claude
   # Code runs SRT's profile too, and neither runtime gets extra mach services from Symphony, so both
   # allow LaunchServices and deny the window server. Two control runs outside the sandbox first show
-  # that this machine draws the probe's window and shows a crash dialog, so a clean sandboxed run
-  # means the sandbox stopped them.
+  # that this machine draws the probe's window and shows a crash dialog. Then the probe runs twice in
+  # the sandbox: a plain run for the window, and a `crash` run for the dialog. Clean sandboxed runs
+  # mean the sandbox stopped them.
   #
   # It puts windows and dialogs on screen, so it runs only with `--only appkit_dialog`, on the
   # `appkit-dialog` workflow's disposable macOS runner. Never on the host: they would land on the
@@ -64,29 +65,36 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     assert Enum.any?(crash_control.owners, &dialog?/1),
            "the control crash showed no dialog, so this machine can't answer the check: #{inspect(crash_control.owners)}"
 
-    reports_before = crash_reports("probe-")
     sandboxed = observe(windows, 30_000, fn -> srt_run(srt, settings, root, probe) end)
-    screenshot(artifacts, "sandboxed.png")
+    screenshot(artifacts, "sandboxed-window.png")
+    dismiss_dialogs(windows)
+
+    reports_before = crash_reports("probe-")
+    crashed = observe(windows, 30_000, fn -> srt_run(srt, settings, root, "#{probe} crash") end, &dialog?/1)
+    screenshot(artifacts, "sandboxed-crash.png")
     reports = crash_reports("probe-") -- reports_before
     dismiss_dialogs(windows)
 
     {output, status} = sandboxed.result
-    window? = "probe" in sandboxed.owners
-    dialog? = Enum.any?(sandboxed.owners, &dialog?/1)
+    {crash_output, crash_status} = crashed.result
+    window? = "probe" in sandboxed.owners or "probe" in crashed.owners
+    dialog? = Enum.any?(sandboxed.owners ++ crashed.owners, &dialog?/1)
 
     report(artifacts, [
       {"Control: window outside the sandbox", yes_no("control-probe" in window_control.owners)},
       {"Control: crash dialog outside the sandbox", yes_no(Enum.any?(crash_control.owners, &dialog?/1))},
       {"Sandboxed: probe window", yes_no(window?)},
       {"Sandboxed: crash dialog", yes_no(dialog?)},
-      {"Sandboxed: new crash report", if(reports == [], do: "no", else: Enum.join(reports, ", "))},
+      {"Sandboxed crash: new crash report", if(reports == [], do: "no", else: Enum.join(reports, ", "))},
       {"Sandboxed: exit status", to_string(status)},
-      {"Sandboxed: new window owners", Enum.join(sandboxed.owners -- sandboxed.baseline, ", ")},
-      {"Sandboxed: output (tail)", output |> String.split("\n", trim: true) |> Enum.take(-6) |> Enum.join(" / ")}
+      {"Sandboxed crash: exit status", to_string(crash_status)},
+      {"Sandboxed: new window owners", Enum.join(Enum.uniq(sandboxed.owners ++ crashed.owners) -- sandboxed.baseline, ", ")},
+      {"Sandboxed: output (tail)", tail(output)},
+      {"Sandboxed crash: output (tail)", tail(crash_output)}
     ])
 
-    refute window?, "the sandboxed probe drew a window: #{output}"
-    refute dialog?, "the sandboxed probe's crash showed a dialog: #{inspect(sandboxed.owners)}"
+    refute window?, "the sandboxed probe drew a window: #{output} / #{crash_output}"
+    refute dialog?, "the sandboxed probe's crash showed a dialog: #{inspect(Enum.uniq(sandboxed.owners ++ crashed.owners))}"
   end
 
   defp compile!(source, output) do
@@ -184,6 +192,8 @@ defmodule SymphonyElixir.AgentSandboxAppKitTest do
     task = Task.async(fn -> System.cmd("screencapture", ["-x", Path.join(artifacts, name)], stderr_to_stdout: true) end)
     Task.yield(task, 10_000) || Task.shutdown(task, :brutal_kill)
   end
+
+  defp tail(output), do: output |> String.split("\n", trim: true) |> Enum.take(-6) |> Enum.join(" / ")
 
   defp yes_no(true), do: "yes"
   defp yes_no(false), do: "no"
