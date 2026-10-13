@@ -420,13 +420,29 @@ class Instance:
             "id": "e2e-issue-1", "identifier": ISSUE, "title": "Stub run",
             "description": "End-to-end test issue", "state": "Todo",
         }]))
-        # The hook runs with Symphony's own environment: the release that runs, its version, and the secret the app
-        # passed it.
-        (config / "WORKFLOW.md").write_text(
-            "---\nhooks:\n  before_run: |\n"
-            f"    printf '%s root=%s vsn=%s secret=%s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" "
-            f"\"${{SYMPHONY_RELEASE_ROOT:-unknown}}\" \"${{RELEASE_VSN:-unknown}}\" \"${{E2E_SECRET:-unset}}\" "
+        # The hook logs the release its Symphony runs and that release's version, read from the command line of
+        # the BEAM it descends from (Symphony clears the launcher's variables before it runs a hook), and the
+        # secret the app passed Symphony.
+        hook = self.work / "bin" / "runs-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "pid=$PPID\n"
+            "beam=''\n"
+            "for _ in 1 2 3 4 5 6 7 8; do\n"
+            "  [ -n \"$pid\" ] && [ \"$pid\" -gt 1 ] || break\n"
+            "  command=\"$(ps -ww -o command= -p \"$pid\")\"\n"
+            "  case \"$command\" in */bin/beam.smp*) beam=\"$command\"; break ;; esac\n"
+            "  pid=\"$(ps -o ppid= -p \"$pid\" | tr -d ' ')\"\n"
+            "done\n"
+            "root=\"$(printf '%s\\n' \"$beam\" | sed -n 's|.* -root \\([^ ]*\\).*|\\1|p')\"\n"
+            "vsn=\"$(printf '%s\\n' \"$beam\" | sed -n 's|.* -boot [^ ]*/releases/\\([^/ ]*\\)/start.*|\\1|p')\"\n"
+            "printf '%s root=%s vsn=%s secret=%s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" "
+            "\"${root:-unknown}\" \"${vsn:-unknown}\" \"${E2E_SECRET:-unset}\" "
             f">> '{self.runs_log}'\n"
+        )
+        hook.chmod(0o755)
+        (config / "WORKFLOW.md").write_text(
+            f"---\nhooks:\n  before_run: |\n    '{hook}'\n"
             "---\nWork on {{ issue.identifier }}.\n"
         )
         stub = self.work / "bin" / "stub-claude"
