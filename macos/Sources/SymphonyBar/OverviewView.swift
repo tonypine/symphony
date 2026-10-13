@@ -111,7 +111,15 @@ struct OverviewBody: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture(perform: actions.openUsage)
+                .focusable()
+                .onKeyPress(.return) {
+                    actions.openUsage()
+                    return .handled
+                }
+                .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
+                .accessibilityAction { actions.openUsage() }
+                .accessibilityAction(named: "Open Usage") { actions.openUsage() }
                 .accessibilityHint("Opens Usage")
                 .help("Open Usage")
             }

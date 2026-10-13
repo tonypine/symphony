@@ -147,7 +147,8 @@ private struct AgreementChart: View {
                                 .foregroundStyle(.secondary)
                         }
                 }
-                .chartXScale(domain: 0...100)
+                // Room past 100% for the trailing value label, so a full bar's label isn't clipped.
+                .chartXScale(domain: 0...100, range: .plotDimension(endPadding: 72))
                 .chartXAxis {
                     AxisMarks(values: [0, 25, 50, 75, 100]) { value in
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
