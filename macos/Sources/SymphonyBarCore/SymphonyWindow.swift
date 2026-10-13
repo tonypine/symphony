@@ -2,7 +2,7 @@ import Foundation
 
 /// A view of the Symphony window, in sidebar order (`docs/design/director-app-screens.md` §0).
 public enum SymphonyView: String, CaseIterable, Equatable {
-    case inbox, overview, initiatives, tickets, quality, usage, shipped, repos, diagnostics
+    case inbox, overview, initiatives, tickets, quality, usage, shipped, audit, repos, diagnostics
 
     public var title: String {
         switch self {
@@ -13,6 +13,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .quality: "Quality"
         case .usage: "Usage"
         case .shipped: "Shipped"
+        case .audit: "Audit"
         case .repos: "Repos"
         case .diagnostics: "Diagnostics"
         }
@@ -28,6 +29,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .quality: "How far to trust the crew"
         case .usage: "Tokens and limits"
         case .shipped: "What shipped and what the crew learned"
+        case .audit: "Every move on record, hash-chained"
         case .repos: "Repositories Symphony works on"
         case .diagnostics: "Symphony's own health"
         }
@@ -43,6 +45,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         case .quality: "checkmark.seal"
         case .usage: "chart.bar.xaxis"
         case .shipped: "shippingbox"
+        case .audit: "checklist"
         case .repos: "square.stack.3d.up"
         case .diagnostics: "stethoscope"
         }
@@ -52,7 +55,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         switch self {
         case .inbox, .overview, .initiatives, .tickets: .main
         case .quality, .usage: .insights
-        case .shipped: .records
+        case .shipped, .audit: .records
         case .repos, .diagnostics: .factory
         }
     }
@@ -78,7 +81,7 @@ public enum SidebarSection: String, CaseIterable, Equatable {
 /// The sidebar: only the views built so far, in the design's order, with ⌘1–⌘8 following that order.
 public struct Sidebar: Equatable {
     /// The views this version of the app has. Later views join here, in place.
-    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .repos, .diagnostics]
+    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .diagnostics]
     public static let maxShortcuts = 8
 
     public let views: [SymphonyView]

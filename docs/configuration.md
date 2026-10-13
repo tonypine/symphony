@@ -1912,7 +1912,8 @@ its output isn't a terminal (a file or a pipe). `symphony dashboard [--url <cont
 view in another terminal by polling `GET /api/v1/state?format=terminal&columns=<n>` on the control plane.
 
 The dashboard also serves an Audit tab at `/audit` (filters, per-record expansion, daily hash-chain
-verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`.
+verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`, and each
+day's chain verification from `/api/v1/audit/verify?date=YYYY-MM-DD` (see SPEC §13.8.2).
 Per-issue transcripts are available in the dashboard and as JSON at
 `/api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript` (or
 `/api/v1/issues/<issue_identifier>/transcript` for the default repository).
