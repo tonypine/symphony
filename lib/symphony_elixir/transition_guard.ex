@@ -319,7 +319,9 @@ defmodule SymphonyElixir.TransitionGuard do
   state to set, after any redirect) or `{:error, reason}` with the same tuple the tool returned
   before. On a repo running the designed machine, an agent asking to enter `Code Review` or `QA` by
   hand is refused: `Code Review` is the handoff signal's to enter and `QA` the verdict's, never the
-  tool's. So is an agent asking for `In Progress` from a phase past implementation (`Rework`,
+  tool's. So is an agent other than a plan parent's asking for `In Review` or Human Review: the
+  push hands the ticket to `Code Review`, and parking it in a legacy review state would skip Code
+  Review and QA. So is an agent asking for `In Progress` from a phase past implementation (`Rework`,
   `Code Review`, `QA` or `Merging`): on the designed machine that is a `Restart`, which only a
   person performs. `Epic Review` is refused the same way: the machine enters it once an epic
   parent's sub-issues are all terminal and its review's verdict leaves it.
@@ -357,6 +359,7 @@ defmodule SymphonyElixir.TransitionGuard do
              :ok <- refuse_human_only(state),
              :ok <- refuse_restart_state(state, ctx, settings),
              :ok <- refuse_code_review_entry(state, settings),
+             :ok <- refuse_review_entry(state, ctx, settings),
              :ok <- refuse_qa_entry(state, settings),
              :ok <- refuse_epic_review_entry(state, settings),
              :ok <- refuse_waiting_state(state, settings) do
@@ -442,6 +445,18 @@ defmodule SymphonyElixir.TransitionGuard do
     if StateMachine.designed?(settings) and state_name_matches?(state_name, settings.tracker.code_review_state),
       do: {:error, {:code_review_requires_handoff_signal, state_name}},
       else: :ok
+  end
+
+  # On a designed repo `In Review` and Human Review are draining legacy states: an implementation run
+  # hands its work over to `Code Review` by pushing, so an agent asking to park its ticket in either
+  # would skip Code Review and QA. Judged after the redirects, so a plan parent's handoff, which the
+  # plan-review redirect turns into `Plan Review`, and a plan parent on a repo without one, keep
+  # their move.
+  defp refuse_review_entry(%{"name" => state_name}, ctx, settings) do
+    if StateMachine.designed?(settings) and not Map.get(ctx, :plan_parent?, false) and
+         Enum.any?([@in_review_state, HumanReview.state(settings)], &state_name_matches?(state_name, &1)),
+       do: {:error, {:review_requires_handoff_signal, state_name}},
+       else: :ok
   end
 
   # `Plan Review` is a designed repo's plan handoff: the plan run hands the plan over by naming
