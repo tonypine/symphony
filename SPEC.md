@@ -2387,10 +2387,13 @@ Rules:
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded. A `Code Review` or `QA` ticket back from `CI Fix` on the same red head (a repair
-  that pushed nothing) MUST enter `CI Fix` again, until the fix attempts run out and the failure
-  escalates to a `Needs Decision` hold. A repo with the reviewer off parks its `Code Review` tickets with
-  `code_review_reviewer_disabled` recorded and never approves without a reviewer.
+  origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
+  `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
+  `CI Fix` again, until the fix attempts run out and the failure or conflict escalates to a
+  `Needs Decision` hold in place. Reviewer comments left on a PR in `Code Review` or `QA` are not a
+  rework in flight and MUST NOT hold a red head back. A repo with the reviewer off parks its
+  `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approves without a
+  reviewer.
 - **Verdicts bind to a head.** Code Review and QA verdicts are recorded against the head SHA they
   judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
   so the new head is reviewed again.
@@ -2429,8 +2432,10 @@ Rules:
   `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR;
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
-  (or reuses) one high-priority fix ticket per broken component and sets a `Blocked` hold on the
-  affected ticket waiting on it. Only the same failure recurring with no new information escalates
+  (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
+  waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
+  High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
+  reused one keeps its priority. Only the same failure recurring with no new information escalates
   to a `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
