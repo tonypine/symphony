@@ -434,6 +434,51 @@ defmodule SymphonyElixir.CiPollerTest do
       assert_ci_fix_entry("Rework")
     end
 
+    test "a Code Review ticket back from CI Fix on the same red head enters CI Fix again" do
+      assert_ci_fix_reentry("Code Review")
+    end
+
+    test "a QA ticket back from CI Fix on the same red head enters CI Fix again" do
+      assert_ci_fix_reentry("QA")
+    end
+
+    test "a Rework ticket on a red head CI Fix already took stays with its rework run" do
+      assert_ci_fix_entry("Rework")
+      now = ~U[2026-05-06 09:05:00Z]
+      # The fixing agent judged the repair substantive and moved the ticket to Rework on the same head.
+      Application.put_env(:symphony_elixir, :ci_test_issues, [%{in_review_issue() | state: "Rework"}])
+      Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+
+      assert {:ok, %{actions: [{:already_handled, "issue-2401", "abc123"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_receive {:issue_state_update, "issue-2401", _state}
+    end
+
+    test "a Code Review ticket on a red head CI Fix already took waits while a run on it is still active" do
+      assert_ci_fix_entry("Code Review")
+      now = ~U[2026-05-06 09:05:00Z]
+      put_run(in_review_issue(), now, "running")
+      Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+
+      assert {:ok, %{actions: [{:already_handled, "issue-2401", "abc123"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_receive {:issue_state_update, "issue-2401", _state}
+    end
+
+    test "a ticket CI Fix just took is not routed again while the read still shows its old phase" do
+      assert_ci_fix_entry("Code Review")
+      # The poll a minute later still reads the ticket in Code Review: the move may not have landed in
+      # the read yet, so the dispatch stands.
+      Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+
+      assert {:ok, %{actions: [{:already_handled, "issue-2401", "abc123"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: ~U[2026-05-06 09:02:00Z])
+
+      refute_receive {:issue_state_update, "issue-2401", _state}
+    end
+
     test "a legacy repo keeps the red -> In Progress fix loop with no origin recorded" do
       now = ~U[2026-05-06 09:00:00Z]
       # The default workflow here runs the legacy machine; `In Review` is the state its poller watches.
@@ -2771,6 +2816,37 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert_receive {:issue_state_update, "issue-2401", "CI Fix"}
     assert CiFix.origin(@repo_key, "issue-2401") == origin
+  end
+
+  # A CI Fix run that pushed nothing returns the ticket to `origin` on the same red head. Nothing
+  # else would ever move it (its review or QA run waits for a green head), so the next poll routes
+  # it to CI Fix again, spending another fix attempt; once the attempts run out, it escalates.
+  defp assert_ci_fix_reentry(origin) do
+    assert_ci_fix_entry(origin)
+    now = ~U[2026-05-06 09:05:00Z]
+    Application.put_env(:symphony_elixir, :ci_test_issues, [%{in_review_issue() | state: origin}])
+    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+    assert :ok = CiFix.record_origin(@repo_key, "issue-2401", nil)
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "CI Fix"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert_receive {:issue_state_update, "issue-2401", "CI Fix"}
+    assert CiFix.origin(@repo_key, "issue-2401") == origin
+    assert [%{status: "dispatch_requested", ci_retry_count: 2, dispatched_shas: ["abc123"]}] = RunStore.list_ci_checks()
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "CI Fix"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 5, :minute))
+
+    assert_receive {:issue_state_update, "issue-2401", "CI Fix"}
+
+    assert {:ok, %{actions: [{:escalated, "issue-2401", ^origin}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 10, :minute))
+
+    refute_receive {:issue_state_update, "issue-2401", _state}
+
+    assert {:ok, %{actions: [{:already_handled, "issue-2401", "abc123"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 15, :minute))
   end
 
   defp put_run(issue, now, status \\ "success") do
