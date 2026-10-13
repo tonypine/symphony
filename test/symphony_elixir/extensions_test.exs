@@ -723,6 +723,24 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "updated_at" => "2026-10-03T06:00:00Z"
                }
              ],
+             "landing_waits" => [
+               %{
+                 "issue_id" => "follow-http",
+                 "issue_identifier" => "MT-FOLLOW",
+                 "pull_request_url" => "https://github.com/acme/repo/pull/10",
+                 "state" => "QA",
+                 "waits_for" => %{
+                   "issue_id" => "merge-http",
+                   "issue_identifier" => "MT-MERGE",
+                   "pull_request_url" => "https://github.com/acme/repo/pull/9",
+                   "state" => "Merging"
+                 },
+                 "shared_files" => 2,
+                 "files" => ["lib/a.ex", "lib/b.ex"],
+                 "reason" => "waits for MT-MERGE to land (shares 2 files)",
+                 "since" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "slot_waiting" => [
                %{
                  "issue_id" => "wait-http",
@@ -4115,6 +4133,19 @@ defmodule SymphonyElixir.ExtensionsTest do
           head_sha: "abc1234def",
           status: "auto-merge on, waiting for CI on `abc1234`",
           updated_at: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
+      landing_waits: [
+        %{
+          issue_id: "follow-http",
+          issue_identifier: "MT-FOLLOW",
+          pr_url: "https://github.com/acme/repo/pull/10",
+          state: "QA",
+          waits_for: %{issue_id: "merge-http", issue_identifier: "MT-MERGE", pr_url: "https://github.com/acme/repo/pull/9", state: "Merging"},
+          shared_files: 2,
+          files: ["lib/a.ex", "lib/b.ex"],
+          reason: "waits for MT-MERGE to land (shares 2 files)",
+          since: ~U[2026-10-03 06:00:00Z]
         }
       ],
       claimed: ["issue-http", "retry-http"],

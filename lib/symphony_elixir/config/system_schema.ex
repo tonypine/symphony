@@ -1052,7 +1052,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
       {:ok,
        config
-       |> Map.drop(["runtime", "acceptance_gate"])
+       |> Map.drop(["runtime", "acceptance_gate", "state"])
        |> maybe_put("kind", Map.get(config, "runtime"))
        |> maybe_put("acceptance_gate", acceptance_gate)}
     end

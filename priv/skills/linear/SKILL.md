@@ -28,7 +28,7 @@ arguments from prompts.
 
 ## Write Tools
 
-- `linear_update_state` with `{"state_name_or_id": "In Review"}`: resolves the
+- `linear_update_state` with `{"state_name_or_id": "Rework"}`: resolves the
   state against the current issue team's workflow. Unknown states are a no-op.
 - `linear_set_assignee` with `{"assignee": "self"}`, `{"assignee": "unassign"}`,
   or `{"assignee": "<user_id>"}`.
@@ -90,9 +90,8 @@ arguments from prompts.
   (up to 120 characters) names the decision; `decision` holds one question and 2
   to 4 options, each with what it does, exactly one recommended. A request
   without options is refused. Never ask a person to run a check: a check an agent
-  can't run (launching the app, a host crash check, a check on a device) goes to
-  the supervisor as a `## Supervisor check` block with the ticket moved to
-  `In Review`, and a manual check that could be a test becomes a test.
+  can't run (launching the app, a host crash check, a check on a device) belongs
+  to CI or a QA playbook, and a manual check that could be a test becomes a test.
   `unblocks` and `est_minutes` (1 to 480) are optional. Every field is refused
   when it holds a secret. A request with the same title still open is not posted
   again. At most 5 per run.

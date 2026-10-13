@@ -269,12 +269,37 @@ defmodule SymphonyElixir.InboxTest do
                Item.from_node(held, "shop", %Schema{}, lookups(%{hold | reason: nil, clearing_condition: nil}))
     end
 
+    test "a ticket the dispatch-loop guard holds, with the loop in the reason" do
+      held = issue_node("SHOP-61", %{"state" => %{"name" => "Rework"}, "labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
+      run = %{kind: "rework", run_id: "run-1", state: "Rework", head: "abc", at: ~U[2026-10-01 05:58:00Z], outcome: %{exit: "ended normally", head: "abc", at: nil}}
+      attrs = SymphonyElixir.DispatchLoop.hold_attrs(%{kind: "rework", count: 4, window_ms: 600_000, runs: [run]}, [])
+      hold = Map.merge(attrs, %{kind: :blocked, decision: nil, set_at: ~U[2026-10-01 06:00:00Z]})
+
+      assert %{kind: :blocked, ask: ask, review: %{reason: ask, clearing_condition: "when a person unblocks or restarts it"}} =
+               Item.from_node(held, "shop", %Schema{}, lookups(hold))
+
+      assert ask =~ "dispatch_loop: 4 rework runs in 10 minutes without a state change, a new PR head or a decision"
+      assert ask =~ "started 05:58 UTC, ended normally, no new PR head, no handoff signal"
+    end
+
     test "reads an option and a quality-gate entry" do
       assert Item.option("Plain text") == %{label: "Plain text", effect: nil, recommended: false}
       assert Item.option("**Keep** (recommended):") == %{label: "Keep", effect: nil, recommended: true}
 
       assert %{kind: :clarify, ask: "The quality gate couldn't score the ticket", waiting_since: ~U[2026-10-01 07:00:00Z], review: %{held: false, found: "LLM call failed"}} =
                Item.from_quality_gate(%{kind: :error, issue_id: "id-1", reason: "LLM call failed", updated_at: ~U[2026-10-01 07:00:00Z]})
+    end
+  end
+
+  # The description a decision is written into, as Linear would hold it; the hold's label goes nowhere.
+  defmodule DescriptionTracker do
+    def set_machine_label(_issue_id, _name), do: :ok
+    def clear_machine_label(_issue_id, _name), do: :ok
+    def fetch_issue_description(_issue_id), do: {:ok, "Sign the release builds."}
+
+    def update_issue_description(issue_id, description) do
+      send(self(), {:description_written, issue_id, description})
+      :ok
     end
   end
 
@@ -306,10 +331,19 @@ defmodule SymphonyElixir.InboxTest do
         ])
 
       answered_client = linear(test_pid, fn _variables -> page([light(answered)]) end, %{answered["id"] => answered})
-      state = state(answered_client, settings_fun: fn _repo -> designed_settings() end) |> Inbox.run_once()
+
+      state =
+        answered_client
+        |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
+        |> Inbox.run_once()
 
       assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
       assert Inbox.cached(state.opts[:name]) == []
+
+      # The same read writes the answer into the ticket's scope.
+      assert_received {:description_written, "id-SHOP-92", description}
+      assert String.starts_with?(description, "Sign the release builds.\n\n")
+      assert [%{id: "D1", key: "request", title: "Add the signing secret", question: "Add the secret?"}] = SymphonyElixir.Decisions.recorded(description)
     end
 
     test "reads an issue in full once, and again only when it or a comment changed" do

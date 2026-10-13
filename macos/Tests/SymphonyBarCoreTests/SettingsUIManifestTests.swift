@@ -76,6 +76,10 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting token limits", { try TokenLimits.updating($0, from: TokenLimits(), to: limits) }, from: yaml)
         let timeouts = OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 1_200_000, pendingToolReportMs: 120_000)
         yaml = try record("setting timeouts", { try OperationTimeouts.updating($0, from: OperationTimeouts(), to: timeouts) }, from: yaml)
+        let loopLimits = DispatchLoopLimits(runs: 3, windowMs: 300_000, longRuns: 6, longWindowMs: 7_200_000)
+        yaml = try record("setting the dispatch-loop limits", {
+            try DispatchLoopLimits.updating($0, from: DispatchLoopLimits(), to: loopLimits)
+        }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
             try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))
         }, from: yaml)

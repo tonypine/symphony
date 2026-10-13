@@ -95,6 +95,14 @@ final class SettingsViewModel: ObservableObject {
     @Published var pendingToolReportMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultPendingToolReportMs)
     /// Why `symphony check` rejected the changed timeouts, shown in their section.
     @Published private(set) var timeoutsError: String?
+    /// `watchdog.dispatch_loop_*` in the configured symphony.yml: the runs of one kind a ticket may get without
+    /// progress within each window, in minutes, before Symphony holds it instead of dispatching it again.
+    @Published var dispatchLoopRuns = DispatchLoopLimits.defaultRuns
+    @Published var dispatchLoopWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultWindowMs)
+    @Published var dispatchLoopLongRuns = DispatchLoopLimits.defaultLongRuns
+    @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
+    /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
+    @Published private(set) var dispatchLoopError: String?
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
 
@@ -113,6 +121,10 @@ final class SettingsViewModel: ObservableObject {
     /// The timeouts read from symphony.yml, or nil when they couldn't be read. Only a timeout whose stepper
     /// moved is written.
     private var loadedTimeouts: OperationTimeouts?
+
+    /// The dispatch-loop limits read from symphony.yml, or nil when they couldn't be read. Only a limit whose
+    /// stepper moved is written.
+    private var loadedDispatchLoopLimits: DispatchLoopLimits?
 
     /// The allowed ticket priorities read from symphony.yml, or nil when they couldn't be read. Only
     /// a change from these is written.
@@ -172,6 +184,7 @@ final class SettingsViewModel: ObservableObject {
         loadWorkflowStates()
         loadTicketPatternsBuiltIn()
         loadTimeouts()
+        loadDispatchLoopLimits()
         loadRunProfiles()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
@@ -324,6 +337,24 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The dispatch-loop steppers are off until a symphony.yml has been read, and while Save checks it.
+    var canEditDispatchLoop: Bool { loadedDispatchLoopLimits != nil && !isSaving }
+
+    private func loadDispatchLoopLimits() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let limits = try SymphonyConfigFile(path: path).readDispatchLoopLimits()
+            dispatchLoopRuns = DispatchLoopLimits.steppedRuns(limits.runs)
+            dispatchLoopWindowMinutes = DispatchLoopLimits.minutes(limits.windowMs)
+            dispatchLoopLongRuns = DispatchLoopLimits.steppedRuns(limits.longRuns)
+            dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(limits.longWindowMs)
+            loadedDispatchLoopLimits = limits
+        } catch {
+            configFileError = "Could not read the dispatch-loop limits from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The model and effort pickers are off until a symphony.yml has been read, and while Save checks it.
     var canEditRunProfiles: Bool { loadedRunProfiles != nil && !isSaving }
 
@@ -424,7 +455,7 @@ final class SettingsViewModel: ObservableObject {
 
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
-    /// failure shows in `configCheckError`, `tokenLimitsError` or `timeoutsError`.
+    /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError` or `dispatchLoopError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -445,6 +476,14 @@ final class SettingsViewModel: ObservableObject {
             pendingToolReport: pendingToolReportMinutes
         )
         let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
+        dispatchLoopError = nil
+        let loopLimits = loadedDispatchLoopLimits?.setting(
+            runs: dispatchLoopRuns,
+            windowMinutes: dispatchLoopWindowMinutes,
+            longRuns: dispatchLoopLongRuns,
+            longWindowMinutes: dispatchLoopLongWindowMinutes
+        )
+        let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
         ticketPrioritiesError = nil
         let priorities = ticketPriorities
         let loadedPriorities = loadedTicketPriorities.flatMap { $0 != priorities ? $0 : nil }
@@ -455,7 +494,7 @@ final class SettingsViewModel: ObservableObject {
         let builtInPatterns = ticketPatternsBuiltIn
         let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
 
-        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil
+        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldLoopLimits != nil
             || loadedPriorities != nil || loadedStates != nil || builtInPatternsChanged else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -471,6 +510,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let timeouts, let oldTimeouts {
                 saved = await saveTimeouts(timeouts, from: oldTimeouts, settings: settings, secrets: secrets)
+            }
+            if saved, let loopLimits, let oldLoopLimits {
+                saved = await saveDispatchLoopLimits(loopLimits, from: oldLoopLimits, settings: settings, secrets: secrets)
             }
             if saved, let loadedPriorities {
                 saved = await saveTicketPriorities(priorities, from: loadedPriorities, settings: settings, secrets: secrets)
@@ -596,6 +638,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTimeouts = timeouts
+        return true
+    }
+
+    /// Writes the dispatch-loop limits that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveDispatchLoopLimits(
+        _ limits: DispatchLoopLimits,
+        from loaded: DispatchLoopLimits,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeDispatchLoopLimits(limits, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the dispatch-loop limits to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            dispatchLoopError = "symphony check rejected these limits, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedDispatchLoopLimits = limits
         return true
     }
 

@@ -296,6 +296,7 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
 | GitHub webhooks | Diagnostics (**D11**) | Debugging Symphony |
 | Agent lanes | Initiatives, one slot line per initiative (**D5**); capacity in Diagnostics (**D11**) | Lanes exist for initiatives |
 | Finishing runs, waiting to start, waiting on blockers, auto-merge status | Tickets "Waiting on" column (**D6**), ticket page (**D3**) | Why a ticket waits belongs to the ticket |
+| Landing order: the PR a ticket's PR lands after, and the files they share | Ticket page (**D3**): a Lands after fact, and a `Merging` ticket's "Waiting on MT-1 to land (shares 2 files)" | Why a ticket waits belongs to the ticket |
 | Auto Review: gate runner, agreement, recent verdicts | Quality (**D7**); the verdict per ticket on **D2b** and **D3** | |
 | Forced: phase, waiting on, forced for, stale | Tickets "Forced" (**D6**), ticket page (**D3**), Needs attention when stale (**D1**) | |
 | Running sessions: issue, state, session, runtime/turns, agent update, tokens | Now working (**D1**), Tickets (**D6**), ticket page (**D3**) | |

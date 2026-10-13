@@ -7,6 +7,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.Context
 
@@ -25,7 +26,8 @@ defmodule SymphonyElixir.ReviewAgent do
           required(:file) => String.t(),
           required(:line_range) => {pos_integer(), pos_integer()},
           required(:quoted_snippet) => String.t(),
-          required(:suggested_fix) => String.t()
+          required(:suggested_fix) => String.t(),
+          optional(:decision) => String.t()
         }
   @type result :: %{
           required(:verdict) => verdict(),
@@ -34,6 +36,7 @@ defmodule SymphonyElixir.ReviewAgent do
           optional(:reason) => String.t(),
           optional(:source) => map(),
           optional(:advisory_notes) => [String.t()],
+          optional(:decision_notes) => [String.t()],
           optional(:inconclusive) => String.t()
         }
 
@@ -295,6 +298,27 @@ defmodule SymphonyElixir.ReviewAgent do
 
   def unverified_notes(payload) when is_map(payload), do: Map.get(payload, :comments, [])
 
+  @doc """
+  Keeps a review from requesting changes against a person's recorded decision
+  (`SymphonyElixir.Decisions`): a finding that names a decision recorded in the ticket's description
+  (`"decision": "D1"`) becomes a decision note, and a change request left with no other finding
+  approves. A finding that names no recorded decision stays a finding.
+  """
+  @spec honour_decisions(result(), Issue.t()) :: result()
+  def honour_decisions(%{verdict: :request_changes, findings: [_finding | _rest] = findings} = result, %Issue{description: description}) do
+    decided = description |> Decisions.recorded() |> MapSet.new(& &1.id)
+    {decision_findings, kept} = Enum.split_with(findings, &MapSet.member?(decided, Map.get(&1, :decision)))
+    honoured(result, Enum.map(decision_findings, &decision_note/1), kept)
+  end
+
+  def honour_decisions(result, _issue), do: result
+
+  defp honoured(result, [], _kept), do: result
+  defp honoured(result, notes, []), do: Map.merge(result, %{verdict: :approve, findings: [], comments: notes, decision_notes: notes})
+  defp honoured(result, notes, kept), do: Map.merge(result, %{findings: kept, comments: Enum.map(kept, &finding_comment/1), decision_notes: notes})
+
+  defp decision_note(finding), do: "Against decision #{finding.decision}, so a note, not a change request: " <> finding_comment(finding)
+
   defp put_grounded_comments(%{findings: findings} = result) when is_list(findings) do
     Map.put(result, :comments, Enum.map(findings, &finding_comment/1))
   end
@@ -310,7 +334,7 @@ defmodule SymphonyElixir.ReviewAgent do
   def approval_prompt(result, opts) do
     """
     #{approval_heading(result)}
-    #{advisory_notes_section(result)}
+    #{advisory_notes_section(result)}#{decision_notes_section(result)}
     Continue the normal workflow push and PR handoff now. Use the validation evidence already
     collected for the reviewed diff. Do not stop at the reviewer-agent gate again unless code
     changes after this approval.
@@ -346,6 +370,18 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp advisory_notes_section(_result), do: ""
+
+  defp decision_notes_section(%{decision_notes: [_note | _rest] = notes}) do
+    """
+
+    The reviewer disagreed with the ticket's recorded decisions below. The decisions stand: do not
+    change code for them. Record them in the workpad Notes for the person who made them.
+
+    #{notes |> Enum.with_index(1) |> Enum.map_join("\n", fn {note, index} -> "#{index}. #{note}" end)}
+    """
+  end
+
+  defp decision_notes_section(_result), do: ""
 
   defp advisory_notes_intro(%{inconclusive: _reason}) do
     "The reviewer's last pass still raised the findings below after the correction rounds ran\nout."
@@ -486,7 +522,9 @@ defmodule SymphonyElixir.ReviewAgent do
             reviewer_turn_opts(opts, reviewer_settings, on_message, linear_comment_registry: Keyword.get(opts, :linear_comment_registry))
 
           with {:ok, verdict} <- review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts),
+               verdict = honour_decisions(verdict, issue),
                {:ok, checked} <- self_check(agent_module, session, issue, verdict, message_collector, turn_opts) do
+            checked = honour_decisions(checked, issue)
             ground_findings(agent_module, session, issue, checked, source, message_collector, turn_opts)
           end
         after
@@ -741,7 +779,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     Issue (context for what the diff is for):
     #{present_issue(issue)}
-
+    #{decisions_rule(issue)}
     Review criteria. Review the code, not the ticket:
     - Correctness: bugs in the changed code, such as wrong conditions, unhandled cases, broken callers, races and resource leaks.
     - Tests: each new branch, error path and edge case the diff adds has a test that exercises it, and changed behaviour has its tests updated.
@@ -795,8 +833,23 @@ defmodule SymphonyElixir.ReviewAgent do
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title)}
     Description:
-    #{PromptSafety.linear_issue_body(issue.description)}
+    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description))}
     """
+  end
+
+  # A person's answers to the ticket's decision requests are its scope: the reviewer follows them
+  # and Symphony turns a finding that names one into a note (`honour_decisions/2`).
+  defp decisions_rule(%Issue{description: description}) do
+    case Decisions.prompt_section(description) do
+      "" ->
+        ""
+
+      section ->
+        """
+        #{section}
+        A finding that contradicts a recorded decision is not a finding: do not request changes for work a decision put out of scope or deferred, or for code that follows what a decision chose. If you think a decision is wrong, say so in `comments` as a note and do not request changes for it. A finding you still report about a decided point must name the decision in `"decision": "D<n>"`; Symphony keeps it as a note, not a change request.
+        """
+    end
   end
 
   defp reviewer_on_message(collector, forward) do
@@ -1136,17 +1189,30 @@ defmodule SymphonyElixir.ReviewAgent do
          {:ok, quoted_snippet} <- required_string(Map.get(finding, "quoted_snippet"), :invalid_finding_quoted_snippet),
          {:ok, suggested_fix} <- required_string(Map.get(finding, "suggested_fix"), :invalid_finding_suggested_fix) do
       {:ok,
-       %{
-         summary: summary,
-         file: file,
-         line_range: line_range,
-         quoted_snippet: quoted_snippet,
-         suggested_fix: suggested_fix
-       }}
+       maybe_put_decision(
+         %{
+           summary: summary,
+           file: file,
+           line_range: line_range,
+           quoted_snippet: quoted_snippet,
+           suggested_fix: suggested_fix
+         },
+         Map.get(finding, "decision")
+       )}
     end
   end
 
   defp coerce_finding(_finding), do: {:error, :invalid_finding}
+
+  # The recorded decision a finding is about (`honour_decisions/2`), as `D<n>`.
+  defp maybe_put_decision(finding, decision) when is_binary(decision) do
+    case String.trim(decision) |> String.upcase() do
+      "" -> finding
+      decision -> Map.put(finding, :decision, decision)
+    end
+  end
+
+  defp maybe_put_decision(finding, _decision), do: finding
 
   defp required_string(value, error) when is_binary(value) do
     case String.trim(value) do

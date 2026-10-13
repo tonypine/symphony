@@ -4019,6 +4019,34 @@ defmodule SymphonyElixir.CoreTest do
     refute codex_prompt =~ "workflow detail"
   end
 
+  test "the first-turn prompt lists the open PRs that share files with the ticket's own" do
+    now = ~U[2026-10-13 12:00:00Z]
+
+    for {id, files} <- [{"issue-own", ["lib/a.ex", "lib/b.ex"]}, {"issue-other", ["lib/b.ex"]}] do
+      :ok =
+        RunStore.put_pr_review(%{
+          repo_key: "default",
+          issue_id: id,
+          issue_identifier: String.upcase(id),
+          pr_url: "https://github.com/example/repo/pull/#{byte_size(id)}",
+          landing: %{
+            files: files,
+            head_sha: "head",
+            state: "QA",
+            state_since: now,
+            progress_at: now,
+            waits_for: nil,
+            waits_since: nil
+          },
+          updated_at: now
+        })
+    end
+
+    issue = %Issue{id: "issue-own", identifier: "ISSUE-OWN", title: "Overlap", state: "Rework", repo_key: "default"}
+    assert AgentRunner.build_first_turn_prompt(issue, []) =~ "- ISSUE-OTHER (QA) https://github.com/example/repo/pull/11: lib/b.ex"
+    refute AgentRunner.build_first_turn_prompt(%{identifier: "NO-ID", title: "No id"}, []) =~ "Open pull requests"
+  end
+
   test "agent runner forwards timestamped codex updates to recipient" do
     test_root =
       Path.join(

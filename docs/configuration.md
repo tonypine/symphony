@@ -1100,7 +1100,8 @@ pull_requests:
     update-branch), Symphony tries again with the new head on the next poll; only a head that
     moves 3 times in a row falls back to the landing agent.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
-    merged code and auto-merge fires when it passes.
+    merged code and auto-merge fires when it passes. A PR that waits for another to land first (see
+    the landing order below) is updated once that one has landed.
   - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
     context (an agent run; a `designed` repo's ticket enters `CI Fix`, which returns it to
     `Merging`). The approval covered the diff before the conflict, so the fix goes back through
@@ -1118,6 +1119,16 @@ pull_requests:
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
     "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
+  - Landing order: when open PRs change the same files, each merge would reopen a conflict on the
+    others. So Symphony reads the files of every open PR on each poll and lands PRs that share a
+    file one after another: the ticket furthest along first (`Merging`, QA, Code Review, `Rework`),
+    then the one longest in its state. The others keep working, but get no conflict fix and no
+    "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
+    its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
+    one up, and a forced ticket never waits. `/api/v1/state` lists the waits under `landing_waits`
+    ("waits for MT-1 to land (shares 2 files)"), the Mac app's ticket page shows them as Lands
+    after, and the agent's first prompt names the open PRs that share files with its own, so it can
+    stack on one instead. Nothing to configure.
   - Moving a ticket out of `Merging` to any state but `Done` (by hand in Linear, or with the
     Director's Undo) turns auto-merge off on the next poll, with a ticket comment and an
     `auto_merge_disabled` audit event (`reason: "left_merging"`), so the PR doesn't merge without
@@ -1946,12 +1957,29 @@ watchdog:
   no_progress_threshold_ms: 600000
   stray_process_cpu_minutes: 10
   pending_tool_report_after_ms: 60000
+  dispatch_loop_runs: 4
+  dispatch_loop_window_ms: 600000
+  dispatch_loop_long_runs: 8
+  dispatch_loop_long_window_ms: 3600000
 ```
 
 `pending_tool_report_after_ms` (default `60000`, one minute; a positive integer) is how long one of
 Symphony's own MCP tool calls (`linear_*`, `github_*`, `qa_*`) must run before Symphony's state and
 the dashboard show the run as waiting on it. Settings in the macOS app edits it as "Show a pending
 tool call after", in minutes.
+
+The `dispatch_loop_*` keys (positive integers; the two `runs` at most 50) bound how often one ticket is dispatched without
+progress, whatever `enabled` says. Symphony records every run it starts in the ticket's store record
+and, before the next one, counts the runs of the same kind since the ticket last made progress: a
+state move, a new PR head, a recorded verdict, or a hold that lifted. A run stopped by a usage limit
+or an unreachable model API isn't counted. When those runs already reach `dispatch_loop_runs` within
+`dispatch_loop_window_ms` (4 in 10 minutes by default) or `dispatch_loop_long_runs` within
+`dispatch_loop_long_window_ms` (8 in an hour), Symphony starts no more. It puts the ticket on a
+`Blocked` hold whose reason names the run kind, the count, the window and how the last runs ended
+(exit, whether they left a new PR head, the handoff signal or its absence), logs one error line, and
+lists the ticket in the Inbox and in `waiting_on_you` of `/api/v1/state`. `Unblock` or `Restart`
+lifts the hold, and the count starts again. Settings in the macOS app edits the limits in its
+Dispatch loops section, as "Hold a ticket after" and "Or after", each a number of runs in minutes.
 
 On every tick the watchdog also reads the host's process table and warns about stray processes.
 A stray process runs in, or names on its command line, a folder under `workspaces.root`,

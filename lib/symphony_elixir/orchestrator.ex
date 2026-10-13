@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     BuildInfo,
     CiPoller,
     Config,
+    DispatchLoop,
     EpicLanes,
     ForcedQueue,
     ForcedStatus,
@@ -662,6 +663,7 @@ defmodule SymphonyElixir.Orchestrator do
       issue_id ->
         {running_entry, state} = pop_running_entry(state, issue_id)
         Verification.release(Map.get(running_entry, :verification), "agent process exit")
+        record_dispatch_outcome(running_entry, reason)
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
 
@@ -2730,8 +2732,6 @@ defmodule SymphonyElixir.Orchestrator do
     clear_quality_gate_blocking_cache_entries(state, [issue_id])
   end
 
-  defp clear_quality_gate_blocking_cache_entry(state, _issue_id), do: state
-
   defp clear_quality_gate_blocking_cache_entries(%State{quality_gate_cache: cache} = state, issue_ids)
        when is_map(cache) and is_list(issue_ids) do
     {cache, changed?} =
@@ -4518,6 +4518,45 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host, repo_key) do
+    case dispatch_loop(issue, repo_key) do
+      :ok -> dispatch_issue_to_worker(state, issue, attempt, preferred_worker_host, repo_key)
+      {:loop, loop, record} -> hold_dispatch_loop(state, issue, repo_key, loop, record)
+    end
+  end
+
+  # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`): the runs of this kind the ticket got
+  # since its last progress, against the `watchdog` limits. A record the store can't read lists no
+  # runs, so a store error never stops a dispatch.
+  defp dispatch_loop(%Issue{id: issue_id, state: issue_state} = issue, repo_key) do
+    record = TicketState.normalize(RunStore.get_ticket_state(repo_key, issue_id))
+    kind = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind
+    attempt = %{kind: kind, state: issue_state, head: pr_head(issue_id, repo_key)}
+
+    case DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) do
+      :ok -> :ok
+      {:loop, loop} -> {:loop, loop, record}
+    end
+  end
+
+  # Past a limit the ticket is held instead of dispatched again: a Blocked hold whose reason names
+  # the loop, which a person lifts with Unblock or Restart. A store write that fails leaves the
+  # ticket unheld, so the next dispatch finds the same loop and tries again.
+  defp hold_dispatch_loop(%State{} = state, %Issue{id: issue_id} = issue, repo_key, loop, record) do
+    attrs = DispatchLoop.hold_attrs(loop, record.signals)
+    _ = Hold.set(repo_key, issue_id, :blocked, attrs)
+    Logger.error("Holding #{issue_context(issue)} instead of dispatching it again: #{attrs.reason}")
+    record_ticket_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})
+    release_undispatched_claim(state, issue_id)
+  end
+
+  defp pr_head(issue_id, repo_key) do
+    case CiPoller.observed_head(issue_id, repo_key: repo_key) do
+      %{commit_sha: head} -> head
+      nil -> nil
+    end
+  end
+
+  defp dispatch_issue_to_worker(%State{} = state, issue, attempt, preferred_worker_host, repo_key) do
     recipient = self()
 
     case select_worker_host(state, preferred_worker_host) do
@@ -4627,6 +4666,8 @@ defmodule SymphonyElixir.Orchestrator do
           "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} forced=#{forced?} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
         )
 
+        record_dispatch(issue, repo_key, run_id, run_profile, running_attrs)
+
         running_entry =
           %{
             pid: pid,
@@ -4715,6 +4756,42 @@ defmodule SymphonyElixir.Orchestrator do
         })
     end
   end
+
+  # Every run started for a ticket is recorded in its store record, best effort, for the
+  # dispatch-loop guard. A PR run is an operator's explicit dispatch with no Linear ticket behind it.
+  defp record_dispatch(_issue, _repo_key, _run_id, _run_profile, %{run_kind: :pr}), do: :ok
+
+  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs) do
+    dispatch = %{kind: kind, run_id: run_id, state: issue_state, head: pr_head(issue_id, repo_key)}
+
+    repo_key
+    |> RunStore.record_ticket_dispatch(issue_id, dispatch)
+    |> log_run_store_error("record the dispatch")
+  end
+
+  # How the run ended, for the dispatch-loop guard's hold reason: its exit and the PR head it left. A
+  # run stopped by a usage limit or an unreachable model API counts no attempt, so it is dropped.
+  defp record_dispatch_outcome(%{run_id: run_id, issue: %Issue{id: issue_id}} = running_entry, reason) when is_binary(run_id) do
+    if pr_run_entry?(running_entry) do
+      :ok
+    else
+      repo_key = running_entry_repo_key(running_entry)
+
+      repo_key
+      |> RunStore.record_ticket_dispatch_outcome(issue_id, run_id, dispatch_outcome(reason, issue_id, repo_key))
+      |> log_run_store_error("record the end of the run")
+    end
+  end
+
+  defp record_dispatch_outcome(_running_entry, _reason), do: :ok
+
+  defp dispatch_outcome({uncounted, _info}, _issue_id, _repo_key) when uncounted in [:usage_limited, :model_api_unreachable],
+    do: %{counted: false}
+
+  defp dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}
+
+  defp dispatch_outcome(reason, issue_id, repo_key),
+    do: %{exit: "failed (#{reason |> agent_exit_reason_summary() |> String.slice(0, 120)})", head: pr_head(issue_id, repo_key)}
 
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
     "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
@@ -6923,10 +7000,6 @@ defmodule SymphonyElixir.Orchestrator do
     "#{issue_id}-#{System.system_time(:microsecond)}-#{System.unique_integer([:positive])}"
   end
 
-  defp new_run_id(_issue_id) do
-    "run-#{System.system_time(:microsecond)}-#{System.unique_integer([:positive])}"
-  end
-
   defp attempt_count(attempt) when is_integer(attempt) and attempt > 0, do: attempt
   defp attempt_count(_attempt), do: 1
 
@@ -7548,6 +7621,7 @@ defmodule SymphonyElixir.Orchestrator do
     skipped = error_skipped ++ cached_skipped
 
     {auto_merge, auto_merge_ms} = timed_part(&PrReviewPoller.auto_merge_statuses/0)
+    {landing_waits, landing_waits_ms} = timed_part(&PrReviewPoller.landing_waits/0)
     {run_history, run_history_ms} = timed_part(fn -> persisted_run_history(state.repo_key) end)
 
     awaiting_clarification =
@@ -7577,6 +7651,7 @@ defmodule SymphonyElixir.Orchestrator do
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
       auto_merge: auto_merge,
+      landing_waits: landing_waits,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
       dispatch_skipped: dispatch_skipped_snapshot(state.dispatch_skipped),
       shipped_today: ShippedToday.today(state.shipped, now),
@@ -7590,7 +7665,7 @@ defmodule SymphonyElixir.Orchestrator do
       }
     }
 
-    {snapshot, %{run_history: run_history_ms, auto_merge: auto_merge_ms}}
+    {snapshot, %{run_history: run_history_ms, auto_merge: auto_merge_ms, landing_waits: landing_waits_ms}}
   end
 
   defp concurrency_snapshot(%State{} = state) do

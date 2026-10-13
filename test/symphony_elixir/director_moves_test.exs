@@ -194,6 +194,37 @@ defmodule SymphonyElixir.DirectorMovesTest do
                RunStore.get_ticket_state("repo-restart", "pr").signals
     end
 
+    test "clears a dispatch-loop hold, so the ticket starts again with its count at zero", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([%{restart_issue() | repo_key: "repo-restart"}])
+      :ok = RunStore.record_ticket_dispatch("repo-restart", "pr", %{kind: :rework, run_id: "run-1", state: "Rework"})
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{reason: "dispatch_loop: 4 rework runs", waits_on: %{type: "dispatch_loop", keys: ["rework"]}})
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      refute Hold.held?("repo-restart", "pr", :blocked)
+      assert RunStore.get_ticket_state("repo-restart", "pr").dispatches == []
+    end
+
+    test "leaves any other Blocked hold, and stands when the store refuses to clear the loop's", %{opts: opts} do
+      put_issues([%{pr("In Progress") | pr_urls: [], repo_key: "repo-restart"}])
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "access"}})
+
+      assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert Hold.held?("repo-restart", "pr", :blocked)
+
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{to_state: "In Progress"}} =
+                   DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
+        end)
+
+      assert log =~ "Restarted MOT-40 but couldn't clear its dispatch-loop hold: :boom"
+      assert Hold.held?("repo-restart", "pr", :blocked)
+    end
+
     test "a ticket with no pull request restarts just the same", %{opts: opts} do
       put_issues([%{pr("In Progress") | pr_urls: []}])
 
@@ -411,6 +442,23 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
     end
 
+    test "clears a dispatch-loop hold in place, and the ticket's count starts again", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+
+      :ok =
+        Hold.set("repo-director", "pr", :blocked, %{
+          reason: "dispatch_loop: 4 implementation runs in 10 minutes",
+          waits_on: %{type: "dispatch_loop", keys: ["implementation"]}
+        })
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+    end
+
     test "refuses a ticket with no hold, and one waiting on something other than access", %{opts: opts} do
       put_issues([pr("In Progress")])
       assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
@@ -510,6 +558,42 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add checkout."}])
+      set_decision_hold()
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      assert String.starts_with?(description, "Add checkout.\n\n")
+
+      assert [
+               %{
+                 id: "D1",
+                 key: "comment-1",
+                 title: "Add the release signing secrets",
+                 question: "Add the signing secrets, or ship unsigned builds?",
+                 answer: "Add the secrets"
+               }
+             ] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "a description Linear refuses to write still records the decision under the request", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_description_result, [{:error, :rate_limited}])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_description_result) end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+        end)
+
+      assert log =~ "Failed to record decisions on issue_id=pr"
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
     end
 
     test "a decision that directs a move sends the ticket there through the guard", %{opts: opts} do

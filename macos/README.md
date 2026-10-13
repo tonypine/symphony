@@ -199,6 +199,13 @@ set (or, in Development mode, no checkout folder).
   it (for example a negative number) and keeps Save off until it passes. Save writes only the changed lines and
   keeps comments. Below them, today's usage comes from `/api/v1/state`'s `budget`: tokens used and left, when
   the count resets (UTC midnight, shown in local time), and a line while the daily cap has paused new runs.
+- **Dispatch loops** holds a ticket Symphony keeps dispatching without progress. **Hold a ticket after** is
+  `watchdog.dispatch_loop_runs` in `watchdog.dispatch_loop_window_ms` (4 runs in 10 minutes by default) and **Or
+  after** is `watchdog.dispatch_loop_long_runs` in `watchdog.dispatch_loop_long_window_ms` (8 runs in 60
+  minutes), each a stepper for the runs and one for the minutes. Once a ticket got that many runs of one kind
+  with no state change, new PR head or decision, Symphony starts no more and puts it on a Blocked hold whose
+  reason says why; the Inbox lists it with **Unblock…**, and **Restart…** under ⋯. Save runs `symphony check`
+  first and writes only the changed lines.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
@@ -835,8 +842,8 @@ state. The window opens on the Inbox the first time.
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
   **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); an action asking a decision **Send Decision…** (its options are the picks) and,
-  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access hold and
-  lets it continue in place. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
+  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access or
+  dispatch-loop hold and lets it continue in place, and **Restart…** under ⋯. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move

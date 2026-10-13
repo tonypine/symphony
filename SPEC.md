@@ -1150,6 +1150,14 @@ Fields:
   - Default: `60000` (1 minute)
   - How long one of Symphony's own MCP tool calls must run before the runtime snapshot reports
     the run's oldest pending call (`pending_tool`).
+- `dispatch_loop_runs` (positive integer, at most `50`) and `dispatch_loop_window_ms` (positive integer)
+  - Default: `4` runs within `600000` (10 minutes)
+- `dispatch_loop_long_runs` (positive integer, at most `50`) and `dispatch_loop_long_window_ms` (positive integer)
+  - Default: `8` runs within `3600000` (1 hour)
+  - The dispatch-loop guard's two limits: how many runs of one kind a ticket may get since its last
+    progress within each window. The run past either limit is not dispatched; the ticket is held
+    `Blocked` instead (see the `Dispatch-loop guard` rule in the state machine section). These limits
+    apply whether or not `enabled` is set.
 
 #### 5.4.11 `workers` (object)
 
@@ -1883,6 +1891,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
 - `watchdog.pending_tool_report_after_ms`: positive integer, default `60000`
+- `watchdog.dispatch_loop_runs`: positive integer up to `50`, default `4`
+- `watchdog.dispatch_loop_window_ms`: positive integer, default `600000`
+- `watchdog.dispatch_loop_long_runs`: positive integer up to `50`, default `8`
+- `watchdog.dispatch_loop_long_window_ms`: positive integer, default `3600000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
@@ -2200,6 +2212,11 @@ The poller:
   label or not), is
   recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
   and no retry used, until a person moves the issue on or removes the label;
+- orders the landing of tracked PRs that change the same files (the landing order below): a
+  conflict on a PR that waits for another to land first is recorded as `conflict_waiting_to_land`
+  with no state move, conflict-fix run, auto-merge change or retry used, and is no pending conflict
+  for an agent's prompt; the first poll after that PR lands or stops sharing files with it takes
+  the conflict path above, so the follower merges the base branch once, with the leader's changes;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle
@@ -2283,7 +2300,10 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   only after 3 such refusals in a row.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
-  head. A failed call other than a conflict is retried on the next poll.
+  head. A failed call other than a conflict is retried on the next poll. A PR that waits for
+  another to land first (the landing order below) is not updated: its state is `waiting_to_land`
+  ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
+  PR lands or leaves its way, and the first poll after that updates it once.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
   conflict context, and the fix returns through review. The approval covered the diff before the
@@ -2327,6 +2347,36 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   issue why. Either way it then drops the `auto_merge` state, so the next move to `Merging` turns
   auto-merge on again, even at the same head. While GitHub refuses, the poll records an error and
   the next poll tries again. An issue moved to `Done`, or a PR already merged or closed, keeps it.
+
+Landing order of PRs that change the same files:
+
+- On each poll of a repository with two or more tracked PRs, the PR review poller reads the
+  repository's open PRs and the paths each changes in one GraphQL query (the 100 most recently
+  updated, the first 100 paths of each), so the files follow every head. When the read fails it
+  logs it and keeps the paths each PR review record last had. A record keeps its overlap data under
+  `landing`: the paths, the head they were read at, the state the ticket was last read in and since
+  when, when its state or head last moved, and the PR it waits for and since when. It is written
+  only when it changes, and dropped for a PR that is no longer open.
+- Two tracked PRs overlap when they share a path; the weight of the overlap is the number of paths
+  they share. Tracked PRs land in this order: the ticket furthest along first (`Merging`, then the
+  QA state, then the Code Review state, then `Rework`, then any other state), then the one longest
+  in its state, then the lower PR number. A ticket whose state the poll didn't read (in `CI Fix`, for
+  example) keeps the state it was last read in.
+- A PR waits for the first PR above it in that order that shares a path with it and leads: a PR
+  on a hold (any kind) or whose state and head haven't moved for two hours doesn't lead, and a
+  PR that waits counts as moving on every poll it waits. A forced ticket never waits. The order is
+  total, so a group of overlapping PRs never deadlocks.
+- A waiting PR keeps working (review, QA, rework); only its sync with the base branch waits: no
+  conflict-fix run (above) and no update-branch (auto-merge, above).
+- `/api/v1/state` lists every waiting PR under `landing_waits`: `issue_id`, `issue_identifier`,
+  `pull_request_url`, `state`, `waits_for` (`issue_id`, `issue_identifier`, `pull_request_url`,
+  `state`), `shared_files` (the count), `files` (the first 10 shared paths), `reason` (`waits for
+  MT-1 to land (shares 2 files)`) and `since`.
+- The agent's first-turn prompt lists the other open PRs the poller holds, with their state, URL
+  and paths: the ones that share paths with the ticket's own PR (and the one it waits for), or,
+  for a ticket with no PR in the map yet, every one, so the agent can stack its branch on one
+  instead of meeting the conflict after it lands. The paths are GitHub's, so they are sanitized and
+  marked untrusted.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
@@ -2385,13 +2435,28 @@ Rules:
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Recording a decision also lifts a
   `handoff_missing` hold on the same ticket, so the ticket resumes with no other hold to clear.
+- **Dispatch-loop guard.** Every run dispatched for a ticket is recorded in its ticket-state record
+  with its run kind and the state and PR head it started on. Before the next dispatch, the runs of
+  the same kind since the ticket's last progress are counted against `watchdog.dispatch_loop_runs`
+  within `watchdog.dispatch_loop_window_ms` and `watchdog.dispatch_loop_long_runs` within
+  `watchdog.dispatch_loop_long_window_ms`. Progress is a state move or a new PR head (a run started on
+  another state or head is not counted), a recorded verdict, or a hold that lifts; a run a usage
+  limit or an unreachable model API stopped is not counted either. Past either limit the run MUST
+  NOT be dispatched: the ticket is held `Blocked` with `waits_on.type` `dispatch_loop` and a reason
+  naming the run kind, the count, the window and the last runs' outcomes (exit, whether they left a
+  new PR head, the handoff signal or its absence), one error line is logged, and the Inbox (and so
+  `waiting_on_you` in `/api/v1/state`) lists the ticket. A person lifts it with `Unblock` or
+  `Restart`, and the count starts again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. The reviewer and QA runs MUST dispatch only on a green head; a red head in `Code Review`,
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded. A `Code Review` or `QA` ticket back from `CI Fix` on the same red head (a repair
-  that pushed nothing) MUST enter `CI Fix` again, until the fix attempts run out and the failure
-  escalates to a `Needs Decision` hold. A repo with the reviewer off parks its `Code Review` tickets with
-  `code_review_reviewer_disabled` recorded and never approves without a reviewer.
+  origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
+  `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
+  `CI Fix` again, until the fix attempts run out and the failure or conflict escalates to a
+  `Needs Decision` hold in place. Reviewer comments left on a PR in `Code Review` or `QA` are not a
+  rework in flight and MUST NOT hold a red head back. A repo with the reviewer off parks its
+  `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approves without a
+  reviewer.
 - **Verdicts bind to a head.** Code Review and QA verdicts are recorded against the head SHA they
   judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
   so the new head is reviewed again.
@@ -2407,6 +2472,18 @@ Rules:
   review confirmation, and clears when the decision is recorded (a reply under the request, the
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
   directs a move.
+- **Decisions are scope.** A person's answer to a decision request (a reply under the request, or
+  the Inbox's Decide) MUST be written into the machine-owned Decisions section of the issue
+  description, between `<!-- symphony:decisions:start -->` and `<!-- symphony:decisions:end -->`
+  and before the summary block, on the read that sees it: one entry per answered request, keyed by
+  the request comment so a repeat writes nothing, numbered `D1`, `D2`… with the date, the question,
+  the answer and what it means for scope (deferred to a named ticket, out of scope, in scope, or as
+  answered). Every byte outside the section, and the entries already in it, MUST stay unchanged.
+  The reviewer and QA prompts MUST render the section with the rule that a finding contradicting a
+  recorded decision is not a finding; a reviewer finding that names a recorded decision
+  (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
+  approval. The implementation prompt reads the section in the description. A ruling a person
+  gives in a plain comment, not under a decision request, is not recorded.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
@@ -2430,8 +2507,10 @@ Rules:
   `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR;
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
-  (or reuses) one high-priority fix ticket per broken component and sets a `Blocked` hold on the
-  affected ticket waiting on it. Only the same failure recurring with no new information escalates
+  (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
+  waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
+  High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
+  reused one keeps its priority. Only the same failure recurring with no new information escalates
   to a `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
@@ -3549,7 +3628,8 @@ Scoped Linear tool extension contract:
   one it returns the document with its content secret-redacted and wrapped in prompt-safety
   boundary tags like comments. `linear_get_document` is read-only and available to the read-only
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
-- `linear_update_issue_summary` is the only tool that writes the current issue's description, and
+- `linear_update_issue_summary` is the only tool that writes the current issue's description (the
+  Decisions section is Symphony's own write, outside any tool), and
   it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
@@ -3578,7 +3658,9 @@ Scoped Linear tool extension contract:
   current issue: it sets the `Needs Decision` hold, which pauses the issue in its phase, and adds
   no label of its own. The request stays open until a person answers it (a reply under it, or the
   Inbox's Decide) or it is withdrawn. A request with the same title still open on the issue MUST
-  NOT be posted again. Requests
+  NOT be posted again. A request whose title or question a person already answered (the Decisions
+  section, or an answered request under the issue) MUST NOT be posted: the result carries the
+  recorded answer, which the run applies. Requests
   MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
   against, or when the issue's repository turned human actions off. The read-only reviewer scope
   MUST NOT advertise or execute it.
@@ -4168,6 +4250,10 @@ Minimum endpoints:
     ticket, and after a restart from the time it noted that event on the ticket's run record. The
     Mac app's Overview shows the count as its Shipped today stage.
   - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
+  - `landing_waits` lists the tracked PRs that wait for another PR that shares their files to land
+    first, with the PR they wait for and the `reason` (Section 7.5). The Mac app's ticket page shows
+    it as a Lands after fact (`MT-1 (shares 2 files)`), and a `Merging` ticket's phase as `Waiting on
+    MT-1 to land (shares 2 files)`.
   - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
     for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
     MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,

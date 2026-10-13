@@ -624,6 +624,18 @@ defmodule SymphonyElixir.QaAgentTest do
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
     end
 
+    test "carries the ticket's recorded decisions, which QA never fails the change for" do
+      decision = SymphonyElixir.Decisions.entry("comment-1", ~D[2026-10-13], "Keep the old flag", "Drop the old flag here?", "Defer to TP-891")
+      {:ok, description} = SymphonyElixir.Decisions.put("Adds `symphony check`.", [decision])
+
+      prompt = QaAgent.prompt(job(%{issue: issue(%{description: description})}), nil)
+
+      assert prompt =~ ~r/<linear_issue_body>\s*Adds `symphony check`.\s*<\/linear_issue_body>/
+      assert prompt =~ "D1: Drop the old flag here? Answer: Defer to TP-891 Scope: Deferred to TP-891."
+      assert prompt =~ "Do not fail the change for work a recorded decision put out of scope or deferred"
+      refute QaAgent.prompt(job(), nil) =~ "Recorded decisions"
+    end
+
     test "an epic review judges the epic itself at the base branch head against its own checklist" do
       epic =
         issue(%{

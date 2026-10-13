@@ -45,12 +45,17 @@ defmodule SymphonyElixir.HoldTest do
     end
   end
 
-  describe "access_wait?/1" do
-    test "is true only for a hold waiting on an access grant" do
-      assert Hold.access_wait?(%{waits_on: %{type: "access", keys: []}})
-      refute Hold.access_wait?(%{waits_on: %{type: "dependency", keys: ["TP-1"]}})
-      refute Hold.access_wait?(%{reason: "no waits_on"})
-      refute Hold.access_wait?(nil)
+  describe "unblockable?/1 and dispatch_loop?/1" do
+    test "an access or dispatch-loop hold waits on a person's Unblock; only the latter is a loop" do
+      assert Hold.unblockable?(%{waits_on: %{type: "access", keys: []}})
+      assert Hold.unblockable?(%{waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
+      refute Hold.unblockable?(%{waits_on: %{type: "dependency", keys: ["TP-1"]}})
+      refute Hold.unblockable?(%{reason: "no waits_on"})
+      refute Hold.unblockable?(nil)
+
+      assert Hold.dispatch_loop?(%{waits_on: %{type: SymphonyElixir.DispatchLoop.hold_type(), keys: []}})
+      refute Hold.dispatch_loop?(%{waits_on: %{type: "access", keys: []}})
+      refute Hold.dispatch_loop?(nil)
     end
   end
 

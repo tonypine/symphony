@@ -116,9 +116,9 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2f · Inbox: a blocked ticket
 
-- **Shows:** a ticket an access hold pauses in place: why it is blocked (the reason the hold recorded) and what
-  clears it.
-- **Actions:** **Unblock…** (prominent), **Open in Linear**. The sheet asks "Unblock SHOP-360?", says the ticket
+- **Shows:** a ticket an access or dispatch-loop hold pauses in place: why it is blocked (the reason the hold
+  recorded; for a loop, the run kind, the count, the window and how the last runs ended) and what clears it.
+- **Actions:** **Unblock…** (prominent), **Open in Linear**, and **Restart…** under ⋯. The sheet asks "Unblock SHOP-360?", says the ticket
   keeps its state and continues from where it stopped, and the banner afterwards says "Hold cleared" with no Undo
   (nothing moved).
 - **Data:** the Inbox list's `blocked` kind and `POST /api/v1/control/unblock` (section 2).

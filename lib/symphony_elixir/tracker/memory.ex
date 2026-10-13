@@ -107,6 +107,44 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
+  @spec fetch_issue_description(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def fetch_issue_description(issue_id) do
+    case Enum.find(issue_entries(), &(&1.id == issue_id)) do
+      %Issue{description: description} -> {:ok, description}
+      nil -> {:error, :issue_not_found}
+    end
+  end
+
+  @doc """
+  Writes the description of an issue in `:memory_tracker_issues`, so the next read sees it, and
+  reports `{:memory_tracker_description_update, issue_id, description}`.
+  """
+  @spec update_issue_description(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_description(issue_id, description) do
+    case next_result(:memory_tracker_update_issue_description_result) do
+      :ok ->
+        put_description(issue_id, description)
+        send_event({:memory_tracker_description_update, issue_id, description})
+        :ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp put_description(issue_id, description) do
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, issues} when is_list(issues) ->
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, Enum.map(issues, &with_description(&1, issue_id, description)))
+
+      _file_or_none ->
+        :ok
+    end
+  end
+
+  defp with_description(%Issue{id: issue_id} = issue, issue_id, description), do: %{issue | description: description}
+  defp with_description(issue, _issue_id, _description), do: issue
+
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
     case next_result(:memory_tracker_update_issue_state_result) do
