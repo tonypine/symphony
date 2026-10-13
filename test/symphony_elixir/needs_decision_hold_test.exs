@@ -39,6 +39,8 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
     def set_machine_label(_issue_id, _name), do: :ok
     def clear_machine_label(_issue_id, _name), do: :ok
     def update_issue_state(_issue_id, _state), do: {:error, :rate_limited}
+    def fetch_issue_description(_issue_id), do: {:ok, nil}
+    def update_issue_description(_issue_id, _description), do: :ok
   end
 
   setup do
@@ -272,6 +274,22 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert log =~ "Failed to continue issue_id=#{@issue_id} to Merging after its decision"
       assert stored_hold() == nil
       refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "the read that sees the answer writes it into the description's Decisions section" do
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
+      assert {:ok, nil} = SymphonyElixir.Tracker.fetch_issue_description(@issue_id)
+
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply(@comment_id, "Ship unsigned")]}})
+      assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear
+
+      assert {:ok, description} = SymphonyElixir.Tracker.fetch_issue_description(@issue_id)
+
+      assert [%{id: "D1", key: @comment_id, title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"} = decision] =
+               SymphonyElixir.Decisions.recorded(description)
+
+      assert decision.answer =~ "Ship unsigned (option: **Ship unsigned**: The agent drops the signing step.)"
     end
 
     test "an ordinary decision's hold continues in place, moving nothing" do

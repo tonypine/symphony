@@ -32,6 +32,12 @@ steps.
   ticket continues from where it stopped. An answer that directs a move (for
   instance back to `Rework`) makes that move through the machine's guard. A
   withdrawal clears the hold the same way; the ticket never moved.
+- Symphony writes each answer into the `Decisions` section of the issue
+  description (`D1`, `D2`…: the question, the answer and what it means for scope).
+  A recorded decision is part of the ticket's scope: follow it, never re-open it, and
+  never edit the section. The tool does not raise a question a person already
+  answered; it returns the recorded answer, which you apply. A review finding that
+  contradicts a recorded decision is not a finding: answer it by naming the decision.
 
 ## Blocked-access escape hatch (required behavior)
 

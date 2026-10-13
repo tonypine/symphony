@@ -10,14 +10,16 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   reads as open (`sync/3` does one ticket).
 
   A request stops being open when the person answers it — a reply under it, or the Director's
-  Decide in the Inbox — or when the run withdraws it. The hold then clears and the ticket continues
+  Decide in the Inbox — or when the run withdraws it. An answer is written into the Decisions
+  section of the ticket's description on the read that sees it (`SymphonyElixir.Decisions`), so
+  the reviewer and later runs honour it. The hold then clears and the ticket continues
   from where it stopped; a merge confirmation's hold carries the move its confirmation performs, so
   answering that one continues into `Merging` (`SymphonyElixir.MergeConfirmation`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{Config, Handoff, Hold, MergeConfirmation, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{Config, Decisions, Handoff, Hold, MergeConfirmation, TicketSignals, TransitionGuard}
   alias SymphonyElixir.HumanActions.{Collector, Request}
 
   @typedoc "What the ticket's open decision requests call for: set the hold, clear it, or leave it."
@@ -124,6 +126,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
 
   defp sync_ticket(repo_key, %{"id" => issue_id} = node, settings, opts) when is_binary(issue_id) do
     repair_drift(repo_key, issue_id, labels(node), opts)
+    # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
+    _ = Decisions.sync(node, Keyword.take(opts, [:tracker]))
     current = Hold.get(repo_key, issue_id, :needs_decision, opts)
 
     case desired(Collector.newest_request(node, settings), current) do

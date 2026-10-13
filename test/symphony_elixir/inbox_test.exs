@@ -278,6 +278,18 @@ defmodule SymphonyElixir.InboxTest do
     end
   end
 
+  # The description a decision is written into, as Linear would hold it; the hold's label goes nowhere.
+  defmodule DescriptionTracker do
+    def set_machine_label(_issue_id, _name), do: :ok
+    def clear_machine_label(_issue_id, _name), do: :ok
+    def fetch_issue_description(_issue_id), do: {:ok, "Sign the release builds."}
+
+    def update_issue_description(issue_id, description) do
+      send(self(), {:description_written, issue_id, description})
+      :ok
+    end
+  end
+
   describe "the poller" do
     test "the read is also the one that sets and clears the Needs Decision hold" do
       test_pid = self()
@@ -306,10 +318,19 @@ defmodule SymphonyElixir.InboxTest do
         ])
 
       answered_client = linear(test_pid, fn _variables -> page([light(answered)]) end, %{answered["id"] => answered})
-      state = state(answered_client, settings_fun: fn _repo -> designed_settings() end) |> Inbox.run_once()
+
+      state =
+        answered_client
+        |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
+        |> Inbox.run_once()
 
       assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
       assert Inbox.cached(state.opts[:name]) == []
+
+      # The same read writes the answer into the ticket's scope.
+      assert_received {:description_written, "id-SHOP-92", description}
+      assert String.starts_with?(description, "Sign the release builds.\n\n")
+      assert [%{id: "D1", key: "request", title: "Add the signing secret", question: "Add the secret?"}] = SymphonyElixir.Decisions.recorded(description)
     end
 
     test "reads an issue in full once, and again only when it or a comment changed" do

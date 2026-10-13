@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.Decisions
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
@@ -471,6 +472,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentHumanActionScope($id: String!) {
     issue(id: $id) {
       id
+      description
       state { name }
       team { states { nodes { id name } } }
       labels { nodes { id name } }
@@ -1213,7 +1215,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   the project's human-action update, and leaves the issue in its phase with the `Needs Decision`
   hold set (`SymphonyElixir.NeedsDecisionHold`). It never adds a label itself. The request stays
   open until a person answers it, or the agent withdraws it. A request with the same title still
-  open on the issue is not posted again, but the issue still gains the hold. Every field is
+  open on the issue is not posted again, but the issue still gains the hold. A request whose title
+  or question a person already answered (`SymphonyElixir.Decisions`) is not posted at all: the
+  result carries the recorded answer, which the run applies. Every field is
   refused when it holds a secret pattern. At most #{@human_action_cap_per_run} per run.
   """
   @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -1329,8 +1333,28 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp post_human_action(issue_id, repo_key, request, settings, opts) do
     with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      hold_request(repo_key, issue, open_request_titled(issue, request.title, settings), request, settings, opts)
+      case decided(issue, request) do
+        nil -> hold_request(repo_key, issue, open_request_titled(issue, request.title, settings), request, settings, opts)
+        decision -> {:ok, already_decided(decision)}
+      end
     end
+  end
+
+  # A question a person already answered is not asked again: the description's Decisions section,
+  # or an answered request the Inbox has not written there yet (`SymphonyElixir.Decisions`).
+  defp decided(issue, request) do
+    Decisions.find(Decisions.recorded(issue["description"]) ++ Decisions.answered(issue), request.title, request.question)
+  end
+
+  defp already_decided(decision) do
+    %{
+      "requested" => false,
+      "reason" => "already_decided",
+      "decision" => %{"question" => decision.question, "answer" => decision.answer, "scope" => decision.scope},
+      "message" =>
+        "A person already decided this question. Apply the recorded answer and carry on: it is part of the ticket's scope. " <>
+          "Ask again only with a different question that the answer does not settle."
+    }
   end
 
   # Nothing moves. The comment goes first — a hold with no question on the board
