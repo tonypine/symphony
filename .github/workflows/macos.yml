@@ -165,7 +165,17 @@ jobs:
           esac
           # The runner doesn't trust the Symphony certificate, so codesign may stop
           # at the trust check; any other failure is a broken signature.
-          for target in "$APP" "$APP/Contents/Resources/symphony"; do
+          # Resources/symphony is the release's launcher script, sealed by the
+          # bundle's signature; the Mach-O files inside symphony-release carry
+          # their own. An older release has a Mach-O at Resources/symphony.
+          targets=("$APP")
+          if [ -d "$APP/Contents/Resources/symphony-release" ]; then
+            while IFS= read -r file; do targets+=("$file"); done < <(
+              find "$APP/Contents/Resources/symphony-release" -type f -exec file {} + | grep Mach-O | cut -d: -f1)
+          else
+            targets+=("$APP/Contents/Resources/symphony")
+          fi
+          for target in "${targets[@]}"; do
             if ! output="$(codesign --verify --strict "$target" 2>&1)"; then
               echo "$output"
               case "$output" in
