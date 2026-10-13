@@ -246,8 +246,10 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   first run is the one that crashes, so the hook also refuses to run what an earlier command in the
   line builds from app sources (`swiftc`, `clang`, `cc` or `gcc`, also through `xcrun`, and
   `swift build`), counts the line's own text as the source when the line writes it (a heredoc),
-  and judges a `swift run` of a package not built yet by its sources. The hook reads command lines, not what a script runs
-  later, so the prompt rule still applies. Codex has no such hook.
+  and judges `swift run` of a package by its sources. A copy of an app counts as an app, and the
+  line a shell runs with `-c` (`bash -c '...'`) is checked like the outer one. The hook reads
+  command lines, not what a script runs later or a program named through a variable (`$P`), so
+  the prompt rule still applies. Codex has no such hook.
 - The workflow runs the probe twice outside the sandbox first, to show that the runner draws the
   window and sees the check-in, then twice in the sandbox, plainly and made to crash. It fails if
   the sandboxed probe draws a window or the hook lets either command run, and its job summary

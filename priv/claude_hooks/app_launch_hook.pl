@@ -15,7 +15,9 @@
 # command builds from app sources: the output of `swiftc`, `clang`, `cc` or `gcc` (also through
 # `xcrun`), and the products of `swift build`. A source file the line writes itself (a heredoc)
 # isn't on disk either, so then the line's own text counts as the source. `swift run` of a
-# package that isn't built yet is judged by its sources.
+# package is judged by its sources. A copy of an app (`cp`, `mv`, `ln`) is an app too, and the line
+# a shell runs with `-c` (`bash -c '...'`) is checked like the outer one. A program named through a
+# variable (`$P`) or started by a script is not seen.
 #
 # Claude Code passes the tool call as JSON on stdin. Exit 2 refuses the command and shows stderr to
 # the agent; anything else lets it run.
@@ -32,6 +34,7 @@ my @app_symbols = (
 );
 my $app_source = qr/\b(?:NSApplication|NSApplicationMain|NSApp|NSWindow|NSPanel|NSAlert|NSStatusBar|WindowGroup|MenuBarExtra)\b|:\s*App\s*\{/;
 my %wrappers = map { $_ => 1 } qw(env exec command time nohup nice timeout gtimeout caffeinate arch then do else ! sudo);
+my %copiers = map { $_ => 1 } qw(cp mv ln ditto install rsync);
 my %compilers = map { $_ => 1 } qw(swiftc clang clang++ cc c++ gcc g++);
 my $source_file = qr/\.(?:swift|m|mm|c|cc|cpp)$/;
 my $chunk_size = 1 << 20;
@@ -48,28 +51,62 @@ my %built_apps;
 # `[build dir, product]` pairs an earlier `swift build` builds from app sources.
 my @built_products;
 
-for my $segment (split /\|\||&&|\$\(|[;&|\n()`{}]/, $command) {
-  my @words = shellwords($segment);
-  @words = split ' ', $segment unless @words;
-  my ($program, @args) = program(@words);
-  next unless defined $program;
+check_line($command, $cwd);
+exit 0;
 
-  ($program, @args) = xcrun_tool(@args) if basename($program) eq 'xcrun';
-  next unless defined $program;
+# Checks each simple command of a line, in order, so `cd` and what earlier commands build carry
+# over to the later ones.
+sub check_line {
+  my ($line, $dir) = @_;
 
-  if ($program eq 'cd') {
-    $cwd = resolve($args[0], $cwd) if @args;
-  } elsif (basename($program) eq 'swift') {
-    check_swift($cwd, @args);
-  } elsif ($compilers{basename($program)}) {
-    compile($program, $cwd, @args);
-  } elsif ($program =~ m{/}) {
-    my $path = resolve($program, $cwd);
-    refuse($program) if $built_apps{$path} || built_product($path) || app_binary($path);
+  # `bash -c '<line>'` runs a line of its own, which the split below would cut at its separators:
+  # check it whole first.
+  while ($line =~ /\b(?:sh|bash|zsh|dash|ksh)\s+(?:-\w+\s+)*-\w*c\s+(?:'([^']*)'|"([^"]*)"|([^\s;&|]+))/g) {
+    check_line($1 // $2 // $3, $dir);
+  }
+
+  for my $segment (split /\|\||&&|\$\(|[;&|\n()`{}]/, $line) {
+    my @words = shellwords($segment);
+    @words = split ' ', $segment unless @words;
+    my ($program, @args) = program(@words);
+    next unless defined $program;
+
+    ($program, @args) = xcrun_tool(@args) if basename($program) eq 'xcrun';
+    next unless defined $program;
+    my $name = basename($program);
+
+    if ($program eq 'cd') {
+      $dir = resolve($args[0], $dir) if @args;
+    } elsif ($name eq 'swift') {
+      check_swift($dir, @args);
+    } elsif ($compilers{$name}) {
+      compile($program, $dir, @args);
+    } elsif ($copiers{$name}) {
+      copy($dir, @args);
+    } elsif ($program =~ m{/}) {
+      my $path = resolve($program, $dir);
+      refuse($program) if app_path($path);
+    }
   }
 }
 
-exit 0;
+sub app_path {
+  my ($path) = @_;
+  return $built_apps{$path} || built_product($path) || app_binary($path);
+}
+
+# A copy of an app is an app: `cp probe x && ./x`.
+sub copy {
+  my ($dir, @args) = @_;
+  my @paths = map { resolve($_, $dir) } grep { !/^-/ } @args;
+  return unless @paths >= 2;
+
+  my $target = pop @paths;
+  for my $source (grep { app_path($_) } @paths) {
+    # The target may be a folder the line creates first, so take both readings.
+    $built_apps{$_} = 1 for ($target, "$target/" . basename($source));
+  }
+}
 
 # The program of a simple command and its arguments: the first word that is not a `VAR=value`
 # assignment, a wrapper, or a wrapper's flag or number.

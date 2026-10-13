@@ -41,7 +41,14 @@ defmodule SymphonyElixir.ClaudeCode.AppLaunchHookTest do
           "swiftc -O probe.swift -o probe && ./probe",
           "FOO=1 env BAR=2 timeout 10 ./demo",
           "cd sub && ./alert",
-          "echo hi; ( ./demo & )"
+          "echo hi; ( ./demo & )",
+          "bash -c ./probe",
+          ~s(sh -c "./demo"),
+          "/bin/zsh -c 'cd sub; ./alert'",
+          "bash -lc 'echo; ./probe crash'",
+          "xcrun ./demo",
+          "cp probe copy && ./copy",
+          "mkdir -p bin && cp -f sub/alert bin && bin/alert"
         ] do
       assert {stderr, 2} = run(script, root, command), command
       assert stderr =~ "starts a macOS app"
@@ -71,7 +78,10 @@ defmodule SymphonyElixir.ClaudeCode.AppLaunchHookTest do
           "mix test",
           "swift build",
           "swift test",
-          "cd"
+          "cd",
+          "bash -c 'otool -L ./probe'",
+          "cp render copy && ./copy",
+          "cp probe"
         ] do
       assert {"", 0} = run(script, root, command), command
     end
