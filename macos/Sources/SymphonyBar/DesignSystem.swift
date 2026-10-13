@@ -3,7 +3,7 @@ import SwiftUI
 import SymphonyBarCore
 
 // The design system's tokens (`DesignTokens`) mapped to system values, and the components the Symphony window
-// shares (`docs/design/design-system.md` §5). Nothing here hardcodes a color.
+// shares (`docs/design/design-system.md` §5). Nothing here hardcodes a color but the chart palette.
 
 extension DesignTokens.SystemColor {
     var color: Color {
@@ -23,6 +23,21 @@ extension DesignTokens.SystemColor {
         case .tertiary: Color(nsColor: .tertiaryLabelColor)
         case .accent: .accentColor
         }
+    }
+}
+
+// The one exception to system colors: the chart palette's validated light and dark pair (§3.3).
+extension DesignTokens.ChartSeries {
+    /// The series color, its light or dark value following the appearance.
+    var color: Color {
+        let (light, dark) = hex
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let value = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(
+                srgbRed: CGFloat(value >> 16 & 0xFF) / 255, green: CGFloat(value >> 8 & 0xFF) / 255,
+                blue: CGFloat(value & 0xFF) / 255, alpha: 1
+            )
+        })
     }
 }
 

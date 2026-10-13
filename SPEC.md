@@ -4605,6 +4605,31 @@ Minimum endpoints:
     out or is unavailable, return `200` with an `error` object in place of the list, as
     `/api/v1/state` does.
 
+- `GET /api/v1/history?days=N`
+  - Token use and merges over the last `N` UTC days ending today (default 14, at most 90; any
+    other value returns `400` `invalid_days`), for the Mac app's Usage and Quality. Read from the
+    run records only; it MUST make no Linear request.
+  - `tokens_per_day` has one entry per day (`date`, `total_tokens`, `providers`: tokens by
+    provider). A run counts on the day it started, with its pre-push reviewer's tokens. The
+    provider is the one the run recorded, else the one its model names (`unknown` when neither).
+  - `tickets` lists each ticket that ran in the period, most tokens first: `issue_id`,
+    `identifier`, `title`, `repo_key`, `total_tokens`, `attempts` (its runs in the period) and
+    `cap` (`agent.max_tokens_per_issue`, null when unset).
+  - `merged_per_day` has one entry per day (`date`, `merged`): the tickets whose completion
+    Symphony noted that day.
+  - `review` is how far the Code Review agent can be trusted, from the tickets' verdicts and
+    signals ledger. A Code Review approval is upheld when QA passes or skips it or the Director
+    confirms the merge, overturned when QA fails it or the Director sends it to Rework, and pending
+    until one of them judges it. `agreement` and each `by_repo` entry (with the repo's
+    `manual_review`) carry `agreed`, `disagreed`, `pending` and `rate` (agreed over judged, null
+    when none). `qa_first_pass` (`passed`, `judged`, `rate`) counts tickets whose first QA pass or
+    fail was a pass; `sent_to_rework` (`sent`, `reviewed`, `rate`) counts reviewed tickets that a
+    Code Review rework, a QA fail or the Director sent back. `disagreements` lists each overturned
+    approval, newest first: `issue_id`, `identifier`, `repo_key`, `review`, `decision`,
+    `decided_by` (`QA` or `Director`) and `decided_at`.
+  - The response also has `days`, `from`, `to`, `daily_budget` (`agent.max_tokens_per_day`) and
+    `per_ticket_cap`.
+
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
     the implementation tracks that is useful for debugging.
