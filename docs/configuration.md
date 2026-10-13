@@ -1099,7 +1099,8 @@ pull_requests:
     update-branch), Symphony tries again with the new head on the next poll; only a head that
     moves 3 times in a row falls back to the landing agent.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
-    merged code and auto-merge fires when it passes.
+    merged code and auto-merge fires when it passes. A PR that waits for another to land first (see
+    the landing order below) is updated once that one has landed.
   - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
     context (an agent run; a `designed` repo's ticket enters `CI Fix`, which returns it to
     `Merging`). The approval covered the diff before the conflict, so the fix goes back through
@@ -1117,6 +1118,16 @@ pull_requests:
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
     "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
+  - Landing order: when open PRs change the same files, each merge would reopen a conflict on the
+    others. So Symphony reads the files of every open PR on each poll and lands PRs that share a
+    file one after another: the ticket furthest along first (`Merging`, QA, Code Review, `Rework`),
+    then the one longest in its state. The others keep working, but get no conflict fix and no
+    "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
+    its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
+    one up, and a forced ticket never waits. `/api/v1/state` lists the waits under `landing_waits`
+    ("waits for MT-1 to land (shares 2 files)"), the Mac app's ticket page shows them as Lands
+    after, and the agent's first prompt names the open PRs that share files with its own, so it can
+    stack on one instead. Nothing to configure.
   - Moving a ticket out of `Merging` to any state but `Done` (by hand in Linear, or with the
     Director's Undo) turns auto-merge off on the next poll, with a ticket comment and an
     `auto_merge_disabled` audit event (`reason: "left_merging"`), so the PR doesn't merge without

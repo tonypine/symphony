@@ -198,10 +198,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              message_queue_len: queue_len,
              snapshot_age_ms: age_ms,
              snapshot_build_ms: build_ms,
-             snapshot_parts_ms: %{run_history: run_history_ms, auto_merge: auto_merge_ms} = parts
+             snapshot_parts_ms: parts
            } = Orchestrator.diagnostics(pid)
 
-    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, auto_merge_ms], &(is_integer(&1) and &1 >= 0))
+    assert %{run_history: run_history_ms, auto_merge: auto_merge_ms, landing_waits: landing_waits_ms} = parts
+
+    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, auto_merge_ms, landing_waits_ms], &(is_integer(&1) and &1 >= 0))
     refute Map.has_key?(parts, :qa)
 
     assert %{orchestrator: %{snapshot_build_ms: api_build_ms}} =
@@ -223,7 +225,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert log =~ ~r/Orchestrator slow handle_info duration_ms=\d+ message=:publish_snapshot/
     assert log =~ ~r/Orchestrator slow handle_call duration_ms=\d+ message=:pause_status/
-    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ run_history_ms=\d+/
+    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ landing_waits_ms=\d+ run_history_ms=\d+/
   end
 
   test "a retry's Linear read runs outside the orchestrator, which answers and publishes snapshots while it is in flight" do

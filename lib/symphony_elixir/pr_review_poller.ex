@@ -6,7 +6,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiPoller, Config, Notifications, PersonWait, RunStore}
+  alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, CiPoller, Config, LandingOrder, Notifications, PersonWait, RunStore}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -526,7 +526,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered, merging_issue_ids, phase_issue_ids, verdict_phase_issue_ids} <-
+    with {:ok, discovered, issues, merging_issue_ids, phase_issue_ids, verdict_phase_issue_ids} <-
            discover_reviews(settings, run_store, tracker, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
       opts =
@@ -534,6 +534,9 @@ defmodule SymphonyElixir.PrReviewPoller do
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
         |> Keyword.put(:phase_issue_ids, phase_issue_ids)
         |> Keyword.put(:verdict_phase_issue_ids, verdict_phase_issue_ids)
+
+      {reviews, landing_waits} = refresh_landing_order(reviews, issues, settings, opts, now)
+      opts = Keyword.put(opts, :landing_waits, landing_waits)
 
       actions =
         reviews
@@ -589,9 +592,33 @@ defmodule SymphonyElixir.PrReviewPoller do
       discovered =
         Enum.count(issues, &persist_discovered_review?(&1, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
-      {:ok, discovered, merging_issue_ids, phase_issue_ids, verdict_phase_ids(issues, settings)}
+      {:ok, discovered, issues, merging_issue_ids, phase_issue_ids, verdict_phase_ids(issues, settings)}
     end
   end
+
+  # The overlap map (see `SymphonyElixir.LandingOrder`): each record keeps the files its PR changes
+  # and the PR it waits for, written only when they change. Returns the records with their landing
+  # and the waits by issue id.
+  defp refresh_landing_order(reviews, issues, settings, opts, now) do
+    reviews =
+      reviews
+      |> LandingOrder.refresh(issues, settings, opts, now)
+      |> Enum.map(fn {record, landing} -> put_landing(record, landing, opts) end)
+
+    waits = for %{landing: %{waits_for: %{} = wait}} = record <- reviews, into: %{}, do: {Map.get(record, :issue_id), wait}
+    {reviews, waits}
+  end
+
+  defp put_landing(record, landing, opts) do
+    if Map.get(record, :landing) != landing do
+      # A failed write is logged; the poll still orders with what it read.
+      _result = update_review(opts, record, %{landing: landing})
+    end
+
+    Map.put(record, :landing, landing)
+  end
+
+  defp landing_wait(record, opts), do: opts |> Keyword.get(:landing_waits, %{}) |> Map.get(Map.get(record, :issue_id))
 
   # The tracker returns `Merging` issues from every repository; only this repository's are landed
   # here, so its auto-merge setting never applies to another's PRs. A missing repo_key means the
@@ -859,14 +886,24 @@ defmodule SymphonyElixir.PrReviewPoller do
         maybe_transition_rework(record, attrs, settings, opts, now)
 
       :conflict ->
-        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, opts, now) do
-          maybe_transition_conflict(record, attrs, settings, opts, now)
-        end
+        act_on_conflict(record, attrs, activity, settings, opts, now)
 
       action when action in [:approved, :stale, :watching] ->
         if auto_merge_issue?(record, opts),
           do: run_auto_merge(record, attrs, activity, settings, opts, now),
           else: handle_review_action(action, record, attrs, opts, now)
+    end
+  end
+
+  defp act_on_conflict(record, attrs, activity, settings, opts, now) do
+    case landing_wait(record, opts) do
+      nil ->
+        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, opts, now) do
+          maybe_transition_conflict(record, attrs, settings, opts, now)
+        end
+
+      wait ->
+        wait_to_land(record, attrs, wait, opts)
     end
   end
 
@@ -970,6 +1007,85 @@ defmodule SymphonyElixir.PrReviewPoller do
       }
     end)
     |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+  end
+
+  @doc """
+  Every tracked PR that waits for another to land first (see `SymphonyElixir.LandingOrder`), with
+  the PR it waits for, how many files they share and the reason as the state API shows it.
+  """
+  @spec landing_waits(keyword()) :: [map()]
+  def landing_waits(opts \\ []) do
+    opts
+    |> landing_records()
+    |> Enum.flat_map(fn
+      %{landing: %{waits_for: %{} = wait} = landing} = record ->
+        [
+          %{
+            issue_id: Map.get(record, :issue_id),
+            issue_identifier: Map.get(record, :issue_identifier),
+            pr_url: Map.get(record, :pr_url),
+            state: landing.state,
+            waits_for: Map.take(wait, [:issue_id, :issue_identifier, :pr_url, :state]),
+            shared_files: wait.shared_files,
+            files: wait.files,
+            reason: LandingOrder.reason(wait),
+            since: landing.waits_since
+          }
+        ]
+
+      _record ->
+        []
+    end)
+    |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+  end
+
+  @doc """
+  The other open PRs the overlap map holds, for an agent's first prompt: with the issue's own PR
+  in the map, the ones that share files with it (`shared`) and the one it waits for; without it
+  (no PR yet), every other PR and the files it changes (`open`). Nil when there are none.
+  """
+  @spec open_pr_overlap(String.t(), keyword()) :: map() | nil
+  def open_pr_overlap(issue_id, opts \\ []) when is_binary(issue_id) do
+    {own, others} =
+      opts
+      |> landing_records()
+      |> Enum.filter(&match?(%{landing: %{files: [_ | _]}}, &1))
+      |> Enum.split_with(&(Map.get(&1, :issue_id) == issue_id))
+
+    case {own, others} do
+      {_own, []} -> nil
+      {[%{landing: landing} | _], others} -> overlap_with(landing, others)
+      {[], others} -> %{waits_for: nil, shared: [], open: Enum.map(others, &overlap_entry(&1, &1.landing.files))}
+    end
+  end
+
+  defp overlap_with(landing, others) do
+    shared =
+      for record <- others, files = LandingOrder.shared_files(landing.files, record.landing.files), files != [] do
+        overlap_entry(record, files)
+      end
+
+    if shared == [], do: nil, else: %{waits_for: landing.waits_for, shared: shared, open: []}
+  end
+
+  defp overlap_entry(record, files) do
+    %{
+      issue_identifier: Map.get(record, :issue_identifier),
+      state: record.landing.state,
+      pr_url: Map.get(record, :pr_url),
+      files: files
+    }
+  end
+
+  defp landing_records(opts) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.flat_map(repo_keys_from_opts(opts), fn repo_key ->
+      case list_pr_reviews(run_store, repo_key) do
+        {:ok, records} -> Enum.filter(records, &match?(%{landing: %{files: files}} when is_list(files), &1))
+        {:error, _reason} -> []
+      end
+    end)
   end
 
   defp auto_merge_status?(%{auto_merge: %{state: state}}) when is_binary(state), do: true
@@ -1120,7 +1236,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp run_auto_merge(record, attrs, activity, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
 
-    case AutoMerge.step(record, activity, settings, opts, now) do
+    case AutoMerge.step(record, activity, settings, Keyword.put(opts, :landing_wait, landing_wait(record, opts)), now) do
       {:ok, auto_merge} ->
         complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
 
@@ -1427,6 +1543,21 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
+  # A follower whose leader still lands (see `SymphonyElixir.LandingOrder`) gets no conflict fix yet:
+  # the leader's merge would reopen the conflict. No move, no auto-merge change and no retry used;
+  # once the leader lands or leaves the group, the next poll takes the conflict path with its changes.
+  defp wait_to_land(record, attrs, wait, opts) do
+    issue_id = Map.get(record, :issue_id)
+
+    unless Map.get(record, :status) == "conflict_waiting_to_land" do
+      Logger.info(
+        "PR review #{Map.get(record, :issue_identifier)}: the PR conflicts with the base branch but #{LandingOrder.reason(wait)}; no conflict fix until then issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} leader_issue_id=#{wait.issue_id}"
+      )
+    end
+
+    complete_review_update(opts, record, Map.put(attrs, :status, "conflict_waiting_to_land"), {:landing_wait, issue_id, wait.issue_identifier})
+  end
+
   defp conflict_hold_phase?(%{settings: settings, origin_state: state}) do
     match?({:ok, signal, _origin} when signal != :ci_fix_enter_merging, CiFix.entry(state, settings))
   end
@@ -1610,7 +1741,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp conflict_prompt_pending?(record) do
     normalize_conflict_context(Map.get(record, :conflict_context)) != nil and
-      Map.get(record, :status) not in ["conflict_escalated", "cleanup_pending"]
+      Map.get(record, :status) not in ["conflict_escalated", "cleanup_pending", "conflict_waiting_to_land"]
   end
 
   defp normalize_conflict_context(context) when is_map(context) do
