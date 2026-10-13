@@ -19,9 +19,6 @@ public struct QAMode: Equatable {
     public static let apiFixturesKey = "SYMPHONY_BAR_QA_API_FIXTURES"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
-    /// Where the embedded Burrito binary unpacks its release, under `.burrito/`. Burrito's launcher removes older
-    /// versions' unpacked releases from that folder, so a test launch must never share it with the installed app.
-    public static let burritoInstallDirectoryKey = "SYMPHONY_INSTALL_DIR"
 
     public static let settingsFileName = "settings.plist"
     public static let secretsFileName = "secrets.json"
@@ -29,7 +26,6 @@ public struct QAMode: Equatable {
     public static let symphonyLogsFolder = "symphony-logs"
     public static let updatesFolder = "updates"
     public static let stateFolder = "state"
-    public static let burritoFolder = "burrito"
 
     public let root: URL
     /// True when `SYMPHONY_BAR_QA_SCRIPTED` is `1`.
@@ -89,7 +85,6 @@ public struct QAMode: Equatable {
     public var symphonyLogsRoot: URL { root.appendingPathComponent(Self.symphonyLogsFolder, isDirectory: true) }
     public var updateCacheDirectory: URL { root.appendingPathComponent(Self.updatesFolder, isDirectory: true) }
     public var stateRoot: URL { root.appendingPathComponent(Self.stateFolder, isDirectory: true) }
-    public var burritoInstallDirectory: URL { root.appendingPathComponent(Self.burritoFolder, isDirectory: true) }
 
     /// The fixtures the app reads Symphony's API from, logging control requests under the QA root; nil without
     /// `SYMPHONY_BAR_QA_API_FIXTURES`.
@@ -120,9 +115,9 @@ public struct AppStores {
     public let controlURLFallback: URL?
     /// The API fixtures that answer instead of Symphony, only in QA mode with `SYMPHONY_BAR_QA_API_FIXTURES`.
     public let apiFixtures: APIFixtures?
-    /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT`, `SYMPHONY_LOGS_ROOT` and `SYMPHONY_INSTALL_DIR`
-    /// default to folders under the QA root, so the app neither sees nor controls a Symphony started outside QA
-    /// mode, and the Symphony it starts keeps its state, logs and unpacked release there.
+    /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT` and `SYMPHONY_LOGS_ROOT` default to folders
+    /// under the QA root, so the app neither sees nor controls a Symphony started outside QA mode, and the
+    /// Symphony it starts keeps its state and logs there.
     public let environment: [String: String]
 
     public init(
@@ -159,7 +154,6 @@ public struct AppStores {
         for (key, folder) in [
             (StateRoot.environmentKey, qaMode.stateRoot),
             (QAMode.symphonyLogsRootKey, qaMode.symphonyLogsRoot),
-            (QAMode.burritoInstallDirectoryKey, qaMode.burritoInstallDirectory),
         ] where environment[key]?.trimmingWhitespace().isEmpty ?? true {
             environment[key] = folder.path
         }

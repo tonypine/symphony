@@ -13,8 +13,8 @@ defmodule SymphonyElixir.LauncherEnv do
   `clear/1` runs once at startup, after `SymphonyElixir.CLI.maybe_configure_packaged_runtime/0`
   (which reads `BINDIR` to start `epmd`). It records that the service is a packaged build in
   `:running_as_release`, which `SymphonyElixir.Paths` reads instead of the variable, then unsets
-  the variables and drops the release's directories from `PATH`. A Burrito build, which sets no
-  `SYMPHONY_RELEASE_ROOT`, is left as it is.
+  the variables and drops the release's directories from `PATH`. A service not started by the
+  launcher, which sets no `SYMPHONY_RELEASE_ROOT`, is left as it is.
   """
 
   @app :symphony_elixir

@@ -8,8 +8,8 @@ defmodule SymphonyElixir.ReleaseCookie do
   must be unguessable and owner-only.
 
   The `bin/symphony` script applies this cookie via `rel/env.sh.eex` before the VM
-  boots. The Burrito-packaged binary boots the BEAM directly and never sources
-  `env.sh`, so for that launch path `runtime.exs` resolves the same value via
+  boots. The release launcher (`bin/symphony-app`, what Symphony.app runs) boots
+  the BEAM directly and never sources `env.sh`, so for that launch path `runtime.exs` resolves the same value via
   `resolve!/0` and `SymphonyElixir.ReleaseNode` applies it when the service starts
   distribution. Both paths converge on the same persisted value, so a daemon
   started either way accepts a `bin/symphony remote` shell.

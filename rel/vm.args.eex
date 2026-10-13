@@ -1,5 +1,5 @@
-## No node name here. The Burrito-packaged binary boots the BEAM directly from
-## this file for every subcommand, and a fixed `-name` would make a one-off
+## No node name here. The release launcher (bin/symphony-app) boots the BEAM
+## directly from this file for every subcommand, and a fixed `-name` would make a one-off
 ## command such as `symphony check` clash with a running Symphony before any
 ## Elixir code runs. The service starts distribution itself as
 ## symphony@127.0.0.1 (SymphonyElixir.ReleaseNode); the bin/symphony script gets
@@ -7,7 +7,7 @@
 ## service's stable node name is what reopens the on-disk RunStore schema.
 ##
 ## The cookie is a secret and is NOT set here: the script launcher reads it via
-## env.sh, the Burrito launcher via SymphonyElixir.ReleaseCookie.
+## env.sh, bin/symphony-app via SymphonyElixir.ReleaseCookie.
 
 ## Distribution exists only for local remote-console / observer access (the
 ## control plane is HTTP), so bind the distribution listener to loopback.

@@ -375,10 +375,6 @@ defmodule SymphonyElixir.CLITest do
     # SYMPHONY_RELEASE_ROOT, set by rel/overlays/bin/symphony-app.
     assert CLI.packaged_args("/Applications/Symphony.app/Contents/Resources/symphony-release", [~c"check", ~c"--config", ~c"s y.yml"]) ==
              ["check", "--config", "s y.yml"]
-
-    # __BURRITO_BIN_PATH, set by the Burrito wrapper until TP-871.
-    assert CLI.packaged_args("/Applications/Symphony.app/Contents/Resources/symphony", [~c"--config", ~c"s.yml", ~c"--port", ~c"4040"]) ==
-             ["--config", "s.yml", "--port", "4040"]
   end
 
   test "reads root env overrides before applying flag overrides" do
