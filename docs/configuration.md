@@ -223,7 +223,8 @@ tickets:
   when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
   example on `[urgent, high]` only. It never stops a forced ticket (`agent.concurrency.force_label`)
   or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
-  `null` turns the filter off.
+  `null` turns the filter off. `/api/v1/state` lists each ticket it holds back under
+  `dispatch_skipped` (`priority medium is not in tickets.priorities (urgent, high)`).
 
 ### `repositories`
 
@@ -719,7 +720,7 @@ agent:
   restarts); a ticket labelled in another state, such as `Backlog` or `In Review`, joins once it
   moves into an active state. Once queued it stays listed in any non-terminal state (`In Review`,
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
-  queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
+  `title`, `repo_key`, queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
   `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
   `breakdown`, `close_out`, `final_verification`, `epic_review`), whether an agent is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
@@ -752,9 +753,8 @@ agent:
   The daily token budget and a usage-limit headroom hold don't stop a forced ticket (a warning is
   logged when the budget would have); the per-issue token cap still does. The operator Pause, the
   Linear rate-limit pause, the workspace quota pause, `max_concurrent_agents_per_host`, blocked-by
-  links, a failed setup, retry backoff, the post-PR quiet period, auto-merge and `Merging` CI waits,
-  and a usage-limit pause still hold it; when a usage-limit pause resumes, a held forced ticket
-  goes out first.
+  links, a failed setup, retry backoff, auto-merge and `Merging` CI waits, and a usage-limit pause
+  still hold it; when a usage-limit pause resumes, a held forced ticket goes out first.
   A forced plan ticket is one forced unit. Its plan, re-plan and close-out runs use the
   allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
@@ -780,7 +780,10 @@ agent:
   and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
   `waiting for CI on <sha>`; it doesn't count as waiting for a slot, so it doesn't hold back `Todo`.
   `/api/v1/state` also lists the issue ids Symphony holds a claim on (`claimed`); a claim with no
-  running agent, retry or slot wait is released at the end of the next poll.
+  running agent, retry or slot wait is released at the end of the next poll. Every other candidate
+  the last poll passed over is listed under `dispatch_skipped` with the gate that held it (`blocked
+  by MT-2`, `on a Needs Decision hold`, a usage limit, the `tickets.priorities` filter, ...) and
+  since when.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
@@ -2145,7 +2148,8 @@ recorded and what clears it), `headline` (its one-line ask: the text after `**Wh
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
 or watches outside those states, is dropped — unless a hold pauses it, which is what waits on the
-Director. It doesn't depend on `human_actions.enabled`.
+Director. A plan that leaves `Plan Review` (approved, or sent to `Rework`) drops out on the next
+read. It doesn't depend on `human_actions.enabled`.
 `inbox_read` is false while Symphony has not yet read Linear for the list (the first read starts a
 second after startup), and true from its first successful read on, or when the tracker isn't Linear.
 The Mac app waits for it before it remembers what already waits, so nothing that was there notifies.

@@ -2,7 +2,7 @@ import Foundation
 
 /// The design system's tokens (`docs/design/design-system.md` §3) as named roles. Each maps to a system value, so
 /// light, dark, Increase Contrast and later system refinements follow by themselves; the SwiftUI mapping is in the
-/// app's `DesignSystem.swift`. No color is hardcoded.
+/// app's `DesignSystem.swift`. No color is hardcoded but the chart palette, which the design validates as a pair.
 public enum DesignTokens {
     /// A system color a token maps to (§3.1, §3.2).
     public enum SystemColor: String, CaseIterable, Equatable {
@@ -50,6 +50,22 @@ public enum DesignTokens {
 
         /// The badge background's opacity of the status color: 14% in light, 22% in dark.
         public static func badgeTint(dark: Bool) -> Double { dark ? 0.22 : 0.14 }
+    }
+
+    /// The categorical chart palette (§3.3), in its fixed order: a series keeps its color whatever else a chart
+    /// shows, and never takes a status color. Light and dark values are the design's validated pair.
+    public enum ChartSeries: Int, CaseIterable, Equatable {
+        case series1 = 1, series2, series3, series4
+
+        /// The light and dark values as `0xRRGGBB`.
+        public var hex: (light: UInt32, dark: UInt32) {
+            switch self {
+            case .series1: (0x007AFF, 0x3D86F5)
+            case .series2: (0xE07800, 0xCC780A)
+            case .series3: (0xAF52DE, 0xAE5ADF)
+            case .series4: (0x1A9BB0, 0x2A9FB4)
+            }
+        }
     }
 
     /// Surface and text roles (§3.1).

@@ -1461,24 +1461,11 @@ defmodule SymphonyElixir.AgentRunner do
         audit_linear_state_transition(issue, refreshed_issue, Keyword.get(opts, :run_id), opts)
         warn_if_pr_url_lost(refreshed_issue, run_context)
 
-        cond do
-          post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
-            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
-            hand_off_quiet_pr_head(issue, refreshed_issue, run_context)
-
-          waiting_on_sub_issues?(refreshed_issue) ->
-            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
-            {:done, refreshed_issue}
-
-          Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
-            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; back in Todo and waiting for its blockers")
-            {:done, refreshed_issue}
-
-          active_issue_state?(refreshed_issue.state) ->
-            {:continue, refreshed_issue}
-
-          true ->
-            {:done, refreshed_issue}
+        if waiting_on_hold?(refreshed_issue, opts) do
+          Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits on a hold or on its decision request")
+          {:done, refreshed_issue}
+        else
+          continue_unheld_issue?(issue, refreshed_issue, run_context)
         end
 
       {:ok, []} ->
@@ -1490,6 +1477,28 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(issue, _issue_state_fetcher, _opts, _run_context), do: {:done, issue}
+
+  defp continue_unheld_issue?(%Issue{} = issue, %Issue{} = refreshed_issue, run_context) do
+    cond do
+      post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
+        hand_off_quiet_pr_head(issue, refreshed_issue, run_context)
+
+      waiting_on_sub_issues?(refreshed_issue) ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
+        {:done, refreshed_issue}
+
+      Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; back in Todo and waiting for its blockers")
+        {:done, refreshed_issue}
+
+      active_issue_state?(refreshed_issue.state) ->
+        {:continue, refreshed_issue}
+
+      true ->
+        {:done, refreshed_issue}
+    end
+  end
 
   # The checks that hand a run on its PR to CI or review, instead of parking it, read the PR URL
   # from the refreshed issue's attachments. Say so when one the issue had at dispatch is gone.
@@ -1520,6 +1529,15 @@ defmodule SymphonyElixir.AgentRunner do
   # same way the post-turn refresh does, instead of failing the run.
   defp with_linear_retry(fun, label, opts) do
     TransientRetry.run(fun, opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label))
+  end
+
+  # A decision request (`linear_request_human_action`) or a reported block pauses the ticket in its
+  # phase on a hold, and the hold, not another turn, says when it continues: a turn would only
+  # repeat the wait, and enough of them would park it as idle. A request this run posted counts even
+  # before its hold is in the store, so a failed hold write never parks the ticket under its question.
+  defp waiting_on_hold?(%Issue{id: issue_id} = issue, opts) do
+    CommentRegistry.human_action_requested?(Keyword.get(opts, :linear_comment_registry)) or
+      Hold.held_any?(run_repo_key(issue, opts), issue_id)
   end
 
   defp waiting_on_sub_issues?(%Issue{} = issue) do

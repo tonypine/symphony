@@ -94,7 +94,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private var poll: ReposPoll?
     private var inFlight = false
 
-    func show(status: SymphonyStatus) {
+    /// Shows the window; with `editing`, on that repo's Edit sheet, where its manual review is.
+    func show(status: SymphonyStatus, editing key: String? = nil) {
         if window == nil {
             let model = ReposViewModel()
             model.onSelect = { key in AppStores.current.defaults.set(key, forKey: Self.selectionKey) }
@@ -130,6 +131,10 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         window?.makeKeyAndOrderFront(nil)
         // Puts the window in front even if the system still declined to activate the app.
         window?.orderFrontRegardless()
+        if let key {
+            model?.selection = key
+            showSheet(editing: key)
+        }
     }
 
     /// Called after each status poll and child process event. Does nothing while the window is closed.

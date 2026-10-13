@@ -15,6 +15,10 @@ struct OverviewActions {
     var openTickets: (TicketList.Filter) -> Void = { _ in }
     /// A click on an initiative in the Initiatives card opens it in Initiatives (D5), by issue id.
     var openInitiative: (String) -> Void = { _ in }
+    /// The Today card opens Usage (D8).
+    var openUsage: () -> Void = {}
+    /// The Shipped today tile and the idle state's Show Shipped open Shipped (D9).
+    var openShipped: () -> Void = {}
 }
 
 /// The Overview in a scroll view, laid out for the width it gets.
@@ -80,7 +84,7 @@ struct OverviewBody: View {
     @ViewBuilder private var mainColumn: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
             if overview.showsAllCaughtUp {
-                AllCaughtUp()
+                AllCaughtUp(showShipped: actions.openShipped)
             }
             if !overview.working.isEmpty {
                 Card(title: Overview.nowWorkingTitle) {
@@ -107,6 +111,19 @@ struct OverviewBody: View {
                         ForEach(overview.meters) { MeterView(meter: $0) }
                     }
                 }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: actions.openUsage)
+                .focusable()
+                .onKeyPress(.return) {
+                    actions.openUsage()
+                    return .handled
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { actions.openUsage() }
+                .accessibilityAction(named: "Open Usage") { actions.openUsage() }
+                .accessibilityHint("Opens Usage")
+                .help("Open Usage")
             }
             if !initiatives.isEmpty {
                 InitiativesCard(initiatives: initiatives, open: actions.openInitiative)
@@ -183,14 +200,20 @@ private struct FlowStrip: View {
                                 .foregroundStyle(.tertiary)
                                 .accessibilityHidden(true)
                         }
-                        // Each tile is a button with a focus ring (J2 step 5): Waiting on you opens the Inbox, the
-                        // others open Tickets filtered to their stage.
-                        if let filter = TicketList.Filter(stage: stage.kind) {
+                        // Each tile is a button with a focus ring (J2 step 5): Waiting on you opens the Inbox,
+                        // Shipped today opens Shipped, the others open Tickets filtered to their stage.
+                        switch stage.kind.destination {
+                        case let .tickets(filter):
                             Button { actions.openTickets(filter) } label: { StatTile(stage: stage) }
                                 .buttonStyle(.plain)
                                 .help("Show \(filter.title) in Tickets")
                                 .accessibilityAddTraits(.isButton)
-                        } else {
+                        case .shipped:
+                            Button(action: actions.openShipped) { StatTile(stage: stage) }
+                                .buttonStyle(.plain)
+                                .help("Open Shipped")
+                                .accessibilityAddTraits(.isButton)
+                        case .inbox:
                             Button(action: actions.openInbox) { StatTile(stage: stage) }
                                 .buttonStyle(.plain)
                                 .help("Open the Inbox")
@@ -505,13 +528,18 @@ private struct TicketTitle: View {
 }
 
 private struct AllCaughtUp: View {
+    var showShipped: () -> Void
+
     var body: some View {
-        HStack(spacing: DesignTokens.Space.s3) {
-            Image(systemName: DesignTokens.Status.done.symbol)
-                .font(.title2)
-                .foregroundStyle(DesignTokens.Status.done.tint)
-                .accessibilityHidden(true)
-            Text(Overview.allCaughtUp).font(DesignTokens.TypeStyle.section.font)
+        VStack(spacing: DesignTokens.Space.s3) {
+            HStack(spacing: DesignTokens.Space.s3) {
+                Image(systemName: DesignTokens.Status.done.symbol)
+                    .font(.title2)
+                    .foregroundStyle(DesignTokens.Status.done.tint)
+                    .accessibilityHidden(true)
+                Text(Overview.allCaughtUp).font(DesignTokens.TypeStyle.section.font)
+            }
+            Button(Overview.showShippedTitle, action: showShipped)
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, DesignTokens.Space.s8)

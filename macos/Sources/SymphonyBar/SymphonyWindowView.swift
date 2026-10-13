@@ -14,6 +14,9 @@ final class SymphonyWindowModel: ObservableObject {
         didSet {
             guard selection != oldValue else { return }
             onSelect(selection)
+            readHistoryIfDue()
+            readQualityIfDue()
+            readShippedIfDue()
         }
     }
 
@@ -53,6 +56,43 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var initiatives: InitiativesPayload?
     /// What the last Initiatives read got when it got none, nil after one that did.
     @Published private(set) var initiativesResult: EndpointResult?
+    /// The last history Symphony served, for Usage; read while Usage shows.
+    @Published private(set) var usageHistory: HistoryPayload?
+    /// What the last history read got when it got none, nil after one that did.
+    @Published private(set) var historyResult: EndpointResult?
+    /// The history and runs of Quality's period, read while Quality shows.
+    @Published private(set) var quality: (history: HistoryPayload, runs: [QualityRun])?
+    /// What the last Quality read got when it got none, nil after one that did.
+    @Published private(set) var qualityResult: EndpointResult?
+    /// Quality's period; changing it reads again.
+    @Published var qualityPeriod: Quality.Period = .month {
+        didSet {
+            guard qualityPeriod != oldValue else { return }
+            qualityReadAt = nil
+            readQualityIfDue()
+        }
+    }
+    /// Shipped's merged tickets for its period, read while Shipped shows (D9).
+    @Published var shipped: ShippedPayload?
+    /// What the last Shipped read got when it got none, nil after one that did.
+    @Published var shippedResult: EndpointResult?
+    /// Every stored learning, read while Shipped shows, for its Learnings tab.
+    @Published var learnings: LearningsPayload?
+    @Published var learningsResult: EndpointResult?
+    /// Shipped's segmented control: Shipped or Learnings.
+    @Published var shippedTab: Shipped.Tab = .shipped
+    /// Shipped's period; changing it reads again.
+    @Published var shippedPeriod: Shipped.Period = .week {
+        didSet {
+            guard shippedPeriod != oldValue else { return }
+            shippedReadAt = nil
+            readShippedIfDue()
+        }
+    }
+    /// The Learnings tab's repo and tag filters and search.
+    @Published var learningsFilter = Learnings.Filter()
+    /// Set by ⌘F on Shipped to put the focus in the Learnings search field.
+    @Published var learningsSearchRequested = false
     /// The initiative shown, by issue id; nil shows the first.
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
@@ -93,7 +133,8 @@ final class SymphonyWindowModel: ObservableObject {
 
     var onSelect: (SymphonyView) -> Void = { _ in }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    var onOpenRepos: () -> Void = {}
+    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    var onOpenRepos: (String?) -> Void = { _ in }
     var onOpenWebDashboard: () -> Void = {}
     var onScopeChange: (OverviewScope) -> Void = { _ in }
     /// Sends a control request to Symphony, or to the API fixtures in QA mode, and says how it went.
@@ -108,6 +149,16 @@ final class SymphonyWindowModel: ObservableObject {
     private var readingRepos = false
     private var readingInbox = false
     private var readingInitiatives = false
+    private var readingHistory = false
+    /// When the history was last read; the run records it comes from change slowly.
+    private var historyReadAt: Date?
+    private var readingQuality = false
+    private var qualityReadAt: Date?
+    /// The history is read again at most this often.
+    static let historyInterval: TimeInterval = 60
+    var readingShipped = false
+    /// When Shipped and Learnings were last read; the run records they come from change slowly.
+    var shippedReadAt: Date?
     var readingTicket = false
     /// When the ticket page last read its runs and audit records, which change slowly.
     var ticketSlowReadAt: Date?
@@ -129,6 +180,9 @@ final class SymphonyWindowModel: ObservableObject {
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
+                readHistoryIfDue()
+                readQualityIfDue()
+                readShippedIfDue()
                 readTicket()
             }
             .store(in: &cancellables)
@@ -345,9 +399,68 @@ final class SymphonyWindowModel: ObservableObject {
             openStopRun(identifier, origin: .needsAttention)
         case .openDiagnostics:
             show(.diagnostics)
+        case .openUsage:
+            showUsage()
         case let .stopForcing(identifier):
             stopForcing(identifier)
         }
+    }
+
+    /// Opens Usage and reads the history at once.
+    func showUsage() {
+        show(.usage)
+        historyReadAt = nil
+        readHistoryIfDue()
+    }
+
+    /// Reads the history while Usage shows; Symphony answers from its run records, with no Linear request.
+    private func readHistoryIfDue() {
+        guard selection == .usage, shownTicket == nil, !readingHistory, state.countsKnown,
+            historyReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+        else { return }
+        readingHistory = true
+        Task {
+            let result = await client.get(HistoryPayload.path(days: HistoryPayload.defaultDays))
+            if case let .loaded(data) = result, let payload = HistoryPayload.decode(data) {
+                usageHistory = payload
+                historyResult = nil
+            } else {
+                historyResult = result
+            }
+            historyReadAt = Date()
+            readingHistory = false
+        }
+    }
+
+    /// Reads Quality's history and runs while Quality shows, for its period.
+    private func readQualityIfDue() {
+        guard selection == .quality, shownTicket == nil, !readingQuality, state.countsKnown,
+            qualityReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+        else { return }
+        readingQuality = true
+        let period = qualityPeriod
+        Task {
+            let result = await client.get(HistoryPayload.path(days: period.rawValue))
+            if case let .loaded(data) = result, let history = HistoryPayload.decode(data) {
+                let from = history.tokensPerDay.first?.date ?? ""
+                let runsResult = await client.get(QualityRun.path(from: from))
+                let runs = if case let .loaded(data) = runsResult { QualityRun.decode(data) ?? [] } else { [QualityRun]() }
+                if period == qualityPeriod {
+                    quality = (history, runs)
+                    qualityResult = nil
+                }
+            } else {
+                qualityResult = result
+            }
+            qualityReadAt = period == qualityPeriod ? Date() : nil
+            readingQuality = false
+            if qualityReadAt == nil { readQualityIfDue() }
+        }
+    }
+
+    /// Change Review…: the Repos window on `repoKey`'s Edit sheet, where its manual review is.
+    func changeReview(_ repoKey: String) {
+        onOpenRepos(repoKey)
     }
 
     private func readReposIfDue() {
@@ -364,7 +477,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// Shows `view`: Repos opens its window and the selection stays where it was.
     func show(_ view: SymphonyView) {
         if view.opensOwnWindow {
-            onOpenRepos()
+            onOpenRepos(nil)
         } else {
             selection = view
             history.visit(.view(view))
@@ -449,6 +562,15 @@ struct SymphonyWindowView: View {
                         DispatchControlButton(model: model, client: client)
                     }
                     .sharedBackgroundVisibility(.hidden)
+                    if model.selection == .shipped, model.shownTicket == nil {
+                        ToolbarItem(placement: .principal) {
+                            Picker("Shipped or Learnings", selection: $model.shippedTab) {
+                                ForEach(Shipped.Tab.allCases) { Text($0.title).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .fixedSize()
+                        }
+                    }
                     if model.selection == .tickets, model.shownTicket == nil {
                         ToolbarItem(placement: .automatic) {
                             Button { model.openForceSheet() } label: {
@@ -621,6 +743,12 @@ struct SymphonyDetail: View {
                 TicketsContent(model: model, client: client)
             case .diagnostics:
                 DiagnosticsContent(model: model, client: client)
+            case .usage:
+                UsageContent(model: model, client: client)
+            case .quality:
+                QualityContent(model: model)
+            case .shipped:
+                ShippedContent(model: model)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }
@@ -644,7 +772,9 @@ struct OverviewContent: View {
                     openInbox: { model.showInbox() },
                     openTicket: model.openTicket,
                     openTickets: model.showTickets,
-                    openInitiative: model.showInitiative
+                    openInitiative: model.showInitiative,
+                    openUsage: model.showUsage,
+                    openShipped: { model.showShipped() }
                 ),
                 initiatives: model.initiativesList?.active ?? []
             )

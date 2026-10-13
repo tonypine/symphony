@@ -75,7 +75,8 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(hold.severity, .warning)
         XCTAssertEqual(hold.sentence, "The Codex 5-hour limit holds new runs until 15:40.")
         XCTAssertEqual(hold.note, "Runs resume by themselves.")
-        XCTAssertEqual(hold.fixes, [])
+        XCTAssertEqual(hold.fixes, [.openUsage])
+        XCTAssertEqual(hold.fixes.map(\.title), ["Open Usage"])
 
         XCTAssertTrue(overview.working[0].isStuck)
         XCTAssertEqual(Overview.badgeCount(try state("attention"), now: wallClock), 2)
@@ -116,6 +117,16 @@ final class OverviewTests: XCTestCase {
         XCTAssertTrue(overview.nextUp.isEmpty)
         XCTAssertTrue(overview.problems.isEmpty)
         XCTAssertEqual(overview.meters.first?.value, "0 of 5M")
+    }
+
+    func testEachTileOpensItsView() {
+        XCTAssertEqual(Overview.StageKind.waitingOnYou.destination, .inbox)
+        XCTAssertEqual(Overview.StageKind.shippedToday.destination, .shipped)
+        XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.queued))
+        XCTAssertEqual(Overview.StageKind.working.destination, .tickets(.working))
+        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.review))
+        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.merging))
+        XCTAssertEqual(Overview.showShippedTitle, "Show Shipped")
     }
 
     func testTheRunningFixtureFromBeforeTheOverviewStillReads() throws {

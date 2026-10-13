@@ -164,6 +164,23 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert BlockedHold.sync(:not_an_issue, @terminal, settings: designed_settings()) == :skipped
     end
 
+    test "a polled issue with no repo key is held under the repo it was polled for" do
+      polled = issue(%{repo_key: nil, blocked_by: [blocker("TP-1", "In Progress")]})
+
+      log =
+        capture_log(fn ->
+          assert BlockedHold.sync(polled, @terminal, settings: designed_settings(), repo_key: @repo_key) == :set
+
+          # The label it set now matches the store, so the next sweep finds no hand-added label.
+          held = %{polled | labels: ["Blocked"]}
+          assert BlockedHold.sync(held, @terminal, settings: designed_settings(), repo_key: @repo_key) == :none
+        end)
+
+      assert %{waits_on: %{type: "dependency", keys: ["TP-1"]}} = stored_hold()
+      refute log =~ "hand-added"
+      refute log =~ "repo key"
+    end
+
     test "reports and clears a hand-added Blocked label with no store hold" do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Blocked"]})])
       stray = issue(%{labels: ["Blocked"]})

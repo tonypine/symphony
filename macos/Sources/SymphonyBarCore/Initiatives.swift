@@ -152,6 +152,14 @@ public struct Initiative: Equatable, Identifiable {
             self.blockedBy = blockedBy
             self.waits = waits
         }
+
+        /// The issue id Review opens in the Inbox, nil when the row opens the ticket page instead: only a ticket
+        /// that waits on the Director and that the Inbox lists. A sub-ticket not promoted yet waits on the Director
+        /// without an Inbox item of its own; its plan's item is the one to review.
+        public func reviewIssueID(inbox: Set<String>) -> String? {
+            guard waits == .you, let issueID, inbox.contains(issueID) else { return nil }
+            return issueID
+        }
     }
 
     public struct FinalVerification: Equatable {

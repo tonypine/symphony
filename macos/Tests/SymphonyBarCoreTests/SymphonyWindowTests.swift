@@ -84,11 +84,15 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testSidebarListsOnlyBuiltViewsInTheDesignsOrder() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.views, [.inbox, .overview, .initiatives, .tickets, .repos, .diagnostics])
-        XCTAssertEqual(sidebar.sections.map(\.section), [.main, .factory])
+        XCTAssertEqual(sidebar.views, [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .repos, .diagnostics])
+        XCTAssertEqual(sidebar.sections.map(\.section), [.main, .insights, .records, .factory])
         XCTAssertEqual(sidebar.sections.first?.views, [.inbox, .overview, .initiatives, .tickets])
+        XCTAssertEqual(sidebar.sections[1].views, [.quality, .usage])
+        XCTAssertEqual(sidebar.sections[2].views, [.shipped])
         XCTAssertEqual(sidebar.sections.last?.views, [.repos, .diagnostics])
+        XCTAssertEqual(SidebarSection.records.title, "Records")
         XCTAssertEqual(SidebarSection.factory.title, "Factory")
+        XCTAssertEqual(SymphonyView.shipped.symbol, "shippingbox")
     }
 
     func testViewsJoinInPlace() {
@@ -104,17 +108,20 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(sidebar.shortcut(for: .overview), 2)
         XCTAssertEqual(sidebar.shortcut(for: .initiatives), 3)
         XCTAssertEqual(sidebar.shortcut(for: .tickets), 4)
-        XCTAssertEqual(sidebar.shortcut(for: .repos), 5)
-        XCTAssertEqual(sidebar.shortcut(for: .diagnostics), 6)
-        XCTAssertNil(sidebar.shortcut(for: .usage))
-        XCTAssertEqual(sidebar.view(forShortcut: 6), .diagnostics)
-        XCTAssertNil(sidebar.view(forShortcut: 7))
+        XCTAssertEqual(sidebar.shortcut(for: .quality), 5)
+        XCTAssertEqual(sidebar.shortcut(for: .usage), 6)
+        XCTAssertEqual(sidebar.shortcut(for: .shipped), 7)
+        XCTAssertEqual(sidebar.shortcut(for: .repos), 8)
+        XCTAssertNil(sidebar.shortcut(for: .diagnostics))
+        XCTAssertEqual(sidebar.view(forShortcut: 7), .shipped)
+        XCTAssertEqual(sidebar.view(forShortcut: 8), .repos)
+        XCTAssertNil(sidebar.view(forShortcut: 9))
         XCTAssertNil(sidebar.view(forShortcut: 0))
 
         let all = Sidebar(built: SymphonyView.allCases)
-        XCTAssertEqual(all.views.count, 8)
+        XCTAssertEqual(all.views.count, 9)
         XCTAssertEqual(all.views.compactMap(all.shortcut(for:)), Array(1...8))
-        XCTAssertEqual(all.view(forShortcut: 8), .diagnostics)
+        XCTAssertEqual(all.view(forShortcut: 8), .repos)
     }
 
     func testRestoresTheSavedViewWhenItShowsInTheWindow() {
@@ -124,7 +131,9 @@ final class SymphonyWindowTests: XCTestCase {
         // The first time, the window opens on the Inbox: decisions first.
         XCTAssertEqual(sidebar.restoredView(saved: nil), .inbox)
         XCTAssertEqual(sidebar.restoredView(saved: "tickets"), .tickets)
-        XCTAssertEqual(sidebar.restoredView(saved: "usage"), .inbox)
+        XCTAssertEqual(sidebar.restoredView(saved: "usage"), .usage)
+        XCTAssertEqual(sidebar.restoredView(saved: "quality"), .quality)
+        XCTAssertEqual(sidebar.restoredView(saved: "shipped"), .shipped)
         XCTAssertEqual(sidebar.restoredView(saved: "repos"), .inbox)
         XCTAssertEqual(Sidebar(built: [.overview, .diagnostics]).restoredView(saved: "nonsense"), .overview)
     }
@@ -176,7 +185,8 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(DesignTokens.Radius.card - DesignTokens.Space.s1, DesignTokens.Radius.row)
     }
 
-    /// The design system maps tokens to system colors only: no hex or RGB literal anywhere in the app's sources.
+    /// The design system maps tokens to system colors only: no hex or RGB literal anywhere in the app's sources, but
+    /// the chart palette's validated pair in `DesignSystem.swift` (design system §3.3).
     func testNoHardcodedColorsInTheSources() throws {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -188,7 +198,7 @@ final class SymphonyWindowTests: XCTestCase {
         let patterns = [#"Color\(\s*red:"#, #"Color\(\s*\.sRGB"#, #"NSColor\(\s*(calibrated|srgb|device)?[Rr]ed:"#, #"#[0-9A-Fa-f]{6}\b"#]
         for file in files {
             let text = try String(contentsOf: file, encoding: .utf8)
-            for pattern in patterns {
+            for pattern in patterns where !(file.lastPathComponent == "DesignSystem.swift" && pattern.hasPrefix("NSColor")) {
                 XCTAssertNil(text.range(of: pattern, options: .regularExpression), "\(file.lastPathComponent) matches \(pattern)")
             }
         }

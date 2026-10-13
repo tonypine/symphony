@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.PrReviewPoller
   alias SymphonyElixir.RunStore
@@ -13,15 +14,17 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   defmodule ProgressAgent do
     # Coding-agent stand-in: every turn completes and is reported to the test, or, with
     # `:progress_api_unreachable` set, ends as Claude's turn does when it can't reach the model API.
+    # `:progress_turn_hook` runs with the turn's options, as a tool the agent calls would.
     def start_session(_workspace, opts) do
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_session_started, opts})
       {:ok, %{}}
     end
 
-    def run_turn(_session, _prompt, _issue, _opts) do
+    def run_turn(_session, _prompt, _issue, opts) do
       count = Application.get_env(:symphony_elixir, :progress_agent_turns, 0) + 1
       Application.put_env(:symphony_elixir, :progress_agent_turns, count)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_turn, count})
+      if hook = Application.get_env(:symphony_elixir, :progress_turn_hook), do: hook.(opts)
 
       case Application.get_env(:symphony_elixir, :progress_api_unreachable) do
         %{} = info -> {:error, {:model_api_unreachable, info}}
@@ -100,6 +103,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_agent_turns,
             :progress_pr_head_result,
             :progress_api_unreachable,
+            :progress_turn_hook,
             :progress_reviewer_api_unreachable,
             :progress_reviewer_requests_changes,
             :memory_tracker_update_issue_state_result,
@@ -277,6 +281,32 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
     assert_signal("blocked", %{to: "Backlog", reason: "idle_park"})
+  end
+
+  describe "a run whose ticket waits on a decision" do
+    test "ends after the turn that set the Needs Decision hold, without parking it or handing it off" do
+      Application.put_env(:symphony_elixir, :progress_turn_hook, fn _opts ->
+        :ok = SymphonyElixir.Hold.set("default", "issue-progress", :needs_decision, %{reason: "Which reading is right?"})
+      end)
+
+      run_issue!("In Progress", heads: ["sha-rework"], repos: designed_repos(), max_turns: 5)
+
+      assert turns() == 1
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+    end
+
+    test "ends after the turn that posted the request, even before its hold is in the store" do
+      Application.put_env(:symphony_elixir, :progress_turn_hook, fn opts ->
+        CommentRegistry.record_human_action_request(Keyword.fetch!(opts, :linear_comment_registry))
+      end)
+
+      run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5)
+
+      assert turns() == 1
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+    end
   end
 
   test "a turn that can't reach the model API ends the run on the provider hold, so outage turns never park the issue" do

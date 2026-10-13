@@ -358,7 +358,7 @@ A run already going then finishes as a normal run and gives the forced slot to t
 | `finishing_max`, and the hold on `Todo` while a finish waits | a Claude or Codex usage-limit pause (the runs would just fail) |
 | priority and age ordering (forced tickets go first, oldest forced first) | blocked-by links: a blocked ticket waits for its blocker |
 | the daily token budget (with a warning) and a usage-limit headroom hold | the per-issue token cap and the per-host worker cap |
-| | a failed setup, retry backoff, post-PR quiet, and the CI waits before merging |
+| | a failed setup, retry backoff, and the CI waits before merging |
 
 `agent.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
 second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one

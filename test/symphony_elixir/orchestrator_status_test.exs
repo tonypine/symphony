@@ -4384,6 +4384,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [done_issue])
     assert :ok = SymphonyElixir.Notifications.subscribe()
 
+    # The plan the ticket belongs to, as the Initiatives server caches it.
+    initiatives_key = {SymphonyElixir.Initiatives, :initiatives, SymphonyElixir.Initiatives}
+    plan = %{identifier: "MT-PLAN", title: "Plan", final_verification: nil, sub_tickets: [%{id: issue_id}]}
+    :persistent_term.put(initiatives_key, [plan])
+    on_exit(fn -> :persistent_term.erase(initiatives_key) end)
+
     orchestrator_name = Module.concat(__MODULE__, :TerminalRestartOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
@@ -4409,6 +4415,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert %DateTime{} = run_record.issue_completed_notified_at
     assert %DateTime{} = run_record.watch_closed_at
+    assert run_record.initiative == %{identifier: "MT-PLAN", title: "Plan"}
 
     assert %{shipped_today: [shipped]} = wait_for_snapshot(pid, &match?(%{shipped_today: [_]}, &1))
 

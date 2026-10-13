@@ -91,6 +91,22 @@ public struct Overview: Equatable {
             case .shippedToday: "Shipped today"
             }
         }
+
+        /// Where a tile leads (J2 step 5).
+        public enum Destination: Equatable {
+            case inbox, shipped
+            case tickets(TicketList.Filter)
+        }
+
+        /// Waiting on you opens the Inbox, Shipped today opens Shipped (D9), the others open Tickets filtered to their
+        /// stage.
+        public var destination: Destination {
+            switch self {
+            case .waitingOnYou: .inbox
+            case .shippedToday: .shipped
+            default: TicketList.Filter(stage: self).map(Destination.tickets) ?? .inbox
+            }
+        }
     }
 
     /// A stat tile (C5): a count, its label and one line of context.
@@ -117,6 +133,8 @@ public struct Overview: Equatable {
         case open(String)
         case openInLinear(URL)
         case openDiagnostics
+        /// Opens Usage (D8).
+        case openUsage
         /// `POST /api/v1/control/force` with `clear`.
         case stopForcing(String)
         /// Opens the Stop Run sheet (D12c); nothing stops until its button is pressed.
@@ -127,6 +145,7 @@ public struct Overview: Equatable {
             case .open: "Open"
             case .openInLinear: "Open in Linear"
             case .openDiagnostics: "Open Diagnostics"
+            case .openUsage: "Open Usage"
             case .stopForcing: "Stop Forcing"
             case .stopRun: StopRunSheet.buttonTitle
             }
@@ -255,6 +274,7 @@ public struct Overview: Equatable {
 
     public static let resumeTitle = "Resume Dispatch"
     public static let allCaughtUp = "All caught up."
+    public static let showShippedTitle = "Show Shipped"
     public static let nowWorkingTitle = "Now working"
     public static let nextUpTitle = "Next up"
     public static let needsAttentionTitle = "Needs attention"
@@ -487,7 +507,7 @@ public struct Overview: Equatable {
             findings.append(Finding(
                 subject: "usage-limit-\(limit.provider)-\(limit.scope)", kind: .usageLimit, severity: .warning,
                 sentence: limit.isAPIUnreachable ? "\(what): new runs wait\(when)." : "\(what) holds new runs\(when).",
-                note: "Runs resume by themselves.", fixes: []
+                note: "Runs resume by themselves.", fixes: limit.isAPIUnreachable ? [] : [.openUsage]
             ))
         }
 
@@ -633,7 +653,7 @@ public struct Overview: Equatable {
         return "\(tickets)\(place). \(waiting)"
     }
 
-    private static func meters(_ snapshot: StateSnapshot, reference: Date, timeZone: TimeZone) -> [Meter] {
+    static func meters(_ snapshot: StateSnapshot, reference: Date, timeZone: TimeZone) -> [Meter] {
         var meters: [Meter] = []
         if let budget = snapshot.budget {
             if let limit = budget.dailyLimit, limit > 0 {
