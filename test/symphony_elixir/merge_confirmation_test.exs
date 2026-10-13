@@ -218,6 +218,18 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       }
     end
 
+    defp merge_hold do
+      %{
+        decision: %{
+          confirm: "Merging",
+          options: [
+            %{label: "Merge", effect: "the ticket moves to Merging"},
+            %{label: "Send to Rework", effect: "the ticket moves to Rework"}
+          ]
+        }
+      }
+    end
+
     test "an answer picks the option its number or label opens with" do
       assert MergeConfirmation.picked(ci_hold(), ["send to rework please"]) == {:ok, "Rework"}
       assert MergeConfirmation.picked(ci_hold(), ["Option 2"]) == {:ok, nil}
@@ -234,6 +246,9 @@ defmodule SymphonyElixir.MergeConfirmationTest do
     test "a reply that picks nothing is a change request; an ordinary decision moves nothing" do
       assert MergeConfirmation.reply_target(ci_hold(), ["Neither option"]) == "In Progress"
       assert MergeConfirmation.reply_target(ci_hold(), ["1"]) == "Rework"
+      assert MergeConfirmation.reply_target(ci_hold(), ["1 change needed on the same PR"]) == "In Progress"
+      assert MergeConfirmation.reply_target(merge_hold(), ["Merge conflicts remain, fix first"]) == "In Progress"
+      assert MergeConfirmation.reply_target(merge_hold(), ["Merge."]) == "Merging"
       assert MergeConfirmation.reply_target(%{decision: %{}}, ["1"]) == nil
     end
   end

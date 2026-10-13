@@ -146,7 +146,8 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   @doc """
   The move the answers to a confirmation hold pick: `{:ok, target}` when they pick exactly one of
-  its options — by number (`1`, `option 1`) or by label at the start of the answer — where `target`
+  its options — by number (`1`, `option 1`) or by label, alone, set off by punctuation, or followed only by confirming
+  words such as `please` — where `target`
   is the carried confirmation, `Rework`, or nil for an option that moves nothing; `:none` when no
   answer picks an option, or the answers pick options that disagree.
   """
@@ -182,9 +183,19 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   defp opens_with?(head, word) do
     case String.split_at(head, String.length(word)) do
-      {^word, rest} -> not Regex.match?(~r/^\w/u, rest)
+      {^word, rest} -> confirming_tail?(rest)
       _other -> false
     end
+  end
+
+  # What may follow a pick: nothing, punctuation that sets it off (`Merge.`, `2. the tests are
+  # thin`), or a few confirming words. A sentence that merely opens with an option's number or label
+  # (`Merge conflicts remain`, `1 change needed`) is free text.
+  @confirming_words ~w(please thanks thank you ok okay yes go ahead do it confirmed sounds good lgtm)
+
+  defp confirming_tail?(rest) do
+    Regex.match?(~r/^\s*([[:punct:]]|$)/u, rest) or
+      rest |> String.split(~r/\s+/u, trim: true) |> Enum.all?(&(&1 in @confirming_words))
   end
 
   # An option as the hold records it: the tool's map, or the line Linear's comment reads back.
