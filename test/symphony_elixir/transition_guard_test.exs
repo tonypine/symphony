@@ -515,6 +515,30 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert attrs.waits_on == %{type: "access", keys: []}
     end
 
+    test "a run that marked its issue blocked by open tickets gets a dependency hold on them" do
+      for from <- ["In Progress", "Rework"] do
+        assert {:hold, :blocked, attrs} =
+                 TransitionGuard.resolve_request(state("Backlog"), %{
+                   settings: designed_settings(),
+                   from_state: from,
+                   open_blockers: ["TP-997", "TP-998"]
+                 })
+
+        assert attrs.reason == "the run reported a block: waiting on TP-997, TP-998"
+        assert attrs.clearing_condition == "when every blocker is terminal"
+        assert attrs.waits_on == %{type: "dependency", keys: ["TP-997", "TP-998"]}
+      end
+    end
+
+    test "a block report with no open blocker keeps the access hold" do
+      assert {:hold, :blocked, %{waits_on: %{type: "access", keys: []}}} =
+               TransitionGuard.resolve_request(state("Backlog"), %{
+                 settings: designed_settings(),
+                 from_state: "In Progress",
+                 open_blockers: []
+               })
+    end
+
     test "the hold fires from Rework too, matching the phase loosely" do
       for from <- ["Rework", " in progress ", "REWORK"] do
         assert {:hold, :blocked, _attrs} =

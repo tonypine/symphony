@@ -2893,7 +2893,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       settings
     end
 
-    defp team_client(from_state) do
+    defp team_client(from_state, relations \\ []) do
       states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-progress", "name" => "In Progress"}]
 
       fn query, _variables, _opts ->
@@ -2904,11 +2904,65 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
            "data" => %{
              "issue" => %{
                "state" => %{"name" => from_state, "type" => "started"},
+               "inverseRelations" => %{"nodes" => relations},
                "team" => %{"states" => %{"nodes" => states}}
              }
            }
          }}
       end
+    end
+
+    defp relation(type, identifier, state) do
+      %{"type" => type, "issue" => %{"identifier" => identifier, "state" => state && %{"name" => state}}}
+    end
+
+    test "a run that marked its issue blocked by open tickets gets a dependency hold on them" do
+      :ok = SymphonyElixir.RunStore.clear()
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      # Only the open `blocks` relations count: a terminal blocker, another relation type and a
+      # repeated blocker are left out, and a blocker whose state is unknown counts as open.
+      relations = [
+        relation("blocks", "TP-997", "In Progress"),
+        relation("blocks", "TP-990", " done "),
+        relation("related", "TP-991", "Todo"),
+        relation("blocks", "TP-997", "In Progress"),
+        relation("blocks", "TP-998", nil)
+      ]
+
+      assert {:ok, response} =
+               Linear.update_state(context, "Backlog",
+                 linear_client: team_client("Rework", relations),
+                 settings: designed_settings(),
+                 store: SymphonyElixir.RunStore,
+                 tracker: HoldTracker
+               )
+
+      assert response["held"] == true
+      assert response["reason"] == "the run reported a block: waiting on TP-997, TP-998"
+      assert response["clearing_condition"] == "when every blocker is terminal"
+      assert_received {:machine_label_set, "issue-1", "Blocked"}
+
+      assert %{holds: [%{kind: :blocked, waits_on: %{type: "dependency", keys: ["TP-997", "TP-998"]}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+    end
+
+    test "a block report whose blockers are all terminal keeps the access hold" do
+      :ok = SymphonyElixir.RunStore.clear()
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, %{"held" => true}} =
+               Linear.update_state(context, "Backlog",
+                 linear_client: team_client("In Progress", [relation("blocks", "TP-997", "Done")]),
+                 settings: designed_settings(),
+                 store: SymphonyElixir.RunStore,
+                 tracker: HoldTracker
+               )
+
+      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access", keys: []}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
     end
 
     test "turns an agent's Backlog request into a Blocked hold, without a move" do
