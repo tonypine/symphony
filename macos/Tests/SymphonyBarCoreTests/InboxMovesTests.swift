@@ -318,6 +318,18 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(store[plan.id], DecisionPicks(picks: [0: 1]))
     }
 
+    func testAKeystrokeInTheWriteInReportsOnlyWhenItsBlanknessChanges() {
+        var store = InboxPicks()
+        // Each character of a fast typist keeps the words; only the first and the clearing one change Send Decision….
+        XCTAssertFalse(store.writeIn("  ", itemID: "a"))
+        XCTAssertTrue(store.writeIn("  L", itemID: "a"))
+        XCTAssertFalse(store.writeIn("  Le", itemID: "a"))
+        XCTAssertFalse(store.writeIn("  Lea", itemID: "a"))
+        XCTAssertEqual(store["a"].writeIn, "  Lea")
+        XCTAssertTrue(store.writeIn("\n", itemID: "a"))
+        XCTAssertEqual(store["a"].writeIn, "\n")
+    }
+
     func testSendingTheWriteInPostsItsWordsAsTheAnswer() throws {
         let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: decisionFixture)))
         let item = inbox.items[1]

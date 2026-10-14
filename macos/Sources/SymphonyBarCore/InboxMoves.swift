@@ -226,9 +226,13 @@ public struct InboxPicks: Equatable {
         byItem[itemID, default: DecisionPicks()].picks[decision] = option
     }
 
-    /// Keeps the words written in the item's write-in (N11).
-    public mutating func writeIn(_ text: String, itemID: String) {
+    /// Keeps the words written in the item's write-in (N11). Returns true when they turned blank or stopped being
+    /// blank, the one change Send Decision… shows; the field shows the words themselves.
+    @discardableResult
+    public mutating func writeIn(_ text: String, itemID: String) -> Bool {
+        let wasBlank = self[itemID].writeIn.trimmingWhitespace().isEmpty
         byItem[itemID, default: DecisionPicks()].writeIn = text
+        return wasBlank != text.trimmingWhitespace().isEmpty
     }
 
     /// Forgets the item's picks once they were sent.

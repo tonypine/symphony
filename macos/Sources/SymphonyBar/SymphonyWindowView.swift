@@ -46,8 +46,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxResult: EndpointResult?
     /// The Inbox item shown, by issue id; nil shows the first.
     @Published var inboxSelection: String?
-    /// The Director's picks in each item's decisions, and its write-in, by issue id (C16, N11).
-    @Published private(set) var inboxPicks = InboxPicks()
+    /// The Director's picks in each item's decisions, and its write-in, by issue id (C16, N11). Not `@Published`: a
+    /// keystroke in the write-in redraws the window only when the text turns blank or stops being blank.
+    private(set) var inboxPicks = InboxPicks() {
+        willSet { if publishesPicks { objectWillChange.send() } }
+    }
+    private var publishesPicks = true
     /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.
     @Published var inboxSheet: ConsequenceSheet?
     /// True while the sheet's move is on its way to Symphony.
@@ -294,7 +298,11 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// Keeps what the Director writes in the write-in (N11) of the request with issue id `itemID`, with its picks.
     func writeIn(_ text: String, itemID: String) {
-        inboxPicks.writeIn(text, itemID: itemID)
+        var picks = inboxPicks
+        let blankChanged = picks.writeIn(text, itemID: itemID)
+        publishesPicks = blankChanged
+        inboxPicks = picks
+        publishesPicks = true
     }
 
     /// Acts on a review's toolbar entry: a move opens its sheet, a link opens.

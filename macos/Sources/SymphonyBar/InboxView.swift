@@ -638,7 +638,7 @@ private struct ActionCards: View {
                     choose: pick
                 )
                 if answerable && action.isWriteIn(picks) {
-                    WriteInField(text: Binding(get: { picks.writeIn }, set: writeIn), focused: $writeInFocused)
+                    WriteInField(initialText: picks.writeIn, commit: writeIn, focused: $writeInFocused)
                 }
             }
             // Picking the write-in, by a click or its number key, puts the keyboard in its field.
@@ -846,9 +846,12 @@ private struct OptionCardView: View {
 }
 
 /// N11's field, under the write-in card once it is picked: a `TextEditor` three lines tall that grows with the
-/// text to eight, then scrolls, over the hint that says how the agent reads it.
+/// text to eight, then scrolls, over the hint that says how the agent reads it. The editor types into the field's own
+/// draft, handed to `commit` on each change: bound straight to the window model, a redraw between fast keystrokes put
+/// an older text back and lost what was typed.
 private struct WriteInField: View {
-    @Binding var text: String
+    @State private var text: String
+    var commit: (String) -> Void
     var focused: FocusState<Bool>.Binding
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
@@ -856,6 +859,12 @@ private struct WriteInField: View {
     private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
     /// The text view's own inset on each side of a line.
     private static let inset: CGFloat = 5
+
+    init(initialText: String, commit: @escaping (String) -> Void, focused: FocusState<Bool>.Binding) {
+        _text = State(initialValue: initialText)
+        self.commit = commit
+        self.focused = focused
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -891,6 +900,7 @@ private struct WriteInField: View {
         TextEditor(text: $text)
             .font(DesignTokens.TypeStyle.body.font)
             .scrollContentBackground(.hidden)
+            .onChange(of: text) { _, text in commit(text) }
             .focused(focused)
             .accessibilityLabel(OptionCard.writeInLabel)
             .accessibilityHint(OptionCard.writeInHint)
