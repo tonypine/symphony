@@ -184,6 +184,23 @@ final class LiveAPIClientTests: XCTestCase {
         XCTAssertEqual(EndpointPlaceholder.updateSymphony, "Update Symphony to see this view.")
     }
 
+    func testReadsAPullRequestsPageAtItsPath() async {
+        answer = .answered(Data(#"{"number": 448, "title": "TP-892 Retire two old review steps"}"#.utf8), statusCode: 200)
+        let client = client()
+        let result = await client.pullRequestPage(repoKey: "symphony", number: 448)
+        XCTAssertEqual(fetched, ["api/v1/pull_requests/symphony/448"])
+        guard case let .loaded(page) = result else { return XCTFail("not loaded: \(result)") }
+        XCTAssertEqual(page.title, "TP-892 Retire two old review steps")
+
+        answer = .answered(Data(#"{"error":{"code":"not_found","message":"Pull request not found"}}"#.utf8), statusCode: 404)
+        let missing = await client.pullRequestPage(repoKey: "symphony", number: 9999)
+        XCTAssertEqual(missing, .notFound)
+
+        answer = .answered(Data(#"{"error":{"code":"request_failed","message":"Not Found"}}"#.utf8), statusCode: 404)
+        let older = await client.pullRequestPage(repoKey: "symphony", number: 448)
+        XCTAssertEqual(older, .unsupported)
+    }
+
     func testEndpointResults() {
         XCTAssertEqual(EndpointResult(.answered(Data("x".utf8), statusCode: 200)), .loaded(Data("x".utf8)))
         XCTAssertEqual(EndpointResult(.answered(Data(), statusCode: 500)), .failed("Symphony answered with HTTP 500"))

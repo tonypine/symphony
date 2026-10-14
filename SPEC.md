@@ -4674,6 +4674,28 @@ Minimum endpoints:
     }
     ```
 
+- `GET /api/v1/pull_requests/<repo_key>/<number>`
+  - Returns a pull request's page for the Mac app (`SymphonyElixir.PullRequestPage`), read-only:
+    `number`, `url`, `title`, `repo_key`, `ticket` (`identifier`, `title`, `state`, `waiting_on`)
+    when the pull request belongs to a ticket, `github` (`available`/`unavailable`), `state`
+    (`open`/`merged`/`closed`), `review_state` (as in the Inbox's references), `opened_at`,
+    `last_pushed_at`, `merged_at`, `summary` (the body's `## This PR` section as plain text, else
+    its first paragraph), `review_history` (Symphony's Code Review and QA verdicts on the pull
+    request, oldest first: `at`, `kind` `code_review`/`qa`, `verdict`, `reason`: the one-line
+    reason the run recorded with it), `areas` (the changed files grouped by area, never named:
+    `name` `Agent instructions`/`App`/`Server`/`Documentation`/`Tests`/`Other`, `files`,
+    `additions`, `deletions`), `health` (`checks` with `state` `passed`/`failed`/`pending` and the
+    count of each, `code_review` with the latest `verdict` and the `round`, `qa`: the latest QA
+    verdict, `overlaps`: the other open pull requests Symphony tracks that change one of the same
+    files, `{number, ticket}`) and `size` (`files`, `additions`, `deletions`, `commits`).
+  - The ticket is the one Linear has the pull request attached to, else the one Symphony's PR
+    review record or the pull request's title or branch names.
+  - When GitHub can't be read, return `200` with what Linear and Symphony's records know and
+    `github: "unavailable"` (`state`, `summary`, `size` and `health.checks` null, `areas` empty).
+    An unknown repo returns `404` `unknown_repo`, a pull request GitHub doesn't have `404`
+    `not_found`.
+  - A page GitHub answered is kept for one poll interval (`polling.interval_ms`) per pull request.
+
 - `GET /api/v1/initiatives`
   - Returns the plan tickets (label `plan` or `breakdown`) the operator follows to done, for the Mac
     app's Initiatives: active ones, then those in review (the Plan Review state or `Epic Review`), then those done in the last 7 days. A canceled plan, one in
