@@ -472,8 +472,8 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
 - **Disconnect…** at the foot, in red.
 
 While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
-few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete disconnects the selected one (after
-the same confirmation), and ⌘W closes the window.
+few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete opens the same Disconnect sheet as
+**Disconnect…** and **−**, and ⌘W closes the window.
 
 When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
 set in Settings instead. Their source, Linear routing and manual review come from the file, and
@@ -552,12 +552,19 @@ or no longer has the repo.
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
   them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
-- **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
-  lines right above it (with no blank line between), and leaves one blank line between its neighbours.
-  It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
-  stays until you remove it. It is disabled for the only repo. For the `default: true` repo, the alert
-  asks which repo becomes the default. Symphony then restarts as after Add Repo.
-- **Remove Clone…** (managed repos only) deletes Symphony's clone under `workspaces.clones_root`
+- **Disconnect…** (the detail's foot, the sidebar **−**, the context menu or Delete) opens a sheet,
+  "Disconnect <key>?", saying what happens and what stays on disk, with **Cancel** and **Disconnect**.
+  Disconnect removes the entry from `repositories:` together with the comment lines right above it
+  (with no blank line between), and leaves one blank line between its neighbours. It never deletes a
+  local folder: a local checkout and its branches stay as they are. It is disabled for the only repo,
+  with "Symphony needs at least one repo." on hover and next to it, and the sheet doesn't open. For
+  the `default: true` repo, the sheet's **New default** pop-up picks the repo that becomes the default.
+  For a managed repo whose clone exists, **Also delete Symphony's clone (<path>)** deletes the clone
+  in the same step. It can be checked only when Remove Clone… could run (below), and otherwise shows
+  why under it, following each poll. After removing the entry the app checks again as Remove Clone
+  does, so a clone that became busy is kept and the banner says why. Symphony then restarts as after
+  Add Repo.
+- **Remove Clone…** (managed repos only), for a repo that stays connected, deletes Symphony's clone under `workspaces.clones_root`
   after you confirm; the repo stays connected and Symphony clones it again when it starts or on its
   next dispatch. It is disabled, with the reason next to it, while an agent runs in a worktree of
   the clone (any repo with the same source), and while Symphony is starting or doesn't list its running
@@ -968,6 +975,7 @@ make          # builds an ad-hoc-signed build/Symphony.app
 make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
+make snapshots  # renders the views in Tests/Snapshots offscreen (no window) and rewrites their PNGs
 make clean    # removes build/ and .build/
 make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```

@@ -1837,6 +1837,20 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert message =~ "linear_get_comments"
   end
 
+  test "add_comment refuses a body that reads as a person's ruling" do
+    response =
+      DynamicTool.execute(
+        "linear_add_comment",
+        %{"body" => "Decision: defer the legacy partials to TP-891"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: fn _query, _variables, _opts -> flunk("linear client should not be called for a ruling") end
+      )
+
+    assert response["success"] == false
+    assert %{"error" => %{"code" => "ruling_comment_body", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "linear_request_human_action"
+  end
+
   test "attach_file rejects paths outside the workspace before upload" do
     test_root = Path.join(System.tmp_dir!(), "linear-attach-file-#{System.unique_integer([:positive])}")
     workspace = Path.join(test_root, "workspace")

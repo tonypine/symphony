@@ -361,6 +361,8 @@ steps.
   withdrawal clears the hold the same way; the ticket never moved.
 - Symphony writes each answer into the `Decisions` section of the issue
   description (`D1`, `D2`…: the question, the answer and what it means for scope).
+  A person's plain comment that opens with `Decision:` or `Ruling:` is a ruling, and
+  Symphony records it there too; never open a comment of your own that way.
   A recorded decision is part of the ticket's scope: follow it, never re-open it, and
   never edit the section. The tool does not raise a question a person already
   answered; it returns the recorded answer, which you apply. A review finding that
