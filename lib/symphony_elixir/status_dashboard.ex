@@ -16,7 +16,7 @@ defmodule SymphonyElixir.StatusDashboard do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.Config
+  alias SymphonyElixir.{Config, Sessions}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -381,6 +381,7 @@ defmodule SymphonyElixir.StatusDashboard do
           {:ok,
            %{
              running: running,
+             sessions: Map.get(snapshot, :sessions, []),
              watching: Map.get(snapshot, :watching, []),
              forced: Map.get(snapshot, :forced, []),
              retrying: retrying,
@@ -443,6 +444,7 @@ defmodule SymphonyElixir.StatusDashboard do
         {:ok,
          %{
            running: running,
+           sessions: Sessions.list(running),
            watching: Map.get(snapshot, :watching, []),
            forced: Map.get(snapshot, :forced, []),
            retrying: retrying,

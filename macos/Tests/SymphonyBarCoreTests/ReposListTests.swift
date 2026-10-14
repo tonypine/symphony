@@ -353,8 +353,7 @@ final class ReposListTests: XCTestCase {
             isDefault: true,
             workflow: "WORKFLOW.md",
             route: RepositoryRoute(projects: ["building-the-harness"]),
-            workspace: RepositoryWorkspace(strategy: "worktree", repo: "~/Projects/symphony"),
-            acceptanceGateMode: "enforce"
+            workspace: RepositoryWorkspace(strategy: "worktree", repo: "~/Projects/symphony")
         ),
         RepositoryEntry(
             key: "api",
@@ -368,7 +367,6 @@ final class ReposListTests: XCTestCase {
         ReposConfig(
             path: "/etc/symphony/symphony.yml",
             repos: .entries(configured),
-            globalGate: .shadow,
             clonesRoot: URL(fileURLWithPath: "/Clones/repos")
         )
     }
@@ -439,9 +437,6 @@ final class ReposListTests: XCTestCase {
         try """
             workspaces:
               clones_root: clones
-            auto_review:
-              acceptance_gate:
-                mode: enforce
             repositories:
               - key: symphony
                 default: true
@@ -452,7 +447,6 @@ final class ReposListTests: XCTestCase {
         let read = ReposConfig.read(path: " \(file.path)\n")
 
         XCTAssertEqual(read.path, file.path)
-        XCTAssertEqual(read.globalGate, .enforce)
         XCTAssertEqual(read.clonesRoot, root.appendingPathComponent("clones").standardizedFileURL)
         XCTAssertEqual(try read.entries.get().map(\.key), ["symphony"])
     }
@@ -480,11 +474,9 @@ final class ReposListTests: XCTestCase {
         XCTAssertEqual(
             unreadable.entries, .failure(AddRepoProblem("Couldn't read the repos in \(unreadable.shownPath): \(message)"))
         )
-        XCTAssertEqual(unreadable.globalGate, .off)
 
         let missing = ReposConfig.read(path: root.appendingPathComponent("missing.yml").path)
         guard case .unreadable = missing.repos else { return XCTFail("\(missing.repos)") }
-        XCTAssertNil(missing.globalGate)
         XCTAssertEqual(missing.clonesRoot, ManagedClones.root(in: "", configPath: missing.path))
     }
 
@@ -520,21 +512,8 @@ final class ReposListTests: XCTestCase {
         XCTAssertEqual(shown.chip, .running)
         XCTAssertEqual(shown.repos.map(\.key), ["symphony", "api"])
         XCTAssertEqual(shown.repos[0].live, ReposList.detail(symphony, warning: nil, now: now).live)
-        XCTAssertEqual(
-            shown.repos[0].gate,
-            RepoDetail.Gate(
-                mode: RepoField("Mode", "Enforce"),
-                record: "This Symphony doesn't report the gate's record. Update it to see it."
-            )
-        )
-        XCTAssertEqual(
-            shown.repos[1].gate,
-            RepoDetail.Gate(
-                mode: RepoField("Mode", "Inherit: Shadow"),
-                record: "This Symphony doesn't report the gate's record. Update it to see it."
-            )
-        )
-        XCTAssertEqual(window(running, .repos([docs], warning: nil)).repos[0].gate, nil)
+        XCTAssertEqual(shown.repos.map(\.manualReview?.value), ["Off", "Off"])
+        XCTAssertNil(window(running, .repos([docs], warning: nil)).repos[0].manualReview)
         XCTAssertEqual(shown.repos.map(\.health.status), [.healthy, .notWorking])
         XCTAssertEqual(window(running, .repos([], warning: nil)).content, .empty(.noRepos))
     }
@@ -575,10 +554,7 @@ final class ReposListTests: XCTestCase {
         XCTAssertEqual(shown.repos[1].source.notCloned, true)
         XCTAssertEqual(shown.repos[1].live, .folded(line: "Live status shows while Symphony runs.", canStart: true))
         XCTAssertEqual(shown.repos[1].routing.sentence, "Issues in team ENG go to api.")
-        XCTAssertEqual(
-            shown.repos[1].gate,
-            RepoDetail.Gate(mode: RepoField("Mode", "Inherit: Shadow"), record: "Start Symphony to see the gate's record.")
-        )
+        XCTAssertNotNil(shown.repos[1].manualReview)
     }
 
     func testFoldsTheLiveSectionsWithWhySymphonyDoesntShowThem() {
@@ -630,7 +606,7 @@ final class ReposListTests: XCTestCase {
         let shown = window(running, .repos([symphony], warning: nil), config: ReposConfig(path: "", repos: .noPath))
 
         XCTAssertEqual(shown.repos.map(\.key), ["symphony"])
-        XCTAssertNil(shown.repos[0].gate)
+        XCTAssertNil(shown.repos[0].manualReview)
         XCTAssertEqual(
             shown.repos[0].actions,
             RepoActions(

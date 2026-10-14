@@ -7,14 +7,12 @@ defmodule SymphonyElixir.ForcedStatus do
   `describe/1` turns them into a `phase` and a `waiting_on`:
 
     * a running agent gives the run's kind as the phase (`implementation`, `rework`,
-      `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `final_verification`) and
-      waits on nothing; a running Auto Review QA pass gives `auto_review`;
+      `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `code_review`,
+      `qa`, `epic_review`) and waits on nothing;
     * a `Merging` ticket held while CI runs on its head is `waiting_on_ci` (`ci`);
-    * a ticket in `In Review` or the Human Review state is `waiting_for_human` (`human`);
+    * a plan in `Plan Review` is `waiting_for_human` (`human`);
     * a ticket in `Backlog` or `Triage` keeps the phase its next run would have and waits on
       `backlog`;
-    * a ticket in the Auto Review state is `auto_review`, waiting on a `slot` while its pass is
-      queued;
     * otherwise the phase is the next run's kind, waiting on its open `blocker`s, the operator's
       Pause (`paused`), a usage-limit pause (`usage_limit`), a free `slot`, or GitHub auto-merge
       (`ci`), in that order.
@@ -26,21 +24,20 @@ defmodule SymphonyElixir.ForcedStatus do
           | :review_feedback
           | :ci_fix
           | :waiting_on_ci
-          | :auto_review
+          | :code_review
+          | :qa
           | :waiting_for_human
           | :landing
           | :breakdown
           | :close_out
-          | :final_verification
+          | :epic_review
 
   @type waiting_on :: :slot | :human | :ci | :blocker | :usage_limit | :paused | :backlog | nil
 
   @type signals :: %{
           optional(:running_kind) => atom() | nil,
-          optional(:qa) => :running | :queued | nil,
           optional(:state) => String.t() | nil,
-          optional(:auto_review_state) => String.t() | nil,
-          optional(:human_review_state) => String.t() | nil,
+          optional(:plan_review_state) => String.t() | nil,
           optional(:kind) => atom() | nil,
           optional(:merging_ci_wait?) => boolean(),
           optional(:auto_merge?) => boolean(),
@@ -58,9 +55,11 @@ defmodule SymphonyElixir.ForcedStatus do
     :review_feedback,
     :ci_fix,
     :landing,
+    :code_review,
+    :qa,
     :breakdown,
     :close_out,
-    :final_verification
+    :epic_review
   ]
   @backlog_states ["backlog", "triage"]
 
@@ -70,12 +69,13 @@ defmodule SymphonyElixir.ForcedStatus do
     "review_feedback" => "review feedback",
     "ci_fix" => "CI fix",
     "waiting_on_ci" => "waiting on CI",
-    "auto_review" => "Auto Review",
+    "code_review" => "Code Review",
+    "qa" => "QA",
     "waiting_for_human" => "waiting for a human",
     "landing" => "landing",
     "breakdown" => "plan",
     "close_out" => "close-out",
-    "final_verification" => "final verification"
+    "epic_review" => "epic review"
   }
 
   @waiting_labels %{
@@ -144,20 +144,16 @@ defmodule SymphonyElixir.ForcedStatus do
   def duration_label(_seconds), do: "n/a"
 
   defp run_phase(kind) when kind in @run_phases, do: kind
-  defp run_phase(:qa), do: :auto_review
   defp run_phase(_kind), do: :implementation
 
   defp classify(%{running_kind: kind}, _state) when not is_nil(kind), do: {run_phase(kind), true, nil}
-  defp classify(%{qa: :running}, _state), do: {:auto_review, true, nil}
   defp classify(%{merging_ci_wait?: true}, _state), do: {:waiting_on_ci, false, :ci}
-  defp classify(_signals, "in review"), do: {:waiting_for_human, false, :human}
   defp classify(signals, state) when state in @backlog_states, do: {next_phase(signals), false, :backlog}
 
   defp classify(signals, state) do
     cond do
       state == nil -> {next_phase(signals), false, waiting_on(signals)}
-      state == normalize(Map.get(signals, :human_review_state)) -> {:waiting_for_human, false, :human}
-      state == normalize(Map.get(signals, :auto_review_state)) -> {:auto_review, false, if(Map.get(signals, :qa) == :queued, do: :slot)}
+      state == normalize(Map.get(signals, :plan_review_state)) -> {:waiting_for_human, false, :human}
       true -> {next_phase(signals), false, waiting_on(signals)}
     end
   end

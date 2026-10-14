@@ -364,16 +364,17 @@ defmodule SymphonyElixir.CLITest do
     assert {:error, "Usage: symphony dashboard" <> _} = CLI.evaluate(["dashboard", "extra"], base_deps())
   end
 
-  test "maybe_configure_burrito_runtime is a no-op outside Burrito" do
-    assert :ok = CLI.maybe_configure_burrito_runtime()
+  test "maybe_configure_packaged_runtime is a no-op outside a packaged build" do
+    assert :ok = CLI.maybe_configure_packaged_runtime()
   end
 
-  test "burrito_args reads the wrapper's plain arguments only inside a Burrito binary" do
-    assert CLI.burrito_args(nil, [~c"--help"]) == :not_in_burrito
-    assert CLI.burrito_args("", [~c"--help"]) == :not_in_burrito
+  test "packaged_args reads the launcher's plain arguments only inside a packaged build" do
+    assert CLI.packaged_args(nil, [~c"--help"]) == :not_packaged
+    assert CLI.packaged_args("", [~c"--help"]) == :not_packaged
 
-    assert CLI.burrito_args("/Applications/Symphony.app/Contents/Resources/symphony", [~c"check", ~c"--config", ~c"s.yml"]) ==
-             ["check", "--config", "s.yml"]
+    # SYMPHONY_RELEASE_ROOT, set by rel/overlays/bin/symphony-app.
+    assert CLI.packaged_args("/Applications/Symphony.app/Contents/Resources/symphony-release", [~c"check", ~c"--config", ~c"s y.yml"]) ==
+             ["check", "--config", "s y.yml"]
   end
 
   test "reads root env overrides before applying flag overrides" do
@@ -428,6 +429,14 @@ defmodule SymphonyElixir.CLITest do
     assert_received {:host, "0.0.0.0"}
   end
 
+  test "rejects --host unix: with an empty socket path and exits non-zero naming it" do
+    deps = base_deps(%{set_server_host_override: fn host -> flunk("unexpected host override #{inspect(host)}") end})
+
+    assert {:error, message} = CLI.evaluate(["--host", "unix:"], deps)
+    assert message =~ ~s(the socket path in host "unix:" is empty)
+    assert capture_io(:stderr, fn -> assert CLI.finish({:error, message}) == 1 end) == message <> "\n"
+  end
+
   test "returns startup error when app cannot start" do
     deps = base_deps(%{ensure_all_started: fn -> {:error, :boom} end})
 
@@ -461,6 +470,20 @@ defmodule SymphonyElixir.CLITest do
 
     assert output =~ "Symphony runtime context:"
     assert output =~ "You are working on `ABC-123`"
+  end
+
+  test "workflow preview forwards the repo key" do
+    path = Path.join(System.tmp_dir!(), "cli_preview_#{System.unique_integer([:positive])}.md")
+    File.write!(path, "---\nprompts: {}\n---\nrepo={{ repo_key }}\n")
+    on_exit(fn -> File.rm_rf(path) end)
+
+    output =
+      capture_io(fn ->
+        assert {:halt, 0} =
+                 CLI.evaluate(["workflow", "preview", "--file", path, "--repo", "api"], base_deps())
+      end)
+
+    assert output =~ "repo=api"
   end
 
   test "workflow preview reports a friendly error for a missing file" do

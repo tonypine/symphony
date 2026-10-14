@@ -7,7 +7,11 @@ for you on the host. They only act on this worktree's configured app and on apps
 
 - `qa_build`: runs the configured build command. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
-  secrets, never the real ones), and returns its `pid`.
+  secrets, never the real ones), and returns its `pid`. Pass `api_fixtures`, a directory relative
+  to the checkout (for example `macos/Tests/Fixtures/director-app/running`), and Symphony copies
+  it to the machine the app runs on and launches the app with `SYMPHONY_BAR_QA_API_FIXTURES`
+  pointing at the copy (returned as `api_fixtures`). The directory may hold only regular files,
+  at most 5 MB, inside the checkout.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
@@ -15,6 +19,16 @@ for you on the host. They only act on this worktree's configured app and on apps
   types into a text field the way a person does and presses Tab to commit it, so the app
   saves what it shows; it fails with `text_not_entered` or `not_focused` when the text did not
   land.
+- `qa_ax_select`: selects a table or outline row (an `AXRow`, or a cell inside it) by its
+  `path`. Rows answer no `AXPress`, so use this to select one; the app comes to the front and the
+  table takes keyboard focus. `qa_ax_tree` marks the selected row `selected: true`.
+- `qa_key`: presses a `key` (`return`, `escape`, `tab`, `space`, `delete`, arrows such as `down`,
+  or one character such as `[`) with optional `modifiers` (`command`, `shift`, `option`,
+  `control`) in the app's focused window. A shortcut such as ⌘[ is `key: "["`,
+  `modifiers: ["command"]`. It returns the `window` and `focused` element the key went to.
+- `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
+  no accessibility action reaches. It fails with `covered` or `not_on_screen` when another app's
+  window is in front or the element is scrolled away.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
   usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
@@ -31,6 +45,9 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_quit_app`: quits the app and returns its recent output.
 - `qa_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (a test `symphony.yml`,
   a `WORKFLOW.md`) where the app can open it, and returns the `path` to give the app.
+- `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
+  last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
+  `method`, `path` and `body`. The log lives where you cannot read it, so use this instead.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
@@ -51,9 +68,19 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
-2. Run `qa_launch_app`. In QA mode the app starts with empty settings.
+2. Run `qa_launch_app`. In QA mode the app starts with empty settings. When the walkthrough
+   runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
+   directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
+   API from those files instead of a running Symphony. When the walkthrough checks what the app
+   sent (`api-requests.jsonl`), call `qa_api_requests` after the action and judge its `requests`.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
-   buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act.
+   buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act. When an
+   element answers `qa_ax_press` with `unsupported`:
+   - a table or list row (`AXOutline` or `AXTable` > `AXRow`): select it with `qa_ax_select`, then
+     read `qa_ax_tree` again to check what the selection shows (an inspector, a detail pane);
+   - a step that names a key or shortcut (Return opens the selected item, ⌘[ goes back, Escape
+     closes): press it with `qa_key` after selecting what it acts on;
+   - any other control: `qa_click` it.
 4. Let every window settle before you judge it. A window can open at the right size and
    collapse seconds later, so a check right after opening proves nothing:
    - wait about 10 seconds after the window opens (`sleep 10` in your shell);

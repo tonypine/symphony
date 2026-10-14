@@ -365,6 +365,144 @@ final class RepositoriesConfigTests: XCTestCase {
         XCTAssertEqual(try RepositoriesConfig.updating("symphony", to: entry, in: config), expected)
     }
 
+    func testSetsAndClearsManualReview() throws {
+        let yaml = "repositories:\n  - key: a\n    manual_review: on\n    base_branch: main\n"
+        XCTAssertEqual(try RepositoriesConfig.entries(in: yaml).map(\.manualReview), ["on"])
+
+        // `on` and `off` read as booleans in YAML, so the editor writes them quoted.
+        var off = RepositoryEntry(key: "a", baseBranch: "main")
+        off.manualReview = "off"
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: off, in: yaml),
+            "repositories:\n  - key: a\n    manual_review: \"off\"\n    base_branch: main\n"
+        )
+
+        // Off is the default, so removing the key puts the repo back on it.
+        var cleared = RepositoryEntry(key: "a", baseBranch: "main")
+        cleared.manualReview = nil
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: cleared, in: yaml),
+            "repositories:\n  - key: a\n    base_branch: main\n"
+        )
+    }
+
+    func testManualReviewSitsAfterTheWorkflow() throws {
+        let yaml = "repositories:\n  - key: a\n    base_branch: main\n"
+        var entry = RepositoryEntry(key: "a", baseBranch: "main", workflow: "WORKFLOW.md")
+        entry.manualReview = "on"
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: yaml),
+            "repositories:\n  - key: a\n    base_branch: main\n    workflow: WORKFLOW.md\n    manual_review: \"on\"\n"
+        )
+    }
+
+    func testLeavesARetiredStateMachineKeyAsItIs() throws {
+        let yaml = "repositories:\n  - key: a\n    state_machine: designed\n"
+        var entry = RepositoryEntry(key: "a")
+        entry.manualReview = "on"
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: yaml),
+            "repositories:\n  - key: a\n    manual_review: \"on\"\n    state_machine: designed\n"
+        )
+    }
+
+    func testReadsTheBuiltInTicketPatternsOverride() throws {
+        let yaml = """
+            repositories:
+              - key: a
+                acceptance_gate:
+                  mode: off
+                  escalate:
+                    ticket_patterns:
+                      - '(?i)ours'
+                    ticket_patterns_builtin: false
+              - key: b
+                acceptance_gate:
+                  max_turns: 3
+            """
+        XCTAssertEqual(try RepositoriesConfig.entries(in: yaml).map(\.ticketPatternsBuiltIn), [false, nil])
+    }
+
+    func testAddsTheBuiltInTicketPatternsBlocksAfterTheWorkspace() throws {
+        let yaml = "repositories:\n  - key: a\n    workspace:\n      repo: ~/a\n  - key: b\n"
+        var entry = RepositoryEntry(key: "a", workspace: RepositoryWorkspace(repo: "~/a"))
+        entry.ticketPatternsBuiltIn = false
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: yaml),
+            "repositories:\n  - key: a\n    workspace:\n      repo: ~/a\n"
+                + "    acceptance_gate:\n      escalate:\n        ticket_patterns_builtin: false\n  - key: b\n"
+        )
+
+        XCTAssertEqual(
+            try RepositoriesConfig.adding(RepositoryEntry(key: "c", ticketPatternsBuiltIn: true), to: yaml),
+            yaml + "  - key: c\n    acceptance_gate:\n      escalate:\n        ticket_patterns_builtin: true\n"
+        )
+    }
+
+    func testSetsTheBuiltInTicketPatternsNextToTheOtherGateRules() throws {
+        let yaml = """
+            repositories:
+              - key: a
+                acceptance_gate:
+                  mode: off  # retired
+                  escalate:
+                    ticket_patterns: ['(?i)ours']
+
+            """
+        var entry = try XCTUnwrap(RepositoriesConfig.entries(in: yaml).first)
+        entry.ticketPatternsBuiltIn = false
+        let off = try RepositoriesConfig.updating("a", to: entry, in: yaml)
+        XCTAssertEqual(off, yaml.replacingOccurrences(
+            of: "escalate:\n", with: "escalate:\n        ticket_patterns_builtin: false\n"
+        ))
+
+        entry.ticketPatternsBuiltIn = true
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: off),
+            off.replacingOccurrences(of: "builtin: false", with: "builtin: true")
+        )
+
+        // Same as Settings removes the key and leaves the rest of the block.
+        entry.ticketPatternsBuiltIn = nil
+        XCTAssertEqual(try RepositoriesConfig.updating("a", to: entry, in: off), yaml)
+
+        // A gate block without `escalate:` gets one.
+        let noEscalate = "repositories:\n  - key: a\n    acceptance_gate:\n      mode: off\n"
+        entry.ticketPatternsBuiltIn = false
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: noEscalate),
+            "repositories:\n  - key: a\n    acceptance_gate:\n      escalate:\n        ticket_patterns_builtin: false\n      mode: off\n"
+        )
+    }
+
+    func testClearingTheBuiltInTicketPatternsRemovesTheBlocksItEmptied() throws {
+        let yaml = """
+            repositories:
+              - key: a
+                base_branch: main
+                acceptance_gate:
+                  escalate:
+                    # only our own patterns
+                    ticket_patterns_builtin: false
+              - key: b
+
+            """
+        let entry = RepositoryEntry(key: "a", baseBranch: "main")
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: yaml),
+            "repositories:\n  - key: a\n    base_branch: main\n  - key: b\n"
+        )
+
+        // An `escalate:` block that still holds other rules stays.
+        let withLabels = yaml.replacingOccurrences(
+            of: "        ticket_patterns_builtin: false\n", with: "        ticket_patterns_builtin: false\n        labels: [x]\n"
+        )
+        XCTAssertEqual(
+            try RepositoriesConfig.updating("a", to: entry, in: withLabels),
+            withLabels.replacingOccurrences(of: "        ticket_patterns_builtin: false\n", with: "")
+        )
+    }
+
     func testRemovesAnEmptiedBlockWithItsComments() throws {
         var entry = symphony
         entry.route = RepositoryRoute()

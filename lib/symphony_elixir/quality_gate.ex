@@ -206,6 +206,9 @@ defmodule SymphonyElixir.QualityGate do
             url: entry.url,
             score: entry.score,
             reason: entry.reason,
+            rounds_asked: Map.get(entry, :rounds_asked, 0),
+            max_rounds: Map.get(entry, :max_rounds),
+            pass_threshold: Map.get(entry, :pass_threshold),
             scored_at: entry.scored_at
           }
         ]
@@ -237,6 +240,9 @@ defmodule SymphonyElixir.QualityGate do
             score: entry.score,
             reason: entry.reason,
             rounds_asked: Map.get(entry, :rounds_asked, 0),
+            max_rounds: Map.get(entry, :max_rounds),
+            pass_threshold: Map.get(entry, :pass_threshold),
+            questions: Map.get(entry, :questions, []),
             scored_at: entry.scored_at
           }
         ]

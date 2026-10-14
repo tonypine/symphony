@@ -2,6 +2,7 @@ defmodule SymphonyElixir.RunStoreTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.RunStore.RunIndex
+  alias SymphonyElixir.TicketState
 
   @repo_key "repo-a"
   @other_repo_key "repo-b"
@@ -350,6 +351,135 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_issue_id} = RunStore.delete_merged_wait(nil)
 
     restart_run_store()
+  end
+
+  test "persists per-ticket state records across run store restart" do
+    at = ~U[2026-10-04 00:23:15Z]
+    record = TicketState.new(@repo_key, "issue-1", %{issue_identifier: "ACME-1", phase: "In Progress"})
+
+    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+    assert :ok = RunStore.put_ticket_state(record)
+
+    assert %{phase: "In Progress", issue_identifier: "ACME-1"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.update_ticket_state(@repo_key, "issue-1", %{phase: "Merging", updated_at: at})
+    assert %{phase: "Merging", updated_at: ^at} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert {:error, :ticket_state_not_found} = RunStore.update_ticket_state(@repo_key, "issue-missing", %{phase: "Todo"})
+
+    assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
+    assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-2", "blocked", %{reason: "tooling"})
+    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "abc123", "pass")
+
+    assert [%{name: "handoff", details: %{to: "Code Review"}}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
+    assert [%{name: "blocked"}] = RunStore.get_ticket_state(@repo_key, "issue-2").signals
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
+
+    assert :ok = RunStore.put_ticket_state(TicketState.new(@other_repo_key, "issue-1", %{phase: "Done"}))
+
+    restart_run_store()
+
+    assert %{phase: "Merging"} = RunStore.get_ticket_state(@repo_key, "issue-1")
+    assert [%{name: "handoff"}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
+    assert %{phase: "Done"} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
+
+    assert Enum.sort(Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id)) == ["issue-1", "issue-2"]
+    assert Enum.sort(Enum.map(RunStore.list_all_ticket_states(), & &1.issue_id)) == ["issue-1", "issue-1", "issue-2"]
+
+    assert :ok = RunStore.delete_ticket_state(@repo_key, "issue-1")
+    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+
+    restart_run_store()
+  end
+
+  test "records CI state per head, newest write wins, and refuses bad arguments" do
+    at = ~U[2026-10-04 00:23:15Z]
+    later = DateTime.add(at, 60, :second)
+
+    assert {:ok, :changed} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", at)
+    assert %{ci_states: [%{head_sha: "abc", status: "running"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert {:ok, :unchanged} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", later)
+    assert {:ok, :changed} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "green", later)
+    assert {:ok, :stale} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "red", at)
+    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert %{ci_states: [%{head_sha: "abc", status: "green"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert {:ok, :changed} = RunStore.record_ci_state(@other_repo_key, "issue-1", nil, "red", at)
+    assert %{ci_states: [%{head_sha: nil, status: "red"}]} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
+
+    assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, nil, "abc", "running", at)
+    assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", nil, at)
+    assert {:error, :invalid_ci_state} = RunStore.record_ci_state(@repo_key, "issue-1", "abc", "running", nil)
+    assert {:error, :invalid_repo_key} = RunStore.record_ci_state(nil, "issue-1", "abc", "running", at)
+  end
+
+  test "rejects ticket state writes without a repo_key or issue_id" do
+    assert {:error, :missing_repo_key} = RunStore.put_ticket_state(%{issue_id: "issue-1"})
+    assert {:error, :invalid_ticket_state_record} = RunStore.put_ticket_state(%{})
+    assert {:error, :missing_repo_key} = RunStore.update_ticket_state("issue-1", %{phase: "Todo"})
+    assert {:error, :invalid_ticket_state_record} = RunStore.update_ticket_state(@repo_key, nil, %{phase: "Todo"})
+    assert {:error, :missing_repo_key} = RunStore.delete_ticket_state("issue-1")
+    assert {:error, :invalid_issue_id} = RunStore.delete_ticket_state(@repo_key, nil)
+    assert {:error, :invalid_issue_id} = RunStore.get_ticket_state(@repo_key, nil)
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_signal(@repo_key, nil, "handoff", %{})
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_verdict(@repo_key, nil, "qa", nil, "pass")
+  end
+
+  test "sets and clears a ticket hold, creating the record when the issue has none" do
+    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+
+    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "waiting on TP-1"})
+
+    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-1", waits_on: nil}]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "waiting on TP-2"})
+    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-2"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert %{holds: [%{kind: :blocked, reason: "waiting on TP-2"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-1", :blocked)
+    assert %{holds: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # An issue with no record has no hold to clear, and clearing one does not create the record.
+    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-missing", :blocked)
+    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+  end
+
+  test "rejects ticket hold writes without a repo_key or issue_id" do
+    assert {:error, :invalid_issue_id} = RunStore.set_ticket_hold(@repo_key, nil, :blocked, %{})
+    assert {:error, :invalid_issue_id} = RunStore.clear_ticket_hold(@repo_key, nil, :blocked)
+    assert {:error, :invalid_repo_key} = RunStore.set_ticket_hold(nil, "issue-1", :blocked, %{})
+    assert {:error, :invalid_repo_key} = RunStore.clear_ticket_hold(nil, "issue-1", :blocked)
+  end
+
+  test "records a ticket's dispatched runs and how they ended, and a lifted hold ends the count" do
+    assert :ok = RunStore.record_ticket_dispatch(@repo_key, "issue-1", %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"})
+    assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})
+
+    assert %{dispatches: [%{kind: "rework", run_id: "run-1", state: "Rework", head: "a", outcome: %{exit: "ended normally", head: "a"}}]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert %{dispatches: [%{run_id: "run-1"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.set_ticket_hold(@repo_key, "issue-1", :blocked, %{reason: "dispatch_loop"})
+    assert :ok = RunStore.clear_ticket_hold(@repo_key, "issue-1", :blocked)
+    assert %{dispatches: []} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # An issue with no record lists no run, and recording an end does not create the record.
+    assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-missing", "run-1", %{exit: "ended normally"})
+    assert RunStore.get_ticket_state(@repo_key, "issue-missing") == nil
+
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch(@repo_key, nil, %{})
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch_outcome(@repo_key, nil, "run-1", %{})
+    assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch(nil, "issue-1", %{})
+    assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch_outcome(nil, "issue-1", "run-1", %{})
   end
 
   test "interrupt_running_runs marks stale running records as failures" do

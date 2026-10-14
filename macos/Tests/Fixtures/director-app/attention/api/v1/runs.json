@@ -1,0 +1,657 @@
+{
+  "count": 44,
+  "filters": {
+    "agent_kind": null,
+    "date_from": null,
+    "date_to": null,
+    "issue_label": null,
+    "limit": 50,
+    "outcome": null
+  },
+  "generated_at": "2026-10-07T14:20:00Z",
+  "runs": [
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 1740,
+      "ended_at": "2026-10-07T10:31:00Z",
+      "error": null,
+      "error_kind": null,
+      "eval_id": "run-288-1",
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "issue_labels": [],
+      "logged_at": "2026-10-07T10:31:00Z",
+      "outcome": "pr_opened",
+      "pull_request_url": "https://github.com/acme/web-shop/pull/406",
+      "run_id": "run-288-1",
+      "session_id": "session-run-288-1",
+      "started_at": "2026-10-07T10:02:00Z",
+      "status": "success",
+      "tests_run": null,
+      "tokens": {
+        "total_tokens": 980000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 840,
+      "ended_at": "2026-10-07T12:24:00Z",
+      "error": null,
+      "error_kind": null,
+      "eval_id": "run-288-2",
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "issue_labels": [],
+      "logged_at": "2026-10-07T12:24:00Z",
+      "outcome": "pr_opened",
+      "pull_request_url": "https://github.com/acme/web-shop/pull/406",
+      "run_id": "run-288-2",
+      "session_id": "session-run-288-2",
+      "started_at": "2026-10-07T12:10:00Z",
+      "status": "success",
+      "tests_run": null,
+      "tokens": {
+        "total_tokens": 410000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 1320,
+      "ended_at": "2026-10-07T13:25:00Z",
+      "error": "mix test timed out after 20 min: CheckoutTotalTest hangs on the rounding test",
+      "error_kind": null,
+      "eval_id": "run-305-1",
+      "issue_id": "i-305",
+      "issue_identifier": "SHOP-305",
+      "issue_labels": [],
+      "logged_at": "2026-10-07T13:25:00Z",
+      "outcome": "error",
+      "pull_request_url": null,
+      "run_id": "run-305-1",
+      "session_id": "session-run-305-1",
+      "started_at": "2026-10-07T13:03:00Z",
+      "status": "failed",
+      "tests_run": null,
+      "tokens": {
+        "total_tokens": 860000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-24",
+      "duration_seconds": 600,
+      "eval_id": "run-q1",
+      "issue_identifier": "SHOP-271",
+      "outcome": "pr_opened",
+      "run_id": "run-q1",
+      "started_at": "2026-09-24T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-24",
+      "duration_seconds": 660,
+      "eval_id": "run-q2",
+      "issue_identifier": "API-112",
+      "outcome": "pr_opened",
+      "run_id": "run-q2",
+      "started_at": "2026-09-24T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-25",
+      "duration_seconds": 600,
+      "eval_id": "run-q3",
+      "issue_identifier": "DOCS-33",
+      "outcome": "pr_opened",
+      "run_id": "run-q3",
+      "started_at": "2026-09-25T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-25",
+      "duration_seconds": 660,
+      "eval_id": "run-q4",
+      "issue_identifier": "SHOP-274",
+      "outcome": "no_changes",
+      "run_id": "run-q4",
+      "started_at": "2026-09-25T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-25",
+      "duration_seconds": 720,
+      "eval_id": "run-q5",
+      "issue_identifier": "WEB-71",
+      "outcome": "pr_opened",
+      "run_id": "run-q5",
+      "started_at": "2026-09-25T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-26",
+      "duration_seconds": 600,
+      "eval_id": "run-q6",
+      "issue_identifier": "API-115",
+      "outcome": "no_changes",
+      "run_id": "run-q6",
+      "started_at": "2026-09-26T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-26",
+      "duration_seconds": 660,
+      "eval_id": "run-q7",
+      "issue_identifier": "SHOP-271",
+      "outcome": "pr_opened",
+      "run_id": "run-q7",
+      "started_at": "2026-09-26T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-26",
+      "duration_seconds": 720,
+      "eval_id": "run-q8",
+      "issue_identifier": "API-112",
+      "outcome": "error",
+      "run_id": "run-q8",
+      "started_at": "2026-09-26T010:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-26",
+      "duration_seconds": 780,
+      "eval_id": "run-q9",
+      "issue_identifier": "DOCS-33",
+      "outcome": "pr_opened",
+      "run_id": "run-q9",
+      "started_at": "2026-09-26T011:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 400000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-27",
+      "duration_seconds": 600,
+      "eval_id": "run-q10",
+      "issue_identifier": "SHOP-274",
+      "outcome": "pr_opened",
+      "run_id": "run-q10",
+      "started_at": "2026-09-27T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-27",
+      "duration_seconds": 660,
+      "eval_id": "run-q11",
+      "issue_identifier": "WEB-71",
+      "outcome": "error",
+      "run_id": "run-q11",
+      "started_at": "2026-09-27T09:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-28",
+      "duration_seconds": 600,
+      "eval_id": "run-q12",
+      "issue_identifier": "API-115",
+      "outcome": "error",
+      "run_id": "run-q12",
+      "started_at": "2026-09-28T08:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-28",
+      "duration_seconds": 660,
+      "eval_id": "run-q13",
+      "issue_identifier": "SHOP-271",
+      "outcome": "pr_opened",
+      "run_id": "run-q13",
+      "started_at": "2026-09-28T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-28",
+      "duration_seconds": 720,
+      "eval_id": "run-q14",
+      "issue_identifier": "API-112",
+      "outcome": "pr_opened",
+      "run_id": "run-q14",
+      "started_at": "2026-09-28T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-29",
+      "duration_seconds": 600,
+      "eval_id": "run-q15",
+      "issue_identifier": "DOCS-33",
+      "outcome": "pr_opened",
+      "run_id": "run-q15",
+      "started_at": "2026-09-29T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-29",
+      "duration_seconds": 660,
+      "eval_id": "run-q16",
+      "issue_identifier": "SHOP-274",
+      "outcome": "pr_opened",
+      "run_id": "run-q16",
+      "started_at": "2026-09-29T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-29",
+      "duration_seconds": 720,
+      "eval_id": "run-q17",
+      "issue_identifier": "WEB-71",
+      "outcome": "no_changes",
+      "run_id": "run-q17",
+      "started_at": "2026-09-29T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-29",
+      "duration_seconds": 780,
+      "eval_id": "run-q18",
+      "issue_identifier": "API-115",
+      "outcome": "pr_opened",
+      "run_id": "run-q18",
+      "started_at": "2026-09-29T011:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 400000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-09-30",
+      "duration_seconds": 600,
+      "eval_id": "run-q19",
+      "issue_identifier": "SHOP-271",
+      "outcome": "pr_opened",
+      "run_id": "run-q19",
+      "started_at": "2026-09-30T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-09-30",
+      "duration_seconds": 660,
+      "eval_id": "run-q20",
+      "issue_identifier": "API-112",
+      "outcome": "no_changes",
+      "run_id": "run-q20",
+      "started_at": "2026-09-30T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-01",
+      "duration_seconds": 600,
+      "eval_id": "run-q21",
+      "issue_identifier": "DOCS-33",
+      "outcome": "no_changes",
+      "run_id": "run-q21",
+      "started_at": "2026-10-01T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-01",
+      "duration_seconds": 660,
+      "eval_id": "run-q22",
+      "issue_identifier": "SHOP-274",
+      "outcome": "pr_opened",
+      "run_id": "run-q22",
+      "started_at": "2026-10-01T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-01",
+      "duration_seconds": 720,
+      "eval_id": "run-q23",
+      "issue_identifier": "WEB-71",
+      "outcome": "error",
+      "run_id": "run-q23",
+      "started_at": "2026-10-01T010:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-02",
+      "duration_seconds": 600,
+      "eval_id": "run-q24",
+      "issue_identifier": "API-115",
+      "outcome": "pr_opened",
+      "run_id": "run-q24",
+      "started_at": "2026-10-02T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-02",
+      "duration_seconds": 660,
+      "eval_id": "run-q25",
+      "issue_identifier": "SHOP-271",
+      "outcome": "error",
+      "run_id": "run-q25",
+      "started_at": "2026-10-02T09:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-02",
+      "duration_seconds": 720,
+      "eval_id": "run-q26",
+      "issue_identifier": "API-112",
+      "outcome": "pr_opened",
+      "run_id": "run-q26",
+      "started_at": "2026-10-02T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-02",
+      "duration_seconds": 780,
+      "eval_id": "run-q27",
+      "issue_identifier": "DOCS-33",
+      "outcome": "pr_opened",
+      "run_id": "run-q27",
+      "started_at": "2026-10-02T011:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 400000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-03",
+      "duration_seconds": 600,
+      "eval_id": "run-q28",
+      "issue_identifier": "SHOP-274",
+      "outcome": "error",
+      "run_id": "run-q28",
+      "started_at": "2026-10-03T08:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-03",
+      "duration_seconds": 660,
+      "eval_id": "run-q29",
+      "issue_identifier": "WEB-71",
+      "outcome": "pr_opened",
+      "run_id": "run-q29",
+      "started_at": "2026-10-03T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-04",
+      "duration_seconds": 600,
+      "eval_id": "run-q30",
+      "issue_identifier": "API-115",
+      "outcome": "pr_opened",
+      "run_id": "run-q30",
+      "started_at": "2026-10-04T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-04",
+      "duration_seconds": 660,
+      "eval_id": "run-q31",
+      "issue_identifier": "SHOP-271",
+      "outcome": "pr_opened",
+      "run_id": "run-q31",
+      "started_at": "2026-10-04T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-04",
+      "duration_seconds": 720,
+      "eval_id": "run-q32",
+      "issue_identifier": "API-112",
+      "outcome": "no_changes",
+      "run_id": "run-q32",
+      "started_at": "2026-10-04T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-05",
+      "duration_seconds": 600,
+      "eval_id": "run-q33",
+      "issue_identifier": "DOCS-33",
+      "outcome": "pr_opened",
+      "run_id": "run-q33",
+      "started_at": "2026-10-05T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-05",
+      "duration_seconds": 660,
+      "eval_id": "run-q34",
+      "issue_identifier": "SHOP-274",
+      "outcome": "no_changes",
+      "run_id": "run-q34",
+      "started_at": "2026-10-05T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-05",
+      "duration_seconds": 720,
+      "eval_id": "run-q35",
+      "issue_identifier": "WEB-71",
+      "outcome": "pr_opened",
+      "run_id": "run-q35",
+      "started_at": "2026-10-05T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-05",
+      "duration_seconds": 780,
+      "eval_id": "run-q36",
+      "issue_identifier": "API-115",
+      "outcome": "error",
+      "run_id": "run-q36",
+      "started_at": "2026-10-05T011:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 400000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-06",
+      "duration_seconds": 600,
+      "eval_id": "run-q37",
+      "issue_identifier": "SHOP-271",
+      "outcome": "no_changes",
+      "run_id": "run-q37",
+      "started_at": "2026-10-06T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-06",
+      "duration_seconds": 660,
+      "eval_id": "run-q38",
+      "issue_identifier": "API-112",
+      "outcome": "pr_opened",
+      "run_id": "run-q38",
+      "started_at": "2026-10-06T09:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-07",
+      "duration_seconds": 600,
+      "eval_id": "run-q39",
+      "issue_identifier": "DOCS-33",
+      "outcome": "pr_opened",
+      "run_id": "run-q39",
+      "started_at": "2026-10-07T08:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 100000
+      }
+    },
+    {
+      "agent_kind": "claude",
+      "date": "2026-10-07",
+      "duration_seconds": 660,
+      "eval_id": "run-q40",
+      "issue_identifier": "SHOP-274",
+      "outcome": "error",
+      "run_id": "run-q40",
+      "started_at": "2026-10-07T09:00:00Z",
+      "status": "failure",
+      "tokens": {
+        "total_tokens": 200000
+      }
+    },
+    {
+      "agent_kind": "codex",
+      "date": "2026-10-07",
+      "duration_seconds": 720,
+      "eval_id": "run-q41",
+      "issue_identifier": "WEB-71",
+      "outcome": "pr_opened",
+      "run_id": "run-q41",
+      "started_at": "2026-10-07T010:00:00Z",
+      "status": "success",
+      "tokens": {
+        "total_tokens": 300000
+      }
+    }
+  ]
+}

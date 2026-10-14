@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SymphonyBarCore
 
 @MainActor
@@ -8,6 +9,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
     private lazy var reposWindow = ReposWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
+    /// The one client the Symphony window's views read Symphony's local API through.
+    private lazy var apiClient = LiveAPIClient(
+        fetch: LiveAPIClient.fetch(base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport),
+        download: LiveAPIClient.fetch(
+            base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport, timeout: LiveAPIClient.downloadTimeout
+        )
+    )
+    private lazy var symphonyWindow = SymphonyWindowController(client: apiClient)
+    /// Notifies each new Inbox item and Needs attention problem from the window's state polls (D14).
+    private lazy var inboxNotifications = InboxNotificationCenter(defaults: AppStores.current.defaults)
+    private var stateSubscription: AnyCancellable?
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
     private var usageLimitNotices = UsageLimitNotices()
@@ -16,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var restartNowItem = menuItem(StatusMenu.restartNowTitle, action: #selector(restartNow(_:)))
     private lazy var cancelRestartItem = menuItem(StatusMenu.cancelRestartTitle, action: #selector(cancelRestart(_:)))
     private var detailItems: [NSMenuItem] = []
+    /// The "Waiting on you" heading, a row per waiting ticket and "N more…", under the status lines.
+    private var waitingItems: [NSMenuItem] = []
     private var startWhenStopped = false
     /// The Pause or Resume request under way, if any.
     private var controlInFlight: ControlAction?
@@ -28,8 +42,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var forcedItems: [NSMenuItem] = []
     /// The force or stop-forcing request under way, if any.
     private var forceInFlight: ControlAction?
-    /// The acceptance gate's kill switch: a row for each repository the gate runs on, under Pause and Resume.
-    private var gateItems: [NSMenuItem] = []
     private let updates = UpdatePoller()
     /// The newer release, while there is one.
     private var availableRelease: Release?
@@ -63,7 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var exitingOnSignal = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        EditMenu.install()
+        MainMenu.install(
+            settings: menuItem(
+                StatusMenu.settingsTitle,
+                action: #selector(openSettings(_:)),
+                keyEquivalent: StatusMenu.settingsKeyEquivalent
+            ),
+            view: symphonyWindow.viewMenu()
+        )
         terminationSignals = TerminationSignals(queue: .main) { [weak self] number in
             MainActor.assumeIsolated { self?.terminate(onSignal: number) }
         }
@@ -75,6 +94,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(statusTitleItem)
         sourceItem.isEnabled = false
         menu.addItem(sourceItem)
+        menu.addItem(.separator())
+        menu.addItem(
+            menuItem(
+                StatusMenu.openSymphonyTitle,
+                action: #selector(openSymphony(_:)),
+                keyEquivalent: StatusMenu.openSymphonyKeyEquivalent
+            )
+        )
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.startTitle, action: #selector(startSymphony(_:))))
         menu.addItem(menuItem(StatusMenu.stopTitle, action: #selector(stopSymphony(_:))))
@@ -88,10 +115,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         forcedTitleItem.isEnabled = false
         menu.addItem(forcedTitleItem)
         menu.addItem(forceItem)
-        menu.addItem(.separator())
-        menu.addItem(menuItem(StatusMenu.openDashboardTitle, action: #selector(openDashboard(_:))))
-        menu.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
-        menu.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
         menu.addItem(.separator())
         updateAvailableItem.action = #selector(showReleaseNotes(_:))
         updateAvailableItem.target = self
@@ -116,6 +139,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 keyEquivalent: StatusMenu.settingsKeyEquivalent
             )
         )
+        let developer = NSMenu(title: StatusMenu.developerTitle)
+        developer.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
+        developer.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
+        developer.addItem(menuItem(StatusMenu.openWebDashboardTitle, action: #selector(openWebDashboard(_:))))
+        let developerItem = NSMenuItem(title: StatusMenu.developerTitle, action: nil, keyEquivalent: "")
+        developerItem.submenu = developer
+        menu.addItem(developerItem)
         menu.addItem(.separator())
         menu.addItem(
             NSMenuItem(
@@ -157,6 +187,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.restartMachine = { [weak self] in self?.restarter.machine ?? RestartMachine() }
         reposWindow.restartNow = { [weak self] in self?.restartNow(nil) }
         reposWindow.cancelRestart = { [weak self] in self?.cancelRestart(nil) }
+        symphonyWindow.appVersion = updates.current.version ?? ""
+        symphonyWindow.stateRoot = poller.stateRoot
+        symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
+        symphonyWindow.openRepos = { [weak self] key in
+            guard let self else { return }
+            reposWindow.show(status: machine.status, editing: key)
+        }
+        symphonyWindow.openWebDashboard = { [weak self] in self?.openWebDashboard(nil) }
+        symphonyWindow.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard ?? false }
+        symphonyWindow.canOpenLogs = { [weak self] in self?.canOpenLogs ?? false }
+        symphonyWindow.afterControl = { [weak self] in self?.poller.pollNow() }
+        symphonyWindow.update(status: machine.status, configPath: configPath)
+        inboxNotifications.onOpen = { [weak self] issueID in
+            guard let self else { return }
+            if let issueID { symphonyWindow.showInbox(selecting: issueID) } else { symphonyWindow.show(view: .overview) }
+        }
+        inboxNotifications.onApproveAndMerge = { [weak self] issueID in
+            self?.symphonyWindow.showInbox(selecting: issueID, opening: .approveAndMerge)
+        }
+        inboxNotifications.start()
+        stateSubscription = apiClient.$stateJSON
+            .compactMap { $0.flatMap(OverviewState.decode) }
+            .sink { [weak self] state in self?.inboxNotifications.update(state) }
+        apiClient.start()
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
@@ -195,6 +249,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showUpdate(nil, manual: false)
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
+    }
+
+    /// Where the window's client reads Symphony's local API.
+    private func apiBase() -> URL? {
+        StateRoot.controlURL(in: poller.stateRoot(), fallback: AppStores.current.apiFallback)
     }
 
     /// Acts on what the quitting app recorded before an update or a rollback, and returns whether Symphony ran before
@@ -256,9 +315,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 }
             case .start:
                 // On the next poll, so a Symphony already running from the CLI is attached to, not started twice.
+                // While one still answers, the regular poll checks again whether it has exited.
                 startWhenStopped = true
                 resumeWhenAnswering = resumeAfterUpdate
-                poller.pollNow()
+                if machine.canStart { poller.pollNow() }
+            case .restart:
+                runner.stop { [weak self] in self?.performHealth([.start]) }
             case .healthy:
                 guard let checkedUpdate else { break }
                 let update = LastUpdate(checkedUpdate, installedAt: Date())
@@ -352,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(startSymphony(_:)):
-            return !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
+            return canStartNow
         case #selector(stopSymphony(_:)):
             menuItem.title = runner.isStopping && !restarting ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
             return runner.isRunning && machine.canStop && !runner.isStopping && !restarting
@@ -366,7 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(cancelRestart(_:)):
             return restarter.machine.canCancel
         case #selector(pauseDispatch(_:)):
-            menuItem.title = controlInFlight == .pause ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
+            menuItem.title = controlInFlight.map(StatusMenu.isPause) == true ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
             return controlInFlight == nil && !restarting && StatusMenu.canPause(machine.status)
         case #selector(resumeDispatch(_:)):
             menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
@@ -380,15 +442,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(stopForcing(_:)):
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
-        case #selector(openDashboard(_:)), #selector(openTerminalDashboard(_:)):
-            switch machine.status {
-            case .running, .paused:
-                return true
-            case .stopped, .starting, .error:
-                return false
-            }
+        case #selector(openTerminalDashboard(_:)):
+            return isAnswering
+        case #selector(openWebDashboard(_:)):
+            return canOpenWebDashboard
+        case #selector(openWaitingTicket(_:)):
+            return menuItem.representedObject is URL
         case #selector(openLogs(_:)):
-            return FileManager.default.fileExists(atPath: runner.logURL.path)
+            return canOpenLogs
         case #selector(checkForUpdates(_:)):
             menuItem.title = updates.isChecking ? UpdateMenu.checkingTitle : UpdateMenu.checkTitle
             return !updates.isChecking
@@ -445,8 +506,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private var restarting: Bool { restarter.machine.isRestarting }
 
+    /// Opens the window's Pause Dispatch sheet (D12a). Scripted QA mode can't press the sheet's button, so it answers
+    /// the sheet the way it answers a prompt: the rest of the command file is the reason, none for the menu's.
     @objc private func pauseDispatch(_ sender: Any?) {
-        send(.pause)
+        if let script = QAScriptDriver.shared {
+            let reason = script.answer(promptTitle: PauseSheet.title, message: PauseSheet.happens) ?? ""
+            send(PauseSheet.action(reason: reason))
+            return
+        }
+        symphonyWindow.showPauseSheet()
     }
 
     @objc private func resumeDispatch(_ sender: Any?) {
@@ -462,11 +530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         let stateRoot = runner.stateRoot
         Task {
-            let result = await ControlAPI.send(
-                action,
-                stateRoot: stateRoot,
-                fallback: AppStores.current.controlURLFallback
-            )
+            let result = await AppStores.current.sendControl(action, stateRoot: stateRoot)
             controlInFlight = nil
             if case let .failed(message) = result { controlError = message }
             showStatus()
@@ -474,19 +538,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// Asks for a ticket and forces it past the dispatch limits.
+    /// Opens the window's Force a Ticket sheet (D12b). Scripted QA mode answers it as a prompt: the rest of the command
+    /// file is the identifier, and nothing is sent when there is none.
     @objc private func forceTicket(_ sender: Any?) {
         guard forceInFlight == nil else { return }
-        let alert = NSAlert()
-        alert.messageText = StatusMenu.forcePromptTitle
-        alert.informativeText = StatusMenu.forcePromptMessage
-        alert.addButton(withTitle: StatusMenu.forcePromptButton)
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.placeholderString = StatusMenu.forcePromptPlaceholder
-        guard let input = SymphonyRunner.prompt(alert, field: field), let identifier = StatusMenu.forceIdentifier(input)
-        else { return }
-        sendForce(.force(identifier))
+        if let script = QAScriptDriver.shared {
+            guard let input = script.answer(promptTitle: ForceSheet.title, message: ForceSheet.skips + " " + ForceSheet.keeps),
+                  let identifier = ForceSheet.identifier(input)
+            else { return }
+            sendForce(.force(identifier))
+            return
+        }
+        symphonyWindow.showForceSheet()
     }
 
     @objc private func stopForcing(_ sender: NSMenuItem) {
@@ -502,11 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         let stateRoot = runner.stateRoot
         Task {
-            let result = await ControlAPI.send(
-                action,
-                stateRoot: stateRoot,
-                fallback: AppStores.current.controlURLFallback
-            )
+            let result = await AppStores.current.sendControl(action, stateRoot: stateRoot)
             forceInFlight = nil
             if case let .failed(message) = result { SymphonyRunner.showAlert(title: message, body: "") }
             poller.pollNow()
@@ -521,7 +580,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         settingsWindow.show()
     }
 
-    @objc private func openDashboard(_ sender: Any?) {
+    @objc private func openSymphony(_ sender: Any?) {
+        symphonyWindow.show()
+    }
+
+    /// Acts on a button of the Symphony window's placeholder (D0).
+    private func perform(_ action: WindowState.Action) {
+        switch action {
+        case .startSymphony:
+            if canStartNow { startSymphony(nil) }
+        case .openLogs:
+            if canOpenLogs { openLogs(nil) }
+        case .restartSymphony:
+            switch StatusMenu.restartPath(machine.status, appRunsSymphony: runner.isRunning) {
+            case .graceful:
+                restart()
+            case .stopAndStart:
+                guard !restarting, !runner.isStopping, !updater.isUpdating else { return }
+                runner.stop { [weak self] in self?.startSymphony(nil) }
+            case .start:
+                if canStartNow { startSymphony(nil) }
+            case nil:
+                break
+            }
+        case .openSettings:
+            settingsWindow.show()
+        }
+    }
+
+    private var canStartNow: Bool {
+        !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
+    }
+
+    private var isAnswering: Bool {
+        switch machine.status {
+        case .running, .paused:
+            return true
+        case .stopped, .starting, .error:
+            return false
+        }
+    }
+
+    /// The web dashboard opens while Symphony answers at a control URL; never the API fixtures' made-up one.
+    private var canOpenWebDashboard: Bool {
+        isAnswering && StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) != nil
+    }
+
+    private var canOpenLogs: Bool {
+        FileManager.default.fileExists(atPath: runner.logURL.path)
+    }
+
+    @objc private func openWebDashboard(_ sender: Any?) {
         guard let url = StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) else {
             return
         }
@@ -748,57 +857,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         showUpdateItems()
-        showGateItems(in: menu)
-    }
-
-    /// Shows a row for each repository whose acceptance gate runs, read from symphony.yml each time the menu opens,
-    /// with a submenu to switch it to Shadow or Off. Nothing shows when the file can't be read.
-    private func showGateItems(in menu: NSMenu) {
-        gateItems.forEach(menu.removeItem)
-        let file = SymphonyConfigFile(path: configPath)
-        guard let global = try? file.readAcceptanceGateMode(), let entries = try? file.readRepositories() else {
-            gateItems = []
-            return
-        }
-        gateItems = AcceptanceGate.menuItems(global: global, entries: entries).map { gate in
-            let submenu = NSMenu()
-            for mode in AcceptanceGate.MenuItem.choices {
-                let item = menuItem(mode.title, action: #selector(switchAcceptanceGate(_:)))
-                item.representedObject = GateSwitch(key: gate.key, mode: mode)
-                item.state = gate.mode == mode ? .on : .off
-                submenu.addItem(item)
-            }
-            let item = NSMenuItem(title: gate.title, action: nil, keyEquivalent: "")
-            item.submenu = submenu
-            return item
-        }
-        guard let resume = menu.items.firstIndex(where: { $0.action == #selector(resumeDispatch(_:)) }) else { return }
-        for (offset, item) in gateItems.enumerated() {
-            menu.insertItem(item, at: resume + 1 + offset)
-        }
-    }
-
-    /// The repository, or the global mode for a nil key, and the mode a kill switch item sets.
-    private struct GateSwitch {
-        let key: String?
-        let mode: AcceptanceGateMode
-    }
-
-    /// Writes the mode to symphony.yml straight away, without `symphony check`, so the kill switch can't wait on or
-    /// be refused by it. Symphony reads the mode again on its next poll.
-    @objc private func switchAcceptanceGate(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? GateSwitch else { return }
-        let file = SymphonyConfigFile(path: configPath)
-        do {
-            if let key = target.key {
-                try file.writeRepositoryAcceptanceGateMode(.mode(target.mode), of: key)
-            } else {
-                try file.writeAcceptanceGateMode(target.mode)
-            }
-        } catch {
-            SymphonyRunner.showAlert(title: "Couldn't switch the acceptance gate", body: error.localizedDescription)
-        }
-        reposWindow.update(status: machine.status)
     }
 
     private var configPath: String {
@@ -818,13 +876,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch machine.status {
         case let .running(snapshot, _), let .paused(snapshot, _):
             settingsWindow.budget = snapshot.budget
-            settingsWindow.state = snapshot
         default:
             settingsWindow.budget = nil
-            settingsWindow.state = nil
         }
         // An open Repos window refreshes with each poll.
         reposWindow.update(status: machine.status)
+        symphonyWindow.update(status: machine.status, configPath: configPath)
         switch event {
         case .started:
             // A Pause or Resume error was about the Symphony that was running before.
@@ -856,7 +913,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     startSymphony(nil)
                 } else {
                     resumeWhenAnswering = false
-                    handleHealth(.notStarted)
+                    // After an update, the Symphony it stopped may not have exited yet: the check waits for it.
+                    handleHealth(.otherRunning)
                 }
             }
             autoUpdateTick()
@@ -871,12 +929,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let status = machine.status
 
         if let button = statusItem?.button {
-            let label = StatusMenu.iconLabel(for: status)
+            let badge = StatusMenu.badgeCount(for: status)
+            let label = StatusMenu.iconLabel(for: status, badge: badge)
             let image = NSImage(systemSymbolName: StatusMenu.iconSymbolName(for: status), accessibilityDescription: label)
             image?.isTemplate = true
-            button.image = image
+            button.image = badge == nil ? image : image.map(Self.badged)
             button.toolTip = label
         }
+        symphonyWindow.dockBadge = StatusMenu.badgeCount(for: status)
 
         statusTitleItem.title = StatusMenu.statusTitle(status)
         sourceItem.title = runner.sourceLine
@@ -901,7 +961,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         for (offset, item) in detailItems.enumerated() {
             menu.insertItem(item, at: menu.index(of: statusTitleItem) + 1 + offset)
         }
+        showWaiting(in: menu)
         showForced(in: menu)
+    }
+
+    /// Lists the tickets waiting on the operator under the status lines (D13): each row, with its kind's symbol and
+    /// age, opens the window on it in the Inbox, and "N more…" opens the Inbox. Nothing shows while none waits.
+    private func showWaiting(in menu: NSMenu) {
+        waitingItems.forEach(menu.removeItem)
+        let waiting = StatusMenu.waitingMenu(machine.status)
+        guard !waiting.tickets.isEmpty else {
+            waitingItems = []
+            return
+        }
+        let heading = NSMenuItem(title: StatusMenu.waitingTitle, action: nil, keyEquivalent: "")
+        heading.isEnabled = false
+        let rows = waiting.tickets.map { ticket in
+            let item = menuItem(StatusMenu.waitingLine(ticket), action: #selector(openWaitingTicket(_:)))
+            item.representedObject = ticket.issueID ?? ticket.identifier
+            item.toolTip = ticket.title
+            item.image = NSImage(systemSymbolName: ticket.kind.symbol, accessibilityDescription: StatusMenu.kindLabel(ticket.kind))
+            return item
+        }
+        let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWaitingTicket(_:)))] } ?? []
+        waitingItems = [.separator(), heading] + rows + more
+        let start = menu.index(of: sourceItem) + 1
+        for (offset, item) in waitingItems.enumerated() {
+            menu.insertItem(item, at: start + offset)
+        }
+    }
+
+    @objc private func openWaitingTicket(_ sender: NSMenuItem) {
+        symphonyWindow.showInbox(selecting: sender.representedObject as? String)
+    }
+
+    /// The menu bar icon with a dot in its top right corner while the Inbox isn't empty. Drawn per appearance, so
+    /// the symbol keeps the menu bar's text color while the dot keeps `status.you`'s orange.
+    private static func badged(_ symbol: NSImage) -> NSImage {
+        let size = NSSize(width: max(symbol.size.width, 18), height: max(symbol.size.height, 18))
+        let image = NSImage(size: size, flipped: false) { rect in
+            let symbolRect = NSRect(
+                x: (rect.width - symbol.size.width) / 2, y: (rect.height - symbol.size.height) / 2,
+                width: symbol.size.width, height: symbol.size.height
+            )
+            let tinted = NSImage(size: symbol.size, flipped: false) { tintRect in
+                symbol.draw(in: tintRect)
+                NSColor.labelColor.set()
+                tintRect.fill(using: .sourceAtop)
+                return true
+            }
+            tinted.draw(in: symbolRect)
+            let dot = NSRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 7, height: 7)
+            NSColor.systemOrange.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.accessibilityDescription = symbol.accessibilityDescription
+        return image
     }
 
     /// Shows a row for each forced ticket, with a submenu to stop forcing it, and hides their heading while there

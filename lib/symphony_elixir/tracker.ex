@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Tracker do
   Adapter boundary for issue tracker reads and writes.
   """
 
-  alias SymphonyElixir.{Config, Linear.Issue, PlanComments}
+  alias SymphonyElixir.{Config, Linear.Issue, MachineLabels, PlanComments}
 
   @typedoc "A state change in an issue's history: when it happened and the states it moved between."
   @type state_change :: %{at: DateTime.t(), from: String.t() | nil, to: String.t()}
@@ -25,6 +25,28 @@ defmodule SymphonyElixir.Tracker do
           ]
         }
 
+  @typedoc """
+  A workflow state as `SymphonyElixir.StateProvisioning` reads it: its name and the team it belongs
+  to (`team_key` is the team's short key, `team_id` its id).
+  """
+  @type workflow_state :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          team_id: String.t() | nil,
+          team_key: String.t() | nil
+        }
+
+  @typedoc """
+  A label as provisioning reads it: its name and the team that defines it (`team_key` is the team's
+  short key, `team_id` its id; both are nil for a workspace label).
+  """
+  @type label :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          team_id: String.t() | nil,
+          team_key: String.t() | nil
+        }
+
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
@@ -33,6 +55,8 @@ defmodule SymphonyElixir.Tracker do
               {:ok, [term()], [{String.t(), term()}]} | {:error, term()}
   @callback fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   @callback enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
+  @callback fetch_issue_description(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  @callback update_issue_description(String.t(), String.t()) :: :ok | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   @callback add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
@@ -41,6 +65,10 @@ defmodule SymphonyElixir.Tracker do
   @callback fetch_plan_comments(String.t()) :: {:ok, PlanComments.feedback()} | {:error, term()}
   @callback create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
+  @callback workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
+  @callback create_workflow_state(String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  @callback labels() :: {:ok, [label()]} | {:error, term()}
+  @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -92,16 +120,55 @@ defmodule SymphonyElixir.Tracker do
     adapter().update_issue_state(issue_id, state_name)
   end
 
-  @doc "Adds the label named `label_name` (matched ignoring case) to the issue."
+  @doc """
+  Adds the label named `label_name` (matched ignoring case) to the issue. Refuses the
+  machine-owned labels (see `SymphonyElixir.MachineLabels`): only the machinery writes those,
+  through `set_machine_label/2`.
+  """
   @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   def add_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
-    adapter().add_issue_label(issue_id, label_name)
+    if MachineLabels.owned?(label_name) do
+      {:error, :machine_owned_label}
+    else
+      adapter().add_issue_label(issue_id, label_name)
+    end
   end
 
-  @doc "Removes every label named `label_name` (matched ignoring case) from the issue."
+  @doc """
+  Removes every label named `label_name` (matched ignoring case) from the issue. Refuses the
+  machine-owned labels: only the machinery clears those, through `clear_machine_label/2`.
+  """
   @spec remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   def remove_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
-    adapter().remove_issue_label(issue_id, label_name)
+    if MachineLabels.owned?(label_name) do
+      {:error, :machine_owned_label}
+    else
+      adapter().remove_issue_label(issue_id, label_name)
+    end
+  end
+
+  @doc """
+  Sets a machine-owned label (see `SymphonyElixir.MachineLabels`). This is the only path that may
+  write one; a name the machine does not own is refused, so the machinery can't be used to add an
+  arbitrary board label.
+  """
+  @spec set_machine_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def set_machine_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    if MachineLabels.owned?(label_name) do
+      adapter().add_issue_label(issue_id, label_name)
+    else
+      {:error, :not_machine_owned_label}
+    end
+  end
+
+  @doc "Clears a machine-owned label (see `SymphonyElixir.MachineLabels`); a name it does not own is refused."
+  @spec clear_machine_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def clear_machine_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    if MachineLabels.owned?(label_name) do
+      adapter().remove_issue_label(issue_id, label_name)
+    else
+      {:error, :not_machine_owned_label}
+    end
   end
 
   @spec fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}
@@ -114,6 +181,15 @@ defmodule SymphonyElixir.Tracker do
   def fetch_plan_comments(issue_id) when is_binary(issue_id) do
     adapter().fetch_plan_comments(issue_id)
   end
+
+  @doc "The issue's description as Linear stores it, with Symphony's own blocks in it."
+  @spec fetch_issue_description(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def fetch_issue_description(issue_id) when is_binary(issue_id), do: adapter().fetch_issue_description(issue_id)
+
+  @doc "Replaces the issue's description with `description`."
+  @spec update_issue_description(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_description(issue_id, description) when is_binary(issue_id) and is_binary(description),
+    do: adapter().update_issue_description(issue_id, description)
 
   @doc "Posts `body` on the issue as a reply under the comment `parent_comment_id`."
   @spec create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
@@ -128,6 +204,32 @@ defmodule SymphonyElixir.Tracker do
   @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   def workflow_state_exists?(state_name, teams) when is_binary(state_name) and is_list(teams) do
     adapter().workflow_state_exists?(state_name, teams)
+  end
+
+  @doc "Every workflow state the tracker defines, across all teams."
+  @spec workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
+  def workflow_states, do: adapter().workflow_states()
+
+  @doc """
+  Creates a workflow state named `state_name` in `team` (a team key or id), and returns it. Used
+  only by `SymphonyElixir.StateProvisioning` to create a state that is missing.
+  """
+  @spec create_workflow_state(String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
+    adapter().create_workflow_state(state_name, team)
+  end
+
+  @doc "Every label the tracker defines, workspace-wide and per team."
+  @spec labels() :: {:ok, [label()]} | {:error, term()}
+  def labels, do: adapter().labels()
+
+  @doc """
+  Creates a label named `label_name` in `team` (a team key or id), and returns it. Used only by
+  `SymphonyElixir.StateProvisioning` to create a label that is missing.
+  """
+  @spec create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
+  def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
+    adapter().create_label(label_name, team)
   end
 
   @spec adapter() :: module()

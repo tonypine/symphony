@@ -8,6 +8,71 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
 
+  # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
+  # asked to make and answers with the result a test sets (`:ok` by default).
+  defmodule FakeTracker do
+    def update_issue_state(issue_id, state) do
+      send(self(), {:tracker_moved, issue_id, state})
+      Process.get(:linear_tool_tracker_result, :ok)
+    end
+
+    def set_machine_label(issue_id, name) do
+      send(self(), {:machine_label_set, issue_id, name})
+      :ok
+    end
+
+    def clear_machine_label(issue_id, name) do
+      send(self(), {:machine_label_cleared, issue_id, name})
+      :ok
+    end
+  end
+
+  describe "state mutations" do
+    test "every state move goes through TransitionGuard, except update_state/3's guarded one" do
+      source = File.read!("lib/symphony_elixir/agent_tools/linear.ex")
+
+      # `@update_issue_state_mutation` is defined once and called once, in `update_state/3`, whose
+      # target TransitionGuard.resolve_request/2 validates. Every other move — the human-action
+      # request, the withdrawal, the sub-issue cancel — goes through TransitionGuard.perform/4.
+      assert length(Regex.scan(~r/@update_issue_state_mutation/, source)) == 2
+      assert source =~ "TransitionGuard.resolve_request"
+
+      # The sub-issue update mutation is only ever a field edit: no call sets a state id.
+      for line <- String.split(source, "\n"), line =~ "@update_subissue_mutation" do
+        refute line =~ "stateId"
+      end
+    end
+
+    test "sub-issue creation's initial state is the only stateId outside the guard" do
+      source = File.read!("lib/symphony_elixir/agent_tools/linear.ex")
+
+      state_id_lines =
+        source
+        |> String.split("\n")
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&String.starts_with?(&1, "#"))
+        |> Enum.filter(&(&1 =~ "stateId"))
+
+      # An existing issue's move: the mutation's variables, its issueUpdate input, and its one call
+      # site, whose `state_id` is what TransitionGuard.resolve_request/2 resolved.
+      assert Enum.any?(state_id_lines, &(&1 =~ "$stateId: String!"))
+      assert Enum.any?(state_id_lines, &(&1 =~ "input: { stateId: $stateId }"))
+      assert Enum.any?(state_id_lines, &(&1 =~ "graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}"))
+
+      # The only other stateId this module hands Linear is a new sub-issue's initial state, built by
+      # subissue_input/5 for @create_subissue_mutation and explicitly documented there as outside the
+      # guard's scope.
+      assert Enum.any?(state_id_lines, &(&1 =~ ~s("stateId" => state_id)))
+      assert source =~ "subissue_input(parent, state_id, title, description, priority)"
+      assert source =~ ~r/graphql\(@create_subissue_mutation, %\{input: input\}/
+      assert source =~ "sub-issue creation's initial state is outside TransitionGuard's scope"
+
+      # A new stateId may not appear unnoticed: it must either resolve through the guard or be
+      # documented here as another explicit exception.
+      assert length(state_id_lines) == 4
+    end
+  end
+
   describe "dynamic read output prompt safety" do
     test "wraps current issue title description and nested comment bodies" do
       long_title = String.duplicate("a", 501)
@@ -1064,6 +1129,70 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "create_subissue_in_state/4" do
+    test "files the child in the named state, not Backlog, and records it like any sub-issue" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      states = [
+        %{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"},
+        %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}
+      ]
+
+      assert {:ok, response} =
+               Linear.create_subissue_in_state(
+                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 "Todo",
+                 %{"title" => "Epic review fails: the export button is missing", "description" => "What the review found."},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert get_in(response, ["data", "issueCreate", "issue", "identifier"]) == "TP-999"
+      assert_received {:linear_called, mutation, %{input: input}}
+      assert mutation =~ "SymphonyAgentCreateSubissue"
+      assert input["stateId"] == "state-todo"
+      assert input["parentId"] == "issue-parent-uuid"
+      assert input["title"] == "Epic review fails: the export button is missing"
+      refute Map.has_key?(input, "priority")
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "a child filed without a priority inherits the parent's, and an explicit one wins" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      states = [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}]
+      scope = Map.put(subissue_scope(states), "priority", 1)
+      context = %{issue: %Issue{id: "issue-parent"}, comment_registry: registry}
+      opts = [linear_client: subissue_client(self(), scope)]
+
+      assert {:ok, _response} =
+               Linear.create_subissue_in_state(context, "Todo", %{"title" => "No export", "description" => "body"}, opts)
+
+      assert_received {:linear_called, _scope_query, %{id: "issue-parent"}}
+      assert_received {:linear_called, _mutation, %{input: %{"priority" => 1, "stateId" => "state-todo"}}}
+
+      assert {:ok, _response} =
+               Linear.create_subissue_in_state(context, "Todo", %{"title" => "A low one", "description" => "body", "priority" => 4}, opts)
+
+      assert_received {:linear_called, _scope_query, %{id: "issue-parent"}}
+      assert_received {:linear_called, _mutation, %{input: %{"priority" => 4}}}
+    end
+
+    test "a state the team does not have names the state it asked for, and does not fall back to Backlog" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      states = [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]
+
+      assert {:error, {:child_state_not_found, "Todo", ["Backlog"]}} =
+               Linear.create_subissue_in_state(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 "Todo",
+                 %{"title" => "Epic review finding: no export button", "description" => "body"},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
+    end
+  end
+
   describe "create_subissue/3" do
     test "creates a Backlog child of the current issue in its team, project and assignee" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
@@ -1126,7 +1255,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              }
     end
 
-    test "refuses to create without a Backlog state and gives the slot back" do
+    test "refuses to create without a Backlog state and lets the title be filed again" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       states = [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}, %{"id" => "state-nameless"}]
 
@@ -1137,10 +1266,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  linear_client: subissue_client(self(), subissue_scope(states))
                )
 
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "gives the slot back when Linear reports the create failed" do
+    test "lets the title be filed again when Linear reports the create failed" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -1156,22 +1285,37 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  linear_client: client
                )
 
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "stops at the per-run cap without calling Linear" do
+    test "files as many sub-issues as the plan needs" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
+      {:ok, linear} = Agent.start_link(fn -> %{children: [], relations: []} end)
       context = %{issue_id: "issue-parent", comment_registry: registry}
-      attrs = %{"title" => "Slice", "description" => "body"}
 
-      client = subissue_client(self(), subissue_scope())
-
-      for _ <- 1..10 do
-        assert {:ok, _response} = Linear.create_subissue(context, attrs, linear_client: client)
+      for n <- 1..12 do
+        attrs = %{"title" => "Slice #{n}", "description" => "body"}
+        assert {:ok, _response} = Linear.create_subissue(context, attrs, linear_client: in_memory_linear(linear))
       end
 
-      assert {:error, {:subissue_cap_reached, 10}} =
-               Linear.create_subissue(context, attrs, linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called past the cap") end)
+      assert linear |> Agent.get(& &1.children) |> length() == 12
+      assert registry |> Linear.CommentRegistry.created_subissues() |> map_size() == 12
+    end
+
+    test "refuses a title this run already filed under the same parent, naming the first one" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+      client = subissue_client(self(), subissue_scope())
+
+      assert {:ok, _response} = Linear.create_subissue(context, %{"title" => "Slice", "description" => "body"}, linear_client: client)
+
+      assert {:error, {:duplicate_subissue, "TP-999"}} =
+               Linear.create_subissue(context, %{"title" => "  slice ", "description" => "again"},
+                 linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called for a duplicate") end
+               )
+
+      assert {:ok, _response} =
+               Linear.create_subissue(%{context | issue_id: "issue-other"}, %{"title" => "Slice", "description" => "body"}, linear_client: client)
     end
 
     test "refuses to create without a per-run registry" do
@@ -1197,7 +1341,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                    Linear.create_subissue(context, attrs, dir: audit_dir, linear_client: no_linear)
         end
 
-        assert Agent.get(registry, & &1.subissues) == 0
+        assert Linear.CommentRegistry.created_subissues(registry) == %{}
         assert [%{"event_type" => "refused_agent_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
         refute inspect(audit_events(audit_dir)) =~ openai_fixture()
       after
@@ -1235,7 +1379,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
     test "accepts a sub-issue this run created before Linear lists it as a child" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
-      Linear.CommentRegistry.record_subissue(registry, "TP-7", "issue-7")
+      Linear.CommentRegistry.record_subissue(registry, "issue-parent", "Earlier", "TP-7", "issue-7")
       test_pid = self()
 
       assert {:ok, _response} =
@@ -1261,10 +1405,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                )
 
       assert Agent.get(linear, & &1) == %{children: [%{"id" => "issue-old", "identifier" => "TP-50"}], relations: []}
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "keeps the slot and names the created issue when a blocked-by link fails" do
+    test "records the title and names the created issue when a blocked-by link fails" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       scope = Map.put(subissue_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})
 
@@ -1281,11 +1425,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  linear_client: client
                )
 
-      assert Agent.get(registry, & &1.subissues) == 1
+      assert {:error, {:duplicate_subissue, "TP-999"}} = Linear.CommentRegistry.check_subissue_title(registry, "issue-parent", "B")
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
     end
 
-    test "gives the slot back when Linear does not return the created issue" do
+    test "lets the title be filed again when Linear does not return the created issue" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -1298,7 +1442,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       attrs = %{"title" => "B", "description" => "body"}
       assert {:error, :subissue_not_returned} = Linear.create_subissue(context, attrs, linear_client: client)
 
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
     test "validates title, description and priority" do
@@ -1715,21 +1859,159 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       do: {:ok, %{"data" => %{"documentUpdate" => %{"success" => true, "document" => @created_document}}}}
   end
 
+  describe "update_issue_summary/3" do
+    @summary_attrs %{
+      "status" => "PR open, waiting on Auto Review",
+      "links" => %{
+        "review_brief" => "https://linear.app/acme/issue/TP-7#comment-brief",
+        "artifacts" => [%{"label" => "PR #12", "url" => "https://github.com/acme/app/pull/12"}]
+      },
+      "changelog_entry" => "Opened the PR"
+    }
+
+    test "writes only the summary block, keeping a person's edit made between runs" do
+      linear = description_linear("## Goal\n\nShip it.")
+      client = description_client(self(), linear)
+      context = %{issue_id: "issue-current"}
+
+      assert {:ok, %{"issue" => %{"id" => "issue-current"}, "descriptionLength" => length}} =
+               Linear.update_issue_summary(context, @summary_attrs, linear_client: client, today: ~D[2026-10-06])
+
+      first = Agent.get(linear, & &1)
+      assert length == String.length(first)
+      assert_received {:linear_called, "SymphonyAgentIssueDescription", %{id: "issue-current"}}
+      assert_received {:linear_called, "SymphonyAgentUpdateIssueDescription", %{id: "issue-current"}}
+      assert String.starts_with?(first, "## Goal\n\nShip it.\n\n<!-- symphony:summary:start -->")
+      assert first =~ "**Status:** PR open, waiting on Auto Review"
+      assert first =~ "**Review brief:** [Review brief](https://linear.app/acme/issue/TP-7#comment-brief)"
+      assert first =~ "- [PR #12](https://github.com/acme/app/pull/12)"
+      assert first =~ "- 2026-10-06: Opened the PR"
+
+      # A person edits the text before the block and adds a line after it.
+      Agent.update(linear, fn description -> String.replace(description, "Ship it.", "Ship it, and test it.") <> "\n\nAdded by a person." end)
+
+      second_attrs = %{"status" => "Merged", "links" => %{"artifacts" => []}, "changelog_entry" => "Merged the PR"}
+      assert {:ok, _result} = Linear.update_issue_summary(context, second_attrs, linear_client: client, today: ~D[2026-10-07])
+
+      second = Agent.get(linear, & &1)
+      assert String.starts_with?(second, "## Goal\n\nShip it, and test it.\n\n<!-- symphony:summary:start -->")
+      assert String.ends_with?(second, "<!-- symphony:summary:end -->\n\nAdded by a person.")
+      assert second =~ "**Status:** Merged"
+      refute second =~ "PR open"
+      refute second =~ "pull/12"
+      assert second =~ "- 2026-10-07: Merged the PR\n- 2026-10-06: Opened the PR\n\n<!-- symphony:summary:end -->"
+      assert SymphonyElixir.IssueSummary.strip(second) == "## Goal\n\nShip it, and test it.\n\nAdded by a person."
+    end
+
+    test "refuses a description with an unterminated block, writing nothing" do
+      linear = description_linear("Goal\n\n<!-- symphony:summary:start -->\nhalf")
+      client = description_client(self(), linear)
+
+      assert {:error, :summary_block_unterminated} =
+               Linear.update_issue_summary(%{issue_id: "issue-current"}, @summary_attrs, linear_client: client)
+
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueDescription", _variables}
+    end
+
+    test "returns Linear's failures" do
+      no_issue = fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => nil}}} end
+
+      assert {:error, :issue_not_found} =
+               Linear.update_issue_summary(%{issue_id: "issue-current"}, @summary_attrs, linear_client: no_issue)
+
+      failed = fn
+        query, _variables, _opts ->
+          if query =~ "SymphonyAgentIssueDescription",
+            do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => nil}}}},
+            else: {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+      end
+
+      assert {:error, {:linear_mutation_failed, "issueUpdate", _response}} =
+               Linear.update_issue_summary(%{issue_id: "issue-current"}, @summary_attrs, linear_client: failed)
+    end
+
+    test "rejects invalid and secret-bearing fields before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-issue-summary-secret")
+      audit_dir = Path.join(workspace, "audit")
+      context = secret_context(workspace)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+
+      try do
+        for {attrs, error} <- [
+              {Map.delete(@summary_attrs, "status"), :invalid_summary_status},
+              {Map.put(@summary_attrs, "changelog_entry", " "), :invalid_summary_changelog_entry},
+              {Map.put(@summary_attrs, "status", "key " <> openai_fixture()), :secret_pattern_detected},
+              {put_in(@summary_attrs, ["links", "artifacts"], [%{"label" => openai_fixture(), "url" => "https://x.dev/a"}]), :secret_pattern_detected}
+            ] do
+          assert {:error, ^error} =
+                   Linear.update_issue_summary(context, attrs, dir: audit_dir, linear_client: no_linear)
+        end
+
+        assert [%{"tool" => "linear_update_issue_summary", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        assert {:error, :missing_current_issue} = Linear.update_issue_summary(%{}, @summary_attrs)
+      after
+        File.rm_rf(workspace)
+      end
+    end
+  end
+
+  defp description_linear(description) do
+    {:ok, linear} = Agent.start_link(fn -> description end)
+    linear
+  end
+
+  defp description_client(test_pid, linear) do
+    fn query, variables, _opts ->
+      [_match, name] = Regex.run(~r/(?:query|mutation) (\w+)/, query)
+      send(test_pid, {:linear_called, name, variables})
+
+      case name do
+        "SymphonyAgentIssueDescription" ->
+          {:ok, %{"data" => %{"issue" => %{"id" => variables.id, "description" => Agent.get(linear, & &1)}}}}
+
+        "SymphonyAgentUpdateIssueDescription" ->
+          Agent.update(linear, fn _description -> variables.description end)
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true, "issue" => %{"id" => variables.id, "url" => "https://linear.app/acme/issue/TP-7"}}}}}
+      end
+    end
+  end
+
   describe "request_human_action/3" do
     @human_action %{
       "title" => "Add the release signing secrets",
       "why" => "Every Release run on main fails without them.",
-      "steps" => ["Open Settings → Secrets and variables → Actions.", "Add `MACOS_CERTIFICATE`."],
+      "decision" => %{
+        "question" => "Add the signing secrets, or ship unsigned builds?",
+        "options" => [
+          %{
+            "label" => "Add the secrets",
+            "effect" => "Releases are signed again.",
+            "recommended" => true,
+            "tradeoffs" => [%{"kind" => "good", "text" => "Gatekeeper stops warning."}, %{"kind" => "cost", "text" => "Someone exports the certificate once."}]
+          },
+          %{"label" => "Ship unsigned", "effect" => "The agent drops the signing step.", "tradeoffs" => [%{"kind" => "risk", "text" => "Users see a warning on first launch."}]}
+        ],
+        "recommendation_reason" => "Signing is a one-time setup."
+      },
       "unblocks" => "the Release workflow on main",
-      "est_minutes" => 10
+      "if_unanswered" => "Every Release run on main keeps failing."
     }
+
+    @team_states [
+      %{"id" => "state-todo", "name" => "Todo"},
+      %{"id" => "state-progress", "name" => "In Progress"},
+      %{"id" => "state-rework", "name" => "Rework"},
+      %{"id" => "state-review", "name" => "In Review"},
+      %{"id" => "state-human", "name" => "Human Review"}
+    ]
 
     defp human_action_scope(attrs \\ %{}) do
       issue =
         Map.merge(
           %{
             "id" => "issue-24",
-            "team" => %{"id" => "team-1"},
+            "state" => %{"name" => "In Progress"},
+            "team" => %{"states" => %{"nodes" => @team_states}},
             "labels" => %{"nodes" => []},
             "comments" => %{"nodes" => []},
             "history" => %{"nodes" => []}
@@ -1737,7 +2019,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
           Map.get(attrs, :issue, %{})
         )
 
-      %{"data" => %{"issue" => issue, "issueLabels" => %{"nodes" => Map.get(attrs, :labels, [%{"id" => "label-team", "team" => %{"id" => "team-1"}}])}}}
+      %{"data" => %{"issue" => issue}}
     end
 
     # Answers each query by name; `overrides` replaces an answer, `test_pid` gets every call.
@@ -1749,8 +2031,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         default =
           case name do
             "SymphonyAgentHumanActionScope" -> {:ok, scope}
-            "SymphonyAgentCreateLabel" -> {:ok, %{"data" => %{"issueLabelCreate" => %{"success" => true, "issueLabel" => %{"id" => "label-new"}}}}}
-            "SymphonyAgentAddLabel" -> {:ok, %{"data" => %{"issueAddLabel" => %{"success" => true}}}}
+            "SymphonyAgentUpdateIssueState" -> {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
             "SymphonyAgentAddComment" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-new", "url" => "https://linear.app/c"}}}}}
             "SymphonyAgentAddReply" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply-to-" <> variables.parentId}}}}}
             "SymphonyAgentRemoveLabel" -> {:ok, %{"data" => %{"issueRemoveLabel" => %{"success" => true}}}}
@@ -1760,6 +2041,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
+    defp decision_request(title) do
+      options = [%{label: "a", effect: "b", recommended: true}, %{label: "c", effect: "d"}]
+      %{title: title, why: "x", question: "q", options: options}
+    end
+
     defp human_action_opts(client, extra \\ []) do
       test_pid = self()
 
@@ -1767,6 +2053,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         [
           linear_client: client,
           settings: Config.settings!(),
+          tracker: FakeTracker,
           refresh_human_actions: fn -> send(test_pid, :refreshed) end
         ],
         extra
@@ -1777,95 +2064,70 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       Linear.request_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
     end
 
-    test "labels the issue, posts the request, and asks Symphony to list it" do
+    test "posts the request, holds the issue in place, adds no label of its own, and asks Symphony to list it" do
+      :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24"}, comment_registry: registry}
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
 
-      assert {:ok, %{"requested" => true, "commentId" => "comment-new", "url" => "https://linear.app/c", "label" => "human-action"}} =
+      assert {:ok, %{"requested" => true, "commentId" => "comment-new", "url" => "https://linear.app/c", "state" => "In Progress"} = result} =
                request_human_action(context, human_action_scope())
 
-      assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "issue-24", label: "human-action"}}
-      assert_received {:linear_called, "SymphonyAgentAddLabel", %{issueId: "issue-24", labelId: "label-team"}}
+      refute Map.has_key?(result, "label")
+      assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "issue-24"}}
       assert_received {:linear_called, "SymphonyAgentAddComment", %{issueId: "issue-24", body: body}}
+      refute_received {:tracker_moved, _issue_id, _state}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
+      refute_received {:linear_called, "SymphonyAgentCreateLabel", _variables}
+      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
       assert_received :refreshed
+      assert body =~ "## Decision needed: Add the release signing secrets"
+      assert body =~ "**If unanswered:** Every Release run on main keeps failing."
+
+      assert body =~ """
+             1. **Add the secrets** (recommended): Releases are signed again.
+                - Good: Gatekeeper stops warning.
+                - Cost: Someone exports the certificate once.
+             2. **Ship unsigned**: The agent drops the signing step.
+                - Risk: Users see a warning on first launch.
+
+             **Why recommended:** Signing is a one-time setup.
+             """
+
+      refute body =~ "Steps:"
+      refute body =~ "**Time:**"
 
       assert %{
                title: "Add the release signing secrets",
+               question: "Add the signing secrets, or ship unsigned builds?",
                why: "Every Release run on main fails without them.",
+               if_unanswered: "Every Release run on main keeps failing.",
+               recommendation_reason: "Signing is a one-time setup.",
                unblocks: "the Release workflow on main",
-               est_minutes: 10,
-               steps: ["Open Settings → Secrets and variables → Actions.", "Add `MACOS_CERTIFICATE`."]
+               options: ["**Add the secrets** (recommended): Releases are signed again.", "**Ship unsigned**: The agent drops the signing step."],
+               tradeoffs: [
+                 [%{kind: "good", text: "Gatekeeper stops warning."}, %{kind: "cost", text: "Someone exports the certificate once."}],
+                 [%{kind: "risk", text: "Users see a warning on first launch."}]
+               ],
+               steps: []
              } = Request.parse(body)
 
       assert Agent.get(registry, & &1.human_actions) == 1
       assert Linear.CommentRegistry.human_action_requested?(registry)
     end
 
-    test "does not post the same open request twice" do
+    test "gives the slot back when Linear refuses any step, or the hold can't be set" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
-      refute Linear.CommentRegistry.human_action_requested?(registry)
-      body = Request.render(%{title: "add the release  signing secrets", why: "x", steps: ["y"]}, "human-action")
-
-      scope =
-        human_action_scope(%{
-          issue: %{
-            "labels" => %{"nodes" => [%{"id" => "label-team", "name" => "Human-Action"}]},
-            "comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}]},
-            "history" => %{"nodes" => [%{"createdAt" => "2026-10-04T10:05:00.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Backlog"}}]}
-          }
-        })
-
-      assert {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => "comment-1"}} =
-               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, scope)
-
-      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
-      refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
-      refute_received :refreshed
-      assert Agent.get(registry, & &1.human_actions) == 0
-      # The open request still waits on a person, so the issue goes to Human Review.
-      assert Linear.CommentRegistry.human_action_requested?(registry)
-
-      # Once a person moved the issue on, the same title is a new request; the label is already there.
-      moved_on =
-        put_in(scope, ["data", "issue", "history", "nodes"], [
-          %{"createdAt" => "2026-10-04T12:00:00.000Z", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}}
-        ])
-
-      assert {:ok, %{"requested" => true}} =
-               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, moved_on)
-
-      refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
-      assert_received {:linear_called, "SymphonyAgentAddComment", _variables}
-    end
-
-    test "uses the workspace label, or creates the team label when there is none" do
-      {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue_id: "issue-24", comment_registry: registry}
-      workspace_label = human_action_scope(%{labels: [%{"id" => "label-other-team", "team" => %{"id" => "team-2"}}, %{"id" => "label-workspace", "team" => nil}]})
-
-      assert {:ok, %{"requested" => true}} = request_human_action(context, workspace_label)
-      assert_received {:linear_called, "SymphonyAgentAddLabel", %{labelId: "label-workspace"}}
-
-      minimal = Map.take(@human_action, ["title", "why", "steps"])
-      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope(%{labels: []}), %{}, minimal)
-
-      assert_received {:linear_called, "SymphonyAgentCreateLabel", %{input: %{"name" => "human-action", "teamId" => "team-1"}}}
-      assert_received {:linear_called, "SymphonyAgentAddLabel", %{labelId: "label-new"}}
-    end
-
-    test "gives the slot back when Linear refuses any step" do
-      {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue_id: "issue-24", comment_registry: registry}
-      scope = human_action_scope(%{labels: []})
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
+      scope = human_action_scope()
       refused = fn field -> {:ok, %{"data" => %{field => %{"success" => false}}}} end
 
-      for {overrides, expected} <- [
-            {%{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
-            {%{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
-            {%{"SymphonyAgentCreateLabel" => refused.("issueLabelCreate")}, {:error, {:linear_mutation_failed, "issueLabelCreate", :_}}},
-            {%{"SymphonyAgentCreateLabel" => {:ok, %{"data" => %{"issueLabelCreate" => %{"success" => true}}}}}, {:error, :label_not_created}},
-            {%{"SymphonyAgentAddLabel" => refused.("issueAddLabel")}, {:error, {:linear_mutation_failed, "issueAddLabel", :_}}},
-            {%{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}}
+      for {context, overrides, expected} <- [
+            {context, %{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
+            {context, %{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
+            {context, %{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}},
+            # A hold needs the repo it is recorded under.
+            {%{issue_id: "issue-24", comment_registry: registry}, %{}, {:error, :missing_repo_key}}
           ] do
         result = request_human_action(context, scope, overrides)
 
@@ -1896,7 +2158,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
           {"title", "Add " <> openai_fixture()},
           {"why", openai_fixture()},
           {"unblocks", openai_fixture()},
-          {"steps", ["Paste " <> openai_fixture()]}
+          {"if_unanswered", openai_fixture()},
+          {"decision", put_in(@human_action["decision"], ["question"], "Paste " <> openai_fixture() <> "?")},
+          {"decision", put_in(@human_action["decision"], ["recommendation_reason"], "Paste " <> openai_fixture())},
+          {"decision", put_in(@human_action["decision"], ["options", Access.at(1), "effect"], "Paste " <> openai_fixture())},
+          {"decision", put_in(@human_action["decision"], ["options", Access.at(1), "tradeoffs"], [%{"kind" => "risk", "text" => openai_fixture()}])}
         ]
 
         for {field, value} <- secret_fields do
@@ -1906,17 +2172,42 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         assert [%{"tool" => "linear_request_human_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
         refute inspect(audit_events(audit_dir)) =~ openai_fixture()
 
+        decision = &%{"decision" => Map.merge(@human_action["decision"], &1)}
+        option = &Map.merge(%{"label" => "Keep it", "effect" => "Nothing changes."}, &1)
+
+        decision_required =
+          "`decision` is required: one `question` and 2 to 4 `options`. A person only makes decisions; a check an agent can't run belongs to " <>
+            "CI or a QA playbook, and a manual check that could be a test becomes a test."
+
+        options_count =
+          "`decision.options` must list 2 to 4 options, each with a `label` and an `effect`; with no real choice to make, there is nothing to ask a person."
+
+        tradeoffs = "Each option's `tradeoffs` lists at most 3, each with a `kind` (good, cost, risk) and a non-blank `text`."
+        four_tradeoffs = List.duplicate(%{"kind" => "good", "text" => "x"}, 4)
+
         for {attrs, message} <- [
               {%{"title" => " "}, "`title` must be a non-blank string."},
               {%{"title" => String.duplicate("a", 121)}, "`title` must be at most 120 characters."},
               {%{"why" => nil}, "`why` must be a non-blank string."},
-              {%{"steps" => []}, "`steps` must list 1 to 15 non-blank strings."},
-              {%{"steps" => List.duplicate("x", 16)}, "`steps` must list 1 to 15 non-blank strings."},
-              {%{"steps" => ["ok", " "]}, "`steps` must list 1 to 15 non-blank strings."},
-              {%{"steps" => "one"}, "`steps` must list 1 to 15 non-blank strings."},
+              {%{"decision" => nil}, decision_required},
+              {%{"decision" => "Ship it?"}, decision_required},
+              {decision.(%{"question" => " "}), "`decision.question` must be a non-blank string."},
+              {decision.(%{"options" => nil}), options_count},
+              {decision.(%{"options" => []}), options_count},
+              {decision.(%{"options" => [option.(%{"recommended" => true})]}), options_count},
+              {decision.(%{"options" => List.duplicate(option.(%{}), 5)}), options_count},
+              {decision.(%{"options" => [option.(%{"recommended" => true}), option.(%{"effect" => " "})]}), "Each of `decision.options` needs a non-blank `label` and `effect`."},
+              {decision.(%{"options" => [option.(%{"recommended" => true}), "Keep it"]}), "Each of `decision.options` needs a non-blank `label` and `effect`."},
+              {decision.(%{"options" => [option.(%{}), option.(%{})]}), "Exactly one of `decision.options` must be `recommended`."},
+              {decision.(%{"options" => [option.(%{"recommended" => true}), option.(%{"recommended" => true})]}), "Exactly one of `decision.options` must be `recommended`."},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => "cheap"}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => four_tradeoffs}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => [%{"kind" => "nice", "text" => "x"}]}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => [%{"kind" => "good", "text" => " "}]}), option.(%{})]}), tradeoffs},
+              {decision.(%{"options" => [option.(%{"recommended" => true, "tradeoffs" => ["cheap"]}), option.(%{})]}), tradeoffs},
+              {decision.(%{"recommendation_reason" => 3}), "`decision.recommendation_reason` must be a string."},
               {%{"unblocks" => 3}, "`unblocks` must be a string."},
-              {%{"est_minutes" => 0}, "`est_minutes` must be an integer from 1 to 480."},
-              {%{"est_minutes" => 1.5}, "`est_minutes` must be an integer from 1 to 480."}
+              {%{"if_unanswered" => 3}, "`if_unanswered` must be a string."}
             ] do
           assert {:error, {:invalid_human_action, ^message}} = Linear.request_human_action(context, Map.merge(@human_action, attrs), opts)
         end
@@ -1936,14 +2227,45 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
+    test "refuses code in a request, naming each token and its field, and posts nothing" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
+      opts = human_action_opts(fn _query, _variables, _opts -> flunk("Linear should not be called") end)
+      option = &put_in(@human_action, ["decision", "options", Access.at(0) | &1], &2)
+
+      for {attrs, field, token} <- [
+            {put_in(@human_action, ["decision", "question"], "How should TP-892 handle the partials?`"), "decision.question", "`"},
+            {Map.put(@human_action, "why", "It still has the legacy {% else %} branch."), "why", "{% else %}"},
+            {Map.put(@human_action, "if_unanswered", "The review keeps flagging lib/symphony_elixir."), "if_unanswered", "lib/symphony_elixir"},
+            {option.(["effect"], "The next run edits plan_pipeline.liquid."), "decision.options[0].effect", "plan_pipeline.liquid"},
+            {option.(["label"], "Hand back 2f5af5ab"), "decision.options[0].label", "2f5af5ab"},
+            {option.(["tradeoffs"], [%{"kind" => "risk", "text" => "It conflicts with auto/TP-891."}]), "decision.options[0].tradeoffs[0].text", "auto/TP-891"}
+          ] do
+        assert {:error, {:invalid_human_action, message}} = Linear.request_human_action(context, attrs, opts)
+        assert message =~ "`#{field}` has "
+        assert message =~ inspect(token)
+        assert message =~ "Rewrite it in plain words"
+      end
+
+      refute Linear.CommentRegistry.human_action_requested?(registry)
+    end
+
+    test "ignores an older caller's time estimate" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
+
+      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope(), %{}, Map.put(@human_action, "est_minutes", 10))
+      assert_received {:linear_called, "SymphonyAgentAddComment", %{body: body}}
+      refute body =~ "**Time:**"
+    end
+
     test "reads the settings of the issue's repository when none are given" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       client = human_action_client(self(), human_action_scope())
+      context = %{issue: %Issue{id: "issue-24", repo_key: Config.repo_key!()}, comment_registry: registry}
 
-      for context <- [%{issue_id: "issue-24"}, %{issue: %Issue{id: "issue-24", repo_key: nil}}] do
-        assert {:ok, %{"requested" => true, "label" => "human-action"}} =
-                 Linear.request_human_action(Map.put(context, :comment_registry, registry), @human_action, linear_client: client)
-      end
+      assert {:ok, %{"requested" => true, "state" => "In Progress", "held" => true}} =
+               Linear.request_human_action(context, @human_action, linear_client: client, tracker: FakeTracker)
     end
   end
 
@@ -1951,18 +2273,18 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     @withdrawal %{"reason" => "The dialyzer run had started minutes earlier, not 11 hours ago."}
 
     defp request_node(id, title, created_at) do
-      %{"id" => id, "body" => Request.render(%{title: title, why: "x", steps: ["y"]}, "human-action"), "createdAt" => created_at}
+      %{"id" => id, "body" => Request.render_hold(decision_request(title), "In Progress"), "createdAt" => created_at}
     end
 
-    defp withdrawal_scope(comments, labels \\ [%{"id" => "label-on-issue", "name" => "Human-Action"}]) do
-      human_action_scope(%{issue: %{"labels" => %{"nodes" => labels}, "comments" => %{"nodes" => comments}}})
+    defp withdrawal_scope(comments, issue \\ %{}) do
+      human_action_scope(%{issue: Map.merge(%{"comments" => %{"nodes" => comments}}, issue)})
     end
 
     defp withdraw_human_action(context, scope, overrides \\ %{}, attrs \\ @withdrawal) do
       Linear.withdraw_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
     end
 
-    test "replies with the reason under the request, removes the label, and drops it from the next update" do
+    test "replies with the reason under the request, leaves the issue where it is, and drops it from the next update" do
       requests = [request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:27.000Z")]
       scope = withdrawal_scope(requests)
 
@@ -1971,13 +2293,16 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                 "withdrawn" => true,
                 "requestCommentIds" => ["comment-1"],
                 "replyCommentIds" => ["reply-to-comment-1"],
-                "labelRemoved" => true,
-                "label" => "human-action"
-              }} = withdraw_human_action(%{issue: %Issue{id: "MOT-24", identifier: "MOT-24"}}, scope)
+                "remaining" => 0,
+                "state" => "In Progress"
+              }} = withdraw_human_action(%{issue: %Issue{id: "MOT-24", identifier: "MOT-24", repo_key: "repo-a"}}, scope)
 
-      assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "MOT-24", label: "human-action"}}
+      assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "MOT-24"}}
       assert_received {:linear_called, "SymphonyAgentAddReply", %{issueId: "issue-24", parentId: "comment-1", body: reply}}
-      assert_received {:linear_called, "SymphonyAgentRemoveLabel", %{issueId: "issue-24", labelId: "label-on-issue"}}
+      refute_received {:tracker_moved, _issue_id, _state}
+      assert_received {:machine_label_cleared, "MOT-24", "Needs Decision"}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
       assert_received :refreshed
       assert reply == "## Action withdrawn\n\nThe dialyzer run had started minutes earlier, not 11 hours ago."
 
@@ -1990,99 +2315,75 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       again = put_in(scope, ["data", "issue"], after_withdrawal)
 
       assert {:ok, %{"requested" => true}} =
-               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, again, %{}, %{
+               request_human_action(%{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}, again, %{}, %{
                  "title" => "Re-run the stuck dialyzer job",
                  "why" => "x",
-                 "steps" => ["y"]
+                 "decision" => @human_action["decision"]
                })
     end
 
-    test "withdraws only the request named by title, and keeps the label for the others" do
+    test "withdraws only the request named by title, and keeps the hold for the others" do
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}}
+
       scope =
         withdrawal_scope([
           request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
           request_node("comment-2", "Add the release signing secrets", "2026-10-04T18:58:00.000Z")
         ])
 
-      assert {:ok, %{"withdrawn" => true, "requestCommentIds" => ["comment-1"], "labelRemoved" => false}} =
-               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{}, Map.put(@withdrawal, "title", " re-run the stuck  DIALYZER job "))
+      assert {:ok, %{"withdrawn" => true, "requestCommentIds" => ["comment-1"], "remaining" => 1, "state" => "In Progress"}} =
+               withdraw_human_action(context, scope, %{}, Map.put(@withdrawal, "title", " re-run the stuck  DIALYZER job "))
 
       assert_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-1"}}
       refute_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-2"}}
+      refute_received {:machine_label_cleared, _issue_id, _name}
+
+      # Without a title, every open request goes, and the hold with them; the issue stays put.
+      assert {:ok, %{"requestCommentIds" => ["comment-1", "comment-2"], "replyCommentIds" => ["reply-to-comment-1", "reply-to-comment-2"], "remaining" => 0, "state" => "In Progress"}} =
+               withdraw_human_action(context, scope)
+
+      assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
+      refute_received {:tracker_moved, _issue_id, _state}
+    end
+
+    test "a deprecated request label comes off with the last request" do
+      legacy = put_in(Config.settings!().human_actions.label, "human-action")
+      labels = %{"nodes" => [%{"id" => "label-on-issue", "name" => "Human-Action"}, %{"id" => "label-other", "name" => "bug"}]}
+      scope = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => labels})
+      client = human_action_client(self(), scope)
+
+      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}}
+
+      assert {:ok, %{"withdrawn" => true, "remaining" => 0, "state" => "In Progress"}} =
+               Linear.withdraw_human_action(context, @withdrawal, human_action_opts(client, settings: legacy))
+
+      assert_received {:linear_called, "SymphonyAgentRemoveLabel", %{issueId: "issue-24", labelId: "label-on-issue"}}
+      refute_received {:linear_called, "SymphonyAgentRemoveLabel", %{labelId: "label-other"}}
+      refute_received {:tracker_moved, _issue_id, _state}
+
+      # Without the deprecated setting, the label is left alone.
+      assert {:ok, %{"withdrawn" => true}} = withdraw_human_action(context, scope)
       refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
-
-      # Without a title, every open request goes, and the label with them.
-      assert {:ok, %{"requestCommentIds" => ["comment-1", "comment-2"], "replyCommentIds" => ["reply-to-comment-1", "reply-to-comment-2"], "labelRemoved" => true}} =
-               withdraw_human_action(%{issue_id: "issue-24"}, scope)
-    end
-
-    # Moves the issue to Backlog through `update_state/3` and returns the state it landed in.
-    defp move_to_backlog(context) do
-      test_pid = self()
-      states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-human", "name" => "Human Review"}]
-
-      client = fn query, variables, _opts ->
-        if query =~ "SymphonyAgentIssueTeamStates" do
-          {:ok, %{"data" => %{"issue" => %{"team" => %{"states" => %{"nodes" => states}}}}}}
-        else
-          send(test_pid, {:moved_to, variables.stateId})
-          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
-        end
-      end
-
-      assert {:ok, _response} = Linear.update_state(context, "Backlog", linear_client: client, settings: Config.settings!())
-      assert_received {:moved_to, state_id}
-      state_id
-    end
-
-    test "after withdrawing its only request, the run's move to Backlog lands in Backlog, not Human Review" do
-      {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue_id: "issue-24", comment_registry: registry}
-
-      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope())
-      assert move_to_backlog(context) == "state-human"
-
-      scope = withdrawal_scope([request_node("comment-1", "Add the release signing secrets", "2026-10-04T18:57:00.000Z")])
-      assert {:ok, %{"withdrawn" => true, "labelRemoved" => true}} = withdraw_human_action(context, scope)
-
-      refute Linear.CommentRegistry.human_action_requested?(registry)
-      assert move_to_backlog(context) == "state-backlog"
-    end
-
-    test "withdrawing one of two open requests keeps the move to Human Review" do
-      {:ok, registry} = Linear.CommentRegistry.start_link()
-      context = %{issue_id: "issue-24", comment_registry: registry}
-      Linear.CommentRegistry.record_human_action_request(registry)
-
-      scope =
-        withdrawal_scope([
-          request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
-          request_node("comment-2", "Add the release signing secrets", "2026-10-04T18:58:00.000Z")
-        ])
-
-      assert {:ok, %{"withdrawn" => true, "labelRemoved" => false}} =
-               withdraw_human_action(context, scope, %{}, Map.put(@withdrawal, "title", "Re-run the stuck dialyzer job"))
-
-      assert Linear.CommentRegistry.human_action_requested?(registry)
-      assert move_to_backlog(context) == "state-human"
     end
 
     test "changes nothing when no open request matches" do
       open = request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z")
       withdrawn = %{"id" => "reply-1", "body" => Request.render_withdrawal("Not needed."), "parent" => %{"id" => "comment-1"}}
 
+      answered = %{"id" => "reply-2", "body" => "Add the secrets", "parent" => %{"id" => "comment-1"}}
+
       for {scope, attrs} <- [
-            {withdrawal_scope([open], []), @withdrawal},
+            {withdrawal_scope([open, answered]), @withdrawal},
             {withdrawal_scope([open, withdrawn]), @withdrawal},
             {withdrawal_scope([]), @withdrawal},
             {withdrawal_scope([open]), Map.put(@withdrawal, "title", "Something else")}
           ] do
-        assert {:ok, %{"withdrawn" => false, "reason" => "no_open_request", "label" => "human-action"}} =
+        assert {:ok, %{"withdrawn" => false, "reason" => "no_open_request"}} =
                  withdraw_human_action(%{issue_id: "issue-24"}, scope, %{}, attrs)
       end
 
       refute_received {:linear_called, "SymphonyAgentAddReply", _variables}
-      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
       refute_received :refreshed
     end
 
@@ -2098,10 +2399,17 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert {:error, {:linear_mutation_failed, "commentCreate", _body}} =
                withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentAddReply" => refused.("commentCreate")})
 
-      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
+
+      # The hold the withdrawal clears needs the repo it is recorded under.
+      assert {:error, :missing_repo_key} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
+
+      legacy = put_in(Config.settings!().human_actions.label, "human-action")
+      labelled = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => %{"nodes" => [%{"id" => "l-1", "name" => "human-action"}]}})
+      client = human_action_client(self(), labelled, %{"SymphonyAgentRemoveLabel" => refused.("issueRemoveLabel")})
 
       assert {:error, {:linear_mutation_failed, "issueRemoveLabel", _body}} =
-               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentRemoveLabel" => refused.("issueRemoveLabel")})
+               Linear.withdraw_human_action(%{issue_id: "issue-24"}, @withdrawal, human_action_opts(client, settings: legacy))
 
       refute_received :refreshed
     end
@@ -2539,5 +2847,401 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     workspace = Path.join(System.tmp_dir!(), "#{name}-#{System.unique_integer([:positive])}")
     File.mkdir_p!(workspace)
     workspace
+  end
+
+  describe "update_state/3 and the Blocked hold" do
+    defmodule HoldTracker do
+      def set_machine_label(issue_id, name) do
+        send(self(), {:machine_label_set, issue_id, name})
+        :ok
+      end
+
+      def clear_machine_label(issue_id, name) do
+        send(self(), {:machine_label_cleared, issue_id, name})
+        :ok
+      end
+    end
+
+    defp designed_settings do
+      assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
+      settings
+    end
+
+    defp team_client(from_state) do
+      states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-progress", "name" => "In Progress"}]
+
+      fn query, _variables, _opts ->
+        assert query =~ "SymphonyAgentIssueTeamStates"
+
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "state" => %{"name" => from_state, "type" => "started"},
+               "team" => %{"states" => %{"nodes" => states}}
+             }
+           }
+         }}
+      end
+    end
+
+    test "turns an agent's Backlog request into a Blocked hold, without a move" do
+      :ok = SymphonyElixir.RunStore.clear()
+
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, response} =
+               Linear.update_state(context, "Backlog",
+                 linear_client: team_client("In Progress"),
+                 settings: designed_settings(),
+                 store: SymphonyElixir.RunStore,
+                 tracker: HoldTracker
+               )
+
+      assert response["held"] == true
+      assert response["hold"] == "Blocked"
+      assert response["reason"] =~ "reported a block"
+      assert response["message"] =~ "Blocked"
+      assert response["message"] =~ "a person lifts an access hold with Unblock"
+      assert_received {:machine_label_set, "issue-1", "Blocked"}
+
+      assert %{holds: [%{kind: :blocked, waits_on: %{type: "access"}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-1")
+    end
+
+    # A plan parent: the plan run hands over by naming `Plan Review`, and the guard performs the move
+    # into the repo's configured `Plan Review` state.
+    defp plan_review_client(extra \\ []) do
+      states =
+        [%{"id" => "state-review", "name" => "In Review"}, %{"id" => "state-plan-review", "name" => "Plan Review"}] ++ extra
+
+      fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "state" => %{"name" => "In Progress", "type" => "started"},
+                 "labels" => %{"nodes" => [%{"name" => "plan"}]},
+                 "team" => %{"states" => %{"nodes" => states}}
+               }
+             }
+           }}
+        else
+          send(self(), {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+    end
+
+    test "a plan parent naming the retired In Review is refused: the handoff names Plan Review" do
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      for asked <- ["In Review", " in review "] do
+        assert {:error, {:retired_state, "In Review"}} =
+                 Linear.update_state(context, asked, linear_client: plan_review_client(), settings: designed_settings())
+
+        refute_received {:moved_to, _state_id}
+      end
+    end
+
+    test "a plan parent may name Plan Review itself; any other ticket is refused" do
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+               Linear.update_state(context, "Plan Review", linear_client: plan_review_client(), settings: designed_settings())
+
+      assert_received {:moved_to, "state-plan-review"}
+
+      not_a_plan = fn query, variables, opts ->
+        case plan_review_client().(query, variables, opts) do
+          {:ok, %{"data" => %{"issue" => issue}}} ->
+            {:ok, %{"data" => %{"issue" => Map.put(issue, "labels", %{"nodes" => []})}}}
+
+          other ->
+            other
+        end
+      end
+
+      assert {:error, {:plan_review_requires_handoff_signal, "Plan Review"}} =
+               Linear.update_state(context, "Plan Review", linear_client: not_a_plan, settings: designed_settings())
+
+      refute_received {:moved_to, _state_id}
+    end
+
+    # The CI Fix lane's substantive exit: the fixing agent, finding the repair needs a real change,
+    # sends its own ticket to `Rework`. That is an ordinary state request — the guard performs no
+    # lane edge for it — so the only thing the lane does is record what the move meant.
+    defp ci_fix_move_client do
+      test_pid = self()
+
+      fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "state" => %{"name" => "CI Fix", "type" => "started"},
+                 "team" => %{"states" => %{"nodes" => [%{"id" => "state-rework", "name" => "Rework"}]}}
+               }
+             }
+           }}
+        else
+          send(test_pid, :state_mutated)
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+    end
+
+    test "a CI Fix ticket the agent sends to Rework records the substantive fix verdict" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+
+      assert {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} =
+               Linear.update_state(context, "Rework",
+                 linear_client: ci_fix_move_client(),
+                 settings: designed_settings()
+               )
+
+      assert_received :state_mutated
+
+      assert [%{name: "fix verdict", details: %{outcome: "substantive", to: "Rework"}}] =
+               SymphonyElixir.Handoff.signals("repo-a", "issue-1")
+    end
+  end
+
+  describe "request_human_action/3 on a designed repo" do
+    # The tool's Linear traffic plus the machine label a hold projects; a legacy repo's move is the
+    # FakeTracker's, so a designed test asserting no move sees nothing on that mailbox either.
+    defmodule DesignedTracker do
+      def set_machine_label(issue_id, name) do
+        send(self(), {:machine_label_set, issue_id, name})
+        :ok
+      end
+
+      def clear_machine_label(issue_id, name) do
+        send(self(), {:machine_label_cleared, issue_id, name})
+        :ok
+      end
+    end
+
+    defp designed_opts(client, extra \\ []) do
+      test_pid = self()
+
+      Keyword.merge(
+        [
+          linear_client: client,
+          settings: designed_settings(),
+          tracker: DesignedTracker,
+          logger: fn _event -> :ok end,
+          refresh_human_actions: fn -> send(test_pid, :refreshed) end
+        ],
+        extra
+      )
+    end
+
+    defp designed_context do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
+    end
+
+    test "holds the ticket in its phase with the Needs Decision label, and moves nothing" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      opts = designed_opts(human_action_client(self(), human_action_scope()))
+
+      assert {:ok,
+              %{
+                "requested" => true,
+                "commentId" => "comment-new",
+                "url" => "https://linear.app/c",
+                "state" => "In Progress",
+                "held" => true,
+                "hold" => "Needs Decision"
+              }} = Linear.request_human_action(context, @human_action, opts)
+
+      # A decision never moves a ticket: no tracker move, no direct state mutation.
+      refute_received {:tracker_moved, _issue_id, _state}
+      refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
+      assert_received {:machine_label_set, "issue-24", "Needs Decision"}
+
+      assert_received {:linear_called, "SymphonyAgentAddComment", %{body: body}}
+      assert body =~ "## Decision needed: Add the release signing secrets"
+      assert body =~ "the ticket stays in In Progress until the decision is recorded"
+      assert body =~ "or answer it in the Symphony Inbox"
+      refute body =~ "then move the issue out of"
+
+      # The hold carries the decision, so the Inbox reads the ask off it and the flow resumes there.
+      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
+
+      assert_received :refreshed
+    end
+
+    test "a question the person already answered in the Decisions section is not asked again, and the run gets the answer" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+
+      decision =
+        SymphonyElixir.Decisions.entry(
+          "comment-0",
+          ~D[2026-10-13],
+          "Sign the release builds",
+          "Add the signing secrets, or ship unsigned builds?",
+          "Ship unsigned builds for now"
+        )
+
+      {:ok, description} = SymphonyElixir.Decisions.put("Fix the release.", [decision])
+      client = human_action_client(self(), human_action_scope(%{issue: %{"description" => description}}))
+
+      assert {:ok,
+              %{
+                "requested" => false,
+                "reason" => "already_decided",
+                "decision" => %{"question" => "Add the signing secrets, or ship unsigned builds?", "answer" => "Ship unsigned builds for now", "scope" => "As answered"},
+                "message" => "A person already decided this question. Apply the recorded answer" <> _rest
+              }} = Linear.request_human_action(context, @human_action, designed_opts(client))
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      refute Linear.CommentRegistry.human_action_requested?(context.comment_registry)
+    end
+
+    test "an answered request the Inbox has not written into the description yet is not asked again either" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+
+      body =
+        Request.render_hold(
+          %{
+            title: "Add the release signing secrets",
+            question: "Add the signing secrets, or ship unsigned builds?",
+            why: "Every Release run on main fails without them.",
+            options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}, %{label: "Ship unsigned", effect: "No signing."}]
+          },
+          "In Progress"
+        )
+
+      comments = [
+        %{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"},
+        %{"id" => "reply-1", "body" => "Add the secrets", "createdAt" => "2026-10-04T11:00:00.000Z", "parent" => %{"id" => "comment-1"}}
+      ]
+
+      scope = human_action_scope(%{issue: %{"comments" => %{"nodes" => comments}}})
+
+      assert {:ok, %{"reason" => "already_decided", "decision" => %{"answer" => "Add the secrets (option: **Add the secrets** (recommended): Releases are signed again.)"}}} =
+               Linear.request_human_action(context, @human_action, designed_opts(human_action_client(self(), scope)))
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+    end
+
+    test "a request the ticket already has is the one the hold records, and nothing is posted again" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+
+      body =
+        Request.render_hold(
+          %{
+            title: "Add the release signing secrets",
+            question: "Add the signing secrets, or ship unsigned builds?",
+            why: "Every Release run on main fails without them.",
+            unblocks: nil,
+            options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}]
+          },
+          "In Progress"
+        )
+
+      scope =
+        human_action_scope(%{
+          issue: %{"comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}]}}
+        })
+
+      assert {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => "comment-1", "held" => true}} =
+               Linear.request_human_action(context, @human_action, designed_opts(human_action_client(self(), scope)))
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      refute_received {:tracker_moved, _issue_id, _state}
+      # The open request still waits on a person, so the run does not count it as idle.
+      assert Linear.CommentRegistry.human_action_requested?(context.comment_registry)
+
+      assert %{holds: [%{kind: :needs_decision, decision: %{title: "Add the release signing secrets"}}]} =
+               SymphonyElixir.RunStore.get_ticket_state("repo-a", "issue-24")
+    end
+
+    test "a withdrawal clears the hold so the ticket continues, and another open request keeps it" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      opts = designed_opts(human_action_client(self(), human_action_scope()))
+
+      assert {:ok, %{"requested" => true}} = Linear.request_human_action(context, @human_action, opts)
+
+      assert SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+
+      # The second request is on the board too; withdrawing the first leaves the ticket waiting.
+      scope =
+        human_action_scope(%{
+          issue: %{
+            "comments" => %{
+              "nodes" => [
+                held_comment("comment-1", "Add the release signing secrets"),
+                held_comment("comment-2", "Rotate the CI token")
+              ]
+            }
+          }
+        })
+
+      assert {:ok, %{"withdrawn" => true, "remaining" => 1}} =
+               Linear.withdraw_human_action(
+                 context,
+                 %{"reason" => "Handled it myself", "title" => "Rotate the CI token"},
+                 designed_opts(human_action_client(self(), scope))
+               )
+
+      assert SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      refute_received {:machine_label_cleared, _issue_id, _name}
+
+      # With nothing left open the hold clears and the ticket continues where it is.
+      assert {:ok, %{"withdrawn" => true, "remaining" => 0}} =
+               Linear.withdraw_human_action(context, %{"reason" => "Not needed yet"}, designed_opts(human_action_client(self(), scope)))
+
+      refute SymphonyElixir.Hold.held?("repo-a", "issue-24", :needs_decision)
+      assert_received {:machine_label_cleared, "issue-24", "Needs Decision"}
+      # Nothing moved: the ticket never left its phase.
+      refute_received {:tracker_moved, _issue_id, _state}
+    end
+
+    defp held_comment(id, title) do
+      body =
+        Request.render_hold(
+          %{
+            title: title,
+            question: "Add the signing secrets, or ship unsigned builds?",
+            why: "Every Release run on main fails without them.",
+            unblocks: nil,
+            options: [%{label: "Add the secrets", effect: "Releases are signed again.", recommended: true}]
+          },
+          "In Progress"
+        )
+
+      %{"id" => id, "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}
+    end
+
+    # The lane's other non-mechanical exit: a repair the agent cannot make without access or a
+    # secret. Nothing moves — the ticket keeps its CI Fix state and takes the Needs Decision hold —
+    # so the verdict is the only record that the lane is where the block happened.
+    test "a CI Fix ticket's Needs Decision hold records the cannot_fix fix verdict" do
+      :ok = SymphonyElixir.RunStore.clear()
+      context = designed_context()
+      scope = human_action_scope(%{issue: %{"state" => %{"name" => "CI Fix"}}})
+      opts = designed_opts(human_action_client(self(), scope))
+
+      assert {:ok, %{"requested" => true, "state" => "CI Fix", "held" => true, "hold" => "Needs Decision"}} =
+               Linear.request_human_action(context, @human_action, opts)
+
+      refute_received {:tracker_moved, _issue_id, _state}
+
+      assert [%{name: "fix verdict", details: %{outcome: "cannot_fix"}}] =
+               SymphonyElixir.Handoff.signals("repo-a", "issue-24")
+    end
   end
 end

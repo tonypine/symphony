@@ -27,4 +27,10 @@ public enum ChildLog {
         close(descriptor)
         return log
     }
+
+    /// The line the app appends when Symphony exits, for example
+    /// `=== 2026-10-13T02:17:21Z Symphony exited with status 1 (unexpected)`.
+    public static func exitLine(_ exit: ChildExit, requested: Bool, at date: Date = Date()) -> String {
+        "=== \(date.ISO8601Format()) Symphony \(exit.summary) (\(requested ? "stopped by the app" : "unexpected"))\n"
+    }
 }

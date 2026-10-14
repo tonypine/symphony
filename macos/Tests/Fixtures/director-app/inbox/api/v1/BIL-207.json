@@ -1,0 +1,24 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "issue_id": "i-207",
+  "issue_identifier": "BIL-207",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "api",
+  "retry": null,
+  "running": null,
+  "status": "tracked",
+  "tracked": {
+    "state": "Todo",
+    "title": "Credit notes for downgrades",
+    "url": "https://linear.app/acme/issue/BIL-207"
+  },
+  "watching": null,
+  "workspace": null
+}

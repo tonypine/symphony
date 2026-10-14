@@ -2,32 +2,33 @@ defmodule SymphonyElixir.PlanComments do
   @moduledoc """
   Acts on people's comments on a `breakdown` parent's plan.
 
-  A plan under review (the parent in `In Review`, none of its open sub-issues promoted out of
-  `Backlog`) is revised in place: a person's new comment sends the parent back to `In Progress`,
-  where the breakdown run picks it up, edits the plan, answers the comment and returns the parent
-  to `In Review` (see `SymphonyElixir.Linear.Issue.unapproved_plan?/2`). A plan in the human review
-  state waits for the operator: Symphony never moves a parent out of it, so a comment there revises
-  nothing (the operator moves it to `Rework` or back to `In Review` for that). An approved plan (the parent
-  in the waiting state, or in `In Review` with sub-issues already promoted) is not changed from
-  comments: under each new top-level comment Symphony replies once that, if it asks for a plan
-  change, the change goes through `Rework`. Replies inside a thread get nothing.
+  A plan under review (the parent in `Plan Review`, none of its open sub-issues promoted out of
+  `Backlog`) is revised in place: a person's new comment sends the parent to `Rework`, the epic
+  path's re-plan, where the breakdown run picks it up, edits the plan, answers the comment and
+  returns the parent to `Plan Review`, keeping its sub-tickets (see
+  `SymphonyElixir.Linear.Issue.unapproved_plan?/2`). An approved plan (the parent in the waiting
+  state, or in `Plan Review` with sub-issues already promoted) is not changed from comments: under
+  each new top-level comment Symphony replies once that, if it asks for a plan change, the change
+  goes through `Rework`. Replies inside a thread get nothing.
 
   Only a person's comment counts. Integration bots are skipped, and so are Symphony's own comments:
   the ones its last run posted, by id, and the others by how they start, because Symphony and the
-  reviewer can share one Linear user. A supervisor's notes (`Supervisor review:`, `Supervisor note:`)
-  are skipped the same way: the supervisor posts as the operator, and plan approval stays the
-  operator's call.
+  reviewer can share one Linear user. The review brief (`## Review brief`) is one of them: a run
+  edits it in place at each handoff, so it is never a person's comment. A supervisor's notes
+  (`Supervisor review:`, `Supervisor note:`) are skipped the same way: the supervisor posts as the
+  operator, and plan approval stays the operator's call.
   """
 
-  alias SymphonyElixir.{AgentLabels, BreakdownReview, HumanReview, SubIssueWait, Tracker}
+  alias SymphonyElixir.{AgentLabels, BreakdownReview, PlanReview, SubIssueWait, Tracker}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Report
 
   @reply_opener "If this asks for a change to the plan: Symphony doesn't change an approved plan from comments"
-  # How the comments Symphony posts itself start: run failures, landing notes, quality gate
-  # results and its own replies.
+  # How the comments Symphony posts itself start: the review brief, run failures, landing notes,
+  # quality gate results and its own replies.
   @symphony_openers [
+    "## Review brief",
     "Symphony stopped ",
     "Symphony parked ",
     "Symphony couldn't ",
@@ -60,20 +61,18 @@ defmodule SymphonyElixir.PlanComments do
   @type last_run :: %{started_at: DateTime.t() | nil, ended_at: DateTime.t() | nil, comment_ids: [String.t()] | nil}
 
   @doc """
-  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in `In Review`
-  whose plan was not approved, `:answer` for one whose plan was (in the waiting state, or back in
-  `In Review` or the human review state with sub-issues under way), nil otherwise. A parent in the
-  human review state with its plan not approved waits for the operator, and one whose sub-issues
-  are all terminal is left to its close-out.
+  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in
+  `Plan Review` (`SymphonyElixir.PlanReview`) whose plan was not approved, `:answer` for one whose
+  plan was (in the waiting state, or back in `Plan Review` with sub-issues under way), nil
+  otherwise. One whose sub-issues are all terminal is left to its epic review.
   """
   @spec action(Issue.t() | term(), Enumerable.t(String.t()), term()) :: action() | nil
   def action(%Issue{state: state} = issue, terminal_states, settings) when is_binary(state) do
     cond do
       not Issue.breakdown?(issue) or Issue.close_out_ready?(issue, terminal_states) -> nil
       SubIssueWait.in_state?(issue, settings) -> :answer
-      not HumanReview.review_state?(state, settings) -> nil
+      not PlanReview.in_state?(state, settings) -> nil
       Issue.waiting_on_sub_issues?(issue, terminal_states) -> :answer
-      HumanReview.in_state?(state, settings) -> nil
       true -> :revise
     end
   end
@@ -167,7 +166,7 @@ defmodule SymphonyElixir.PlanComments do
       Enum.any?(openers(), &String.starts_with?(trimmed, &1))
   end
 
-  defp openers, do: [Report.heading(), Request.heading() | BreakdownReview.comment_openers()] ++ @symphony_openers ++ @supervisor_openers
+  defp openers, do: [Report.heading() | Request.headings()] ++ BreakdownReview.comment_openers() ++ @symphony_openers ++ @supervisor_openers
 
   defp entered_at(changes, state) do
     changes

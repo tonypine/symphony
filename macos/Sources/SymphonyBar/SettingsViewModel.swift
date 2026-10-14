@@ -71,6 +71,21 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var tokenLimitsError: String?
     /// True while `symphony check` runs on the changed token limits.
     @Published private(set) var isCheckingTokenLimits = false
+    /// `tickets.priorities` in the configured symphony.yml: the Linear priorities allowed to start
+    /// new work. Empty means every priority may.
+    @Published var ticketPriorities = TicketPriorities()
+    /// Why `symphony check` rejected the changed ticket priorities, shown in their section.
+    @Published private(set) var ticketPrioritiesError: String?
+    /// `issues.states.*` in the configured symphony.yml: the machine-owned phase states the board
+    /// creates at startup. Nothing dispatches on them yet.
+    @Published var workflowStates = WorkflowStates()
+    /// Why `symphony check` rejected the changed board states, shown in their section.
+    @Published private(set) var workflowStatesError: String?
+    /// `auto_review.acceptance_gate.escalate.ticket_patterns_builtin` in the configured symphony.yml: whether Code
+    /// Review's built-in ticket patterns send a ticket to a person.
+    @Published var ticketPatternsBuiltIn = BuiltInTicketPatterns.defaultIsOn
+    /// Why `symphony check` rejected the changed built-in ticket patterns setting, shown above Save.
+    @Published private(set) var ticketPatternsBuiltInError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
     /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
@@ -80,14 +95,14 @@ final class SettingsViewModel: ObservableObject {
     @Published var pendingToolReportMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultPendingToolReportMs)
     /// Why `symphony check` rejected the changed timeouts, shown in their section.
     @Published private(set) var timeoutsError: String?
-    /// `auto_review.acceptance_gate.mode` in the configured symphony.yml.
-    @Published var acceptanceGateMode = AcceptanceGateMode.off
-    /// Enforce, while its confirmation is open.
-    @Published var pendingAcceptanceGate: AcceptanceGateChoice?
-    /// Symphony's latest state, for the acceptance gate's agreement stats; nil while it isn't answering.
-    @Published var state: StateSnapshot?
-    /// Why `symphony check` rejected the changed acceptance gate mode, shown in its section.
-    @Published private(set) var acceptanceGateError: String?
+    /// `watchdog.dispatch_loop_*` in the configured symphony.yml: the runs of one kind a ticket may get without
+    /// progress within each window, in minutes, before Symphony holds it instead of dispatching it again.
+    @Published var dispatchLoopRuns = DispatchLoopLimits.defaultRuns
+    @Published var dispatchLoopWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultWindowMs)
+    @Published var dispatchLoopLongRuns = DispatchLoopLimits.defaultLongRuns
+    @Published var dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(DispatchLoopLimits.defaultLongWindowMs)
+    /// Why `symphony check` rejected the changed dispatch-loop limits, shown in their section.
+    @Published private(set) var dispatchLoopError: String?
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
 
@@ -107,8 +122,21 @@ final class SettingsViewModel: ObservableObject {
     /// moved is written.
     private var loadedTimeouts: OperationTimeouts?
 
-    /// The gate mode read from symphony.yml, or nil when it couldn't be read. Written only when it changed.
-    private var loadedAcceptanceGateMode: AcceptanceGateMode?
+    /// The dispatch-loop limits read from symphony.yml, or nil when they couldn't be read. Only a limit whose
+    /// stepper moved is written.
+    private var loadedDispatchLoopLimits: DispatchLoopLimits?
+
+    /// The allowed ticket priorities read from symphony.yml, or nil when they couldn't be read. Only
+    /// a change from these is written.
+    private var loadedTicketPriorities: TicketPriorities?
+
+    /// The board states read from symphony.yml, or nil when they couldn't be read. Only a name changed
+    /// from these is written.
+    private var loadedWorkflowStates: WorkflowStates?
+
+    /// The built-in ticket patterns setting read from symphony.yml, or nil when it couldn't be read. It is
+    /// written only when the toggle moved away from it.
+    private var loadedTicketPatternsBuiltIn: Bool?
 
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
@@ -152,9 +180,12 @@ final class SettingsViewModel: ObservableObject {
 
         loadMaxConcurrentAgents()
         loadTokenLimits()
+        loadTicketPriorities()
+        loadWorkflowStates()
+        loadTicketPatternsBuiltIn()
         loadTimeouts()
+        loadDispatchLoopLimits()
         loadRunProfiles()
-        loadAcceptanceGateMode()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
     }
@@ -244,6 +275,51 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The ticket priority toggles are off until a symphony.yml has been read, and while Save checks it.
+    var canEditTicketPriorities: Bool { loadedTicketPriorities != nil && !isSaving }
+
+    private func loadTicketPriorities() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let priorities = try SymphonyConfigFile(path: path).readTicketPriorities()
+            ticketPriorities = priorities
+            loadedTicketPriorities = priorities
+        } catch {
+            configFileError = "Could not read the allowed ticket priorities from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The board state fields are off until a symphony.yml has been read, and while Save checks it.
+    var canEditWorkflowStates: Bool { loadedWorkflowStates != nil && !isSaving }
+
+    private func loadWorkflowStates() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let states = try SymphonyConfigFile(path: path).readWorkflowStates()
+            workflowStates = states
+            loadedWorkflowStates = states
+        } catch {
+            configFileError = "Could not read the board states from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The built-in ticket patterns toggle is off until a symphony.yml has been read, and while Save checks it.
+    var canEditTicketPatternsBuiltIn: Bool { loadedTicketPatternsBuiltIn != nil && !isSaving }
+
+    private func loadTicketPatternsBuiltIn() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let isOn = try SymphonyConfigFile(path: path).readBuiltInTicketPatterns()
+            ticketPatternsBuiltIn = isOn
+            loadedTicketPatternsBuiltIn = isOn
+        } catch {
+            configFileError = "Could not read the built-in ticket patterns setting from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The timeout steppers are off until a symphony.yml has been read, and while Save checks it.
     var canEditTimeouts: Bool { loadedTimeouts != nil && !isSaving }
 
@@ -258,6 +334,24 @@ final class SettingsViewModel: ObservableObject {
             loadedTimeouts = timeouts
         } catch {
             configFileError = "Could not read the timeouts from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The dispatch-loop steppers are off until a symphony.yml has been read, and while Save checks it.
+    var canEditDispatchLoop: Bool { loadedDispatchLoopLimits != nil && !isSaving }
+
+    private func loadDispatchLoopLimits() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let limits = try SymphonyConfigFile(path: path).readDispatchLoopLimits()
+            dispatchLoopRuns = DispatchLoopLimits.steppedRuns(limits.runs)
+            dispatchLoopWindowMinutes = DispatchLoopLimits.minutes(limits.windowMs)
+            dispatchLoopLongRuns = DispatchLoopLimits.steppedRuns(limits.longRuns)
+            dispatchLoopLongWindowMinutes = DispatchLoopLimits.minutes(limits.longWindowMs)
+            loadedDispatchLoopLimits = limits
+        } catch {
+            configFileError = "Could not read the dispatch-loop limits from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -282,26 +376,6 @@ final class SettingsViewModel: ObservableObject {
             if case .repository(let key) = runProfilesScope, !repositoryKeys.contains(key) { runProfilesScope = .global }
         } catch {
             configFileError = "Could not read models from symphony.yml: \(error.localizedDescription)"
-        }
-    }
-
-    /// The gate picker is off until a symphony.yml has been read, and while Save checks it.
-    var canEditAcceptanceGate: Bool { loadedAcceptanceGateMode != nil && !isSaving }
-
-    /// The agreement stats under the gate picker: one line per repository, or why there are none.
-    var acceptanceGateLines: [String] {
-        AcceptanceGate.agreementLines(keys: repositoryKeys, in: state)
-    }
-
-    private func loadAcceptanceGateMode() {
-        let path = settings.trimmed().configPath
-        guard !path.isEmpty else { return }
-        do {
-            let mode = try SymphonyConfigFile(path: path).readAcceptanceGateMode()
-            acceptanceGateMode = mode
-            loadedAcceptanceGateMode = mode
-        } catch {
-            configFileError = "Could not read the acceptance gate's mode from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -379,9 +453,9 @@ final class SettingsViewModel: ObservableObject {
         ).trimmed()
     }
 
-    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits, gate
-    /// mode and timeouts are written only after `symphony check` passes on them; until then the rest isn't saved,
-    /// and a failure shows in `configCheckError`, `tokenLimitsError`, `acceptanceGateError` or `timeoutsError`.
+    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
+    /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
+    /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError` or `dispatchLoopError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -395,9 +469,6 @@ final class SettingsViewModel: ObservableObject {
         let loadedProfiles = loadedRunProfiles.flatMap { $0 != profiles ? $0 : nil }
         let limits = formTokenLimits
         let loadedLimits = loadedTokenLimits.flatMap { $0 != limits ? $0 : nil }
-        acceptanceGateError = nil
-        let gateMode = acceptanceGateMode
-        let gateChanged = loadedAcceptanceGateMode.map { $0 != gateMode } ?? false
         timeoutsError = nil
         let timeouts = loadedTimeouts?.settingMinutes(
             gitNetwork: gitNetworkTimeoutMinutes,
@@ -405,7 +476,26 @@ final class SettingsViewModel: ObservableObject {
             pendingToolReport: pendingToolReportMinutes
         )
         let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
-        guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil else {
+        dispatchLoopError = nil
+        let loopLimits = loadedDispatchLoopLimits?.setting(
+            runs: dispatchLoopRuns,
+            windowMinutes: dispatchLoopWindowMinutes,
+            longRuns: dispatchLoopLongRuns,
+            longWindowMinutes: dispatchLoopLongWindowMinutes
+        )
+        let oldLoopLimits = loadedDispatchLoopLimits.flatMap { $0 != loopLimits ? $0 : nil }
+        ticketPrioritiesError = nil
+        let priorities = ticketPriorities
+        let loadedPriorities = loadedTicketPriorities.flatMap { $0 != priorities ? $0 : nil }
+        workflowStatesError = nil
+        let states = workflowStates
+        let loadedStates = loadedWorkflowStates.flatMap { $0 != states ? $0 : nil }
+        ticketPatternsBuiltInError = nil
+        let builtInPatterns = ticketPatternsBuiltIn
+        let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
+
+        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldLoopLimits != nil
+            || loadedPriorities != nil || loadedStates != nil || builtInPatternsChanged else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -418,11 +508,20 @@ final class SettingsViewModel: ObservableObject {
             if saved, let limits, let loadedLimits {
                 saved = await saveTokenLimits(limits, from: loadedLimits, settings: settings, secrets: secrets)
             }
-            if saved, gateChanged {
-                saved = await saveAcceptanceGateMode(gateMode, settings: settings, secrets: secrets)
-            }
             if saved, let timeouts, let oldTimeouts {
                 saved = await saveTimeouts(timeouts, from: oldTimeouts, settings: settings, secrets: secrets)
+            }
+            if saved, let loopLimits, let oldLoopLimits {
+                saved = await saveDispatchLoopLimits(loopLimits, from: oldLoopLimits, settings: settings, secrets: secrets)
+            }
+            if saved, let loadedPriorities {
+                saved = await saveTicketPriorities(priorities, from: loadedPriorities, settings: settings, secrets: secrets)
+            }
+            if saved, let loadedStates {
+                saved = await saveWorkflowStates(states, from: loadedStates, settings: settings, secrets: secrets)
+            }
+            if saved, builtInPatternsChanged {
+                saved = await saveTicketPatternsBuiltIn(builtInPatterns, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -542,28 +641,104 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes `auto_review.acceptance_gate.mode` to symphony.yml once `symphony check` passes on the result.
-    private func saveAcceptanceGateMode(
-        _ mode: AcceptanceGateMode,
+    /// Writes the dispatch-loop limits that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveDispatchLoopLimits(
+        _ limits: DispatchLoopLimits,
+        from loaded: DispatchLoopLimits,
         settings: AppSettings,
         secrets: SecretSettings
     ) async -> Bool {
         let check = configCheck
         let result: ConfigCheckResult
         do {
-            result = try await SymphonyConfigFile(path: settings.configPath).writeAcceptanceGateMode(mode) { path in
+            result = try await SymphonyConfigFile(path: settings.configPath).writeDispatchLoopLimits(limits, from: loaded) { path in
                 await check(path, settings, secrets)
             }
         } catch {
-            configFileError = "Could not save the acceptance gate's mode to symphony.yml: \(error.localizedDescription)"
+            configFileError = "Could not save the dispatch-loop limits to symphony.yml: \(error.localizedDescription)"
             return false
         }
         if case .failed(let message) = result {
-            acceptanceGateError = "symphony check rejected this mode, so nothing was saved: \(message)"
+            dispatchLoopError = "symphony check rejected these limits, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
             return false
         }
         configFileError = nil
-        loadedAcceptanceGateMode = mode
+        loadedDispatchLoopLimits = limits
+        return true
+    }
+
+    /// Writes `tickets.priorities` to symphony.yml once `symphony check` passes on the result.
+    private func saveTicketPriorities(
+        _ priorities: TicketPriorities,
+        from loaded: TicketPriorities,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeTicketPriorities(priorities, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the allowed ticket priorities to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            ticketPrioritiesError = "symphony check rejected these ticket priorities, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedTicketPriorities = priorities
+        return true
+    }
+
+    /// Writes `issues.states.*` to symphony.yml once `symphony check` passes on the result.
+    private func saveWorkflowStates(
+        _ states: WorkflowStates,
+        from loaded: WorkflowStates,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeWorkflowStates(states, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the board states to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            workflowStatesError = "symphony check rejected these board states, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedWorkflowStates = states
+        return true
+    }
+
+    /// Writes `auto_review.acceptance_gate.escalate.ticket_patterns_builtin` to symphony.yml once `symphony check`
+    /// passes on the result.
+    private func saveTicketPatternsBuiltIn(_ isOn: Bool, settings: AppSettings, secrets: SecretSettings) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeBuiltInTicketPatterns(isOn) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the built-in ticket patterns setting to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            ticketPatternsBuiltInError = "symphony check rejected the built-in ticket patterns setting, so nothing was saved: "
+                + ConfigCheck.reasonFirst(message)
+            return false
+        }
+        configFileError = nil
+        loadedTicketPatternsBuiltIn = isOn
         return true
     }
 

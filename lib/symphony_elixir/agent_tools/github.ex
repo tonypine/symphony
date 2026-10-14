@@ -8,10 +8,12 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   """
 
   alias SymphonyElixir.AgentTools.{Linear, ProtectedPaths, PushCheck, SecretScanner}
+  alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
+  alias SymphonyElixir.Handoff
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Workspace
 
@@ -57,7 +59,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   @doc """
   Fetches `origin` and merges the base branch into the checked-out branch, outside the agent sandbox.
 
-  The sandbox write-protects paths such as `.ai/skills`, so the agent's own `git merge` fails when
+  The sandbox write-protects paths such as `.agents/skills`, so the agent's own `git merge` fails when
   the base branch changed one. Symphony first fast-forwards to the branch's remote copy when that
   is ahead, then merges with `--no-commit` and repo hooks off: the agent commits the merge (or
   resolves the conflicts) in its sandbox. It refuses a branch that changes a protected path itself.
@@ -101,6 +103,8 @@ defmodule SymphonyElixir.AgentTools.GitHub do
                draft_args(draft?),
              github_opts(context, opts)
            ) do
+      CommentRegistry.record_pull_request(Map.get(context, :comment_registry))
+      record_handoff(context, opts, %{branch: branch, pr_url: String.trim(output)})
       {:ok, %{"url" => String.trim(output), "repo" => origin_repo, "head" => branch, "draft" => draft?}}
     end
   end
@@ -163,6 +167,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
            {:ok, push_check} <- push_check_settings(context, opts),
            :ok <- PushCheck.verify(workspace, branch, push_check, &run_git(&1, workspace, opts)),
            {:ok, output} <- run_git(["push", "origin", branch], workspace, opts) do
+        record_handoff(context, opts, %{branch: branch})
         {:ok, %{"remote" => "origin", "branch" => branch, "output" => String.trim(output)}}
       end
     end
@@ -676,6 +681,49 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   defp issue_repo_key(%{issue: %{repo_key: repo_key}}) when is_binary(repo_key), do: repo_key
   defp issue_repo_key(_context), do: nil
+
+  # The explicit handoff signal, emitted mechanically where it is unambiguous: a successful push
+  # or pull request is the session saying its work is on the PR. It is recorded bound to the head
+  # it pushed, so the runner may advance the ticket from `In Progress` to `Code Review`
+  # (`SymphonyElixir.Handoff`). A tool call made outside a configured repo (a test, a bare session)
+  # records nothing rather than failing.
+  defp record_handoff(context, opts, details) do
+    with repo_key when is_binary(repo_key) <- issue_repo_key(context),
+         issue_id when is_binary(issue_id) <- handoff_issue_id(context),
+         {:ok, _settings} <- handoff_settings(repo_key, opts) do
+      Handoff.emit(repo_key, issue_id, Map.put(details, :head, workspace_head(context, opts)))
+    else
+      _not_a_handoff -> :ok
+    end
+  end
+
+  defp handoff_issue_id(context) do
+    case Map.get(context, :issue) do
+      %{id: issue_id} when is_binary(issue_id) -> issue_id
+      _issue -> Map.get(context, :issue_id)
+    end
+  end
+
+  defp handoff_settings(repo_key, opts) do
+    case Keyword.get(opts, :settings) do
+      %Schema{} = settings -> {:ok, settings}
+      _settings -> Config.settings_for_repo(repo_key)
+    end
+  end
+
+  # The head the handoff is bound to. A workspace the tool cannot read gives no head, and the
+  # signal then counts for whatever head the runner asks about.
+  defp workspace_head(context, opts) do
+    with {:ok, workspace} <- workspace(context),
+         {:ok, output} <- run_git(["rev-parse", "HEAD"], workspace, opts) do
+      case String.trim(output) do
+        "" -> nil
+        head -> head
+      end
+    else
+      _error -> nil
+    end
+  end
 
   defp draft_args(true), do: ["--draft"]
   defp draft_args(false), do: []

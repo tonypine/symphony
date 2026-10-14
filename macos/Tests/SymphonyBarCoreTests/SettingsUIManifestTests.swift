@@ -60,14 +60,9 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.workflow = "WORKFLOW.md"
         changed.route = RepositoryRoute(team: "OPS", projects: ["ops"], labels: ["infra"], assignee: "you")
         changed.workspace = RepositoryWorkspace(source: "acme/api", fetchBeforeDispatch: false)
+        changed.manualReview = "on"
+        changed.ticketPatternsBuiltIn = false
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
-
-        yaml = try record("setting the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.shadow, in: $0) }, from: yaml)
-        yaml = try record("changing the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.enforce, in: $0) }, from: yaml)
-        yaml = try record("setting a repository's gate mode", {
-            try AcceptanceGate.settingRepositoryMode(.mode(.off), of: "api", in: $0)
-        }, from: yaml)
-        yaml = try record("inheriting the gate mode", { try AcceptanceGate.settingRepositoryMode(.inherit, of: "api", in: $0) }, from: yaml)
 
         let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic")
         let profiles = RunProfiles(defaults: every, kinds: Dictionary(uniqueKeysWithValues: RunKind.allCases.map { ($0, every) }))
@@ -81,9 +76,28 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting token limits", { try TokenLimits.updating($0, from: TokenLimits(), to: limits) }, from: yaml)
         let timeouts = OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 1_200_000, pendingToolReportMs: 120_000)
         yaml = try record("setting timeouts", { try OperationTimeouts.updating($0, from: OperationTimeouts(), to: timeouts) }, from: yaml)
+        let loopLimits = DispatchLoopLimits(runs: 3, windowMs: 300_000, longRuns: 6, longWindowMs: 7_200_000)
+        yaml = try record("setting the dispatch-loop limits", {
+            try DispatchLoopLimits.updating($0, from: DispatchLoopLimits(), to: loopLimits)
+        }, from: yaml)
+        yaml = try record("setting allowed ticket priorities", {
+            try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))
+        }, from: yaml)
+        yaml = try record("setting the board states", {
+            try WorkflowStates.updating(
+                $0,
+                from: WorkflowStates(),
+                to: WorkflowStates(codeReview: "Review", qa: "Quality", planReview: "Planning", epicReview: "Epic", ciFix: "Fixing")
+            )
+        }, from: yaml)
+        yaml = try record("turning off the built-in ticket patterns", { try BuiltInTicketPatterns.setting(false, in: $0) }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
-        for key in SettingsUIManifest.keyPaths where !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
+        // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops
+        // them after the deprecation window; no control writes them any more (TP-827).
+        let retired: Set = ["auto_review.acceptance_gate.mode", "repositories[].acceptance_gate.mode"]
+        for key in SettingsUIManifest.keyPaths
+        where !retired.contains(key) && !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
             XCTFail("SettingsUIManifest.keyPaths lists `\(key)`, which no editor writes")
         }
     }

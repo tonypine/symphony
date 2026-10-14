@@ -15,7 +15,7 @@ description:
 2. Under Symphony, sync with the `github_sync_base` tool (no arguments; Claude
    sees it as `mcp__symphony__github_sync_base`). It runs outside the agent
    sandbox, so it can merge base-branch changes to write-protected files such
-   as `.ai/skills` or `WORKFLOW.md`, which a `git merge` in the sandbox cannot.
+   as `.agents/skills` or `WORKFLOW.md`, which a `git merge` in the sandbox cannot.
    It fetches `origin`, fast-forwards to the branch's remote copy when that is
    ahead, then merges the repo's base branch (e.g. `origin/main`) with rerere
    and `zdiff3` conflict markers, without committing. Act on its `status`:

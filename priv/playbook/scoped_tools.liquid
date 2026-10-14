@@ -18,7 +18,7 @@ arguments — Symphony injects the scope server-side. To refresh remote refs, us
 rather than reading SSH config or credential files from the sandbox.
 To merge the base branch into your branch, use `github_sync_base()` (no arguments)
 rather than `git merge` in your shell: it merges outside the sandbox, so the base
-branch's changes to write-protected files such as `.ai/skills` come through. The
+branch's changes to write-protected files such as `.agents/skills` come through. The
 `pull` skill says what to do with its result.
 
 Do not craft raw Linear GraphQL from prompts.
@@ -31,6 +31,11 @@ titled `<identifier> · <title>`, and attaches it to the issue;
 `linear_get_document(document_id?)` lists the issue's documents without an id and
 reads one with it. They act only on documents this issue's runs created. Edit an
 existing document instead of creating a second one.
+
+The issue description belongs to the person who wrote it. The one part an agent
+writes is the Symphony summary block at its end, through
+`linear_update_issue_summary(status, links, changelog_entry)`; every other byte of
+the description stays as it is (see `Review brief`).
 
 Images and files attached to the ticket appear in the description and comments as
 `https://uploads.linear.app/...` links that Symphony has pre-signed, so they download

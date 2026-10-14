@@ -12,6 +12,8 @@ defmodule SymphonyElixir.QaDriver.Checks do
   @screenshot_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
   @fixture_limit 1_000_000
   @fixture_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/
+  @fixture_dir_limit 5_000_000
+  @fixture_dir_files 1_000
   # Every tool error that stops an app part says this, so the other playbooks still run.
   @blocked_hint "Mark the app steps you could not check `blocked` with this reason, finish the other playbooks' steps " <>
                   "(pass or fail), then answer with verdict `blocked` and this reason."
@@ -184,8 +186,104 @@ defmodule SymphonyElixir.QaDriver.Checks do
          {:ok, canonical} <- inside_roots(roots, path, local_path, tool),
          {:ok, stat} <- fixture_lstat(canonical, local_path, tool),
          :ok <- single_regular_file(stat, local_path, tool),
-         {:ok, bytes} <- read_checked(canonical, stat, local_path, tool) do
+         {:ok, bytes} <- read_checked(canonical, stat, local_path, tool, @fixture_limit) do
       {:ok, canonical, bytes}
+    end
+  end
+
+  @doc """
+  Reads a fixture directory for `tool`'s `argument` (`api_fixtures`) and returns
+  its resolved path and every file in it as `{relative path, bytes}`, sorted.
+  `dir_path` is relative to the canonical `worktree` (the PR checkout) and must
+  resolve, every link on the way followed, to a directory inside it and outside
+  its `.git`. Every
+  entry under it must be a directory or a regular file with no other hard
+  link, never a symlink, and the files must total at most 5 MB and 1000 files.
+  Each file is read like `read_fixture/4` reads one, so a file swapped after
+  the check is refused. A refusal's code is `<tool>_refused`.
+  """
+  @spec read_fixture_dir(Path.t(), term(), String.t(), String.t()) ::
+          {:ok, Path.t(), [{String.t(), binary()}]} | tool_error()
+  def read_fixture_dir(worktree, dir_path, argument, tool) do
+    with {:ok, relative} <- fixture_dir_path(dir_path, argument),
+         {:ok, dir} <- fixture_dir(worktree, relative, tool),
+         {:ok, files, _total} <- walk_fixture_dir(dir, nil, {[], 0}, relative, tool) do
+      {:ok, dir, Enum.reverse(files)}
+    end
+  end
+
+  defp fixture_dir_path(path, argument) when is_binary(path) and path != "" and byte_size(path) <= 4_096 do
+    cond do
+      String.contains?(path, <<0>>) -> tool_error("invalid_arguments", "`#{argument}` must not contain NUL bytes.")
+      Path.type(path) != :relative -> tool_error("invalid_arguments", "`#{argument}` must be relative to the PR checkout.")
+      true -> {:ok, path}
+    end
+  end
+
+  defp fixture_dir_path(_path, argument), do: tool_error("invalid_arguments", "`#{argument}` must be a directory path relative to the PR checkout.")
+
+  defp fixture_dir(worktree, relative, tool) do
+    with {:ok, canonical} <- PathSafety.canonicalize(Path.expand(relative, worktree)),
+         true <- String.starts_with?(canonical, worktree <> "/") do
+      git? = ".git" in Path.split(Path.relative_to(canonical, worktree))
+
+      case File.lstat(canonical) do
+        _stat when git? -> refused(tool, "#{relative} is in the checkout's .git directory. Pass a fixtures directory.")
+        {:ok, %File.Stat{type: :directory}} -> {:ok, canonical}
+        {:ok, _stat} -> refused(tool, "#{relative} is not a directory.")
+        {:error, reason} -> refused(tool, "#{relative} could not be read: #{inspect(reason)}.")
+      end
+    else
+      _other -> refused(tool, "#{relative} resolves outside the PR checkout. Pass a directory in the checkout, like macos/Tests/Fixtures/<name>.")
+    end
+  end
+
+  defp walk_fixture_dir(dir, prefix, acc, label, tool) do
+    case File.ls(dir) do
+      {:ok, names} -> walk_fixture_entries(Enum.sort(names), dir, prefix, acc, label, tool)
+      {:error, reason} -> refused(tool, "#{Path.join([label | List.wrap(prefix)])} could not be listed: #{inspect(reason)}.")
+    end
+  end
+
+  defp walk_fixture_entries([], _dir, _prefix, {files, total}, _label, _tool), do: {:ok, files, total}
+
+  defp walk_fixture_entries([name | rest], dir, prefix, acc, label, tool) do
+    relative = if prefix, do: Path.join(prefix, name), else: name
+
+    with {:ok, files, total} <- fixture_dir_entry(Path.join(dir, name), relative, acc, label, tool) do
+      walk_fixture_entries(rest, dir, prefix, {files, total}, label, tool)
+    end
+  end
+
+  defp fixture_dir_entry(path, relative, acc, label, tool) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %File.Stat{type: :directory}} -> walk_fixture_dir(path, relative, acc, label, tool)
+      {:ok, %File.Stat{type: :regular, links: 1} = stat} -> fixture_dir_file(path, stat, relative, acc, label, tool)
+      {:ok, stat} -> fixture_dir_refusal(stat, Path.join(label, relative), tool)
+      {:error, reason} -> refused(tool, "#{Path.join(label, relative)} could not be read: #{inspect(reason)}.")
+    end
+  end
+
+  defp fixture_dir_file(path, stat, relative, {files, total} = acc, label, tool) do
+    cond do
+      length(files) >= @fixture_dir_files -> refused(tool, "#{label} holds more than #{@fixture_dir_files} files.")
+      total + stat.size > @fixture_dir_limit -> refused(tool, "#{label} holds over #{@fixture_dir_limit} bytes.")
+      true -> read_fixture_dir_file(path, stat, relative, acc, Path.join(label, relative), tool)
+    end
+  end
+
+  defp fixture_dir_refusal(%File.Stat{type: :symlink}, shown, tool),
+    do: refused(tool, "#{shown} is a symlink. A fixture directory may hold only regular files.")
+
+  defp fixture_dir_refusal(%File.Stat{type: :regular}, shown, tool),
+    do: refused(tool, "#{shown} has other hard links. A fixture directory may hold only files of its own.")
+
+  defp fixture_dir_refusal(_stat, shown, tool),
+    do: refused(tool, "#{shown} is not a regular file. A fixture directory may hold only regular files.")
+
+  defp read_fixture_dir_file(path, stat, relative, {files, total}, shown, tool) do
+    with {:ok, bytes} <- read_checked(path, stat, shown, tool, @fixture_dir_limit - total) do
+      {:ok, [{relative, bytes} | files], total + byte_size(bytes)}
     end
   end
 
@@ -212,11 +310,11 @@ defmodule SymphonyElixir.QaDriver.Checks do
   defp single_regular_file(%File.Stat{type: :regular}, local_path, tool), do: refused(tool, "#{local_path} has other hard links. Write a fresh copy.")
   defp single_regular_file(_stat, local_path, tool), do: refused(tool, "#{local_path} is not a regular file.")
 
-  defp read_checked(path, stat, local_path, tool) do
+  defp read_checked(path, stat, local_path, tool, limit) do
     case :file.open(path, [:read, :binary, :raw]) do
       {:ok, fd} ->
         try do
-          read_opened(fd, path, stat, local_path, tool)
+          read_opened(fd, path, stat, local_path, tool, limit)
         after
           :file.close(fd)
         end
@@ -226,18 +324,18 @@ defmodule SymphonyElixir.QaDriver.Checks do
     end
   end
 
-  defp read_opened(fd, path, stat, local_path, tool) do
+  defp read_opened(fd, path, stat, local_path, tool, limit) do
     {:ok, info} = :file.read_file_info(fd, time: :posix)
     opened = File.Stat.from_record(info)
 
     bytes =
-      case :file.read(fd, @fixture_limit + 1) do
+      case :file.read(fd, limit + 1) do
         {:ok, bytes} -> bytes
         :eof -> ""
       end
 
     same_file? = same_inode?(opened, stat) and opened.links == 1 and still_at?(path, opened)
-    complete? = byte_size(bytes) <= @fixture_limit
+    complete? = byte_size(bytes) <= limit
     if same_file? and complete?, do: {:ok, bytes}, else: refused(tool, "#{local_path} changed while it was read; leave it alone during #{tool}.")
   end
 

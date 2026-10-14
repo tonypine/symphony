@@ -166,6 +166,7 @@ final class SymphonyRunner {
 
     private func childExited(_ exit: ChildExit, requested: Bool) {
         child = nil
+        writeExit(exit, requested: requested)
         launchedSettings = nil
         if !requested {
             notify(title: "Symphony stopped unexpectedly", body: StatusMenu.unexpectedExitMessage(exit, logPath: logPath))
@@ -184,10 +185,19 @@ final class SymphonyRunner {
             command: \(([launch.executable] + launch.arguments).map(ShellWords.quote).joined(separator: " "))
 
             """
+        append(header, to: log)
+    }
+
+    /// Notes how Symphony exited at the end of the log, so a crash before its own logger starts is on record.
+    private func writeExit(_ exit: ChildExit, requested: Bool) {
+        append(ChildLog.exitLine(exit, requested: requested), to: logURL)
+    }
+
+    private func append(_ text: String, to log: URL) {
         guard let handle = try? FileHandle(forWritingTo: log) else { return }
         defer { try? handle.close() }
         _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: Data(header.utf8))
+        try? handle.write(contentsOf: Data(text.utf8))
     }
 
     /// Posts a notification, or shows an alert when notifications aren't allowed. Scripted QA mode records it.

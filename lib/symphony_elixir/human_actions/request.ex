@@ -1,82 +1,163 @@
 defmodule SymphonyElixir.HumanActions.Request do
   @moduledoc """
-  The `## Action needed:` comment that records a request for a human on an issue.
+  The `## Decision needed:` comment that records a request for a human on an issue.
 
-  `linear_request_human_action` posts it, and a supervisor or a person can write the same comment
-  by hand. Together with the `human_actions.label` label on the issue, it is how Symphony finds
-  the request again on every poll and after a restart:
+  `linear_request_human_action` posts it. It leaves the issue in its phase and sets the
+  `Needs Decision` hold (`SymphonyElixir.NeedsDecisionHold`), and `render_hold/2` renders that
+  comment. A person only ever gets a decision: one question and two to four options, each with what
+  it does, one of them recommended. Never a runbook of steps: a check an agent can't run belongs to
+  CI or a QA playbook instead.
 
-      ## Action needed: Add the release signing secrets
+      ## Decision needed: Close TP-612 as a duplicate of TP-668
 
-      **Why:** Every Release run on `main` fails at the signing step without them.
-      **Unblocks:** the Release workflow on `main`
-      **Time:** about 10 min
+      **Question:** TP-668 (Company search) already shipped what TP-612 (Search companies by name) asks for. Close TP-612 as its duplicate?
+      **Why:** Nothing is left to build. The ticket only waits on this call.
+      **If unanswered:** TP-612 stays open and holds a slot on the board.
 
-      **Steps:**
-      1. Open the repository's Settings → Secrets and variables → Actions.
-      2. Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate.
+      **Options:**
+      1. **Close as duplicate** (recommended): TP-612 moves to Done, linked to TP-668.
+         - Good: The board shows only work that is left.
+      2. **Keep it open**: the next run looks for what TP-668 missed.
+         - Cost: A run spends time on work that is likely done.
 
-  Only the heading is required; `parse/1` reads whatever else is there. A request stays open until
-  its issue moves on: after the request, the issue leaves a state outside `issues.states.active`
-  (`Backlog` back to `Todo`, `In Review` to `Merging`). The requesting agent's own move to
-  `Backlog` comes from an active state, so it keeps the request open.
+      **Why recommended:** TP-668 covers every line of TP-612's description.
+
+  The fields are written in the Director's words (`docs/standards/decision-writing.md`). Each option
+  carries up to three trade-offs, indented under it as `- Good:`, `- Cost:` or `- Risk:` lines.
+
+  Symphony finds the request again on every poll and after a restart. It also reads the older
+  `## Action needed:` comment, with its `**Steps:**` list, which a supervisor or a person may still
+  write by hand. Only the heading is required; `parse/1` reads whatever else is there. A request
+  is closed once a person answers it — see `SymphonyElixir.HumanActions.Collector.open_requests/2` —
+  or once a person moves its issue on: after the request, the issue leaves a state outside
+  `issues.states.active` (`Code Review` to `Rework`, `Backlog` back to `Todo`).
 
   A request is also closed once it is withdrawn: a reply under it that starts with
   `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.
   """
 
-  @heading "## Action needed:"
+  @decision_heading "## Decision needed:"
+  @action_heading "## Action needed:"
   @withdrawn_heading "## Action withdrawn"
-  @field_pattern ~r/^\*\*(Why|Unblocks|Time):\*\*\s*(.*)$/i
+  # `**Time:**` is an older comment's estimate: it still reads as a field, so it never reads as a
+  # step, and is ignored.
+  @field_pattern ~r/^\*\*(Question|Why|If unanswered|Why recommended|Unblocks|Time):\*\*\s*(.*)$/i
   @steps_marker ~r/^\*\*Steps:\*\*\s*$/i
+  @options_marker ~r/^\*\*Options:\*\*\s*$/i
   @list_item ~r/^\s*(?:\d+[.)]|[-*])\s+(?:\[[ xX]\]\s+)?(.+)$/
-  @minutes ~r/(\d+)\s*min/i
+  @tradeoff_item ~r/^\s+[-*]\s+(Good|Cost|Risk):\s*(.+)$/i
+  @tradeoff_kinds ~w(good cost risk)
 
-  @typedoc "A parsed request. `created_at` is the comment's creation time."
+  @typedoc "What picking an option gains (`good`), costs (`cost`) or risks (`risk`), in one line."
+  @type tradeoff :: %{kind: String.t(), text: String.t()}
+
+  @typedoc """
+  One option of a decision: what it is called, what it does, whether it is the recommended one, and
+  up to three trade-offs.
+  """
+  @type option :: %{
+          required(:label) => String.t(),
+          required(:effect) => String.t(),
+          optional(:recommended) => boolean(),
+          optional(:tradeoffs) => [tradeoff()]
+        }
+
+  @typedoc """
+  A parsed request. `created_at` is the comment's creation time. A decision has its `question`
+  and its `options`, one rendered line each, with each option's trade-offs at the same index of
+  `tradeoffs`; a hand-written `## Action needed:` request has `steps` instead.
+  """
   @type t :: %{
           title: String.t(),
+          question: String.t() | nil,
+          options: [String.t()],
+          tradeoffs: [[tradeoff()]],
           why: String.t() | nil,
+          if_unanswered: String.t() | nil,
+          recommendation_reason: String.t() | nil,
           unblocks: String.t() | nil,
-          est_minutes: pos_integer() | nil,
           steps: [String.t()],
           created_at: DateTime.t() | nil
         }
 
-  @doc "The heading that starts a request comment."
-  @spec heading() :: String.t()
-  def heading, do: @heading
+  @doc "The trade-off kinds an option may carry: `good`, `cost` and `risk`."
+  @spec tradeoff_kinds() :: [String.t()]
+  def tradeoff_kinds, do: @tradeoff_kinds
+
+  @doc "The headings that start a request comment: the decision Symphony posts, and the older hand-written action."
+  @spec headings() :: [String.t()]
+  def headings, do: [@decision_heading, @action_heading]
 
   @doc """
-  Renders a request comment. `label` is the label that keeps the request listed, named in the
-  closing line so whoever reads the comment knows how to mark it done.
+  Renders a decision request, which sets the `Needs Decision` hold instead of moving the issue: the
+  closing line says the ticket stays in `state` and names the
+  Inbox as the other way to answer, so whoever reads the comment knows the ticket is not going
+  anywhere while it waits.
   """
-  @spec render(map(), String.t()) :: String.t()
-  def render(%{title: title, why: why, steps: steps} = request, label) do
-    fields =
-      [
-        {"Why", why},
-        {"Unblocks", Map.get(request, :unblocks)},
-        {"Time", minutes_text(Map.get(request, :est_minutes))}
-      ]
-      |> Enum.reject(fn {_name, value} -> blank?(value) end)
-      |> Enum.map(fn {name, value} -> "**#{name}:** #{one_line(value)}" end)
+  @spec render_hold(map(), String.t() | nil) :: String.t()
+  def render_hold(request, state) do
+    state = if is_binary(state) and String.trim(state) != "", do: state, else: "its phase"
 
-    step_lines = steps |> Enum.with_index(1) |> Enum.map(fn {step, index} -> "#{index}. #{one_line(step)}" end)
-
-    Enum.join(
-      [
-        "#{@heading} #{one_line(title)}",
-        "",
-        Enum.join(fields, "\n"),
-        "",
-        "**Steps:**",
-        Enum.join(step_lines, "\n"),
-        "",
-        "_Symphony lists this in the project update until this issue moves on. Remove the `#{label}` label once it is done._"
-      ],
-      "\n"
+    render_request(
+      request,
+      "_Reply with the option you pick, or answer it in the Symphony Inbox: the ticket stays in #{state} until the decision is recorded. Symphony lists this in the project update until then._"
     )
   end
+
+  defp render_request(%{title: title, question: question, why: why, options: options} = request, closing) do
+    fields =
+      [
+        {"Question", question},
+        {"Why", why},
+        {"If unanswered", Map.get(request, :if_unanswered)},
+        {"Unblocks", Map.get(request, :unblocks)}
+      ]
+      |> fields()
+
+    option_lines = options |> Enum.with_index(1) |> Enum.map(fn {option, index} -> "#{index}. #{option_text(option)}" end)
+
+    [
+      "#{@decision_heading} #{one_line(title)}",
+      "",
+      Enum.join(fields, "\n"),
+      "",
+      "**Options:**",
+      Enum.join(option_lines, "\n"),
+      "",
+      recommendation_line(request),
+      closing
+    ]
+    |> List.flatten()
+    |> Enum.join("\n")
+  end
+
+  defp fields(fields) do
+    fields
+    |> Enum.reject(fn {_name, value} -> blank?(value) end)
+    |> Enum.map(fn {name, value} -> "**#{name}:** #{one_line(value)}" end)
+  end
+
+  defp recommendation_line(request) do
+    case fields([{"Why recommended", Map.get(request, :recommendation_reason)}]) do
+      [] -> []
+      [line] -> [line, ""]
+    end
+  end
+
+  defp option_text(%{label: label, effect: effect} = option) do
+    marker = if Map.get(option, :recommended), do: " (recommended)"
+    Enum.join(["**#{option_label(label)}**#{marker}: #{one_line(effect)}" | tradeoff_lines(Map.get(option, :tradeoffs))], "\n")
+  end
+
+  # Each trade-off is a sub-item of its option, so the option list still reads as one numbered list.
+  defp tradeoff_lines(tradeoffs) when is_list(tradeoffs) do
+    for %{kind: kind, text: text} <- tradeoffs, not blank?(text), do: "   - #{String.capitalize(kind)}: #{one_line(text)}"
+  end
+
+  defp tradeoff_lines(_tradeoffs), do: []
+
+  # A label stays plain text inside the bold markers.
+  defp option_label(label), do: label |> one_line() |> String.replace("*", "")
 
   @doc "Renders the reply that withdraws a request, with the reason."
   @spec render_withdrawal(String.t()) :: String.t()
@@ -87,35 +168,72 @@ defmodule SymphonyElixir.HumanActions.Request do
   def withdrawal?(body) when is_binary(body), do: body |> String.trim_leading() |> String.starts_with?(@withdrawn_heading)
   def withdrawal?(_body), do: false
 
-  @doc "Parses a comment body; nil unless it starts with the request heading."
+  @doc "Parses a comment body; nil unless it starts with a request heading."
   @spec parse(String.t() | nil) :: t() | nil
   def parse(body), do: parse(body, nil)
 
-  @doc "Parses a comment body created at `created_at`; nil unless it starts with the request heading."
+  @doc "Parses a comment body created at `created_at`; nil unless it starts with a request heading."
   @spec parse(String.t() | nil, DateTime.t() | nil) :: t() | nil
   def parse(body, created_at) when is_binary(body) do
     case body |> String.trim() |> String.split("\n") do
-      [@heading <> title | lines] -> parse_lines(String.trim(title), lines, created_at)
+      [@decision_heading <> title | lines] -> parse_lines(:decision, String.trim(title), lines, created_at)
+      [@action_heading <> title | lines] -> parse_lines(:action, String.trim(title), lines, created_at)
       _lines -> nil
     end
   end
 
   def parse(_body, _created_at), do: nil
 
-  defp parse_lines("", _lines, _created_at), do: nil
+  defp parse_lines(_kind, "", _lines, _created_at), do: nil
 
-  defp parse_lines(title, lines, created_at) do
+  defp parse_lines(kind, title, lines, created_at) do
     lines = Enum.map(lines, &String.trim_trailing/1)
     fields = for line <- lines, [_, name, value] <- [Regex.run(@field_pattern, line)], into: %{}, do: {String.downcase(name), String.trim(value)}
 
+    {options, steps} =
+      case kind do
+        :decision -> {options(lines), []}
+        :action -> {[], steps(lines)}
+      end
+
     %{
       title: title,
+      question: present(fields["question"]),
+      options: Enum.map(options, &elem(&1, 0)),
+      tradeoffs: Enum.map(options, &elem(&1, 1)),
       why: present(fields["why"]),
+      if_unanswered: present(fields["if unanswered"]),
+      recommendation_reason: present(fields["why recommended"]),
       unblocks: present(fields["unblocks"]),
-      est_minutes: minutes(fields["time"]),
-      steps: steps(lines),
+      steps: steps,
       created_at: created_at
     }
+  end
+
+  # The list items after `**Options:**`, as rendered, each with the trade-offs indented under it.
+  defp options(lines) do
+    lines
+    |> Enum.drop_while(&(not Regex.match?(@options_marker, &1)))
+    |> Enum.drop(1)
+    |> Enum.reduce([], &option_line/2)
+    |> Enum.reverse()
+    |> Enum.map(fn {option, tradeoffs} -> {option, Enum.reverse(tradeoffs)} end)
+  end
+
+  defp option_line(line, [{option, tradeoffs} | rest] = acc) do
+    case Regex.run(@tradeoff_item, line) do
+      [_, kind, text] -> [{option, [%{kind: String.downcase(kind), text: String.trim(text)} | tradeoffs]} | rest]
+      nil -> option_item(line, acc)
+    end
+  end
+
+  defp option_line(line, []), do: option_item(line, [])
+
+  defp option_item(line, acc) do
+    case Regex.run(@list_item, line) do
+      [_, item] -> [{String.trim(item), []} | acc]
+      nil -> acc
+    end
   end
 
   @doc "The steps in free text, such as a human task's description, read as in a request."
@@ -160,6 +278,17 @@ defmodule SymphonyElixir.HumanActions.Request do
     end)
   end
 
+  @doc "A pull request as a request names it, `PR #448`; nil for anything but a pull request URL."
+  @spec pull_request(String.t() | nil) :: String.t() | nil
+  def pull_request(url) when is_binary(url) do
+    case Regex.run(~r{/pull/(\d+)}, url) do
+      [_, number] -> "PR ##{number}"
+      nil -> nil
+    end
+  end
+
+  def pull_request(_url), do: nil
+
   @doc "The title as compared for duplicates: trimmed, lower case, single spaces."
   @spec normalize_title(String.t()) :: String.t()
   def normalize_title(title), do: title |> one_line() |> String.downcase()
@@ -170,18 +299,6 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   defp after?(%DateTime{} = at, %DateTime{} = created_at), do: DateTime.compare(at, created_at) == :gt
   defp after?(_at, _created_at), do: true
-
-  defp minutes_text(minutes) when is_integer(minutes), do: "about #{minutes} min"
-  defp minutes_text(_minutes), do: nil
-
-  defp minutes(text) when is_binary(text) do
-    case Regex.run(@minutes, text) do
-      [_, digits] -> String.to_integer(digits)
-      nil -> nil
-    end
-  end
-
-  defp minutes(_text), do: nil
 
   defp present(""), do: nil
   defp present(value), do: value

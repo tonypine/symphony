@@ -2,28 +2,30 @@ defmodule SymphonyElixir.BreakdownReview do
   @moduledoc """
   Acts on a human's review of a `breakdown` parent's plan.
 
-  A breakdown run leaves its sub-issues in `Backlog` and the parent in `In Review` (or the Human
-  Review state, when its ticket says a person reviews it). The human approves the plan with one
-  move of the parent, from either review state to the waiting state (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
+  A breakdown run leaves its sub-issues in `Backlog` and the parent in the configured `Plan Review`
+  state (`SymphonyElixir.PlanReview`). The human approves the plan with one move of the parent from
+  there to the waiting state (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
   `Todo` in one batch; blocked-by links keep the order. Moving the parent to `Rework` rejects
   the plan: Symphony cancels the plan's sub-issues still in `Backlog` and runs the breakdown again.
-  The plan's sub-issues are the ones created while the parent was worked into `In Review`, so a
-  sub-issue a person added under the parent before or after that run, such as a parked
-  `Final verification`, is left alone.
+  The plan's sub-issues are the ones created while the parent was worked into `Plan Review`, so a
+  sub-issue a person added under the parent before or after that run is left alone.
 
   Symphony only polls, so it reads the parent's state history to see the move. Only a person's
-  move approves: Symphony records each time it moves a parent to the waiting state itself, and a
-  move within a minute of that is not read as approval, since Symphony and the reviewer can share
-  one Linear user. A sub-issue is acted on only when it has sat in `Backlog` since before that
-  move, which keeps both actions idempotent across polls and restarts: a sub-issue a human (or a
-  final verification run) moves back to `Backlog` later is left alone, and so is one created after
-  the move, such as the sub-issues of the re-planned breakdown.
+  move approves: Symphony records each time it moves a parent itself, and a move within a minute of
+  that is not read as the person's, since Symphony and the reviewer can share one Linear user. That
+  record separates the two ways a parent reaches `Rework` as well: the machine moves
+  it there to revise the plan in place when a person comments on it, and only a person's own move to
+  `Rework` rejects the plan and cancels its sub-issues. A sub-issue is acted on only when it has sat
+  in `Backlog` since before that move, which keeps both actions idempotent across polls and restarts:
+  a sub-issue a human moves back to `Backlog` later is left alone, and
+  so is one created after the move, such as the sub-issues of the re-planned breakdown.
   """
 
-  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PlanReview
   alias SymphonyElixir.SubIssueWait
   alias SymphonyElixir.Tracker
+  alias SymphonyElixir.TransitionGuard
 
   @backlog_state "Backlog"
   @todo_state "Todo"
@@ -65,10 +67,11 @@ defmodule SymphonyElixir.BreakdownReview do
   @doc """
   The sub-issues `action` applies to: those in `Backlog` since before the move that asked for it,
   and for `:replace` only those created by the rejected plan's run, between the parent's state
-  change before its latest move to `In Review` and that move. With no such move as the parent's
+  change before its latest move to `Plan Review` and that move. With no such move as the parent's
   latest state change (for example a parent Symphony parked from `In Progress`, which nobody
-  approved), or no move to `In Review` before a rejection, there are none. `own_move_at` is when
-  Symphony itself last moved the parent; an approval at that time is Symphony's, and approves nothing.
+  approved), or no move to `Plan Review` before a rejection, there are none. `own_move_at` is when
+  Symphony itself last moved the parent: an approval at that time is Symphony's, and approves
+  nothing, and a rejection there is Symphony's own revise of the plan, which rejects nothing.
   """
   @spec sub_issues_to_move(action(), Tracker.breakdown_history(), term(), DateTime.t() | nil) :: [map()]
   def sub_issues_to_move(action, %{state_changes: changes, sub_issues: sub_issues}, settings, own_move_at \\ nil) do
@@ -82,11 +85,16 @@ defmodule SymphonyElixir.BreakdownReview do
 
   @doc "Moves one sub-issue as `action` asks: to `Todo`, or to the team's canceled state."
   @spec move(action(), String.t(), module()) :: :ok | {:error, term()}
-  def move(:promote, sub_issue_id, tracker), do: tracker.update_issue_state(sub_issue_id, @todo_state)
+  def move(action, sub_issue_id, tracker), do: move(action, sub_issue_id, tracker, %{})
 
-  def move(:replace, sub_issue_id, tracker) do
+  @doc false
+  @spec move(action(), String.t(), module(), map()) :: :ok | {:error, term()}
+  def move(:promote, sub_issue_id, tracker, ctx),
+    do: TransitionGuard.perform(sub_issue_id, :breakdown_promote, ctx, tracker: tracker)
+
+  def move(:replace, sub_issue_id, tracker, ctx) do
     Enum.reduce_while(@canceled_states, {:error, :state_not_found}, fn state, _result ->
-      case tracker.update_issue_state(sub_issue_id, state) do
+      case TransitionGuard.perform(sub_issue_id, :breakdown_cancel, Map.put(ctx, :target, state), tracker: tracker) do
         {:error, :state_not_found} = error -> {:cont, error}
         result -> {:halt, result}
       end
@@ -110,13 +118,16 @@ defmodule SymphonyElixir.BreakdownReview do
   def comment_openers, do: ["Promoted to #{@todo_state}:", "Cancelled for re-plan:"]
 
   defp decided_at(:promote, %{from: from, to: to, at: at}, settings, own_move_at) do
-    if HumanReview.review_state?(from, settings) and state_matches?(to, SubIssueWait.state(settings)) and
+    if PlanReview.in_state?(from, settings) and state_matches?(to, SubIssueWait.state(settings)) and
          not own_move?(at, own_move_at),
        do: at
   end
 
-  defp decided_at(:replace, %{to: to, at: at}, _settings, _own_move_at) do
-    if state_matches?(to, @rework_state), do: at
+  # A person's move of the parent to `Rework` rejects the plan. The machine moves the parent there
+  # itself to revise it in place when a person comments on the plan, so its own move
+  # (`own_move_at`) rejects nothing: only a move Symphony did not make cancels the plan's sub-issues.
+  defp decided_at(:replace, %{to: to, at: at}, _settings, own_move_at) do
+    if state_matches?(to, @rework_state) and not own_move?(at, own_move_at), do: at
   end
 
   defp decided_at(_action, nil, _settings, _own_move_at), do: nil
@@ -125,14 +136,14 @@ defmodule SymphonyElixir.BreakdownReview do
   defp own_move?(_at, nil), do: false
 
   # When the plan's sub-issues were created: `:promote` takes every sub-issue from before the
-  # approval, `:replace` only the run that moved the parent to a review state before the rejection.
+  # approval, `:replace` only the run that moved the parent to `Plan Review` before the rejection.
   defp plan_window(:promote, _changes, at, _settings), do: {nil, at}
 
   defp plan_window(:replace, changes, at, settings) do
     changes
     |> Enum.filter(&(DateTime.compare(&1.at, at) == :lt))
     |> Enum.sort_by(& &1.at, {:desc, DateTime})
-    |> Enum.drop_while(&(not HumanReview.review_state?(&1.to, settings)))
+    |> Enum.drop_while(&(not PlanReview.in_state?(&1.to, settings)))
     |> case do
       [review, previous | _] -> {previous.at, review.at}
       [review] -> {nil, review.at}

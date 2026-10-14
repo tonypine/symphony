@@ -24,15 +24,15 @@ defmodule SymphonyElixir.EpicLanes do
   an epic's extra parallel tickets and the tickets of epics still waiting for a lane.
   """
 
-  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PlanReview
 
   # Linear states a sub-ticket sits in before a human approves it into Todo.
   @not_approved_states MapSet.new(["backlog", "triage"])
 
-  # States in which a ticket on the path waits for a person rather than for Symphony.
-  # A renamed Human Review state is read from the settings (`human_gated_state?/1`).
-  @human_gated_states MapSet.union(@not_approved_states, MapSet.new(["in review", "human review"]))
+  # States in which a ticket on the path waits for a person rather than for Symphony: not approved
+  # yet, or the Plan Review state, read from the settings (`human_gated_state?/1`), where a plan
+  # parent waits for its plan's review (a nested epic parent, a sub-ticket of this one).
 
   @type epic :: %{
           id: String.t(),
@@ -185,10 +185,13 @@ defmodule SymphonyElixir.EpicLanes do
 
   def members(nil, _epic_id), do: %{}
 
-  @doc "True when a ticket in `state` waits for a person: not yet approved (Backlog, Triage), In Review or Human Review."
+  @doc """
+  True when a ticket in `state` waits for a person: not yet approved (Backlog, Triage), or in
+  `Plan Review`.
+  """
   @spec human_gated_state?(String.t() | nil) :: boolean()
   def human_gated_state?(state) when is_binary(state),
-    do: MapSet.member?(@human_gated_states, normalize_state(state)) or HumanReview.in_state?(state)
+    do: MapSet.member?(@not_approved_states, normalize_state(state)) or PlanReview.in_state?(state)
 
   def human_gated_state?(_state), do: false
 

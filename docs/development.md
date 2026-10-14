@@ -16,6 +16,20 @@ mise install
 mise exec -- mix setup
 ```
 
+### Xcode
+
+`.xcode-version` at the repo root pins the one Xcode every macOS workflow on `macos-26` builds
+the Mac app with (`macos.yml`, `macos-e2e.yml`), so CI and the release compile with the same
+Swift. The policy is the newest Xcode installed on GitHub's `macos-26` runner image.
+`scripts/ci/xcode-developer-dir.sh` prints its `/Applications/Xcode_<version>.app/Contents/Developer`
+for `DEVELOPER_DIR` and fails, naming the wanted version and the Xcodes found, when the runner
+lacks it; it never falls back to another version.
+
+To bump it when the image adds an Xcode, read the Xcode table in the
+[runner-images `macos-26` readme](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md),
+write the newest version exactly as its `/Applications/Xcode_<version>.app` name spells it, and
+fix any new Swift errors in `macos/` in the same pull request. The release workflows use it too.
+
 ## Pre-push hook
 
 `make setup` runs `git config core.hooksPath .githooks`, which turns on
@@ -125,13 +139,29 @@ them on a Mac outside any sandbox with:
 mix test --only seatbelt
 ```
 
-Where a macOS version lets a command under the profile listen beyond loopback, the dev server
-refuses to start, and the tests that serve a page assert that refusal instead.
+The tests that serve a page start a dev server that listens on its unix socket, and check the page
+on `127.0.0.1:<port>` through Symphony's loopback bridge, and that a connection to the Mac's own
+non-loopback addresses on that port is refused. For the manual check from another host on the
+network, start one under the real sandbox and connect from that host to `<this Mac's LAN
+address>:<port>`: it must be refused, while `curl http://127.0.0.1:<port>/` on the Mac gets the
+page.
+
+The tests tagged `:unix_socket` listen on a unix socket in the temp folder, as the dev server does
+on macOS. The agent sandbox refuses that bind, so `test/test_helper.exs` skips them there too; CI
+runs them.
 
 The [`seatbelt` workflow](../.github/workflows/seatbelt.yml) runs the same command on the newest
 macOS runner image, on pull requests and pushes to `main` that change `lib/symphony_elixir/verification/`,
-`lib/symphony_elixir/agent_sandbox_config.ex`, `scripts/qa-dashboard-server.sh` or the tests
-themselves. It is not a required check.
+`lib/symphony_elixir/agent_sandbox_config.ex`, `lib/symphony_elixir/http_server.ex`,
+`scripts/qa-dashboard-server.sh` or the tests themselves. It is not a required check.
+
+The test tagged `:appkit_dialog` runs a minimal AppKit program under the agent profile, checks
+that it draws no window and that the Bash hook refuses to start it, and records whether it checks
+in with LaunchServices and shows a crash dialog (see [security](security.md#no-windows-on-the-host-desktop)).
+It puts windows and dialogs on screen itself, so never run it on your Mac: the
+[`appkit-dialog` workflow](../.github/workflows/appkit-dialog.yml) runs it on a disposable macOS
+runner, weekly and on pull requests that change the probe, the test, the hook or
+`lib/symphony_elixir/agent_sandbox_config.ex`. It is not a required check.
 
 ## Required checks
 
@@ -146,15 +176,15 @@ itself changed.
 
 ## Packaging
 
-Packaged macOS binaries are built with Burrito and include the Erlang runtime:
+The packaged build is the plain `mix release`, Erlang runtime included:
 
 ```bash
-make package
+make release
 ```
 
-Release artifacts are written to `burrito_out/` such as `burrito_out/symphony-macos-arm64`. Set
-`BURRITO_TARGET=macos_arm64` to build only that one. Releases ship it inside `Symphony.app`; see
-[Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
+It writes `_build/prod/rel/symphony`. Releases ship it inside `Symphony.app`, in
+`Contents/Resources/symphony-release`, and run it in place through the launcher at
+`Contents/Resources/symphony`; see [Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
 
 ## Why Elixir?
 

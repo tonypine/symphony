@@ -3,19 +3,27 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, LandingOrder, PromptSafety, ReviewAgent, TicketState, Workflow}
 
   @render_opts [
     strict_variables: true,
     strict_filters: true,
     file_system: {SymphonyElixir.Playbook.FileSystem, nil}
   ]
+
+  # The retired state-machine version switch left one machine; the variable stays, always
+  # `designed`, so an instruction file that still branches on it renders instead of failing the
+  # strict-variables check.
+  @state_machine "designed"
+
   @compact_comment_limit 5
   # CI log excerpts can reach 20k sanitized bytes, larger than the stdio soft
   # limit that forced the compact prompt in the first place. Keep only the tail
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
-  @qa_findings_limit 10_000
+  @ticket_state_limit 4_000
+  @open_pr_limit 10
+  @open_pr_file_limit 15
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -87,6 +95,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "attempt" => Keyword.get(opts, :attempt),
       "agent" => to_solid_value(agent_context),
       "repo_key" => repo_key,
+      "state_machine" => @state_machine,
       "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
       "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
       "reviewer_comments" => to_solid_value(reviewer_comments),
@@ -97,8 +106,9 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
-    |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
+    |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
+    |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -159,8 +169,9 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
-    |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
+    |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
+    |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -540,16 +551,135 @@ defmodule SymphonyElixir.PromptBuilder do
     prompt <> "\n\n" <> ci_failure_section(ci_failure)
   end
 
-  defp append_qa_failure(prompt, %{} = qa_failure) do
-    prompt <> "\n\n" <> qa_failure_section(qa_failure)
-  end
-
-  defp append_qa_failure(prompt, _qa_failure), do: prompt
-
   defp append_pr_conflict(prompt, nil), do: prompt
 
   defp append_pr_conflict(prompt, pr_conflict) when is_map(pr_conflict) do
     prompt <> "\n\n" <> pr_conflict_section(pr_conflict)
+  end
+
+  # The other open PRs that change this ticket's files (`PrReviewPoller.open_pr_overlap/2`), so the
+  # agent can stack on one instead of meeting the conflict after it lands. Paths and URLs come from
+  # GitHub: untrusted.
+  defp append_open_pr_overlap(prompt, %{shared: [_ | _] = shared} = overlap) do
+    lines = [
+      "Open pull requests that change the same files as this ticket's PR:",
+      "",
+      "BEGIN UNTRUSTED OPEN PULL REQUESTS",
+      open_pr_lines(shared),
+      "END UNTRUSTED OPEN PULL REQUESTS",
+      "",
+      open_pr_wait_line(Map.get(overlap, :waits_for)) <>
+        "When your change builds on one of them, you may stack this branch on that PR's branch rather than resolve the same files twice."
+    ]
+
+    prompt <> "\n\n" <> Enum.join(lines, "\n")
+  end
+
+  defp append_open_pr_overlap(prompt, %{open: [_ | _] = open}) do
+    lines = [
+      "Open pull requests other tickets are landing, and the files they change:",
+      "",
+      "BEGIN UNTRUSTED OPEN PULL REQUESTS",
+      open_pr_lines(open),
+      "END UNTRUSTED OPEN PULL REQUESTS",
+      "",
+      "If your change touches these files, each of those merges will reopen a conflict on your PR. When it builds on one of them, you may stack your branch on that PR's branch instead."
+    ]
+
+    prompt <> "\n\n" <> Enum.join(lines, "\n")
+  end
+
+  defp append_open_pr_overlap(prompt, _overlap), do: prompt
+
+  defp open_pr_lines(entries) do
+    entries
+    |> Enum.take(@open_pr_limit)
+    |> Enum.map_join("\n", fn entry ->
+      {listed, rest} = Enum.split(entry.files, @open_pr_file_limit)
+      more = if rest == [], do: "", else: " (and #{length(rest)} more)"
+
+      pr =
+        [blank_fallback(entry.issue_identifier, "untracked"), "(#{blank_fallback(entry.state, "unknown")})", blank_fallback(entry.pr_url, nil)]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
+
+      "- " <> PromptSafety.open_pull_request_field("#{pr}: #{Enum.join(listed, ", ")}#{more}")
+    end)
+  end
+
+  defp open_pr_wait_line(%{} = wait),
+    do: "This PR #{LandingOrder.reason(wait)}: Symphony sends it no conflict fix and doesn't update its branch until then. "
+
+  defp open_pr_wait_line(_wait), do: ""
+
+  # The per-ticket machine record is injected as continuation context (D9), never read through a
+  # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.
+  defp append_ticket_state(prompt, ticket_state) do
+    case ticket_state_section(ticket_state) do
+      nil -> prompt
+      section -> prompt <> "\n\n" <> section
+    end
+  end
+
+  defp ticket_state_section(ticket_state) when is_map(ticket_state) do
+    state = TicketState.normalize(ticket_state)
+
+    if ticket_state_empty?(state) do
+      nil
+    else
+      render_ticket_state(state)
+    end
+  end
+
+  defp ticket_state_section(_ticket_state), do: nil
+
+  # Verdicts are deliberately not part of the section (only phase, holds, CI and signals are
+  # rendered), so they do not count as content here: a verdict-only record adds nothing.
+  defp ticket_state_empty?(state) do
+    state.phase == nil and state.holds == [] and state.ci_states == [] and state.signals == []
+  end
+
+  defp render_ticket_state(state) do
+    [
+      "Ticket state:",
+      "",
+      "- Phase: #{blank_fallback(state.phase, "unknown")}",
+      "- Holds: #{ticket_state_holds(state.holds)}",
+      "- CI: #{ticket_state_ci(state.ci_states)}",
+      "Recent signals:",
+      PromptSafety.linear_block(ticket_state_signal_lines(state.signals), "ticket_state", @ticket_state_limit)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp ticket_state_holds([]), do: "none"
+
+  defp ticket_state_holds(holds) do
+    Enum.map_join(holds, "; ", fn hold ->
+      reason = blank_fallback(hold.reason, "no reason recorded")
+      clearing = blank_fallback(hold.clearing_condition, "no clearing condition recorded")
+      "#{hold.kind} (#{reason}; clears when #{clearing})"
+    end)
+  end
+
+  defp ticket_state_ci([]), do: "unknown"
+
+  defp ticket_state_ci([state | _rest]) do
+    "#{blank_fallback(state.status, "unknown")} at #{blank_fallback(state.head_sha, "unknown head")}"
+  end
+
+  defp ticket_state_signal_lines([]), do: "none"
+
+  defp ticket_state_signal_lines(signals) do
+    Enum.map_join(signals, "\n", fn signal ->
+      details = Enum.map_join(signal.details, " ", fn {key, value} -> "#{key}=#{value}" end)
+      line = "- #{signal.name} at #{signal.at}"
+
+      case details do
+        "" -> line
+        details -> line <> " " <> details
+      end
+    end)
   end
 
   defp append_review_agent_instructions(prompt, %{review_agent: %{enabled: true} = config}, opts) do
@@ -591,15 +721,18 @@ defmodule SymphonyElixir.PromptBuilder do
   defp ci_poller_enabled?(%{ci: %{enabled: enabled}}), do: enabled == true
   defp ci_poller_enabled?(_settings), do: false
 
+  # The Code Review and QA verdicts are what return work, as `Rework` on the same pull request.
   defp feedback_protocol_section(pr_polling?, ci_polling?) do
-    [
-      "PR feedback and CI delivery:",
-      "",
-      pr_feedback_protocol_line(pr_polling?),
-      ci_feedback_protocol_line(ci_polling?),
-      "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not treat it as `Rework`, which still means closing the PR and starting over."
-    ]
-    |> Enum.join("\n")
+    Enum.join(
+      [
+        "PR feedback and CI delivery:",
+        "",
+        pr_feedback_protocol_line(pr_polling?),
+        ci_feedback_protocol_line(ci_polling?),
+        "- A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR, with the verdict's reasons in the continuation prompt. Fix it on the same branch and push; that push hands off to `Code Review` again. Do not move the issue to `Rework` by hand — that state is the reviewer's and QA's verdict to set, on the same pull request; the human-only `Restart` is what starts over."
+      ],
+      "\n"
+    )
   end
 
   defp pr_feedback_protocol_line(true) do
@@ -654,54 +787,6 @@ defmodule SymphonyElixir.PromptBuilder do
       "",
       "#{names} is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it by adding the `#{CiPoller.waiver_label()}` label. Do not edit or revert the protected change; fix only the other failed checks."
     ]
-  end
-
-  # QA findings come from an agent that ran the PR's code, so they are fenced as data.
-  defp qa_failure_section(qa_failure) do
-    findings =
-      qa_failure
-      |> get_field(:findings)
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
-      |> Enum.map_join("\n", &("- " <> &1))
-
-    [
-      qa_failure_intro(string_field(qa_failure, :source), blank_fallback(string_field(qa_failure, :commit_sha), "unknown")),
-      "",
-      "BEGIN UNTRUSTED QA FINDINGS",
-      PromptSafety.linear_block(qa_findings_text(findings, qa_failure), "qa_findings", @qa_findings_limit),
-      "END UNTRUSTED QA FINDINGS"
-    ]
-    |> Enum.join("\n")
-  end
-
-  # An enforced acceptance gate `rework` comes back through the same continuation as a QA fail.
-  defp qa_failure_intro("acceptance_gate", commit_sha) do
-    Enum.join(
-      [
-        "Auto Review acceptance gate rework:",
-        "",
-        "The acceptance gate judged commit #{commit_sha} against the ticket and sent it back: the acceptance criteria or the scope below are not met yet.",
-        "Fix them on the same branch and PR, then push. Symphony runs QA and the gate again once CI is green."
-      ],
-      "\n"
-    )
-  end
-
-  defp qa_failure_intro(_source, commit_sha) do
-    Enum.join(
-      [
-        "Auto Review QA failure:",
-        "",
-        "The QA agent tested commit #{commit_sha} and found the behaviour below.",
-        "Fix it on the same branch and PR, then push. Symphony runs QA again once CI is green."
-      ],
-      "\n"
-    )
-  end
-
-  defp qa_findings_text(findings, qa_failure) do
-    blank_fallback(findings, blank_fallback(string_field(qa_failure, :summary), "No findings were recorded."))
   end
 
   defp pr_conflict_section(pr_conflict) do

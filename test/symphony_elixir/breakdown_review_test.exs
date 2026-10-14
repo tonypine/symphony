@@ -46,7 +46,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert BreakdownReview.action(parent, settings) == :promote
       assert BreakdownReview.action(%{parent | state: "Rework"}, settings) == :replace
       assert BreakdownReview.action(%{parent | sub_issues: [sub("c2", "Todo")]}, settings) == nil
-      assert BreakdownReview.action(%{parent | state: "In Review"}, settings) == nil
+      assert BreakdownReview.action(%{parent | state: "Plan Review"}, settings) == nil
       assert BreakdownReview.action(%{parent | labels: ["feature"]}, settings) == nil
       assert BreakdownReview.action(%{parent | sub_issues: nil}, settings) == nil
       assert BreakdownReview.action(nil, settings) == nil
@@ -74,7 +74,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert ids(BreakdownReview.sub_issues_to_move(:promote, history, Config.settings!())) == ["c1", "c2"]
     end
 
-    test "only an In Review to waiting-state move is an approval, and only as the latest state change" do
+    test "only a Plan Review to waiting-state move is an approval, and only as the latest state change" do
       settings = Config.settings!()
       subs = [history_sub("c1", "Backlog", created_at: ~U[2026-10-01 00:00:00Z])]
 
@@ -84,7 +84,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert BreakdownReview.sub_issues_to_move(:promote, history([], subs), settings) == []
 
       # The latest change wins, whatever order Linear returns them in.
-      reviewed_again = [change("In Review", @waiting, @planned), change(@waiting, "In Review", @approved), approval(@later)]
+      reviewed_again = [change("Plan Review", @waiting, @planned), change(@waiting, "Plan Review", @approved), approval(@later)]
       approved = history(Enum.reverse(reviewed_again), subs)
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
       assert BreakdownReview.sub_issues_to_move(:promote, history(Enum.take(reviewed_again, 2), subs), settings) == []
@@ -93,33 +93,13 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), no_waiting_state) == []
     end
 
-    test "a move out of Human Review approves and rejects a plan exactly as one out of In Review" do
-      settings = Config.settings!()
-      subs = [history_sub("c1", "Backlog")]
-
-      approved = history([change("Human Review", @waiting, @approved)], subs)
-      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
-
-      rejected =
-        history(
-          [change("Todo", "In Progress", @started), change("In Progress", "Human Review", @reviewed), change("Human Review", "Rework", @approved)],
-          [history_sub("c1", "Backlog"), history_sub("c2", "Backlog", created_at: @later)]
-        )
-
-      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings)) == ["c1"]
-
-      # With the state turned off, a move out of it approves nothing.
-      off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
-      assert BreakdownReview.sub_issues_to_move(:promote, approved, off) == []
-      assert BreakdownReview.sub_issues_to_move(:replace, rejected, off) == []
-    end
-
-    test "a move Symphony made itself is never an approval" do
+    test "a move Symphony made itself is never an approval or a rejection" do
       settings = Config.settings!()
       subs = [history_sub("c1", "Backlog")]
       approved = history([approval()], subs)
 
-      # Symphony parking a parent that was already In Review leaves the same history entry a person's approval does.
+      # Symphony parking a parent that was already in Plan Review leaves the same history entry a
+      # person's approval does.
       assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, @approved) == []
       assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, -60)) == []
       assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, 60)) == []
@@ -129,9 +109,30 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings, nil)) == ["c1"]
       assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
 
-      # A rejection is never Symphony's move; its own record does not affect it.
-      rejected = history(rejection(), [history_sub("c1", "Backlog")])
-      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved)) == ["c1"]
+      # A rejection at Symphony's own recorded move is Symphony's own revise of the plan, not
+      # a person's: it cancels nothing. A person's rejection at another time still cancels the plan.
+      rejected = history(rejection(), subs)
+      assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved) == []
+      assert BreakdownReview.sub_issues_to_move(:replace, rejected, settings, DateTime.add(@approved, 60)) == []
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, DateTime.add(@approved, -61))) == ["c1"]
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, nil)) == ["c1"]
+    end
+
+    test "approves and rejects only from the plan review state" do
+      settings = Config.settings!()
+      subs = [history_sub("c1", "Backlog")]
+
+      # A move out of a retired review state approves and rejects nothing.
+      retired_approval = history([change("In Review", @waiting, @approved)], subs)
+      assert BreakdownReview.sub_issues_to_move(:promote, retired_approval, settings) == []
+
+      retired_rejection = [change("In Progress", "Human Review", @reviewed), change("Human Review", "Rework", @approved)]
+      assert BreakdownReview.sub_issues_to_move(:replace, history(retired_rejection, subs), settings) == []
+
+      # With the state turned off nothing approves or rejects a plan.
+      off = %{settings | tracker: %{settings.tracker | plan_review_state: nil}}
+      assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), off) == []
+      assert BreakdownReview.sub_issues_to_move(:replace, history(rejection(), subs), off) == []
     end
 
     test "a rejection replaces the rejected plan's sub-issues in Backlog since before the move to Rework" do
@@ -153,11 +154,11 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       approved = %{history | state_changes: [approval()]}
       assert BreakdownReview.sub_issues_to_move(:replace, approved, settings) == []
 
-      # With no move to In Review before the rejection there is no plan to cancel.
+      # With no move to Plan Review before the rejection there is no plan to cancel.
       unreviewed = %{history | state_changes: [change("Todo", "In Progress", @started), change("In Progress", "Rework", @approved)]}
       assert BreakdownReview.sub_issues_to_move(:replace, unreviewed, settings) == []
 
-      # With no state change before the move to In Review, every earlier sub-issue is the plan's.
+      # With no state change before the move to Plan Review, every earlier sub-issue is the plan's.
       reviewed_only = %{history | state_changes: Enum.drop(rejection(), 1)}
       assert ids(BreakdownReview.sub_issues_to_move(:replace, reviewed_only, settings)) == ["c1", "c4", "c6"]
     end
@@ -246,7 +247,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       parked = parent(@waiting, [sub("c1", "Backlog")])
       put_history("parent", [change("In Progress", @waiting, @approved)], [history_sub("c1", "Backlog")])
 
-      state = review([parked, %{parked | id: "in-review", state: "In Review"}], orchestrator_state())
+      state = review([parked, %{parked | id: "in-review", state: "Plan Review"}], orchestrator_state())
       refute_received {:memory_tracker_state_update, _id, _state}
       assert_received {:memory_tracker_breakdown_history, "parent"}
       refute_received {:memory_tracker_breakdown_history, "in-review"}
@@ -263,7 +264,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       parent = parent(@waiting, [sub("c1", "Backlog"), sub("c2", "Backlog")])
       subs = [history_sub("c1", "Backlog"), history_sub("c2", "Backlog")]
 
-      # Linear records Symphony's park of an In Review parent as In Review to the waiting state.
+      # Linear records Symphony's park of a Plan Review parent as Plan Review to the waiting state.
       :ok = RunStore.put_own_state_move("parent", DateTime.add(@approved, 2))
       put_history("parent", [approval()], subs)
 
@@ -277,8 +278,8 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert review([parent], orchestrator_state()).breakdown_reviews == %{"parent" => ["c1", "c2"]}
       refute_received {:memory_tracker_state_update, _id, _state}
 
-      # The human sends it back to In Review and approves it.
-      put_history("parent", [approval(), change(@waiting, "In Review", @later), approval(DateTime.add(@later, 300))], subs)
+      # The human sends it back to Plan Review and approves it.
+      put_history("parent", [approval(), change(@waiting, "Plan Review", @later), approval(DateTime.add(@later, 300))], subs)
       review([parent], orchestrator_state())
       assert_received {:memory_tracker_state_update, "c1", "Todo"}
       assert_received {:memory_tracker_state_update, "c2", "Todo"}
@@ -382,6 +383,30 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       refute Orchestrator.should_dispatch_issue_for_test(replanned, orchestrator_state())
     end
 
+    test "records a plan verdict signal for each promoted sub-ticket" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "c1")
+      parent = %{parent(@waiting, [sub("c1", "Backlog")]) | repo_key: repo_key}
+      put_history("parent", [approval()], [history_sub("c1", "Backlog")])
+
+      review([parent], orchestrator_state())
+
+      assert [%{name: "plan verdict", details: %{outcome: "approve", sub_issue: "MT-c1", to: "Todo"}}] =
+               RunStore.get_ticket_state(repo_key, "c1").signals
+    end
+
+    test "records a deprioritized signal for each replaced sub-ticket" do
+      repo_key = "default"
+      RunStore.delete_ticket_state(repo_key, "c1")
+      parent = %{parent("Rework", [sub("c1", "Backlog")]) | repo_key: repo_key}
+      put_history("parent", rejection(), [history_sub("c1", "Backlog")])
+
+      review([parent], orchestrator_state())
+
+      assert [%{name: "deprioritized", details: %{outcome: "changes", sub_issue: "MT-c1", to: "Canceled"}}] =
+               RunStore.get_ticket_state(repo_key, "c1").signals
+    end
+
     test "a poll cycle promotes an approved parent's sub-tickets" do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [
         %{parent(@waiting, [sub("c1", "Backlog"), sub("c2", "Done")]) | id: "parent-poll", team: %{key: "Test"}}
@@ -418,7 +443,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
              "issue" => %{
                "history" => %{
                  "nodes" => [
-                   %{"createdAt" => "2026-10-02T10:00:00Z", "fromState" => %{"name" => "In Review"}, "toState" => %{"name" => @waiting}},
+                   %{"createdAt" => "2026-10-02T10:00:00Z", "fromState" => %{"name" => "Plan Review"}, "toState" => %{"name" => @waiting}},
                    %{"createdAt" => "2026-10-02T09:30:00Z", "fromState" => nil, "toState" => nil},
                    %{"createdAt" => "not a date", "toState" => %{"name" => "Todo"}}
                  ]
@@ -450,7 +475,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert_received {:graphql_called, query, %{id: "parent"}}
       assert query =~ "SymphonyBreakdownHistory"
 
-      assert history.state_changes == [%{at: @approved, from: "In Review", to: @waiting}]
+      assert history.state_changes == [%{at: @approved, from: "Plan Review", to: @waiting}]
 
       assert history.sub_issues == [
                %{id: "c1", identifier: "TP-2", state: "Backlog", created_at: @planned, state_changed_at: @later},
@@ -490,10 +515,10 @@ defmodule SymphonyElixir.BreakdownReviewTest do
   end
 
   defp rejection do
-    [change("Todo", "In Progress", @started), change("In Progress", "In Review", @reviewed), change("In Review", "Rework", @approved)]
+    [change("Todo", "In Progress", @started), change("In Progress", "Plan Review", @reviewed), change("Plan Review", "Rework", @approved)]
   end
 
-  defp approval(at \\ @approved), do: change("In Review", @waiting, at)
+  defp approval(at \\ @approved), do: change("Plan Review", @waiting, at)
 
   defp change(from, to, at), do: %{at: at, from: from, to: to}
 

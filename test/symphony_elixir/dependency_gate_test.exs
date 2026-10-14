@@ -3,19 +3,24 @@ defmodule SymphonyElixir.DependencyGateTest do
 
   alias SymphonyElixir.DependencyAudit
   alias SymphonyElixir.DependencyGate
+  alias SymphonyElixir.HumanActions.PlainWords
+  alias SymphonyElixir.RunStore
+  alias SymphonyElixir.Tracker.Memory
 
   test "build/3 defaults the audit module and invalid gates allow by default" do
-    assert DependencyGate.hold_state() == "In Review"
-
     gate = DependencyGate.build("/tmp/workspace", nil, nil)
 
     assert gate.audit_module == DependencyAudit
     assert DependencyGate.audit(:not_a_gate) == {:ok, []}
+
+    assert DependencyGate.github_create_pull_request_tool?("github_create_pull_request")
+    assert DependencyGate.github_create_pull_request_tool?("github.create_pull_request")
+    refute DependencyGate.github_create_pull_request_tool?("github_create_pull_request_comment")
   end
 
-  test "react_to_hold logs tracker update failures and continues" do
+  test "react_to_hold logs a hold that can't be set and continues" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
-    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :rate_limited})
+    Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :rate_limited})
 
     issue = %Issue{
       id: "issue-dependency-gate-failure",
@@ -29,7 +34,22 @@ defmodule SymphonyElixir.DependencyGateTest do
 
     assert capture_log(fn ->
              assert :ok = DependencyGate.react_to_hold(gate, [])
-           end) =~ "Failed to move dependency hold issue to In Review"
+           end) =~ "Failed to hold dependency issue issue_id=issue-dependency-gate-failure on a Needs Decision hold"
+  end
+
+  test "pause/4 asks for the package changes in plain words, whatever the audit found" do
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    issue = %{id: "issue-dependency-gate-words", identifier: "ACME-GATE-WORDS", state: "In Progress"}
+    on_exit(fn -> RunStore.delete_ticket_state("repo-dep-words", issue.id) end)
+
+    for finding <- [{:hold, [%{package: "left_pad", reason: "new package"}]}, {:error, {:enoent, "/tmp/mix.lock"}}] do
+      assert :ok = DependencyGate.pause(issue, finding, "repo-dep-words", tracker: Memory)
+      assert_received {:memory_tracker_comment, "issue-dependency-gate-words", body}
+      assert body =~ "## Decision needed: Approve the dependency changes on ACME-GATE-WORDS"
+      assert body =~ "**If unanswered:** ACME-GATE-WORDS stays where it is and its pull request is not opened."
+      assert body =~ "**Why recommended:**"
+      assert PlainWords.tokens(body) == []
+    end
   end
 
   test "react_to_hold and react_to_audit_error never move a terminal issue" do
@@ -40,8 +60,11 @@ defmodule SymphonyElixir.DependencyGateTest do
       id: "issue-dependency-gate-terminal",
       identifier: "ACME-GATE-TERMINAL",
       title: "Dependency gate terminal",
-      state: "In Progress"
+      state: "In Progress",
+      repo_key: "repo-dep-gate"
     }
+
+    RunStore.delete_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal")
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: "Done"}])
     gate = DependencyGate.build("/tmp/workspace", issue, nil, repo_key: "default")
@@ -53,7 +76,11 @@ defmodule SymphonyElixir.DependencyGateTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
 
     assert :ok = DependencyGate.react_to_hold(gate, [])
-    assert_received {:memory_tracker_state_update, "issue-dependency-gate-terminal", "In Review"}
+    assert_received {:memory_tracker_label_added, "issue-dependency-gate-terminal", "Needs Decision"}
+    refute_received {:memory_tracker_state_update, "issue-dependency-gate-terminal", _state}
+
+    assert [%{name: "decision requested", details: %{hold: "needs_decision", reason: "dependency_source_requires_approval"}}] =
+             RunStore.get_ticket_state("repo-dep-gate", "issue-dependency-gate-terminal").signals
   end
 
   test "issue_terminal? reads the refreshed state and treats lookup failures as active" do

@@ -245,12 +245,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
-            <p class="metric-label">Human Review</p>
-            <p class="metric-value numeric"><%= @visible_payload.counts.human_review %></p>
-            <p class="metric-detail">needs you</p>
-          </article>
-
-          <article class="metric-card">
             <p class="metric-label">Retrying</p>
             <p class="metric-value numeric"><%= @visible_payload.counts.retrying %></p>
             <p class="metric-detail">backoff</p>
@@ -285,6 +279,49 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
             <p class="metric-detail">completed + active</p>
           </article>
+        </section>
+
+        <section class="section-card" id="waiting-on-you">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Waiting on you</h2>
+              <p class="section-copy">Tickets in review, or with a decision only you can make, oldest first.</p>
+            </div>
+          </div>
+
+          <%= if @payload.waiting_on_you == [] do %>
+            <p class="empty-state">Nothing waits on you.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Kind</th>
+                    <th>What to review</th>
+                    <th>Waiting since</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.waiting_on_you} class="waiting-on-you-row">
+                    <td>
+                      <div class="issue-stack">
+                        <%= if entry.url do %>
+                          <a class="issue-id" href={entry.url} target="_blank" rel="noreferrer" title={entry.title}><%= entry.issue_identifier %></a>
+                        <% else %>
+                          <span class="issue-id" title={entry.title}><%= entry.issue_identifier %></span>
+                        <% end %>
+                        <span class="muted"><%= entry.state %></span>
+                      </div>
+                    </td>
+                    <td><%= waiting_kind_label(entry.kind) %></td>
+                    <td><%= entry.headline || entry.title %></td>
+                    <td class="numeric"><%= format_ago(seconds_since(entry.waiting_since, @now)) %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
         </section>
 
         <section class="section-card">
@@ -476,28 +513,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </tbody>
               </table>
             </div>
-          <% end %>
-        </section>
-
-        <section class="section-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">Auto Review</h2>
-              <p class="section-copy">
-                Acceptance gate: <%= gate_runner_line(@payload.acceptance_gate) %>
-              </p>
-              <p :for={{repo_key, stats} <- Enum.sort(@payload.acceptance_gate.agreement)} class="section-copy">
-                <%= gate_agreement_line(repo_key, stats) %>
-              </p>
-            </div>
-          </div>
-
-          <%= if @payload.acceptance_gate.recent == [] do %>
-            <p class="empty-state">The acceptance gate has not judged a ticket yet.</p>
-          <% else %>
-            <p :for={entry <- @payload.acceptance_gate.recent} class="section-copy">
-              <%= gate_verdict_line(entry) %>
-            </p>
           <% end %>
         </section>
 
@@ -890,6 +905,52 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
+              <h2 class="section-title">Drain report</h2>
+              <p class="section-copy">Tickets still in a retired state (Auto Review, In Review, Human Review), with what each waits on and the move that frees it.</p>
+            </div>
+          </div>
+
+          <%= if drain_stragglers(@visible_payload) == [] do %>
+            <p class="empty-state">No ticket left in a retired state</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>State</th>
+                    <th>Waits on</th>
+                    <th>Move</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- drain_stragglers(@visible_payload)}>
+                    <td>
+                      <%= if entry.url do %>
+                        <a class="issue-id" href={entry.url} target="_blank" rel="noreferrer" title={entry.title}><%= entry.issue_identifier %></a>
+                      <% else %>
+                        <span class="issue-id" title={entry.title}><%= entry.issue_identifier %></span>
+                      <% end %>
+                    </td>
+                    <td><%= entry.state %></td>
+                    <td><span class="event-text"><%= entry.waits_on %></span></td>
+                    <td><span class="event-text"><%= entry.move %></span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+
+          <ul :if={drain_landed(@visible_payload) != []} class="section-copy">
+            <li :for={landing <- drain_landed(@visible_payload)}>
+              <%= landing.issue_identifier %> left <%= landing.from %> for <%= landing.to || "an unread state" %>
+            </li>
+          </ul>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
               <h2 class="section-title">Awaiting clarification</h2>
               <p class="section-copy">Quality-gate holds waiting for clearer issue context.</p>
             </div>
@@ -1006,7 +1067,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes())
+    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox())
   end
 
   defp queue_dashboard_reload(socket) do
@@ -1029,32 +1090,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> assign(:repo_filter, repo_filter)
     |> assign(:visible_payload, filter_payload(payload, repo_filter))
   end
-
-  defp gate_runner_line(%{running: running, queued: queued}) do
-    names = if running == [], do: "", else: " (#{Enum.map_join(running, ", ", & &1.identifier)})"
-    "#{length(running)} running#{names}, #{length(queued)} queued."
-  end
-
-  defp gate_verdict_line(entry) do
-    agent = if entry.agent_verdict in [nil, entry.verdict], do: "", else: " (agent: #{entry.agent_verdict})"
-    reasons = if entry.reasons == [], do: "", else: " · reasons: #{Enum.map_join(entry.reasons, ", ", & &1.rule)}"
-    %{met: met, unmet: unmet, unclear: unclear} = entry.criteria
-
-    "#{entry.issue_identifier}: #{entry.verdict}#{agent} · #{met} met, #{unmet} unmet, #{unclear} unclear#{reasons} · " <>
-      "#{entry.mode} · human: #{entry.human_decision || "waiting"}"
-  end
-
-  defp gate_agreement_line(repo_key, stats) do
-    readiness = if stats.ready_to_enforce, do: "ready to enforce", else: "not ready to enforce: #{stats.unmet_condition}"
-
-    "#{repo_key}: #{stats.judged} judged, #{stats.agreed} agreed (#{rate_label(stats.agreement_rate)}), " <>
-      "#{stats.unsafe_approvals} unsafe approvals, #{stats.false_reworks} false reworks, " <>
-      "#{stats.escalations} escalations (#{stats.escalations_merged_unchanged} merged unchanged), " <>
-      "gate tokens median #{stats.tokens.median || "n/a"}, p90 #{stats.tokens.p90 || "n/a"} · #{readiness}"
-  end
-
-  defp rate_label(nil), do: "n/a"
-  defp rate_label(rate), do: "#{round(rate * 100)}%"
 
   defp lane_status_label("running"), do: "Running"
   defp lane_status_label("yielded"), do: "Yielded"
@@ -1079,8 +1114,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp filter_payload(payload, repo_filter) when is_binary(repo_filter) do
     payload
     |> Map.update(:running, [], &filter_repo_rows(&1, repo_filter))
+    |> Map.update(:sessions, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:watching, [], &filter_repo_rows(&1, repo_filter))
-    |> Map.update(:human_review, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:retrying, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:awaiting_clarification, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:skipped, [], &filter_repo_rows(&1, repo_filter))
@@ -1093,11 +1128,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Map.put(payload, :counts, %{
       running: payload |> Map.get(:running, []) |> length(),
       watching: payload |> Map.get(:watching, []) |> length(),
-      human_review: payload |> Map.get(:human_review, []) |> length(),
       conflicts: payload |> Map.get(:conflicts, []) |> length(),
       retrying: payload |> Map.get(:retrying, []) |> length()
     })
   end
+
+  defp drain_stragglers(payload), do: get_in(payload, [Access.key(:drain_report, %{}), Access.key(:stragglers, [])])
+  defp drain_landed(payload), do: get_in(payload, [Access.key(:drain_report, %{}), Access.key(:landed, [])])
 
   defp filter_repo_rows(rows, repo_filter), do: Enum.filter(rows, &(Map.get(&1, :repo_key) == repo_filter))
 
@@ -1180,6 +1217,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
   end
 
+  defp inbox do
+    Endpoint.config(:inbox) || SymphonyElixir.Inbox
+  end
+
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
@@ -1238,6 +1279,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp format_ago(_seconds), do: "n/a"
+
+  defp waiting_kind_label("plan"), do: "Plan"
+  defp waiting_kind_label("action"), do: "Decision"
+  defp waiting_kind_label("clarify"), do: "Clarify"
+  defp waiting_kind_label("blocked"), do: "Blocked"
 
   defp github_webhooks(%{pollers: %{ci: %{webhooks: %{} = webhooks}}}), do: webhooks
   defp github_webhooks(_payload), do: nil

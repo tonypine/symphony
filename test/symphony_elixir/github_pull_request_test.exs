@@ -373,7 +373,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
         assert CiPoller.ci_action(status) == :pending
       end)
 
-    assert log =~ "Ignoring the checks of cancelled run(s) 37483418928 superseded by another run of the same workflow pr_url=#{pr_url} commit_sha=460a3f6"
+    assert log =~ "Ignoring the checks of superseded run(s) 37483418928: only the newest run of their workflow counts pr_url=#{pr_url} commit_sha=460a3f6"
 
     # Once the other run is green, so is the head.
     green = passed ++ [check.("macos", 37_483_170_247, "COMPLETED", "SUCCESS")]
@@ -397,6 +397,55 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, []))
       assert {:failure, [%{conclusion: "CANCELLED"} | _]} = CiPoller.ci_action(status)
     end
+  end
+
+  test "fetch_ci_status leaves out a completed run that a newer run of the same workflow superseded" do
+    pr_url = "https://github.com/org/repo/pull/379"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=b21d68d&per_page=100"
+
+    runner = fn rollup ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "b21d68d", "statusCheckRollup" => rollup}), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+    end
+
+    check = fn workflow, name, run_id, conclusion ->
+      %{
+        "name" => name,
+        "status" => "COMPLETED",
+        "conclusion" => conclusion,
+        "workflowName" => workflow,
+        "detailsUrl" => "https://github.com/org/repo/actions/runs/#{run_id}/job/#{name}"
+      }
+    end
+
+    # An edited PR body re-ran the workflow on the same head: the old FAILURE (38158828206) sits
+    # beside the new SUCCESS (38159202288), and only the newest run counts.
+    failed = check.("pr-description-lint", "validate-pr-description", 38_158_828_206, "FAILURE")
+    passed = check.("pr-description-lint", "validate-pr-description", 38_159_202_288, "SUCCESS")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([failed, passed]))
+        assert Enum.map(status.checks, & &1.run_id) == ["38159202288"]
+        assert CiPoller.ci_action(status) == :success
+      end)
+
+    assert log =~ "Ignoring the checks of superseded run(s) 38158828206: only the newest run of their workflow counts pr_url=#{pr_url} commit_sha=b21d68d"
+
+    # The newest run is authoritative even when it is the one that failed.
+    new_failed = check.("pr-description-lint", "validate-pr-description", 38_159_202_288, "FAILURE")
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([failed, new_failed]))
+    assert {:failure, [%{run_id: "38159202288"}]} = CiPoller.ci_action(status)
+
+    # Another workflow's failure is untouched by the supersession.
+    other = check.("release", "smoke", 38_159_999_999, "FAILURE")
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([failed, passed, other]))
+    assert {:failure, [%{name: "smoke"}]} = CiPoller.ci_action(status)
   end
 
   test "fetch_ci_status reads the base branch's required checks for a landing still waiting on a check" do
@@ -893,6 +942,20 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert "commitBody=" in fields
     end
 
+    test "close patches the pull request to the closed state" do
+      pr_url = "https://github.com/org/repo/pull/42"
+
+      runner = fn ["api", "repos/org/repo/pulls/42", "--method", "PATCH", "-f", "state=closed"], _opts ->
+        {~s({"state":"closed"}), 0}
+      end
+
+      assert :ok = PullRequest.close(pr_url, gh_runner: runner)
+      assert {:error, :invalid_pr_url} = PullRequest.close("https://example.com/nope", gh_runner: runner)
+
+      denied = fn _args, _opts -> {"gh: Resource not accessible by integration", 1} end
+      assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.close(pr_url, gh_runner: denied)
+    end
+
     test "update_branch asks GitHub to merge the base in for the expected head" do
       pr_url = "https://github.com/org/repo/pull/42"
 
@@ -906,6 +969,41 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, {:gh_failed, _args, 1, _output}} = PullRequest.update_branch(pr_url, "head-1", gh_runner: stale)
       assert {:error, :enoent} = PullRequest.update_branch(pr_url, "head-1", gh_runner: unavailable)
       assert {:error, :invalid_pr_url} = PullRequest.update_branch("https://github.com/org/repo/issues/42", "head-1", gh_runner: ok)
+    end
+
+    test "cancel_stale_runs cancels the head's unfinished workflow runs and names them" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      parent = self()
+
+      runs =
+        Jason.encode!(%{
+          "workflow_runs" => [
+            %{"id" => 1, "status" => "in_progress"},
+            %{"id" => 2, "status" => "queued"},
+            %{"id" => 3, "status" => "completed"}
+          ]
+        })
+
+      runner = fn
+        ["api", "repos/org/repo/actions/runs?head_sha=head-1&per_page=100"], _opts -> {runs, 0}
+        ["api", "repos/org/repo/actions/runs/" <> _ = endpoint, "--method", "POST"], _opts -> send(parent, {:cancel, endpoint}) && {"", 0}
+      end
+
+      assert {:ok, [1, 2]} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: runner)
+      assert_received {:cancel, "repos/org/repo/actions/runs/1/cancel"}
+      assert_received {:cancel, "repos/org/repo/actions/runs/2/cancel"}
+
+      refused = fn
+        ["api", "repos/org/repo/actions/runs?" <> _], _opts -> {runs, 0}
+        _cancel, _opts -> {"gh: Cannot cancel a workflow run that is completed. (HTTP 409)", 1}
+      end
+
+      assert {:error, {:gh_failed, _args, 1, "gh: Cannot cancel" <> _}} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: refused)
+      not_runs = fn _args, _opts -> {"[]", 0} end
+      unavailable = fn _args, _opts -> {:error, :enoent} end
+      assert {:error, :invalid_workflow_runs_payload} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: not_runs)
+      assert {:error, :enoent} = PullRequest.cancel_stale_runs(pr_url, "head-1", gh_runner: unavailable)
+      assert {:error, :invalid_pr_url} = PullRequest.cancel_stale_runs("https://github.com/org/repo/issues/42", "head-1", gh_runner: runner)
     end
   end
 
@@ -963,5 +1061,148 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, {:gh_failed, _args, 1, "Not Found"}} = PullRequest.commit_included?(pr_url, "m6", "b", gh_runner: runner)
       assert {:error, :invalid_pr_url} = PullRequest.commit_included?("not a url", "m1", "b", gh_runner: runner)
     end
+  end
+
+  describe "fetch_summary/2" do
+    test "reads a pull request's title, body, state, review decision, size and checks in one gh call" do
+      test_pid = self()
+      pr_url = "https://github.com/acme/app/pull/448"
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        {Jason.encode!(%{
+           "number" => 448,
+           "url" => pr_url,
+           "title" => "TP-892 Retire two review steps",
+           "body" => "## This PR\n\nGone.",
+           "state" => "OPEN",
+           "reviewDecision" => "",
+           "changedFiles" => 12,
+           "additions" => 120,
+           "deletions" => 480,
+           "headRefName" => "auto/TP-892",
+           "headRefOid" => "abc",
+           "statusCheckRollup" => [
+             %{"name" => "test", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+             %{"name" => "lint", "status" => "IN_PROGRESS", "conclusion" => nil}
+           ]
+         }), 0}
+      end
+
+      assert {:ok,
+              %{
+                number: 448,
+                url: ^pr_url,
+                title: "TP-892 Retire two review steps",
+                body: "## This PR\n\nGone.",
+                state: "OPEN",
+                review_decision: nil,
+                changed_files: 12,
+                additions: 120,
+                deletions: 480,
+                head_ref_name: "auto/TP-892",
+                checks: "pending"
+              }} = PullRequest.fetch_summary(pr_url, gh_runner: runner)
+
+      assert_received {:gh, ["pr", "view", ^pr_url, "--json", fields]}
+      assert fields =~ "statusCheckRollup"
+    end
+
+    test "answers an error for a bad URL, a failed gh call or an unreadable payload" do
+      pr_url = "https://github.com/acme/app/pull/448"
+      assert {:error, :invalid_pr_url} = PullRequest.fetch_summary("https://example.com/x", gh_runner: fn _args, _opts -> flunk("no call") end)
+
+      answering = fn output, status ->
+        PullRequest.fetch_summary(pr_url, gh_runner: fn _args, _opts -> {output, status} end)
+      end
+
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = answering.("Not Found", 1)
+      assert {:error, :invalid_pr_payload} = answering.("[]", 0)
+      assert {:error, {:invalid_pr_payload, _message}} = answering.("not json", 0)
+      assert {:ok, %{url: ^pr_url, checks: nil}} = answering.("{}", 0)
+    end
+  end
+
+  describe "fetch_page/2" do
+    test "reads the summary plus dates, changed files, commits and check counts in one gh call" do
+      test_pid = self()
+      pr_url = "https://github.com/acme/app/pull/448"
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        {Jason.encode!(%{
+           "number" => 448,
+           "url" => pr_url,
+           "title" => "TP-892 Retire two review steps",
+           "body" => "## This PR\n\nGone.",
+           "state" => "MERGED",
+           "reviewDecision" => "APPROVED",
+           "changedFiles" => 2,
+           "additions" => 12,
+           "deletions" => 48,
+           "headRefName" => "auto/TP-892",
+           "headRefOid" => "c2",
+           "createdAt" => "2026-10-12T09:00:00Z",
+           "mergedAt" => "2026-10-13T15:00:00Z",
+           "files" => [%{"path" => "lib/a.ex", "additions" => 10, "deletions" => 8}, %{"path" => "README.md", "additions" => 2}, %{"additions" => 1}],
+           "commits" => [
+             %{"oid" => "c1", "committedDate" => "2026-10-12T09:00:00Z"},
+             %{"oid" => "c2", "committedDate" => "2026-10-13T08:00:00Z"},
+             %{"oid" => "c3", "committedDate" => "not a date"},
+             %{"committedDate" => "2026-10-14T08:00:00Z"}
+           ],
+           "statusCheckRollup" => [
+             %{"name" => "test", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+             %{"name" => "lint", "status" => "COMPLETED", "conclusion" => "FAILURE"},
+             %{"name" => "docs", "status" => "IN_PROGRESS", "conclusion" => nil}
+           ]
+         }), 0}
+      end
+
+      assert {:ok, page} = PullRequest.fetch_page(pr_url, gh_runner: runner)
+
+      assert %{
+               number: 448,
+               title: "TP-892 Retire two review steps",
+               state: "MERGED",
+               review_decision: "APPROVED",
+               changed_files: 2,
+               checks: "failed",
+               created_at: ~U[2026-10-12 09:00:00Z],
+               merged_at: ~U[2026-10-13 15:00:00Z],
+               last_pushed_at: ~U[2026-10-13 08:00:00Z],
+               commits: ["c1", "c2", "c3"],
+               check_counts: %{passed: 1, failed: 1, pending: 1}
+             } = page
+
+      assert page.files == [%{path: "lib/a.ex", additions: 10, deletions: 8}, %{path: "README.md", additions: 2, deletions: 0}]
+      assert_received {:gh, ["pr", "view", ^pr_url, "--json", fields]}
+      assert fields =~ "files,commits"
+    end
+
+    test "a pull request GitHub doesn't have is not found, without dates it has none" do
+      pr_url = "https://github.com/acme/app/pull/9999"
+      missing = "GraphQL: Could not resolve to a PullRequest with the number of 9999. (repository.pullRequest)\n"
+
+      answering = fn output, status ->
+        PullRequest.fetch_page(pr_url, gh_runner: fn _args, _opts -> {output, status} end)
+      end
+
+      assert {:error, :not_found} = answering.(missing, 1)
+      assert {:error, {:gh_failed, _args, 1, "HTTP 502"}} = answering.("HTTP 502", 1)
+      assert {:ok, %{created_at: nil, merged_at: nil, last_pushed_at: nil} = page} = answering.("{}", 0)
+      assert %{files: [], commits: []} = page
+      assert page.check_counts == %{passed: 0, failed: 0, pending: 0}
+      assert {:error, :timeout} = PullRequest.fetch_page(pr_url, gh_runner: fn _args, _opts -> {:error, :timeout} end)
+    end
+  end
+
+  test "a head's checks fail when one finished without passing, else wait while one runs, else pass" do
+    assert PullRequest.checks_outcome([]) == nil
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "COMPLETED", conclusion: "SKIPPED"}]) == "passed"
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "QUEUED", conclusion: nil}]) == "pending"
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "FAILURE"}, %{status: "QUEUED", conclusion: nil}]) == "failed"
   end
 end

@@ -5,9 +5,8 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.AcceptanceGate
-  alias SymphonyElixir.AcceptanceGate.Runner, as: GateRunner
-  alias SymphonyElixir.{AuditLog, StrayProcesses}
+  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketState}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -76,10 +75,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, :unavailable, state}
     end
-  end
-
-  defmodule ConflictGateContext do
-    def build(_issue, _record, _sha, _settings, _opts), do: {:conflict, ["README.md"]}
   end
 
   defmodule StaticOrchestrator do
@@ -536,52 +531,33 @@ defmodule SymphonyElixir.ExtensionsTest do
         }
       )
 
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
-
-    :ok =
-      RunStore.put_run(%{
-        repo_key: "default",
-        run_id: "gate-MT-WATCH",
-        kind: "acceptance_gate",
-        issue_id: "issue-watch",
-        issue_identifier: "MT-WATCH",
-        pr_url: "https://github.com/example/repo/pull/123",
-        head_sha: "abc1234def",
-        mode: "shadow",
-        verdict: "escalate",
-        agent_verdict: "approve",
-        reasons: [%{rule: "size", detail: "1600 changed lines outside docs and tests"}],
-        criteria: %{met: 2, unmet: 0, unclear: 1},
-        tokens: %{total_tokens: 5_000},
-        started_at: ~U[2026-10-03 05:50:00Z],
-        judged_at: ~U[2026-10-03 06:00:00Z]
-      })
+    # A named inbox this test never starts, so the payload's inbox state is the same on every
+    # run: an unstarted inbox reads as read (`Inbox.read?/1`), independent of the app's Inbox poller.
+    start_test_endpoint(
+      orchestrator: orchestrator_name,
+      snapshot_timeout_ms: 50,
+      inbox: Module.concat(__MODULE__, :ObservabilityApiInbox)
+    )
 
     conn = get(build_conn(), "/api/v1/state")
     state_payload = json_response(conn, 200)
-
-    gate_verdict = %{
-      "repo_key" => "default",
-      "issue_id" => "issue-watch",
-      "issue_identifier" => "MT-WATCH",
-      "pr_url" => "https://github.com/example/repo/pull/123",
-      "head_sha" => "abc1234def",
-      "mode" => "shadow",
-      "verdict" => "escalate",
-      "agent_verdict" => "approve",
-      "reasons" => [%{"rule" => "size", "detail" => "1600 changed lines outside docs and tests"}],
-      "criteria" => %{"met" => 2, "unmet" => 0, "unclear" => 1},
-      "judged_at" => "2026-10-03T06:00:00Z",
-      "run_id" => "gate-MT-WATCH",
-      "human_decision" => nil,
-      "human_decided_at" => nil
-    }
+    assert is_integer(state_payload["uptime_seconds"]) and state_payload["uptime_seconds"] >= 0
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
              "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
+             "uptime_seconds" => state_payload["uptime_seconds"],
              "repos" => ["default"],
-             "counts" => %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2},
+             "counts" => %{
+               "running" => 1,
+               "watching" => 1,
+               "conflicts" => 0,
+               "retrying" => 1,
+               "claimed" => 2,
+               "forced" => 2,
+               "shipped_today" => 1,
+               "waiting_on_you" => 0
+             },
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -616,6 +592,15 @@ defmodule SymphonyElixir.ExtensionsTest do
                  }
                }
              ],
+             "sessions" => [
+               %{
+                 "kind" => "agent",
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "repo_key" => "default",
+                 "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at")
+               }
+             ],
              "watching" => [
                %{
                  "issue_id" => "issue-watch",
@@ -629,7 +614,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "seconds_since_last_run" => 3_600
                }
              ],
-             "human_review" => [],
+             "waiting_on_you" => [],
+             "inbox_read" => true,
              "conflicts" => [],
              "retrying" => [
                %{
@@ -645,6 +631,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "forced" => false
                }
              ],
+             "drain_report" => state_payload["drain_report"],
              "awaiting_clarification" => [],
              "skipped" => [],
              "run_history" => [
@@ -726,29 +713,6 @@ defmodule SymphonyElixir.ExtensionsTest do
                "used" => 1,
                "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
              },
-             "qa" => %{
-               "running" => [%{"issue_id" => "qa-forced-http", "identifier" => "MT-QA-F", "sha" => "abc1234def", "forced" => true}],
-               "queued" => [%{"issue_id" => "qa-queued-http", "identifier" => "MT-QA-Q", "forced" => false}]
-             },
-             "acceptance_gate" => %{
-               "running" => [],
-               "queued" => [],
-               "recent" => [gate_verdict],
-               "agreement" => %{
-                 "default" => %{
-                   "judged" => 0,
-                   "agreed" => 0,
-                   "agreement_rate" => nil,
-                   "unsafe_approvals" => 0,
-                   "false_reworks" => 0,
-                   "escalations" => 0,
-                   "escalations_merged_unchanged" => 0,
-                   "tokens" => %{"median" => nil, "p90" => nil},
-                   "ready_to_enforce" => false,
-                   "unmet_condition" => "at least 20 judged tickets (0 so far)"
-                 }
-               }
-             },
              "auto_merge" => [
                %{
                  "issue_id" => "merge-http",
@@ -760,16 +724,55 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "updated_at" => "2026-10-03T06:00:00Z"
                }
              ],
+             "landing_waits" => [
+               %{
+                 "issue_id" => "follow-http",
+                 "issue_identifier" => "MT-FOLLOW",
+                 "pull_request_url" => "https://github.com/acme/repo/pull/10",
+                 "state" => "QA",
+                 "waits_for" => %{
+                   "issue_id" => "merge-http",
+                   "issue_identifier" => "MT-MERGE",
+                   "pull_request_url" => "https://github.com/acme/repo/pull/9",
+                   "state" => "Merging"
+                 },
+                 "shared_files" => 2,
+                 "files" => ["lib/a.ex", "lib/b.ex"],
+                 "reason" => "waits for MT-MERGE to land (shares 2 files)",
+                 "since" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "slot_waiting" => [
                %{
                  "issue_id" => "wait-http",
                  "issue_identifier" => "MT-WAIT",
+                 "repo_key" => "default",
                  "title" => "Waiting",
                  "state" => "Todo",
-                 "reason" => "a Merging or Auto Review issue is waiting for a slot",
+                 "reason" => "a Merging issue is waiting for a slot",
                  "attempt" => nil,
                  "since" => "2026-10-03T06:00:00Z",
                  "forced" => false
+               }
+             ],
+             "dispatch_skipped" => [
+               %{
+                 "issue_id" => "skip-http",
+                 "issue_identifier" => "MT-SKIP",
+                 "repo_key" => "default",
+                 "title" => "Skipped",
+                 "state" => "Todo",
+                 "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+                 "since" => "2026-10-03T06:00:00Z"
+               }
+             ],
+             "shipped_today" => [
+               %{
+                 "issue_id" => "shipped-http",
+                 "issue_identifier" => "MT-SHIPPED",
+                 "title" => "Shipped",
+                 "repo_key" => "default",
+                 "completed_at" => "2026-10-03T07:00:00Z"
                }
              ],
              "blocked" => [
@@ -803,6 +806,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_id" => "forced-http",
                  "issue_identifier" => "MT-FORCED",
                  "title" => "Fix the release",
+                 "repo_key" => "web",
                  "state" => "In Review",
                  "forced_since" => "2026-10-03T05:00:00Z",
                  "forced_for_seconds" => 3_600,
@@ -820,6 +824,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_id" => "forced-parent-http",
                  "issue_identifier" => "MT-EPIC",
                  "title" => "Export",
+                 "repo_key" => nil,
                  "state" => "Waiting on sub-tickets",
                  "forced_since" => "2026-10-03T06:00:00Z",
                  "forced_for_seconds" => 300_000,
@@ -886,8 +891,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
-             "acceptance_gate" => nil,
-             "tracked" => %{}
+             "tracked" => %{},
+             "verdicts" => []
            }
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
@@ -918,8 +923,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
-             "acceptance_gate" => gate_verdict,
-             "tracked" => %{}
+             "tracked" => %{},
+             "verdicts" => []
            }
 
     conn = get(build_conn(), "/api/v1/MT-MISSING")
@@ -1067,7 +1072,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received :request_refresh_called
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
+    assert state_payload["counts"]["shipped_today"] == 1
+    assert state_payload["counts"]["forced"] == 2
   end
 
   test "phoenix observability api allows configured origins to refresh" do
@@ -1108,6 +1114,98 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(conn, 202)
 
     assert_received :request_refresh_called
+  end
+
+  test "phoenix observability api serves a ticket waiting for a slot or passed over by a dispatch gate" do
+    orchestrator_name = Module.concat(__MODULE__, :WaitingIssueApiOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot(), refresh: :unavailable)
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{
+             "status" => "dispatch_skipped",
+             "issue_id" => "skip-http",
+             "repo_key" => "default",
+             "running" => nil,
+             "retry" => nil,
+             "dispatch_skipped" => %{
+               "state" => "Todo",
+               "reason" => "priority medium is not in tickets.priorities (urgent, high)",
+               "since" => "2026-10-03T06:00:00Z"
+             },
+             "verdicts" => []
+           } = skipped = json_response(get(build_conn(), "/api/v1/MT-SKIP"), 200)
+
+    refute Map.has_key?(skipped, "slot_waiting")
+
+    assert %{
+             "status" => "slot_waiting",
+             "issue_id" => "wait-http",
+             "slot_waiting" => %{
+               "state" => "Todo",
+               "reason" => "a Merging issue is waiting for a slot",
+               "since" => "2026-10-03T06:00:00Z"
+             }
+           } = json_response(get(build_conn(), "/api/v1/MT-WAIT"), 200)
+
+    assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
+  end
+
+  test "phoenix observability api serves a ticket's code review and qa verdicts, newest first" do
+    reviewed = ~U[2026-10-12 09:00:00Z]
+    passed = ~U[2026-10-12 10:00:00Z]
+
+    record =
+      "default"
+      |> TicketState.new("issue-http", %{issue_identifier: "MT-HTTP"})
+      |> TicketState.record_verdict("code_review", "abc123", "approve", reviewed)
+      |> TicketState.record_verdict("ci_fix", "abc123", "mechanical", reviewed)
+      |> TicketState.record_verdict("qa", "abc123", "fail", passed)
+
+    gone =
+      "default"
+      |> TicketState.new("issue-gone", %{issue_identifier: "MT-GONE"})
+      |> TicketState.record_verdict("code_review", nil, "rework", reviewed)
+
+    retry = TicketState.new("other", "retry-elsewhere", %{issue_identifier: "MT-RETRY"})
+    retry = TicketState.record_verdict(retry, "qa", "def456", "pass", passed)
+
+    for ticket <- [record, gone, retry], do: assert(:ok = RunStore.put_ticket_state(ticket))
+
+    on_exit(fn ->
+      RunStore.delete_ticket_state("default", "issue-http")
+      RunStore.delete_ticket_state("default", "issue-gone")
+      RunStore.delete_ticket_state("other", "retry-elsewhere")
+    end)
+
+    snapshot = Map.update!(static_snapshot(), :retrying, fn entries -> Enum.map(entries, &Map.delete(&1, :repo_key)) end)
+    orchestrator_name = Module.concat(__MODULE__, :VerdictsApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot, refresh: :unavailable)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"verdicts" => verdicts} = json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+
+    assert verdicts == [
+             %{"kind" => "qa", "outcome" => "fail", "head_sha" => "abc123", "recorded_at" => "2026-10-12T10:00:00Z"},
+             %{"kind" => "code_review", "outcome" => "approve", "head_sha" => "abc123", "recorded_at" => "2026-10-12T09:00:00Z"}
+           ]
+
+    assert %{"status" => "retrying", "verdicts" => [%{"kind" => "qa", "outcome" => "pass"}]} =
+             json_response(get(build_conn(), "/api/v1/MT-RETRY"), 200)
+
+    assert %{"verdicts" => []} = json_response(get(build_conn(), "/api/v1/MT-WATCH"), 200)
+
+    assert %{
+             "status" => "untracked",
+             "repo_key" => "default",
+             "issue_id" => "issue-gone",
+             "running" => nil,
+             "verdicts" => [%{"kind" => "code_review", "outcome" => "rework", "head_sha" => nil}]
+           } = json_response(get(build_conn(), "/api/v1/MT-GONE"), 200)
+
+    assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
   end
 
   test "phoenix observability api exposes filtered quality runs and session reports" do
@@ -1377,6 +1475,640 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
+  test "the inbox api lists what waits on you from Symphony's cache, without a Linear request" do
+    test_pid = self()
+    inbox = {:test, make_ref()}
+
+    plan = %{
+      "id" => "issue-MT-PLAN",
+      "identifier" => "MT-PLAN",
+      "title" => "Plan the export",
+      "url" => "https://linear.app/example/issue/MT-PLAN",
+      "state" => %{"name" => "Plan Review"},
+      "labels" => %{"nodes" => [%{"name" => "plan"}]},
+      "children" => %{"nodes" => []},
+      "comments" => %{"nodes" => []},
+      "history" => %{"nodes" => [%{"createdAt" => "2026-10-01T10:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Plan Review"}}]}
+    }
+
+    linear_client = fn query, _variables, _opts ->
+      send(test_pid, {:linear, query})
+
+      if query =~ "SymphonyInboxList",
+        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-MT-PLAN", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [plan]}}}}
+    end
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    assert_received {:linear, _list_query}
+    assert_received {:linear, _detail_query}
+    assert_received {:linear, _references_query}
+
+    held = %{
+      kind: :clarification,
+      issue_id: "issue-MT-HELD",
+      repo_key: "default",
+      identifier: "MT-HELD",
+      title: "Vague",
+      state: "Todo",
+      url: "https://linear.app/example/issue/MT-HELD",
+      score: 3,
+      reason: "No acceptance criteria.",
+      rounds_asked: 1,
+      max_rounds: 2,
+      pass_threshold: 6,
+      questions: ["What should it do?"],
+      scored_at: ~U[2026-10-01 09:00:00Z]
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :awaiting_clarification, [held]))
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    payload = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+    state = json_response(get(build_conn(), "/api/v1/state"), 200)
+    refute_received {:linear, _query}
+
+    assert %{
+             "counts" => %{"total" => 2, "pr" => 0, "clarify" => 1, "plan" => 1, "action" => 0},
+             "items" => [
+               %{
+                 "identifier" => "MT-HELD",
+                 "kind" => "clarify",
+                 "ask" => "Answer the quality gate's questions",
+                 "waiting_since" => "2026-10-01T09:00:00Z",
+                 "review" => %{"held" => true, "score" => 3, "round" => 1, "max_rounds" => 2, "questions" => ["What should it do?"]}
+               },
+               %{
+                 "issue_id" => "issue-MT-PLAN",
+                 "identifier" => "MT-PLAN",
+                 "title" => "Plan the export",
+                 "repo_key" => "default",
+                 "kind" => "plan",
+                 "state" => "Plan Review",
+                 "ask" => "Approve the plan",
+                 "waiting_since" => "2026-10-01T10:00:00Z",
+                 "waiting_seconds" => waiting_seconds,
+                 "url" => "https://linear.app/example/issue/MT-PLAN",
+                 "review" => %{"brief" => nil, "sub_tickets" => []}
+               }
+             ]
+           } = payload
+
+    assert waiting_seconds > 0
+    assert state["counts"]["waiting_on_you"] == 2
+    assert state["inbox_read"]
+    assert Enum.map(state["waiting_on_you"], & &1["kind"]) == ["clarify", "plan"]
+
+    assert json_response(post(build_conn(), "/api/v1/inbox", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+  end
+
+  test "the initiatives api lists plan tickets from Symphony's cache, without a Linear request" do
+    test_pid = self()
+    initiatives = {:test, make_ref()}
+    inbox = {:test, make_ref()}
+
+    child = fn identifier, state, type, extra ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Part " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "createdAt" => "2026-10-01T10:00:00Z",
+          "state" => %{"name" => state, "type" => type},
+          "inverseRelations" => %{"nodes" => []}
+        },
+        extra
+      )
+    end
+
+    blocked_by = fn identifier ->
+      %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Plan Review", "type" => "started"}}}]}}
+    end
+
+    plan = fn identifier, state, type, children, extra ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Plan " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "completedAt" => nil,
+          "state" => %{"name" => state, "type" => type},
+          "children" => %{"nodes" => children}
+        },
+        extra
+      )
+    end
+
+    nodes = [
+      plan.("MT-DONE", "Done", "completed", [], %{"completedAt" => DateTime.utc_now() |> DateTime.to_iso8601()}),
+      plan.("MT-REVIEW", "Plan Review", "started", [], %{}),
+      plan.(
+        "MT-PLAN",
+        "Waiting on sub-tickets",
+        "started",
+        [
+          child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
+          child.("MT-2", "Plan Review", "started", %{}),
+          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"})
+        ],
+        %{}
+      ),
+      plan.("MT-QUEUED", "Waiting on sub-tickets", "started", [], %{})
+    ]
+
+    linear_client = fn query, _variables, _opts ->
+      send(test_pid, {:linear, query})
+      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => false}}}}}
+    end
+
+    SymphonyElixir.Initiatives.run_once(%{
+      opts: [
+        name: initiatives,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      timer: nil
+    })
+
+    assert_received {:linear, _query}
+
+    lanes = %{
+      max_total: 2,
+      lanes: [%{issue_id: "issue-MT-PLAN", identifier: "MT-PLAN", status: "running", sub_issue: %{identifier: "MT-HTTP"}}],
+      queued_epics: [%{issue_id: "issue-MT-QUEUED", identifier: "MT-QUEUED"}],
+      shared: %{slots: 1, used: 0}
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :InitiativesOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :epic_lanes, lanes))
+
+    start_test_endpoint(
+      orchestrator: orchestrator_name,
+      initiatives: initiatives,
+      inbox: inbox,
+      snapshot_timeout_ms: 50
+    )
+
+    payload = json_response(get(build_conn(), "/api/v1/initiatives"), 200)
+    refute_received {:linear, _query}
+
+    assert %{"read" => true, "counts" => %{"active" => 2, "in_review" => 1, "done" => 1}, "initiatives" => listed} = payload
+    assert Enum.map(listed, & &1["identifier"]) == ["MT-PLAN", "MT-QUEUED", "MT-REVIEW", "MT-DONE"]
+
+    assert %{
+             "issue_id" => "issue-MT-PLAN",
+             "title" => "Plan MT-PLAN",
+             "state" => "Waiting on sub-tickets",
+             "repo_key" => "default",
+             "url" => "https://linear.app/example/issue/MT-PLAN",
+             "group" => "active",
+             "counts" => %{"done" => 0, "working" => 1, "you" => 1, "queued" => 0, "blocked" => 1, "total" => 3},
+             "slot" => %{"status" => "running", "identifier" => "MT-HTTP", "reason" => nil},
+             "sub_tickets" => [
+               %{"identifier" => "MT-2", "waits_on" => "you", "blocked_by" => [], "waiting_for" => []},
+               %{"identifier" => "MT-3", "waits_on" => "blocker", "blocked_by" => ["MT-2"], "waiting_for" => ["MT-2"]},
+               %{"identifier" => "MT-HTTP", "waits_on" => "working"}
+             ]
+           } = hd(listed)
+
+    assert %{"slot" => %{"status" => "queued", "position" => 1}} = Enum.at(listed, 1)
+    refute Map.has_key?(hd(listed), "final_verification")
+    assert %{"slot" => nil} = Enum.at(listed, 2)
+
+    assert json_response(post(build_conn(), "/api/v1/initiatives", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+
+    no_lanes = Module.concat(__MODULE__, :InitiativesNoLanesOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: no_lanes, snapshot: Map.delete(static_snapshot(), :epic_lanes))
+
+    assert %{initiatives: [%{slot: nil} | _rest]} =
+             SymphonyElixirWeb.Presenter.initiatives_payload(no_lanes, 50, initiatives, inbox)
+
+    assert %{error: %{code: "snapshot_unavailable"}} =
+             SymphonyElixirWeb.Presenter.initiatives_payload(Module.concat(__MODULE__, :NoInitiatives), 50, initiatives)
+
+    timeout_orchestrator = Module.concat(__MODULE__, :InitiativesTimeoutOrchestrator)
+    {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
+    assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.initiatives_payload(timeout_orchestrator, 1, initiatives)
+  end
+
+  test "the inbox api returns a decision's what-waits, trade-offs and why recommended, and no time estimate" do
+    inbox = {:test, make_ref()}
+
+    body =
+      Request.render_hold(
+        %{
+          title: "Leave the old text to TP-891",
+          question: "Should TP-892 (Retire two old review steps) leave the old text to TP-891?",
+          why: "Code Review sent PR #448 back a second time.",
+          if_unanswered: "TP-892 stays in Rework.",
+          options: [
+            %{label: "Leave it to TP-891", effect: "TP-892 goes back to Code Review.", recommended: true, tradeoffs: [%{kind: "good", text: "TP-892 can merge today."}]},
+            %{label: "Remove it now", effect: "The next run deletes the old text."}
+          ],
+          recommendation_reason: "It is one line of text."
+        },
+        "Rework"
+      )
+
+    action = %{
+      "id" => "issue-TP-892",
+      "identifier" => "TP-892",
+      "title" => "Retire two old review steps",
+      "url" => "https://linear.app/example/issue/TP-892",
+      "state" => %{"name" => "Rework"},
+      "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+      "children" => %{"nodes" => []},
+      "comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-01T10:00:00Z"}]},
+      "history" => %{"nodes" => []}
+    }
+
+    linear_client = fn query, _variables, _opts ->
+      if query =~ "SymphonyInboxList",
+        do: {:ok, %{"data" => %{"issues" => %{"nodes" => [%{"id" => "issue-TP-892", "updatedAt" => "2026-10-01T10:00:00Z"}]}}}},
+        else: {:ok, %{"data" => %{"issues" => %{"nodes" => [action]}}}}
+    end
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxDecisionOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    assert %{"items" => [%{"identifier" => "TP-892", "kind" => "action", "review" => review}]} = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+
+    assert %{
+             "if_unanswered" => "TP-892 stays in Rework.",
+             "recommendation_reason" => "It is one line of text.",
+             "options" => [
+               %{"label" => "Leave it to TP-891", "recommended" => true, "tradeoffs" => [%{"kind" => "good", "text" => "TP-892 can merge today."}]},
+               %{"label" => "Remove it now", "recommended" => false, "tradeoffs" => []}
+             ]
+           } = review
+
+    refute Map.has_key?(review, "est_minutes")
+  end
+
+  # TP-892 waits on a decision that mentions TP-891 and #448; TP-923 is its parent, a plan in review
+  # whose brief mentions TP-947; TP-894 waits on its merge confirmation (#450); TP-900 is blocked
+  # and TP-901 held by the quality gate, both mentioning TP-891.
+  defp inbox_mentions_fixture(opts) do
+    {inbox, orchestrator_name} = inbox_mentions_poll(opts)
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+    json_response(get(build_conn(), "/api/v1/inbox"), 200)
+  end
+
+  defp inbox_mentions_poll(opts) do
+    request =
+      Request.render_hold(
+        %{
+          title: "Leave the old review text to TP-891",
+          question: "Should TP-892 leave the old review text to TP-891?",
+          why: "Code Review sent PR #448 back a second time over text TP-891 removes anyway.",
+          if_unanswered: "TP-892 stays in Rework.",
+          options: [
+            %{label: "Leave it to TP-891", effect: "TP-892 goes back to Code Review.", recommended: true},
+            %{label: "Remove it now", effect: "The next run deletes the old text."}
+          ],
+          recommendation_reason: "TP-891 removes it within the week."
+        },
+        "Rework"
+      )
+
+    node = fn identifier, attrs ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Title of " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "state" => %{"name" => "In Progress"},
+          "labels" => %{"nodes" => []},
+          "children" => %{"nodes" => []},
+          "comments" => %{"nodes" => []},
+          "history" => %{"nodes" => []}
+        },
+        attrs
+      )
+    end
+
+    action =
+      node.("TP-892", %{
+        "state" => %{"name" => "Rework"},
+        "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+        "comments" => %{
+          "nodes" => [
+            %{"id" => "earlier", "body" => String.replace(request, "Leave the old review text to TP-891", "Keep the old step"), "createdAt" => "2026-10-13T05:00:00Z"},
+            %{"id" => "answer", "body" => "Keep it", "createdAt" => "2026-10-13T05:48:00Z", "parent" => %{"id" => "earlier"}},
+            %{"id" => "request", "body" => request, "createdAt" => "2026-10-13T09:00:00Z"}
+          ]
+        }
+      })
+
+    merge =
+      node.("TP-894", %{
+        "state" => %{"name" => "QA"},
+        "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+        "comments" => %{"nodes" => [%{"id" => "merge", "body" => String.replace(request, "PR #448", "PR #450"), "createdAt" => "2026-10-13T08:00:00Z"}]}
+      })
+
+    plan =
+      node.("TP-923", %{
+        "state" => %{"name" => "Plan Review"},
+        "labels" => %{"nodes" => [%{"name" => "plan"}]},
+        "comments" => %{
+          "nodes" => [%{"id" => "brief", "body" => "## Review brief\n\n**What to review:** the plan.\n\n- TP-947: decisions in your words.\n", "createdAt" => "2026-10-13T07:00:00Z"}]
+        }
+      })
+
+    blocked = node.("TP-900", %{"labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
+    nodes = [action, merge, plan, blocked]
+
+    children = for type <- ~w(completed completed completed completed started unstarted backlog), do: %{"createdAt" => "2026-10-12T00:00:00Z", "state" => %{"type" => type}}
+
+    own_892 = %{
+      "id" => "issue-TP-892",
+      "identifier" => "TP-892",
+      "parent" => %{"identifier" => "TP-923", "title" => "Improve decision handling", "children" => %{"nodes" => children}},
+      "attachments" => %{"nodes" => [%{"url" => "https://github.com/example/app/pull/448"}]},
+      "relations" => %{"nodes" => [%{"type" => "related", "relatedIssue" => %{"identifier" => "TP-891", "title" => "Remove the retired review states", "state" => %{"name" => "In Progress"}}}]},
+      "inverseRelations" => %{"nodes" => []}
+    }
+
+    ticket = fn identifier, title, state, type ->
+      %{
+        "id" => "issue-" <> identifier,
+        "identifier" => identifier,
+        "title" => title,
+        "description" => "Remove the review states nobody uses. The [old flows](https://example.com) go too.",
+        "url" => "https://linear.app/example/issue/" <> identifier,
+        "state" => %{"name" => state, "type" => type},
+        "parent" => %{"identifier" => "TP-923", "title" => "Improve decision handling"},
+        "attachments" => %{"nodes" => []},
+        "inverseRelations" => %{"nodes" => []}
+      }
+    end
+
+    mentioned =
+      [
+        ticket.("TP-891", "Remove the retired review states", "In Progress", "started"),
+        ticket.("TP-892", "Retire two old review steps", "Rework", "started"),
+        ticket.("TP-947", "Write decisions in your words", "Done", "completed")
+      ]
+      |> Enum.reject(&(&1["identifier"] in Keyword.get(opts, :unreadable, [])))
+
+    test_pid = self()
+
+    linear_client = fn query, variables, _opts ->
+      cond do
+        query =~ "SymphonyInboxList" ->
+          {:ok, %{"data" => %{"issues" => %{"nodes" => Enum.map(nodes, &%{"id" => &1["id"], "updatedAt" => "2026-10-13T09:00:00Z"})}}}}
+
+        query =~ "SymphonyInboxIssues" ->
+          {:ok, %{"data" => %{"issues" => %{"nodes" => Enum.filter(nodes, &(&1["id"] in variables.filter["id"]["in"]))}}}}
+
+        query =~ "SymphonyInboxReferences" ->
+          send(test_pid, :references_query)
+          {:ok, %{"data" => %{"own" => %{"nodes" => [own_892]}, "mentioned" => %{"nodes" => mentioned}}}}
+      end
+    end
+
+    pull_request = fn url ->
+      if url in Keyword.get(opts, :unreadable, []) do
+        {:error, {:gh_failed, ["pr", "view"], 1, "HTTP 502"}}
+      else
+        number = url |> String.split("/") |> List.last() |> String.to_integer()
+
+        {:ok,
+         %{
+           number: number,
+           url: url,
+           title: "TP-892 Remove the Final verification and Supervisor check flows",
+           body: "## This PR\n\nThe two retired review steps are gone. Nothing else changes.",
+           state: "OPEN",
+           review_decision: nil,
+           changed_files: 14,
+           additions: 120,
+           deletions: 610,
+           head_ref_name: "auto/TP-892",
+           checks: "passed"
+         }}
+      end
+    end
+
+    merge_hold =
+      SymphonyElixir.MergeConfirmation.attrs(SymphonyElixir.MergeConfirmation.request(%SymphonyElixir.Linear.Issue{identifier: "TP-894"}, %{recommendation: "merge", review: nil, qa: "pass", pr: nil}))
+
+    blocked_hold = %{
+      kind: :blocked,
+      reason: "Waits on TP-891's fix to the review states",
+      clearing_condition: "when a person unblocks it",
+      waits_on: %{type: "access", keys: []},
+      decision: nil,
+      set_at: ~U[2026-10-13 06:00:00Z]
+    }
+
+    held = %{
+      kind: :clarification,
+      issue_id: "issue-TP-901",
+      repo_key: "default",
+      identifier: "TP-901",
+      title: "Vague",
+      state: "Todo",
+      url: "https://linear.app/example/issue/TP-901",
+      score: 3,
+      reason: "Like TP-891, it has no acceptance criteria.",
+      questions: [],
+      scored_at: ~U[2026-10-13 04:00:00Z]
+    }
+
+    inbox = {:test, make_ref()}
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client,
+        snapshot: fn -> %{awaiting_clarification: [held]} end,
+        github_repos: %{"default" => "example/app"},
+        pull_request: pull_request,
+        verdicts: fn
+          "default", "issue-TP-892" -> [%{head_sha: "b", outcome: "request_changes"}, %{head_sha: "a", outcome: "request_changes"}]
+          _repo_key, _issue_id -> []
+        end,
+        hold: fn
+          _repo_key, "issue-TP-894" -> merge_hold
+          _repo_key, "issue-TP-900" -> blocked_hold
+          _repo_key, _issue_id -> nil
+        end
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    assert_received :references_query
+    refute_received :references_query
+
+    orchestrator_name = Module.concat(__MODULE__, "InboxMentions#{System.unique_integer([:positive])}")
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :awaiting_clarification, [held]))
+    {inbox, orchestrator_name}
+  end
+
+  defp inbox_item(payload, identifier), do: Enum.find(payload["items"], &(&1["identifier"] == identifier))
+
+  test "the inbox api returns what each item mentions and where its ticket sits, for every kind" do
+    payload = inbox_mentions_fixture([])
+
+    assert Enum.map(payload["items"], &{&1["identifier"], &1["kind"]}) |> Enum.sort() ==
+             [{"TP-892", "action"}, {"TP-894", "action"}, {"TP-900", "blocked"}, {"TP-901", "clarify"}, {"TP-923", "plan"}]
+
+    for item <- payload["items"] do
+      assert is_map(item["references"]), item["identifier"]
+      assert %{"parent" => _, "pull_request" => _, "blocked_by" => _, "blocks" => _, "related" => _, "earlier_decisions" => _} = item["context"]
+    end
+
+    # 1. The decision's mentions: a ticket with its title, state and summary, and a pull request with
+    # its review state, size and checks.
+    action = inbox_item(payload, "TP-892")
+
+    assert %{
+             "kind" => "ticket",
+             "identifier" => "TP-891",
+             "title" => "Remove the retired review states",
+             "repo_key" => "default",
+             "state" => "In Progress",
+             "summary" => "Remove the review states nobody uses.",
+             "url" => "https://linear.app/example/issue/TP-891",
+             "parent" => %{"identifier" => "TP-923", "title" => "Improve decision handling"},
+             "pull_request" => nil,
+             "waiting_on" => "a slot"
+           } = action["references"]["TP-891"]
+
+    refute Map.has_key?(action["references"]["TP-891"], "facts")
+
+    assert %{
+             "kind" => "pull_request",
+             "number" => 448,
+             "repo_key" => "default",
+             "url" => "https://github.com/example/app/pull/448",
+             "title" => "TP-892 Remove the Final verification and Supervisor check flows",
+             "summary" => "The two retired review steps are gone.",
+             "review_state" => "changes_requested",
+             "review_rounds" => 2,
+             "files" => 14,
+             "additions" => 120,
+             "deletions" => 610,
+             "checks" => "passed",
+             "ticket" => "TP-892"
+           } = action["references"]["PR #448"]
+
+    assert action["references"]["TP-892"]["waiting_on"] == "you"
+
+    # 3. Where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request sent back twice,
+    # TP-891 connected, and the decision answered at 05:48.
+    assert action["context"] == %{
+             "parent" => %{
+               "identifier" => "TP-923",
+               "title" => "Improve decision handling",
+               "done" => 4,
+               "total" => 7,
+               "children" => ~w(completed completed completed completed started unstarted backlog)
+             },
+             "pull_request" => %{"number" => 448, "url" => "https://github.com/example/app/pull/448", "checks" => "passed", "sent_back" => 2},
+             "blocked_by" => [],
+             "blocks" => [],
+             "related" => [%{"identifier" => "TP-891", "title" => "Remove the retired review states", "state" => "In Progress"}],
+             "earlier_decisions" => [%{"at" => "2026-10-13T05:48:00Z", "title" => "Keep the old step", "answer" => "Keep it"}]
+           }
+
+    # A pull request waiting on its merge confirmation, a plan, a blocked ticket and a held one.
+    merge = inbox_item(payload, "TP-894")
+    assert merge["review"]["confirm"] == "Merging"
+    assert %{"kind" => "pull_request", "number" => 450} = merge["references"]["PR #450"]
+
+    assert %{"TP-947" => %{"kind" => "ticket", "state" => "Done", "waiting_on" => nil}} = inbox_item(payload, "TP-923")["references"]
+    assert %{"TP-891" => %{"kind" => "ticket"}} = inbox_item(payload, "TP-900")["references"]
+    assert %{"TP-891" => %{"kind" => "ticket"}} = inbox_item(payload, "TP-901")["references"]
+  end
+
+  test "the inbox api returns a mention it can't read as missing and leaves the rest of the item as it was" do
+    {inbox, orchestrator_name} = inbox_mentions_poll([])
+    readable = orchestrator_name |> SymphonyElixirWeb.Presenter.inbox_payload(50, inbox) |> Jason.encode!() |> Jason.decode!()
+    # 2. Linear can't read TP-891, and GitHub can't read #448.
+    payload = inbox_mentions_fixture(unreadable: ["TP-891", "https://github.com/example/app/pull/448"])
+
+    action = inbox_item(payload, "TP-892")
+    assert action["references"]["TP-891"] == %{"kind" => "missing", "url" => "https://linear.app/example/issue/TP-891"}
+    assert action["references"]["PR #448"] == %{"kind" => "missing", "url" => "https://github.com/example/app/pull/448"}
+
+    # The context's pull request is #448 too: its checks are unknown, the rest of it stays.
+    before = inbox_item(readable, "TP-892")
+    assert action["context"]["pull_request"] == %{before["context"]["pull_request"] | "checks" => nil}
+    before = put_in(before, ["context", "pull_request", "checks"], nil)
+    assert Map.drop(action, ["references", "waiting_seconds"]) == Map.drop(before, ["references", "waiting_seconds"])
+    assert Map.drop(action["references"], ["TP-891", "PR #448"]) == Map.drop(before["references"], ["TP-891", "PR #448"])
+  end
+
+  test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do
+    inbox = {:test, make_ref()}
+
+    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
+      %{
+        issue_id: "issue-MT-ACT",
+        identifier: "MT-ACT",
+        title: "Signing",
+        repo_key: "default",
+        kind: :action,
+        state: "Human Review",
+        ask: "Add the signing secret",
+        waiting_since: nil,
+        url: nil,
+        review: %{title: "Add the signing secret", steps: ["Add it"], requested_at: ~U[2026-10-01 08:00:00.123Z]}
+      }
+    ])
+
+    orchestrator_name = Module.concat(__MODULE__, :InboxActionOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+
+    assert %{items: [%{waiting_seconds: nil, review: %{requested_at: "2026-10-01T08:00:00Z"}}]} =
+             SymphonyElixirWeb.Presenter.inbox_payload(orchestrator_name, 50, inbox)
+
+    assert %{error: %{code: "snapshot_unavailable"}} = SymphonyElixirWeb.Presenter.inbox_payload(Module.concat(__MODULE__, :NoInbox), 50, inbox)
+
+    timeout_orchestrator = Module.concat(__MODULE__, :InboxTimeoutOrchestrator)
+    {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
+    assert %{error: %{code: "snapshot_timeout"}} = SymphonyElixirWeb.Presenter.inbox_payload(timeout_orchestrator, 1, inbox)
+  end
+
   test "phoenix observability api preserves snapshot timeout behavior" do
     timeout_orchestrator = Module.concat(__MODULE__, :TimeoutOrchestrator)
     {:ok, _pid} = SlowOrchestrator.start_link(name: timeout_orchestrator)
@@ -1389,6 +2121,19 @@ defmodule SymphonyElixir.ExtensionsTest do
                "generated_at" => timeout_payload["generated_at"],
                "error" => %{"code" => "snapshot_timeout", "message" => "Snapshot timed out"}
              }
+  end
+
+  test "every web dashboard page shows the Mac app banner once" do
+    orchestrator_name = Module.concat(__MODULE__, :BannerOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot(), refresh: %{})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    for path <- ["/", "/quality", "/learnings", "/audit", "/repos/default/issues/MT-HTTP/transcript", "/issues/MT-HTTP/transcript"] do
+      html = html_response(get(build_conn(), path), 200)
+      banner = "Symphony for Mac is now where you direct the factory. This dashboard stays for Linux and remote use and gets no new features."
+
+      assert length(String.split(html, banner)) == 2, "expected one banner on #{path}"
+    end
   end
 
   test "dashboard bootstraps liveview from embedded static assets" do
@@ -1464,19 +2209,91 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert live_view_js =~ "var LiveView = (() => {"
   end
 
-  test "the state api and the dashboard list tickets waiting in Human Review" do
-    human_review = %{
-      issue_id: "issue-human",
+  defmodule DrainTracker do
+    def fetch_issues_by_states(_states), do: {:ok, Process.get(:drain_issues, [])}
+    def fetch_issue_states_by_ids(_ids), do: {:ok, [%{id: "issue-gone", state: "Plan Review"}]}
+  end
+
+  test "the state api and the dashboard show the drain report: stragglers with their wait, and where the gone ones landed" do
+    on_exit(&RetiredStates.reset_for_test/0)
+    RetiredStates.reset_for_test()
+
+    Process.put(:drain_issues, [%{id: "issue-gone", identifier: "MT-GONE", state: "Human Review", labels: ["plan"]}])
+    capture_log(fn -> RetiredStates.report(tracker: DrainTracker, now_ms: 0) end)
+
+    Process.put(:drain_issues, [
+      %{id: "issue-drain", identifier: "MT-DRAIN", title: "Old", url: "https://linear.app/example/issue/MT-DRAIN", state: "In Review", labels: []},
+      %{id: "issue-nourl", identifier: nil, state: "Human Review", labels: []}
+    ])
+
+    capture_log(fn -> RetiredStates.report(tracker: DrainTracker, now_ms: 1) end)
+
+    orchestrator_name = Module.concat(__MODULE__, :DrainOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{
+             "stragglers" => [
+               %{"issue_identifier" => "MT-DRAIN", "state" => "In Review", "wait" => "supervisor_check", "waits_on" => "a supervisor check of its PR"},
+               %{"issue_identifier" => "issue-nourl", "wait" => "open_decision", "url" => nil}
+             ],
+             "landed" => [%{"issue_identifier" => "MT-GONE", "from" => "Human Review", "to" => "Plan Review"}]
+           } = json_response(get(build_conn(), "/api/v1/state"), 200)["drain_report"]
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Drain report"
+    assert html =~ "MT-DRAIN"
+    assert html =~ "a supervisor check of its PR"
+    assert html =~ "MT-GONE left Human Review for Plan Review"
+
+    RetiredStates.reset_for_test()
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "No ticket left in a retired state"
+  end
+
+  test "the state api and the dashboard list what waits on you, oldest first, without tickets that left review" do
+    now = DateTime.utc_now()
+
+    entry = fn identifier, kind, hours_ago, ask ->
+      %{
+        issue_id: "issue-" <> identifier,
+        identifier: identifier,
+        title: "Title of " <> identifier,
+        repo_key: "default",
+        url: "https://linear.app/example/issue/" <> identifier,
+        state: "Plan Review",
+        kind: kind,
+        waiting_since: hours_ago && DateTime.add(now, -hours_ago * 3_600, :second),
+        ask: ask,
+        review: %{}
+      }
+    end
+
+    inbox = {:test, make_ref()}
+
+    :persistent_term.put({SymphonyElixir.Inbox, :items, inbox}, [
+      entry.("MT-PR", :action, 1, "The retry fix"),
+      entry.("MT-UNKNOWN", :blocked, nil, nil),
+      entry.("MT-PLAN", :plan, 3, "The split into four sub-tickets"),
+      entry.("MT-ACTION", :action, 2, nil),
+      entry.("MT-APPROVED", :plan, 4, "Approved already"),
+      entry.("MT-HTTP", :pr, 5, "Running again")
+    ])
+
+    approved = %{
+      issue_id: "issue-MT-APPROVED",
       repo_key: "default",
-      identifier: "MT-HUMAN",
-      state: "Human Review",
-      url: "https://linear.app/example/issue/MT-HUMAN",
-      last_ran_at: DateTime.add(DateTime.utc_now(), -60, :second),
-      seconds_since_last_run: 60
+      identifier: "MT-APPROVED",
+      state: "Waiting on sub-tickets",
+      url: nil,
+      last_ran_at: nil,
+      seconds_since_last_run: nil
     }
 
-    snapshot = Map.update!(static_snapshot(), :watching, &(&1 ++ [human_review]))
-    orchestrator_name = Module.concat(__MODULE__, :HumanReviewOrchestrator)
+    in_review = %{approved | issue_id: "issue-MT-PR", identifier: "MT-PR", state: "Plan Review"}
+    snapshot = static_snapshot()
+    snapshot = %{snapshot | watching: snapshot.watching ++ [approved, in_review], running: Enum.map(snapshot.running, &%{&1 | issue_id: "issue-MT-HTTP"})}
+    orchestrator_name = Module.concat(__MODULE__, :WaitingOnYouOrchestrator)
 
     {:ok, _pid} =
       StaticOrchestrator.start_link(
@@ -1485,15 +2302,44 @@ defmodule SymphonyElixir.ExtensionsTest do
         refresh: %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}
       )
 
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
 
-    state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert %{"watching" => 2, "human_review" => 1} = state_payload["counts"]
-    assert [%{"issue_identifier" => "MT-HUMAN", "state" => "Human Review", "url" => "https://linear.app/example/issue/MT-HUMAN"}] = state_payload["human_review"]
+    waiting = json_response(get(build_conn(), "/api/v1/state"), 200)["waiting_on_you"]
+    assert Enum.map(waiting, & &1["issue_identifier"]) == ["MT-PLAN", "MT-ACTION", "MT-PR", "MT-UNKNOWN"]
+
+    assert [
+             %{
+               "issue_id" => "issue-MT-PLAN",
+               "title" => "Title of MT-PLAN",
+               "url" => "https://linear.app/example/issue/MT-PLAN",
+               "state" => "Plan Review",
+               "kind" => "plan",
+               "headline" => "The split into four sub-tickets",
+               "waiting_since" => waiting_since,
+               "waiting_seconds" => waiting_seconds
+             },
+             %{"kind" => "action", "headline" => nil},
+             %{"kind" => "action", "state" => "Plan Review", "headline" => "The retry fix"},
+             %{"kind" => "blocked", "waiting_since" => nil, "waiting_seconds" => nil}
+           ] = waiting
+
+    assert is_binary(waiting_since)
+    assert waiting_seconds in 10_799..10_860
 
     {:ok, _view, html} = live(build_conn(), "/")
-    assert html =~ "Human Review"
-    assert html =~ "needs you"
+    assert html =~ "Waiting on you"
+    rows = Regex.scan(~r/<tr class="waiting-on-you-row">.*?<\/tr>/s, html) |> Enum.map(&hd/1)
+    assert length(rows) == 4
+    assert Enum.at(rows, 0) =~ "MT-PLAN"
+    assert Enum.at(rows, 0) =~ "Plan"
+    assert Enum.at(rows, 0) =~ "The split into four sub-tickets"
+    assert Enum.at(rows, 0) =~ "3h ago"
+    assert Enum.at(rows, 1) =~ "Decision"
+    assert Enum.at(rows, 1) =~ "Title of MT-ACTION"
+    assert Enum.at(rows, 2) =~ "Decision"
+    assert Enum.at(rows, 3) =~ "Blocked"
+    assert Enum.at(rows, 3) =~ "n/a"
+    refute Enum.any?(rows, &(&1 =~ "MT-APPROVED"))
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do
@@ -1714,119 +2560,6 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert html =~ "MT-QA"
     refute html =~ "MT-API-RUN"
-  end
-
-  test "dashboard liveview shows the acceptance gate's passes, verdicts and each repo's agreement" do
-    orchestrator_name = Module.concat(__MODULE__, :AcceptanceGateDashboardOrchestrator)
-    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
-
-    {:ok, _view, html} = live(build_conn(), "/")
-    assert html =~ "Auto Review"
-    assert html =~ "Acceptance gate: 0 running, 0 queued."
-    assert html =~ "The acceptance gate has not judged a ticket yet."
-
-    test_pid = self()
-
-    run_fun = fn _job, _opts ->
-      send(test_pid, {:gate_pass, self()})
-
-      receive do
-        :finish -> :ok
-      end
-    end
-
-    start_supervised!({GateRunner, run_fun: run_fun})
-    issue = %{id: "issue-gate", identifier: "MT-GATE"}
-    gate_job = %{issue: issue, record: %{repo_key: "default", workspace_path: "/tmp/ws"}, sha: "abc1234", settings: Config.settings!()}
-    assert :started = GateRunner.request(gate_job, [])
-    assert_receive {:gate_pass, pass_pid}
-    on_exit(fn -> send(pass_pid, :finish) end)
-
-    gate_run = fn repo_key, identifier, verdict, attrs ->
-      Map.merge(
-        %{
-          repo_key: repo_key,
-          run_id: "gate-#{identifier}",
-          kind: "acceptance_gate",
-          issue_id: "issue-#{identifier}",
-          issue_identifier: identifier,
-          head_sha: "abc1234",
-          mode: "shadow",
-          verdict: verdict,
-          agent_verdict: verdict,
-          reasons: [],
-          criteria: %{met: 1, unmet: 0, unclear: 0},
-          tokens: %{total_tokens: 1_000},
-          started_at: ~U[2026-10-03 05:00:00Z],
-          judged_at: ~U[2026-10-03 05:00:00Z]
-        },
-        attrs
-      )
-    end
-
-    decided = %{human_decision: "approve", human_decided_at: ~U[2026-10-03 07:00:00Z], unchanged: true}
-
-    runs =
-      [
-        gate_run.("default", "MT-ESC", "escalate", %{
-          agent_verdict: "approve",
-          reasons: [%{rule: "size", detail: "1600 changed lines"}],
-          criteria: %{met: 2, unmet: 0, unclear: 1},
-          judged_at: ~U[2026-10-03 06:00:00Z]
-        }),
-        gate_run.("web", "MT-WEB", "approve", %{judged_at: ~U[2026-10-03 05:30:00Z]}),
-        gate_run.("api", "MT-API", "rework", decided)
-      ] ++ for(n <- 1..20, do: gate_run.("default", "MT-OK-#{n}", "approve", Map.put(decided, :judged_at, ~U[2026-10-03 05:00:00Z] |> DateTime.add(n))))
-
-    Enum.each(runs, &(:ok = RunStore.put_run(&1)))
-
-    {:ok, _view, html} = live(build_conn(), "/")
-
-    assert html =~ "Acceptance gate: 1 running (MT-GATE), 0 queued."
-    assert html =~ "MT-ESC: escalate (agent: approve) · 2 met, 0 unmet, 1 unclear · reasons: size · shadow · human: waiting"
-    assert html =~ "MT-WEB: approve · 1 met, 0 unmet, 0 unclear · shadow · human: waiting"
-    assert html =~ "MT-OK-20: approve · 1 met, 0 unmet, 0 unclear · shadow · human: approve"
-
-    assert html =~
-             "default: 20 judged, 20 agreed (100%), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), " <>
-               "gate tokens median 1000, p90 1000 · ready to enforce"
-
-    assert html =~
-             "api: 1 judged, 0 agreed (0%), 0 unsafe approvals, 1 false reworks, 0 escalations (0 merged unchanged), " <>
-               "gate tokens median 1000, p90 1000 · not ready to enforce: at least 20 judged tickets (1 so far)"
-
-    assert html =~ "web: 0 judged, 0 agreed (n/a), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), gate tokens median n/a, p90 n/a"
-  end
-
-  test "state api and dashboard list a gate run the acceptance gate stored among the recent runs" do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
-    audit_dir = Path.join(System.tmp_dir!(), "gate-run-history-#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf(audit_dir) end)
-
-    issue = %Issue{id: "issue-gate-run", identifier: "MT-GATE-RUN", title: "Gate run", description: "", state: "Auto Review", labels: []}
-    record = %{repo_key: "default", issue_id: issue.id, pr_url: "https://github.com/example/repo/pull/7", workspace_path: "/tmp/ws"}
-    job = %{issue: issue, record: record, sha: "abc1234def", settings: Config.settings!(), qa: %{verdict: :pass}}
-
-    assert {:ok, %{verdict: "rework"}} = AcceptanceGate.judge(job, context: ConflictGateContext, dir: audit_dir)
-    assert [gate_run] = RunStore.list_runs("default", :all)
-    refute Map.has_key?(gate_run, :attempt)
-
-    orchestrator_name = Module.concat(__MODULE__, :GateRunHistoryOrchestrator)
-    snapshot = %{static_snapshot() | run_history: [gate_run]}
-    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
-
-    state_payload = build_conn() |> get("/api/v1/state") |> json_response(200)
-
-    assert [%{"kind" => "acceptance_gate", "issue_identifier" => "MT-GATE-RUN", "status" => "gate_rework", "attempt" => nil}] =
-             state_payload["run_history"]
-
-    assert [%{"issue_identifier" => "MT-GATE-RUN", "verdict" => "rework"}] = state_payload["acceptance_gate"]["recent"]
-
-    {:ok, _view, html} = live(build_conn(), "/")
-
-    assert html =~ "MT-GATE-RUN: rework"
   end
 
   test "state api and dashboard show Linear requests per caller for the last hour" do
@@ -2184,11 +2917,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Waiting for a lane: MT-E4"
     refute html =~ "No active epics"
 
+    refute html =~ "Auto Review passes"
     assert html =~ "Finishing runs"
     assert html =~ "Landing: MT-LAND"
     assert html =~ "MT-MERGE: auto-merge on, waiting for CI on `abc1234`"
     assert html =~ "MT-WAIT"
-    assert html =~ "a Merging or Auto Review issue is waiting for a slot"
+    assert html =~ "a Merging issue is waiting for a slot"
     refute html =~ "Nothing is waiting to start."
     assert html =~ "Waiting on blockers"
     assert html =~ "MT-VERIFY waiting on MT-GAP (In Progress)"
@@ -3559,7 +4293,17 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
+
+    assert response.body["counts"] == %{
+             "running" => 1,
+             "watching" => 1,
+             "conflicts" => 0,
+             "retrying" => 1,
+             "claimed" => 2,
+             "forced" => 2,
+             "shipped_today" => 1,
+             "waiting_on_you" => 0
+           }
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -3788,10 +4532,6 @@ defmodule SymphonyElixir.ExtensionsTest do
         shared: %{slots: 1, used: 1}
       },
       finishing: %{slots: 2, used: 1, running: [%{issue_id: "land-http", identifier: "MT-LAND", state: "Merging"}]},
-      qa: %{
-        running: [%{issue_id: "qa-forced-http", identifier: "MT-QA-F", sha: "abc1234def", forced: true}],
-        queued: [%{issue_id: "qa-queued-http", identifier: "MT-QA-Q", forced: false}]
-      },
       auto_merge: [
         %{
           issue_id: "merge-http",
@@ -3803,6 +4543,19 @@ defmodule SymphonyElixir.ExtensionsTest do
           updated_at: ~U[2026-10-03 06:00:00Z]
         }
       ],
+      landing_waits: [
+        %{
+          issue_id: "follow-http",
+          issue_identifier: "MT-FOLLOW",
+          pr_url: "https://github.com/acme/repo/pull/10",
+          state: "QA",
+          waits_for: %{issue_id: "merge-http", issue_identifier: "MT-MERGE", pr_url: "https://github.com/acme/repo/pull/9", state: "Merging"},
+          shared_files: 2,
+          files: ["lib/a.ex", "lib/b.ex"],
+          reason: "waits for MT-MERGE to land (shares 2 files)",
+          since: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
       claimed: ["issue-http", "retry-http"],
       slot_waiting: [
         %{
@@ -3810,9 +4563,30 @@ defmodule SymphonyElixir.ExtensionsTest do
           identifier: "MT-WAIT",
           title: "Waiting",
           state: "Todo",
-          reason: "a Merging or Auto Review issue is waiting for a slot",
+          reason: "a Merging issue is waiting for a slot",
           attempt: nil,
+          since: ~U[2026-10-03 06:00:00Z],
+          repo_key: "default"
+        }
+      ],
+      dispatch_skipped: [
+        %{
+          issue_id: "skip-http",
+          identifier: "MT-SKIP",
+          title: "Skipped",
+          state: "Todo",
+          repo_key: "default",
+          reason: "priority medium is not in tickets.priorities (urgent, high)",
           since: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
+      shipped_today: [
+        %{
+          issue_id: "shipped-http",
+          identifier: "MT-SHIPPED",
+          title: "Shipped",
+          repo_key: "default",
+          completed_at: ~U[2026-10-03 07:00:00Z]
         }
       ],
       blocked: [
@@ -3838,6 +4612,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           issue_id: "forced-http",
           identifier: "MT-FORCED",
           title: "Fix the release",
+          repo_key: "web",
           state: "In Review",
           forced_since: ~U[2026-10-03 05:00:00.123456Z],
           forced_for_seconds: 3_600,

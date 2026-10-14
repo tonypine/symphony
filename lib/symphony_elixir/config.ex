@@ -129,6 +129,15 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @doc "The branch PRs for `repo_key` merge into (`main` when the repository names none)."
+  @spec base_branch(String.t() | nil) :: String.t()
+  def base_branch(repo_key) do
+    case repo_base_branch(repo_key) do
+      {:ok, branch} when is_binary(branch) and branch != "" -> branch
+      _other -> "main"
+    end
+  end
+
   @spec system() :: {:ok, SystemSchema.t()} | {:error, term()}
   def system do
     with {:ok, config} <- unwrap_cache_result(Cache.get()),
@@ -225,6 +234,22 @@ defmodule SymphonyElixir.Config do
   def max_concurrent_agents_for_state(_state_name), do: settings!().agent.max_concurrent_agents
 
   @doc """
+  The Linear priority numbers `tickets.priorities` allows to start new work, or nil when the key is
+  empty and every priority may. An issue outside the set is not dispatched as new work: Symphony
+  waits with free lanes even when such an issue sits in an active state. A forced ticket and a retry
+  waiting for a slot are exempt, so the filter only gates fresh picks.
+  """
+  @spec ticket_priority_filter() :: MapSet.t(0..4) | nil
+  def ticket_priority_filter, do: ticket_priority_filter(settings!())
+
+  @spec ticket_priority_filter(Schema.t()) :: MapSet.t(0..4) | nil
+  def ticket_priority_filter(%Schema{tickets: %{priorities: priorities}}) when priorities in [nil, []], do: nil
+
+  def ticket_priority_filter(%Schema{tickets: %{priorities: names}}) do
+    MapSet.new(names, &Schema.Tickets.priority_number/1)
+  end
+
+  @doc """
   The model, effort and provider for a run of `kind`, field by field: the routed repository's
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent`, then
   `agent.run_profiles.<kind>`, then `agent`. `settings` from `settings_for_repo/1` carry the
@@ -247,20 +272,11 @@ defmodule SymphonyElixir.Config do
   def pre_push_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :pre_push_review, config)
 
   @doc """
-  The profile the Auto Review QA agent starts with: `auto_review.model` / `.effort`, else the
-  `qa` run profile as resolved by `run_profile/2`. The provider resolves as in `run_profile/2`.
+  The profile the QA agent starts with: `auto_review.model` / `.effort`, else the `qa` run profile
+  as resolved by `run_profile/2`. The provider resolves as in `run_profile/2`.
   """
   @spec qa_profile(Schema.t()) :: RunKind.profile()
   def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
-
-  @doc """
-  The profile the acceptance gate agent starts with: `auto_review.acceptance_gate.model` /
-  `.effort`, else the `acceptance_gate` run profile as resolved by `run_profile/2`. The
-  provider resolves as in `run_profile/2`.
-  """
-  @spec acceptance_gate_profile(Schema.t()) :: RunKind.profile()
-  def acceptance_gate_profile(%Schema{auto_review: %{acceptance_gate: config}} = settings),
-    do: own_run_profile(settings, :acceptance_gate, config)
 
   @doc """
   The host's `auto_review.android` settings for Android QA. `sdk_root` falls back to
@@ -442,7 +458,6 @@ defmodule SymphonyElixir.Config do
 
   defp effective_run_profile(settings, "pre_push_review"), do: pre_push_review_profile(settings)
   defp effective_run_profile(settings, "qa"), do: qa_profile(settings)
-  defp effective_run_profile(settings, "acceptance_gate"), do: acceptance_gate_profile(settings)
   defp effective_run_profile(settings, kind), do: run_profile(settings, kind)
 
   @doc """
@@ -500,15 +515,7 @@ defmodule SymphonyElixir.Config do
   defp own_profile_setting(settings, "pre_push_review", field), do: {"pre_push_review", Map.get(settings.review_agent, field)}
   defp own_profile_setting(settings, "qa", field), do: {"auto_review", Map.get(settings.auto_review, field)}
 
-  defp own_profile_setting(settings, "acceptance_gate", field),
-    do: {"auto_review.acceptance_gate", Map.get(settings.auto_review.acceptance_gate, field)}
-
   defp own_profile_setting(_settings, _kind, _field), do: nil
-
-  @spec review_agent_blocked_state(String.t()) :: String.t()
-  def review_agent_blocked_state(repo_key) when is_binary(repo_key) do
-    settings_for_repo!(repo_key).ci.escalation_state
-  end
 
   @spec codex_turn_sandbox_policy(Path.t() | nil) :: map()
   def codex_turn_sandbox_policy(workspace \\ nil) do
@@ -978,8 +985,25 @@ defmodule SymphonyElixir.Config do
     |> merge_repo_workspace(repo)
     |> merge_repo_agent(repo)
     |> merge_repo_acceptance_gate(repo)
+    |> merge_repo_manual_review(repo, system_config)
     |> deep_merge(repo_config)
   end
+
+  # The repo's manual review setting, on the config for the machinery to read. An explicit
+  # `repositories[].manual_review` wins; otherwise the deprecated acceptance-gate mode derives it,
+  # so a config that only sets a gate mode still gets the review authority that mode meant.
+  defp merge_repo_manual_review(config, %SystemSchema.Repo{manual_review: manual_review} = repo, %SystemSchema{} = system_config) do
+    Map.put(config, "manual_review", manual_review || gate_manual_review(repo, system_config))
+  end
+
+  # The repo's effective acceptance-gate mode: its own when it sets one, else the global block's.
+  defp gate_manual_review(%SystemSchema.Repo{acceptance_gate: %{"mode" => mode}}, _system_config),
+    do: SystemSchema.manual_review_for_gate_mode(mode)
+
+  defp gate_manual_review(_repo, %SystemSchema{auto_review: %{acceptance_gate: %{mode: mode}}}),
+    do: SystemSchema.manual_review_for_gate_mode(mode)
+
+  defp gate_manual_review(_repo, _system_config), do: SystemSchema.manual_review_for_gate_mode(nil)
 
   defp merge_repo_acceptance_gate(config, %SystemSchema.Repo{acceptance_gate: nil}), do: config
 

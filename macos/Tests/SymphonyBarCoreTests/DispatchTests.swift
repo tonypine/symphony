@@ -1,0 +1,139 @@
+import Foundation
+import XCTest
+@testable import SymphonyBarCore
+
+final class DispatchTests: XCTestCase {
+    private let utc = TimeZone(identifier: "UTC")!
+
+    // MARK: - C2: the dispatch control
+
+    func testDispatchOnListsWhatIsWorkingAndQueued() throws {
+        let control = DispatchControl(window: .connected, paused: false, state: try state("tickets"), now: Date(), timeZone: utc)
+        XCTAssertEqual(control.mode, .on)
+        XCTAssertEqual(control.word, "Dispatch on")
+        XCTAssertEqual(control.status, .done)
+        XCTAssertEqual(control.working, ["SHOP-305 · Checkout total rounding", "API-131 · Rate limit headers"])
+        XCTAssertEqual(control.queued.count, DispatchControl.listLimit)
+        XCTAssertEqual(control.moreQueued, 3)
+        XCTAssertEqual(control.moreWorking, 0)
+        XCTAssertEqual(control.accessibilityLabel, "Dispatch on, 2 working")
+        XCTAssertTrue(control.canPause)
+        XCTAssertFalse(control.canResume)
+        XCTAssertTrue(control.canForce)
+        XCTAssertFalse(control.canStart)
+        XCTAssertTrue(control.pauseFacts.isEmpty)
+        XCTAssertTrue(control.limits.isEmpty)
+    }
+
+    func testPausedSaysWhoWhenAndWhyInOrange() throws {
+        let control = DispatchControl(window: .connected, paused: true, state: try state("paused"), now: Date(), timeZone: utc)
+        XCTAssertEqual(control.mode, .paused)
+        XCTAssertEqual(control.word, "Paused · Deploy freeze")
+        XCTAssertEqual(control.status, .you)
+        XCTAssertEqual(control.status.color, .orange)
+        XCTAssertEqual(control.pauseFacts, [
+            TicketList.Fact(label: "By", value: "You"),
+            TicketList.Fact(label: "Since", value: "14:03"),
+            TicketList.Fact(label: "Why", value: "Deploy freeze"),
+        ])
+        XCTAssertTrue(control.canResume)
+        XCTAssertFalse(control.canPause)
+        XCTAssertTrue(control.canForce)
+    }
+
+    func testAPauseFromTheMenuOrWithoutAStateSaysSo() {
+        let menu = OverviewState(snapshot: StateSnapshot(pause: .init(reason: ControlAction.pauseReason)))
+        XCTAssertEqual(DispatchControl(window: .connected, paused: true, state: menu, now: Date()).pauseFacts.first?.value, "You, from the menu bar")
+
+        let unread = DispatchControl(window: .connected, paused: true, state: nil, now: Date())
+        XCTAssertEqual(unread.word, "Paused")
+        XCTAssertEqual(unread.pauseFacts, [TicketList.Fact(label: "By", value: "You"), TicketList.Fact(label: "Why", value: "No reason given")])
+    }
+
+    func testHoldingNamesTheLimitAndWhenItResets() throws {
+        let control = DispatchControl(window: .connected, paused: false, state: try state("holding"), now: Date(), timeZone: utc)
+        XCTAssertEqual(control.mode, .holding)
+        XCTAssertEqual(control.word, "Holding · Claude limit")
+        XCTAssertEqual(control.status, .idle)
+        XCTAssertTrue(control.limits[0].hasPrefix("Paused: Claude limit, resumes ~16:00"))
+        XCTAssertTrue(control.canPause)
+
+        let unreachable = OverviewState(snapshot: StateSnapshot(usageLimits: [.init(reason: "model_api_unreachable")]))
+        XCTAssertEqual(DispatchControl(window: .connected, paused: false, state: unreachable, now: Date()).word, "Holding · Claude API unreachable")
+
+        let canary = OverviewState(snapshot: StateSnapshot(usageLimits: [.init(phase: .canary)]))
+        XCTAssertEqual(DispatchControl(window: .connected, paused: false, state: canary, now: Date()).mode, .on)
+
+        let budget = OverviewState(snapshot: StateSnapshot(budget: .init(dailyPaused: true)))
+        let held = DispatchControl(window: .connected, paused: false, state: budget, now: Date())
+        XCTAssertEqual(held.word, "Holding · token budget")
+        XCTAssertEqual(held.limits, ["Daily token budget used up, resets at midnight UTC"])
+    }
+
+    func testSymphonyStoppedOffersStartOnlyWhenStopped() {
+        let stopped = DispatchControl(window: .stopped, paused: false, state: nil, now: Date())
+        XCTAssertEqual(stopped.mode, .stopped)
+        XCTAssertEqual(stopped.word, "Symphony stopped")
+        XCTAssertEqual(stopped.accessibilityLabel, "Symphony stopped")
+        XCTAssertTrue(stopped.canStart)
+        XCTAssertFalse(stopped.canPause)
+        XCTAssertFalse(stopped.canResume)
+        XCTAssertFalse(stopped.canForce)
+        XCTAssertEqual(DispatchControl(window: .starting, paused: false, state: nil, now: Date()).word, "Symphony starting")
+        XCTAssertEqual(DispatchControl(window: .notAnswering, paused: false, state: nil, now: Date()).word, "Symphony not answering")
+        XCTAssertEqual(DispatchControl(window: .firstLaunch, paused: false, state: nil, now: Date()).word, "Symphony not set up")
+        XCTAssertFalse(DispatchControl(window: .starting, paused: false, state: nil, now: Date()).canStart)
+    }
+
+    // MARK: - D12a and D12b: the sheets
+
+    func testPauseSheetSendsItsReasonOrTheMenusOne() throws {
+        XCTAssertEqual(PauseSheet.action(reason: "  Deploy freeze \n"), .pauseWithReason("Deploy freeze"))
+        XCTAssertEqual(try body(PauseSheet.action(reason: "Deploy freeze")), ["reason": "Deploy freeze"])
+        XCTAssertEqual(try body(PauseSheet.action(reason: "  ")), ["reason": ControlAction.pauseReason])
+        let request = ControlAPI.request(.pauseWithReason("x"), base: URL(string: "http://h")!, token: "t")
+        XCTAssertEqual(request.url?.path, "/api/v1/control/pause")
+        XCTAssertNil(ControlAction.pauseWithReason("x").moveIdentifier)
+        XCTAssertEqual(ControlAPI.result(.pauseWithReason("x"), statusCode: 500, data: Data()), .failed("Couldn't pause Symphony: HTTP 500"))
+        XCTAssertTrue(PauseSheet.happens.contains("forced tickets included"))
+        XCTAssertTrue(PauseSheet.stays.contains("go on to their end"))
+    }
+
+    func testForceSheetFindsTheTicketAsItIsTyped() throws {
+        let list = TicketList(state: try state("tickets"), now: Date(), timeZone: utc)
+        XCTAssertNil(ForceSheet.identifier("   "))
+        XCTAssertEqual(ForceSheet.identifier(" shop-320 "), "SHOP-320")
+        XCTAssertEqual(ForceSheet.matches("shop-3", in: list).count, ForceSheet.suggestionLimit)
+        XCTAssertEqual(ForceSheet.matches("SHOP-32", in: list).map(\.identifier), ["SHOP-320", "SHOP-325", "SHOP-322"])
+        XCTAssertEqual(ForceSheet.matches("API-131", in: list).map(\.identifier), ["API-131"])
+        XCTAssertTrue(ForceSheet.matches("", in: list).isEmpty)
+        XCTAssertTrue(ForceSheet.matches("SHOP", in: nil).isEmpty)
+
+        XCTAssertEqual(ForceSheet.summary("shop-320", in: list), "Order history filters\nTodo · Queued")
+        XCTAssertEqual(ForceSheet.summary("SHOP-325", in: list), "Express checkout\nTodo · Queued · already forced")
+        XCTAssertEqual(ForceSheet.summary("TP-9", in: list), "Symphony doesn't track TP-9 yet. It looks it up in Linear when you force it.")
+        XCTAssertNil(ForceSheet.summary("", in: list))
+
+        XCTAssertTrue(ForceSheet.canForce("SHOP-320", in: list))
+        XCTAssertTrue(ForceSheet.canForce("TP-9", in: list))
+        XCTAssertFalse(ForceSheet.canForce("SHOP-325", in: list))
+        XCTAssertFalse(ForceSheet.canForce(" ", in: list))
+        XCTAssertTrue(ForceSheet.keeps.contains("never moves a ticket"))
+        XCTAssertTrue(ForceSheet.skips.contains("forced allowance"))
+    }
+
+    // MARK: - Helpers
+
+    private func body(_ action: ControlAction) throws -> [String: String] {
+        let request = ControlAPI.request(action, base: URL(string: "http://h")!, token: "t")
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: String])
+    }
+
+    private func state(_ name: String) throws -> OverviewState {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/\(name)/api/v1/state.json")
+        return try XCTUnwrap(OverviewState.decode(try Data(contentsOf: url)))
+    }
+}

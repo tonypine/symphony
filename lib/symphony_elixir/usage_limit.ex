@@ -7,7 +7,10 @@ defmodule SymphonyElixir.UsageLimit do
   window resets. Codex runs are provider `"openai"` (see `for_agent_kind/2`), so a Claude hold
   never holds them and a Codex hold never holds Claude runs. Each hold is keyed by
   `{provider, scope}`: scope `:all` holds every run of the provider, a model scope
-  (`"opus"`, `"sonnet"`) only runs whose model is in that family.
+  (`"opus"`, `"sonnet"`) only runs whose model is in that family. A run that sees a limit for a
+  provider other than its own — an OpenRouter run through the Claude runtime can see the Claude
+  subscription's window — records the hold for that provider but is not held itself: the
+  orchestrator retries it with the normal backoff.
 
   At `resume_at` a hold moves to `phase: :canary`: one held run goes out alone while the
   hold keeps covering every other run, and the canary's outcome decides whether the hold
@@ -21,8 +24,7 @@ defmodule SymphonyElixir.UsageLimit do
   A run whose agent could not reach the model API at all (`source: :api_unreachable`, reason
   `model_api_unreachable`) holds the provider the same way, with a canary as the probe: the
   first one goes out after 60 seconds, and each canary that still can't reach the API doubles
-  the wait, up to `unknown_reset_retry_seconds`. With no run held on it (QA, the acceptance gate,
-  a PR run) the hold is released at `resume_at` and remembered for `outage_memory_seconds/1`, so
+  the wait, up to `unknown_reset_retry_seconds`. With no run held on it (QA, a PR run) the hold is released at `resume_at` and remembered for `outage_memory_seconds/1`, so
   the next run finding the outage again doubles the wait as a canary would.
 
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;

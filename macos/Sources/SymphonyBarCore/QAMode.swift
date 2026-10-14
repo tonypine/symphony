@@ -3,7 +3,8 @@ import Foundation
 /// QA mode, for test launches: `SYMPHONY_BAR_QA_ROOT=<dir>` keeps the app's settings, secrets, Launch at Login,
 /// logs, update downloads, Symphony's state and logs and the embedded Symphony's unpacked release under `<dir>`,
 /// never in UserDefaults, the app's secrets file or the folders a normal launch uses. With
-/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai.
+/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai, and with
+/// `SYMPHONY_BAR_QA_API_FIXTURES` it reads Symphony's local API from files (see `APIFixtures`).
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -14,11 +15,10 @@ public struct QAMode: Equatable {
     /// The API base of the OpenRouter stub QA starts (`symphony openrouter-stub`), such as
     /// `http://127.0.0.1:4100/api`. The Symphony the app runs reads it too, also only in QA mode.
     public static let openRouterURLKey = "SYMPHONY_QA_OPENROUTER_URL"
+    /// A directory of API fixtures the app reads Symphony's local API from instead of Symphony: see `APIFixtures`.
+    public static let apiFixturesKey = "SYMPHONY_BAR_QA_API_FIXTURES"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
-    /// Where the embedded Burrito binary unpacks its release, under `.burrito/`. Burrito's launcher removes older
-    /// versions' unpacked releases from that folder, so a test launch must never share it with the installed app.
-    public static let burritoInstallDirectoryKey = "SYMPHONY_INSTALL_DIR"
 
     public static let settingsFileName = "settings.plist"
     public static let secretsFileName = "secrets.json"
@@ -26,7 +26,6 @@ public struct QAMode: Equatable {
     public static let symphonyLogsFolder = "symphony-logs"
     public static let updatesFolder = "updates"
     public static let stateFolder = "state"
-    public static let burritoFolder = "burrito"
 
     public let root: URL
     /// True when `SYMPHONY_BAR_QA_SCRIPTED` is `1`.
@@ -35,12 +34,21 @@ public struct QAMode: Equatable {
     public let updateURL: URL?
     /// The OpenRouter stub from `SYMPHONY_QA_OPENROUTER_URL`, nil for openrouter.ai.
     public let openRouterURL: URL?
+    /// The API fixtures directory from `SYMPHONY_BAR_QA_API_FIXTURES`, nil for Symphony's own API.
+    public let apiFixturesDirectory: URL?
 
-    public init(root: URL, scripted: Bool = false, updateURL: URL? = nil, openRouterURL: URL? = nil) {
+    public init(
+        root: URL,
+        scripted: Bool = false,
+        updateURL: URL? = nil,
+        openRouterURL: URL? = nil,
+        apiFixturesDirectory: URL? = nil
+    ) {
         self.root = root.standardizedFileURL
         self.scripted = scripted
         self.updateURL = updateURL
         self.openRouterURL = openRouterURL
+        self.apiFixturesDirectory = apiFixturesDirectory?.standardizedFileURL
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
@@ -51,7 +59,10 @@ public struct QAMode: Equatable {
             root: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true),
             scripted: environment[scriptedKey]?.trimmingWhitespace() == "1",
             updateURL: updateURL.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil },
-            openRouterURL: environment[openRouterURLKey].flatMap(loopbackURL)
+            openRouterURL: environment[openRouterURLKey].flatMap(loopbackURL),
+            apiFixturesDirectory: environment[apiFixturesKey].map { $0.trimmingWhitespace() }.flatMap { path in
+                path.isEmpty ? nil : URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+            }
         )
     }
 
@@ -74,7 +85,14 @@ public struct QAMode: Equatable {
     public var symphonyLogsRoot: URL { root.appendingPathComponent(Self.symphonyLogsFolder, isDirectory: true) }
     public var updateCacheDirectory: URL { root.appendingPathComponent(Self.updatesFolder, isDirectory: true) }
     public var stateRoot: URL { root.appendingPathComponent(Self.stateFolder, isDirectory: true) }
-    public var burritoInstallDirectory: URL { root.appendingPathComponent(Self.burritoFolder, isDirectory: true) }
+
+    /// The fixtures the app reads Symphony's API from, logging control requests under the QA root; nil without
+    /// `SYMPHONY_BAR_QA_API_FIXTURES`.
+    public var apiFixtures: APIFixtures? {
+        apiFixturesDirectory.map {
+            APIFixtures(directory: $0, requestLog: root.appendingPathComponent(APIFixtures.requestLogFileName))
+        }
+    }
 }
 
 /// Where the app keeps its settings and secrets, and the environment it reads Symphony's state root from:
@@ -95,9 +113,11 @@ public struct AppStores {
     /// The control URL used while Symphony hasn't written one. Nil in QA mode, so the app never mistakes the
     /// Symphony a normal launch runs, on the default port, for its own.
     public let controlURLFallback: URL?
-    /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT`, `SYMPHONY_LOGS_ROOT` and `SYMPHONY_INSTALL_DIR`
-    /// default to folders under the QA root, so the app neither sees nor controls a Symphony started outside QA
-    /// mode, and the Symphony it starts keeps its state, logs and unpacked release there.
+    /// The API fixtures that answer instead of Symphony, only in QA mode with `SYMPHONY_BAR_QA_API_FIXTURES`.
+    public let apiFixtures: APIFixtures?
+    /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT` and `SYMPHONY_LOGS_ROOT` default to folders
+    /// under the QA root, so the app neither sees nor controls a Symphony started outside QA mode, and the
+    /// Symphony it starts keeps its state and logs there.
     public let environment: [String: String]
 
     public init(
@@ -114,6 +134,7 @@ public struct AppStores {
             updateURL = UpdateChecker.latestReleaseURL
             openRouterBaseURL = OpenRouterClient.baseURL
             controlURLFallback = SymphonyState.defaultBaseURL
+            apiFixtures = nil
             self.environment = environment
             return
         }
@@ -128,11 +149,11 @@ public struct AppStores {
         updateURL = qaMode.updateURL ?? UpdateChecker.latestReleaseURL
         openRouterBaseURL = qaMode.openRouterURL.map(OpenRouterClient.baseURL(api:)) ?? OpenRouterClient.baseURL
         controlURLFallback = nil
+        apiFixtures = qaMode.apiFixtures
         var environment = environment
         for (key, folder) in [
             (StateRoot.environmentKey, qaMode.stateRoot),
             (QAMode.symphonyLogsRootKey, qaMode.symphonyLogsRoot),
-            (QAMode.burritoInstallDirectoryKey, qaMode.burritoInstallDirectory),
         ] where environment[key]?.trimmingWhitespace().isEmpty ?? true {
             environment[key] = folder.path
         }
@@ -140,6 +161,21 @@ public struct AppStores {
     }
 
     public var isQAMode: Bool { qaMode != nil }
+
+    /// What sends the app's requests to Symphony's local API: the fixtures when they answer, else the network.
+    public var apiTransport: ControlAPI.Transport {
+        apiFixtures?.transport ?? { try await URLSession.shared.data(for: $0) }
+    }
+
+    /// The base URL used while Symphony hasn't written a control URL: the fixtures' when they answer.
+    public var apiFallback: URL? {
+        apiFixtures == nil ? controlURLFallback : APIFixtures.baseURL
+    }
+
+    /// The control token sent instead of the state directory's while fixtures answer.
+    public var apiToken: String? {
+        apiFixtures == nil ? nil : APIFixtures.token
+    }
 
     /// The update helper's environment. In QA mode it is the app's, so the app the helper relaunches is in QA mode
     /// too and keeps the same folders.

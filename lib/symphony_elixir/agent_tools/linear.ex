@@ -11,20 +11,25 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.AgentLabels
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
-  alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.CiFix
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.Decisions
+  alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.HumanActions.Request
-  alias SymphonyElixir.HumanReview
+  alias SymphonyElixir.IssueSummary
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
+  alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.PersonWait
   alias SymphonyElixir.PromptSafety
-  alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
-  alias SymphonyElixir.SubIssueWait
+  alias SymphonyElixir.Tracker
+  alias SymphonyElixir.TransitionGuard
 
   @comment_limit_default 50
   @comment_limit_max 100
@@ -34,18 +39,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @private_file_upload_max_bytes 50 * 1024 * 1024
   @default_attachment_allowed_hosts ["github.com"]
   # Moving an issue to `Merging` is how a human approves a merge, so agents may not do it.
-  @merging_state "Merging"
   # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
   @backlog_state "Backlog"
-  @subissue_cap_per_run 10
+  # Where a withdrawn request's issue goes back to when its history doesn't say.
   @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
   # A project update notifies everyone following the project, so a run may post only one.
   @project_update_cap_per_run 1
   @project_update_healths ["onTrack", "atRisk", "offTrack"]
   # Requests for a human are deduplicated by title, so this only bounds a run that loops.
   @human_action_cap_per_run 5
-  @human_action_max_steps 15
-  @human_action_max_minutes 480
+  @human_action_options 2..4
+  @human_action_max_tradeoffs 3
   # Documents hold a ticket's long-lived artifacts, edited over several runs; this bounds a run that loops.
   @document_cap_per_run 10
   @document_attachment_first 100
@@ -202,6 +206,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
           name
         }
       }
+      attachments(first: 50) {
+        nodes {
+          url
+        }
+      }
+      state {
+        name
+        type
+      }
       team {
         states {
           nodes {
@@ -329,6 +342,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentSubissueScope($id: String!, $first: Int!) {
     issue(id: $id) {
       id
+      priority
       team {
         id
         states {
@@ -455,10 +469,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   """
 
   @human_action_scope_query """
-  query SymphonyAgentHumanActionScope($id: String!, $label: String!) {
+  query SymphonyAgentHumanActionScope($id: String!) {
     issue(id: $id) {
       id
-      team { id }
+      description
+      state { name }
+      team { states { nodes { id name } } }
       labels { nodes { id name } }
       comments(last: 50, orderBy: createdAt) {
         nodes { id body createdAt parent { id } }
@@ -466,26 +482,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
       history(first: 50) {
         nodes { createdAt fromState { name } toState { name } }
       }
-    }
-    issueLabels(filter: {name: {eqIgnoreCase: $label}}, first: 50) {
-      nodes { id team { id } }
-    }
-  }
-  """
-
-  @create_label_mutation """
-  mutation SymphonyAgentCreateLabel($input: IssueLabelCreateInput!) {
-    issueLabelCreate(input: $input) {
-      success
-      issueLabel { id }
-    }
-  }
-  """
-
-  @add_label_mutation """
-  mutation SymphonyAgentAddLabel($issueId: String!, $labelId: String!) {
-    issueAddLabel(id: $issueId, labelId: $labelId) {
-      success
     }
   }
   """
@@ -554,6 +550,24 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentDocuments($ids: [ID!]!, $first: Int!) {
     documents(filter: { id: { in: $ids } }, first: $first) {
       nodes { id title url updatedAt }
+    }
+  }
+  """
+
+  @issue_description_query """
+  query SymphonyAgentIssueDescription($id: String!) {
+    issue(id: $id) {
+      id
+      description
+    }
+  }
+  """
+
+  @update_issue_description_mutation """
+  mutation SymphonyAgentUpdateIssueDescription($id: String!, $description: String!) {
+    issueUpdate(id: $id, input: { description: $description }) {
+      success
+      issue { id url }
     }
   }
   """
@@ -669,13 +683,54 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, CommentRegistry.human_action_requested?(Map.get(context, :comment_registry)), opts),
-         {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
-      check_mutation_success(response, "issueUpdate")
+         result <- resolve_state_id(issue_id, state_name_or_id, opts) do
+      case result do
+        {:ok, {:state, state_id}, move} -> apply_state(context, issue_id, state_id, move, opts)
+        {:hold, kind, attrs} -> apply_hold(context, issue_id, kind, attrs, opts)
+        {:error, _reason} = error -> error
+      end
     end
   end
 
   def update_state(_context, _state_name_or_id, _opts), do: {:error, :invalid_state}
+
+  defp apply_state(context, issue_id, state_id, move, opts) do
+    with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts),
+         {:ok, result} <- check_mutation_success(response, "issueUpdate") do
+      record_fix_verdict(context, issue_id, move)
+      {:ok, result}
+    end
+  end
+
+  # A CI Fix ticket the fixing agent sends to Rework is the lane's substantive verdict: the repair
+  # needs a real change, so the ticket re-enters review instead of returning to its origin
+  # (`SymphonyElixir.CiFix`). The move itself is this tool's ordinary validated state request; only
+  # the verdict is recorded, and best-effort, like every other ledger write.
+  defp record_fix_verdict(context, issue_id, %{fix_verdict: verdict} = move) when is_binary(verdict) do
+    CiFix.record_verdict(issue_repo_key(context), issue_id, verdict, %{to: move.to})
+  end
+
+  defp record_fix_verdict(_context, _issue_id, _move), do: :ok
+
+  # The Backlog escape hatch is retired: the guard turned the request into a Blocked
+  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
+  # hold lifts on its own; the access hold this reports is lifted by a person's `Unblock` (or by the
+  # self-heal fix ticket). The agent did not move the issue.
+  defp apply_hold(context, issue_id, kind, attrs, opts) do
+    with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
+      {:ok,
+       %{
+         "held" => true,
+         "hold" => Hold.label(kind),
+         "reason" => Map.get(attrs, :reason),
+         "clearing_condition" => Map.get(attrs, :clearing_condition),
+         "message" =>
+           "The issue stays in its current state with the `#{Hold.label(kind)}` label. " <>
+             "Symphony lifts a hold when what it waits on clears, and a person lifts an access " <>
+             "hold with Unblock; do not move the issue yourself."
+       }}
+    end
+  end
 
   @spec add_comment(context(), String.t()) :: {:ok, map()} | {:error, term()}
   def add_comment(context, body), do: add_comment(context, body, [])
@@ -830,8 +885,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Creates a Backlog child of the current issue in the same team and project, assigned to the same
   assignee. Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
-  everything that scopes the new issue is read from the current issue. At most
-  #{@subissue_cap_per_run} per run.
+  everything that scopes the new issue is read from the current issue. Without a `priority`, the
+  child inherits the current issue's, so `tickets.priorities` dispatches it like its parent. A
+  title this run already filed under the current issue is refused with the earlier sub-issue's
+  identifier, so a looping run can't file the same sub-issue again and again.
 
   `blocked_by` lists identifiers of sibling sub-issues (the current issue's existing children, or
   sub-issues this run created) that block the new one. Unknown identifiers are refused before
@@ -839,6 +896,28 @@ defmodule SymphonyElixir.AgentTools.Linear do
   """
   @spec create_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_subissue(context, attrs, opts \\ []) when is_map(attrs) do
+    create_child(context, attrs, @backlog_state, opts)
+  end
+
+  @doc """
+  Creates a child of the current issue in the state named `state_name`, scoped exactly like
+  `create_subissue/3`'s Backlog child (same team, project, assignee and parent, and the parent's
+  priority unless `attrs` names one) and with the same validation, secret scan and per-run title
+  deduplication.
+
+  This is the machine-side filing path, for a flow that files a child an agent must not: an epic
+  review files each gap it found as a follow-up in `Todo` (`SymphonyElixir.EpicReview`), because a
+  `Backlog` child does not hold its parent and the epic would sit unnoticed until a person promoted
+  it. Agents keep `linear_create_subissue` and its Backlog contract; no tool is registered for this
+  function.
+  """
+  @spec create_subissue_in_state(context(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def create_subissue_in_state(context, state_name, attrs, opts \\ [])
+      when is_binary(state_name) and is_map(attrs) do
+    create_child(context, attrs, state_name, opts)
+  end
+
+  defp create_child(context, attrs, state_name, opts) do
     registry = Map.get(context, :comment_registry)
 
     with {:ok, issue_id} <- current_issue_id(context),
@@ -850,19 +929,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
              "linear_create_subissue",
              opts
            ),
-         :ok <- CommentRegistry.reserve_subissue(registry, @subissue_cap_per_run) do
-      case create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
-        {:ok, response} ->
-          {:ok, response}
-
-        # The issue exists by then, so its slot stays used.
-        {:error, {:blocked_by_relation_failed, _identifier, _blocker, _reason}} = error ->
-          error
-
-        {:error, _reason} = error ->
-          CommentRegistry.release_subissue(registry)
-          error
-      end
+         :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
+      create_child_issue(issue_id, {title, description, priority, blocked_by}, state_name, registry, opts)
     end
   end
 
@@ -889,7 +957,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, children} <- fetch_path(parent, ["children", "nodes"], []),
          {:ok, child} <- backlog_child(children, identifier) do
-      apply_subissue_change(parent, children, child, change, opts)
+      apply_subissue_change(parent, children, child, change, issue_repo_key(context), opts)
     end
   end
 
@@ -944,17 +1012,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp apply_subissue_change(parent, _children, child, %{cancel_reason: reason}, opts) do
-    with {:ok, state_id} <- canceled_state_id(get_in(parent, ["team", "states", "nodes"]) || []),
+  defp apply_subissue_change(parent, _children, child, %{cancel_reason: reason}, repo_key, opts) do
+    with {:ok, canceled} <- canceled_state(get_in(parent, ["team", "states", "nodes"]) || []),
          {:ok, response} <- graphql(@add_comment_mutation, %{issueId: child["id"], body: reason}, opts),
          {:ok, _response} <- check_mutation_success(response, "commentCreate"),
-         {:ok, response} <- graphql(@update_subissue_mutation, %{id: child["id"], input: %{"stateId" => state_id}}, opts),
-         {:ok, _response} <- check_mutation_success(response, "issueUpdate") do
+         ctx = %{target: canceled, repo_key: repo_key},
+         :ok <- TransitionGuard.perform(child["id"], :breakdown_cancel, ctx, tracker: tracker(opts)) do
       {:ok, %{"identifier" => child["identifier"], "canceled" => true}}
     end
   end
 
-  defp apply_subissue_change(_parent, children, child, change, opts) do
+  defp apply_subissue_change(_parent, children, child, change, _repo_key, opts) do
     input = change |> Map.take([:title, :description]) |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
 
     with :ok <- update_subissue_fields(child, input, opts),
@@ -1021,13 +1089,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end)
   end
 
-  defp canceled_state_id(states) do
+  # The name of the team's canceled state: the state `:breakdown_cancel` resolves to for a Backlog
+  # sub-issue, found by name first and then by type.
+  defp canceled_state(states) do
     state =
       Enum.find(states, &(state_name_matches?(&1, "Canceled") or state_name_matches?(&1, "Cancelled"))) ||
         Enum.find(states, &(&1["type"] == "canceled"))
 
     case state do
-      %{"id" => state_id} -> {:ok, state_id}
+      %{"name" => name} -> {:ok, name}
       _ -> {:error, {:canceled_state_not_found, states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)}}
     end
   end
@@ -1035,7 +1105,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Marks the current issue blocked by existing issues: each identifier in `blocked_by` gets a
   `blocks` relation to the current issue, so Symphony holds it in `Todo` until every blocker is
-  terminal. A final verification uses it to wait on the gaps it filed. Every identifier is looked
+  terminal. Every identifier is looked
   up before any relation is created; unknown identifiers and the current issue itself are refused.
   """
   @spec add_blocked_by(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -1133,11 +1203,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   @doc """
-  Records that the current issue needs something only a human can do: adds the
-  `human_actions.label` label to the issue and posts an `## Action needed:` comment
-  (`SymphonyElixir.HumanActions.Request`), which Symphony lists in the project's human-action
-  update. A request with the same title still open on the issue is not posted again. Every field
-  is refused when it holds a secret pattern. At most #{@human_action_cap_per_run} per run.
+  Records that the current issue needs something only a human can do: posts an
+  `## Decision needed:` comment (`SymphonyElixir.HumanActions.Request`), which Symphony lists in
+  the project's human-action update, and leaves the issue in its phase with the `Needs Decision`
+  hold set (`SymphonyElixir.NeedsDecisionHold`). It never adds a label itself. The request stays
+  open until a person answers it, or the agent withdraws it. A request with the same title still
+  open on the issue is not posted again, but the issue still gains the hold. A request whose title
+  or question a person already answered (`SymphonyElixir.Decisions`) is not posted at all: the
+  result carries the recorded answer, which the run applies. Every field is
+  refused when it holds a secret pattern, and when it holds code the Director does not read
+  (`SymphonyElixir.HumanActions.PlainWords`): the error names each token and its field. At most
+  #{@human_action_cap_per_run} per run.
   """
   @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def request_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1148,7 +1224,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- reject_human_action_secrets(request, context, opts),
          {:ok, settings} <- human_actions_settings(context, opts),
          :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
-      case post_human_action(issue_id, request, settings, opts) do
+      case post_human_action(issue_id, issue_repo_key(context), request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
           CommentRegistry.record_human_action_request(registry)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
@@ -1167,37 +1243,96 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp validate_human_action(attrs) do
-    %{"title" => title, "why" => why, "steps" => steps, "unblocks" => unblocks, "est_minutes" => est_minutes} =
-      Map.merge(%{"title" => nil, "why" => nil, "steps" => nil, "unblocks" => nil, "est_minutes" => nil}, attrs)
+    %{"title" => title, "why" => why, "decision" => decision, "unblocks" => unblocks, "if_unanswered" => if_unanswered} =
+      Map.merge(%{"title" => nil, "why" => nil, "decision" => nil, "unblocks" => nil, "if_unanswered" => nil}, attrs)
 
-    case Enum.find(human_action_checks(title, why, steps, unblocks, est_minutes), fn {valid?, _message} -> not valid? end) do
-      {false, message} ->
+    case Enum.find(human_action_checks(title, why, decision, unblocks, if_unanswered), fn {valid?, _message} -> not valid?.() end) do
+      {_check, message} ->
         {:error, {:invalid_human_action, message}}
 
       nil ->
-        unblocks = if non_blank?(unblocks), do: unblocks
-        {:ok, %{title: Request.one_line(title), why: why, steps: steps, unblocks: unblocks, est_minutes: est_minutes}}
+        request = %{
+          title: Request.one_line(title),
+          why: why,
+          question: decision["question"],
+          options: Enum.map(decision["options"], &decision_option/1),
+          recommendation_reason: present_text(decision["recommendation_reason"]),
+          if_unanswered: present_text(if_unanswered),
+          unblocks: present_text(unblocks)
+        }
+
+        case PlainWords.check(request) do
+          :ok -> {:ok, request}
+          {:error, message} -> {:error, {:invalid_human_action, message}}
+        end
     end
   end
 
-  # In order: a later check may rely on an earlier one having passed.
-  defp human_action_checks(title, why, steps, unblocks, est_minutes) do
+  # In order, and lazy: a later check relies on the earlier ones having passed.
+  defp human_action_checks(title, why, decision, unblocks, if_unanswered) do
     [
-      {non_blank?(title), "`title` must be a non-blank string."},
-      {non_blank?(title) and String.length(Request.one_line(title)) <= @title_max_length, "`title` must be at most #{@title_max_length} characters."},
-      {non_blank?(why), "`why` must be a non-blank string."},
-      {valid_steps?(steps), "`steps` must list 1 to #{@human_action_max_steps} non-blank strings."},
-      {is_nil(unblocks) or is_binary(unblocks), "`unblocks` must be a string."},
-      {is_nil(est_minutes) or est_minutes in 1..@human_action_max_minutes, "`est_minutes` must be an integer from 1 to #{@human_action_max_minutes}."}
+      {fn -> non_blank?(title) end, "`title` must be a non-blank string."},
+      {fn -> String.length(Request.one_line(title)) <= @title_max_length end, "`title` must be at most #{@title_max_length} characters."},
+      {fn -> non_blank?(why) end, "`why` must be a non-blank string."},
+      {fn -> is_map(decision) end,
+       "`decision` is required: one `question` and #{@human_action_options.first} to #{@human_action_options.last} `options`. " <>
+         "A person only makes decisions; a check an agent can't run belongs to CI or a QA playbook, " <>
+         "and a manual check that could be a test becomes a test."},
+      {fn -> non_blank?(decision["question"]) end, "`decision.question` must be a non-blank string."},
+      {fn -> is_list(decision["options"]) and length(decision["options"]) in @human_action_options end,
+       "`decision.options` must list #{@human_action_options.first} to #{@human_action_options.last} options, each with a `label` and an `effect`; " <>
+         "with no real choice to make, there is nothing to ask a person."},
+      {fn -> Enum.all?(decision["options"], &valid_decision_option?/1) end, "Each of `decision.options` needs a non-blank `label` and `effect`."},
+      {fn -> Enum.count(decision["options"], &(&1["recommended"] == true)) == 1 end, "Exactly one of `decision.options` must be `recommended`."},
+      {fn -> Enum.all?(decision["options"], &valid_tradeoffs?(&1["tradeoffs"])) end,
+       "Each option's `tradeoffs` lists at most #{@human_action_max_tradeoffs}, each with a `kind` (#{Enum.join(Request.tradeoff_kinds(), ", ")}) and a non-blank `text`."},
+      {fn -> optional_string?(decision["recommendation_reason"]) end, "`decision.recommendation_reason` must be a string."},
+      {fn -> optional_string?(unblocks) end, "`unblocks` must be a string."},
+      {fn -> optional_string?(if_unanswered) end, "`if_unanswered` must be a string."}
     ]
   end
 
   defp non_blank?(value), do: is_binary(value) and String.trim(value) != ""
 
-  defp valid_steps?(steps), do: is_list(steps) and length(steps) in 1..@human_action_max_steps and Enum.all?(steps, &non_blank?/1)
+  defp optional_string?(value), do: is_nil(value) or is_binary(value)
+
+  defp present_text(value), do: if(non_blank?(value), do: value)
+
+  defp valid_decision_option?(%{} = option), do: non_blank?(option["label"]) and non_blank?(option["effect"])
+  defp valid_decision_option?(_option), do: false
+
+  defp valid_tradeoffs?(nil), do: true
+
+  defp valid_tradeoffs?(tradeoffs) when is_list(tradeoffs) and length(tradeoffs) <= @human_action_max_tradeoffs,
+    do: Enum.all?(tradeoffs, &valid_tradeoff?/1)
+
+  defp valid_tradeoffs?(_tradeoffs), do: false
+
+  defp valid_tradeoff?(%{"kind" => kind, "text" => text}), do: kind in Request.tradeoff_kinds() and non_blank?(text)
+  defp valid_tradeoff?(_tradeoff), do: false
+
+  defp decision_option(option) do
+    %{
+      label: option["label"],
+      effect: option["effect"],
+      recommended: option["recommended"] == true,
+      tradeoffs: for(tradeoff <- List.wrap(option["tradeoffs"]), do: %{kind: tradeoff["kind"], text: tradeoff["text"]})
+    }
+  end
 
   defp reject_human_action_secrets(request, context, opts) do
-    fields = [title: request.title, why: request.why, unblocks: request.unblocks, steps: Enum.join(request.steps, "\n")]
+    options = Enum.map_join(request.options, "\n", fn option -> Enum.join(["#{option.label}: #{option.effect}" | Enum.map(option.tradeoffs, & &1.text)], "\n") end)
+
+    fields = [
+      title: request.title,
+      why: request.why,
+      unblocks: request.unblocks,
+      if_unanswered: request.if_unanswered,
+      question: request.question,
+      recommendation_reason: request.recommendation_reason,
+      options: options
+    ]
+
     SecretScanner.reject_fields_if_secret_pattern(fields, context, "linear_request_human_action", opts)
   end
 
@@ -1212,68 +1347,115 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
   defp issue_repo_key(_context), do: nil
 
-  defp post_human_action(issue_id, request, settings, opts) do
-    label = settings.human_actions.label
-
-    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id, label: label}, opts),
+  @doc """
+  The open human-action requests on the current issue (`SymphonyElixir.HumanActions.Request`),
+  as `{comment_id, request}`: requests with no withdrawal reply that the issue hasn't moved on
+  from since.
+  """
+  @spec open_human_action_requests(context(), Schema.t(), keyword()) ::
+          {:ok, [{String.t(), Request.t()}]} | {:error, term()}
+  def open_human_action_requests(context, settings, opts \\ []) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      labelled? = Enum.any?(get_in(issue, ["labels", "nodes"]) || [], &(String.downcase(to_string(&1["name"])) == String.downcase(label)))
+      {:ok, HumanActionsCollector.open_requests(issue, settings)}
+    end
+  end
 
-      case duplicate_request(issue, request, labelled?, settings) do
-        {comment_id, _request} -> {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id, "label" => label}}
-        nil -> create_human_action(issue, body, request, label, labelled?, opts)
+  defp post_human_action(issue_id, repo_key, request, settings, opts) do
+    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
+      case decided(issue, request) do
+        nil -> hold_request(repo_key, issue, open_request_titled(issue, request.title, settings), request, settings, opts)
+        decision -> {:ok, already_decided(decision)}
       end
     end
   end
 
-  # Without the label, an earlier request is closed (a person removed the label), so a new one is
-  # posted.
-  defp duplicate_request(_issue, _request, false, _settings), do: nil
+  # A question a person already answered is not asked again: the description's Decisions section,
+  # or an answered request the Inbox has not written there yet (`SymphonyElixir.Decisions`).
+  defp decided(issue, request) do
+    Decisions.find(Decisions.recorded(issue["description"]) ++ Decisions.answered(issue), request.title, request.question)
+  end
 
-  defp duplicate_request(issue, request, true, settings) do
-    title = Request.normalize_title(request.title)
+  defp already_decided(decision) do
+    %{
+      "requested" => false,
+      "reason" => "already_decided",
+      "decision" => %{"question" => decision.question, "answer" => decision.answer, "scope" => decision.scope},
+      "message" =>
+        "A person already decided this question. Apply the recorded answer and carry on: it is part of the ticket's scope. " <>
+          "Ask again only with a different question that the answer does not settle."
+    }
+  end
+
+  # Nothing moves. The comment goes first — a hold with no question on the board
+  # would pause the ticket with nothing for the person to answer — then the hold is set from the
+  # request, so the ticket keeps its phase and the person answers it there. A request the ticket
+  # already has is the one recorded, so the hold carries what the comment says. A request raised from
+  # the CI Fix lane is the lane's `cannot_fix` verdict: the repair needs access or a secret, which no
+  # run can supply, so the ticket waits for a person in place.
+  defp hold_request(repo_key, issue, open, request, settings, opts) do
+    state = get_in(issue, ["state", "name"])
+
+    with {:ok, result} <- post_request(issue, open, request, state, opts),
+         :ok <- set_decision_hold(repo_key, issue, recorded_request(open, request), opts) do
+      record_hold_verdict(repo_key, issue, state, settings)
+
+      {:ok,
+       result
+       |> Map.put("state", state)
+       |> Map.put("held", true)
+       |> Map.put("hold", Hold.label(:needs_decision))}
+    end
+  end
+
+  # Best-effort, like every other ledger write: a hold is set either way.
+  defp record_hold_verdict(repo_key, issue, state, settings) do
+    case CiFix.hold_verdict(state, settings) do
+      nil -> :ok
+      verdict -> CiFix.record_verdict(repo_key, issue["id"], verdict, %{})
+    end
+  end
+
+  defp recorded_request({_comment_id, open_request}, _request), do: open_request
+  defp recorded_request(nil, request), do: request
+
+  defp set_decision_hold(repo_key, issue, request, opts) do
+    Hold.set(repo_key, issue["id"], :needs_decision, NeedsDecisionHold.attrs(request), opts)
+  end
+
+  defp open_request_titled(issue, title, settings) do
+    title = Request.normalize_title(title)
     Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end)
   end
 
-  defp create_human_action(issue, body, request, label, labelled?, opts) do
-    with :ok <- ensure_human_action_label(issue, body, label, labelled?, opts),
-         {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: Request.render(request, label)}, opts),
+  defp post_request(_issue, {comment_id, _open}, _request, _state, _opts),
+    do: {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
+
+  # The request sets the hold instead of moving the issue, so the closing line says the ticket is
+  # not going anywhere.
+  defp post_request(issue, nil, request, state, opts) do
+    body = Request.render_hold(request, state)
+
+    with {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: body}, opts),
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}
-      {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"], "label" => label}}
+      {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"]}}
     end
   end
 
-  defp ensure_human_action_label(_issue, _body, _label, true, _opts), do: :ok
-
-  defp ensure_human_action_label(issue, body, label, false, opts) do
-    team_id = get_in(issue, ["team", "id"])
-    labels = get_in(body, ["data", "issueLabels", "nodes"]) || []
-    existing = Enum.find(labels, &(get_in(&1, ["team", "id"]) == team_id)) || Enum.find(labels, &is_nil(&1["team"]))
-
-    with {:ok, label_id} <- human_action_label_id(existing, label, team_id, opts),
-         {:ok, response} <- graphql(@add_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
-         {:ok, _response} <- check_mutation_success(response, "issueAddLabel") do
-      :ok
-    end
-  end
-
-  defp human_action_label_id(%{"id" => label_id}, _label, _team_id, _opts), do: {:ok, label_id}
-
-  defp human_action_label_id(nil, label, team_id, opts) do
-    with {:ok, response} <- graphql(@create_label_mutation, %{input: %{"name" => label, "teamId" => team_id}}, opts),
-         {:ok, response} <- check_mutation_success(response, "issueLabelCreate") do
-      fetch_path(response, ["data", "issueLabelCreate", "issueLabel", "id"], :label_not_created)
-    end
-  end
+  # The tracker `TransitionGuard.perform/4` writes through. Tests inject a spy; the run uses the
+  # repo's configured tracker.
+  defp tracker(opts), do: Keyword.get(opts, :tracker, Tracker)
 
   @doc """
   Withdraws open human-action requests on the current issue that are no longer needed: replies
-  `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), and
-  removes the `human_actions.label` label once no open request is left, so the next human-action
-  update drops them and the run's next move to `Backlog` or `In Review` no longer goes to Human
-  Review. An issue with no open request is left as it is. The reason is refused when it holds a
-  secret pattern.
+  `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
+  next human-action update drops them. Once no open request is left, a deprecated request label
+  (`PersonWait.legacy_request_labels/1`) comes off and the `Needs Decision` hold is cleared so the
+  ticket continues in place. An issue with no open request is left as it is. The reason is refused
+  when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1281,23 +1463,28 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, reason, title} <- validate_withdrawal(attrs),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([reason: reason], context, "linear_withdraw_human_action", opts),
          {:ok, settings} <- human_actions_settings(context, opts) do
-      case post_withdrawal(issue_id, reason, title, settings, opts) do
-        {:ok, %{"withdrawn" => true} = withdrawal} = result ->
-          forget_human_action_request(context, withdrawal)
-          Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
-          result
-
-        other ->
-          other
-      end
+      post_withdrawal(issue_id, reason, title, settings, opts)
+      |> settle_withdrawal(context, issue_id, opts)
     end
   end
 
-  # With no open request left on the issue, the run's issue no longer waits on a person.
-  defp forget_human_action_request(context, %{"labelRemoved" => true}),
-    do: CommentRegistry.clear_human_action_request(Map.get(context, :comment_registry))
+  # The withdrawal landed: the hold it releases goes first, so an issue that no longer waits on a
+  # person is cleared before the human-action list is refreshed. Anything else `post_withdrawal`
+  # returned passes through.
+  defp settle_withdrawal({:ok, %{"withdrawn" => true} = withdrawal} = result, context, issue_id, opts) do
+    with :ok <- release_decision_hold(context, issue_id, withdrawal, opts) do
+      Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
+      result
+    end
+  end
 
-  defp forget_human_action_request(_context, _withdrawal), do: :ok
+  defp settle_withdrawal(other, _context, _issue_id, _opts), do: other
+
+  # A request moved nothing, so its `Needs Decision` hold is what the withdrawal clears: the store
+  # first, then the label, and the ticket continues in place. Another request still open means the
+  # ticket still waits, so the hold stays.
+  defp release_decision_hold(_context, _issue_id, %{"remaining" => remaining}, _opts) when remaining != 0, do: :ok
+  defp release_decision_hold(context, issue_id, _withdrawal, opts), do: Hold.clear(issue_repo_key(context), issue_id, :needs_decision, opts)
 
   defp validate_withdrawal(attrs) do
     reason = Map.get(attrs, "reason")
@@ -1311,18 +1498,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp post_withdrawal(issue_id, reason, title, settings, opts) do
-    label = settings.human_actions.label
-
-    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id, label: label}, opts),
+    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      issue_label = Enum.find(get_in(issue, ["labels", "nodes"]) || [], &(String.downcase(to_string(&1["name"])) == String.downcase(label)))
-      open = if issue_label, do: HumanActionsCollector.open_requests(issue, settings), else: []
+      open = HumanActionsCollector.open_requests(issue, settings)
       {withdrawing, remaining} = Enum.split_with(open, &withdrawing?(&1, title))
 
       if withdrawing == [] do
-        {:ok, %{"withdrawn" => false, "reason" => "no_open_request", "label" => label}}
+        {:ok, %{"withdrawn" => false, "reason" => "no_open_request"}}
       else
-        withdraw_requests(issue["id"], issue_label, withdrawing, remaining, reason, label, opts)
+        withdraw_requests(issue, withdrawing, remaining, reason, settings, opts)
       end
     end
   end
@@ -1330,19 +1514,43 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp withdrawing?(_request, nil), do: true
   defp withdrawing?({_comment_id, request}, title), do: Request.normalize_title(request.title) == Request.normalize_title(title)
 
-  # Replies first: a withdrawn request stays out of the update even if removing the label fails.
-  defp withdraw_requests(issue_id, issue_label, withdrawing, remaining, reason, label, opts) do
-    with {:ok, reply_ids} <- reply_withdrawals(issue_id, withdrawing, reason, opts),
-         {:ok, label_removed?} <- remove_human_action_label(issue_id, issue_label, remaining, opts) do
+  # Replies first: a withdrawn request stays out of the update even if removing its label fails.
+  defp withdraw_requests(issue, withdrawing, remaining, reason, settings, opts) do
+    with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts),
+         {:ok, state} <- release_issue(issue, remaining, settings, opts) do
       {:ok,
        %{
          "withdrawn" => true,
          "requestCommentIds" => Enum.map(withdrawing, fn {comment_id, _request} -> comment_id end),
          "replyCommentIds" => reply_ids,
-         "labelRemoved" => label_removed?,
-         "label" => label
+         "remaining" => length(remaining),
+         "state" => state
        }}
     end
+  end
+
+  # Another open request still waits on a person: the issue stays where it is.
+  defp release_issue(issue, [_open | _rest], _settings, _opts), do: {:ok, get_in(issue, ["state", "name"])}
+
+  defp release_issue(issue, [], settings, opts) do
+    with :ok <- remove_legacy_request_labels(issue, settings, opts), do: {:ok, get_in(issue, ["state", "name"])}
+  end
+
+  defp remove_legacy_request_labels(issue, settings, opts) do
+    legacy = PersonWait.legacy_request_labels(settings)
+
+    issue
+    |> get_in(["labels", "nodes"])
+    |> List.wrap()
+    |> Enum.filter(&(String.downcase(to_string(&1["name"])) in legacy))
+    |> Enum.reduce_while(:ok, fn %{"id" => label_id}, :ok ->
+      with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
+           {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
+        {:cont, :ok}
+      else
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp reply_withdrawals(issue_id, withdrawing, reason, opts) do
@@ -1356,16 +1564,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
         error -> {:halt, error}
       end
     end)
-  end
-
-  # Another open request on the issue still needs the label.
-  defp remove_human_action_label(_issue_id, _issue_label, [_open | _rest], _opts), do: {:ok, false}
-
-  defp remove_human_action_label(issue_id, %{"id" => label_id}, [], opts) do
-    with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue_id, labelId: label_id}, opts),
-         {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
-      {:ok, true}
-    end
   end
 
   defp validate_project_update_fields(attrs) do
@@ -1568,6 +1766,33 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> wrap_string_field("title", &PromptSafety.linear_document_title/1)
   end
 
+  @doc """
+  Writes the Symphony summary block at the end of the current issue's description: the status, the
+  review brief and artifact links, and one new changelog entry dated today (UTC) on top of the
+  ones the block holds, capped. The description is read right before the write, and every byte
+  outside the block stays as it is, so a person's edit between runs survives. Fields holding a
+  secret pattern are refused before any Linear call.
+  """
+  @spec update_issue_summary(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def update_issue_summary(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, summary} <- IssueSummary.new(attrs),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts),
+         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0)),
+         variables = %{id: issue_id, description: description},
+         {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
+         {:ok, response} <- check_mutation_success(response, "issueUpdate") do
+      {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "descriptionLength" => String.length(description)}}
+    end
+  end
+
+  defp summary_secret_fields(summary) do
+    links = Enum.flat_map(summary.artifacts, &[artifact_label: &1.label, artifact_url: &1.url])
+    [status: summary.status, changelog_entry: summary.entry, review_brief: summary.review_brief || ""] ++ links
+  end
+
   defp validate_subissue_fields(attrs) do
     title = Map.get(attrs, "title")
     description = Map.get(attrs, "description")
@@ -1591,17 +1816,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
     identifiers |> Enum.map(&(&1 |> String.trim() |> String.upcase())) |> Enum.uniq()
   end
 
-  defp create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
+  defp create_child_issue(issue_id, {title, description, priority, blocked_by}, state_name, registry, opts) do
     with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
-         {:ok, state_id} <- backlog_state_id(states),
+         {:ok, state_id} <- child_state_id(states, state_name),
          {:ok, blockers} <- resolve_blockers(blocked_by, parent, registry),
-         input = subissue_input(parent, state_id, title, description, priority),
+         input = subissue_input(parent, state_id, title, description, priority || parent["priority"]),
          {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts),
          {:ok, response} <- check_mutation_success(response, "issueCreate"),
          {:ok, identifier, new_id} <- created_subissue(response) do
-      CommentRegistry.record_subissue(registry, identifier, new_id)
+      CommentRegistry.record_subissue(registry, issue_id, title, identifier, new_id)
       link_blockers(response, {identifier, new_id}, blockers, opts)
     end
   end
@@ -1649,17 +1874,42 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp backlog_state_id(states) do
+  # The new child's initial state, by name (case-insensitively), the way the team names it. `Backlog`
+  # also matches the team's backlog-type state, so an agent's sub-issue lands in the column the
+  # tracker shows as Backlog even when the team renamed it. Any other `state_name` — an epic review's
+  # `Todo` follow-up (`SymphonyElixir.EpicReview`) — is matched by name alone.
+  defp child_state_id(states, state_name) do
     state =
-      Enum.find(states, &state_name_matches?(&1, @backlog_state)) ||
-        Enum.find(states, &(&1["type"] == "backlog"))
+      Enum.find(states, &state_name_matches?(&1, state_name)) ||
+        if(state_name_matches?(%{"name" => @backlog_state}, state_name),
+          do: Enum.find(states, &(&1["type"] == "backlog"))
+        )
 
     case state do
       %{"id" => state_id} -> {:ok, state_id}
-      _ -> {:error, {:backlog_state_not_found, states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)}}
+      _ -> {:error, child_state_error(state_name, states)}
     end
   end
 
+  # A team with no `Backlog` keeps the error the agent tool's mapping knows
+  # (`SymphonyElixir.Codex.DynamicTool`), and a machine-side filing names the state it asked for.
+  defp child_state_error(state_name, states) do
+    available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
+
+    if state_name_matches?(%{"name" => @backlog_state}, state_name) do
+      {:backlog_state_not_found, available}
+    else
+      {:child_state_not_found, state_name, available}
+    end
+  end
+
+  # The one state write outside the guard is sub-issue creation's initial state: the guard resolves
+  # a move of an existing issue (from-state to target), and an `issueCreate` has no from-state to
+  # move from. So sub-issue creation's initial state is outside TransitionGuard's scope: `create_subissue/3`'s
+  # Backlog child and `create_subissue_in_state/4`'s named one (an epic review's `Todo` follow-up)
+  # both come through here, and this is the only stateId the Linear tool hands Linear without
+  # `TransitionGuard.resolve_request/2`; the state-scanning test in `agent_tools_linear_test.exs`
+  # keeps that list to the two known sites.
   defp subissue_input(parent, state_id, title, description, priority) do
     %{
       "teamId" => get_in(parent, ["team", "id"]),
@@ -1674,7 +1924,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp resolve_state_id(issue_id, state_name_or_id, human_action_requested?, opts) do
+  defp resolve_state_id(issue_id, state_name_or_id, opts) do
     normalized = String.trim(state_name_or_id)
 
     if normalized == "" do
@@ -1682,13 +1932,34 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
-           :ok <- refuse_auto_review_handoff_state(state, pr_less_issue?(issue), settings),
-           state = human_review_redirect(state, issue, states, human_action_requested?, settings),
-           {:ok, state_id} <- refuse_human_only_state(state) do
-        refuse_waiting_on_sub_issues_state(state, state_id, settings)
+      with {:ok, state, issue} <- lookup_team_state(issue_id, normalized, opts) do
+        guard_state(state, settings, issue)
       end
     end
+  end
+
+  # The guard's answer decides what the tool does: a state the issue moves to, a hold that pauses it
+  # in place, or the refusal the tool passes back. A resolved move carries what recording its signal
+  # needs: the state it came from, the state it goes to, the repo key and the lane verdict the move
+  # means (nil for every move but a CI Fix ticket's own request to `Rework`).
+  defp guard_state(state, settings, issue) do
+    from_state = get_in(issue, ["state", "name"])
+
+    ctx = %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}
+
+    case TransitionGuard.resolve_request(state, ctx) do
+      {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
+      {:hold, _kind, _attrs} = hold -> hold
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp move_details(from_state, resolved, settings) do
+    %{
+      from: from_state,
+      to: resolved["name"],
+      fix_verdict: CiFix.verdict_for_move(from_state, resolved["name"], settings)
+    }
   end
 
   # UUIDs are resolved against the team states too, so the target's name is known before the
@@ -1703,7 +1974,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
       case Enum.find(states, matches?) do
         %{"id" => _} = state ->
-          {:ok, state, get_in(body, ["data", "issue"]), states}
+          {:ok, state, get_in(body, ["data", "issue"])}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
@@ -1712,74 +1983,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  # An issue only a person can move on goes to the Human Review state instead of `In Review`, apart
-  # from the supervisor's queue: a `breakdown` plan whose ticket says a person reviews it, and the
-  # issue of a run that asked a person for something (which also goes there instead of `Backlog`).
-  defp human_review_redirect(state, issue, states, human_action_requested?, settings) do
-    with true <- HumanReview.enabled?(settings),
-         true <- needs_person?(state, issue, human_action_requested?, settings),
-         %{"id" => _} = human_review <- Enum.find(states, &state_name_matches?(&1, HumanReview.state(settings))) do
-      human_review
-    else
-      _keep -> state
-    end
-  end
-
-  defp needs_person?(state, issue, human_action_requested?, settings) do
-    cond do
-      state_name_matches?(state, @backlog_state) ->
-        human_action_requested?
-
-      state_name_matches?(state, AutoReview.review_state()) ->
-        human_action_requested? or human_reviewed_plan?(issue, settings)
-
-      true ->
-        false
-    end
-  end
-
-  defp human_reviewed_plan?(issue, settings) do
-    labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
-    plan = %Issue{title: issue["title"], description: issue["description"], labels: labels}
-    Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
-  end
-
-  defp refuse_human_only_state(%{"id" => state_id} = state) do
-    if state_name_matches?(state, @merging_state),
-      do: {:error, {:merging_requires_human_approval, state["name"]}},
-      else: {:ok, state_id}
-  end
-
-  # With Auto Review on, Symphony moves the issue on from the PR being open, so an
-  # agent asking for `In Review` or the Human Review state is refused rather than silently
-  # redirected. It runs before the Human Review redirect, so a run that asked a person for
-  # something cannot skip QA that way: a blocked PR reaches Human Review through Auto Review.
-  # A `breakdown` parent and a `Final verification:` ticket open no PR: their result goes to
-  # a person whatever Auto Review says.
-  defp refuse_auto_review_handoff_state(state, pr_less?, settings) do
-    if AutoReview.enabled?(settings) and not pr_less? and
-         (state_name_matches?(state, AutoReview.review_state()) or HumanReview.in_state?(state["name"], settings)),
-       do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
-       else: :ok
-  end
-
-  # Moving a `breakdown` parent from `In Review` to the waiting state approves its plan and
-  # promotes its sub-tickets, so only a human does it.
-  defp refuse_waiting_on_sub_issues_state(state, state_id, settings) do
-    case SubIssueWait.state(settings) do
-      waiting_state when is_binary(waiting_state) ->
-        if state_name_matches?(state, waiting_state),
-          do: {:error, {:waiting_on_sub_issues_state_requires_human_approval, state["name"]}},
-          else: {:ok, state_id}
-
-      nil ->
-        {:ok, state_id}
-    end
-  end
-
-  defp pr_less_issue?(issue) do
+  # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
+  # request, and it is the ticket whose handoff enters `Plan Review`.
+  defp plan_parent?(issue) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
-    Enum.any?(labels, &Issue.breakdown_label?/1) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
+    Enum.any?(labels, &Issue.breakdown_label?/1)
   end
 
   defp label_name(%{"name" => name}), do: name

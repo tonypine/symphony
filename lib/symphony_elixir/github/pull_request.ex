@@ -51,6 +51,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:details_url) => String.t() | nil,
           optional(:workflow_name) => String.t() | nil,
           optional(:run_id) => String.t() | nil,
+          optional(:completed_at) => DateTime.t() | nil,
           optional(:stale) => boolean()
         }
 
@@ -102,6 +103,51 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           files: [String.t()]
         }
 
+  @type summary :: %{
+          number: pos_integer() | nil,
+          url: String.t(),
+          title: String.t() | nil,
+          body: String.t() | nil,
+          state: String.t() | nil,
+          review_decision: String.t() | nil,
+          changed_files: non_neg_integer() | nil,
+          additions: non_neg_integer() | nil,
+          deletions: non_neg_integer() | nil,
+          head_ref_name: String.t() | nil,
+          checks: String.t() | nil
+        }
+
+  @typedoc "A changed file and its line counts."
+  @type changed_file :: %{path: String.t(), additions: non_neg_integer(), deletions: non_neg_integer()}
+
+  @typedoc """
+  What the Director app's pull request page shows of a pull request: `t:summary/0` plus when it
+  opened, last moved and merged, its changed files, its commits (their SHAs, oldest first) and how
+  many of its head's checks passed, failed and still run.
+  """
+  @type page :: %{
+          number: pos_integer() | nil,
+          url: String.t(),
+          title: String.t() | nil,
+          body: String.t() | nil,
+          state: String.t() | nil,
+          review_decision: String.t() | nil,
+          changed_files: non_neg_integer() | nil,
+          additions: non_neg_integer() | nil,
+          deletions: non_neg_integer() | nil,
+          head_ref_name: String.t() | nil,
+          checks: String.t() | nil,
+          created_at: DateTime.t() | nil,
+          merged_at: DateTime.t() | nil,
+          last_pushed_at: DateTime.t() | nil,
+          files: [changed_file()],
+          commits: [String.t()],
+          check_counts: %{passed: non_neg_integer(), failed: non_neg_integer(), pending: non_neg_integer()}
+        }
+
+  @summary_fields "number,url,title,body,state,reviewDecision,changedFiles,additions,deletions,headRefName,headRefOid,statusCheckRollup"
+  @page_fields @summary_fields <> ",createdAt,mergedAt,files,commits"
+
   @run_fields "databaseId,workflowName,status,conclusion,url,createdAt"
 
   @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
@@ -144,6 +190,100 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       do_fetch_ci_status(pr_url, opts)
     else
       {:error, :invalid_pr_url}
+    end
+  end
+
+  @doc """
+  What the Director app's popover shows of a pull request, in one `gh pr view`: its title, body,
+  state, review decision, size and the outcome of its checks (`checks_outcome/1`).
+  """
+  @spec fetch_summary(String.t(), keyword()) :: {:ok, summary()} | {:error, term()}
+  def fetch_summary(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, summary, _pr, _checks} <- view_pull_request(pr_url, @summary_fields, opts), do: {:ok, summary}
+  end
+
+  @doc """
+  What the Director app's pull request page shows of a pull request (`t:page/0`), in one
+  `gh pr view`. A pull request GitHub doesn't have is `{:error, :not_found}`.
+  """
+  @spec fetch_page(String.t(), keyword()) :: {:ok, page()} | {:error, term()}
+  def fetch_page(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, summary, pr, checks} <- view_pull_request(pr_url, @page_fields, opts) do
+      commits = for %{"oid" => oid} = commit when is_binary(oid) <- List.wrap(pr["commits"]), do: {oid, parse_datetime(commit["committedDate"])}
+
+      {:ok,
+       Map.merge(summary, %{
+         created_at: parse_datetime(pr["createdAt"]),
+         merged_at: parse_datetime(pr["mergedAt"]),
+         last_pushed_at: commits |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1) |> Enum.max(DateTime, fn -> nil end),
+         files: for(%{"path" => path} = file when is_binary(path) <- List.wrap(pr["files"]), do: %{path: path, additions: count(file["additions"]), deletions: count(file["deletions"])}),
+         commits: Enum.map(commits, &elem(&1, 0)),
+         check_counts: check_counts(checks)
+       })}
+    end
+  end
+
+  defp view_pull_request(pr_url, fields, opts) do
+    with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(["pr", "view", pr_url, "--json", fields], opts),
+         {:ok, %{} = pr} <- Jason.decode(output) do
+      %{checks: checks} =
+        drop_superseded_checks(%{pr_url: pr_url, commit_sha: pr["headRefOid"], checks: normalize_status_check_rollup(pr["statusCheckRollup"])})
+
+      summary = %{
+        number: pr["number"],
+        url: pr["url"] || pr_url,
+        title: pr["title"],
+        body: pr["body"],
+        state: pr["state"],
+        review_decision: if(blank?(pr["reviewDecision"]), do: nil, else: upcase(pr["reviewDecision"])),
+        changed_files: pr["changedFiles"],
+        additions: pr["additions"],
+        deletions: pr["deletions"],
+        head_ref_name: pr["headRefName"],
+        checks: checks_outcome(checks)
+      }
+
+      {:ok, summary, pr, checks}
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:ok, _decoded} -> {:error, :invalid_pr_payload}
+      {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
+      {:error, reason} -> {:error, if(missing_pull_request?(reason), do: :not_found, else: reason)}
+    end
+  end
+
+  defp missing_pull_request?({:gh_failed, _args, _status, output}) when is_binary(output), do: output =~ "Could not resolve to a PullRequest"
+  defp missing_pull_request?(_reason), do: false
+
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_value), do: 0
+
+  defp check_counts(checks) do
+    Enum.reduce(checks, %{passed: 0, failed: 0, pending: 0}, fn check, counts ->
+      key =
+        cond do
+          unfinished_check?(check) -> :pending
+          passing_check?(check) -> :passed
+          true -> :failed
+        end
+
+      Map.update!(counts, key, &(&1 + 1))
+    end)
+  end
+
+  @doc """
+  The outcome of a head's checks: `failed` when one finished without passing, else `pending` while
+  one runs, else `passed`; nil when it has none.
+  """
+  @spec checks_outcome([ci_check()]) :: String.t() | nil
+  def checks_outcome([]), do: nil
+
+  def checks_outcome(checks) when is_list(checks) do
+    cond do
+      Enum.any?(checks, &(not unfinished_check?(&1) and not passing_check?(&1))) -> "failed"
+      Enum.any?(checks, &unfinished_check?/1) -> "pending"
+      true -> "passed"
     end
   end
 
@@ -399,6 +539,24 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   @doc """
+  Closes the PR `pr_url` without merging it. Closing an already closed PR is a no-op on GitHub, so
+  a restart is idempotent; a pull request id that doesn't exist comes back as the `gh` failure.
+  The Director's `restart` move is the only caller: a full reset starts from a closed PR, so the
+  fresh branch's pull request does not confuse the head the pollers read.
+  """
+  @spec close(String.t(), keyword()) :: :ok | {:error, term()}
+  def close(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--method", "PATCH", "-f", "state=closed"],
+         {:ok, _output} <- run_gh(args, opts) do
+      :ok
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Merges the base branch into the PR branch on GitHub, only if the head is still
   `expected_head_sha`. A merge conflict comes back as `{:error, :conflict}`.
   """
@@ -418,6 +576,38 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @unfinished_run_statuses ["queued", "in_progress", "waiting", "requested", "pending"]
+
+  @doc """
+  Cancels the workflow runs still queued or in progress on `head_sha` in the PR's repository, and
+  returns the ids it cancelled. Auto-merge calls it once update-branch has moved the PR past
+  that head: CI on a head that can no longer merge only holds a runner.
+  """
+  @spec cancel_stale_runs(String.t(), String.t(), keyword()) :: {:ok, [integer()]} | {:error, term()}
+  def cancel_stale_runs(pr_url, head_sha, opts \\ []) when is_binary(pr_url) and is_binary(head_sha) do
+    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{repo}/actions/runs?head_sha=#{head_sha}&per_page=100"), opts),
+         {:ok, %{"workflow_runs" => runs}} when is_list(runs) <- Jason.decode(output) do
+      runs
+      |> Enum.filter(&(is_integer(&1["id"]) and &1["status"] in @unfinished_run_statuses))
+      |> Enum.map(& &1["id"])
+      |> cancel_runs(host, owner, repo, opts)
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :invalid_workflow_runs_payload}
+    end
+  end
+
+  defp cancel_runs(run_ids, host, owner, repo, opts) do
+    Enum.reduce_while(run_ids, {:ok, []}, fn run_id, {:ok, cancelled} ->
+      case run_gh(github_api_args(host, "repos/#{owner}/#{repo}/actions/runs/#{run_id}/cancel") ++ ["--method", "POST"], opts) do
+        {:ok, _output} -> {:cont, {:ok, cancelled ++ [run_id]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp squash_mutation(pr_url, mutation, request, opts) do
@@ -638,30 +828,61 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   # GitHub cancels every job of a workflow run a concurrency group drops as a duplicate of another
-  # run of the same workflow on the head, which turns its checks red though nothing failed. So the
-  # checks of a run that were all cancelled are left out while another run of that workflow on the
-  # head reported a check that wasn't: that run says how the head's CI went. When every run of the
-  # workflow was cancelled, their checks stay and read as a failure.
+  # run of the same workflow on the head, which turns its checks red though nothing failed. A head
+  # can also carry a completed run beside a newer run of its workflow: an event that runs the
+  # workflow again without a new commit (an edited pull request body, say) adds a second run whose
+  # checks sit beside the first's in the rollup. GitHub's check list and merge evaluation keep
+  # only the newest run of a workflow, while the rollup keeps every run, so the head can read red
+  # here though GitHub shows it green. So only the newest run of a workflow that reported a check
+  # which wasn't cancelled counts, and every other run of that workflow is left out. When every
+  # run of the workflow was cancelled, or a cancelled job sits beside others in its own run, the
+  # cancelled checks still read as a failure.
   defp drop_superseded_checks(%{checks: checks} = ci_status) do
     case superseded_run_ids(checks) do
       [] ->
         ci_status
 
       run_ids ->
-        Logger.info("Ignoring the checks of cancelled run(s) #{Enum.join(run_ids, ", ")} superseded by another run of the same workflow pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
+        Logger.info("Ignoring the checks of superseded run(s) #{Enum.join(run_ids, ", ")}: only the newest run of their workflow counts pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
         %{ci_status | checks: Enum.reject(checks, &(Map.get(&1, :run_id) in run_ids))}
     end
   end
 
   defp superseded_run_ids(checks) do
-    {cancelled, live} =
-      checks
-      |> Enum.filter(&(is_binary(Map.get(&1, :run_id)) and is_binary(Map.get(&1, :workflow_name))))
-      |> Enum.group_by(&{Map.get(&1, :workflow_name), Map.get(&1, :run_id)})
-      |> Enum.split_with(fn {_run, run_checks} -> Enum.all?(run_checks, &(upcase(Map.get(&1, :conclusion)) == "CANCELLED")) end)
+    checks
+    |> Enum.filter(&(is_binary(Map.get(&1, :run_id)) and is_binary(Map.get(&1, :workflow_name))))
+    |> Enum.group_by(&Map.get(&1, :workflow_name))
+    |> Enum.flat_map(&superseded_workflow_run_ids/1)
+  end
 
-    live_workflows = MapSet.new(live, fn {{workflow, _run_id}, _checks} -> workflow end)
-    for {{workflow, run_id}, _checks} <- cancelled, MapSet.member?(live_workflows, workflow), do: run_id
+  defp superseded_workflow_run_ids({_workflow, workflow_checks}) do
+    runs = Enum.group_by(workflow_checks, &Map.get(&1, :run_id))
+
+    case newest_live_run_id(runs) do
+      nil -> []
+      newest_run_id -> for {run_id, _run_checks} <- runs, run_id != newest_run_id, do: run_id
+    end
+  end
+
+  # The newest run of its workflow that reported a check which wasn't cancelled: the run GitHub's
+  # check list shows for that workflow. Nil when every run of the workflow was cancelled, so their
+  # checks stay and read as a failure. GitHub numbers a run as it is created and the numbers grow,
+  # so the highest run id is the newest run.
+  defp newest_live_run_id(runs) do
+    live =
+      Enum.reject(runs, fn {_run_id, run_checks} ->
+        Enum.all?(run_checks, &(upcase(Map.get(&1, :conclusion)) == "CANCELLED"))
+      end)
+
+    case live do
+      [] ->
+        nil
+
+      live ->
+        live
+        |> Enum.max_by(fn {run_id, _run_checks} -> String.to_integer(run_id) end)
+        |> elem(0)
+    end
   end
 
   # Every check reported can have passed while a workflow run that reported them has not finished:
@@ -950,7 +1171,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       conclusion: normalize_id(conclusion),
       details_url: normalize_id(details_url),
       workflow_name: normalize_id(Map.get(check, "workflowName")),
-      run_id: run_id_from_details_url(details_url)
+      run_id: run_id_from_details_url(details_url),
+      completed_at: parse_datetime(Map.get(check, "completedAt") || Map.get(check, "updatedAt"))
     }
   end
 

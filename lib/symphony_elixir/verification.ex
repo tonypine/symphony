@@ -46,8 +46,8 @@ defmodule SymphonyElixir.Verification do
     do: enabled?(settings) and is_binary(command) and command != ""
 
   @doc """
-  Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass,
-  waiting for its health check. The port is released again when the server does not
+  Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass, after its
+  `build_cmd`, waiting for its health check. The port is released again when the server does not
   start. Stop it with `stop_qa_dev_server/1`.
   """
   @spec start_qa_dev_server(Issue.t(), String.t(), Path.t(), keyword()) :: {:ok, qa_dev_server()} | {:error, term()}
@@ -161,7 +161,7 @@ defmodule SymphonyElixir.Verification do
 
     case dev_server.start_cmd do
       command when is_binary(command) and command != "" ->
-        start_dev_server_child(
+        child_opts = [
           run_id: run_id,
           port: port,
           workspace: workspace,
@@ -169,7 +169,9 @@ defmodule SymphonyElixir.Verification do
           env: env(context),
           allowed_domains: Schema.dev_server_network_allowed_domains(settings),
           owner: self()
-        )
+        ]
+
+        with :ok <- build_dev_server(dev_server, child_opts), do: start_dev_server_child(child_opts)
 
       _ ->
         {:ok, nil}
@@ -200,6 +202,11 @@ defmodule SymphonyElixir.Verification do
   end
 
   defp normalize_context(context) when is_map(context), do: allocation_context(context)
+
+  # `build_cmd` runs in the caller, not under the dev server supervisor, so a long build holds up
+  # no other run's dev server.
+  defp build_dev_server(%{build_cmd: command}, opts) when is_binary(command) and command != "", do: DevServer.build(opts)
+  defp build_dev_server(_dev_server, _opts), do: :ok
 
   defp start_dev_server_child(opts) do
     case Process.whereis(@dev_server_supervisor) do

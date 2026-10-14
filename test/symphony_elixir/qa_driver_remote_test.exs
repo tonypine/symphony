@@ -235,6 +235,44 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       wait_until(fn -> elem(System.cmd("kill", ["-0", "#{ssh_pid}"], stderr_to_stdout: true), 1) != 0 end)
     end
 
+    test "copies api_fixtures into the run directory and launches the app on the copy", %{root: root, ssh_host: ssh_host} do
+      fixtures = Path.join(root, "worktree/macos/Tests/Fixtures/director-app/running/api/v1")
+      File.mkdir_p!(fixtures)
+      File.write!(Path.join(fixtures, "overview.json"), ~s({"running":2}))
+      log_request = ~s(mkdir -p "$SYMPHONY_BAR_QA_ROOT"; echo '{"method":"POST","path":"/api/v1/refresh"}' >> "$SYMPHONY_BAR_QA_ROOT/api-requests.jsonl")
+      worktree = git_worktree!(root, ~s(#{log_request}; echo "fixtures $SYMPHONY_BAR_QA_API_FIXTURES"; cat "$SYMPHONY_BAR_QA_API_FIXTURES/api/v1/overview.json"; echo))
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+
+      {:ok, driver} =
+        QaDriver.start_link(
+          worktree: worktree,
+          worker_host: ssh_host,
+          playbook: %{build: "sh build.sh", app: @app},
+          host: %{prepare: prepare}
+        )
+
+      %{host_dir: run_dir} = GenServer.call(driver, :config)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => "macos/Tests/Fixtures/director-app/running"}) end)
+      assert {:ok, %{"pid" => pid, "api_fixtures" => copy}} = result
+      assert String.starts_with?(copy, run_dir <> "/api-fixtures-")
+      assert File.read!(Path.join(copy, "api/v1/overview.json")) == ~s({"running":2})
+
+      wait_until(fn -> Enum.any?(:sys.get_state(driver).apps, fn {_pid, app} -> app.output =~ ~s({"running":2}) end) end)
+      assert {:ok, %{"output" => output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      assert output =~ "fixtures #{copy}\n"
+
+      # The app's request log is read back from its QA root on the QA host, and taken away.
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) ==
+               {:ok, %{"requests" => [%{"method" => "POST", "path" => "/api/v1/refresh"}], "dropped" => 0}}
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{}) == {:ok, %{"requests" => [], "dropped" => 0}}
+
+      QaDriver.stop(driver)
+      refute File.exists?(run_dir)
+    end
+
     test "refuses a QA host that runs as the operator", %{root: root, ssh_host: ssh_host} do
       worktree = Path.join(root, "worktree")
       File.mkdir_p!(worktree)
@@ -339,6 +377,13 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
       assert {:ok, {_output, 125}} = cmd.("/bin/true", [], cd: Path.join(root, "missing"), timeout_ms: 5_000)
       assert {:ok, {"ok\n", 0}} = cmd.("/bin/sh", ["-c", "echo ok"], [])
+    end
+
+    test "cmd adds only the remote env to the command's environment", %{ssh_host: ssh_host} do
+      %{cmd: cmd} = Remote.host(ssh_host)
+      opts = [env: [{~c"LOCAL_ONLY", ~c"secret"}], remote_env: [{"QA_HOST_PORTS", "50001,50002,50003"}], timeout_ms: 5_000]
+
+      assert {:ok, {"50001,50002,50003|\n", 0}} = cmd.("/bin/sh", ["-c", ~s(echo "$QA_HOST_PORTS|$LOCAL_ONLY")], opts)
     end
 
     test "ship unpacks a tar into a fresh directory", %{root: root, ssh_host: ssh_host} do

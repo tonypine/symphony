@@ -3,14 +3,23 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{BuildInfo, Config, ControlClient, LogFile, OpenRouter, Paths, ReleaseNode, TerminalDashboard}
+  alias SymphonyElixir.{
+    BuildInfo,
+    Config,
+    ControlClient,
+    HttpServer,
+    LogFile,
+    OpenRouter,
+    Paths,
+    ReleaseNode,
+    TerminalDashboard
+  }
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  # Set by the Burrito wrapper before it execs the BEAM. The `burrito` dep is
-  # build-only (`runtime: false`), so `Burrito.Util.Args` is not in the release.
-  @burrito_bin_path_env "__BURRITO_BIN_PATH"
+  # Set by the release launcher (`rel/overlays/bin/symphony-app`) before it execs the BEAM.
+  @release_root_env "SYMPHONY_RELEASE_ROOT"
   @service_switches [
     {@acknowledgement_switch, :boolean},
     config: :string,
@@ -311,18 +320,21 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  @workflow_preview_usage "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude] [--repo REPO_KEY]"
+
   defp evaluate_workflow(["preview" | preview_args]), do: dispatch_workflow_preview(preview_args)
 
   defp evaluate_workflow(_args),
-    do: {:error, "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"}
+    do: {:error, @workflow_preview_usage}
 
   defp dispatch_workflow_preview(args) do
-    case OptionParser.parse(args, strict: [file: :string, agent: :string]) do
+    case OptionParser.parse(args, strict: [file: :string, agent: :string, repo: :string]) do
       {opts, [], []} ->
         render_opts =
           []
           |> maybe_put(:file, Keyword.get(opts, :file))
           |> maybe_put(:agent_kind, Keyword.get(opts, :agent))
+          |> maybe_put(:repo_key, Keyword.get(opts, :repo))
 
         case SymphonyElixir.WorkflowPreview.render(render_opts) do
           {:ok, prompt} ->
@@ -334,7 +346,7 @@ defmodule SymphonyElixir.CLI do
         end
 
       _ ->
-        {:error, "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"}
+        {:error, @workflow_preview_usage}
     end
   end
 
@@ -349,10 +361,10 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec maybe_configure_burrito_runtime() :: :ok
-  def maybe_configure_burrito_runtime do
-    case burrito_args() do
-      :not_in_burrito ->
+  @spec maybe_configure_packaged_runtime() :: :ok
+  def maybe_configure_packaged_runtime do
+    case packaged_args() do
+      :not_packaged ->
         :ok
 
       [command | _args] = args when command in ["check", "dashboard", "force"] ->
@@ -503,7 +515,7 @@ defmodule SymphonyElixir.CLI do
       "       symphony dashboard [--url <control-url>]\n" <>
       "       symphony force [--clear] <issue-identifier>\n" <>
       "       symphony openrouter-stub [--port <port>]\n" <>
-      "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>] [--port <port>]\n" <>
+      "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
       "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"
@@ -616,12 +628,10 @@ defmodule SymphonyElixir.CLI do
 
   defp maybe_set_server_host(opts, deps) do
     with_last_opt(opts, :host, fn raw ->
-      host = String.trim(raw)
-
-      if host == "" do
-        {:error, usage_message()}
-      else
-        :ok = deps.set_server_host_override.(host)
+      case String.trim(raw) do
+        "" -> {:error, usage_message()}
+        "unix:" -> {:error, HttpServer.empty_unix_socket_message()}
+        host -> :ok = deps.set_server_host_override.(host)
       end
     end)
   end
@@ -653,16 +663,20 @@ defmodule SymphonyElixir.CLI do
     :ok
   end
 
-  defp burrito_args do
-    burrito_args(System.get_env(@burrito_bin_path_env), :init.get_plain_arguments())
+  defp packaged_args do
+    packaged_args(packaged_marker(), :init.get_plain_arguments())
   end
 
-  # Same as `Burrito.Util.Args.argv/0`: the wrapper passes its arguments after
-  # `-extra`, which the VM exposes as plain arguments.
+  defp packaged_marker do
+    System.get_env(@release_root_env)
+  end
+
+  # The launcher passes its arguments after `-extra`, which the VM exposes as plain
+  # arguments. `marker` is the launcher's env var, unset outside a packaged build.
   @doc false
-  @spec burrito_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_in_burrito
-  def burrito_args(bin_path, _plain_arguments) when bin_path in [nil, ""], do: :not_in_burrito
-  def burrito_args(_bin_path, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
+  @spec packaged_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_packaged
+  def packaged_args(marker, _plain_arguments) when marker in [nil, ""], do: :not_packaged
+  def packaged_args(_marker, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
 
   # A long-running command such as `openrouter-stub` serves from its own processes until the
   # escript is stopped. `Process.sleep/1` is typed to return, so the halt keeps this `no_return()`.

@@ -5,7 +5,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.AcceptanceGate
+  require Logger
+
+  alias SymphonyElixir.Config.DeprecatedGateSettings
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.ManagedClone
   alias SymphonyElixir.Workflow
@@ -30,6 +32,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.QualityGate
   require Schema.ReviewAgent
   require Schema.Server
+  require Schema.Tickets
   require Schema.Tracker
   require Schema.Verification
   require Schema.Watchdog
@@ -37,18 +40,34 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Workspace
 
   @primary_key false
+  @deprecations_key {__MODULE__, :deprecation_warnings}
+  # What replaced the keys of the retired legacy state machine (`drop_retired_key/4`).
+  @retired_state_machine "there is one ticket state machine (`docs/design/state-machine.md`), so no repository picks a version"
+  @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
+                                "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
     agent auto_review dashboard dependency_audit github human_actions issue_gate issues notifications poller pre_push_review
     pull_requests
-    repositories verification watchdog workers workspaces
+    repositories tickets verification watchdog workers workspaces
   )
 
   # `repositories[].acceptance_gate` sets the kill switch, the numbers and extra escalation
   # rules; the gate agent's runtime, model and concurrency stay global.
   @acceptance_gate_keys ~w(mode runtime command model effort max_turns timeout_ms max_concurrent escalate)
   @repo_acceptance_gate_keys ~w(mode max_turns timeout_ms escalate)
-  @acceptance_gate_escalate_keys ~w(labels ticket_patterns paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
+  @acceptance_gate_escalate_keys ~w(labels ticket_patterns ticket_patterns_builtin paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
   @acceptance_gate_busy_files_keys ~w(top window_days max_lines)
+
+  # The deprecated acceptance-gate `mode` → the `manual_review` setting, per the design's review-modes
+  # table. The three modes a `symphony.yml` may carry today, and the design's names for them.
+  @gate_mode_manual_review %{
+    "off" => "off",
+    "shadow" => "on",
+    "enforce" => "off",
+    "decide" => "off",
+    "advise" => "on",
+    "watch" => "off"
+  }
 
   # The keys each section of symphony.yml accepts, by dotted path; `repositories[]` is an item of
   # the `repositories` list. A key that is itself a path here is a nested section. The parser
@@ -58,8 +77,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "issues.memory" => ~w(issues_file),
     "issues.linear" => ~w(endpoint api_key assignee scope),
     "issues.linear.scope" => ~w(project_slug team labels),
-    "issues.states" => ~w(active terminal waiting_on_sub_issues human_review),
-    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate),
+    # `human_review` is retired: it still loads, with a deprecation warning, and is dropped
+    # (`drop_retired_key/4`).
+    "issues.states" => ~w(active terminal waiting_on_sub_issues human_review code_review qa plan_review epic_review ci_fix),
+    "tickets" => ~w(priorities),
+    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate manual_review),
     "repositories[].route" => ~w(team projects labels assignee),
     "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
     "repositories[].agent" => ~w(provider model effort run_profiles),
@@ -94,6 +116,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "poller" => ~w(backoff_base_ms max_backoff_ms degraded_threshold),
     "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
+    # `label` is deprecated (see `normalize_human_actions/1`).
     "human_actions" => ~w(enabled label interval_ms min_update_interval_ms),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
@@ -292,7 +315,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       :assignee,
       :default,
       :agent,
-      :acceptance_gate
+      :acceptance_gate,
+      :manual_review
     ]
 
     defmodule Workspace do
@@ -338,6 +362,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
       # The raw `acceptance_gate` override until `SystemSchema.parse/1` replaces it with the
       # repository's effective `auto_review.acceptance_gate` block, as a string-keyed map.
       field(:acceptance_gate, :map)
+      # The repo's manual review setting: `on` or `off`. Absent (nil) means "off", the default, unless
+      # the deprecated acceptance-gate mode sets it (`manual_review_for_gate_mode/1`).
+      field(:manual_review, :string)
       embeds_one(:workspace, Workspace, on_replace: :update)
     end
 
@@ -354,6 +381,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       |> validate_string(:workflow)
       |> validate_inclusion(:workflow_source, ["ref", "local"])
       |> validate_optional_string(:base_branch)
+      |> validate_inclusion(:manual_review, ["on", "off"])
       |> validate_string(:team)
       |> normalize_string_list(:labels)
       |> normalize_string_list(:projects)
@@ -400,6 +428,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   embedded_schema do
     embeds_one(:tracker, Schema.Tracker, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:tickets, Schema.Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Schema.Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:poller, Schema.Poller, on_replace: :update, defaults_to_struct: true)
     embeds_one(:watchdog, Schema.Watchdog, on_replace: :update, defaults_to_struct: true)
@@ -426,6 +455,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   @spec parse(map()) :: {:ok, t()} | {:error, {:invalid_symphony_config, String.t()}}
   def parse(config) when is_map(config) do
+    Process.put(@deprecations_key, [])
+    result = parse_config(config)
+    log_deprecations(Process.delete(@deprecations_key), config)
+    result
+  end
+
+  defp parse_config(config) do
     config = normalize_keys(config)
 
     with :ok <- reject_removed_keys(config),
@@ -445,6 +481,50 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
+  # `Config.system/0` parses the cached config on every settings read, many times a second and
+  # from many processes at once at startup, so the deprecation warnings collected during a parse
+  # are logged once per distinct config on the node: once for `symphony.yml` as loaded, and once
+  # more for each reload that changes it. The claim runs under a node-local lock so concurrent
+  # first parses of the same config don't each log.
+  defp log_deprecations([], _config), do: :ok
+
+  defp log_deprecations(messages, config) do
+    if claim_deprecations({@deprecations_key, :erlang.phash2(config)}) do
+      messages |> Enum.reverse() |> Enum.each(&Logger.warning/1)
+    end
+
+    :ok
+  end
+
+  defp claim_deprecations(key) do
+    not :persistent_term.get(key, false) and
+      :global.trans({key, self()}, fn -> claim_deprecations_locked(key) end, [node()])
+  end
+
+  defp claim_deprecations_locked(key) do
+    if :persistent_term.get(key, false) do
+      false
+    else
+      :persistent_term.put(key, true)
+      true
+    end
+  end
+
+  defp deprecation_warning(message) do
+    Process.put(@deprecations_key, [message | Process.get(@deprecations_key, [])])
+  end
+
+  # A key the retired legacy state machine read: it still loads, says once per config that it does
+  # nothing now, and is dropped before the section's keys are checked.
+  defp drop_retired_key(section, key, path, replacement) do
+    if Map.has_key?(section, key) do
+      deprecation_warning("symphony.yml `#{path}.#{key}` is deprecated and has no effect: #{replacement}. Remove it")
+      Map.delete(section, key)
+    else
+      section
+    end
+  end
+
   defp finalize(system_config) do
     with {:ok, system_config} <- system_config |> finalize_repos() |> parse_repo_agents() do
       merge_repo_acceptance_gates(system_config)
@@ -460,6 +540,25 @@ defmodule SymphonyElixir.Config.SystemSchema do
   def operator_key_paths do
     @allowed_keys |> Enum.flat_map(&operator_key_paths/1) |> Enum.sort()
   end
+
+  @doc """
+  The manual review value the deprecated acceptance-gate `mode` maps to, per the design's review-modes
+  table (`docs/design/state-machine.md`): the gate modes a `symphony.yml` may still carry — `off`,
+  `shadow` and `enforce` — and the design's own names for them.
+
+  `shadow` is `advise`: the gate ran and said what it thought, and a person decided, which is what
+  manual review `on` does. `enforce` is `decide` (the design's naming for it) and `off` is no review
+  at all, so both map to `off` — the machine moves the ticket on its verdict. `watch` is operator
+  monitoring, not a person stopping the ticket, so it is `off` too. An unknown value is `off`, the
+  setting's default.
+  """
+  @spec manual_review_for_gate_mode(String.t() | nil) :: String.t()
+  def manual_review_for_gate_mode(mode) do
+    @gate_mode_manual_review |> Map.get(normalize_gate_mode(mode), "off")
+  end
+
+  defp normalize_gate_mode(mode) when is_binary(mode), do: mode |> String.trim() |> String.downcase()
+  defp normalize_gate_mode(_mode), do: ""
 
   defp operator_key_paths(path) do
     cond do
@@ -484,6 +583,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   def to_config_map(%__MODULE__{} = system_config) do
     %{
       "tracker" => struct_to_map(system_config.tracker),
+      "tickets" => struct_to_map(system_config.tickets),
       "polling" => struct_to_map(system_config.polling),
       "poller" => struct_to_map(system_config.poller),
       "watchdog" => struct_to_map(system_config.watchdog),
@@ -547,6 +647,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     %__MODULE__{}
     |> cast(attrs, [])
     |> cast_embed(:tracker, with: &Schema.Tracker.changeset/2)
+    |> cast_embed(:tickets, with: &Schema.Tickets.changeset/2)
     |> cast_embed(:polling, with: &Schema.Polling.changeset/2)
     |> cast_embed(:poller, with: &Schema.Poller.changeset/2)
     |> cast_embed(:watchdog, with: &Schema.Watchdog.changeset/2)
@@ -595,6 +696,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_operator_config(config) do
     with {:ok, issue_config} <- normalize_issues(Map.get(config, "issues", %{})),
+         {:ok, tickets} <- normalize_tickets(Map.get(config, "tickets", %{})),
          {:ok, repos} <- normalize_repositories(Map.get(config, "repositories")),
          {:ok, workspace} <- normalize_workspaces(Map.get(config, "workspaces", %{})),
          {:ok, agent_config} <- normalize_agent(Map.get(config, "agent", %{})),
@@ -613,6 +715,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       {:ok,
        %{}
        |> merge_sections(issue_config)
+       |> maybe_put("tickets", tickets)
        |> maybe_put("repos", repos)
        |> maybe_put("workspace", workspace)
        |> maybe_put("worker", worker)
@@ -642,6 +745,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, scope} <- section_map(Map.get(linear, "scope", %{}), "issues.linear.scope"),
          :ok <- reject_unknown_section_keys(scope, section_keys("issues.linear.scope"), "issues.linear.scope"),
          {:ok, states} <- section_map(Map.get(config, "states", %{}), "issues.states"),
+         states = drop_retired_key(states, "human_review", "issues.states", @retired_human_review_state),
          :ok <- reject_unknown_section_keys(states, section_keys("issues.states"), "issues.states") do
       tracker =
         %{}
@@ -656,13 +760,29 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("active_states", Map.get(states, "active"))
         |> maybe_put("terminal_states", Map.get(states, "terminal"))
         |> maybe_put_configured("waiting_on_sub_issues_state", Map.get(states, "waiting_on_sub_issues"), Map.has_key?(states, "waiting_on_sub_issues"))
-        |> maybe_put_configured("human_review_state", Map.get(states, "human_review"), Map.has_key?(states, "human_review"))
+        |> maybe_put_configured("code_review_state", Map.get(states, "code_review"), Map.has_key?(states, "code_review"))
+        |> maybe_put_configured("qa_state", Map.get(states, "qa"), Map.has_key?(states, "qa"))
+        |> maybe_put_configured("plan_review_state", Map.get(states, "plan_review"), Map.has_key?(states, "plan_review"))
+        |> maybe_put_configured("epic_review_state", Map.get(states, "epic_review"), Map.has_key?(states, "epic_review"))
+        |> maybe_put_configured("ci_fix_state", Map.get(states, "ci_fix"), Map.has_key?(states, "ci_fix"))
 
       polling = %{} |> maybe_put("interval_ms", Map.get(config, "poll_interval_ms"))
 
       {:ok, %{} |> maybe_put("tracker", tracker) |> maybe_put("polling", polling)}
     end
   end
+
+  defp normalize_tickets(config) do
+    with {:ok, config} <- section_map(config, "tickets"),
+         :ok <- reject_unknown_section_keys(config, section_keys("tickets"), "tickets") do
+      {:ok, %{} |> maybe_put("priorities", stringify_priorities(Map.get(config, "priorities")))}
+    end
+  end
+
+  # Ecto's `{:array, :string}` rejects Linear's numeric priorities, so numbers become strings here,
+  # before `Schema.Tickets.changeset/2` maps every form to a canonical name.
+  defp stringify_priorities(values) when is_list(values), do: Enum.map(values, &to_string/1)
+  defp stringify_priorities(values), do: values
 
   # Relative to the folder holding symphony.yml, like a repository's workflow.
   defp memory_issues_file(path) when is_binary(path), do: workflow_path_from_symphony_file(path)
@@ -691,6 +811,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     path = "repositories[#{index}]"
 
     with {:ok, repo} <- section_map(repo, path),
+         repo = drop_retired_key(repo, "state_machine", repo_path(Map.get(repo, "key"), index), @retired_state_machine),
          :ok <- reject_unknown_section_keys(repo, section_keys("repositories[]"), path),
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
          :ok <- reject_unknown_section_keys(route, section_keys("repositories[].route"), path <> ".route"),
@@ -699,6 +820,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
          :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
+         agent = drop_repo_retired_run_profiles(agent, repo_agent_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
            normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", section_keys("repositories[].acceptance_gate")) do
       normalized =
@@ -715,6 +837,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("workspace", workspace)
         |> maybe_put("agent", agent)
         |> maybe_put("acceptance_gate", acceptance_gate)
+        |> maybe_put("manual_review", Map.get(repo, "manual_review"))
 
       {:ok, normalized}
     end
@@ -858,7 +981,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("effort", Map.get(config, "effort"))
         |> maybe_put("provider", Map.get(config, "provider"))
         |> maybe_put("small_model", Map.get(config, "small_model"))
-        |> maybe_put("run_profiles", Map.get(config, "run_profiles"))
+        |> maybe_put("run_profiles", drop_retired_run_profiles(Map.get(config, "run_profiles"), "agent.run_profiles"))
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))
         |> maybe_put("epic_lanes", Map.get(concurrency, "epic_lanes"))
@@ -925,9 +1048,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, android} <- section_map(Map.get(config, "android"), "auto_review.android"),
          :ok <- reject_unknown_section_keys(android, section_keys("auto_review.android"), "auto_review.android"),
          {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", section_keys("auto_review.acceptance_gate")) do
+      warn_retired_auto_review_keys(config)
+
       {:ok,
        config
-       |> Map.drop(["runtime", "acceptance_gate"])
+       |> Map.drop(["runtime", "acceptance_gate", "state"])
        |> maybe_put("kind", Map.get(config, "runtime"))
        |> maybe_put("acceptance_gate", acceptance_gate)}
     end
@@ -943,6 +1068,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(escalate, @acceptance_gate_escalate_keys, path <> ".escalate"),
          {:ok, busy_files} <- section_map(Map.get(escalate, "busy_files"), path <> ".escalate.busy_files"),
          :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
+      warn_legacy_escalate_label(Map.get(escalate, "labels"), path)
+      warn_deprecated_gate_mode(Map.get(config, "mode"), path)
+      warn_retired_gate_keys(config, escalate, path)
+
       {:ok,
        config
        |> Map.drop(["runtime", "escalate"])
@@ -950,6 +1079,120 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("escalate", escalate)}
     end
   end
+
+  defp warn_legacy_escalate_label(labels, path) when is_list(labels) do
+    legacy = SymphonyElixir.PersonWait.legacy_request_label()
+
+    if Enum.any?(labels, &(is_binary(&1) and String.downcase(String.trim(&1)) == legacy)) do
+      deprecation_warning(
+        "symphony.yml `#{path}.escalate.labels` lists the deprecated `#{legacy}` label: an action request now pauses its issue " <>
+          "on a Needs Decision hold without the label. Remove `#{legacy}` from the list"
+      )
+    end
+  end
+
+  defp warn_legacy_escalate_label(_labels, _path), do: :ok
+
+  # The acceptance gate is being retired in favour of the per-repo `manual_review` setting: a config
+  # that still sets a mode loads unchanged and says once per config what its mode now means, and
+  # where the setting it maps to lives.
+  defp warn_deprecated_gate_mode(mode, path) when is_binary(mode) do
+    deprecation_warning(
+      "symphony.yml `#{path}.mode` is deprecated and will be removed: review authority is now the per-repo " <>
+        "`manual_review` setting. `#{mode}` maps to `manual_review: #{manual_review_for_gate_mode(mode)}` " <>
+        "(shadow/advise → on; off/enforce/decide → off; watch is operator monitoring)"
+    )
+  end
+
+  defp warn_deprecated_gate_mode(_mode, _path), do: :ok
+
+  # Auto Review is retired (`docs/design/state-machine.md` §Retired): its own flow settings load
+  # unchanged during the deprecation window and say once per config that they do nothing now, and
+  # what replaced them. The QA settings that moved with the QA state (`runtime`, `command`, `model`,
+  # `effort`, `max_turns`, `timeout_ms`, `skip_globs`, `playbooks`, `worker_host`, `android`) still
+  # act and do not warn.
+  @retired_auto_review_keys [
+    {"enabled", "QA runs in the QA state"},
+    {"state", "`issues.states.qa` names the QA state"},
+    {"max_fix_attempts", "a QA fail returns the ticket to Rework on the same pull request"},
+    {"run_on", "QA runs on every head that reaches the QA state"},
+    {"max_concurrent", "QA runs take agent slots (`agent.concurrency`)"}
+  ]
+
+  defp warn_retired_auto_review_keys(config) do
+    for {key, replacement} <- @retired_auto_review_keys, Map.has_key?(config, key) do
+      deprecation_warning("symphony.yml `auto_review.#{key}` is deprecated and has no effect: Auto Review is retired; #{replacement}. Remove it")
+    end
+
+    :ok
+  end
+
+  # The acceptance gate is retired too. Its agent's run settings do nothing now; its `escalate`
+  # rules act in Code Review, read from the same block until the block is removed.
+  @retired_gate_keys ~w(runtime command model effort max_turns timeout_ms max_concurrent)
+
+  defp warn_retired_gate_keys(config, escalate, path) do
+    for key <- @retired_gate_keys, Map.has_key?(config, key) do
+      deprecation_warning(
+        "symphony.yml `#{path}.#{key}` is deprecated and has no effect: the acceptance gate is retired, and Code Review judges the " <>
+          "pull request with the `pre_push_review` reviewer. Remove it"
+      )
+    end
+
+    if Map.has_key?(config, "escalate") do
+      deprecation_warning(
+        "symphony.yml `#{path}.escalate` is deprecated and will move when the acceptance gate's block is removed: its rules now act in " <>
+          "Code Review (`labels` and `ticket_patterns` pause the ticket on a Needs Decision hold; `paths`, `diff_patterns`, " <>
+          "`dependencies`, `max_changed_lines` and `busy_files` deepen the review)"
+      )
+    end
+
+    if Map.has_key?(escalate, "inconclusive_limit") do
+      deprecation_warning(
+        "symphony.yml `#{path}.escalate.inconclusive_limit` is deprecated and has no effect: Code Review retries an inconclusive " <>
+          "review twice on the same head, then asks a person. Remove it"
+      )
+    end
+
+    :ok
+  end
+
+  # A retired run kind's profile goes with it: the key still loads, says so, and is dropped before
+  # the run kinds are checked. The acceptance gate is retired, and so are `Final verification:`
+  # tickets: an epic closes in its epic review.
+  @retired_run_profiles [
+    {"acceptance_gate", "the acceptance gate is retired"},
+    {"final_verification", "`Final verification:` tickets are retired, and an epic closes in its epic review"}
+  ]
+
+  defp drop_retired_run_profiles(profiles, path) when is_map(profiles) do
+    Enum.reduce(@retired_run_profiles, profiles, fn {kind, reason}, acc ->
+      if Map.has_key?(acc, kind) do
+        deprecation_warning("symphony.yml `#{path}.#{kind}` is deprecated and has no effect: #{reason}. Remove it")
+        Map.delete(acc, kind)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp drop_retired_run_profiles(profiles, _path), do: profiles
+
+  defp drop_repo_retired_run_profiles(%{"run_profiles" => profiles} = agent, path) when is_map(profiles),
+    do: Map.put(agent, "run_profiles", drop_retired_run_profiles(profiles, path <> ".run_profiles"))
+
+  defp drop_repo_retired_run_profiles(agent, _path), do: agent
+
+  # CI the fix runs could not make green no longer moves to a configured state: it pauses the ticket
+  # on a Needs Decision hold.
+  defp warn_retired_escalation_state(%{"escalate_to_state" => _state}) do
+    deprecation_warning(
+      "symphony.yml `pull_requests.checks.escalate_to_state` is deprecated and has no effect: CI the fix runs could not make green " <>
+        "pauses the ticket on a Needs Decision hold. Remove it"
+    )
+  end
+
+  defp warn_retired_escalation_state(_checks), do: :ok
 
   # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
   defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do
@@ -992,8 +1235,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("log_excerpt_lines", Map.get(checks, "log_excerpt_lines"))
         |> maybe_put("flaky_retry", Map.get(checks, "retry_failed_once"))
         |> maybe_put("max_retries", Map.get(checks, "max_fix_attempts"))
-        |> maybe_put("escalation_state", Map.get(checks, "escalate_to_state"))
         |> maybe_put("merging_wait_timeout_ms", Map.get(checks, "landing_wait_timeout_ms"))
+
+      warn_retired_escalation_state(checks)
 
       {:ok,
        %{}
@@ -1031,9 +1275,19 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
+  # `label` is retired: the Needs Decision hold says a person needs to act. A config that still
+  # sets it loads, and an issue carrying the label counts as one with an open request
+  # (`SymphonyElixir.PersonWait.legacy_request_labels/1`).
   defp normalize_human_actions(config) do
     with {:ok, config} <- section_map(config, "human_actions"),
          :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
+      if Map.has_key?(config, "label") do
+        deprecation_warning(
+          "symphony.yml `human_actions.label` is deprecated and will be removed: an action request now moves its issue " <>
+            "on a Needs Decision hold and adds no label. An issue carrying the label still counts as an open request"
+        )
+      end
+
       {:ok, config}
     end
   end
@@ -1196,7 +1450,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   # Each repository with an `acceptance_gate` override gets its effective block: the global one
-  # with the override merged on top (`AcceptanceGate.Settings.merge_override/2`), validated again so an
+  # with the override merged on top (`DeprecatedGateSettings.merge_override/2`), validated again so an
   # error names the repository's key.
   defp merge_repo_acceptance_gates(%__MODULE__{} = system_config) do
     global = struct_to_map(system_config.auto_review.acceptance_gate)
@@ -1207,9 +1461,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
           {repo, errors}
 
         %Repo{acceptance_gate: override, name: name} = repo, errors ->
-          merged = AcceptanceGate.Settings.merge_override(global, override)
+          merged = DeprecatedGateSettings.merge_override(global, override)
 
-          case %AcceptanceGate.Settings{} |> AcceptanceGate.Settings.changeset(merged) |> apply_action(:validate) do
+          case %DeprecatedGateSettings{} |> DeprecatedGateSettings.changeset(merged) |> apply_action(:validate) do
             {:ok, settings} -> {%{repo | acceptance_gate: struct_to_map(settings)}, errors}
             {:error, changeset} -> {repo, errors ++ acceptance_gate_errors(changeset, repo_path(name, nil) <> ".acceptance_gate")}
           end
@@ -1328,7 +1582,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
-  defp preserve_explicit_nil_path?(["tracker", "human_review_state"]), do: true
+
+  defp preserve_explicit_nil_path?(["tracker", field])
+       when field in ["code_review_state", "qa_state", "plan_review_state", "epic_review_state", "ci_fix_state"],
+       do: true
+
   defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 

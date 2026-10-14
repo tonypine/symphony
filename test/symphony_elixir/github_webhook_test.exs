@@ -101,17 +101,44 @@ defmodule SymphonyElixir.GitHubWebhookTest do
   end
 
   describe "parse/3" do
-    test "a completed check suite, check run or workflow run names its head and PRs" do
+    test "a completed check suite, check run or workflow run names its head, conclusion and PRs" do
       for event <- ["check_suite", "check_run", "workflow_run"] do
         payload = %{
           "action" => "completed",
           "repository" => @repository,
-          event => %{"head_sha" => "abc123", "pull_requests" => [%{"number" => 7}, %{"number" => "bad"}, %{}]}
+          event => %{
+            "head_sha" => "abc123",
+            "conclusion" => "failure",
+            "completed_at" => "2026-05-06T09:00:00Z",
+            "pull_requests" => [%{"number" => 7}, %{"number" => "bad"}, %{}]
+          }
         }
 
         assert Webhook.parse(event, payload, @events) ==
-                 {:ci, %{event: event, action: "completed", head_sha: "abc123", pr_urls: ["https://github.com/example/repo/pull/7"]}}
+                 {:ci,
+                  %{
+                    event: event,
+                    action: "completed",
+                    head_sha: "abc123",
+                    conclusion: "failure",
+                    completed_at: ~U[2026-05-06 09:00:00Z],
+                    pr_urls: ["https://github.com/example/repo/pull/7"],
+                    merged: false
+                  }}
       end
+    end
+
+    test "a completed check falls back to its updated_at, and reads a missing or unparseable time as nil" do
+      for {subject, expected} <- [
+            {%{"head_sha" => "abc", "updated_at" => "2026-05-06T10:00:00Z"}, ~U[2026-05-06 10:00:00Z]},
+            {%{"head_sha" => "abc"}, nil},
+            {%{"head_sha" => "abc", "completed_at" => "not a time"}, nil}
+          ] do
+        assert {:ci, %{completed_at: ^expected}} = Webhook.parse("check_run", %{"action" => "completed", "check_run" => subject}, @events)
+      end
+
+      assert {:ci, %{conclusion: nil}} =
+               Webhook.parse("check_run", %{"action" => "completed", "check_run" => %{"head_sha" => "abc", "conclusion" => "  "}}, @events)
     end
 
     test "a check event with no PR list still names its head" do
@@ -129,8 +156,29 @@ defmodule SymphonyElixir.GitHubWebhookTest do
         }
 
         assert Webhook.parse("pull_request", payload, @events) ==
-                 {:ci, %{event: "pull_request", action: action, head_sha: "def456", pr_urls: ["https://github.com/example/repo/pull/7"]}}
+                 {:ci,
+                  %{
+                    event: "pull_request",
+                    action: action,
+                    head_sha: "def456",
+                    conclusion: nil,
+                    completed_at: nil,
+                    pr_urls: ["https://github.com/example/repo/pull/7"],
+                    merged: false
+                  }}
       end
+    end
+
+    test "a pull request closed by merging says so, since its base branch moved" do
+      pull_request = %{"html_url" => "https://github.com/example/repo/pull/7", "head" => %{"sha" => "def456"}, "merged" => true}
+
+      assert {:ci, %{action: "closed", merged: true}} =
+               Webhook.parse("pull_request", %{"action" => "closed", "repository" => @repository, "pull_request" => pull_request}, @events)
+
+      assert {:ci, %{action: "reopened", merged: false}} =
+               Webhook.parse("pull_request", %{"action" => "reopened", "repository" => @repository, "pull_request" => pull_request}, @events)
+
+      assert Webhook.parse("pull_request", %{"action" => "closed", "pull_request" => %{"merged" => true}}, @events) == :ignored
     end
 
     test "pings, other actions, other events and events left out of the config" do
@@ -143,6 +191,23 @@ defmodule SymphonyElixir.GitHubWebhookTest do
       assert Webhook.parse("check_run", %{"action" => "completed", "check_run" => %{"head_sha" => "abc"}}, ["check_suite"]) == :ignored
       assert Webhook.parse(nil, %{}, @events) == :ignored
       assert Webhook.parse("check_suite", nil, @events) == :ignored
+    end
+  end
+
+  describe "ci_status/1" do
+    test "a moved or reopened head is running, and a closed PR carries no state" do
+      assert Webhook.ci_status(%{action: "synchronize", conclusion: nil}) == "running"
+      assert Webhook.ci_status(%{action: "reopened", conclusion: nil}) == "running"
+      assert Webhook.ci_status(%{action: "closed", conclusion: nil}) == nil
+    end
+
+    test "a failed check is red, and a passing or conclusionless one carries no state of its own" do
+      for conclusion <- ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure"] do
+        assert Webhook.ci_status(%{action: "completed", conclusion: conclusion}) == "red"
+      end
+
+      assert Webhook.ci_status(%{action: "completed", conclusion: "SUCCESS"}) == nil
+      assert Webhook.ci_status(%{action: "completed", conclusion: nil}) == nil
     end
   end
 

@@ -37,6 +37,7 @@ defmodule SymphonyElixir.TestSupport do
           stop_default_orchestrator: 0,
           stop_default_http_server: 0,
           stop_process: 1,
+          stop_orchestrator_agent_tasks: 0,
           stop_verification_port_pool: 0,
           clear_run_store!: 0,
           unix_socket_bind_probe: 0,
@@ -94,8 +95,6 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)
           Application.delete_env(:symphony_elixir, :config_cache_file_reader)
           Application.delete_env(:symphony_elixir, :config_cache_watch)
-          # An orchestrator started against a tracker without the state turns it off for the VM.
-          SymphonyElixir.HumanReview.reset_for_test("Human Review")
           Cache.clear()
           File.rm_rf(workflow_root)
         end)
@@ -109,8 +108,8 @@ defmodule SymphonyElixir.TestSupport do
     overrides = Keyword.put_new(overrides, :workspace_root, Path.join(Path.dirname(path), "workspaces"))
     {system_config, repo_config, prompt} = split_workflow_content(path, overrides)
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, repo_workflow_content(repo_config, prompt))
-    File.write!(SymphonyElixir.Workflow.symphony_file_path(), symphony_content(system_config, path))
+    write_atomically!(path, repo_workflow_content(repo_config, prompt))
+    write_atomically!(SymphonyElixir.Workflow.symphony_file_path(), symphony_content(system_config, path))
     Cache.clear()
 
     if Process.whereis(SymphonyElixir.WorkflowStore) do
@@ -122,6 +121,14 @@ defmodule SymphonyElixir.TestSupport do
     end
 
     :ok
+  end
+
+  # A test may rewrite the workflow while its orchestrator runs. `File.write!` truncates the file
+  # first, so a config read in between would see an empty `symphony.yml`; a rename swaps it whole.
+  defp write_atomically!(path, content) do
+    tmp_path = "#{path}.tmp-#{System.unique_integer([:positive])}"
+    File.write!(tmp_path, content)
+    File.rename!(tmp_path, path)
   end
 
   defp split_workflow_content(path, overrides) do
@@ -473,6 +480,42 @@ defmodule SymphonyElixir.TestSupport do
     :exit, _reason -> :ok
   end
 
+  # Agent tasks run under the shared TaskSupervisor and outlive the orchestrator that dispatched
+  # them. Stop them before a test removes their workspaces, or one goes on to spawn a command there
+  # and the port prints `spawn: Could not cd to ...`.
+  def stop_orchestrator_agent_tasks do
+    case Process.whereis(SymphonyElixir.TaskSupervisor) do
+      nil ->
+        :ok
+
+      _pid ->
+        SymphonyElixir.TaskSupervisor
+        |> Task.Supervisor.children()
+        |> Enum.filter(&orchestrator_task?/1)
+        |> Enum.each(&await_or_stop_task/1)
+    end
+  end
+
+  # Killing a task in the middle of `System.cmd` breaks the port's pipe, so let it finish first.
+  defp await_or_stop_task(pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      5_000 ->
+        Process.demonitor(ref, [:flush])
+        stop_process(pid)
+    end
+  end
+
+  defp orchestrator_task?(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} -> match?({SymphonyElixir.Orchestrator, _fun, _arity}, Keyword.get(dictionary, :"$initial_call"))
+      nil -> false
+    end
+  end
+
   def stop_process(pid) when is_pid(pid) do
     if Process.alive?(pid) do
       ref = Process.monitor(pid)
@@ -539,6 +582,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          tickets: nil,
           poll_interval_ms: 30_000,
           poller: nil,
           watchdog: nil,
@@ -626,6 +670,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
+    tickets = Keyword.get(config, :tickets)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     poller = Keyword.get(config, :poller)
     watchdog = Keyword.get(config, :watchdog)
@@ -695,7 +740,7 @@ defmodule SymphonyElixir.TestSupport do
       [
         "---",
         issues_yaml(%{
-          human_review: Keyword.fetch(config, :tracker_human_review_state),
+          plan_review: Keyword.fetch(config, :tracker_plan_review_state),
           kind: tracker_kind,
           endpoint: tracker_endpoint,
           memory_issues_file: tracker_memory_issues_file,
@@ -709,6 +754,7 @@ defmodule SymphonyElixir.TestSupport do
           interval_ms: poll_interval_ms
         }),
         poller && "poller: #{yaml_value(poller)}",
+        tickets && "tickets: #{yaml_value(tickets)}",
         watchdog_yaml(watchdog),
         workspaces_yaml(
           workspace_root,
@@ -841,8 +887,8 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp human_review_yaml({:ok, state}), do: "    human_review: #{yaml_value(state)}"
-  defp human_review_yaml(:error), do: nil
+  defp plan_review_yaml({:ok, state}), do: "    plan_review: #{yaml_value(state)}"
+  defp plan_review_yaml(:error), do: nil
 
   defp issues_yaml(config) do
     [
@@ -861,7 +907,7 @@ defmodule SymphonyElixir.TestSupport do
       "  states:",
       "    active: #{yaml_value(config.active_states)}",
       "    terminal: #{yaml_value(config.terminal_states)}",
-      human_review_yaml(config.human_review)
+      plan_review_yaml(config.plan_review)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
@@ -997,6 +1043,13 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:enable_weaker_network_isolation, Map.get(sandbox_runtime, :enable_weaker_network_isolation))
   end
 
+  @dispatch_loop_keys [
+    :dispatch_loop_runs,
+    :dispatch_loop_window_ms,
+    :dispatch_loop_long_runs,
+    :dispatch_loop_long_window_ms
+  ]
+
   defp watchdog_yaml(nil), do: nil
 
   defp watchdog_yaml(opts) when is_list(opts) or is_map(opts) do
@@ -1014,6 +1067,10 @@ defmodule SymphonyElixir.TestSupport do
         do: "  pending_tool_report_after_ms: #{yaml_value(config.pending_tool_report_after_ms)}"
       )
     ]
+    |> Enum.concat(
+      for {key, value} <- Map.take(config, @dispatch_loop_keys),
+          do: "  #{key}: #{yaml_value(value)}"
+    )
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
@@ -1069,7 +1126,6 @@ defmodule SymphonyElixir.TestSupport do
       "    log_excerpt_lines: #{yaml_value(Map.get(ci, :log_excerpt_lines))}",
       "    retry_failed_once: #{yaml_value(Map.get(ci, :flaky_retry))}",
       "    max_fix_attempts: #{yaml_value(Map.get(ci, :max_retries))}",
-      "    escalate_to_state: #{yaml_value(Map.get(ci, :escalation_state))}",
       "    landing_wait_timeout_ms: #{yaml_value(Map.get(ci, :merging_wait_timeout_ms))}"
     ]
     |> Enum.join("\n")
@@ -1093,6 +1149,7 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:workspace, workspace)
     |> maybe_put(:agent, repo_field(repo, :agent))
     |> maybe_put(:acceptance_gate, repo_field(repo, :acceptance_gate))
+    |> maybe_put(:manual_review, repo_field(repo, :manual_review))
   end
 
   defp repo_field(repo, key), do: Map.get(repo, key) || Map.get(repo, Atom.to_string(key))
@@ -1131,6 +1188,7 @@ defmodule SymphonyElixir.TestSupport do
           kv("range", Map.get(port_allocation, :range))
         ]),
         nested_yaml("dev_server", [
+          kv("build_cmd", Map.get(dev_server, :build_cmd)),
           kv("start_cmd", Map.get(dev_server, :start_cmd)),
           kv("health_check_url", Map.get(dev_server, :health_check_url)),
           kv("health_timeout_ms", Map.get(dev_server, :health_timeout_ms)),

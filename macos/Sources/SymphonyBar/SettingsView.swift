@@ -54,6 +54,8 @@ struct SettingsView: View {
                     }
                 }
 
+                NotificationsSection()
+
                 Section {
                     Toggle("Development mode", isOn: $model.settings.developmentMode)
                     if model.settings.developmentMode {
@@ -142,6 +144,85 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Text("Only the chosen priorities start new work. With none chosen, every priority may.")
+                        .foregroundStyle(.secondary)
+                    ForEach(TicketPriority.allCases, id: \.self) { priority in
+                        Toggle(priority.title, isOn: Binding(
+                            get: { model.ticketPriorities.priorities.contains(priority) },
+                            set: { on in
+                                if on {
+                                    model.ticketPriorities.priorities.insert(priority)
+                                } else {
+                                    model.ticketPriorities.priorities.remove(priority)
+                                }
+                            }
+                        ))
+                    }
+                    if model.ticketPrioritiesError != nil {
+                        CheckErrorPointer(subject: "these ticket priorities")
+                    }
+                } header: {
+                    Text("Tickets (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "An issue whose priority is not chosen is not dispatched: Symphony waits with free "
+                            + "lanes even when it sits in Todo. Use it to focus limited API spend, for example "
+                            + "on urgent and high tickets only. A forced ticket, and a run already under way, "
+                            + "still go. Save checks symphony.yml with symphony check first; Symphony reads it "
+                            + "on its next poll, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditTicketPriorities)
+
+                Section {
+                    Text("The Linear workflow states Symphony creates for the board's phases. Nothing moves tickets into them yet.")
+                        .foregroundStyle(.secondary)
+                    WorkflowStateRow(title: "Code review", name: $model.workflowStates.codeReview)
+                    WorkflowStateRow(title: "QA", name: $model.workflowStates.qa)
+                    WorkflowStateRow(title: "Plan review", name: $model.workflowStates.planReview)
+                    WorkflowStateRow(title: "Epic review", name: $model.workflowStates.epicReview)
+                    WorkflowStateRow(title: "CI fix", name: $model.workflowStates.ciFix)
+                    if model.workflowStatesError != nil {
+                        CheckErrorPointer(subject: "these board states")
+                    }
+                } header: {
+                    Text("Board states (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "issues.states.code_review, .qa, .plan_review, .epic_review and .ci_fix. At startup Symphony "
+                            + "creates a Linear state with each name in your team, and reports the exact name loudly "
+                            + "when one is missing or renamed instead of creating a duplicate. Renamed a state in "
+                            + "Linear? Point its field here at the new name. Save checks symphony.yml with symphony "
+                            + "check first; Symphony reads it when it next starts."
+                    )
+                }
+                .disabled(!model.canEditWorkflowStates)
+
+                Section {
+                    Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
+                    Text(
+                        model.ticketPatternsBuiltIn
+                            ? BuiltInTicketPatternsChoice.on.explanation
+                            : BuiltInTicketPatternsChoice.off.explanation
+                    )
+                    .foregroundStyle(.secondary)
+                    if model.ticketPatternsBuiltInError != nil {
+                        CheckErrorPointer(subject: "this setting")
+                    }
+                } header: {
+                    Text("Code Review (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
+                            + "match a title or description asking for a human or manual review, saying it must not be "
+                            + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
+                            + "a repo can override this in its Edit sheet. Save checks symphony.yml with symphony check "
+                            + "first; Symphony reads it on its next poll, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditTicketPatternsBuiltIn)
+
+                Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
                     Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
                         .foregroundStyle(.secondary)
@@ -165,6 +246,30 @@ struct SettingsView: View {
                     )
                 }
                 .disabled(!model.canEditTimeouts)
+
+                Section {
+                    DispatchLoopRow(title: "Hold a ticket after", runs: $model.dispatchLoopRuns, minutes: $model.dispatchLoopWindowMinutes)
+                    DispatchLoopRow(title: "Or after", runs: $model.dispatchLoopLongRuns, minutes: $model.dispatchLoopLongWindowMinutes)
+                    Text(
+                        "Once a ticket got this many runs of one kind in that time with no state change, new PR head or "
+                            + "decision, Symphony starts no more and puts it on a Blocked hold that says why. Unblock it "
+                            + "from the Inbox."
+                    )
+                    .foregroundStyle(.secondary)
+                    if let error = model.dispatchLoopError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Dispatch loops (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "watchdog.dispatch_loop_runs in watchdog.dispatch_loop_window_ms (default 4 runs in 10 minutes) "
+                            + "and watchdog.dispatch_loop_long_runs in watchdog.dispatch_loop_long_window_ms (default 8 "
+                            + "runs in 60 minutes). Save checks symphony.yml with symphony check first; Symphony reads "
+                            + "them on its next dispatch, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditDispatchLoop)
 
                 Section {
                     Picker("Scope", selection: $model.runProfilesScope) {
@@ -239,35 +344,6 @@ struct SettingsView: View {
                             + "cheaper OpenRouter model for Claude Code's titles and summaries on OpenRouter runs; "
                             + "default keeps them on the run's model. Save checks symphony.yml with symphony check "
                             + "first; changes apply to the next run."
-                    )
-                }
-
-                Section {
-                    AcceptanceGatePicker(
-                        choice: Binding(
-                            get: { .mode(model.acceptanceGateMode) },
-                            set: { if case let .mode(mode) = $0 { model.acceptanceGateMode = mode } }
-                        ),
-                        pending: $model.pendingAcceptanceGate,
-                        choices: AcceptanceGateMode.allCases.map { .mode($0) },
-                        inherited: model.acceptanceGateMode
-                    )
-                    .disabled(!model.canEditAcceptanceGate)
-                    if let error = model.acceptanceGateError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                    ForEach(model.acceptanceGateLines, id: \.self) { line in
-                        Text(line).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text(AcceptanceGate.sectionTitle)
-                } footer: {
-                    SectionFooter(
-                        "The gate judges each PR against its ticket after QA. Each repository's Edit… sheet in "
-                            + "Repos… can set its own mode, and the status menu switches an enforced repository to "
-                            + "Shadow or Off at once. Save checks symphony.yml with symphony check first; Symphony "
-                            + "reads the mode on its next poll, no restart needed. The stats cover each repository's "
-                            + "last 50 verdicts a person decided."
                     )
                 }
 
@@ -364,11 +440,17 @@ struct SettingsView: View {
                 if let error = model.tokenLimitsError {
                     CheckErrorText(message: error)
                 }
-                if model.acceptanceGateError != nil {
-                    Text("symphony check rejected the acceptance gate's mode; see Acceptance gate.").foregroundStyle(.red)
-                }
                 if model.timeoutsError != nil {
                     Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)
+                }
+                if model.dispatchLoopError != nil {
+                    Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
+                }
+                if model.ticketPrioritiesError != nil {
+                    Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
+                }
+                if let error = model.ticketPatternsBuiltInError {
+                    CheckErrorText(message: error)
                 }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
@@ -604,6 +686,32 @@ private struct OpenRouterModelField: View {
 
 /// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
 /// out as one line cut off with an ellipsis.
+/// D14: one switch per kind of notification, kept in the app's defaults and read at each poll.
+private struct NotificationsSection: View {
+    @State private var preferences = NotificationPreferences.load(from: AppStores.current.defaults)
+
+    var body: some View {
+        Section {
+            ForEach(NoticeKind.allCases, id: \.self) { kind in
+                Toggle(kind.settingsTitle, isOn: Binding(
+                    get: { preferences.isOn(kind) },
+                    set: { on in
+                        preferences.set(kind, on: on)
+                        preferences.save(to: AppStores.current.defaults)
+                    }
+                ))
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            SectionFooter(
+                "One notification for each new thing that waits on you and each new problem, never twice for the same "
+                    + "one, and nothing for routine progress."
+            )
+        }
+    }
+}
+
 private struct SectionFooter: View {
     let text: String
 
@@ -662,6 +770,28 @@ private struct TimeoutRow: View {
     }
 }
 
+/// A dispatch-loop limit: a number of runs and a window in whole minutes, each with a stepper.
+private struct DispatchLoopRow: View {
+    let title: String
+    @Binding var runs: Int
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text(runs == 1 ? "1 run" : "\(runs) runs")
+                    .monospacedDigit()
+                Stepper("\(title) runs", value: $runs, in: DispatchLoopLimits.runRange)
+                    .labelsHidden()
+                Text(minutes == 1 ? "in 1 minute" : "in \(minutes) minutes")
+                    .monospacedDigit()
+                Stepper("\(title) minutes", value: $minutes, in: DispatchLoopLimits.minuteRange)
+                    .labelsHidden()
+            }
+        }
+    }
+}
+
 /// A switch for a token cap and, while it's on, the number of tokens with a hint such as "1,000,000,000 = 1B".
 private struct TokenLimitRow: View {
     let toggleTitle: String
@@ -681,6 +811,19 @@ private struct TokenLimitRow: View {
                         .foregroundStyle(field.limit == nil ? .red : .secondary)
                 }
             }
+        }
+    }
+}
+
+/// One `issues.states.*` phase state: the Linear state name the board creates for that phase.
+private struct WorkflowStateRow: View {
+    let title: String
+    @Binding var name: String
+
+    var body: some View {
+        LabeledContent(title) {
+            TextField(title, text: $name, prompt: Text("State name"))
+                .labelsHidden()
         }
     }
 }

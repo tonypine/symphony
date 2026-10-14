@@ -64,7 +64,8 @@ defmodule SymphonyElixir.HumanActionsTest do
     defaults = [
       settings_fun: fn -> %Schema{} end,
       repos: fn -> {:ok, [:repo]} end,
-      collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1))} end,
+      name: {:test, make_ref()},
+      collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1)), []} end,
       linear_client: linear(test_pid, Keyword.get(opts, :previous, no_updates())),
       now_ms: fn -> Agent.get(clock, & &1) end,
       notify: fn event, attrs -> send(test_pid, {:notified, event, attrs}) end
@@ -87,13 +88,14 @@ defmodule SymphonyElixir.HumanActionsTest do
   defp collected(actions), do: %{@project.id => %{project: @project, actions: actions}}
 
   test "posts one update listing a new action, and nothing more while the list stays the same" do
-    actions = start_actions([action("request:comment-1", %{why: "Release fails.", est_minutes: 10})])
+    actions = start_actions([action("request:comment-1", %{why: "Release fails.", if_unanswered: "Releases stay red."})])
     state = state(actions: actions) |> HumanActions.run_once()
 
     assert_received {:recovered, "project-1"}
     assert_received {:posted, %{"projectId" => "project-1", "health" => "atRisk", "body" => body}}
     assert body =~ "### 1. Do request:comment-1"
     assert body =~ "1. Step for request:comment-1"
+    assert body =~ "**If unanswered:** Releases stay red."
     assert body =~ "Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24)"
     assert_received {:notified, :human_action_needed, %{issue_identifier: "MOT-24", reason: "Do request:comment-1", metadata: %{"kind" => "request"}}}
 
@@ -169,12 +171,12 @@ defmodule SymphonyElixir.HumanActionsTest do
     state = HumanActions.run_once(state)
     assert_received {:posted, %{"projectId" => "project-1", "health" => "atRisk", "body" => body}}
     assert body =~ "**1 action needs you.**"
-    assert body =~ "### 1. Add the `SIGNING_KEY` secret"
-    assert body =~ "Unblocks the `Release` workflow on `main` in acme/cycle"
+    assert body =~ "### 1. Add the SIGNING_KEY secret"
+    assert body =~ "Unblocks the Release workflow on main in the cycle repository"
     assert body =~ "1. Open https://github.com/acme/cycle/settings/secrets/actions (the repository's Settings → Secrets and variables → Actions)."
-    assert body =~ "**Done when:** the next run of `Release` on `main` is green."
+    assert body =~ "**Done when:** the next run of the Release workflow on main is green."
     refute body =~ fake_value
-    assert_received {:notified, :human_action_needed, %{issue_identifier: nil, reason: "Add the `SIGNING_KEY` secret", metadata: %{"kind" => "ci_secret"}}}
+    assert_received {:notified, :human_action_needed, %{issue_identifier: nil, reason: "Add the SIGNING_KEY secret", metadata: %{"kind" => "ci_secret"}}}
 
     Process.put(:runs, [%{red.("3") | conclusion: "SUCCESS"}, red.("2"), red.("1")])
     Agent.update(clock, fn _now -> 15 * @minute end)
@@ -188,7 +190,7 @@ defmodule SymphonyElixir.HumanActionsTest do
     refute_received {:posted, _input}
 
     # A project read with no actions and no earlier update from Symphony stays quiet too.
-    collect = fn _repos, _opts -> {:ok, %{"project-1" => %{project: @project, actions: []}}} end
+    collect = fn _repos, _opts -> {:ok, %{"project-1" => %{project: @project, actions: []}}, []} end
     state(actions: start_actions([]), collect: collect) |> HumanActions.run_once()
     assert_received {:recovered, "project-1"}
     refute_received {:posted, _input}
@@ -196,7 +198,7 @@ defmodule SymphonyElixir.HumanActionsTest do
 
   test "reads the last list back after a restart instead of posting it again" do
     listed = [action("a")]
-    {body, []} = Update.render(listed, "human-action")
+    {body, []} = Update.render(listed)
 
     previous =
       {:ok,
@@ -296,6 +298,24 @@ defmodule SymphonyElixir.HumanActionsTest do
     assert Process.alive?(pid)
 
     assert :ok = HumanActions.refresh(:"not_running_#{System.unique_integer([:positive])}")
+  end
+
+  test "keeps the tickets waiting on a person from its last read" do
+    name = {:test, make_ref()}
+    waiting = [%{issue_id: "issue-1", identifier: "TP-1", kind: :pr}]
+    assert HumanActions.waiting_on_you(name) == []
+
+    state = state(actions: start_actions([]), name: name, collect: fn _repos, _opts -> {:ok, %{}, waiting} end)
+    HumanActions.run_once(state)
+    assert HumanActions.waiting_on_you(name) == waiting
+
+    # The same list again, then a failed read, keep it.
+    HumanActions.run_once(state)
+    capture_log(fn -> HumanActions.run_once(%{state | opts: Keyword.put(state.opts, :collect, fn _repos, _opts -> {:error, :linear_down} end)}) end)
+    assert HumanActions.waiting_on_you(name) == waiting
+
+    HumanActions.run_once(%{state | opts: Keyword.put(state.opts, :collect, fn _repos, _opts -> {:ok, %{}, []} end)})
+    assert HumanActions.waiting_on_you(name) == []
   end
 
   test "is on for a Linear tracker with human_actions.enabled" do

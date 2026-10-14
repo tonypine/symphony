@@ -14,12 +14,99 @@ public struct StateSnapshot: Equatable {
     public var updateUnblocks: Int
     /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
     public var forced: [ForcedTicket]
-    /// Tickets waiting in Human Review, which only the operator can move on; 0 when Symphony predates it.
-    public var humanReview: Int
-    /// The acceptance gate's agreement stats per repository key; nil when Symphony predates them.
-    public var gateAgreement: [String: GateAgreement]?
     /// The running agents, in Symphony's order; empty when none runs.
     public var runs: [Run]
+    /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
+    public var waitingOnYou: [WaitingTicket]
+    /// False while Symphony hasn't read Linear for `waitingOnYou` yet, so an empty list may be incomplete; true
+    /// once it has, or when Symphony predates the field.
+    public var inboxRead: Bool
+    /// The kind of every live session (agent runs, QA passes, code review runs), in Symphony's
+    /// order; nil when Symphony predates `sessions`.
+    public var sessionKinds: [String]?
+
+    /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
+    public struct WaitingTicket: Equatable {
+        /// What the operator is asked for.
+        public enum Kind: Equatable {
+            /// A plan waiting for approval.
+            case plan
+            /// A pull request to review.
+            case pr
+            /// A decision an agent asked for with `linear_request_human_action`.
+            case action
+            /// A ticket the quality gate held for clarification or skipped.
+            case clarify
+            /// A ticket an access hold pauses in place, waiting on an Unblock.
+            case blocked
+            /// A kind this app doesn't know yet.
+            case other(String)
+
+            public init(_ text: String?) {
+                switch text {
+                case "plan"?: self = .plan
+                case "pr"?: self = .pr
+                case "action"?: self = .action
+                case "clarify"?: self = .clarify
+                case "blocked"?: self = .blocked
+                default: self = .other(text ?? "")
+                }
+            }
+
+            /// The Inbox kind, nil for one this app doesn't know.
+            public var inboxKind: InboxItem.Kind? {
+                switch self {
+                case .plan: .plan
+                case .pr: .pr
+                case .action: .action
+                case .clarify: .clarify
+                case .blocked: .blocked
+                case .other: nil
+                }
+            }
+
+            /// The SF Symbol of the kind, in the menu and in notifications.
+            public var symbol: String { inboxKind?.symbol ?? SymphonyView.inbox.symbol }
+        }
+
+        /// The Linear issue id, which the Inbox selects it by.
+        public var issueID: String?
+        public var identifier: String
+        /// The repo it belongs to, for the window's scope; nil when Symphony didn't say.
+        public var repoKey: String?
+        public var title: String?
+        /// The ticket in Linear.
+        public var url: URL?
+        public var kind: Kind
+        /// The `**What to review:**` line of its review brief, nil when it has none.
+        public var headline: String?
+        /// How long it has waited, nil when Symphony couldn't tell.
+        public var waitingSeconds: Int?
+        /// A pull request whose checks are green: its notification offers Approve and Merge….
+        public var checksGreen: Bool
+
+        public init(
+            issueID: String? = nil,
+            identifier: String,
+            repoKey: String? = nil,
+            title: String? = nil,
+            url: URL? = nil,
+            kind: Kind = .pr,
+            headline: String? = nil,
+            waitingSeconds: Int? = nil,
+            checksGreen: Bool = false
+        ) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.repoKey = repoKey
+            self.title = title
+            self.url = url
+            self.kind = kind
+            self.headline = headline
+            self.waitingSeconds = waitingSeconds
+            self.checksGreen = checksGreen
+        }
+    }
 
     /// A running agent, as `/api/v1/state`'s `running` lists it.
     public struct Run: Equatable {
@@ -107,6 +194,9 @@ public struct StateSnapshot: Equatable {
     /// A ticket forced past the dispatch limits (`symphony force`, or its force label in Linear).
     public struct ForcedTicket: Equatable {
         public var identifier: String
+        public var issueID: String?
+        public var title: String?
+        public var repoKey: String?
         /// What it is doing and what it waits on, as Symphony words it: "implementation · running",
         /// "implementation · waiting on blocker TP-1", "waiting for a human". Nil when Symphony didn't say.
         public var summary: String?
@@ -120,6 +210,9 @@ public struct StateSnapshot: Equatable {
 
         public init(
             identifier: String,
+            issueID: String? = nil,
+            title: String? = nil,
+            repoKey: String? = nil,
             summary: String? = nil,
             state: String? = nil,
             forcedForSeconds: Int? = nil,
@@ -127,6 +220,9 @@ public struct StateSnapshot: Equatable {
             part: String? = nil
         ) {
             self.identifier = identifier
+            self.issueID = issueID
+            self.title = title
+            self.repoKey = repoKey
             self.summary = summary
             self.state = state
             self.forcedForSeconds = forcedForSeconds
@@ -159,41 +255,6 @@ public struct StateSnapshot: Equatable {
         }
     }
 
-    /// How far a repository's acceptance gate verdicts agree with the person who decided them, over its last 50
-    /// decisions (`acceptance_gate.agreement` in `/api/v1/state`).
-    public struct GateAgreement: Equatable {
-        public var judged: Int
-        public var agreed: Int
-        /// From 0 to 1, nil while no verdict the gate didn't escalate has been decided.
-        public var agreementRate: Double?
-        public var unsafeApprovals: Int
-        public var falseReworks: Int
-        public var escalations: Int
-        public var readyToEnforce: Bool
-        /// The first condition for `enforce` still unmet, for example "at least 20 judged tickets (12 so far)".
-        public var unmetCondition: String?
-
-        public init(
-            judged: Int = 0,
-            agreed: Int = 0,
-            agreementRate: Double? = nil,
-            unsafeApprovals: Int = 0,
-            falseReworks: Int = 0,
-            escalations: Int = 0,
-            readyToEnforce: Bool = false,
-            unmetCondition: String? = nil
-        ) {
-            self.judged = judged
-            self.agreed = agreed
-            self.agreementRate = agreementRate
-            self.unsafeApprovals = unsafeApprovals
-            self.falseReworks = falseReworks
-            self.escalations = escalations
-            self.readyToEnforce = readyToEnforce
-            self.unmetCondition = unmetCondition
-        }
-    }
-
     public init(
         running: Int = 0,
         retrying: Int = 0,
@@ -202,9 +263,10 @@ public struct StateSnapshot: Equatable {
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
         forced: [ForcedTicket] = [],
-        humanReview: Int = 0,
-        gateAgreement: [String: GateAgreement]? = nil,
-        runs: [Run] = []
+        runs: [Run] = [],
+        waitingOnYou: [WaitingTicket] = [],
+        inboxRead: Bool = true,
+        sessionKinds: [String]? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -213,9 +275,10 @@ public struct StateSnapshot: Equatable {
         self.budget = budget
         self.updateUnblocks = updateUnblocks
         self.forced = forced
-        self.humanReview = humanReview
-        self.gateAgreement = gateAgreement
         self.runs = runs
+        self.waitingOnYou = waitingOnYou
+        self.inboxRead = inboxRead
+        self.sessionKinds = sessionKinds
     }
 }
 
@@ -274,8 +337,7 @@ public enum SymphonyState {
         guard let counts = payload.counts else { return .failed("Symphony's state couldn't be read") }
 
         var snapshot = StateSnapshot(
-            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0,
-            humanReview: counts.humanReview ?? 0
+            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
         )
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
@@ -306,6 +368,9 @@ public enum SymphonyState {
             guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
             return StateSnapshot.ForcedTicket(
                 identifier: identifier,
+                issueID: ticket.issueId,
+                title: ticket.title,
+                repoKey: ticket.repoKey,
                 summary: ticket.summary,
                 state: ticket.state,
                 forcedForSeconds: ticket.forcedForSeconds,
@@ -313,7 +378,7 @@ public enum SymphonyState {
                 part: ticket.subIssue?.issueIdentifier
             )
         }
-        snapshot.gateAgreement = gateAgreement(data)
+        snapshot.sessionKinds = payload.sessions?.map { $0.kind ?? "agent" }
         snapshot.runs = (payload.running ?? []).compactMap { run in
             guard let identifier = run.issueIdentifier ?? run.issueId else { return nil }
             return StateSnapshot.Run(
@@ -324,58 +389,22 @@ public enum SymphonyState {
                 lastEventAt: run.lastEventAt.flatMap(parseDate)
             )
         }
-        return .state(snapshot)
-    }
-
-    /// `acceptance_gate.agreement`, read without `convertFromSnakeCase`, which would rewrite repository keys such
-    /// as `my_repo` into `myRepo`. Nil when the state has none.
-    private static func gateAgreement(_ data: Data) -> [String: StateSnapshot.GateAgreement]? {
-        guard let payload = try? JSONDecoder().decode(GatePayload.self, from: data),
-              let agreement = payload.acceptanceGate?.agreement else { return nil }
-        return agreement.mapValues { stats in
-            StateSnapshot.GateAgreement(
-                judged: stats.judged ?? 0,
-                agreed: stats.agreed ?? 0,
-                agreementRate: stats.agreementRate,
-                unsafeApprovals: stats.unsafeApprovals ?? 0,
-                falseReworks: stats.falseReworks ?? 0,
-                escalations: stats.escalations ?? 0,
-                readyToEnforce: stats.readyToEnforce ?? false,
-                unmetCondition: stats.unmetCondition
+        snapshot.waitingOnYou = (payload.waitingOnYou ?? []).compactMap { ticket in
+            guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
+            return StateSnapshot.WaitingTicket(
+                issueID: ticket.issueId,
+                identifier: identifier,
+                repoKey: ticket.repoKey,
+                title: ticket.title,
+                url: ticket.url.flatMap(URL.init(string:)),
+                kind: .init(ticket.kind),
+                headline: ticket.headline,
+                waitingSeconds: ticket.waitingSeconds,
+                checksGreen: ticket.checksGreen ?? false
             )
         }
-    }
-
-    private struct GatePayload: Decodable {
-        struct Gate: Decodable {
-            let agreement: [String: Stats]?
-        }
-
-        struct Stats: Decodable {
-            let judged: Int?
-            let agreed: Int?
-            let agreementRate: Double?
-            let unsafeApprovals: Int?
-            let falseReworks: Int?
-            let escalations: Int?
-            let readyToEnforce: Bool?
-            let unmetCondition: String?
-
-            enum CodingKeys: String, CodingKey {
-                case judged, agreed, escalations
-                case agreementRate = "agreement_rate"
-                case unsafeApprovals = "unsafe_approvals"
-                case falseReworks = "false_reworks"
-                case readyToEnforce = "ready_to_enforce"
-                case unmetCondition = "unmet_condition"
-            }
-        }
-
-        let acceptanceGate: Gate?
-
-        enum CodingKeys: String, CodingKey {
-            case acceptanceGate = "acceptance_gate"
-        }
+        snapshot.inboxRead = payload.inboxRead ?? true
+        return .state(snapshot)
     }
 
     private static let decoder: JSONDecoder = {
@@ -385,7 +414,7 @@ public enum SymphonyState {
     }()
 
     /// Symphony writes whole-second UTC timestamps, for example `2026-10-02T12:16:02Z`.
-    private static func parseDate(_ text: String) -> Date? {
+    static func parseDate(_ text: String) -> Date? {
         ISO8601DateFormatter().date(from: text)
     }
 
@@ -405,8 +434,6 @@ public enum SymphonyState {
         struct Counts: Decodable {
             let running: Int
             let retrying: Int?
-            /// Missing before Symphony had a Human Review state.
-            let humanReview: Int?
         }
 
         struct Pause: Decodable {
@@ -451,6 +478,8 @@ public enum SymphonyState {
 
             let issueId: String?
             let issueIdentifier: String?
+            let title: String?
+            let repoKey: String?
             let summary: String?
             let state: String?
             let forcedForSeconds: Int?
@@ -467,15 +496,37 @@ public enum SymphonyState {
             let lastEventAt: String?
         }
 
+        struct Session: Decodable {
+            let kind: String?
+        }
+
+        struct Waiting: Decodable {
+            let issueId: String?
+            let issueIdentifier: String?
+            let repoKey: String?
+            let title: String?
+            let url: String?
+            let kind: String?
+            let headline: String?
+            let waitingSeconds: Int?
+            let checksGreen: Bool?
+        }
+
         let counts: Counts?
         /// Every field is optional, so an entry missing one never fails the whole state.
         let running: [Running]?
+        /// Missing before Symphony listed every live session with its kind.
+        let sessions: [Session]?
         let pause: Pause?
         let budget: Budget?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?
         /// Missing before Symphony reported forced tickets.
         let forced: [Forced]?
+        /// Missing before Symphony listed what waits on the operator.
+        let waitingOnYou: [Waiting]?
+        /// Missing before Symphony said whether it had read the Inbox.
+        let inboxRead: Bool?
         let error: Failure?
     }
 }

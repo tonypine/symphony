@@ -83,7 +83,8 @@ before the templates, gets only the implementation plan, as today.
 5. **Decisions**: one ADR-style section per real choice, with the options and a recommendation.
 6. **Implementation plan**: the sub-tickets, each naming the feature, journey and Kano class it
    serves (feature → journey → screen → ticket) and carrying a user walkthrough; Must-be tickets
-   first. A `Final verification:` sub-ticket closes the plan, as today.
+   first. A `Final verification:` sub-ticket closed the plan (since retired: an epic now closes
+   itself in its epic review).
 
 Two written references replace the steering the operator did by hand on MOT-3 (TP-619):
 
@@ -143,9 +144,9 @@ A ticket waits on the operator when it is in `In Review` or `Human Review`, or h
 `linear_request_human_action` request. Three surfaces list them:
 
 - **SymphonyBar and the dashboard** show a "Waiting on you" list (TP-617). Each entry gives the
-  ticket, its kind (`plan`, `pr`, `final_verification` or `action`), the headline of its review
-  brief and how long it has waited, oldest first. The menu bar icon shows a badge while the list is
-  not empty, and each item opens the ticket in the browser.
+  ticket, its kind (`plan`, `pr`, `final_verification` (since retired) or `action`), the headline of
+  its review brief and how long it has waited, oldest first. The menu bar icon shows a badge while
+  the list is not empty, and each item opens the ticket in the browser.
 - **A saved Linear view, "Waiting on me"**, for use away from the Mac: in Linear, create a view
   filtered to status `In Review` or `Human Review` and assignee "me", and save it as "Waiting on
   me". On a mobile device, add it to favourites.

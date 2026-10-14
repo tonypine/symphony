@@ -45,6 +45,19 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     defp response("SymphonyLinearIssuesById", %{"ids" => ids}, issues) do
       %{"data" => %{"issues" => %{"nodes" => Enum.filter(issues, &(&1["id"] in ids))}}}
     end
+
+    # The CI-label projection looks a label name up before writing it: nothing on the issue yet,
+    # a workspace label to add.
+    defp response("SymphonyResolveIssueLabel", _variables, _issues) do
+      %{
+        "data" => %{
+          "issue" => %{"team" => %{"id" => "team-1"}, "labels" => %{"nodes" => []}},
+          "issueLabels" => %{"nodes" => [%{"id" => "label-1", "team" => nil}]}
+        }
+      }
+    end
+
+    defp response("SymphonyAddIssueLabel", _variables, _issues), do: %{"data" => %{"issueAddLabel" => %{"success" => true}}}
   end
 
   defmodule GreenGitHub do
@@ -95,9 +108,18 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       assert {:ok, %{discovered: unquote(watched), processed: unquote(watched)}} =
                CiPoller.poll_once(github: GreenGitHub, now: @now)
 
-      # `assignee: me` resolves the viewer once; each repository's states are read once.
-      assert linear_requests() == %{"SymphonyLinearViewer" => 1, "SymphonyLinearPoll" => 2}
+      # `assignee: me` resolves the viewer once; each repository's states are read once. The poll
+      # also projects the machine CI labels on every head whose state it just wrote: one label
+      # lookup per machine label, plus the add that puts the wanted one on the issue.
+      assert linear_requests() == %{
+               "SymphonyLinearViewer" => 1,
+               "SymphonyLinearPoll" => 2,
+               "SymphonyResolveIssueLabel" => 3 * unquote(watched),
+               "SymphonyAddIssueLabel" => unquote(watched)
+             }
 
+      # A poll that reads the same head state changes nothing, so it writes no labels: the
+      # steady-state budget stays flat as watched issues grow.
       assert {:ok, %{processed: unquote(watched)}} = CiPoller.poll_once(github: GreenGitHub, now: DateTime.add(@now, 1, :minute))
       assert linear_requests() == %{"SymphonyLinearPoll" => 2}
     end
@@ -118,6 +140,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   end
 
   defp start_linear!(watched) do
+    suspend_background_readers()
     issues = Enum.map(1..watched, &raw_issue/1)
     plug = {FakeLinear, recipient: self(), issues: issues}
     server = start_supervised!({Bandit, plug: plug, ip: :loopback, port: 0, startup_log: false})
@@ -139,12 +162,25 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     Enum.each(1..watched, &put_run/1)
   end
 
+  # The application's own Linear readers poll on their timers and read the workflow this test
+  # points at the fake endpoint, so a tick during the test would add its reads to the counts.
+  defp suspend_background_readers do
+    for name <- [SymphonyElixir.Inbox, SymphonyElixir.Initiatives, SymphonyElixir.HumanActions],
+        pid = Process.whereis(name),
+        is_pid(pid) do
+      :ok = :sys.suspend(pid)
+      on_exit(fn -> resume(pid) end)
+    end
+  end
+
+  defp resume(pid), do: if(Process.alive?(pid), do: :sys.resume(pid))
+
   defp raw_issue(index) do
     %{
       "id" => "issue-#{index}",
       "identifier" => "TEAM-#{index}",
       "title" => "Watched #{index}",
-      "state" => %{"name" => "In Review"},
+      "state" => %{"name" => "Code Review"},
       "url" => "https://linear.test/TEAM-#{index}",
       "assignee" => %{"id" => "viewer-1"},
       "labels" => %{"nodes" => []},

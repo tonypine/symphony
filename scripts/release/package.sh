@@ -92,7 +92,7 @@ shown=200
   echo
   echo "## Install"
   echo
-  echo "Symphony.app runs on Apple silicon Macs with macOS 13 or later. Install or reinstall it with:"
+  echo "Symphony.app runs on Apple silicon Macs with macOS 26 or later. Install or reinstall it with:"
   echo
   echo '```bash'
   echo "curl -fsSL https://raw.githubusercontent.com/tonypine/symphony/main/scripts/install-macos.sh | bash"
@@ -116,9 +116,9 @@ shown=200
   echo "## Verifying"
   echo
   if [ "$signed" = true ]; then
-    echo "Symphony.app and its embedded \`symphony\` binary are signed with the Symphony code-signing certificate."
+    echo "Symphony.app and its embedded Symphony release are signed with the Symphony code-signing certificate."
   else
-    echo "Symphony.app and its embedded \`symphony\` binary are signed ad hoc: no code-signing certificate is configured yet."
+    echo "Symphony.app and its embedded Symphony release are signed ad hoc: no code-signing certificate is configured yet."
   fi
   echo
   echo '```bash'

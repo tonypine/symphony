@@ -1,11 +1,15 @@
 {% comment %}
 name: completion_bar
-description: Baseline bar that must be satisfied before moving an issue to In Review; repos append their own criteria after the render.
+description: Baseline bar that must be satisfied before the handoff to Code Review; repos append their own criteria after the render.
 vars: []
-{% endcomment %}## Completion bar before In Review
+{% endcomment %}## Completion bar before the handoff
+
+The handoff to `Code Review` is the push that opens or updates the PR; meet this bar
+before it, because the push is what moves the ticket on.
 
 - Step 1/2 checklist is fully complete and accurately reflected in the single workpad comment.
 - Acceptance criteria and required ticket-provided validation items are complete.
 - Validation/tests are green for the latest commit.
 - All PR review feedback has been addressed or explicitly answered, and no actionable comments remain.
-- PR checks are green, branch is pushed, and PR is linked on the issue.
+- Branch is pushed, the PR is open and linked on the issue. CI runs on the pushed head: a red head goes to `CI Fix`, and the reviewer only runs once it is green.
+- The review brief is left before the push (see `Review brief`): it links the PR and says what to check. On a later handoff (review comments addressed, a rework verdict answered), the existing brief is edited in place with `linear_update_comment`, with `What changed since the last brief` filled in; never a second one.

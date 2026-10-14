@@ -8,7 +8,7 @@ defmodule SymphonyElixir.Paths do
   @logs_root_env "SYMPHONY_LOGS_ROOT"
   @state_root_override_key :state_root_override
   @logs_root_override_key :logs_root_override
-  @burrito_env "__BURRITO"
+  @release_root_env "SYMPHONY_RELEASE_ROOT"
   @release_subdir "release"
 
   @spec state_root() :: Path.t()
@@ -148,11 +148,11 @@ defmodule SymphonyElixir.Paths do
   defp running_as_release? do
     case Application.fetch_env(@app, :running_as_release) do
       {:ok, value} when is_boolean(value) -> value
-      _ -> detect_burrito_release()
+      _ -> detect_packaged_release()
     end
   end
 
-  defp detect_burrito_release do
-    System.get_env(@burrito_env) not in [nil, ""]
+  defp detect_packaged_release do
+    System.get_env(@release_root_env) not in [nil, ""]
   end
 end

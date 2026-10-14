@@ -6,7 +6,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, Quality, StatusDashboard}
+  alias SymphonyElixir.{Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
+  alias SymphonyElixir.Learnings.Feed
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   # The frame is padded to the requested width inside StatusDashboard; cap it.
@@ -26,7 +27,17 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   def state(conn, _params) do
-    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes()))
+    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), inbox()))
+  end
+
+  @spec inbox(Conn.t(), map()) :: Conn.t()
+  def inbox(conn, _params) do
+    json(conn, Presenter.inbox_payload(orchestrator(), snapshot_timeout_ms(), inbox()))
+  end
+
+  @spec initiatives(Conn.t(), map()) :: Conn.t()
+  def initiatives(conn, _params) do
+    json(conn, Presenter.initiatives_payload(orchestrator(), snapshot_timeout_ms(), initiatives(), inbox()))
   end
 
   @spec repos(Conn.t(), map()) :: Conn.t()
@@ -51,6 +62,29 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     end
   end
 
+  @spec pull_request(Conn.t(), map()) :: Conn.t()
+  def pull_request(conn, %{"repo_key" => repo_key, "number" => number}) do
+    opts = Keyword.merge([live: &live/0], Endpoint.config(:pull_request_page) || [])
+
+    case PullRequestPage.fetch(repo_key, number, opts) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :unknown_repo} -> error_response(conn, 404, "unknown_repo", "Unknown repo")
+      {:error, :not_found} -> error_response(conn, 404, "not_found", "Pull request not found")
+    end
+  end
+
+  # What runs and what waits on the Director now, for the page's `waiting_on`; nothing when the
+  # snapshot can't be read.
+  defp live do
+    case Orchestrator.snapshot(orchestrator(), snapshot_timeout_ms()) do
+      %{} = snapshot ->
+        %{running: snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id), you: snapshot |> Inbox.items(inbox()) |> MapSet.new(& &1.issue_id)}
+
+      _unavailable ->
+        %{running: MapSet.new(), you: MapSet.new()}
+    end
+  end
+
   @spec runs(Conn.t(), map()) :: Conn.t()
   def runs(conn, params) do
     case Quality.runs_payload(params) do
@@ -63,6 +97,25 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
         error_response(conn, 400, "invalid_runs_filter", inspect(reason))
     end
   end
+
+  @spec history(Conn.t(), map()) :: Conn.t()
+  def history(conn, params) do
+    case History.payload(params) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :invalid_days} -> error_response(conn, 400, "invalid_days", "days must be an integer from 1 to 90")
+    end
+  end
+
+  @spec shipped(Conn.t(), map()) :: Conn.t()
+  def shipped(conn, params) do
+    case Shipped.payload(params) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :invalid_days} -> error_response(conn, 400, "invalid_days", "days must be an integer from 1 to 90")
+    end
+  end
+
+  @spec learnings(Conn.t(), map()) :: Conn.t()
+  def learnings(conn, params), do: json(conn, Feed.payload(params))
 
   @spec quality_report(Conn.t(), map()) :: Conn.t()
   def quality_report(conn, %{"session_id" => session_id} = params) do
@@ -155,6 +208,14 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp stray_processes do
     Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
+  end
+
+  defp inbox do
+    Endpoint.config(:inbox) || SymphonyElixir.Inbox
+  end
+
+  defp initiatives do
+    Endpoint.config(:initiatives) || SymphonyElixir.Initiatives
   end
 
   defp snapshot_timeout_ms do

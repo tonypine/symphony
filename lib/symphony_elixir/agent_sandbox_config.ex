@@ -41,7 +41,7 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       and user-scope `~/.claude/{CLAUDE.md,settings.json,settings.local.json,agents,commands,`
       `hooks,plugins,skills}` plus `~/.mcp.json` (auto-loaded on next Claude Code session;
       writes to these would silently persist prompt-injection across runs)
-    * project-local skills `.ai/skills`, `.claude/skills`, `.codex/skills` (an agent must not
+    * project-local skills `.agents/skills`, `.claude/skills`, `.codex/skills` (an agent must not
       rewrite its own instructions; `github_sync_base` merges the base branch's changes to them),
       and for a local workspace the files a symlink in a protected path points at
       (`workspace_link_targets/1`)
@@ -118,7 +118,7 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "./.claude/agents",
     "./.claude/commands",
     "./.claude/hooks",
-    "./.ai/skills",
+    "./.agents/skills",
     "./.claude/skills",
     "./.codex/skills",
     "./.git",
@@ -201,9 +201,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
   @doc """
   Workspace paths that a symlink inside a write-protected path points at, relative to the
-  workspace root: `priv/skills/pull` for `.ai/skills/pull -> ../../priv/skills/pull`.
+  workspace root: `priv/skills/pull` for `.agents/skills/pull -> ../../priv/skills/pull`.
 
-  Sandboxes match real paths, so denying `.ai/skills` leaves a linked skill's own files writable.
+  Sandboxes match real paths, so denying `.agents/skills` leaves a linked skill's own files writable.
   Reads the links on disk; returns `[]` when the workspace has none.
   """
   @spec workspace_link_targets(Path.t()) :: [String.t()]

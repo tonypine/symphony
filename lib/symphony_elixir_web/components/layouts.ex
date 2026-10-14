@@ -119,6 +119,9 @@ defmodule SymphonyElixirWeb.Layouts do
         <link phx-track-static rel="stylesheet" href={@dashboard_css_path} />
       </head>
       <body>
+        <p class="mac-app-banner" role="note">
+          Symphony for Mac is now where you direct the factory. This dashboard stays for Linux and remote use and gets no new features.
+        </p>
         {@inner_content}
       </body>
     </html>

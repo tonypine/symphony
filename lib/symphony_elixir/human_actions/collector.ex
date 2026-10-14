@@ -3,51 +3,36 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `human_actions.label` label, sits in `In Review` or the Human Review state
-  (`SymphonyElixir.HumanReview`), or is a `Final verification:` ticket. From those:
+  that carries the `Needs Decision` hold's label, or carries a deprecated request label
+  (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
 
-  - each open `## Action needed:` comment on a labelled issue is a `:request`
-    (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
-  - a labelled issue with no request comment is itself a `:task`;
-  - a plan parent in a review state is a `:plan_review`;
-  - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`,
-    unless it is a `Final verification:` ticket;
-  - a `Final verification:` ticket, in any state, whose parent walkthrough report says `blocked`
-    is a `:verification_blocked` on its parent's project, while the ticket stays in the state the
-    walkthrough moved it to;
-  - an issue in the Human Review state with none of the above is a `:human_review`.
+  - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
+    (see `SymphonyElixir.HumanActions.Request`); a withdrawn or answered one is not listed;
+  - an issue with a deprecated request label and no request comment is itself a `:task`.
 
-  Every action on an issue in the Human Review state is marked `human_review`, so the update lists
-  it first.
-
-  Neither lists a `blocked` verdict whose QA agent was stopped by the provider's usage limit: that
-  pass runs again once the limit resets.
+  An issue's comments and history are read in full, past the first page the issue query returns,
+  up to ten more pages of 100 each.
 
   Issues outside a project are skipped: there is no project to post the update to.
+
+  `collect_all/2` also returns, from the same read, the issues waiting on a person
+  (`SymphonyElixir.HumanActions.Waiting`), with or without a project.
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{Action, Request}
-  alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait}
-  alias SymphonyElixir.Linear.{Client, Issue}
-  alias SymphonyElixir.QaAgent.Report
+  alias SymphonyElixir.Hold
+  alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
+  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.{PersonWait, SubIssueWait}
 
   @issue_first 50
   @comment_last 30
   @history_first 50
+  # An issue's comments and history past the first read come in pages of this size, up to this
+  # many pages each.
+  @more_page_size 100
+  @more_pages_max 10
   @max_task_steps 12
-  @plan_review_minutes 10
-  @human_review_minutes 10
-  @verdict_pattern ~r/^\*\*Verdict:\*\*\s*(\w+)/m
-  @reason_pattern ~r/^Reason:\s*(.+)$/m
-  # The `blocked` reason of a QA agent that hit the provider's usage limit, as older QA reports
-  # wrote it: `the QA agent could not finish: {:qa_agent_failed, {:usage_limited, ...}}`.
-  @usage_limit_pattern ~r/:usage_limited\b/
-  # A parent walkthrough's report names the verification ticket and the state it moved it to.
-  @walkthrough_target_pattern ~r/^\*\*Verdict:\*\*\s*\w+\s*→\s*(\S+)\s+(.+?)\s*$/m
-  @blocked_step_pattern ~r/^- \*\*blocked\*\* (.+?)(?: \(evidence: .*\))?$/m
-  @permission_pattern ~r/permission|privacy & security|screen recording/i
-  @gap_state "Todo"
 
   @query """
   query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
@@ -64,12 +49,36 @@ defmodule SymphonyElixir.HumanActions.Collector do
         labels { nodes { name } }
         comments(last: $commentLast, orderBy: createdAt) {
           nodes { id body createdAt parent { id } }
+          pageInfo { hasPreviousPage startCursor }
         }
         history(first: $historyFirst) {
           nodes { createdAt fromState { name } toState { name } }
+          pageInfo { hasNextPage endCursor }
         }
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+  """
+
+  @comments_query """
+  query SymphonyHumanActionsComments($id: String!, $size: Int!, $cursor: String!) {
+    issue(id: $id) {
+      comments(last: $size, before: $cursor, orderBy: createdAt) {
+        nodes { id body createdAt parent { id } }
+        pageInfo { hasPreviousPage startCursor }
+      }
+    }
+  }
+  """
+
+  @history_query """
+  query SymphonyHumanActionsHistory($id: String!, $size: Int!, $cursor: String!) {
+    issue(id: $id) {
+      history(first: $size, after: $cursor) {
+        nodes { createdAt fromState { name } toState { name } }
+        pageInfo { hasNextPage endCursor }
+      }
     }
   }
   """
@@ -86,6 +95,16 @@ defmodule SymphonyElixir.HumanActions.Collector do
   """
   @spec collect([term()], keyword()) :: {:ok, %{String.t() => project_actions()}} | {:error, term()}
   def collect(repos, opts) do
+    with {:ok, actions, _waiting} <- collect_all(repos, opts), do: {:ok, actions}
+  end
+
+  @doc """
+  `collect/2`, plus the issues waiting on a person (`SymphonyElixir.HumanActions.Waiting`) read
+  from the same query.
+  """
+  @spec collect_all([term()], keyword()) ::
+          {:ok, %{String.t() => project_actions()}, [Waiting.entry()]} | {:error, term()}
+  def collect_all(repos, opts) do
     settings = Keyword.fetch!(opts, :settings)
 
     repos
@@ -97,8 +116,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
     end)
     |> case do
       {:ok, nodes} ->
-        actions = nodes |> Enum.uniq_by(& &1["id"]) |> Enum.flat_map(&issue_actions(&1, settings))
-        {:ok, by_project(actions)}
+        nodes = Enum.uniq_by(nodes, & &1["id"])
+        actions = Enum.flat_map(nodes, &issue_actions(&1, settings))
+        {:ok, by_project(actions), Waiting.entries(nodes, settings)}
 
       error ->
         error
@@ -118,7 +138,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   # as if they had closed.
   defp read_pages(filter, after_cursor, acc, linear_client) do
     with {:ok, body} <- linear_client.(@query, variables(filter, after_cursor), []),
-         {:ok, nodes, next} <- issue_page(body) do
+         {:ok, nodes, next} <- issue_page(body),
+         {:ok, nodes} <- read_more(nodes, linear_client) do
       case next do
         {:next, cursor} -> read_pages(filter, cursor, [nodes | acc], linear_client)
         :done -> {:ok, [nodes | acc] |> Enum.reverse() |> Enum.concat()}
@@ -146,14 +167,96 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
 
+  @doc """
+  Reads the rest of each node's comments and history past the first page, as the issue query
+  here does: for a caller (`SymphonyElixir.Inbox`) whose own query reads them with the same fields.
+  """
+  @spec read_more_pages([map()], (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()})) ::
+          {:ok, [map()]} | {:error, term()}
+  def read_more_pages(nodes, linear_client), do: read_more(nodes, linear_client)
+
+  # A long-lived issue's review brief, requests and move into its state can sit past the comments
+  # and history the issue query reads: read the rest of them, so it keeps its waited time and
+  # headline.
+  defp read_more(nodes, linear_client) do
+    nodes
+    |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
+      with {:ok, node} <- read_more(node, "comments", linear_client),
+           {:ok, node} <- read_more(node, "history", linear_client) do
+        {:cont, {:ok, [node | acc]}}
+      else
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
+      error -> error
+    end
+  end
+
+  defp read_more(node, field, linear_client) do
+    case more_pages(node["id"], field, get_in(node, [field, "pageInfo"]), @more_pages_max, linear_client) do
+      {:ok, []} -> {:ok, node}
+      {:ok, pages} -> {:ok, update_in(node, [field, "nodes"], &merge_pages(field, List.wrap(&1), pages))}
+      error -> error
+    end
+  end
+
+  # Past the cap, the issue keeps what was read rather than failing the whole update.
+  defp more_pages(_issue_id, _field, _page_info, 0, _linear_client), do: {:ok, []}
+
+  defp more_pages(issue_id, field, page_info, pages_left, linear_client) do
+    case more_cursor(field, page_info) do
+      :done ->
+        {:ok, []}
+
+      {:next, cursor} ->
+        variables = %{id: issue_id, size: @more_page_size, cursor: cursor}
+
+        with {:ok, body} <- linear_client.(more_query(field), variables, []),
+             {:ok, nodes, page_info} <- connection_page(body, field),
+             {:ok, pages} <- more_pages(issue_id, field, page_info, pages_left - 1, linear_client) do
+          {:ok, [nodes | pages]}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp more_query("comments"), do: @comments_query
+  defp more_query("history"), do: @history_query
+
+  # Comments are read newest last, so their further pages are older; history reads on forward.
+  defp more_cursor("comments", %{"hasPreviousPage" => true} = page_info), do: cursor(page_info["startCursor"])
+  defp more_cursor("history", %{"hasNextPage" => true} = page_info), do: cursor(page_info["endCursor"])
+  defp more_cursor(_field, _page_info), do: :done
+
+  defp cursor(cursor) when is_binary(cursor) and cursor != "", do: {:next, cursor}
+  defp cursor(_cursor), do: {:error, :linear_missing_end_cursor}
+
+  defp connection_page(%{"data" => %{"issue" => %{} = issue}}, field) do
+    case issue[field] do
+      %{"nodes" => nodes} = connection when is_list(nodes) -> {:ok, nodes, connection["pageInfo"]}
+      _connection -> {:error, {:human_actions_query_failed, field}}
+    end
+  end
+
+  defp connection_page(body, _field), do: {:error, {:human_actions_query_failed, body}}
+
+  defp merge_pages("comments", nodes, pages), do: pages |> Enum.reverse() |> Enum.concat() |> Enum.concat(nodes)
+  defp merge_pages("history", nodes, pages), do: Enum.concat([nodes | pages])
+
   defp filter(scope, settings) do
-    labelled = %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => settings.human_actions.label}}}}
-    in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
-    final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
-    wanted = %{"or" => [labelled | in_review] ++ [final_verification]}
+    labelled = Enum.map(PersonWait.legacy_request_labels(settings), &label_filter/1)
+    # A request leaves the ticket in its phase, so the hold's label is what finds it.
+    held = label_filter(Hold.label(:needs_decision))
+    wanted = %{"or" => labelled ++ [held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
+
+  defp label_filter(name), do: %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => name}}}}
 
   defp by_project(actions) do
     actions
@@ -173,28 +276,17 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
     context = %{node: node, issue: issue, project: %{id: project_id, name: project["name"]}, settings: settings}
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
-    in_review? = HumanReview.review_state?(issue.state, settings)
-    human_review? = HumanReview.in_state?(issue.state, settings)
-    final_verification? = RunKind.classify(%Issue{title: issue.title}) == :final_verification
+    legacy_labelled? = Enum.any?(PersonWait.legacy_request_labels(settings), &(&1 in labels))
 
-    actions =
-      labelled_actions(context, String.downcase(settings.human_actions.label) in labels) ++
-        plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1)) ++
-        qa_blocked_actions(context, in_review? and not final_verification?) ++
-        verification_blocked_actions(context, final_verification?)
-
-    actions
-    |> human_review_actions(context, human_review?)
-    |> Enum.map(&%{&1 | human_review: human_review?})
+    request_actions(context, legacy_labelled?)
   end
 
   defp issue_actions(_node, _settings), do: []
 
-  defp labelled_actions(_context, false), do: []
-
-  defp labelled_actions(context, true) do
+  # A deprecated request label on an issue with no request comment makes the issue itself the task.
+  defp request_actions(context, legacy_labelled?) do
     case requests(context.node) do
-      [] -> [task_action(context)]
+      [] when legacy_labelled? -> [task_action(context)]
       _requests -> for {comment_id, request} <- open_requests(context.node, context.settings), do: request_action(context, comment_id, request)
     end
   end
@@ -202,21 +294,76 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @doc """
   The open `## Action needed:` comments of an issue as read from Linear (its `comments` with
   `id`, `body`, `createdAt` and `parent`, and its state `history`), as `{comment_id, request}`.
-  A request with an `## Action withdrawn` reply under it is closed.
+  A request with an `## Action withdrawn` reply under it is closed, and so is one a person answered.
   """
   @spec open_requests(map(), Schema.t()) :: [{String.t(), Request.t()}]
   def open_requests(node, settings) do
     changes = state_changes(node)
     owned = owned_states(settings)
-    withdrawn = withdrawn_ids(node)
+    closed = MapSet.union(withdrawn_ids(node), answered_ids(node))
 
     Enum.filter(requests(node), fn {comment_id, request} ->
-      not MapSet.member?(withdrawn, comment_id) and Request.open?(request, changes, owned)
+      not MapSet.member?(closed, comment_id) and Request.open?(request, changes, owned)
     end)
+  end
+
+  @doc """
+  The newest open request on the issue node and the id of the comment that carries it, or nil when
+  none is open. The comment id is what a reply answers, so the Director app can close it.
+  """
+  @spec newest_open_request(map(), Schema.t()) :: {String.t(), Request.t()} | nil
+  def newest_open_request(node, settings) do
+    node
+    |> open_requests(settings)
+    |> Enum.max_by(&request_at/1, fn -> nil end)
+  end
+
+  # When the request was posted, as a comparable integer; a request whose comment carried no
+  # `createdAt` sorts oldest.
+  defp request_at({_comment_id, request}) do
+    (request.created_at && DateTime.to_unix(request.created_at, :microsecond)) || 0
+  end
+
+  @doc "The newest open request on the issue node, or nil when none is open."
+  @spec newest_request(map(), Schema.t()) :: Request.t() | nil
+  def newest_request(node, settings), do: node |> newest_open_request(settings) |> then(&(&1 && elem(&1, 1)))
+
+  @doc """
+  The requests on the issue node a person answered, newest answer first: each one's title, the
+  answer (the `**Decision:**` lines of the Inbox's Decide, else the first reply on one line) and
+  when it was given. A withdrawn request was never answered and is left out.
+  """
+  @spec answered_requests(map()) :: [%{at: DateTime.t() | nil, title: String.t(), answer: String.t()}]
+  def answered_requests(node) do
+    replies = node |> comments() |> Enum.filter(&is_binary(&1["body"])) |> Enum.group_by(&get_in(&1, ["parent", "id"]))
+
+    for {comment_id, request} <- requests(node),
+        under = Enum.sort_by(Map.get(replies, comment_id, []), &(&1["createdAt"] || "")),
+        not Enum.any?(under, &Request.withdrawal?(&1["body"])),
+        %{"body" => body} = reply <- Enum.take(under, 1) do
+      %{at: parse_datetime(reply["createdAt"]), title: request.title, answer: answer(body)}
+    end
+    |> Enum.sort_by(&((&1.at && DateTime.to_unix(&1.at, :microsecond)) || 0), :desc)
+  end
+
+  defp answer(body) do
+    case Regex.scan(~r/^\s*\*\*Decision:\*\*\s*(.+)$/m, body) do
+      [] -> Request.one_line(body)
+      decisions -> Enum.map_join(decisions, "; ", fn [_, decision] -> Request.one_line(decision) end)
+    end
   end
 
   defp withdrawn_ids(node) do
     for %{"parent" => %{"id" => parent_id}} = comment <- comments(node), Request.withdrawal?(comment["body"]), into: MapSet.new(), do: parent_id
+  end
+
+  # A request does not move its issue, so no state change says it is over: a person's reply under
+  # the request is the answer that closes it.
+  defp answered_ids(node) do
+    for %{"parent" => %{"id" => parent_id}} = comment <- comments(node),
+        not Request.withdrawal?(comment["body"]),
+        into: MapSet.new(),
+        do: parent_id
   end
 
   defp requests(node) do
@@ -232,12 +379,21 @@ defmodule SymphonyElixir.HumanActions.Collector do
       kind: :request,
       title: request.title,
       why: request.why,
+      if_unanswered: request.if_unanswered,
       unblocks: request.unblocks,
-      est_minutes: request.est_minutes,
+      question: request.question,
+      options: request.options,
       steps: request.steps,
-      done_when: "you remove the `#{context.settings.human_actions.label}` label from #{context.issue.identifier}, or move it on once it is unblocked."
+      done_when: request_done_when(request)
     })
   end
+
+  # A request never moves its ticket: the person's reply (or the Inbox's Decide) records the
+  # decision and clears the hold, so the line names no state move.
+  defp request_done_when(%{options: [_ | _]}),
+    do: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
+
+  defp request_done_when(_request), do: "you reply to the request, or the agent withdraws the request."
 
   defp task_action(context) do
     action(context, %{
@@ -245,163 +401,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
       kind: :task,
       title: context.issue.title || context.issue.identifier,
       steps: context.node["description"] |> Request.text_steps() |> Enum.take(@max_task_steps),
-      done_when: "you close #{context.issue.identifier}, or remove its `#{context.settings.human_actions.label}` label."
+      done_when: "you close #{context.issue.identifier}, or move it on."
     })
-  end
-
-  defp plan_review_actions(_context, false), do: []
-
-  defp plan_review_actions(%{issue: issue} = context, true) do
-    approve =
-      case SubIssueWait.state(context.settings) do
-        waiting when is_binary(waiting) -> "To approve, move #{issue.identifier} to `#{waiting}`; Symphony moves its sub-tickets to Todo."
-        nil -> "To approve, move the sub-tickets you accept to Todo."
-      end
-
-    [
-      action(context, %{
-        key: "plan:#{issue.id}",
-        kind: :plan_review,
-        title: "Approve the plan for #{issue.identifier}",
-        why: "#{issue.identifier} is split into sub-tickets, and none of them starts before you approve the plan.",
-        unblocks: "its sub-tickets, waiting in Backlog",
-        est_minutes: @plan_review_minutes,
-        steps: [
-          "Read the plan in the `## Symphony Workpad` comment on #{issue.identifier}.",
-          approve,
-          "To reject it, comment what to change and move #{issue.identifier} to `Rework`."
-        ],
-        done_when: "#{issue.identifier} leaves #{issue.state}."
-      })
-    ]
-  end
-
-  defp qa_blocked_actions(_context, false), do: []
-
-  defp qa_blocked_actions(%{issue: issue} = context, true) do
-    case latest_qa_report(context.node) do
-      # A pass that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
-      %{verdict: "blocked", reason: reason, usage_limited?: false} ->
-        [
-          action(context, %{
-            key: "qa:#{issue.id}",
-            kind: :qa_blocked,
-            title: "Unblock QA for #{issue.identifier}",
-            why: "Auto Review could not test the PR: #{reason || "see the QA report on #{issue.identifier}"}",
-            unblocks: "the review of its PR",
-            steps: [
-              "Fix the cause above, on the machine QA runs on.",
-              "Then test the PR yourself and move #{issue.identifier} to `Merging` to approve it, or to `Rework` to send it back."
-            ],
-            done_when: "#{issue.identifier} leaves #{issue.state}, or its next QA report is not blocked."
-          })
-        ]
-
-      _report ->
-        []
-    end
-  end
-
-  # An issue in the Human Review state is waiting on a person even when nothing else names what for.
-  defp human_review_actions([], %{issue: issue} = context, true) do
-    [
-      action(context, %{
-        key: "review:#{issue.id}",
-        kind: :human_review,
-        title: "Review #{issue.identifier}",
-        why: "#{issue.identifier} waits in #{issue.state}: only you can move it on.",
-        est_minutes: @human_review_minutes,
-        steps: [
-          "Read the `## Symphony Workpad` comment and the latest QA report on #{issue.identifier}, and its PR if it has one.",
-          "Move #{issue.identifier} to `Merging` to approve its PR, to `Rework` to send it back, " <>
-            "or to `Done` to sign off a final verification."
-        ],
-        done_when: "#{issue.identifier} leaves #{issue.state}."
-      })
-    ]
-  end
-
-  defp human_review_actions(actions, _context, _human_review?), do: actions
-
-  defp verification_blocked_actions(_context, false), do: []
-
-  # The verdict line says where the walkthrough left the ticket: `In Review`, or `Todo` when the
-  # failing steps it could run were filed as gap tickets.
-  # A walkthrough that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
-  defp verification_blocked_actions(%{issue: issue} = context, true) do
-    with %{verdict: "blocked", usage_limited?: false, body: body} = report <- latest_qa_report(context.node),
-         [_, target, target_state] <- Regex.run(@walkthrough_target_pattern, body),
-         true <- target == issue.identifier and state_is?(issue.state, target_state) do
-      [verification_blocked_action(context, report, target_state)]
-    else
-      _not_blocked -> []
-    end
-  end
-
-  defp verification_blocked_action(%{issue: issue, node: node} = context, report, target_state) do
-    parent = node["parent"] || %{}
-    of_parent = "the final verification of #{parent["identifier"] || issue.identifier}"
-    blocked_steps = @blocked_step_pattern |> Regex.scan(report.body, capture: :all_but_first) |> List.flatten()
-    permissions? = Regex.match?(@permission_pattern, Enum.join([report.reason || "" | blocked_steps], "\n"))
-
-    {title, fix} =
-      if permissions?,
-        do:
-          {"Grant the QA host's permissions for #{of_parent}",
-           "On the QA host, open System Settings > Privacy & Security and grant Screen Recording and Accessibility to the app the reason above names."},
-        else: {"Unblock #{of_parent}", "Fix the cause above, on the machine QA runs on."}
-
-    rerun =
-      if state_is?(target_state, @gap_state),
-        do: "#{issue.identifier} runs the walkthrough again by itself once the gap tickets that block it are done.",
-        else: "Then move #{issue.identifier} to `#{@gap_state}` so the walkthrough runs again."
-
-    project =
-      case parent["project"] do
-        %{"id" => project_id} = project when is_binary(project_id) -> %{id: project_id, name: project["name"]}
-        _no_project -> context.project
-      end
-
-    action(%{context | project: project}, %{
-      key: "verification:#{issue.id}",
-      kind: :verification_blocked,
-      title: title,
-      why: "The Auto Review walkthrough could not test everything: #{report.reason || "see the QA report on #{issue.identifier}"}#{blocked_steps_text(blocked_steps)}",
-      unblocks: of_parent,
-      steps: [fix, rerun],
-      done_when: "#{issue.identifier} leaves #{target_state}, or its next walkthrough is not blocked."
-    })
-  end
-
-  defp blocked_steps_text([]), do: ""
-  defp blocked_steps_text(steps), do: " Blocked steps: #{Enum.join(steps, "; ")}."
-
-  defp latest_qa_report(node) do
-    node
-    |> comments()
-    |> Enum.filter(&(is_binary(&1["body"]) and String.starts_with?(String.trim(&1["body"]), Report.heading())))
-    |> Enum.max_by(&(&1["createdAt"] || ""), fn -> nil end)
-    |> case do
-      %{"body" => body} ->
-        reason = capture(@reason_pattern, body)
-
-        %{
-          verdict: capture(@verdict_pattern, body),
-          reason: reason,
-          usage_limited?: is_binary(reason) and Regex.match?(@usage_limit_pattern, reason),
-          body: body
-        }
-
-      nil ->
-        nil
-    end
-  end
-
-  defp capture(pattern, body) do
-    case Regex.run(pattern, body) do
-      [_, value] -> String.trim(value)
-      nil -> nil
-    end
   end
 
   defp action(context, attrs), do: struct!(Action, Map.merge(attrs, %{issue: context.issue, project: context.project}))
@@ -418,12 +419,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   # States Symphony or an agent moves an issue out of; leaving any other state is a person
   # moving the issue on.
   defp owned_states(settings) do
-    [SubIssueWait.state(settings), settings.auto_review.state | settings.tracker.active_states]
+    [SubIssueWait.state(settings) | settings.tracker.active_states]
     |> Enum.filter(&is_binary/1)
   end
-
-  defp state_is?(state, expected) when is_binary(state), do: String.downcase(String.trim(state)) == String.downcase(expected)
-  defp state_is?(_state, _expected), do: false
 
   defp parse_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do

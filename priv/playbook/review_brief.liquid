@@ -1,0 +1,88 @@
+{% comment %}
+name: review_brief
+description: One review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects.
+vars: []
+{% endcomment %}## Review brief
+
+The workpad is the agent's log, and nobody reviewing needs to read it. At every
+handoff, leave one comment written for whoever judges the work next, headed
+`## Review brief`. The handoffs are: a PR handed off to `Code Review` (the reviewer
+agent reads it, and with manual review on so does the person confirming the merge),
+a plan handed off to `Plan Review`, and a `linear_request_human_action` decision.
+
+- One brief per ticket. Before writing, look for a comment starting `## Review brief`
+  with `linear_get_comments`. When one exists, edit it in place with
+  `linear_update_comment`, never post a second brief. Only the first handoff creates
+  it, with `linear_add_comment`.
+- Write it before the state move that hands the ticket over.
+- Write for a person who has not read the workpad, the PR or the logs: short, plain
+  words, and links instead of pasted content. Never paste a secret, a log or an
+  `uploads.linear.app` link.
+- Rewrite the whole brief at each handoff so it describes the ticket as it is now. On
+  a revision (a plan revised from comments, review comments addressed, a re-plan),
+  fill in `What changed since the last brief`; leave that part out of the first brief.
+- A plan's brief covers the whole plan in one review: link every artifact (each
+  document or artifact comment, the HTML screens), list every sub-ticket with its
+  identifier and one line on what it delivers, and
+  put every decision the plan leaves open under `Decisions needed`, so the person
+  reviews everything at once.
+- A PR's brief links the PR and says what to check: the behaviour to try, the user
+  journeys QA should walk, and the parts that carry the risk.
+- Next to the brief, update the summary block at the end of the issue description
+  with `linear_update_issue_summary`: the one-line `status` (where the ticket stands,
+  what waits on whom), `links` with the brief's comment URL as `review_brief` and
+  the PR, documents, HTML screens and sub-tickets as `artifacts`, and one
+  `changelog_entry` on what this run changed. Symphony dates the entry, keeps the
+  older ones below it (trimming the oldest) and leaves the rest of the description
+  as it is. Description reads leave the block out, so never take it as requirements.
+
+Use this exact format:
+
+````md
+## Review brief
+
+**What to review:** <one line: what this handoff asks the person to look at>
+
+- <link: the PR, each artifact document or comment, the HTML screens, each sub-ticket>
+
+**What changed since the last brief:**
+
+- <on a revision only: one line per change, naming the comment it answers>
+
+**Decisions needed:**
+
+1. <question>
+   - Options: <A>; <B>
+   - Recommendation: <the option Symphony recommends, and why in one line>
+
+**How to approve / change / reject:**
+
+- Approve: <the exact move>
+- Change: <the exact comment or move>
+- Reject: <the exact move>
+````
+
+Write `None.` under `Decisions needed` when nothing is open. Fill in
+`How to approve / change / reject` with the moves for the ticket's kind:
+
+- **Plan review** (a plan parent in `Plan Review`):
+  - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
+    `Backlog` sub-tickets to `Todo`.
+  - Change: comment on any part of the plan; Symphony moves the parent to `Rework`
+    and a revision run edits the plan in place and updates this brief.
+  - Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets
+    and plans again.
+- **PR review** (a PR in `Code Review`): no person's move is needed. The reviewer
+  agent's verdict moves it on: approve to `QA` (or `Merging` when QA is skipped),
+  rework to `Rework` on the same PR. With manual review on, the step into `Merging`
+  waits on a `Needs Decision` hold whose confirmation is the approval.
+  - Approve: nothing to do, or confirm the merge decision when manual review is on.
+  - Change: leave review comments on the PR; Symphony brings the ticket back to
+    `In Progress` to address them on the same PR.
+  - Reject: `Restart` from the Director app closes the PR and starts over.
+- **Decision** (a ticket on a `Needs Decision` hold from a
+  `linear_request_human_action` request):
+  - Approve: reply under the `## Decision needed:` comment with the option you pick;
+    the hold clears and the ticket continues where it stopped.
+  - Change: reply under the request with what to do instead of the options.
+  - Reject: move the ticket to `Canceled` to drop the work.

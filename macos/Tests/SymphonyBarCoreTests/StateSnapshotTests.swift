@@ -48,6 +48,23 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    func testDecodesTheSessionKinds() throws {
+        let data = try recordedState(
+            replacing: "sessions", with: [["kind": "implementation", "issue_identifier": "TP-1"], ["kind": "qa_pass"], [:]]
+        )
+        guard case .state(let snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertEqual(snapshot.sessionKinds, ["implementation", "qa_pass", "agent"])
+    }
+
+    func testASymphonyWithoutSessionsLeavesTheKindsUnknown() {
+        guard case .state(let snapshot) = SymphonyState.poll(data: Data(#"{"counts": {"running": 0}}"#.utf8), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertNil(snapshot.sessionKinds)
+    }
+
     func testDecodesABudgetPausedOnTheDailyCap() throws {
         let data = try recordedState(replacing: "budget", with: [
             "daily_limit": 1_000_000_000, "daily_used": 1_000_000_123, "daily_remaining": 0, "daily_paused": true,
@@ -171,14 +188,14 @@ final class StateSnapshotTests: XCTestCase {
     func testDecodesTheForcedTickets() throws {
         let data = try recordedState(replacing: "forced", with: [
             [
-                "issue_id": "issue-123", "issue_identifier": "TP-123", "title": "Ship it", "state": "In Progress",
+                "issue_id": "issue-123", "issue_identifier": "TP-123", "title": "Ship it", "repo_key": "web", "state": "In Progress",
                 "forced_since": "2026-10-02T12:16:02Z", "forced_for_seconds": 300, "stale": false, "position": 1,
                 "waiting_on_human": false, "sub_issue": NSNull(), "phase": "implementation", "running": true,
                 "waiting_on": NSNull(), "blockers": [String](), "summary": "implementation · running",
             ],
             [
                 "issue_id": "issue-100", "issue_identifier": "TP-100", "state": "Todo", "forced_for_seconds": 270_000,
-                "stale": true, "sub_issue": ["issue_id": "issue-101", "issue_identifier": "TP-101", "state": "In Review"],
+                "stale": true, "sub_issue": ["issue_id": "issue-101", "issue_identifier": "TP-101", "state": "Code Review"],
                 "phase": "waiting_for_human", "summary": "waiting for a human",
             ],
             // Without a phase Symphony sends no summary; without an identifier, the id names it.
@@ -193,16 +210,25 @@ final class StateSnapshotTests: XCTestCase {
                     running: 1,
                     budget: recordedBudget,
                     forced: [
-                        .init(identifier: "TP-123", summary: "implementation · running", state: "In Progress", forcedForSeconds: 300),
+                        .init(
+                            identifier: "TP-123",
+                            issueID: "issue-123",
+                            title: "Ship it",
+                            repoKey: "web",
+                            summary: "implementation · running",
+                            state: "In Progress",
+                            forcedForSeconds: 300
+                        ),
                         .init(
                             identifier: "TP-100",
+                            issueID: "issue-100",
                             summary: "waiting for a human",
                             state: "Todo",
                             forcedForSeconds: 270_000,
                             stale: true,
                             part: "TP-101"
                         ),
-                        .init(identifier: "issue-7", state: "Todo"),
+                        .init(identifier: "issue-7", issueID: "issue-7", state: "Todo"),
                     ],
                     runs: recordedRuns
                 )
@@ -223,15 +249,46 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns)))
     }
 
-    func testDecodesTheHumanReviewCount() throws {
-        // The recorded state predates the Human Review count, which then reads as none.
+    func testIgnoresTheRetiredHumanReviewCount() {
+        // A Symphony from before the state machine redesign still sends it; the state reads the same without it.
         XCTAssertEqual(
             SymphonyState.poll(data: Data(#"{"counts": {"running": 2, "retrying": 1, "human_review": 3}}"#.utf8), statusCode: 200),
-            .state(StateSnapshot(running: 2, retrying: 1, humanReview: 3))
+            .state(StateSnapshot(running: 2, retrying: 1))
         )
+    }
+
+    func testDecodesWhatWaitsOnYou() throws {
+        let data = try recordedState(replacing: "waiting_on_you", with: [
+            [
+                "issue_id": "id-1", "issue_identifier": "TP-1", "repo_key": "symphony", "title": "Research issue template",
+                "url": "https://linear.app/tonypine/issue/TP-1", "state": "Plan Review", "kind": "plan",
+                "headline": "The split", "waiting_since": "2026-10-02T12:16:02Z", "waiting_seconds": 7_200,
+            ],
+            ["issue_id": "id-2", "kind": "final_verification", "headline": NSNull(), "waiting_seconds": NSNull()],
+            ["kind": "pr"],
+            ["issue_identifier": "TP-3", "kind": "action"],
+            ["issue_identifier": "TP-4", "kind": "pr"],
+            ["issue_identifier": "TP-5"],
+        ])
+
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("the state should read")
+        }
+        XCTAssertEqual(snapshot.waitingOnYou, [
+            .init(
+                issueID: "id-1", identifier: "TP-1", repoKey: "symphony", title: "Research issue template",
+                url: URL(string: "https://linear.app/tonypine/issue/TP-1"), kind: .plan, headline: "The split", waitingSeconds: 7_200
+            ),
+            .init(issueID: "id-2", identifier: "id-2", kind: .other("final_verification")),
+            .init(identifier: "TP-3", kind: .action),
+            .init(identifier: "TP-4", kind: .pr),
+            .init(identifier: "TP-5", kind: .other("")),
+        ])
+
+        // The recorded state predates the list, which then reads as empty.
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
-            .state(StateSnapshot(running: 1, budget: recordedBudget, humanReview: 0, runs: recordedRuns))
+            .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns))
         )
     }
 

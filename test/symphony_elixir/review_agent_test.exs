@@ -3,6 +3,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.ReviewAgent.Context
+  alias SymphonyElixir.TestSupport.Snapshot
 
   defmodule StreamingCodexReviewer do
     def start_session(workspace, opts), do: {:ok, %{workspace: workspace, opts: opts}}
@@ -296,6 +297,48 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
+    test "verifies a finding on a file the diff did not change but that exists at the reviewed head" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-unchanged-file")
+      repo = git_repo_with_change!(test_root)
+
+      try do
+        source = source_for_repo!(repo)
+        result = %{verdict: :request_changes, comments: [], findings: [finding("# review stream", "README.md")]}
+
+        assert {:ok, %{verdict: :request_changes, findings: [%{file: "README.md", line_range: {1, 1}}]}} =
+                 ReviewAgent.validate_findings(result, source)
+
+        mismatch = %{result | findings: [finding("not in the readme", "README.md")]}
+
+        assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}} =
+                 ReviewAgent.validate_findings(mismatch, source)
+
+        assert %{failures: [%{reason: :quoted_snippet_not_found}]} = payload
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "drops a finding on a missing file and keeps the verdict with the rest" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-partial")
+      repo = git_repo_with_change!(test_root)
+
+      try do
+        source = source_for_repo!(repo)
+
+        result = %{
+          verdict: :request_changes,
+          comments: [],
+          findings: [finding("grounded evidence line", "missing.txt"), finding("# review stream", "README.md")]
+        }
+
+        assert {:ok, %{verdict: :request_changes, findings: [%{file: "README.md"}]}} =
+                 ReviewAgent.validate_findings(result, source)
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "relocates a finding whose snippet is cited 1 to 10 lines off" do
       test_root = unique_tmp("symphony-elixir-review-agent-validate-relocate")
       repo = git_repo_with_file_change!(test_root, numbered_lines(1..40), changed_line(numbered_lines(1..40), 20))
@@ -439,6 +482,14 @@ defmodule SymphonyElixir.ReviewAgentTest do
   end
 
   describe "approval_prompt/2" do
+    test "lists the reviewer's disagreements with recorded decisions as notes, not changes" do
+      prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], decision_notes: ["Against decision D1: keep it."]})
+
+      assert prompt =~ "The reviewer disagreed with the ticket's recorded decisions below. The decisions stand: do not\nchange code for them."
+      assert prompt =~ "1. Against decision D1: keep it."
+      refute ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}) =~ "recorded decisions"
+    end
+
     test "lists advisory notes without asking for code changes" do
       prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], advisory_notes: ["[unverified] First.", "[unverified] Second."]})
 
@@ -505,6 +556,22 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert prompt =~ "Do not search for these with ToolSearch"
       assert prompt =~ "Avoid raw"
       assert prompt =~ "`gh` or `git push`"
+    end
+
+    for {kind, attach_tool} <- [{"codex", "`linear_attach_url`"}, {"claude", "`mcp__symphony__linear_attach_url`"}] do
+      test "tells a #{kind} run the push is the handoff and to leave the state alone" do
+        write_workflow_file!(Workflow.workflow_file_path(), agent_kind: unquote(kind), agent_command: "#{unquote(kind)} app-server")
+
+        settings = Config.settings!()
+        prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}, settings: settings)
+
+        assert prompt =~ "attach the PR URL with #{unquote(attach_tool)}; the push is the handoff"
+        assert prompt =~ "Symphony moves the ticket to Code Review itself, so do not change the issue's state"
+        refute prompt =~ "moving the issue to review"
+        refute prompt =~ "In Review"
+        refute prompt =~ "linear_update_state"
+        assert ReviewAgent.approval_handoff_tool_guidance(settings) =~ "the push is the handoff"
+      end
     end
   end
 
@@ -653,6 +720,135 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  test "evaluate prompt for Code Review also judges the change against the ticket's acceptance criteria and scope" do
+    test_root = unique_tmp("symphony-elixir-review-agent-code-review")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+      opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+      assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue(), repo, Config.settings!(), opts)
+
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      assert prompt =~ "This is the pull request's Code Review, so also judge the change against the ticket"
+      refute prompt =~ "Do not judge whether the diff meets the ticket's acceptance criteria"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  describe "recorded decisions" do
+    # TP-892: a person deferred the legacy partials to TP-891, and the reviewer flagged them anyway.
+    defp decided_issue do
+      decision =
+        SymphonyElixir.Decisions.entry(
+          "comment-1",
+          ~D[2026-10-13],
+          "Keep the legacy prompt partials",
+          "Remove the legacy prompt partials here, or leave them for TP-891?",
+          "Defer to TP-891: don't make that change."
+        )
+
+      {:ok, description} = SymphonyElixir.Decisions.put("Reviewer findings need quoted evidence.", [decision])
+      %{issue() | description: description}
+    end
+
+    defp decided_finding(summary, decision) do
+      %{summary: summary, file: "feature.txt", line_range: {1, 1}, quoted_snippet: "grounded evidence line", suggested_fix: "Remove it."}
+      |> then(&if(decision, do: Map.put(&1, :decision, decision), else: &1))
+    end
+
+    test "the Code Review prompt carries the ticket's recorded decisions and the rule that a finding against one is no finding" do
+      test_root = unique_tmp("symphony-elixir-review-agent-decisions-prompt")
+
+      try do
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+        [_intro, issue_part] = String.split(prompt, "Issue (context for what the diff is for):\n", parts: 2)
+        [issue_part, _criteria] = String.split(issue_part, "Review criteria.", parts: 2)
+
+        Snapshot.assert_snapshot!(Path.join("review_agent", "decisions_prompt.md"), issue_part)
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a change request whose only findings name a recorded decision approves, keeping them as notes" do
+      test_root = unique_tmp("symphony-elixir-review-agent-decisions-approve")
+
+      try do
+        repo = git_repo_with_change!(test_root)
+
+        put_sequence_responses!([
+          ~s({"verdict":"request_changes","findings":[{"summary":"The legacy partials are still here.","file":"feature.txt","line_range":[1,1],"quoted_snippet":"grounded evidence line","suggested_fix":"Remove them.","decision":" d1 "}]})
+        ])
+
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+
+        assert {:ok, %{verdict: :approve, findings: [], decision_notes: [note], comments: [note]}} =
+                 ReviewAgent.evaluate(decided_issue(), repo, Config.settings!(), opts)
+
+        assert note =~ "Against decision D1, so a note, not a change request: The legacy partials are still here. (feature.txt:1-1)"
+        # No self-check turn: nothing is left to check.
+        assert_receive {:review_agent_sequence_call, 1, _prompt, _opts}
+        refute_receive {:review_agent_sequence_call, 2, _prompt, _opts}
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "honour_decisions/2 keeps a finding that names no recorded decision" do
+      findings = [decided_finding("Decided.", "D1"), decided_finding("Unknown decision.", "D9"), decided_finding("Plain.", nil)]
+      result = %{verdict: :request_changes, comments: ["raw"], findings: findings}
+
+      honoured = ReviewAgent.honour_decisions(result, decided_issue())
+
+      assert %{verdict: :request_changes, findings: [%{summary: "Unknown decision."}, %{summary: "Plain."}]} = honoured
+      assert %{comments: comments, decision_notes: [note]} = honoured
+
+      assert note =~ "Against decision D1"
+      assert comments == ["Unknown decision. (feature.txt:1-1) Suggested fix: Remove it.", "Plain. (feature.txt:1-1) Suggested fix: Remove it."]
+    end
+
+    test "honour_decisions/2 leaves a verdict alone when no finding names a recorded decision" do
+      result = %{verdict: :request_changes, comments: ["raw"], findings: [decided_finding("Plain.", nil)]}
+
+      assert ReviewAgent.honour_decisions(result, decided_issue()) == result
+      # Without a recorded decision, a finding that names one stays a finding.
+      undecided = %{result | findings: [decided_finding("Decided.", "D1")]}
+      assert ReviewAgent.honour_decisions(undecided, issue()) == undecided
+
+      approved = %{verdict: :approve, comments: []}
+      assert ReviewAgent.honour_decisions(approved, decided_issue()) == approved
+    end
+
+    test "a blank decision on a finding is no decision" do
+      assert {:ok, %{findings: [finding]}} =
+               ReviewAgent.parse_response(~s({"verdict":"request_changes","findings":[{"summary":"s","file":"f","line_range":[1,1],"quoted_snippet":"q","suggested_fix":"x","decision":" "}]}))
+
+      refute Map.has_key?(finding, :decision)
+
+      assert {:ok, %{findings: [finding]}} =
+               ReviewAgent.parse_response(~s({"verdict":"request_changes","findings":[{"summary":"s","file":"f","line_range":[1,1],"quoted_snippet":"q","suggested_fix":"x","decision":3}]}))
+
+      refute Map.has_key?(finding, :decision)
+    end
+  end
+
   test "evaluate gives the reviewer the executor run's temp folder as its $TMPDIR" do
     test_root = unique_tmp("symphony-elixir-review-agent-tmp-dir")
 
@@ -785,10 +981,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert requote_prompt =~ "- feature.txt:1-1: Handle remote guides.\n  Quoted snippet:\n    a misremembered line"
       assert requote_prompt =~ "  Text at the cited lines:\n    grounded evidence line"
       assert requote_prompt =~ "- other.txt:1-1: Outside the diff."
-      assert requote_prompt =~ "(file is not in the diff or the review context)"
+      assert requote_prompt =~ "(file does not exist at the reviewed head)"
       assert requote_prompt =~ "- feature.txt:40-41: Past the end."
       assert requote_prompt =~ "(no lines at this range in the diff or the changed file)"
       assert requote_prompt =~ "Previous JSON:"
+      assert requote_prompt =~ ~r/Your final message must be only this JSON object, with no prose before or after it.\n\z/
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)
@@ -891,6 +1088,120 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert %{failures: [], comments: ["Consider a regression test."]} = payload
       assert_received {:review_agent_sequence_call, 2, _prompt, _opts}
       refute_received {:review_agent_sequence_call, 3, _prompt, _opts}
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  describe "a reviewer that ends in prose" do
+    setup do
+      test_root = unique_tmp("symphony-elixir-review-agent-json-nudge")
+      repo = git_repo_with_change!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      on_exit(fn ->
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end)
+
+      %{repo: repo}
+    end
+
+    test "gets one JSON nudge in the same session and its verdict counts", %{repo: repo} do
+      put_sequence_responses!(["The diff looks fine to me.", ~s({"verdict":"approve","comments":[]})])
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive :review_agent_sequence_session_started
+      refute_receive :review_agent_sequence_session_started
+      assert_receive {:review_agent_sequence_call, 2, nudge, nudge_opts}
+      assert nudge =~ "Return only the JSON verdict for the review you just did"
+      assert nudge_opts[:max_iterations] == 4
+    end
+
+    test "a prose self-check reply gets one JSON nudge and its findings stand", %{repo: repo} do
+      readme = finding_json(%{"file" => "README.md", "quoted_snippet" => "# review stream", "summary" => "Missed file."})
+      response = block_response([readme])
+      put_sequence_responses!([response, "The finding holds, so I kept it.", response])
+
+      assert {:error, {:review_agent_blocked, %{findings: [%{file: "README.md"}]}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 2, self_check_prompt, _opts}
+      assert self_check_prompt =~ ~r/Your final message must be only this JSON object, with no prose before or after it.\n\z/
+      assert_receive {:review_agent_sequence_call, 3, nudge, nudge_opts}
+      assert nudge =~ "Return only the JSON verdict for the review you just did"
+      assert nudge_opts[:max_iterations] == 4
+    end
+
+    test "a prose re-quote reply gets one JSON nudge", %{repo: repo} do
+      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      put_sequence_responses!([unverifiable, unverifiable, "The finding holds, so I kept it.", block_response([finding_json()])])
+
+      assert {:error, {:review_agent_blocked, %{findings: [%{quoted_snippet: "grounded evidence line"}]}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 4, nudge, _opts}
+      assert nudge =~ "Return only the JSON verdict"
+    end
+
+    test "a self-check that stays prose after the nudge is inconclusive", %{repo: repo} do
+      put_sequence_responses!([block_response([finding_json()]), "Prose.", "Still prose."])
+
+      assert {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, :no_json_object}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      refute_receive {:review_agent_sequence_call, 4, _prompt, _opts}
+    end
+
+    test "stays inconclusive when the nudge is prose too", %{repo: repo} do
+      put_sequence_responses!(["Prose.", "Still prose."])
+
+      assert {:error, {:review_agent_inconclusive, {:malformed_review_agent_response, :no_json_object}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      refute_receive {:review_agent_sequence_call, 3, _prompt, _opts}
+    end
+
+    test "reports an unreachable model API on the nudge as unreachable", %{repo: repo} do
+      put_sequence_responses!(["Prose.", {:error, {:model_api_unreachable, %{reason: :econnrefused}}}])
+
+      assert {:error, {:model_api_unreachable, %{reason: :econnrefused}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+    end
+  end
+
+  test "the assembled reviewer prompt ends with the JSON rule, after the project conventions" do
+    test_root = unique_tmp("symphony-elixir-review-agent-contract-last")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      File.write!(Path.join(repo, "CLAUDE.md"), "Project rule body\n")
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      settings = Config.settings!()
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, settings, review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      assert {:ok, assembled} = SymphonyElixir.ProjectGuides.append_to_prompt(prompt, repo, settings, :claude)
+
+      [before_contract, contract] = String.split(assembled, "Return ONLY one JSON object in this shape:")
+      assert before_contract =~ "## Project conventions"
+      assert before_contract =~ "Project rule body"
+      refute contract =~ "## Project conventions"
+      refute assembled =~ SymphonyElixir.ProjectGuides.output_contract_marker()
+      assert String.trim_trailing(contract) =~ ~r/Your final message must be only this JSON object, with no prose before or after it\.$/
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)

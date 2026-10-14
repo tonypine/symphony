@@ -18,6 +18,9 @@ defmodule SymphonyElixir.HumanActions do
   post the same list again. A project whose every action closed while Symphony was down is not
   seen again until it has a new action, and keeps its last update until then.
 
+  The same read lists the tickets waiting on a person (`waiting_on_you/1`), which the state API
+  and the dashboard show as `waiting_on_you`. The list is kept while a read fails.
+
   The server tags itself `human_actions` in `SymphonyElixir.Linear.Usage`, so its Linear requests
   show under that caller on the dashboard.
   """
@@ -29,7 +32,7 @@ defmodule SymphonyElixir.HumanActions do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.{Config, Notifications}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{CiSecrets, Collector, Update}
+  alias SymphonyElixir.HumanActions.{CiSecrets, Collector, Update, Waiting}
   alias SymphonyElixir.Linear.{Client, Usage}
 
   @initial_delay_ms 60_000
@@ -87,6 +90,22 @@ defmodule SymphonyElixir.HumanActions do
     :ok
   end
 
+  @doc """
+  The issues waiting on a person (`SymphonyElixir.HumanActions.Waiting`) as the server named
+  `server` last read them, empty before its first read or when it does not run. Kept outside the
+  server's process, so a dashboard reads it without waiting on a Linear query.
+  """
+  @spec waiting_on_you(GenServer.name()) :: [Waiting.entry()]
+  def waiting_on_you(server \\ __MODULE__), do: :persistent_term.get(waiting_key(server), [])
+
+  # Writes only on a change: a persistent term write is global.
+  defp put_waiting(state, waiting) do
+    server = Keyword.get(state.opts, :name, __MODULE__)
+    if waiting_on_you(server) != waiting, do: :persistent_term.put(waiting_key(server), waiting)
+  end
+
+  defp waiting_key(server), do: {__MODULE__, :waiting_on_you, server}
+
   @impl true
   def init(opts) do
     Usage.put_caller(:human_actions)
@@ -111,11 +130,12 @@ defmodule SymphonyElixir.HumanActions do
   @spec run_once(map()) :: map()
   def run_once(state) do
     settings = settings(state)
-    collect = Keyword.get(state.opts, :collect, &Collector.collect/2)
+    collect = Keyword.get(state.opts, :collect, &Collector.collect_all/2)
     collect_opts = Keyword.merge([settings: settings, linear_client: linear_client(state)], Keyword.take(state.opts, [:scope_filter]))
 
     with {:ok, repos} <- enabled_repos(state),
-         {:ok, collected} <- collect.(repos, collect_opts) do
+         {:ok, collected, waiting} <- collect.(repos, collect_opts) do
+      put_waiting(state, waiting)
       {collected, state} = with_ci_actions(collected, repos, settings, state)
 
       collected
@@ -159,7 +179,7 @@ defmodule SymphonyElixir.HumanActions do
           posted.list_id == list_id -> state
           is_nil(posted.list_id) and actions == [] -> state
           rate_limited?(posted, settings, state) -> state
-          true -> post(state, project_id, posted, actions, settings)
+          true -> post(state, project_id, posted, actions)
         end
 
       {:error, reason} ->
@@ -207,8 +227,8 @@ defmodule SymphonyElixir.HumanActions do
 
   defp rate_limited?(_posted, _settings, _state), do: false
 
-  defp post(state, project_id, posted, actions, settings) do
-    {body, patterns} = Update.render(actions, settings.human_actions.label)
+  defp post(state, project_id, posted, actions) do
+    {body, patterns} = Update.render(actions)
     SecretScanner.audit_redaction(patterns, %{}, "human_actions", "project_update", Keyword.get(state.opts, :audit_opts, []))
     input = %{"projectId" => project_id, "body" => body, "health" => Update.health(actions)}
 

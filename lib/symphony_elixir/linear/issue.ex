@@ -50,7 +50,7 @@ defmodule SymphonyElixir.Linear.Issue do
           priority: integer() | nil,
           state: String.t() | nil,
           team: %{key: String.t() | nil, name: String.t() | nil} | nil,
-          project: %{id: String.t() | nil, name: String.t() | nil} | nil,
+          project: %{:id => String.t() | nil, :name => String.t() | nil, optional(:slug_id) => String.t() | nil} | nil,
           branch_name: String.t() | nil,
           url: String.t() | nil,
           pull_request_url: String.t() | nil,
@@ -127,7 +127,7 @@ defmodule SymphonyElixir.Linear.Issue do
 
   @doc """
   The issue's blockers still outside `terminal_states`. A blocker counts as resolved only once it
-  is terminal (`Done`, `Canceled`, ...): `Merging`, `In Review`, `Auto Review` and `Rework` still
+  is terminal (`Done`, `Canceled`, ...): `Merging`, `Code Review`, `QA`, `CI Fix` and `Rework` still
   block, since the blocker's code is not on the default branch yet. A blocker without a known state
   counts as open.
   """

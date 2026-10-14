@@ -67,7 +67,7 @@ defmodule SymphonyElixir.InitTest do
   end
 
   test "agent skill paths resolve to the same shared SKILL.md content" do
-    canonical = Path.expand("../../.ai/skills/symphony-init-workflow/SKILL.md", __DIR__)
+    canonical = Path.expand("../../.agents/skills/symphony-init-workflow/SKILL.md", __DIR__)
     codex = Path.expand("../../.codex/skills/symphony-init-workflow/SKILL.md", __DIR__)
     claude = Path.expand("../../.claude/skills/symphony-init-workflow/SKILL.md", __DIR__)
 
@@ -77,7 +77,7 @@ defmodule SymphonyElixir.InitTest do
   end
 
   test "shared workflow skill has valid front matter and resolves through agent skill links" do
-    skill_path = Path.expand("../../.ai/skills/symphony-init-workflow/SKILL.md", __DIR__)
+    skill_path = Path.expand("../../.agents/skills/symphony-init-workflow/SKILL.md", __DIR__)
     codex_skill_path = Path.expand("../../.codex/skills/symphony-init-workflow/SKILL.md", __DIR__)
     claude_skill_path = Path.expand("../../.claude/skills/symphony-init-workflow/SKILL.md", __DIR__)
 

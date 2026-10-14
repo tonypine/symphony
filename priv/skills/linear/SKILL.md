@@ -28,7 +28,7 @@ arguments from prompts.
 
 ## Write Tools
 
-- `linear_update_state` with `{"state_name_or_id": "In Review"}`: resolves the
+- `linear_update_state` with `{"state_name_or_id": "Rework"}`: resolves the
   state against the current issue team's workflow. Unknown states are a no-op.
 - `linear_set_assignee` with `{"assignee": "self"}`, `{"assignee": "unassign"}`,
   or `{"assignee": "<user_id>"}`.
@@ -56,7 +56,7 @@ arguments from prompts.
   into sub-tickets or to file out-of-scope work.
 - `linear_update_subissue` with `{"identifier": "TP-13", "title": "...", "description": "...", "blocked_by": ["TP-12"]}`
   or `{"identifier": "TP-13", "cancel_reason": "..."}`: changes a `Backlog`
-  sub-issue of the current issue when a breakdown run revises its plan.
+  sub-issue of the current issue when a plan run revises its plan.
   `blocked_by` is the complete list of sibling sub-issues that block it (sibling
   links left out are removed). `cancel_reason` alone posts the reason on the
   sub-issue and cancels it. A sub-issue outside `Backlog` was promoted by a person
@@ -69,7 +69,39 @@ arguments from prompts.
 - `linear_create_project_update` with `{"body": "...", "health": "onTrack"}`:
   posts an update to the current issue's project. `health` is optional
   (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per
-  run. Use it when a `breakdown` parent ticket closes out.
+  run. Use it when a plan ticket (label `plan`) closes out.
+- `linear_create_document` with `{"title": "...", "content": "..."}`: creates a
+  document in the current issue's project titled `<identifier> · <title>` and
+  attaches it to the issue, so later runs on the issue can read and edit it. Use
+  it for long-lived artifacts (domain brief, journeys, Kano map, screens, ADR
+  draft) instead of comments. Title and content are secret-scanned. At most 10
+  per run; an issue outside a project is refused.
+- `linear_update_document` with `{"document_id": "...", "content": "...", "title": "..."}`:
+  replaces the whole content, and the title when given (it keeps the identifier
+  prefix), of a document this issue's runs created. `title` is optional. Content
+  and title are secret-scanned. Any other document is refused.
+- `linear_get_document` with `{}`: lists the documents this issue's runs created
+  (id, title, url). With `{"document_id": "..."}` it reads one in full, its
+  content secret-redacted. Any other document is refused. It is read-only.
+- `linear_request_human_action` with `{"title": "...", "why": "...", "if_unanswered": "...", "decision": {"question": "...", "recommendation_reason": "...", "options": [{"label": "...", "effect": "...", "recommended": true, "tradeoffs": [{"kind": "good", "text": "..."}, {"kind": "cost", "text": "..."}]}, {"label": "...", "effect": "..."}]}, "unblocks": "..."}`:
+  asks a person for a decision only they can make (a product call, a missing
+  secret or permission: add it or drop what needs it, an account setup). It posts
+  a `## Decision needed:` request that Symphony lists for the operator. `title`
+  (up to 120 characters) names the decision; `decision` holds one question and 2
+  to 4 options, each with what it does, exactly one recommended. A request
+  without options is refused. Never ask a person to run a check: a check an agent
+  can't run (launching the app, a host crash check, a check on a device) belongs
+  to CI or a QA playbook, and a manual check that could be a test becomes a test.
+  Write it in the Director's words (`docs/standards/decision-writing.md`): the
+  question stands alone and names each ticket by identifier and a short name; no
+  file names or paths, code identifiers, branch names, commit hashes, template
+  syntax or backticks; each `effect` says what happens to the work. The tool
+  refuses code in any field and names the token; ticket identifiers (`TP-891`)
+  and PR numbers (`#448`, `PR #448`) are fine. `if_unanswered` (what waits or
+  repeats until someone answers), `decision.recommendation_reason` (one line),
+  each option's `tradeoffs` (0 to 3 of `{"kind": "good" | "cost" | "risk", "text": "..."}`)
+  and `unblocks` are optional. Every field is refused when it holds a secret. A
+  request with the same title still open is not posted again. At most 5 per run.
 - `linear_withdraw_human_action` with `{"reason": "...", "title": "..."}`:
   withdraws a human-action request that is no longer needed. It replies with the
   reason under the request and removes the human-action label once no open

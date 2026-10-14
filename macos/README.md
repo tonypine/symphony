@@ -1,8 +1,9 @@
 # Symphony menu bar app
 
-Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Start
-Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a ticket…, Open Dashboard,
-Open Dashboard in Terminal, Open Logs, Check for Updates…, Settings… and Quit.
+Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Open
+Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a Ticket…,
+Check for Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs, Open Web
+Dashboard) and Quit. Open Symphony opens the [Symphony window](#the-symphony-window).
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
 self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md)), so
@@ -15,13 +16,14 @@ and start it. To work on Symphony itself, build the app from source and run a ch
 - [Restart](#restart)
 - [Update](#update)
 - [Rollback](#rollback)
+- [The Symphony window](#the-symphony-window)
 - [Development mode](#development-mode)
 - [QA mode](#qa-mode)
 - [Troubleshooting](#troubleshooting)
 
 ## Install
 
-Symphony.app needs a Mac with Apple silicon and macOS 13 or later. Install it with the install script or by
+Symphony.app needs a Mac with Apple silicon and macOS 26 or later. Install it with the install script or by
 hand. Both put it at `~/Applications/Symphony.app`, which is where the app updates itself and where Launch
 at Login expects it.
 
@@ -108,7 +110,7 @@ export `LINEAR_API_KEY`; the app keeps it in a file only you can read.
 5. Click **Save**. The app checks that `symphony.yml` exists, that the app has an embedded Symphony and that
    the key is set, then stores the key in the secrets file (see [Settings](#settings)).
 6. Choose **Start Symphony** from the menu. The icon shows `hourglass` while Symphony starts, then
-   `music.note.list` once it answers. Choose **Open Dashboard** to see it at `http://127.0.0.1:4000`.
+   `music.note.list` once it answers. Choose **Open Symphony** to see it in the Symphony window.
 
 If the icon turns to a warning triangle instead, choose **Open Logs** and see [Troubleshooting](#troubleshooting).
 To have Symphony running after login with no clicks, turn on Launch at Login and "Start Symphony when the
@@ -124,17 +126,18 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Restart Symphony** checks `symphony.yml`, waits for agent runs to finish, then stops and starts Symphony
   and resumes dispatch. See [Restart](#restart). While it waits, **Restart Now Anyway** (after the restart
   timeout) and **Cancel Restart** also show.
-- **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
-  continue. The pause is kept across restarts.
+- **Pause Dispatch…** opens the Symphony window's Pause Dispatch sheet, with an optional reason. A pause holds
+  new dispatch: Symphony picks up no new issues, but agent runs already under way continue. The pause is kept
+  across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
-- **Acceptance gate: Enforce (repo)** (one row per repo whose acceptance gate runs, in Shadow or Enforce) is
-  the gate's kill switch: its submenu switches that repo to **Shadow** or **Off** at once. See
-  [Settings](#settings).
-- **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
+- **Force a Ticket…** opens the Symphony window's Force a Ticket sheet (also ⇧⌘F in the window), which finds
+  the ticket as you type its identifier and shows its title and state, and forces that ticket past the dispatch limits, like
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
-- **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
-- **Open Dashboard in Terminal** opens a Terminal window running `symphony dashboard`: the live terminal
+- **Open Symphony** (⌘O) opens the [Symphony window](#the-symphony-window), or brings it to the front.
+- **Developer** holds the items for looking under the hood: **Open Web Dashboard** opens Symphony's web
+  dashboard in the browser, **Open Logs** opens Symphony's output log, and **Open Dashboard in Terminal**
+  opens a Terminal window running `symphony dashboard`: the live terminal
   dashboard (running agents, retry queue, recent events) of the Symphony the app watches. It runs the same
   binary as Start (`bin/symphony` from the checkout in Development mode). Press `q` or Ctrl-C, or close the
   window, to quit; Symphony keeps running.
@@ -146,7 +149,7 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: a sidebar of the connected repos and the detail of the selected one
   (its health, source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
-  acceptance gate, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
+  manual review, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
   managed clone, **Remove Clone…**. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
@@ -186,7 +189,7 @@ set (or, in Development mode, no checkout folder).
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
   Each epic under way keeps one agent for its sub-tickets and the tickets blocking them
   (`agent.concurrency.epic_lanes`, default every slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
-  Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
+  QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
   run on top.
 - **Limit tokens per day** and **Limit tokens per ticket** are `agent.limits.tokens_per_day` and
   `agent.limits.tokens_per_issue`, also in the `symphony.yml` itself. A switch turned off writes `null`, which
@@ -196,11 +199,18 @@ set (or, in Development mode, no checkout folder).
   it (for example a negative number) and keeps Save off until it passes. Save writes only the changed lines and
   keeps comments. Below them, today's usage comes from `/api/v1/state`'s `budget`: tokens used and left, when
   the count resets (UTC midnight, shown in local time), and a line while the daily cap has paused new runs.
+- **Dispatch loops** holds a ticket Symphony keeps dispatching without progress. **Hold a ticket after** is
+  `watchdog.dispatch_loop_runs` in `watchdog.dispatch_loop_window_ms` (4 runs in 10 minutes by default) and **Or
+  after** is `watchdog.dispatch_loop_long_runs` in `watchdog.dispatch_loop_long_window_ms` (8 runs in 60
+  minutes), each a stepper for the runs and one for the minutes. Once a ticket got that many runs of one kind
+  with no state change, new PR head or decision, Symphony starts no more and puts it on a Blocked hold whose
+  reason says why; the Inbox lists it with **Unblock…**, and **Restart…** under ⋯. Save runs `symphony check`
+  first and writes only the changed lines.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
   overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
-  (breakdown, close-out, final verification, implementation, rework, CI fix, review feedback, landing,
+  (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
   pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
   the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
   inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
@@ -237,20 +247,6 @@ set (or, in Development mode, no checkout folder).
   the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
-- **Acceptance gate (saved in symphony.yml)** sets `auto_review.acceptance_gate.mode`, the gate's kill switch
-  (see [the acceptance gate](../docs/acceptance_gate.md)). Each mode shows a line under it: **Off** never
-  runs the gate; **Shadow** records a verdict and moves nothing; **Enforce** approves to Merging, sends back
-  to In Progress and escalates to In Review. Choosing Enforce asks first ("PRs the gate approves merge
-  without a person reviewing them"), and Cancel leaves the mode as it was. A missing key shows Off,
-  Symphony's default. Save runs `symphony check` on a copy of the changed file first, as for Models, then
-  rewrites only that value, keeping its comment, or inserts `mode:`, `acceptance_gate:` and `auto_review:`
-  when they are missing. An `off` is written quoted (`mode: "off"`), which Symphony reads the same as `off`.
-  Symphony reads the mode on its next poll, without a restart. Under the picker, one line per repo shows the
-  gate's agreement stats from `/api/v1/state`'s `acceptance_gate.agreement`, for example
-  `symphony: 12 judged · 92% agreement · 0 unsafe approvals · not ready: at least 20 judged tickets (12 so
-  far)`, ending in `ready to enforce` once the stats say so. While Symphony isn't running the line reads
-  "Start Symphony to see the gate's record." A repo's own mode is set in its **Edit…** sheet (see
-  [Repos](#repos)), and the status menu's **Acceptance gate** rows switch a repo to Shadow or Off at once.
 - `LINEAR_API_KEY` and any extra environment variables are stored only in
   `~/Library/Application Support/symphony/release/secrets.json`, next to Symphony's `control_token`, as a
   JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
@@ -340,8 +336,15 @@ It keeps App Nap off so the poll keeps that pace in the background.
 While Symphony answers, the menu shows `N running · M retrying`, and while dispatch is paused, the pause
 reason and since when. If a Symphony the app didn't start (for example one started from the CLI) answers,
 the app attaches to it as "running (external)": Start, Stop and Restart stay disabled, so the app neither
-starts a second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
-opens `menubar-child.log`.
+starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
+Open Logs opens `menubar-child.log`.
+
+While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans in
+`Plan Review`, open decisions, tickets the quality gate
+holds or skipped, and tickets an access hold pauses in place), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
+each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
+ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
+row opens the Symphony window on it in the Inbox. The menu lists five; **N more…** opens the Inbox for the rest.
 
 Each poll waits up to 5 seconds for an answer. After one missed poll the menu keeps the last status, with
 "Symphony is slow to answer" under it. Only after two missed polls in a row does it show "Symphony isn't
@@ -390,13 +393,13 @@ status until the next Pause or Resume.
 The state root is found as Symphony finds it:
 
 - `SYMPHONY_STATE_ROOT`, from the app's environment or from the variables Start Symphony last used.
-- Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
+- Otherwise `~/Library/Application Support/symphony` or, for the release Symphony.app runs, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
 
 ## Forced tickets
 
-Force a ticket… asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
+Force a Ticket… opens a sheet that asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
 with `{"identifier":"TP-123"}`, like `symphony force TP-123`. Symphony adds its force label
 (`agent.concurrency.force_label`, `expedite` by default) to the ticket, which then skips the slot limits but
 still waits for its blockers, a pause, usage limits and its reviews. It is offered while Symphony answers,
@@ -466,8 +469,6 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
   it runs on, how long it has run and its last activity, and **Reveal Worktree** for a worktree on this
   Mac. **No agents running** otherwise.
-- **Acceptance gate**: the repo's mode (**Inherit: Shadow** while it follows Settings) and the gate's
-  record for the repo.
 - **Disconnect…** at the foot, in red.
 
 While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
@@ -475,7 +476,7 @@ few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete open
 **Disconnect…** and **−**, and ⌘W closes the window.
 
 When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
-set in Settings instead. Their source, Linear routing and acceptance gate come from the file, and
+set in Settings instead. Their source, Linear routing and manual review come from the file, and
 **WORKFLOW.md** and **Activity** fold into one line: "Live status shows while Symphony runs." with **Start
 Symphony** (or that Symphony is starting, or isn't answering). A Symphony too old to serve
 `GET /api/v1/repos` shows the same repos with "Update Symphony to see live status."
@@ -551,11 +552,6 @@ or no longer has the repo.
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
   them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
-  The **Acceptance gate** picker sets `repositories[<key>].acceptance_gate.mode`: **Inherit** (the mode in
-  Settings, named in brackets) removes the key, and an `acceptance_gate:` block it leaves empty; **Off**,
-  **Shadow** and **Enforce** write it, and Enforce asks first as in Settings. Under it, the repo's agreement
-  line shows as in Settings. A Save that changes the gate runs `symphony check` first and saves nothing when
-  it fails. The detail's **Acceptance gate** section then shows the repo's mode.
 - **Disconnect…** (the detail's foot, the sidebar **−**, the context menu or Delete) opens a sheet,
   "Disconnect <key>?", saying what happens and what stays on disk, with **Cancel** and **Disconnect**.
   Disconnect removes the entry from `repositories:` together with the comment lines right above it
@@ -658,16 +654,14 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
 4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
    dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
    stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
-   version's Symphony yet: running it removes older versions' unpacked releases from
-   `~/Library/Application Support/.burrito/`, including the one the running Symphony loads its code from.
+   version's Symphony yet.
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. Its log is
    `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
 6. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
-   it checks `symphony.yml` with its new embedded binary, starts Symphony from it, which removes the old
-   version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A pause you
+   it checks `symphony.yml` with its new embedded binary, starts Symphony from it, and, once it answers, resumes dispatch if the update paused it. A pause you
    made before the update stays. If the helper had to put the old app back, an alert says so.
 
 Update is disabled, with the reason under it, when:
@@ -692,8 +686,12 @@ The line under the update items shows "Checking vX: …" while it does:
 1. **Config check:** `symphony check --config <symphony.yml>` with the new embedded binary must pass, so a
    config error such as `workspaces.repo does not exist` is caught. Symphony starts only once it passes.
 2. **Answer:** when the app starts Symphony after the update (it ran before the update, or "Start Symphony
-   when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. When
-   it doesn't start Symphony, only the config check runs.
+   when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. If it
+   doesn't, the app stops it and starts it once more, and a second miss fails the check. A Symphony that
+   still answers when the app goes to start it is the one the update stopped, still on its way out: the app
+   waits up to a minute for it to exit before it starts the new one. When it doesn't start Symphony, only
+   the config check runs. Each exit of Symphony is noted at the end of `menubar-child.log`, with its status,
+   so a crash before Symphony's own logger starts is on record.
 3. **No crash loop:** for 10 minutes after the update, an unexpected exit of Symphony starts it again (each
    start must answer within 2 minutes), and the third unexpected exit in those 10 minutes fails the check.
    A Stop you choose doesn't count. Outside those 10 minutes the app doesn't start Symphony again after an
@@ -826,6 +824,130 @@ there is nothing to skip. To install an older release than the previous
 one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to that release's tag (see
 [With the install script](#with-the-install-script)).
 
+## The Symphony window
+
+**Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
+and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views and the ticket pages shown), the
+view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
+help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
+version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, **Initiatives**, then under
+**Factory**, **Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and
+state. The window opens on the Inbox the first time.
+
+- **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
+  verifications, Actions, Clarify and Blocked, oldest first in each group, each row with its ticket, title, one-line ask
+  and age; its sidebar item counts them in orange, in every repo. ↑ and ↓ move through the list and Return
+  takes the review's first action. Beside the list, the review of the selected item: a plan's **What to
+  review** with its links, **Decisions needed** with the recommended option picked, and its sub-tickets in
+  landing order; a PR's checks (CI, and QA with its report), with **Open PR**; an action's why, numbered steps, time and what it
+  unblocks, with **Copy Steps**; what the quality gate found in a ticket it holds, its score and round, with
+  **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
+  the ticket in Linear: in the Linear desktop app when it is installed (its `linear://` link, without starting the
+  browser), else in the browser. Every Linear link in the app opens the same way. The review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
+  items says how many ("2 more in other repos").
+
+  You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
+  Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
+  waiting on its merge confirmation **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the
+  default), which answer that request like **Send Decision…**: Approve and Merge picks the option that moves the ticket
+  to `Merging`, and a PR with no request to answer offers only its links; an action asking a decision **Send Decision…** (its options are the picks) and,
+  under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access or
+  dispatch-loop hold and lets it continue in place, and **Restart…** under ⋯. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
+  Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
+  the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
+  verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
+  (`POST /api/v1/control/approve_plan`, `rework`, `decisions`, `decide`, `unblock`), and what went wrong
+  shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
+  Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
+  seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow
+  Symphony's answer (`moved`, `to_state`). Send Decisions posts its comment in place and leaves the plan in
+  `Plan Review`, so its banner just says "Sent your decisions" with no Undo. Unblock moves no ticket, so its banner
+  just says "Hold cleared" with no Undo.
+
+- **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), in three columns like the
+  Inbox. The list groups the plan tickets as Active, In review and Done recently (a week after they are done),
+  each with "4 of 8 done" and a bar of its sub-tickets by stage (Done, Working, Waiting on you, Queued,
+  Blocked) with a legend that gives each stage's symbol, count and word; VoiceOver reads the counts too. The
+  detail opens with a sentence ("4 of 8 done. BIL-206 waits on you, and 2 tickets wait on it."), the bar and its
+  legend, the initiative's lane ("Holds a lane, running BIL-205"), and the sub-tickets in landing order, each
+  with what it waits on (you, a blocker, CI, a slot) and links to the tickets it is blocked by. **Review** on a
+  sub-ticket that waits on you opens its Inbox item; any other row opens its ticket page. The final
+  verification comes last and reads "Waits on 3 tickets" until the others are done, then its result. The
+  Overview's side column shows the active initiatives in an **Initiatives** card; a click opens one here. The
+  scope pop-up applies.
+
+- **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
+  are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
+  freeze." with **Resume Dispatch**, or "The factory is idle.", with a line of context under it. The flow
+  strip counts the tickets at each stage: Queued, Working, Code Review & QA, Waiting on you (the Inbox; the tile
+  opens it), Merging
+  and Shipped today (the tickets Symphony saw reach Done today, UTC); a stage at 0 stays in place in grey.
+  **Needs attention** shows only when something does, most severe and oldest first, one row per ticket or
+  hold: a run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than
+  one repo (**Open in Linear**), a usage-limit hold with the time runs resume, a forced ticket gone stale
+  (**Stop Forcing**) and stray processes (**Open Diagnostics**); **Open** opens the ticket page, and a stuck or
+  failing row also has **Stop Run…**. The sidebar's Overview item counts these rows. **Now working** lists the agent runs, QA passes and landings
+  with their phase, turn, last activity, running time and tokens, and **Next up** the tickets waiting for a
+  slot or a retry. On the side, **Today** has the day's tokens against the daily budget and each provider
+  limit Symphony reports, accent below 75%, orange from 75% and red from 95%, and **Repos** says in one line
+  whether each repo is healthy. Return or a double-click on a ticket row opens its ticket page.
+- A **ticket page** tells one ticket's story: its badges, repo and initiative, what it is doing ("Waiting on a
+  retry at 14:32", "In review · QA pass running"), **Now** (the run and its model and effort, running time,
+  turn, last activity, the tool call it waits on, its workspace with **Reveal**, and its tokens against the
+  per-ticket cap), the **Timeline** of every run with its result, duration and tokens, and
+  your moves ("Stopped by you, moved to Backlog", from the audit records), and the ticket's facts (state,
+  type, initiative, pull request, forced, and for a done ticket when it merged) and the agent's
+  last message. It reads `/api/v1/:issue_identifier`, `/api/v1/runs` and `/api/v1/audit` besides the state;
+  a done ticket, which Symphony no longer tracks, shows what the state and the run records still say. Its
+  actions: **View Transcript**, **Open in Linear**, **Stop Run…**, and under ⋯ **Copy API URL**, **Show Audit
+  Records** (Audit, filtered to the ticket) and **Reveal Worktree**.
+- **View Transcript** opens the run's transcript in its own window (⌘-click opens another): the agent's
+  messages, each tool call with its result and duration, and errors, grouped by turn, with **All**,
+  **Messages**, **Tools** and **Errors**, a search field (⌘F) and **Copy Session ID**. The selected event shows
+  in full below, monospaced and selectable, and a call that hasn't returned says how long it has been silent.
+- **Stop Run…** opens a sheet first. It says what a stop does: it ends the agent and removes its workspace,
+  with any work not pushed, and the ticket keeps its Linear state, so Symphony starts it again on its next
+  poll. **Also move to Backlog** (on from Needs attention, off from the ticket page) then moves the ticket to
+  Backlog with your note as a comment (`POST /api/v1/control/stop`, then `backlog`). A failing ticket between
+  attempts has no run to stop, so only the Backlog move is left.
+- The **scope** pop-up shows all repos or one of the repos Symphony has tickets in. It filters every count
+  and row of the Overview (the sidebar badge still counts every repo), and the app remembers it across
+  relaunches.
+
+- **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
+  under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
+  moves from the app (approve, merge, rework, decisions, Backlog, Stop Run) are recorded like any
+  other; older records may still show a sign-off, a move retired with `Final verification:` tickets.
+  The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
+  whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
+  that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the
+  selected record in full. **Export…** saves every record under the filters and the search as NDJSON, one per
+  line as Symphony wrote it, from the API's export. With nothing to show it says "No audit records match." with
+  **Clear Filters**.
+- **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
+  update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
+  caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
+  JSON** copies `/api/v1/state` as Symphony served it, and **Open Logs** and **Open Web Dashboard** do what
+  the menu items do.
+- While Symphony doesn't answer, every view shows one placeholder instead: **Start Symphony** while it is
+  stopped, a spinner while it starts, **Open Logs** and **Restart Symphony** when it stopped answering, and
+  **Open Settings…** while no `symphony.yml` is set. A view whose endpoint an older Symphony doesn't serve
+  says "Update Symphony to see this view."
+
+**Notifications.** The app notifies each new Inbox item ("BIL-206 waits on you") and each new Needs attention
+problem once, with **Open**, which opens the window on it; a PR whose checks are green also has **Approve and
+Merge…**, which opens the window on its sheet and approves nothing by itself; never twice for the same one, even after a relaunch,
+and nothing for routine progress or what was already there the first time the app ran. They make no sound. The
+app asks for permission the first time one is due, and Settings has a switch per kind under **Notifications**.
+
+While the window is open the app is a regular app, with a Dock icon, a ⌘-Tab entry and its main menu; the Dock
+icon shows how many things wait on you. ⌘W
+closes the window and the app goes back to the menu bar only; Symphony keeps running. The window opens at
+1200 × 760 (it can't shrink below 960 × 600) and comes back at the size, position and view it was left at,
+also after a relaunch. It reads Symphony's local API every 2 seconds while it is on screen and every 30
+seconds otherwise.
+
 ## Development mode
 
 Development mode is for working on Symphony itself: the app runs `bin/symphony` from a checkout, through
@@ -854,7 +976,7 @@ make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to ch
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
 make clean    # removes build/ and .build/
-make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Symphony binary, as releases do
+make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
 
 `make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
@@ -863,13 +985,13 @@ certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.pli
 replaces an installed release too; reinstall the release with the install script afterwards.
 
 Every build also carries `Contents/Helpers/SymphonyQADriver.app`, the helper that takes screenshots and reads
-the accessibility tree for Auto Review's `macos_app` QA. Grant Screen Recording and Accessibility to that helper,
+the accessibility tree for the QA state's `macos_app` playbook. Grant Screen Recording and Accessibility to that helper,
 never to Symphony.app: macOS passes Symphony.app's grants to the agents it starts (see
 [One-time macOS permissions](../docs/configuration.md#one-time-macos-permissions)).
 
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
 itself. `make qa-app` builds this checkout's Symphony (an escript, so it needs the checkout's Erlang and
-Elixir) and embeds it as `make bundle` does, for Auto Review's `macos_app` QA (see
+Elixir) and embeds it as `make bundle` does, for the QA state's `macos_app` playbook (see
 [macOS app QA](../docs/configuration.md#macos-app-qa)). It sets no update key, so it can't update itself either.
 
 ### Run a checkout
@@ -889,7 +1011,7 @@ instead of the app; see [Running](../README.md#running).
 ## QA mode
 
 QA mode is for test launches, by hand or by a QA agent: the app keeps everything it would store under one
-directory and leaves your real settings, secrets and Symphony alone. Auto Review's `macos_app` playbook
+directory and leaves your real settings, secrets and Symphony alone. The QA state's `macos_app` playbook
 always launches the app this way (see [macOS app QA](../docs/configuration.md#macos-app-qa)). Turn it on by starting the app's binary
 with `SYMPHONY_BAR_QA_ROOT` set to a directory. A launch from Finder or `open` doesn't pass the variable on, so
 run the binary directly:
@@ -902,32 +1024,30 @@ In QA mode, under that directory:
 
 | Path | Holds | Instead of |
 | --- | --- | --- |
-| `settings.plist` | the Settings values, Launch at Login, and the pending update across a relaunch | UserDefaults; Launch at Login registers nothing with macOS |
+| `settings.plist` | the Settings values, Launch at Login, the pending update across a relaunch, and the Symphony and Repos windows' frames and selections | UserDefaults; Launch at Login registers nothing with macOS |
 | `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | `~/Library/Application Support/symphony/release/secrets.json` |
 | `logs/` | Symphony's output log | `~/Library/Logs/symphony` |
 | `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |
 | `state/` | Symphony's state: control URL and token (`SYMPHONY_STATE_ROOT`) | `~/Library/Application Support/symphony` |
 | `symphony-logs/` | Symphony's own logs (`SYMPHONY_LOGS_ROOT`) | `~/Library/Logs/symphony/release` |
-| `burrito/` | the embedded Symphony's unpacked release, in `burrito/.burrito/` (`SYMPHONY_INSTALL_DIR`) | `~/Library/Application Support/.burrito` |
 
 The app starts with empty settings, so Settings opens. It doesn't see a Symphony already running outside QA
 mode, so Stop, Restart, Pause and Resume can't reach it, unless `SYMPHONY_STATE_ROOT` is set too, which wins
 over `state/`. Until its own Symphony has written a control URL, the app doesn't look for one on the default
-port 4000 either, where the Symphony a normal launch runs answers. `SYMPHONY_LOGS_ROOT` and
-`SYMPHONY_INSTALL_DIR` set in the environment win over `symphony-logs/` and `burrito/` the same way. Saving
+port 4000 either, where the Symphony a normal launch runs answers. `SYMPHONY_LOGS_ROOT` set in
+the environment wins over `symphony-logs/` the same way. Saving
 Settings leaves `~/Library/Application Support/symphony/release/secrets.json` and the login Keychain as they
 were.
 
 Start runs a checkout in Development mode, or the embedded Symphony with Development mode off. The embedded
-Symphony unpacks under `burrito/`, so it never removes the installed app's unpacked release (running a newer
-build removes older builds' unpacked releases from its folder). It still takes the Erlang node name
+Symphony runs from the app's bundle and takes the Erlang node name
 `symphony@127.0.0.1`, so while another Symphony release runs, start the app with its own `ERL_EPMD_PORT`, for
 example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` is free (`0` picks one).
 
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Three more variables, read only in QA mode:
+Four more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -938,6 +1058,35 @@ Three more variables, read only in QA mode:
   counts. The Symphony the app runs gets it too and, also only in QA mode, checks and runs OpenRouter models
   against the stub. Outside QA mode the app always talks to `https://openrouter.ai`, whatever the environment
   says. See [OpenRouter in QA](../docs/configuration.md#qa-passes).
+- `SYMPHONY_BAR_QA_API_FIXTURES=<dir>` makes the app read Symphony's local API from files instead of
+  Symphony, so QA walks every view with fixed data and no Linear or model calls: each GET reads
+  `<dir>/<path>.json` (for example `<dir>/api/v1/state.json` for `/api/v1/state`) and answers 404 when the
+  file is missing, and each control POST (Pause, Resume, Force, Stop Run, and the Inbox's moves and Undo) is
+  appended as one JSON line to `api-requests.jsonl` under the QA root and answered 200, with
+  `<dir>/<path>.json` as the body when there is one (the `inbox` fixtures answer each move from
+  `api/v1/control/`). The menu, the Repos window and the Symphony window
+  all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
+  are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
+  Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
+  hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
+  ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
+  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
+  `inbox-empty` and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
+  and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
+  earlier decision; and the plan TP-923, whose brief mentions TP-947), of the pull request page: `pull-request`
+  (`inbox-decision`'s content plus PR #448's page: two Code Review verdicts, four areas and TP-891's PR #446
+  overlapping it), of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
+  conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
+  merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
+  shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
+  moves among them; Oct 7's chain verifies and Oct 6's breaks at its line 5, SHOP-298's PR opened, and SHOP-305's
+  ticket page has a stop and a Backlog move). Ages in them count from the payload's `generated_at`, so they read the same
+  on any day; clock times show in the Mac's time zone:
+
+  ```bash
+  SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \
+    ./build/Symphony.app/Contents/MacOS/SymphonyBar
+  ```
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
@@ -945,9 +1094,11 @@ Three more variables, read only in QA mode:
   It keeps `status.json` current: its pid, version, build and bundle path, the pid of the Symphony it runs,
   every visible menu item (submenu items right after the item they open from) with whether it is enabled,
   the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
-  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt, such as Force a
-  ticket…, is answered with the rest of the command file (`Force a ticket…` on the first line, `TP-123` on
-  the second), and cancelled when there is none.
+  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt is answered with
+  the rest of the command file and cancelled when there is none. Pause Dispatch… and Force a Ticket…, which
+  open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the first line
+  and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that reason, and
+  without one pauses with the menu's.
 
 The [end-to-end test](Tests/e2e/README.md) uses all of this to test Update, Restart and rollback without
 touching the installed app.

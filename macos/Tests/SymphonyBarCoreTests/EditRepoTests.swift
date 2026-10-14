@@ -89,6 +89,62 @@ final class EditRepoTests: XCTestCase {
         XCTAssertEqual(try EditRepo.entry(for: draft, editing: web, existing: entries).get().route, RepositoryRoute(team: "ENG"))
     }
 
+    func testManualReviewChangesOnlyWhenItsPickerMoved() throws {
+        let yaml = config.replacingOccurrences(of: "  - key: web\n", with: "  - key: web\n    manual_review: on\n")
+        let on = try XCTUnwrap(RepositoriesConfig.entries(in: yaml).first { $0.key == "web" })
+        XCTAssertEqual(EditRepo.draft(for: on).manualReview, .on)
+
+        // The picker unmoved, on a value Symphony writes itself: the entry keeps it.
+        let unchanged = try EditRepo.entry(for: EditRepo.draft(for: on), editing: on, existing: entries).get()
+        XCTAssertEqual(unchanged.manualReview, "on")
+
+        // Off is the default, so picking it removes the key, and the returned entry is a runtime config the
+        // restart check ignores: the setting is read from symphony.yml while Symphony runs.
+        var draft = EditRepo.draft(for: on)
+        draft.manualReview = .off
+        let off = try EditRepo.entry(for: draft, editing: on, existing: entries).get()
+        XCTAssertNil(off.manualReview)
+        XCTAssertFalse(EditRepo.needsRestart(from: on, to: off))
+
+        // A value Symphony rejects stays until another one is picked.
+        let rejected = try XCTUnwrap(RepositoriesConfig.entries(in: config.replacingOccurrences(
+            of: "  - key: web\n", with: "  - key: web\n    manual_review: maybe\n"
+        )).first { $0.key == "web" })
+        XCTAssertEqual(EditRepo.draft(for: rejected).manualReview, .off)
+        XCTAssertEqual(try EditRepo.entry(for: EditRepo.draft(for: rejected), editing: rejected, existing: entries).get().manualReview,
+                       "maybe")
+    }
+
+    func testTheBuiltInTicketPatternsPickerWritesTheReposOverride() throws {
+        let yaml = config.replacingOccurrences(
+            of: "  - key: web\n",
+            with: "  - key: web\n    acceptance_gate:\n      escalate:\n        ticket_patterns_builtin: false\n"
+        )
+        let off = try XCTUnwrap(RepositoriesConfig.entries(in: yaml).first { $0.key == "web" })
+        XCTAssertEqual(EditRepo.draft(for: off).ticketPatternsBuiltIn, .off)
+        XCTAssertEqual(try EditRepo.entry(for: EditRepo.draft(for: off), editing: off, existing: entries).get(), off)
+
+        // Same as Settings removes the key; the setting is read from symphony.yml while Symphony runs.
+        var draft = EditRepo.draft(for: off)
+        draft.ticketPatternsBuiltIn = .inherit
+        let inherit = try EditRepo.entry(for: draft, editing: off, existing: entries).get()
+        XCTAssertNil(inherit.ticketPatternsBuiltIn)
+        XCTAssertFalse(EditRepo.needsRestart(from: off, to: inherit))
+        XCTAssertEqual(try EditRepo.updating(off, to: inherit, in: yaml), config)
+
+        draft.ticketPatternsBuiltIn = .on
+        XCTAssertEqual(try EditRepo.entry(for: draft, editing: off, existing: entries).get().ticketPatternsBuiltIn, true)
+    }
+
+    func testTheDetailShowsTheReposManualReview() throws {
+        let yaml = config.replacingOccurrences(of: "  - key: web\n", with: "  - key: web\n    manual_review: on\n")
+        let entry = try XCTUnwrap(RepositoriesConfig.entries(in: yaml).first { $0.key == "web" })
+        XCTAssertEqual(ManualReview.repoField(entry).value, "On")
+        XCTAssertEqual(ManualReview.repoField(symphony).value, "Off")
+        XCTAssertEqual(ManualReview.repoField(symphony).detail, "The default.")
+        XCTAssertEqual(ManualReview.repoField(RepositoryEntry(key: "a", manualReview: "maybe")).tone, .problem)
+    }
+
     func testSwitchesALocalFolderToAManagedClone() throws {
         var draft = EditRepo.draft(for: symphony)
         draft.mode = .gitHub

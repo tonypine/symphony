@@ -18,17 +18,97 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
   test "is on by default with the documented settings" do
     write_workflow_file!(Workflow.workflow_file_path())
 
-    assert %{enabled: true, label: "human-action", interval_ms: 300_000, min_update_interval_ms: 900_000} =
+    assert %{enabled: true, label: nil, interval_ms: 300_000, min_update_interval_ms: 900_000} =
              Config.settings!().human_actions
   end
 
   test "reads the human_actions section of symphony.yml" do
     write_workflow_file!(Workflow.workflow_file_path())
-    append_symphony_yml!("human_actions:\n  label: needs-tony\n  interval_ms: 60000\n  min_update_interval_ms: 0\n")
+    append_symphony_yml!("human_actions:\n  interval_ms: 60000\n  min_update_interval_ms: 0\n")
 
-    assert %{enabled: true, label: "needs-tony", interval_ms: 60_000, min_update_interval_ms: 0} =
+    assert %{enabled: true, label: nil, interval_ms: 60_000, min_update_interval_ms: 0} =
              Config.settings!().human_actions
   end
+
+  test "loads a config that still sets the retired label or escalates on it, with a deprecation warning" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    yaml = """
+    human_actions:
+      label: needs-tony
+    auto_review:
+      acceptance_gate:
+        escalate:
+          labels: [needs-human, Human-Action]
+    """
+
+    log =
+      capture_log(fn ->
+        append_symphony_yml!(yaml)
+        assert %{label: "needs-tony"} = Config.settings!().human_actions
+      end)
+
+    assert log =~ "symphony.yml `human_actions.label` is deprecated"
+    assert log =~ "symphony.yml `auto_review.acceptance_gate.escalate.labels` lists the deprecated `human-action` label"
+
+    # A labelled issue counts as one with an open request.
+    settings = Config.settings!()
+    assert SymphonyElixir.PersonWait.legacy_request_labels(settings) == ["needs-tony", "human-action"]
+    assert SymphonyElixir.PersonWait.parked?(%Issue{state: "Backlog", labels: ["Needs-Tony"]}, settings)
+  end
+
+  test "logs each deprecation warning once per load of symphony.yml, not on every settings read" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    base = File.read!(Workflow.symphony_file_path())
+
+    yaml = """
+    human_actions:
+      label: needs-tony
+    auto_review:
+      acceptance_gate:
+        escalate:
+          labels: [human-action]
+    """
+
+    log =
+      capture_log(fn ->
+        append_symphony_yml!(yaml)
+        for _read <- 1..100, do: Config.settings!()
+      end)
+
+    assert count(log, "lists the deprecated `human-action` label") == 1
+    assert count(log, "`human_actions.label` is deprecated") == 1
+
+    # A reload of a changed file that still names the label warns once more.
+    log =
+      capture_log(fn ->
+        File.write!(Workflow.symphony_file_path(), base <> String.replace(yaml, "[human-action]", "[needs-human, human-action]"))
+        Cache.clear()
+        for _read <- 1..100, do: Config.settings!()
+      end)
+
+    assert count(log, "lists the deprecated `human-action` label") == 1
+    assert count(log, "`human_actions.label` is deprecated") == 1
+  end
+
+  test "logs the warning once when many components read the settings at the same time at startup" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    log =
+      capture_log(fn ->
+        append_symphony_yml!("auto_review:\n  acceptance_gate:\n    escalate:\n      labels: [human-action]\n")
+
+        # One reader per component that reads settings on boot (a repo each, the gate, the
+        # pollers), all parsing the freshly loaded config before any of them has warned.
+        1..50
+        |> Enum.map(fn _component -> Task.async(fn -> for _read <- 1..20, do: Config.settings!() end) end)
+        |> Task.await_many(30_000)
+      end)
+
+    assert count(log, "lists the deprecated `human-action` label") == 1
+  end
+
+  defp count(log, fragment), do: length(String.split(log, fragment)) - 1
 
   test "rejects unknown keys and invalid values" do
     base = %{
@@ -73,13 +153,13 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     test_pid = self()
 
     collect = fn repos, opts ->
-      send(test_pid, {:repos, repos, opts[:settings].human_actions.label})
-      {:ok, %{}}
+      send(test_pid, {:repos, repos, opts[:settings].human_actions.enabled})
+      {:ok, %{}, []}
     end
 
     HumanActions.run_once(%{opts: [collect: collect], projects: %{}, timer: make_ref()})
 
-    assert_received {:repos, [repo], "human-action"}
+    assert_received {:repos, [repo], true}
     assert {:ok, %{"project" => %{"slugId" => %{"eq" => "cycle"}}} = filter} = Client.repo_scope_filter(repo)
     refute Map.has_key?(filter, "state")
 

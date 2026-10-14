@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
   import Plug.Conn
   import Plug.Test
 
+  alias SymphonyElixir.AuditLog
   alias SymphonyElixirWeb.ControlApiController
 
   defmodule StubOrchestrator do
@@ -104,6 +105,52 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
 
     assert conn.status == 200
     assert calls(pid) == [{:stop_running, "ACME-123"}]
+  end
+
+  describe "POST /control/stop audit record" do
+    @describetag :tmp_dir
+
+    defp stop_with_audit(reply, audit_dir) do
+      pid = start_stub([reply])
+
+      build_conn(:post, "/api/v1/control/stop", %{"issue_identifier" => "ACME-7"})
+      |> Plug.Conn.assign(:audit_log, dir: audit_dir)
+      |> send_to(:stop, pid, %{"issue_identifier" => "ACME-7"})
+    end
+
+    test "records run_stopped when a run stopped", %{tmp_dir: tmp_dir} do
+      reply = {:ok, %{stopped: true, issue_id: "issue-7", issue_identifier: "ACME-7", repo_key: "web", session_id: "s-7"}}
+
+      conn = stop_with_audit(reply, tmp_dir)
+
+      assert conn.status == 200
+      {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "run_stopped")
+
+      assert [%{"issue_id" => "issue-7", "issue_identifier" => "ACME-7", "repo_key" => "web", "session_id" => "s-7"}] =
+               Enum.to_list(stream)
+    end
+
+    test "records nothing when no run was stopped", %{tmp_dir: tmp_dir} do
+      conn = stop_with_audit({:ok, %{stopped: false, issue_id: "ACME-7"}}, tmp_dir)
+
+      assert conn.status == 200
+      {:ok, stream} = AuditLog.query(dir: tmp_dir)
+      assert Enum.to_list(stream) == []
+    end
+
+    test "still answers when the record can't be written", %{tmp_dir: tmp_dir} do
+      blocker = Path.join(tmp_dir, "blocker")
+      File.write!(blocker, "")
+      reply = {:ok, %{stopped: true, issue_id: "issue-7", issue_identifier: "ACME-7", session_id: "s-7"}}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = stop_with_audit(reply, Path.join(blocker, "audit"))
+          assert conn.status == 200
+        end)
+
+      assert log =~ "Failed to record run_stopped audit event: issue_identifier=ACME-7"
+    end
   end
 
   test "POST /control/dispatch_pr forwards target and intent" do

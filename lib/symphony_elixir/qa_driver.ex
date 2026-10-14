@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.QaDriver do
   @moduledoc """
-  Host-side driver behind the Auto Review `qa_*` tools for the `macos_app` playbook.
+  Host-side driver behind the QA `qa_*` tools for the `macos_app` playbook.
 
   The QA agent runs sandboxed and cannot build Swift, launch GUI apps or read the
   screen, so Symphony does those few things for it on the host, one driver per QA
@@ -22,11 +22,22 @@ defmodule SymphonyElixir.QaDriver do
     gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
     touches real settings or secrets, and `SYMPHONY_QA_OPENROUTER_URL` pointing
     at this pass's `SymphonyElixir.OpenRouter.Stub`, so its OpenRouter flows
-    never need a real key (see "OpenRouter stub" below);
+    never need a real key (see "OpenRouter stub" below). With `api_fixtures`,
+    a directory in the PR checkout (see
+    `SymphonyElixir.QaDriver.Checks.read_fixture_dir/4`: regular files only, at
+    most 5 MB), the launch copies its checked files into a fresh
+    `api-fixtures-<n>/` in the run directory and sets
+    `SYMPHONY_BAR_QA_API_FIXTURES` to that copy, so the app reads Symphony's
+    local API from those JSON files;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
-    `qa_ax_set_value` and `qa_resize_window` accept only a PID this driver
-    launched and that is still running; `qa_check_app` also reports on one that
-    has exited;
+    `qa_ax_set_value`, `qa_ax_select`, `qa_click`, `qa_key` and
+    `qa_resize_window` accept only a PID this driver launched and that is still
+    running; `qa_check_app` also reports on one that has exited;
+  - `qa_ax_select` selects a table or outline row (which answers no AXPress)
+    through `AXSelectedRows` or `AXSelected`; `qa_click` clicks an element's
+    frame centre only when the window in front at that point is the app's own,
+    and `qa_key` presses a named key with modifiers in the app's focused window.
+    The helper posts their mouse and key events to the app's PID alone;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
     followed or replaced;
@@ -37,6 +48,11 @@ defmodule SymphonyElixir.QaDriver do
     between the check and the read. Locally it returns the file's path; on a QA
     host it copies the checked bytes into the run directory's `files/` there and
     returns that path.
+  - `qa_api_requests` returns the requests the app logged to `api-requests.jsonl`
+    in its QA root since the last call (the POSTs it answered from
+    `api_fixtures`), at most the last 500, and takes the log away so the next
+    call returns only newer ones. The QA root is outside the agent sandbox, on
+    the QA host for a `worker_host`, so the agent cannot read the log itself.
 
   Screenshots and accessibility calls run in the helper app,
   `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
@@ -67,7 +83,7 @@ defmodule SymphonyElixir.QaDriver do
 
   Host ports: the driver picks three free ports on this host's loopback for the
   pass (`host_ports/1`, `QA_HOST_PORTS` in the QA agent's prompt and
-  environment). The agent serves the app's stubs and proxies on `127.0.0.1` at
+  environment, and in the environment of the playbook's `build`). The agent serves the app's stubs and proxies on `127.0.0.1` at
   those ports, and the app reaches them at `http://localhost:<port>`.
 
   When the driver stops (the QA pass ends or crashes) it quits every app it
@@ -81,8 +97,9 @@ defmodule SymphonyElixir.QaDriver do
   build directory on the QA host, copies the bundle into Symphony's run
   directory there and launches it from that copy. The agent cannot write on the
   QA host, so the copy is not checked again before launch. Screenshots are
-  captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
-  fixtures there, because the app cannot read the Symphony host's files. Each
+  captured there and copied back into `qa-evidence/`, and `qa_put_file` and
+  `api_fixtures` copy fixtures there (`api_fixtures` as a tar of the checked
+  files), because the app cannot read the Symphony host's files. Each
   app's SSH session forwards a random loopback port on the QA host back to the
   stub (`ssh -R`), and the app gets that port's URL. At start the driver also
   opens one SSH session that forwards each host port from the QA host's
@@ -107,6 +124,10 @@ defmodule SymphonyElixir.QaDriver do
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
+  @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
+  # The app logs each request it answers from API fixtures here, under its QA root.
+  @api_requests_log "api-requests.jsonl"
+  @max_api_requests 500
   # The QA host's loopback ports an app's SSH session may forward to the stub.
   @stub_remote_ports 20_000..59_999
   @host_port_count 3
@@ -121,6 +142,11 @@ defmodule SymphonyElixir.QaDriver do
   @max_screenshots 8
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
+  # The keys `qa_key` presses: named keys, then single characters the helper
+  # maps to US-layout key codes.
+  @named_keys ~w(return enter tab space escape delete forward_delete up down left right home end page_up page_down)
+  @character_keys String.graphemes("abcdefghijklmnopqrstuvwxyz0123456789[],./;'-=`\\")
+  @modifiers ~w(command shift option control)
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
   # The wide pass needs a window at least this size (points).
   @wide_width 1400
@@ -150,7 +176,8 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
+           ~w(qa_resize_window qa_check_app qa_put_file qa_api_requests)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -248,19 +275,21 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_build", driver, config, _args) do
     with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          :ok <- ship(config),
-         {:ok, {output, status}} <- run_build(config) |> rebaseline_on_timeout(driver, config),
+         {:ok, {output, status}} <- run_build(config, build_env(driver)) |> rebaseline_on_timeout(driver, config),
          {:ok, ignored, _dirty} <- worktree_status(config) do
       record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
     end
   end
 
-  defp run_tool("qa_launch_app", driver, config, _args) do
-    with {:ok, built} <- fetch_build(driver),
+  defp run_tool("qa_launch_app", driver, config, args) do
+    with {:ok, fixtures} <- api_fixtures(config, args),
+         {:ok, built} <- fetch_build(driver),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          :ok <- unchanged_build(config, built),
          name = Path.basename(built.executable),
-         {:ok, reports} <- crash_reports(config, name) do
-      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports}})
+         {:ok, reports} <- crash_reports(config, name),
+         {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
+      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports, api_fixtures: fixtures_dir}})
     end
   end
 
@@ -328,6 +357,32 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  defp run_tool("qa_ax_select", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, path} <- element_path(Map.get(args, "path")),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["ax-select", Integer.to_string(pid), path])
+    end
+  end
+
+  defp run_tool("qa_click", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, path} <- element_path(Map.get(args, "path")),
+         {:ok, clicks} <- optional_integer(args, "clicks", 1, 2),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["click", Integer.to_string(pid), path, Integer.to_string(clicks || 1)])
+    end
+  end
+
+  defp run_tool("qa_key", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, key} <- key_name(Map.get(args, "key")),
+         {:ok, modifiers} <- modifiers(Map.get(args, "modifiers")),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, ["key", Integer.to_string(pid), key, Enum.join(modifiers, ",")])
+    end
+  end
+
   defp run_tool("qa_resize_window", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, path} <- optional_element_path(Map.get(args, "path")),
@@ -357,6 +412,26 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, name} <- put_file_name(Map.get(args, "remote_name"), local_path),
          {:ok, path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_file") do
       put_file(config, path, bytes, name)
+    end
+  end
+
+  defp run_tool("qa_api_requests", _driver, config, _args) do
+    log = Path.join(config.qa_root, @api_requests_log)
+    taken = Path.join(config.host_dir, "api-requests-#{System.unique_integer([:positive])}.jsonl")
+
+    # Moved aside before it is read, so a request the app logs meanwhile lands in
+    # a fresh log for the next call instead of being lost.
+    case config.host.cmd.("/bin/mv", ["-f", log, taken], timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
+      {:ok, {_output, 0}} ->
+        read_api_requests(config, taken)
+
+      {:ok, {output, _status}} ->
+        if output =~ "No such file",
+          do: api_requests([]),
+          else: tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be taken: #{String.trim(output)}")
+
+      {:error, reason} ->
+        tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be taken: #{inspect(reason)}")
     end
   end
 
@@ -451,8 +526,24 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
-  defp run_build(config) do
-    opts = [cd: config.build_dir, env: AgentEnv.build(), timeout_ms: config.build_timeout_ms, output_limit: @output_limit]
+  # The build gets `QA_HOST_PORTS` as the QA agent does, so a QA build can name
+  # the port of a stub the agent serves; without a tunnel it gets none.
+  defp build_env(driver) do
+    case host_ports(driver) do
+      {:ok, ports} -> %{"QA_HOST_PORTS" => Enum.join(ports, ",")}
+      {:error, _reason} -> %{}
+    end
+  end
+
+  # `:env` is this host's environment; on a QA host the build gets only `:remote_env`.
+  defp run_build(config, extra_env) do
+    opts = [
+      cd: config.build_dir,
+      env: AgentEnv.build_with(extra_env),
+      remote_env: Enum.to_list(extra_env),
+      timeout_ms: config.build_timeout_ms,
+      output_limit: @output_limit
+    ]
 
     case config.host.cmd.("/bin/sh", ["-c", config.build], opts) do
       {:ok, {output, status}} ->
@@ -672,6 +763,78 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
+  # -- API fixtures ------------------------------------------------------------
+
+  defp api_fixtures(_config, %{"api_fixtures" => nil}), do: {:ok, nil}
+
+  defp api_fixtures(config, %{"api_fixtures" => path}) do
+    with {:ok, _dir, files} <- Checks.read_fixture_dir(config.worktree, path, "api_fixtures", "qa_launch_app") do
+      {:ok, files}
+    end
+  end
+
+  defp api_fixtures(_config, _args), do: {:ok, nil}
+
+  # Each launch gets its own copy of the checked bytes, so an app still running
+  # on an earlier copy keeps it, and later edits in the worktree change nothing.
+  defp copy_api_fixtures(_config, nil), do: {:ok, nil}
+
+  defp copy_api_fixtures(%{remote?: false} = config, files) do
+    dest = Path.join(config.scratch_dir, "api-fixtures-#{System.unique_integer([:positive])}")
+    File.mkdir!(dest)
+
+    for {relative, bytes} <- files do
+      path = Path.join(dest, relative)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, bytes, [:exclusive])
+    end
+
+    {:ok, dest}
+  end
+
+  defp copy_api_fixtures(config, files) do
+    name = "api-fixtures-#{System.unique_integer([:positive])}"
+    tar = Path.join(config.scratch_dir, name <> ".tar")
+    :ok = :erl_tar.create(String.to_charlist(tar), for({relative, bytes} <- files, do: {String.to_charlist(relative), bytes}))
+    dest = Path.join(config.host_dir, name)
+
+    result =
+      case config.host.ship.(tar, dest) do
+        :ok -> {:ok, dest}
+        {:error, reason} -> tool_error("qa_launch_failed", "The api_fixtures directory could not be copied to the QA host: #{reason}")
+      end
+
+    File.rm(tar)
+    result
+  end
+
+  # The taken log is removed whether or not it could be read, so a long pass
+  # leaves no copies behind in the run directory.
+  defp read_api_requests(config, path) do
+    result = config.host.read.(path)
+    config.host.cmd.("/bin/rm", ["-f", path], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
+
+    case result do
+      {:ok, bytes} ->
+        bytes |> String.split("\n", trim: true) |> Enum.map(&api_request/1) |> api_requests()
+
+      {:error, reason} ->
+        tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be read: #{inspect(reason)}")
+    end
+  end
+
+  defp api_request(line) do
+    case Jason.decode(line) do
+      {:ok, request} -> request
+      {:error, _reason} -> line
+    end
+  end
+
+  defp api_requests(requests) do
+    dropped = max(length(requests) - @max_api_requests, 0)
+    {:ok, %{"requests" => Enum.drop(requests, dropped), "dropped" => dropped}}
+  end
+
   # -- argument checks --------------------------------------------------------
 
   defp pid_argument(%{"pid" => pid}) when is_integer(pid) and pid > 0, do: {:ok, pid}
@@ -699,6 +862,25 @@ defmodule SymphonyElixir.QaDriver do
   defp press_action(nil), do: {:ok, "AXPress"}
   defp press_action(action) when action in @press_actions, do: {:ok, action}
   defp press_action(_action), do: tool_error("invalid_arguments", "`action` must be one of #{Enum.join(@press_actions, ", ")}.")
+
+  defp key_name(key) when key in @named_keys or key in @character_keys, do: {:ok, key}
+
+  defp key_name(_key) do
+    tool_error(
+      "invalid_arguments",
+      "`key` must be one of #{Enum.join(@named_keys, ", ")}, or one lowercase letter, digit or one of #{Enum.join(Enum.drop(@character_keys, 36), " ")}."
+    )
+  end
+
+  defp modifiers(nil), do: {:ok, []}
+
+  defp modifiers(list) when is_list(list) do
+    if Enum.all?(list, &(&1 in @modifiers)) and Enum.uniq(list) == list,
+      do: {:ok, list},
+      else: tool_error("invalid_arguments", "`modifiers` must list each of #{Enum.join(@modifiers, ", ")} at most once.")
+  end
+
+  defp modifiers(_list), do: tool_error("invalid_arguments", "`modifiers` must be a list such as [\"command\"].")
 
   defp set_value(value) when is_binary(value) and byte_size(value) <= @value_limit do
     if String.contains?(value, <<0>>), do: tool_error("invalid_arguments", "`value` must not contain NUL bytes."), else: {:ok, value}
@@ -905,7 +1087,7 @@ defmodule SymphonyElixir.QaDriver do
       "qa_permission_missing",
       "#{holder} has no #{grant} permission, so QA cannot see the app. " <>
         "#{Checks.blocked_hint()} An operator grants Screen Recording and Accessibility to #{grantee} " <>
-        "once in System Settings > Privacy & Security (see docs/configuration.md, Auto Review macOS app QA)."
+        "once in System Settings > Privacy & Security (see docs/configuration.md, macOS app QA)."
     )
   end
 
@@ -1061,7 +1243,7 @@ defmodule SymphonyElixir.QaDriver do
           config,
           "qa_worker_unsafe",
           "The QA host #{worker_host} #{problems}. QA must not run where PR code can reach push credentials. " <>
-            "#{Checks.blocked_hint()} An operator fixes the QA host (see docs/configuration.md, Auto Review macOS app QA)."
+            "#{Checks.blocked_hint()} An operator fixes the QA host (see docs/configuration.md, macOS app QA)."
         )
 
       {:error, {:unreachable, reason}} ->
@@ -1175,11 +1357,12 @@ defmodule SymphonyElixir.QaDriver do
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
          {stub_url, forwards} = stub_route(state.config, state.stub.port),
-         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, info.api_fixtures), reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
       payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
+      payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
       {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
     else
       {:error, {:qa_tool, _code, _message}} = error ->
@@ -1224,12 +1407,16 @@ defmodule SymphonyElixir.QaDriver do
     {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
-  # The QA host has its own login environment; only the QA root and the stub's URL cross over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url),
-    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url}]
+  # The QA host has its own login environment; only the QA root, the stub's URL
+  # and the API fixtures' copy cross over.
+  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, fixtures_dir),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | fixtures_env(fixtures_dir)]
 
-  defp launch_env(config, stub_url),
-    do: AgentEnv.build_with(%{@qa_root_env => config.qa_root, OpenRouter.qa_url_env() => stub_url})
+  defp launch_env(config, stub_url, fixtures_dir),
+    do: AgentEnv.build_with(Map.new([{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | fixtures_env(fixtures_dir)]))
+
+  defp fixtures_env(nil), do: []
+  defp fixtures_env(dir), do: [{@api_fixtures_env, dir}]
 
   defp update_app(state, port, fun) do
     case Enum.find(state.apps, fn {_pid, app} -> app.port == port end) do

@@ -1,0 +1,988 @@
+defmodule SymphonyElixir.DirectorMovesTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.{AuditLog, DirectorMoves, Hold, PlanComments, RunStore, SubIssueWait}
+
+  @waiting "Waiting on sub-tickets"
+
+  defmodule MissingStateTracker do
+    def workflow_state_exists?(_state, _teams), do: {:ok, false}
+  end
+
+  defmodule FakeGitHub do
+    def fetch_activity(pr_url, _opts) do
+      send(self(), {:fetch_activity, pr_url})
+      Application.fetch_env!(:symphony_elixir, :director_moves_test_activity)
+    end
+
+    def close(pr_url, _opts) do
+      send(self(), {:close_pr, pr_url})
+      Application.get_env(:symphony_elixir, :director_moves_test_close, :ok)
+    end
+  end
+
+  defmodule FakeWorkspace do
+    def remove_issue_workspaces_checked(issue) do
+      send(self(), {:remove_workspaces, issue.identifier})
+      Application.get_env(:symphony_elixir, :director_moves_test_workspace, :ok)
+    end
+  end
+
+  defmodule CannedLinearClient do
+    def fetch_issue_by_identifier(_identifier), do: Application.fetch_env!(:symphony_elixir, :director_moves_test_fetch)
+  end
+
+  defmodule UnwritableStore do
+    def get_ticket_state(repo_key, issue_id), do: RunStore.get_ticket_state(repo_key, issue_id)
+    def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
+  end
+
+  setup do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    SubIssueWait.reset_for_test(@waiting)
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    audit_dir = Path.join(System.tmp_dir!(), "director-moves-audit-#{System.unique_integer([:positive])}")
+    previous_audit_dir = Application.get_env(:symphony_elixir, :audit_log_dir)
+    Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
+
+    server = :"director_moves_#{System.unique_integer([:positive])}"
+    start_supervised!({DirectorMoves, name: server})
+    clock = :counters.new(1, [])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :director_moves_test_activity)
+      Application.delete_env(:symphony_elixir, :director_moves_test_close)
+      Application.delete_env(:symphony_elixir, :director_moves_test_workspace)
+      SubIssueWait.reset_for_test(@waiting)
+      restore_app_env(:audit_log_dir, previous_audit_dir)
+      File.rm_rf(audit_dir)
+    end)
+
+    %{opts: [server: server, clock: fn -> :counters.get(clock, 1) end, github: FakeGitHub], clock: clock}
+  end
+
+  describe "approve_plan" do
+    test "moves a plan in Plan Review to the waiting state and writes an audit record", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+
+      assert {:ok, result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+
+      assert result == %{
+               move: "approve_plan",
+               issue_id: "plan",
+               issue_identifier: "MOT-30",
+               from_state: "Plan Review",
+               to_state: @waiting,
+               moved: true,
+               commented: false,
+               undo_window_ms: 10_000
+             }
+
+      assert_received {:memory_tracker_state_update, "plan", @waiting}
+      refute_received {:memory_tracker_comment, _id, _body}
+
+      assert [%{"move" => "approve_plan", "issue_identifier" => "MOT-30", "from_state" => "Plan Review", "to_state" => @waiting}] =
+               audit_records()
+    end
+
+    test "records the move's signal in the ticket's signals ledger", %{opts: opts} do
+      RunStore.delete_ticket_state("repo-director", "plan")
+      put_issues([%{plan("Plan Review") | repo_key: "repo-director"}])
+
+      assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+
+      assert [%{name: "decision returned", details: %{move: "approve_plan", from: "Plan Review", to: @waiting}}] =
+               RunStore.get_ticket_state("repo-director", "plan").signals
+    end
+
+    test "refuses a plan outside Plan Review, a ticket that is not a plan, and a turned-off waiting state", %{opts: opts} do
+      put_issues([plan("In Progress"), pr("Plan Review"), %{plan(nil) | id: "stateless", identifier: "MOT-31"}])
+      assert {:error, {:conflict, message}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+      assert message == "MOT-30 is In Progress; the Director answers it only from Plan Review"
+      assert {:error, {:conflict, "MOT-31 is in no state; the Director answers it only from Plan Review"}} = DirectorMoves.move(:approve_plan, "MOT-31", %{}, opts)
+      assert {:error, {:conflict, "MOT-40 is not a plan; approve_plan is for a plan"}} = DirectorMoves.move(:approve_plan, "MOT-40", %{}, opts)
+
+      put_issues([plan("Plan Review")])
+      settings = Config.settings!()
+      disable = fn -> :disabled = SubIssueWait.check_tracker_state(settings, [], tracker: MissingStateTracker) end
+      capture_log(disable)
+      assert {:error, {:conflict, "the waiting state is turned off" <> _}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+
+      refute_received {:memory_tracker_state_update, _id, _state}
+      assert audit_records() == []
+    end
+
+    test "refuses every plan while the Plan Review state is turned off", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_plan_review_state: nil)
+      put_issues([plan("Plan Review")])
+
+      assert {:error, {:conflict, "the Plan Review state is turned off, so the Director can't answer MOT-30 from the app"}} =
+               DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+    end
+  end
+
+  describe "rework" do
+    test "posts the reason, then rejects a plan from Plan Review", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+
+      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "  Split MOT-31 differently  "}, opts)
+      assert_received {:memory_tracker_comment, "plan", "Sent to Rework by the Director:\n\nSplit MOT-31 differently"}
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
+      assert [%{"move" => "rework", "comment" => "Sent to Rework by the Director:\n\nSplit MOT-31 differently"}] = audit_records()
+    end
+
+    test "needs a reason and a plan in Plan Review", %{opts: opts} do
+      put_issues([pr("In Progress")])
+
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "  "}, opts)
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:rework, "MOT-40", %{}, opts)
+      assert {:error, {:conflict, _message}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+      refute_received {:memory_tracker_comment, _id, _body}
+    end
+  end
+
+  describe "restart" do
+    @restart_pr_url "https://github.com/example/repo/pull/40"
+
+    defp restart_opts(opts) do
+      Keyword.merge(opts, github: FakeGitHub, workspace: FakeWorkspace)
+    end
+
+    defp restart_issue(fields \\ []) do
+      struct(%{pr("Rework") | pr_urls: [@restart_pr_url]}, fields)
+    end
+
+    test "closes the pull request, removes the workspace and moves the ticket to In Progress", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+
+      assert {:ok, result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "  The approach is wrong  "}, restart_opts(opts))
+
+      assert result == %{
+               move: "restart",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "Rework",
+               to_state: "In Progress",
+               moved: true,
+               commented: true,
+               undo_window_ms: nil
+             }
+
+      assert_received {:fetch_activity, @restart_pr_url}
+      assert_received {:close_pr, @restart_pr_url}
+      assert_received {:remove_workspaces, "MOT-40"}
+
+      assert_received {:memory_tracker_comment, "pr", comment}
+      assert comment =~ "Restarted by the Director: MOT-40 starts again from main"
+      assert comment =~ "The approach is wrong"
+
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+
+      assert [%{"move" => "restart", "from_state" => "Rework", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "records the restart in the ticket's signals ledger", %{opts: opts} do
+      github_activity(state: "OPEN")
+      RunStore.delete_ticket_state("repo-restart", "pr")
+      put_issues([%{restart_issue() | repo_key: "repo-restart"}])
+
+      assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      assert [%{name: "restart", details: %{move: "restart", from: "Rework", to: "In Progress"}}] =
+               RunStore.get_ticket_state("repo-restart", "pr").signals
+    end
+
+    test "clears a dispatch-loop hold, so the ticket starts again with its count at zero", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([%{restart_issue() | repo_key: "repo-restart"}])
+      :ok = RunStore.record_ticket_dispatch("repo-restart", "pr", %{kind: :rework, run_id: "run-1", state: "Rework"})
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{reason: "dispatch_loop: 4 rework runs", waits_on: %{type: "dispatch_loop", keys: ["rework"]}})
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      refute Hold.held?("repo-restart", "pr", :blocked)
+      assert RunStore.get_ticket_state("repo-restart", "pr").dispatches == []
+    end
+
+    test "leaves any other Blocked hold, and stands when the store refuses to clear the loop's", %{opts: opts} do
+      put_issues([%{pr("In Progress") | pr_urls: [], repo_key: "repo-restart"}])
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "access"}})
+
+      assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert Hold.held?("repo-restart", "pr", :blocked)
+
+      :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "dispatch_loop", keys: ["implementation"]}})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{to_state: "In Progress"}} =
+                   DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, opts |> restart_opts() |> Keyword.put(:store, UnwritableStore))
+        end)
+
+      assert log =~ "Restarted MOT-40 but couldn't clear its dispatch-loop hold: :boom"
+      assert Hold.held?("repo-restart", "pr", :blocked)
+    end
+
+    test "a ticket with no pull request restarts just the same", %{opts: opts} do
+      put_issues([%{pr("In Progress") | pr_urls: []}])
+
+      assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert_received {:remove_workspaces, "MOT-40"}
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "a restart can't be undone: it closed the pull request and removed the workspace", %{opts: opts} do
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+
+      assert {:ok, %{to_state: "In Progress", undo_window_ms: nil}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      put_issues([%{restart_issue() | state: "In Progress"}])
+
+      assert {:error, {:conflict, message}} = DirectorMoves.undo("MOT-40", restart_opts(opts))
+
+      assert message ==
+               "MOT-40 was restarted; the pull request is closed and the workspace is gone, so it can't be undone"
+
+      refute_received {:memory_tracker_state_update, "pr", "Rework"}
+    end
+
+    test "a terminal ticket is refused", %{opts: opts} do
+      put_issues([%{restart_issue() | state: "Done"}])
+
+      assert {:error, {:conflict, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert message == "MOT-40 is Done; only an open ticket can be restarted"
+      refute_received {:remove_workspaces, _identifier}
+    end
+
+    test "needs a reason", %{opts: opts} do
+      put_issues([restart_issue()])
+
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "  "}, restart_opts(opts))
+      assert {:error, {:invalid, "reason is required"}} = DirectorMoves.move(:restart, "MOT-40", %{}, restart_opts(opts))
+      refute_received {:memory_tracker_state_update, _id, _state}
+    end
+
+    test "a reset GitHub refuses stops the move, so nothing is half-done", %{opts: opts} do
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :director_moves_test_close, {:error, :forbidden})
+      put_issues([restart_issue()])
+
+      assert {:error, {:restart, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      assert message == "MOT-40 was not restarted: GitHub refused to close #{@restart_pr_url} (:forbidden)"
+      refute_received {:memory_tracker_state_update, _id, _state}
+      refute_received {:memory_tracker_comment, _id, _body}
+      refute_received {:remove_workspaces, _identifier}
+      assert audit_records() == []
+    end
+
+    test "a workspace that cannot be removed stops the move", %{opts: opts} do
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :director_moves_test_workspace, {:error, :busy})
+      put_issues([restart_issue()])
+
+      assert {:error, {:restart, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+
+      assert message == "MOT-40 was not restarted: couldn't remove the workspace of MOT-40 ({:error, :busy})"
+      refute_received {:memory_tracker_state_update, _id, _state}
+    end
+
+    test "a move Linear refuses after the reset is a partial move", %{opts: opts} do
+      github_activity(state: "OPEN")
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
+      put_issues([restart_issue()])
+
+      assert {:error, {:partial, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
+      assert message =~ "MOT-40"
+      assert_received {:memory_tracker_comment, "pr", _body}
+      assert_received {:close_pr, @restart_pr_url}
+    end
+
+    test "the restart comment says what the reset did" do
+      assert DirectorMoves.restart_comment("MOT-40", "The approach is wrong") ==
+               "Restarted by the Director: MOT-40 starts again from main — its pull requests are closed, its workspace is gone, " <>
+                 "and the workpad's prior attempt is superseded.\n\nThe approach is wrong"
+    end
+  end
+
+  describe "decisions" do
+    test "posts one comment with the picks on a plan in Plan Review, and leaves it there", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      picks = [%{question: " Where are gift cards bought? ", answer: "B. In the app only"}, %{question: "Who pays?", answer: "A. The buyer"}]
+
+      assert {:ok, %{moved: false, commented: true, to_state: "Plan Review", undo_window_ms: nil}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+
+      assert_received {:memory_tracker_comment, "plan", body}
+
+      assert body ==
+               "Decisions on the plan, from the Director:\n\n1. Where are gift cards bought?\n   **Pick:** B. In the app only\n\n2. Who pays?\n   **Pick:** A. The buyer"
+
+      refute_received {:memory_tracker_state_update, _id, _state}
+      # Nothing moved, so there is nothing to undo.
+      assert {:error, {:conflict, "there is no move on MOT-30 to undo"}} = DirectorMoves.undo("MOT-30", opts)
+    end
+
+    test "needs picks, on a plan in Plan Review", %{opts: opts} do
+      put_issues([plan("Plan Review"), pr("Plan Review")])
+
+      for input <- [%{}, %{picks: []}, %{picks: nil}, %{picks: [%{question: "Q", answer: " "}]}, %{picks: ["B"]}] do
+        assert {:error, {:invalid, "picks must list each decision's question and answer"}} = DirectorMoves.move(:decisions, "MOT-30", input, opts)
+      end
+
+      assert {:error, {:conflict, "MOT-40 is not a plan; decisions is for a plan"}} =
+               DirectorMoves.move(:decisions, "MOT-40", %{picks: [%{question: "Q", answer: "B"}]}, opts)
+    end
+
+    test "a comment Linear refuses is Linear's error alone", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
+      assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
+      refute_received {:memory_tracker_state_update, _id, _state}
+      assert audit_records() == []
+    end
+  end
+
+  describe "a move Linear takes only half of" do
+    test "a rework comment whose move Linear refuses is recorded, and not posted twice when sent again", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+
+      assert {:error, {:partial, message}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
+
+      assert message ==
+               "posted the comment on MOT-30, but Linear refused the move to Rework (:state_failed); send it again to make the move without posting the comment twice"
+
+      assert_received {:memory_tracker_comment, "plan", "Sent to Rework by the Director:\n\nNo"}
+
+      assert [%{"move" => "rework", "from_state" => "Plan Review", "to_state" => "Plan Review", "comment" => "Sent to Rework by the Director:\n\nNo", "failed" => "move"}] =
+               audit_records()
+
+      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
+      refute_received {:memory_tracker_comment, _id, _body}
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
+
+      # Once the move went through, the same reason later is a new comment.
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
+      assert_received {:memory_tracker_comment, "plan", _body}
+    end
+
+    test "a different reason, or the ticket in another state, posts the comment again", %{opts: opts} do
+      put_issues([pr("Code Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+      assert {:error, {:partial, _message}} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", _body}
+
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Much later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nMuch later"}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+      assert {:error, {:partial, _message}} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", _body}
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nLater"}
+    end
+  end
+
+  describe "backlog" do
+    test "posts the note when there is one, then moves an open ticket to Backlog", %{opts: opts} do
+      put_issues([pr("In Progress")])
+
+      assert {:ok, %{to_state: "Backlog", commented: true}} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Wait for the API"}, opts)
+      assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nWait for the API"}
+      assert_received {:memory_tracker_state_update, "pr", "Backlog"}
+
+      assert {:ok, %{commented: false}} = DirectorMoves.move(:backlog, "MOT-40", %{note: nil}, opts)
+      refute_received {:memory_tracker_comment, _id, _body}
+
+      # A ticket Linear gave no state is open too.
+      put_issues([pr(nil)])
+      assert {:ok, %{to_state: "Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+    end
+
+    test "refuses a ticket already in Backlog or closed", %{opts: opts} do
+      put_issues([pr("Backlog"), %{pr("Done") | id: "done", identifier: "MOT-41"}])
+
+      assert {:error, {:conflict, "MOT-40 is already in Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      assert {:error, {:conflict, "MOT-41 is Done; only an open ticket moves to Backlog"}} = DirectorMoves.move(:backlog, "MOT-41", %{}, opts)
+    end
+  end
+
+  describe "unblock" do
+    test "clears an access hold in place and posts its comment", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+
+      :ok =
+        Hold.set("repo-director", "pr", :blocked, %{
+          reason: "the run reported a block",
+          clearing_condition: "when the block is resolved; a person clears an access hold",
+          waits_on: %{type: "access", keys: []}
+        })
+
+      assert {:ok, result} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      assert result == %{
+               move: "unblock",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "In Progress",
+               to_state: "In Progress",
+               moved: false,
+               commented: true,
+               undo_window_ms: nil
+             }
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      refute_received {:memory_tracker_state_update, _id, _state}
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+      assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "clears a dispatch-loop hold in place, and the ticket's count starts again", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+
+      :ok =
+        Hold.set("repo-director", "pr", :blocked, %{
+          reason: "dispatch_loop: 4 implementation runs in 10 minutes",
+          waits_on: %{type: "dispatch_loop", keys: ["implementation"]}
+        })
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      refute Hold.held?("repo-director", "pr", :blocked)
+      assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
+      assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+    end
+
+    test "refuses a ticket with no hold, and one waiting on something other than access", %{opts: opts} do
+      put_issues([pr("In Progress")])
+      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "waiting on MOT-1", waits_on: %{type: "dependency", keys: ["MOT-1"]}})
+
+      assert {:error, {:conflict, "MOT-40 is not waiting on an access hold"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert Hold.held?("repo-director", "pr", :blocked)
+      refute_received {:memory_tracker_comment, _id, _body}
+    end
+
+    test "the hold is cleared even when Linear refuses the comment", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{waits_on: %{type: "access"}})
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :comment_failed})
+
+      log = capture_log(fn -> assert {:ok, %{commented: true}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts) end)
+
+      assert log =~ "but Linear refused the comment"
+      refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
+    test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, %{waits_on: %{type: "access"}})
+
+      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
+               DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :store, UnwritableStore))
+
+      assert Hold.held?("repo-director", "pr", :blocked)
+    end
+  end
+
+  describe "decide" do
+    test "a ticket fetched with no repo key is answered and unblocked under the repo its project routes to", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [
+          [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Checkout"]],
+          [key: "repo-other", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Search"]]
+        ]
+      )
+
+      put_issues([%{pr("In Progress") | team: %{key: "MOT"}, project: %{name: "Checkout"}}])
+      set_decision_hold()
+
+      assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+
+      :ok = Hold.set("repo-director", "pr", :blocked, %{reason: "the run reported a block", waits_on: %{type: "access", keys: []}})
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      refute Hold.held?("repo-director", "pr", :blocked)
+    end
+
+    test "a ticket whose repo routes its project by slug id is answered and sent to Rework under that repo", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        repos: [
+          [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["c0ffee12ab34"]],
+          [key: "repo-other", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["5ea4c4ab12cd"]]
+        ]
+      )
+
+      project = %{id: "0b9d7c1e-project", name: "Checkout", slug_id: "c0ffee12ab34"}
+      put_issues([%{pr("In Progress") | team: %{key: "MOT"}, project: project}])
+      set_decision_hold()
+
+      assert {:ok, %{moved: true, to_state: "Rework"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
+
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "records the decision in place: the reply goes under the request and the hold clears", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+
+      assert result == %{
+               move: "decide",
+               issue_id: "pr",
+               issue_identifier: "MOT-40",
+               from_state: "In Progress",
+               to_state: "In Progress",
+               moved: false,
+               commented: true,
+               undo_window_ms: nil
+             }
+
+      assert_received {:memory_tracker_reply, "pr", "comment-1", comment}
+      assert comment == "Decision from the Director:\n\n1. Add the signing secrets, or ship unsigned builds?\n   **Decision:** Add the secrets"
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      # The decision continues the flow in place: nothing moves.
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert [%{name: "decision returned", details: %{move: "decide", from: "In Progress", to: "In Progress"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+      assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    end
+
+    test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add checkout."}])
+      set_decision_hold()
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+
+      assert_received {:memory_tracker_description_update, "pr", description}
+      assert String.starts_with?(description, "Add checkout.\n\n")
+
+      assert [
+               %{
+                 id: "D1",
+                 key: "comment-1",
+                 title: "Add the release signing secrets",
+                 question: "Add the signing secrets, or ship unsigned builds?",
+                 answer: "Add the secrets"
+               }
+             ] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "a description Linear refuses to write still records the decision under the request", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_description_result, [{:error, :rate_limited}])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_description_result) end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, opts)
+        end)
+
+      assert log =~ "Failed to record decisions on issue_id=pr"
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "a decision that directs a move sends the ticket there through the guard", %{opts: opts} do
+      for {move, target} <- [{"rework", "Rework"}, {"DONE", "Done"}] do
+        put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+        set_decision_hold()
+
+        assert {:ok, result} =
+                 DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: move}, opts)
+
+        assert %{moved: true, to_state: ^target, undo_window_ms: 10_000} = result
+        assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+        assert_received {:memory_tracker_state_update, "pr", ^target}
+        refute Hold.held?("repo-director", "pr", :needs_decision)
+      end
+
+      assert [%{"move" => "decide", "to_state" => "Rework"}, %{"to_state" => "Done"}] = audit_records()
+    end
+
+    test "a merge confirmation's hold is what Decide does when the pick is Merge: into Merging", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_merge_hold()
+
+      merge = [%{question: "Merge MOT-40 into its base branch?", answer: "**Merge** (recommended): the ticket moves to Merging"}]
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: merge, request_comment_id: "comment-1"}, opts)
+      assert %{moved: true, to_state: "Merging", undo_window_ms: 10_000} = result
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      assert_received {:memory_tracker_state_update, "pr", "Merging"}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "a Code Review escalation answered Continue to QA moves the ticket into QA", %{opts: opts} do
+      put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
+      set_code_review_hold("QA")
+
+      continue = [%{question: "How should MOT-40 continue after Code Review escalated it?", answer: "Continue to QA"}]
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: continue, request_comment_id: "comment-1"}, opts)
+      assert %{moved: true, from_state: "Code Review", to_state: "QA", undo_window_ms: 10_000} = result
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      assert_received {:memory_tracker_state_update, "pr", "QA"}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert [%{name: "decision returned", details: %{move: "decide", from: "Code Review", to: "QA"}}] = RunStore.get_ticket_state("repo-director", "pr").signals
+    end
+
+    test "a decision directing a move into a state the repo has not configured is refused before anything is written", %{opts: opts} do
+      put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
+      set_code_review_hold("")
+
+      continue = [%{question: "How should MOT-40 continue after Code Review escalated it?", answer: "1"}]
+
+      assert {:error, {:invalid, message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: continue, request_comment_id: "comment-1"}, opts)
+
+      assert message == "MOT-40's decision moves it to a state not configured for repo repo-director; the hold stays"
+      # The request stays open and the hold set, so the person can decide again once the state is configured.
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+      assert audit_records() == []
+    end
+
+    test "a merge confirmation answered with anything but an option moves nothing", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      set_merge_hold()
+
+      neither = [%{question: "Merge MOT-40 into its base branch?", answer: "Neither: fix the flaky test first"}]
+      assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: neither, request_comment_id: "comment-1"}, opts)
+      refute_received {:memory_tracker_state_update, "pr", _state}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "refuses a decision that names no answer, no request, or an unknown move", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+
+      assert {:error, {:invalid, "picks must list each decision's question and answer"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{request_comment_id: "c"}, opts)
+
+      assert {:error, {:invalid, "picks must list each decision's question and answer"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: [%{question: "q", answer: ""}], request_comment_id: "c"}, opts)
+
+      assert {:error, {:invalid, "request_comment_id is required"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks()}, opts)
+
+      assert {:error, {:invalid, message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c", move: "nope"}, opts)
+
+      assert message =~ "move must be"
+
+      assert {:error, {:invalid, _message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c", move: 5}, opts)
+
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+    end
+
+    test "refuses a ticket that is not waiting on a decision", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+
+      assert {:error, {:conflict, "MOT-40 is not waiting on a decision"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
+
+      refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+    end
+
+    test "a reply Linear refuses leaves the hold in place", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :reply_failed})
+
+      assert {:error, {:linear, :reply_failed}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, opts)
+
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert audit_records() == []
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
+    end
+
+    test "a refused directed move is partial: the decision stays recorded and the hold is gone", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
+
+      assert {:error, {:partial, message}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1", move: "rework"}, opts)
+
+      assert message =~ "recorded the decision on MOT-40 and cleared the hold, but Linear refused the move to Rework"
+      # The decision is already in Linear, so the refusal reports the move rather than taking it back.
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
+    end
+
+    test "the decision answers at once while the orchestrator is too busy to take the refresh", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+      test_pid = self()
+
+      # An orchestrator still busy with a poll: it takes the refresh request and never replies.
+      busy =
+        spawn(fn ->
+          receive do
+            {:"$gen_call", {caller, _tag}, :request_refresh} ->
+              send(test_pid, {:refresh_requested, caller})
+              Process.sleep(:infinity)
+          end
+        end)
+
+      assert {:ok, %{move: "decide", moved: false}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "comment-1"}, Keyword.put(opts, :orchestrator, busy))
+
+      assert_received {:memory_tracker_reply, "pr", "comment-1", _comment}
+      refute Hold.held?("repo-director", "pr", :needs_decision)
+      assert_receive {:refresh_requested, caller}
+
+      # The orchestrator going away mid-call ends the request with a warning, not a crash.
+      ref = Process.monitor(caller)
+
+      log =
+        capture_log(fn ->
+          Process.exit(busy, :kill)
+          assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
+        end)
+
+      assert log =~ "Director move couldn't ask the orchestrator to poll again"
+    end
+
+    test "a hold the store refuses to clear comes back as a store error", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      set_decision_hold()
+
+      assert {:error, {:store, "couldn't clear the hold on MOT-40: :boom"}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), request_comment_id: "c"}, Keyword.put(opts, :store, UnwritableStore))
+
+      assert_received {:memory_tracker_reply, "pr", "c", _comment}
+      assert Hold.held?("repo-director", "pr", :needs_decision)
+    end
+
+    test "decide_comment/1 numbers each question with the answer the Director picked" do
+      assert DirectorMoves.decide_comment([%{question: "Close TP-612 as a duplicate?", answer: "Close as duplicate"}]) ==
+               "Decision from the Director:\n\n1. Close TP-612 as a duplicate?\n   **Decision:** Close as duplicate"
+
+      assert DirectorMoves.decide_comment([
+               %{question: "q1", answer: "a1"},
+               %{question: "q2", answer: "a2"}
+             ]) == "Decision from the Director:\n\n1. q1\n   **Decision:** a1\n\n2. q2\n   **Decision:** a2"
+    end
+  end
+
+  describe "errors" do
+    test "an unknown ticket is not found", %{opts: opts} do
+      put_issues([])
+      assert {:error, :issue_not_found} = DirectorMoves.move(:backlog, "MOT-404", %{}, opts)
+      assert {:error, :issue_not_found} = DirectorMoves.undo("MOT-404", opts)
+    end
+
+    test "Linear's errors come back, and a failed comment leaves the state alone", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :comment_failed})
+
+      assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:rework, "MOT-30", %{reason: "No"}, opts)
+      refute_received {:memory_tracker_state_update, _id, _state}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_failed})
+      assert {:error, {:linear, :state_failed}} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+      assert audit_records() == []
+    end
+
+    test "a Linear read that fails comes back as Linear's error, and its not-found as not found", %{opts: opts} do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token")
+      Application.put_env(:symphony_elixir, :linear_client_module, CannedLinearClient)
+
+      rate_limited = {:linear_graphql_errors, [%{"message" => "Rate limited"}]}
+
+      for {response, expected} <- [
+            {{:error, {:linear_graphql_errors, [%{"message" => "Entity not found: Issue"}]}}, {:error, :issue_not_found}},
+            {{:error, rate_limited}, {:error, {:linear, rate_limited}}},
+            {{:error, :issue_not_found}, {:error, :issue_not_found}},
+            {{:error, :timeout}, {:error, {:linear, :timeout}}}
+          ] do
+        Application.put_env(:symphony_elixir, :director_moves_test_fetch, response)
+        assert DirectorMoves.move(:backlog, "MOT-40", %{}, opts) == expected
+      end
+    after
+      Application.delete_env(:symphony_elixir, :linear_client_module)
+      Application.delete_env(:symphony_elixir, :director_moves_test_fetch)
+    end
+  end
+
+  describe "undo" do
+    test "moves the ticket back within 10 s, once", %{opts: opts, clock: clock} do
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Backlog"}
+
+      put_issues([pr("Backlog")])
+      :counters.put(clock, 1, 10_000)
+
+      assert {:ok, %{move: "undo", undone: "backlog", from_state: "Backlog", to_state: "In Progress"}} = DirectorMoves.undo("MOT-40", opts)
+      assert_received {:memory_tracker_state_update, "pr", "In Progress"}
+      assert [%{"move" => "backlog"}, %{"move" => "undo", "from_state" => "Backlog", "to_state" => "In Progress"}] = audit_records()
+
+      assert {:error, {:conflict, "there is no move on MOT-40 to undo"}} = DirectorMoves.undo("MOT-40", opts)
+    end
+
+    test "refuses after 10 s", %{opts: opts, clock: clock} do
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      put_issues([pr("Backlog")])
+      :counters.put(clock, 1, 10_001)
+
+      assert {:error, {:conflict, "the move on MOT-40 is more than 10 s old; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+      refute_received {:memory_tracker_state_update, "pr", "In Progress"}
+    end
+
+    test "refuses once the ticket moved on", %{opts: opts} do
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      put_issues([pr("Todo")])
+
+      assert {:error, {:conflict, "MOT-40 moved on to Todo since; move it in Linear instead"}} = DirectorMoves.undo("MOT-40", opts)
+    end
+
+    test "refuses an approved plan once Symphony promoted its sub-tickets", %{opts: opts} do
+      backlog = [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}]
+      put_issues([%{plan("Plan Review") | sub_issues: backlog}])
+      assert {:ok, _result} = DirectorMoves.move(:approve_plan, "MOT-30", %{}, opts)
+
+      put_issues([%{plan(@waiting) | sub_issues: [%{hd(backlog) | state: "Todo"}]}])
+
+      assert {:error, {:conflict, "Symphony already promoted the sub-tickets of MOT-30; move them in Linear instead"}} =
+               DirectorMoves.undo("MOT-30", opts)
+
+      put_issues([%{plan(@waiting) | sub_issues: backlog}])
+      assert {:ok, %{to_state: "Plan Review"}} = DirectorMoves.undo("MOT-30", opts)
+    end
+
+    test "fails when Linear refuses the move back, and keeps the move to undo", %{opts: opts} do
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      put_issues([pr("Backlog")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :boom}])
+
+      assert {:error, {:linear, :boom}} = DirectorMoves.undo("MOT-40", opts)
+      assert {:ok, _result} = DirectorMoves.undo("MOT-40", opts)
+    end
+  end
+
+  test "the Director's comments count as a person's, not as Symphony's own" do
+    for body <- [
+          DirectorMoves.decisions_comment([%{question: "Where?", answer: "B"}]),
+          DirectorMoves.rework_comment("Split it"),
+          DirectorMoves.restart_comment("MOT-40", "Start over"),
+          DirectorMoves.backlog_comment("Later")
+        ] do
+      assert PlanComments.human?(%{bot?: false, body: body})
+    end
+  end
+
+  test "runs with its default options, under its own name" do
+    case DirectorMoves.start_link() do
+      {:ok, pid} -> Agent.stop(pid)
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
+    put_issues([])
+    assert {:error, :issue_not_found} = DirectorMoves.move(:backlog, "MOT-404", %{})
+    assert {:error, :issue_not_found} = DirectorMoves.undo("MOT-404")
+  end
+
+  test "lists its moves and its undo window" do
+    assert DirectorMoves.moves() == [:approve_plan, :rework, :restart, :decisions, :backlog, :unblock, :decide]
+    assert DirectorMoves.undo_window_ms() == 10_000
+  end
+
+  test "an audit log that can't be written still makes the move", %{opts: opts} do
+    put_issues([pr("In Progress")])
+    blocker = Path.join(System.tmp_dir!(), "director-moves-blocker-#{System.unique_integer([:positive])}")
+    File.write!(blocker, "")
+    Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(blocker, "audit"))
+
+    log = capture_log(fn -> assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts) end)
+    assert log =~ "Failed to record director_move audit event"
+  after
+    Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(System.tmp_dir!(), "unused"))
+  end
+
+  defp github_activity(fields) do
+    Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, Map.merge(%{pr_url: @restart_pr_url, pr_node_id: "PR_node"}, Map.new(fields))})
+  end
+
+  defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+  defp picks, do: [%{question: "Add the signing secrets, or ship unsigned builds?", answer: "Add the secrets"}]
+
+  defp set_merge_hold do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "Merge MOT-40 into its base branch?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{
+          title: "Merge MOT-40",
+          question: "Merge MOT-40 into its base branch?",
+          options: [%{label: "Merge", effect: "the ticket moves to Merging"}, %{label: "Send to Rework", effect: "the ticket moves to Rework"}],
+          confirm: "Merging"
+        }
+      })
+  end
+
+  # The hold `SymphonyElixir.CodeReview` sets on an escalation: its confirmation continues into the
+  # repo's QA state, as `NeedsDecisionHold.pause/4` records it.
+  defp set_code_review_hold(qa_state) do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "How should MOT-40 continue after Code Review escalated it?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{
+          title: "Code Review escalated MOT-40",
+          question: "How should MOT-40 continue after Code Review escalated it?",
+          options: [
+            %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: true},
+            %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: false}
+          ],
+          confirm: qa_state,
+          state: "Code Review"
+        }
+      })
+  end
+
+  defp set_decision_hold do
+    :ok =
+      Hold.set("repo-director", "pr", :needs_decision, %{
+        reason: "Add the signing secrets, or ship unsigned builds?",
+        clearing_condition: "when the decision is recorded",
+        decision: %{title: "Add the release signing secrets", question: "Add the signing secrets, or ship unsigned builds?"}
+      })
+  end
+
+  defp plan(state), do: %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: state, labels: ["plan"]}
+  defp pr(state), do: %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: state, labels: []}
+
+  defp audit_records do
+    {:ok, stream} = AuditLog.query(event_type: "director_move")
+    Enum.to_list(stream)
+  end
+
+  defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
+  defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
+end

@@ -63,7 +63,8 @@ final class ReposViewModel: ObservableObject {
 @MainActor
 final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
     private static let initialContentSize = NSSize(width: ReposView.defaultWidth, height: ReposView.defaultHeight)
-    private static let frameName = "SymphonyReposWindow"
+    /// The window's frame, in the app's defaults so QA mode keeps it under the QA root.
+    private let frame = WindowFrameStore(name: "SymphonyReposWindow", defaults: AppStores.current.defaults)
     /// The app's defaults key for the repo selected last.
     private static let selectionKey = "ReposWindowSelection"
     private static let chipItem = NSToolbarItem.Identifier("ReposChip")
@@ -96,7 +97,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private var poll: ReposPoll?
     private var inFlight = false
 
-    func show(status: SymphonyStatus) {
+    /// Shows the window; with `editing`, on that repo's Edit sheet, where its manual review is.
+    func show(status: SymphonyStatus, editing key: String? = nil) {
         if window == nil {
             let model = ReposViewModel()
             model.onSelect = { key in AppStores.current.defaults.set(key, forKey: Self.selectionKey) }
@@ -112,7 +114,9 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onCancelRestart = { [weak self] in self?.cancelRestart() }
             model.onFix = { [weak self] fix in self?.fix(fix) }
             self.model = model
-            let hostingController = NSHostingController(rootView: ReposView(model: model))
+            let hostingController = NSHostingController(
+                rootView: ReposView(model: model).environment(\.openURL, URLOpener.action)
+            )
             // Only the minimum: the window keeps the size it was left at.
             hostingController.sizingOptions = [.minSize]
             let window = NSWindow(contentViewController: hostingController)
@@ -124,8 +128,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             window.contentMinSize = NSSize(width: ReposView.minWidth, height: ReposView.minHeight)
             window.isReleasedWhenClosed = false
             window.delegate = self
-            if !window.setFrameUsingName(Self.frameName) { window.center() }
-            window.setFrameAutosaveName(Self.frameName)
+            window.restoreFrame(from: frame)
             self.window = window
         }
         update(status: status)
@@ -134,6 +137,10 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         window?.makeKeyAndOrderFront(nil)
         // Puts the window in front even if the system still declined to activate the app.
         window?.orderFrontRegardless()
+        if let key {
+            model?.selection = key
+            showSheet(editing: key)
+        }
     }
 
     /// Called after each status poll and child process event. Does nothing while the window is closed.
@@ -141,13 +148,12 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         guard model != nil else { return }
         self.status = status
         if !ReposList.isAnswering(status) { poll = nil }
-        model?.addRepo?.gateAgreement?.state = state
         model?.canStart = canStart()
         showDisplay()
         guard ReposList.isAnswering(status), !inFlight else { return }
         inFlight = true
         Task {
-            let result = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
+            let result = await AppStores.current.fetchRepos(stateRoot: stateRoot())
             inFlight = false
             // The window may have closed, or Symphony stopped, while the request was out.
             guard model != nil, ReposList.isAnswering(self.status) else { return }
@@ -184,16 +190,6 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         )
         model.selection = next.selection
         model.pendingSelection = next.pending
-    }
-
-    /// Symphony's state while it answers, for the Edit sheet's gate stats.
-    private var state: StateSnapshot? {
-        switch status {
-        case let .running(snapshot, _), let .paused(snapshot, _):
-            return snapshot
-        case .stopped, .starting, .error:
-            return nil
-        }
     }
 
     // MARK: Toolbar
@@ -245,7 +241,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
     private func showSheet(editing key: String?) {
         guard let model, model.addRepo == nil, model.disconnect == nil else { return }
-        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, state: state) { [weak self] saved in
+        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key) { [weak self] saved in
             self?.saved(saved)
         }
         // Also on the repo, so the error is still there once the sheet is closed.
@@ -360,7 +356,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     /// question was open, and deletes it only then.
     private func removeCheckedClone(of gitHub: String) async -> ManagedClones.Outcome {
         if ReposList.isAnswering(status) {
-            poll = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
+            poll = await AppStores.current.fetchRepos(stateRoot: stateRoot())
         }
         let root = ReposConfig.read(path: configPath).clonesRoot
         let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
@@ -379,7 +375,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private func fix(_ fix: RepoHealth.Fix) {
         switch fix {
         case let .openWorkflow(url), let .viewPullRequest(url), let .openOnGitHub(url), let .openInLinear(url):
-            NSWorkspace.shared.open(url)
+            URLOpener.open(url)
         case let .revealInFinder(path), let .revealWorktree(path):
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         case let .copyError(error):
@@ -408,15 +404,11 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         let key = model.selection
         let stateRoot = stateRoot()
         Task {
-            let result = await ControlAPI.send(
-                .stop(identifier),
-                stateRoot: stateRoot,
-                fallback: AppStores.current.controlURLFallback
-            )
+            let result = await AppStores.current.sendControl(.stop(identifier), stateRoot: stateRoot)
             guard let model = self.model else { return }
             model.stopping.remove(identifier)
             switch result {
-            case .done:
+            case .done, .moved:
                 show(ReposBanner(key: key, text: RepoHealth.stoppedMessage(issueIdentifier: identifier)))
             case let .failed(message):
                 model.stopFailures[identifier] = message
@@ -458,10 +450,20 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
     }
 
+    func windowDidMove(_ notification: Notification) {
+        window?.saveFrame(to: frame, after: notification)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        window?.saveFrame(to: frame, after: notification)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        window?.saveFrame(to: frame, after: notification)
+    }
+
     func windowWillClose(_ notification: Notification) {
-        // Saves the frame now and frees its name, which the next window takes even if this one isn't freed yet.
-        window?.saveFrame(usingName: Self.frameName)
-        window?.setFrameAutosaveName("")
+        window?.saveFrame(to: frame, after: notification)
         window = nil
         model = nil
         poll = nil

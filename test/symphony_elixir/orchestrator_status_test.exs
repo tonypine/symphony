@@ -3,6 +3,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixir.Tracker.Memory, as: MemoryTracker
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -197,10 +198,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              message_queue_len: queue_len,
              snapshot_age_ms: age_ms,
              snapshot_build_ms: build_ms,
-             snapshot_parts_ms: %{run_history: run_history_ms, qa: qa_ms, auto_merge: auto_merge_ms}
+             snapshot_parts_ms: parts
            } = Orchestrator.diagnostics(pid)
 
-    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, qa_ms, auto_merge_ms], &(is_integer(&1) and &1 >= 0))
+    assert %{run_history: run_history_ms, auto_merge: auto_merge_ms, landing_waits: landing_waits_ms} = parts
+
+    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, auto_merge_ms, landing_waits_ms], &(is_integer(&1) and &1 >= 0))
+    refute Map.has_key?(parts, :qa)
 
     assert %{orchestrator: %{snapshot_build_ms: api_build_ms}} =
              SymphonyElixirWeb.Presenter.state_payload(orchestrator_name, 1_000)
@@ -221,7 +225,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert log =~ ~r/Orchestrator slow handle_info duration_ms=\d+ message=:publish_snapshot/
     assert log =~ ~r/Orchestrator slow handle_call duration_ms=\d+ message=:pause_status/
-    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ qa_ms=\d+ run_history_ms=\d+/
+    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ landing_waits_ms=\d+ run_history_ms=\d+/
   end
 
   test "a retry's Linear read runs outside the orchestrator, which answers and publishes snapshots while it is in flight" do
@@ -385,6 +389,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     orchestrator_name = Module.concat(__MODULE__, :BoundedRunWritesOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
     on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
+
+    # The startup poll would stop runs the memory tracker does not list, so let it finish before
+    # injecting the run below.
+    wait_for_poll_cycle_idle(pid)
 
     {worker_pid, worker_ref} = start_blocked_worker()
     on_exit(fn -> send(worker_pid, :finish) end)
@@ -2586,18 +2594,25 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       File.mkdir_p!(api_stale_workspace)
       File.touch!(api_stale_workspace, System.os_time(:second) - 30 * 86_400)
 
-      :sys.replace_state(pid, fn state ->
-        %{
-          state
-          | workspace_lifecycle_last_check_at_ms: nil,
-            repo_poll_due_at_ms: %{"bad" => 0}
-        }
-      end)
+      Cache.clear()
+      assert {:ok, repos} = Config.repos()
+      assert Enum.sort(Enum.map(repos, & &1.name)) == ["api", "bad"]
 
       log =
         capture_log(fn ->
           # A startup cycle still in flight would skip this one, and with it the age GC.
           wait_for_poll_cycle_idle(pid)
+
+          # Make the age GC due only once the log is captured: a cycle that started in between
+          # would log the `bad` repo's skip before the capture began.
+          :sys.replace_state(pid, fn state ->
+            %{
+              state
+              | workspace_lifecycle_last_check_at_ms: nil,
+                repo_poll_due_at_ms: %{"bad" => 0}
+            }
+          end)
+
           send(pid, :run_poll_cycle)
 
           wait_for_snapshot(
@@ -2608,7 +2623,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
             1_000
           )
 
-          wait_for_orchestrator_state(pid, &(&1.dispatch_readiness_tasks == %{}), 500)
+          # Hold the window open until the age GC's result is applied (`last_check` was just
+          # cleared), not merely until the readiness map drains — it is empty both before a
+          # task starts and after it ends.
+          wait_for_orchestrator_state(
+            pid,
+            &(not is_nil(&1.workspace_lifecycle_last_check_at_ms) and &1.dispatch_readiness_tasks == %{}),
+            1_000
+          )
         end)
 
       assert log =~ "Skipping workspace age GC for repo_key=bad"
@@ -3540,6 +3562,31 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "active state set includes the phase states, but never Plan Review" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"],
+      repos: [
+        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]
+      ]
+    )
+
+    active_states = Orchestrator.active_state_set_for_test()
+
+    assert MapSet.member?(active_states, "todo")
+    assert MapSet.member?(active_states, "in progress")
+    assert MapSet.member?(active_states, "code review")
+    assert MapSet.member?(active_states, "qa")
+    # `Plan Review` is the epic path's person-owned plan review: watched, never dispatched.
+    refute MapSet.member?(active_states, "plan review")
+    assert MapSet.member?(active_states, "epic review")
+    assert MapSet.member?(active_states, "ci fix")
+
+    state = %Orchestrator.State{poll_interval_ms: 5_000, max_concurrent_agents: 5}
+    issue = %Issue{id: "issue-plan-review", identifier: "MT-PR", title: "Plan", state: "Plan Review", repo_key: "default"}
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "orchestrator hydrates budget state from runs across every repo partition" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -4127,7 +4174,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       id: issue_id,
       identifier: issue_identifier,
       title: "Watch on restart",
-      state: "In Review",
+      state: "Plan Review",
       url: issue_url
     }
 
@@ -4153,7 +4200,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              %{
                issue_id: ^issue_id,
                identifier: ^issue_identifier,
-               state: "In Review",
+               state: "Plan Review",
                url: ^issue_url,
                pull_request_url: ^pull_request_url,
                session_id: "thread-watch-restart-turn-1",
@@ -4329,6 +4376,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [done_issue])
     assert :ok = SymphonyElixir.Notifications.subscribe()
 
+    # The plan the ticket belongs to, as the Initiatives server caches it.
+    initiatives_key = {SymphonyElixir.Initiatives, :initiatives, SymphonyElixir.Initiatives}
+    plan = %{identifier: "MT-PLAN", title: "Plan", sub_tickets: [%{id: issue_id}]}
+    :persistent_term.put(initiatives_key, [plan])
+    on_exit(fn -> :persistent_term.erase(initiatives_key) end)
+
     orchestrator_name = Module.concat(__MODULE__, :TerminalRestartOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
@@ -4354,6 +4407,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert %DateTime{} = run_record.issue_completed_notified_at
     assert %DateTime{} = run_record.watch_closed_at
+    assert run_record.initiative == %{identifier: "MT-PLAN", title: "Plan"}
+
+    assert %{shipped_today: [shipped]} = wait_for_snapshot(pid, &match?(%{shipped_today: [_]}, &1))
+
+    assert %{issue_id: ^issue_id, identifier: ^issue_identifier, title: "Terminal on restart", completed_at: %DateTime{}} =
+             shipped
 
     GenServer.stop(pid)
     flush_notification_events()
@@ -4379,6 +4438,83 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     state = get_orchestrator_state(restarted_pid)
     refute Map.has_key?(state.completed_run_metadata, issue_id)
+
+    # The ticket shipped today still counts after the restart, from its run's marker.
+    assert %{shipped_today: [%{issue_id: ^issue_id, identifier: ^issue_identifier, repo_key: repo_key}]} =
+             GenServer.call(restarted_pid, :snapshot)
+
+    assert repo_key == Config.repo_key!()
+  end
+
+  test "shipped today drops tickets shipped on an earlier local day" do
+    issue_id = "issue-shipped-rollover"
+    issue_identifier = "MT-DONE-ROLL"
+    run_id = "run-shipped-rollover"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"],
+      tracker_terminal_states: ["Done", "Canceled"]
+    )
+
+    :ok = RunStore.clear()
+    ended_at = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: Config.repo_key!(),
+               run_id: run_id,
+               issue_id: issue_id,
+               issue_identifier: issue_identifier,
+               title: "Shipped after midnight",
+               state: "In Review",
+               status: "success",
+               attempt: 1,
+               started_at: DateTime.add(ended_at, -120, :second),
+               ended_at: ended_at,
+               error: nil,
+               pull_request_url: "https://github.com/example/repo/pull/791",
+               runtime_seconds: 120
+             })
+
+    in_review_issue = %Issue{id: issue_id, identifier: issue_identifier, title: "Shipped after midnight", state: "In Review"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [in_review_issue])
+    assert :ok = SymphonyElixir.Notifications.subscribe()
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :ShippedRolloverOrchestrator))
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: stop_process(pid)
+    end)
+
+    wait_for_poll_cycle_idle(pid)
+
+    now = DateTime.utc_now()
+    yesterday = DateTime.add(now, -1, :day)
+
+    shipped_entry = fn id, completed_at ->
+      %{issue_id: id, identifier: id, title: id, repo_key: nil, completed_at: completed_at}
+    end
+
+    :sys.replace_state(pid, fn state ->
+      %{state | shipped: %{"yesterday" => shipped_entry.("yesterday", yesterday), "today" => shipped_entry.("today", now)}}
+    end)
+
+    assert %{shipped_today: [%{issue_id: "today"}]} = GenServer.call(pid, :snapshot)
+    assert Map.has_key?(get_orchestrator_state(pid).shipped, "yesterday")
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{in_review_issue | state: "Done"}])
+    send(pid, :run_poll_cycle)
+
+    assert_receive {:notification_event,
+                    %SymphonyElixir.Notifications.Event{
+                      event: "issue_completed",
+                      issue_identifier: ^issue_identifier
+                    }},
+                   500
+
+    # Recording the next shipped ticket prunes the entry from the earlier day.
+    assert get_orchestrator_state(pid).shipped |> Map.keys() |> Enum.sort() == [issue_id, "today"]
   end
 
   test "orchestrator startup marks interrupted dispatched runs as failures" do
@@ -6650,12 +6786,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     send(worker_pid, :finish)
   end
 
-  test "review-agent blocked exit comments, moves to configured escalation state, and does not schedule retry" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_api_token: nil,
-      ci: %{escalation_state: "Needs Human"}
-    )
+  test "review-agent blocked exit comments, holds the ticket in place on a Blocked hold, and does not schedule retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -6663,8 +6795,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       id: "issue-review-agent-blocked",
       identifier: "MT-REVIEW-BLOCKED",
       title: "Review agent blocked",
-      state: "In Progress"
+      state: "In Progress",
+      repo_key: Config.repo_key!()
     }
+
+    RunStore.delete_ticket_state(Config.repo_key!(), issue.id)
 
     orchestrator_name = Module.concat(__MODULE__, :ReviewAgentBlockedOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -6702,26 +6837,34 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:DOWN, worker_ref, :process, worker_pid, reason})
 
-    assert_receive {:memory_tracker_comment, "issue-review-agent-blocked", body}, 1_000
+    # One tracker task posts the comment, then sets the hold; once it is done both messages are here.
+    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+
+    assert_received {:memory_tracker_comment, "issue-review-agent-blocked", body}
     assert body =~ "reviewer agent returned a verified blocking verdict"
     assert body =~ "Reason: Unsafe to continue."
     assert body =~ "Breaks the retry contract. (lib/example.ex:10-12)"
-    assert body =~ "Target human-review state: Needs Human."
+    assert body =~ "The ticket stays where it is on a Blocked hold until a person unblocks it."
 
-    assert_receive {:memory_tracker_state_update, "issue-review-agent-blocked", "Needs Human"}, 1_000
+    assert_received {:memory_tracker_label_added, "issue-review-agent-blocked", "Blocked"}
+    refute_received {:memory_tracker_state_update, "issue-review-agent-blocked", _state}
 
-    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+    assert [%{name: "blocked", details: %{held: true, reason: "the reviewer agent blocked the run: Unsafe to continue."}}] =
+             RunStore.get_ticket_state(Config.repo_key!(), issue.id).signals
+
+    assert %{reason: "the reviewer agent blocked the run: Unsafe to continue."} =
+             SymphonyElixir.Hold.get(Config.repo_key!(), issue.id, :blocked)
+
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
-    assert %{state: "Needs Human"} = completed_state.watching[issue.id]
 
     send(worker_pid, :finish)
   end
 
-  test "review-agent blocked exit releases claim when escalation state transition fails" do
+  test "review-agent blocked exit releases claim when the hold's label can't be set" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :state_not_found})
+    Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, {:error, :label_not_found})
 
     issue = %Issue{
       id: "issue-review-agent-blocked-transition-fails",
@@ -6754,22 +6897,21 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {:DOWN, worker_ref, :process, worker_pid, {:review_agent_blocked, %{reason: "Unsafe to continue.", findings: [%{summary: "Verified block."}]}}}
     )
 
-    assert_receive {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}, 1_000
-    assert body =~ "Target human-review state: In Review."
-
+    # The tracker task posts the comment before its failed label write; once it is done the comment is here.
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+
+    assert_received {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}
+    assert body =~ "on a Blocked hold"
+    refute_received {:memory_tracker_state_update, "issue-review-agent-blocked-transition-fails", _state}
+
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
 
     send(worker_pid, :finish)
   end
 
-  test "tool failure circuit breaker exit escalates without scheduling retry" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_api_token: nil,
-      ci: %{escalation_state: "Needs Human"}
-    )
+  test "tool failure circuit breaker exit holds the ticket in place without scheduling retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_api_token: nil)
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -6814,14 +6956,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert body =~ "kind=dynamic_tool name=\"github_get_pull_request\" args_hash=abc123"
     assert body =~ "Consecutive failures: 5"
     assert body =~ "Configured threshold: 5"
-    assert body =~ "Target human-review state: Needs Human."
+    assert body =~ "on a Blocked hold"
 
-    assert_receive {:memory_tracker_state_update, "issue-tool-failure-breaker", "Needs Human"}, 1_000
+    assert_receive {:memory_tracker_label_added, "issue-tool-failure-breaker", "Blocked"}, 1_000
 
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+    refute_received {:memory_tracker_state_update, "issue-tool-failure-breaker", _state}
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
-    assert %{state: "Needs Human"} = completed_state.watching[issue.id]
 
     send(worker_pid, :finish)
   end

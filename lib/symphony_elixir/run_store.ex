@@ -6,7 +6,7 @@ defmodule SymphonyElixir.RunStore do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, Paths}
+  alias SymphonyElixir.{Config, Paths, TicketState}
   alias SymphonyElixir.RunStore.RunIndex
 
   @runs_table :symphony_run_store_runs
@@ -14,6 +14,7 @@ defmodule SymphonyElixir.RunStore do
   @totals_table :symphony_run_store_totals
   @pr_review_table :symphony_run_store_pr_reviews
   @ci_check_table :symphony_run_store_ci_checks
+  @ticket_state_table :symphony_run_store_ticket_states
   @verification_allocation_table :symphony_run_store_verification_allocations
   @eval_logs_table :symphony_run_store_eval_logs
   @pause_table :symphony_run_store_pause
@@ -28,6 +29,7 @@ defmodule SymphonyElixir.RunStore do
     {@totals_table, [:key, :record], []},
     {@pr_review_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@ci_check_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
+    {@ticket_state_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@verification_allocation_table, [:key, :repo_key, :run_id, :record], [index: [:repo_key]]},
     {@pause_table, [:key, :record], []},
     {@eval_logs_table, @eval_log_attributes, [type: :bag, index: @eval_log_indexes]},
@@ -611,6 +613,254 @@ defmodule SymphonyElixir.RunStore do
       end)
     end
   end
+
+  @spec put_ticket_state(map()) :: :ok | {:error, term()}
+  def put_ticket_state(%{repo_key: repo_key, issue_id: issue_id} = record) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      normalized =
+        record
+        |> normalize_record()
+        |> Map.put(:repo_key, repo_key)
+        |> TicketState.normalize()
+
+      durable_transaction(fn ->
+        :mnesia.write({@ticket_state_table, scoped_key(repo_key, issue_id), repo_key, issue_id, normalized})
+        :ok
+      end)
+    end
+  end
+
+  def put_ticket_state(%{issue_id: issue_id}) when is_binary(issue_id), do: {:error, :missing_repo_key}
+
+  def put_ticket_state(_record), do: {:error, :invalid_ticket_state_record}
+
+  @spec get_ticket_state(String.t(), String.t()) :: map() | nil | {:error, term()}
+  def get_ticket_state(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> read_ticket_state(repo_key, issue_id) end)
+    end
+  end
+
+  def get_ticket_state(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @spec update_ticket_state(String.t(), map()) :: :ok | {:error, term()}
+  def update_ticket_state(issue_id, attrs) when is_binary(issue_id) and is_map(attrs), do: {:error, :missing_repo_key}
+
+  @spec update_ticket_state(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def update_ticket_state(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      update_ticket_state_record(repo_key, issue_id, attrs)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def update_ticket_state(_repo_key, _issue_id, _attrs), do: {:error, :invalid_ticket_state_record}
+
+  @spec delete_ticket_state(String.t()) :: :ok | {:error, term()}
+  def delete_ticket_state(issue_id) when is_binary(issue_id), do: {:error, :missing_repo_key}
+
+  @spec delete_ticket_state(String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_ticket_state(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.delete({@ticket_state_table, scoped_key(repo_key, issue_id)})
+        :ok
+      end)
+    end
+  end
+
+  def delete_ticket_state(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @spec list_ticket_states() :: [map()] | {:error, term()}
+  def list_ticket_states, do: list_ticket_states(Config.repo_key!())
+
+  @spec list_ticket_states(String.t()) :: [map()] | {:error, term()}
+  def list_ticket_states(repo_key) when is_binary(repo_key) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn ->
+        @ticket_state_table
+        |> scoped_records(repo_key)
+        |> Enum.sort_by(&datetime_sort_key(Map.get(&1, :updated_at)), :desc)
+      end)
+    end
+  end
+
+  @spec list_all_ticket_states() :: [map()] | {:error, term()}
+  def list_all_ticket_states do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        @ticket_state_table
+        |> all_scoped_records()
+        |> Enum.sort_by(&datetime_sort_key(Map.get(&1, :updated_at)), :desc)
+      end)
+    end
+  end
+
+  @doc """
+  Appends a named signal to the ticket's signals ledger, creating the record when none exists. The
+  read-modify-write runs in one durable transaction, so concurrent signals never lose an entry.
+  """
+  @spec record_ticket_signal(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_signal(repo_key, issue_id, name, details) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_signal(repo_key, issue_id, name, details) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_signal(_repo_key, _issue_id, _name, _details), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Appends a verdict, bound to the head SHA it judged, to the ticket's record, creating the record
+  when none exists. The read-modify-write runs in one durable transaction.
+  """
+  @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t()) ::
+          :ok | {:error, term()}
+  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Sets (or replaces) the hold of `kind` on the ticket's record, creating the record when none
+  exists. The hold is the store truth `SymphonyElixir.Hold` projects as a machine label; the
+  read-modify-write runs in one durable transaction.
+  """
+  @spec set_ticket_hold(String.t(), String.t(), :blocked | :needs_decision, map()) :: :ok | {:error, term()}
+  def set_ticket_hold(repo_key, issue_id, kind, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_hold(repo_key, issue_id, kind, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Clears the hold of `kind` from the ticket's record; the ticket continues in place. A record the
+  store does not have yet has no hold to clear, so it is a no-op.
+  """
+  @spec clear_ticket_hold(String.t(), String.t(), :blocked | :needs_decision) :: :ok | {:error, term()}
+  def clear_ticket_hold(repo_key, issue_id, kind) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_clear_ticket_hold(repo_key, issue_id, kind) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Writes the ticket's self-heal bookkeeping (the broken component, the repo that owns the fix, the
+  failure signature, the fix ticket and the retry count) into the ticket's record, creating the
+  record when none exists. The read-modify-write runs in one durable transaction.
+  """
+  @spec record_ticket_self_heal(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_self_heal(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_self_heal(repo_key, issue_id, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_self_heal(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Records a run Symphony dispatched for the ticket (`TicketState.record_dispatch/3`), creating the
+  record when none exists. The read-modify-write runs in one durable transaction.
+  """
+  @spec record_ticket_dispatch(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_dispatch(repo_key, issue_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_dispatch(repo_key, issue_id, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_dispatch(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Records how the dispatched run `run_id` ended (`TicketState.record_dispatch_outcome/4`). A record
+  the store does not have yet lists no run, so it is a no-op.
+  """
+  @spec record_ticket_dispatch_outcome(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def record_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) when is_binary(issue_id) and is_map(attrs) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_dispatch_outcome(_repo_key, _issue_id, _run_id, _attrs), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Drops the stale fix-ticket pointer from the ticket's self-heal bookkeeping, keeping the broken
+  component, the failure signature and the retry count, so a block that recurs after the fix landed
+  is compared against the last failure instead of judged as a first one. A record the store does not
+  have yet has nothing to drop, so it is a no-op.
+  """
+  @spec clear_ticket_fix_ticket(String.t(), String.t()) :: :ok | {:error, term()}
+  def clear_ticket_fix_ticket(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_clear_ticket_fix_ticket(repo_key, issue_id) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def clear_ticket_fix_ticket(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Writes the CI state (`running` / `green` / `red`) of one PR head into the ticket's record, with
+  last-write-wins ordering by `at`. The read-modify-write runs in one durable transaction.
+  Returns `{:ok, :changed}` when the head's state changed (`:unchanged` when it repeated,
+  `:stale` when an older write arrived after a newer one), so the caller projects the CI label only
+  on `:changed`.
+  """
+  @spec record_ci_state(String.t(), String.t(), String.t() | nil, String.t(), DateTime.t()) ::
+          {:ok, :changed | :unchanged | :stale} | {:error, term()}
+  def record_ci_state(repo_key, issue_id, head_sha, status, at)
+      when is_binary(issue_id) and is_binary(status) and is_struct(at, DateTime) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ci_state(repo_key, issue_id, head_sha, status, at) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ci_state(_repo_key, _issue_id, _head_sha, _status, _at), do: {:error, :invalid_ci_state}
+
+  @doc """
+  Records the phase a ticket's CI Fix stay came from, creating the record when none exists. A
+  `nil` origin clears it (the mechanical repair has returned the ticket). The read-modify-write
+  runs in one durable transaction.
+  """
+  @spec set_ci_fix_origin(String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
+  def set_ci_fix_origin(repo_key, issue_id, origin) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ci_fix_origin(repo_key, issue_id, origin) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def set_ci_fix_origin(_repo_key, _issue_id, _origin), do: {:error, :invalid_issue_id}
 
   @spec put_verification_allocation(map()) :: :ok | {:error, term()}
   def put_verification_allocation(%{repo_key: repo_key, run_id: run_id, port: port} = record)
@@ -1271,6 +1521,179 @@ defmodule SymphonyElixir.RunStore do
     end)
   end
 
+  defp read_ticket_state(repo_key, issue_id) do
+    case :mnesia.read(@ticket_state_table, scoped_key(repo_key, issue_id)) do
+      [{@ticket_state_table, _key, ^repo_key, ^issue_id, record}] -> record
+      [] -> nil
+    end
+  end
+
+  defp update_ticket_state_record(repo_key, issue_id, attrs) do
+    durable_transaction(fn ->
+      key = scoped_key(repo_key, issue_id)
+
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+          updated =
+            record
+            |> Map.merge(normalize_update(attrs, [:key, :repo_key, :issue_id]))
+            |> Map.put(:repo_key, repo_key)
+            |> TicketState.normalize()
+
+          :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+          :ok
+
+        [] ->
+          {:error, :ticket_state_not_found}
+      end
+    end)
+  end
+
+  defp write_ticket_signal(repo_key, issue_id, name, details) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.record_signal(record, name, details)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.record_verdict(record, kind, head_sha, outcome)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_hold(repo_key, issue_id, kind, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.set_hold(record, kind, attrs)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_clear_ticket_hold(repo_key, issue_id, kind) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        updated = TicketState.clear_hold(record, kind)
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp write_ticket_self_heal(repo_key, issue_id, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.put_self_heal(record, attrs)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_dispatch(repo_key, issue_id, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.record_dispatch(record, attrs)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_dispatch_outcome(repo_key, issue_id, run_id, attrs) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        updated = TicketState.record_dispatch_outcome(record, run_id, attrs)
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp write_clear_ticket_fix_ticket(repo_key, issue_id) do
+    key = scoped_key(repo_key, issue_id)
+
+    case :mnesia.read(@ticket_state_table, key) do
+      [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] ->
+        updated = TicketState.clear_fix_ticket(record)
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp write_ci_fix_origin(repo_key, issue_id, origin) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    updated = TicketState.put_ci_fix_origin(record, origin)
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ci_state(repo_key, issue_id, head_sha, status, at) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    case TicketState.put_ci_state(record, head_sha, status, at) do
+      {_record, :stale} ->
+        {:ok, :stale}
+
+      {updated, outcome} ->
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        {:ok, outcome}
+    end
+  end
+
   defp durable_transaction(fun) when is_function(fun, 0) do
     case transaction(fun) do
       {:error, _reason} = error ->
@@ -1668,8 +2091,8 @@ defmodule SymphonyElixir.RunStore do
 
   defp index_interrupted_runs(error), do: error
 
-  # Auto Review QA runs use their own `qa_running` status so executor lookups never
-  # mistake them for agent runs; a restart interrupts them all the same.
+  # The retired Auto Review QA runs used their own `qa_running` status; a restart still interrupts
+  # one left over from before the retirement.
   defp interrupt_running_record(%{status: status} = record, error, now, interrupted) when status in ["running", "qa_running"] do
     write_interrupted_run_record(record, error, now, interrupted)
   end

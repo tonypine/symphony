@@ -4,16 +4,20 @@ defmodule SymphonyElixirWeb.Presenter do
   """
 
   alias SymphonyElixir.{
-    AcceptanceGate,
     AuditLog,
     BuildInfo,
     Config,
     ForcedStatus,
-    HumanReview,
+    Inbox,
+    Initiatives,
     Orchestrator,
     Quality,
+    RetiredStates,
     RunKind,
+    RunStore,
+    Sessions,
     StrayProcesses,
+    TicketState,
     URLUtils,
     UsageLimit
   }
@@ -31,6 +35,7 @@ defmodule SymphonyElixirWeb.Presenter do
     pr_opened
     prompt_sent
     refused_agent_action
+    run_stopped
     token_usage_delta
     tool_call
   )
@@ -45,8 +50,8 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout(), GenServer.server()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses) do
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name()) :: map()
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -54,26 +59,32 @@ defmodule SymphonyElixirWeb.Presenter do
       %{} = snapshot ->
         run_history = Map.get(snapshot, :run_history, [])
         blocked = Map.get(snapshot, :blocked, [])
-        human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
+        shipped_today = Map.get(snapshot, :shipped_today, [])
+        waiting_on_you = Inbox.items(snapshot, inbox)
 
         %{
           generated_at: generated_at,
           build: Map.take(BuildInfo.current(), [:version, :sha]),
+          uptime_seconds: uptime_seconds(),
           repos: repo_keys(snapshot),
           counts: %{
             running: length(snapshot.running),
             watching: length(Map.get(snapshot, :watching, [])),
-            human_review: length(human_review),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
-            forced: length(Map.get(snapshot, :forced, []))
+            forced: length(Map.get(snapshot, :forced, [])),
+            shipped_today: length(shipped_today),
+            waiting_on_you: length(waiting_on_you)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
+          sessions: sessions_payload(snapshot.running),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
-          human_review: Enum.map(human_review, &watching_entry_payload/1),
+          waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
+          inbox_read: Inbox.read?(inbox),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
+          drain_report: drain_report_payload(RetiredStates.drain_report()),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])
@@ -92,10 +103,11 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
-          qa: normalize_qa(Map.get(snapshot, :qa)),
-          acceptance_gate: acceptance_gate_payload(AcceptanceGate.Agreement.snapshot()),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
+          landing_waits: snapshot |> Map.get(:landing_waits, []) |> Enum.map(&landing_wait_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
+          dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&dispatch_skipped_payload/1),
+          shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: app_update_payload(blocked),
           forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
@@ -113,6 +125,140 @@ defmodule SymphonyElixirWeb.Presenter do
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
+
+  @doc """
+  The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
+  in review, then done in the last 7 days, each with its sub-tickets in landing order, what each
+  waits on, counts by stage and its slot line from `epic_lanes`. Read from
+  what Symphony cached on its last poll: it makes no Linear request.
+  """
+  @spec initiatives_payload(GenServer.name(), timeout(), GenServer.name(), GenServer.name()) :: map()
+  def initiatives_payload(orchestrator, snapshot_timeout_ms, initiatives \\ Initiatives, inbox \\ Inbox) do
+    generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{} = snapshot ->
+        lanes = Map.get(snapshot, :epic_lanes)
+
+        listed =
+          snapshot
+          |> Initiatives.list(initiatives, inbox)
+          |> Enum.sort_by(&{group_rank(&1.group), &1.identifier || ""})
+          |> Enum.map(&initiative_payload(&1, lanes))
+
+        %{
+          generated_at: generated_at,
+          read: Initiatives.read?(initiatives),
+          counts: Map.new(~w(active in_review done), fn group -> {group, Enum.count(listed, &(&1.group == group))} end),
+          initiatives: listed
+        }
+
+      :timeout ->
+        %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+
+      :unavailable ->
+        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+    end
+  end
+
+  defp group_rank("active"), do: 0
+  defp group_rank("in_review"), do: 1
+  defp group_rank(_done), do: 2
+
+  defp initiative_payload(initiative, lanes) do
+    %{
+      issue_id: initiative.id,
+      identifier: initiative.identifier,
+      title: initiative.title,
+      state: initiative.state,
+      repo_key: initiative.repo_key,
+      url: URLUtils.present_url(initiative.url),
+      group: initiative.group,
+      completed_at: initiative.completed_at,
+      counts: initiative.counts,
+      slot: initiative_slot(lanes, initiative.id),
+      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload/1)
+    }
+  end
+
+  defp sub_ticket_payload(sub_ticket) do
+    %{
+      issue_id: sub_ticket.id,
+      identifier: sub_ticket.identifier,
+      title: sub_ticket.title,
+      state: sub_ticket.state,
+      url: URLUtils.present_url(sub_ticket.url),
+      blocked_by: Enum.map(sub_ticket.blocked_by, & &1.identifier),
+      waits_on: sub_ticket.waits_on,
+      waiting_for: sub_ticket.waiting_for
+    }
+  end
+
+  # The initiative's line in the epic lanes: the lane it runs or holds, the reason it yielded it, or
+  # its place in the queue for one; nil when it has no lane.
+  defp initiative_slot(%{lanes: lanes, queued_epics: queued}, issue_id) do
+    case Enum.find(lanes, &(&1.issue_id == issue_id)) do
+      %{status: status} = lane ->
+        %{status: status, identifier: get_in(lane, [:sub_issue, :identifier]), reason: Map.get(lane, :reason)}
+
+      nil ->
+        case Enum.find_index(queued, &(&1.issue_id == issue_id)) do
+          nil -> nil
+          index -> %{status: "queued", position: index + 1, identifier: nil, reason: nil}
+        end
+    end
+  end
+
+  defp initiative_slot(_lanes, _issue_id), do: nil
+
+  @doc """
+  Everything that waits on the Director (`SymphonyElixir.Inbox.items/2`), oldest first, with
+  counts by kind. Read from what Symphony cached on its last poll: it makes no Linear request.
+  """
+  @spec inbox_payload(GenServer.name(), timeout(), GenServer.name()) :: map()
+  def inbox_payload(orchestrator, snapshot_timeout_ms, inbox \\ Inbox) do
+    now = DateTime.utc_now()
+    generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{} = snapshot ->
+        items = Inbox.items(snapshot, inbox)
+        by_kind = Enum.frequencies_by(items, &Atom.to_string(&1.kind))
+
+        %{
+          generated_at: generated_at,
+          counts: Map.new(~w(plan pr action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          items: Enum.map(items, &inbox_item_payload(&1, now))
+        }
+
+      :timeout ->
+        %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+
+      :unavailable ->
+        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+    end
+  end
+
+  defp inbox_item_payload(item, now) do
+    %{
+      issue_id: item.issue_id,
+      identifier: item.identifier,
+      title: item.title,
+      repo_key: item.repo_key,
+      kind: Atom.to_string(item.kind),
+      state: item.state,
+      ask: item.ask,
+      waiting_since: iso8601(item.waiting_since),
+      waiting_seconds: waiting_seconds(item.waiting_since, now),
+      url: URLUtils.present_url(item.url),
+      review: inbox_review_payload(item.review),
+      references: Map.get(item, :references, %{}),
+      context: Map.get(item, :context)
+    }
+  end
+
+  defp inbox_review_payload(%{requested_at: requested_at} = review), do: %{review | requested_at: iso8601(requested_at)}
+  defp inbox_review_payload(review), do: review
 
   @doc """
   One entry per configured repo (see `SymphonyElixir.Repo.Status`). When the
@@ -143,16 +289,71 @@ defmodule SymphonyElixirWeb.Presenter do
         running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
         retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
         watching = snapshot |> Map.get(:watching, []) |> Enum.find(&(&1.identifier == issue_identifier))
+        waiting = waiting_entry(snapshot, issue_identifier)
 
-        if is_nil(running) and is_nil(retry) and is_nil(watching) do
-          {:error, :issue_not_found}
+        if is_nil(running) and is_nil(retry) and is_nil(watching) and is_nil(waiting) do
+          untracked_issue_payload(issue_identifier)
         else
-          {:ok, issue_payload_body(issue_identifier, running, retry, watching)}
+          payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
+          record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
+          {:ok, Map.put(payload, :verdicts, verdicts_payload(record))}
         end
 
       _ ->
         {:error, :issue_not_found}
     end
+  end
+
+  # A ticket waiting for a slot, or one the last dispatch pass passed over, as `{list, entry}`.
+  defp waiting_entry(snapshot, issue_identifier) do
+    Enum.find_value([:slot_waiting, :dispatch_skipped], fn list ->
+      entry = snapshot |> Map.get(list, []) |> Enum.find(&(&1.identifier == issue_identifier))
+      entry && {list, entry}
+    end)
+  end
+
+  # A ticket Symphony no longer runs or watches is still served while its ticket state record
+  # holds it, so the ticket page can show its Code Review and QA verdicts.
+  defp untracked_issue_payload(issue_identifier) do
+    case ticket_state_by_identifier(issue_identifier) do
+      nil ->
+        {:error, :issue_not_found}
+
+      record ->
+        payload = issue_payload_body(issue_identifier, nil, nil, nil, nil)
+
+        {:ok,
+         %{payload | repo_key: record.repo_key, issue_id: record.issue_id}
+         |> Map.put(:verdicts, verdicts_payload(record))}
+    end
+  end
+
+  defp ticket_state_record(repo_key, issue_id, issue_identifier) when is_binary(repo_key) and is_binary(issue_id) do
+    case RunStore.get_ticket_state(repo_key, issue_id) do
+      %{} = record -> TicketState.normalize(record)
+      _none_or_error -> ticket_state_by_identifier(issue_identifier)
+    end
+  end
+
+  defp ticket_state_record(_repo_key, _issue_id, issue_identifier), do: ticket_state_by_identifier(issue_identifier)
+
+  # A store error reads as no record: `normalize/1` turns the wrapped error into an empty one.
+  defp ticket_state_by_identifier(issue_identifier) do
+    RunStore.list_all_ticket_states()
+    |> List.wrap()
+    |> Enum.map(&TicketState.normalize/1)
+    |> Enum.find(&(&1.issue_identifier == issue_identifier))
+  end
+
+  @verdict_kinds ["code_review", "qa"]
+
+  # The ticket's Code Review and QA verdicts, newest first, as the ledger keeps them.
+  defp verdicts_payload(nil), do: []
+
+  defp verdicts_payload(record) do
+    record.verdicts
+    |> Enum.filter(&(&1.kind in @verdict_kinds))
+    |> Enum.map(&%{kind: &1.kind, outcome: &1.outcome, head_sha: &1.head_sha, recorded_at: iso8601(&1.recorded_at)})
   end
 
   @spec transcript_payload(String.t(), GenServer.name(), timeout()) ::
@@ -317,6 +518,12 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp normalize_token_map(_tokens), do: normalize_token_map(%{})
+
+  # How long this Symphony has run: the Erlang VM's wall clock since it started.
+  defp uptime_seconds do
+    {uptime_ms, _since_last_call} = :erlang.statistics(:wall_clock)
+    div(uptime_ms, 1000)
+  end
 
   defp normalize_pollers(pollers) when is_map(pollers) do
     %{
@@ -506,12 +713,14 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp truthy_param?(value), do: value in ["1", "true", "on", true]
 
-  defp issue_payload_body(issue_identifier, running, retry, watching) do
+  defp issue_payload_body(issue_identifier, running, retry, watching, waiting) do
+    entries = [running, retry, watching, waiting && elem(waiting, 1)]
+
     payload = %{
-      repo_key: repo_key_from_entries(running, retry, watching),
+      repo_key: repo_key_from_entries(entries),
       issue_identifier: issue_identifier,
-      issue_id: issue_id_from_entries(running, retry, watching),
-      status: issue_status(running, retry, watching),
+      issue_id: issue_id_from_entries(entries),
+      status: issue_status(running, retry, watching, waiting),
       workspace: workspace_payload(issue_identifier, running, retry),
       attempts: %{
         restart_count: restart_count(retry),
@@ -524,35 +733,42 @@ defmodule SymphonyElixirWeb.Presenter do
       },
       recent_events: (running && recent_events_payload(running)) || [],
       last_error: retry && retry.error,
-      acceptance_gate:
-        AcceptanceGate.Agreement.latest(repo_key_from_entries(running, retry, watching), issue_id_from_entries(running, retry, watching))
-        |> gate_verdict_payload(),
       tracked: %{}
     }
 
-    if watching do
-      Map.put(payload, :watching, watching_issue_payload(watching))
-    else
-      payload
-    end
+    payload
+    |> put_watching_issue_payload(watching)
+    |> put_waiting_issue_payload(waiting)
   end
 
-  defp issue_id_from_entries(running, retry, watching),
-    do: (running && running.issue_id) || (retry && retry.issue_id) || (watching && watching.issue_id)
+  defp put_watching_issue_payload(payload, nil), do: payload
+  defp put_watching_issue_payload(payload, watching), do: Map.put(payload, :watching, watching_issue_payload(watching))
 
-  defp repo_key_from_entries(running, retry, watching),
-    do: (running && Map.get(running, :repo_key)) || (retry && Map.get(retry, :repo_key)) || (watching && Map.get(watching, :repo_key))
+  defp put_waiting_issue_payload(payload, nil), do: payload
+  defp put_waiting_issue_payload(payload, {list, entry}), do: Map.put(payload, list, waiting_issue_payload(entry))
+
+  defp issue_id_from_entries(entries), do: Enum.find_value(entries, &(&1 && &1.issue_id))
+
+  defp repo_key_from_entries(entries), do: Enum.find_value(entries, &(&1 && Map.get(&1, :repo_key)))
 
   defp restart_count(retry), do: max(retry_attempt(retry) - 1, 0)
   defp retry_attempt(nil), do: 0
   defp retry_attempt(retry), do: retry.attempt || 0
 
-  defp issue_status(running, retry, _watching) do
+  defp issue_status(running, retry, watching, waiting) do
     cond do
       running -> "running"
       retry -> "retrying"
-      true -> "watching"
+      watching -> "watching"
+      waiting -> waiting |> elem(0) |> Atom.to_string()
+      true -> "untracked"
     end
+  end
+
+  defp sessions_payload(running) do
+    running
+    |> Sessions.list()
+    |> Enum.map(&%{&1 | started_at: iso8601(&1.started_at)})
   end
 
   defp running_entry_payload(entry) do
@@ -603,6 +819,46 @@ defmodule SymphonyElixirWeb.Presenter do
       seconds_since_last_run: entry.seconds_since_last_run
     }
   end
+
+  defp drain_report_payload(%{stragglers: stragglers, landed: landed}) do
+    %{
+      stragglers:
+        Enum.map(stragglers, fn straggler ->
+          %{
+            issue_id: straggler.id,
+            issue_identifier: straggler.identifier || straggler.id,
+            title: straggler.title,
+            url: URLUtils.present_url(straggler.url),
+            state: straggler.state,
+            wait: Atom.to_string(straggler.wait),
+            waits_on: straggler.waits_on,
+            move: straggler.move
+          }
+        end),
+      landed:
+        Enum.map(landed, fn landing ->
+          %{issue_id: landing.id, issue_identifier: landing.identifier || landing.id, from: landing.from, to: landing.to}
+        end)
+    }
+  end
+
+  defp waiting_on_you_payload(item, now) do
+    %{
+      issue_id: item.issue_id,
+      issue_identifier: item.identifier,
+      repo_key: item.repo_key,
+      title: item.title,
+      url: URLUtils.present_url(item.url),
+      state: item.state,
+      kind: Atom.to_string(item.kind),
+      headline: item.ask,
+      waiting_since: iso8601(item.waiting_since),
+      waiting_seconds: waiting_seconds(item.waiting_since, now)
+    }
+  end
+
+  defp waiting_seconds(%DateTime{} = since, now), do: max(DateTime.diff(now, since, :second), 0)
+  defp waiting_seconds(_since, _now), do: nil
 
   defp conflict_entry_payload(entry) do
     %{
@@ -695,6 +951,11 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(retry, :worker_host),
       workspace_path: Map.get(retry, :workspace_path)
     }
+  end
+
+  # What a ticket waiting for a slot or passed over by a dispatch gate waits on, and since when.
+  defp waiting_issue_payload(entry) do
+    %{state: entry.state, reason: entry.reason, since: iso8601(Map.get(entry, :since))}
   end
 
   defp watching_issue_payload(watching) do
@@ -855,36 +1116,22 @@ defmodule SymphonyElixirWeb.Presenter do
   defp normalize_finishing(%{slots: slots, used: used, running: running}), do: %{slots: slots, used: used, running: running}
   defp normalize_finishing(_finishing), do: %{slots: nil, used: 0, running: []}
 
-  defp normalize_qa(%{running: running, queued: queued}), do: %{running: running, queued: queued}
-  defp normalize_qa(_qa), do: %{running: [], queued: []}
-
-  defp acceptance_gate_payload(gate) do
+  defp landing_wait_payload(entry) do
     %{
-      running: gate.running,
-      queued: gate.queued,
-      recent: Enum.map(gate.recent, &gate_verdict_payload/1),
-      agreement: gate.agreement
-    }
-  end
-
-  defp gate_verdict_payload(nil), do: nil
-
-  defp gate_verdict_payload(run) do
-    %{
-      repo_key: Map.get(run, :repo_key),
-      issue_id: Map.get(run, :issue_id),
-      issue_identifier: Map.get(run, :issue_identifier),
-      pr_url: Map.get(run, :pr_url),
-      head_sha: Map.get(run, :head_sha),
-      mode: Map.get(run, :mode),
-      verdict: run.verdict,
-      agent_verdict: Map.get(run, :agent_verdict),
-      reasons: Map.get(run, :reasons) || [],
-      criteria: Map.get(run, :criteria) || %{met: 0, unmet: 0, unclear: 0},
-      judged_at: iso8601(Map.get(run, :judged_at)),
-      run_id: Map.get(run, :run_id),
-      human_decision: Map.get(run, :human_decision),
-      human_decided_at: iso8601(Map.get(run, :human_decided_at))
+      issue_id: entry.issue_id,
+      issue_identifier: entry.issue_identifier,
+      pull_request_url: entry.pr_url,
+      state: entry.state,
+      waits_for: %{
+        issue_id: entry.waits_for.issue_id,
+        issue_identifier: entry.waits_for.issue_identifier,
+        pull_request_url: entry.waits_for.pr_url,
+        state: entry.waits_for.state
+      },
+      shared_files: entry.shared_files,
+      files: entry.files,
+      reason: entry.reason,
+      since: iso8601(entry.since)
     }
   end
 
@@ -900,16 +1147,39 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
+  defp shipped_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      title: entry.title,
+      repo_key: entry.repo_key,
+      completed_at: iso8601(entry.completed_at)
+    }
+  end
+
   defp slot_waiting_payload(entry) do
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
+      repo_key: Map.get(entry, :repo_key),
       title: Map.get(entry, :title),
       state: entry.state,
       reason: entry.reason,
       attempt: Map.get(entry, :attempt),
       since: iso8601(Map.get(entry, :since)),
       forced: Map.get(entry, :forced, false)
+    }
+  end
+
+  defp dispatch_skipped_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      repo_key: Map.get(entry, :repo_key),
+      title: Map.get(entry, :title),
+      state: entry.state,
+      reason: entry.reason,
+      since: iso8601(Map.get(entry, :since))
     }
   end
 
@@ -950,6 +1220,7 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       title: entry.title,
+      repo_key: Map.get(entry, :repo_key),
       state: entry.state,
       forced_since: iso8601(entry.forced_since),
       forced_for_seconds: Map.get(entry, :forced_for_seconds),

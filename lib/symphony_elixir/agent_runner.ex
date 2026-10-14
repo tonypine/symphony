@@ -11,13 +11,16 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
-    AutoReview,
-    AutoReview.ParentWalkthrough,
+    CiFix,
     CiPoller,
+    CodeReview,
     Config,
     DependencyAudit,
     DependencyGate,
+    EpicReview,
     GitHub.PullRequest,
+    Handoff,
+    Hold,
     LeftoverProcesses,
     Linear.Issue,
     Linear.TransientRetry,
@@ -25,11 +28,15 @@ defmodule SymphonyElixir.AgentRunner do
     Notifications,
     PromptBuilder,
     PrReviewPoller,
+    QaVerification,
     ReviewAgent,
     RunKind,
     RunStore,
+    StateMachine,
     SubIssueWait,
+    TicketSignals,
     Tracker,
+    TransitionGuard,
     URLUtils,
     UsageLimit,
     Verification,
@@ -40,7 +47,6 @@ defmodule SymphonyElixir.AgentRunner do
   }
 
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
-  @dependency_review_state "In Review"
   @idle_park_state "Backlog"
   @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
@@ -65,7 +71,8 @@ defmodule SymphonyElixir.AgentRunner do
       RunKind.classify(issue,
         terminal_states: settings.tracker.terminal_states,
         ci_failure: pending_ci_failure(issue, opts),
-        reviewer_comments: pending_reviewer_comments(issue, opts)
+        reviewer_comments: pending_reviewer_comments(issue, opts),
+        settings: settings
       )
 
     settings |> Config.run_profile(kind) |> Map.put(:kind, kind) |> UsageLimit.for_agent_kind(settings.agent.kind)
@@ -120,7 +127,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # The orchestrator holds the provider's runs until the limit resets instead of failing the run;
   # it does the same, until a probe gets through, for a model API the agent couldn't reach.
-  # A parent walkthrough's QA agent reports either one as `{:usage_limited, info}`.
+  # An epic review's QA agent reports either one as `{:usage_limited, info}`.
   defp provider_hold_reason({:usage_limited, %{} = info}) do
     if UsageLimit.api_unreachable?(info), do: {:model_api_unreachable, info}, else: {:usage_limited, info}
   end
@@ -570,15 +577,33 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A `Final verification:` ticket gets the Auto Review parent walkthrough in place of executor
-  # turns when it applies (see `SymphonyElixir.AutoReview.ParentWalkthrough`).
+  # A `Code Review` ticket is reviewed rather than executed
+  # (`SymphonyElixir.CodeReview`), its `QA` ticket verified rather than executed
+  # (`SymphonyElixir.QaVerification`), and its epic parent reviewed once its sub-tickets are
+  # terminal (`SymphonyElixir.EpicReview`). Anything else is an ordinary run.
   defp run_issue(workspace, issue, codex_update_recipient, opts, worker_host) do
     walkthrough_opts =
       opts
       |> Keyword.put(:worker_host, worker_host)
       |> Keyword.put(:on_message, codex_message_handler(codex_update_recipient, issue))
 
-    case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
+    case Keyword.get(opts, :code_review, CodeReview).run(issue, workspace, walkthrough_opts) do
+      :skip -> run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host)
+      result -> result
+    end
+  end
+
+  defp run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host) do
+    case Keyword.get(opts, :qa_verification, QaVerification).run(issue, workspace, walkthrough_opts) do
+      :skip -> run_epic_or_parent_run(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host)
+      result -> result
+    end
+  end
+
+  # The epic review is machine-owned and applies to an epic parent
+  # (`SymphonyElixir.EpicReview.epic_review_run?/2`), so an epic is never executed turn by turn.
+  defp run_epic_or_parent_run(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host) do
+    case Keyword.get(opts, :epic_review, EpicReview).run(issue, workspace, walkthrough_opts) do
       :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
       result -> result
     end
@@ -607,8 +632,8 @@ defmodule SymphonyElixir.AgentRunner do
         |> Keyword.put(:linear_comment_registry, linear_comment_registry)
         |> put_reviewer_comments(issue)
         |> put_ci_failure(issue)
-        |> put_qa_failure(issue)
         |> put_pr_conflict(issue)
+        |> put_ticket_state(issue)
 
       run_context = %{
         workspace: workspace,
@@ -837,23 +862,27 @@ defmodule SymphonyElixir.AgentRunner do
     Keyword.get(opts, :dependency_audit_module) || DependencyAudit
   end
 
+  # The dependency changes need a person's approval: the ticket pauses in its phase on a Needs
+  # Decision hold (`DependencyGate.pause/4`), and the decision clears it so the ticket continues.
   defp hold_dependency_approval(%Issue{id: issue_id} = issue, items, turn_session, opts)
        when is_binary(issue_id) do
-    move = fn -> Tracker.update_issue_state(issue_id, @dependency_review_state) end
+    pause = fn -> DependencyGate.pause(issue, {:hold, items}, run_repo_key(issue, opts), Keyword.take(opts, [:tracker])) end
 
-    case with_linear_retry(move, "moving #{issue_context(issue)} to #{@dependency_review_state} for dependency approval", opts) do
+    case with_linear_retry(pause, "holding #{issue_context(issue)} for dependency approval", opts) do
       :ok ->
+        record_move_signal(issue, "decision requested", %{hold: "needs_decision", reason: "dependency_source_requires_approval"}, opts)
+
         Notifications.emit_issue_event(
           :dependency_pending_approval,
           issue,
-          dependency_approval_attrs(items, turn_session, opts)
+          dependency_approval_attrs(issue, items, turn_session, opts)
         )
 
         Logger.warning("Dependency approval required for #{issue_context(issue)} items=#{length(items)}")
         {:hold, items}
 
       {:error, reason} ->
-        {:error, {:dependency_approval_state_update_failed, reason}}
+        {:error, {:dependency_approval_hold_failed, reason}}
     end
   end
 
@@ -861,18 +890,18 @@ defmodule SymphonyElixir.AgentRunner do
     Notifications.emit_issue_event(
       :dependency_pending_approval,
       issue,
-      dependency_approval_attrs(items, turn_session, opts)
+      dependency_approval_attrs(issue, items, turn_session, opts)
     )
 
     {:hold, items}
   end
 
-  defp dependency_approval_attrs(items, turn_session, opts) do
+  defp dependency_approval_attrs(issue, items, turn_session, opts) do
     %{
       repo_key: Keyword.get(opts, :repo_key),
       run_id: Keyword.get(opts, :run_id),
       session_id: turn_session[:session_id],
-      state: @dependency_review_state,
+      state: Map.get(issue, :state),
       reason: "dependency_source_requires_approval",
       metadata: DependencyAudit.approval_metadata(items)
     }
@@ -1222,8 +1251,9 @@ defmodule SymphonyElixir.AgentRunner do
       opts
       |> put_reviewer_comments(issue)
       |> put_ci_failure(issue)
-      |> put_qa_failure(issue)
       |> put_pr_conflict(issue)
+      |> put_open_pr_overlap(issue)
+      |> put_ticket_state(issue)
 
     prompt = PromptBuilder.build_prompt(issue, prompt_opts)
     maybe_compact_codex_initial_prompt(prompt, issue, prompt_opts)
@@ -1389,20 +1419,6 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp pending_ci_failure(_issue, _opts), do: nil
 
-  defp put_qa_failure(opts, issue) when is_list(opts) do
-    if Keyword.has_key?(opts, :qa_failure) do
-      opts
-    else
-      Keyword.put(opts, :qa_failure, pending_qa_failure(issue, opts))
-    end
-  end
-
-  defp pending_qa_failure(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    CiPoller.pending_qa_failure(issue_id, pending_lookup_opts(issue, opts))
-  end
-
-  defp pending_qa_failure(_issue, _opts), do: nil
-
   defp put_pr_conflict(opts, issue) when is_list(opts) do
     if Keyword.has_key?(opts, :pr_conflict) do
       opts
@@ -1417,6 +1433,31 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp pending_pr_conflict(_issue, _opts), do: nil
 
+  defp put_open_pr_overlap(opts, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
+    Keyword.put_new_lazy(opts, :open_pr_overlap, fn ->
+      PrReviewPoller.open_pr_overlap(issue_id, pending_lookup_opts(issue, opts))
+    end)
+  end
+
+  defp put_open_pr_overlap(opts, _issue), do: opts
+
+  defp put_ticket_state(opts, issue) when is_list(opts) do
+    if Keyword.has_key?(opts, :ticket_state) do
+      opts
+    else
+      Keyword.put(opts, :ticket_state, pending_ticket_state(issue, opts))
+    end
+  end
+
+  defp pending_ticket_state(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) and repo_key != "" -> RunStore.get_ticket_state(repo_key, issue_id)
+      _repo_key -> nil
+    end
+  end
+
+  defp pending_ticket_state(_issue, _opts), do: nil
+
   defp pending_lookup_opts(%Issue{} = issue, opts) do
     case Keyword.get(opts, :repo_key) || issue_repo_key(issue) do
       repo_key when is_binary(repo_key) and repo_key != "" -> [repo_key: repo_key]
@@ -1430,24 +1471,11 @@ defmodule SymphonyElixir.AgentRunner do
         audit_linear_state_transition(issue, refreshed_issue, Keyword.get(opts, :run_id), opts)
         warn_if_pr_url_lost(refreshed_issue, run_context)
 
-        cond do
-          post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
-            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
-            {:done, refreshed_issue}
-
-          waiting_on_sub_issues?(refreshed_issue) ->
-            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
-            {:done, refreshed_issue}
-
-          Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
-            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; back in Todo and waiting for its blockers")
-            {:done, refreshed_issue}
-
-          active_issue_state?(refreshed_issue.state) ->
-            {:continue, refreshed_issue}
-
-          true ->
-            {:done, refreshed_issue}
+        if waiting_on_hold?(refreshed_issue, opts) do
+          Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits on a hold or on its decision request")
+          {:done, refreshed_issue}
+        else
+          continue_unheld_issue?(issue, refreshed_issue, run_context)
         end
 
       {:ok, []} ->
@@ -1459,6 +1487,28 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(issue, _issue_state_fetcher, _opts, _run_context), do: {:done, issue}
+
+  defp continue_unheld_issue?(%Issue{} = issue, %Issue{} = refreshed_issue, run_context) do
+    cond do
+      post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
+        hand_off_quiet_pr_head(issue, refreshed_issue, run_context)
+
+      waiting_on_sub_issues?(refreshed_issue) ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
+        {:done, refreshed_issue}
+
+      Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; back in Todo and waiting for its blockers")
+        {:done, refreshed_issue}
+
+      active_issue_state?(refreshed_issue.state) ->
+        {:continue, refreshed_issue}
+
+      true ->
+        {:done, refreshed_issue}
+    end
+  end
 
   # The checks that hand a run on its PR to CI or review, instead of parking it, read the PR URL
   # from the refreshed issue's attachments. Say so when one the issue had at dispatch is gone.
@@ -1491,6 +1541,15 @@ defmodule SymphonyElixir.AgentRunner do
     TransientRetry.run(fun, opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label))
   end
 
+  # A decision request (`linear_request_human_action`) or a reported block pauses the ticket in its
+  # phase on a hold, and the hold, not another turn, says when it continues: a turn would only
+  # repeat the wait, and enough of them would park it as idle. A request this run posted counts even
+  # before its hold is in the store, so a failed hold write never parks the ticket under its question.
+  defp waiting_on_hold?(%Issue{id: issue_id} = issue, opts) do
+    CommentRegistry.human_action_requested?(Keyword.get(opts, :linear_comment_registry)) or
+      Hold.held_any?(run_repo_key(issue, opts), issue_id)
+  end
+
   defp waiting_on_sub_issues?(%Issue{} = issue) do
     settings = Config.settings!()
     terminal_states = settings.tracker.terminal_states
@@ -1509,6 +1568,39 @@ defmodule SymphonyElixir.AgentRunner do
 
       nil ->
         false
+    end
+  end
+
+  # A ticket advances only on the handoff signal, which the push and PR tool hooks emit. A
+  # run that finds its PR already on the workspace HEAD (an interrupted run's successor, a park and
+  # unpark) has nothing to push, so no hook fires and every successor would stop the same way. The
+  # ticket is then exactly where a signal for that head would put it, so the signal is recorded for
+  # the head and the run hands off. A HEAD or PR head that can't be read hands nothing off; the
+  # orchestrator caps those quiet runs.
+  defp hand_off_quiet_pr_head(%Issue{} = previous_issue, %Issue{} = issue, run_context) do
+    pr_url = URLUtils.pull_request_url(issue) || URLUtils.pull_request_url(previous_issue)
+
+    with true <- Handoff.origin?(issue.state),
+         head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
+         true <- pr_url_head?(pr_url, head, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: pr_url, source: "pushed_pr_head"})
+      run_context = put_in(run_context.progress.head, head)
+
+      case move_to_post_pr_state(issue, post_pr_state(run_context), "with its PR already on its head", run_context) do
+        :ok -> {:done, issue}
+        {:error, reason} -> {:error, {:pushed_pr_head_handoff_failed, reason}}
+      end
+    else
+      _no_handoff -> {:done, issue}
+    end
+  end
+
+  defp pr_url_head?(pr_url, head, run_context) do
+    github = Keyword.get(run_context.opts, :github, PullRequest)
+
+    case github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      {:ok, %{commit_sha: ^head}} -> true
+      _other -> false
     end
   end
 
@@ -1551,7 +1643,6 @@ defmodule SymphonyElixir.AgentRunner do
   defp no_pending_rework_signal?(%Issue{} = issue, opts) do
     pending_reviewer_comments(issue, opts) == [] and
       is_nil(pending_ci_failure(issue, opts)) and
-      is_nil(pending_qa_failure(issue, opts)) and
       is_nil(pending_pr_conflict(issue, opts))
   end
 
@@ -1620,10 +1711,10 @@ defmodule SymphonyElixir.AgentRunner do
   defp progress_fingerprint(head, issue, review_agent),
     do: {head, Map.get(issue, :state), URLUtils.pull_request_url(issue), review_agent}
 
-  # Nothing moves an issue out of `Rework` once its rework is done: the agent may not ask for
-  # `In Review` with Auto Review on, and the post-PR move skips `Rework`. The rework is done once
-  # the workspace HEAD has moved past the head the Rework started from (by this run or an earlier
-  # one), that HEAD is the attached PR's head, and no review, CI, QA or conflict signal is pending.
+  # Nothing moves an issue out of `Rework` once its rework is done: the post-PR move skips `Rework`.
+  # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
+  # this run or an earlier one), that HEAD is the attached PR's head, and no review, CI, QA or
+  # conflict signal is pending.
   defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context) when is_binary(head) do
     rework_state?(issue.state) and attached_pr?(issue) and
       head != progress.rework_base and
@@ -1697,12 +1788,116 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
+  # A finished implementation is handed off to `Code Review`.
+  defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> Handoff.target_state()
 
-  defp move_to_post_pr_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
-    move = fn -> Tracker.update_issue_state(issue_id, post_pr_state) end
-    with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts)
+  # An implementation handoff moves to `Code Review` only on the session's explicit handoff signal,
+  # which the push and PR tool hooks emit into the ticket's ledger. Without it the run does not
+  # advance: the ticket is left where it is with a `handoff_missing` event recorded,
+  # and the run fails so the orchestrator's retry machinery picks it up.
+  #
+  # A CI Fix ticket takes neither path: a mechanical repair goes back to the phase the red head or
+  # conflict found it in, which the poller recorded on the ticket (see `return_from_ci_fix/3`).
+  defp move_to_post_pr_state(%Issue{} = issue, post_pr_state, reason, run_context) do
+    if ci_fix_state?(issue, run_context) do
+      return_from_ci_fix(issue, reason, run_context)
+    else
+      hand_off_to_state(issue, post_pr_state, reason, run_context)
+    end
   end
+
+  defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
+    settings = Keyword.fetch!(run_context.opts, :settings)
+
+    if Handoff.origin?(issue.state) and not handoff_emitted?(issue, run_context) do
+      Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: no handoff signal for its head")
+      record_move_signal(issue, Handoff.missing_signal(), %{to: post_pr_state, reason: reason}, run_context.opts)
+      {:error, {:handoff_signal_missing, post_pr_state}}
+    else
+      # The handoff is the table's explicit `:handoff` edge, whose target resolves from the settings
+      # to the configured Code Review state.
+      move = fn -> TransitionGuard.perform(issue_id, :handoff, %{settings: settings}) end
+
+      case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts) do
+        :ok ->
+          # A record of the completed move, marked as a move so it never stands in for the explicit
+          # signal a later run's own head must still emit (`Handoff.emitted?/3`): a workspace HEAD
+          # that reads nil, as an SSH worker's does, would otherwise make this head-less record count
+          # for any head.
+          record_move_signal(
+            issue,
+            "handoff",
+            %{to: post_pr_state, reason: reason, head: run_context.progress.head, move: true},
+            run_context.opts
+          )
+
+          :ok
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp ci_fix_state?(%Issue{} = issue, run_context),
+    do: CiFix.in_state?(issue.state, Keyword.fetch!(run_context.opts, :settings))
+
+  # A mechanical repair returns the ticket to the phase whose red head or conflict put it in the lane,
+  # which the poller recorded on the ticket. The prior verdict is not touched — only `Rework`
+  # invalidates one — so a phase that already holds a verdict on this head carries the ticket on
+  # without a second review or QA run.
+  defp return_from_ci_fix(%Issue{id: issue_id} = issue, reason, run_context) do
+    case CiFix.origin(run_repo_key(issue, run_context.opts), issue_id, run_context.opts) do
+      origin when is_binary(origin) ->
+        do_return_from_ci_fix(issue, origin, reason, run_context)
+
+      nil ->
+        # The origin is the whole point of the lane, so a ticket that lost it does not guess: it
+        # takes the ordinary post-PR handoff, where review judges its head, rather than returning to
+        # a phase nobody recorded.
+        post_pr_state = post_pr_state(run_context)
+
+        Logger.warning("No CI Fix origin recorded for #{issue_context(issue)}; moving it to #{post_pr_state} #{reason} instead")
+
+        hand_off_to_state(issue, post_pr_state, reason, run_context)
+    end
+  end
+
+  defp do_return_from_ci_fix(%Issue{id: issue_id} = issue, origin, reason, run_context) do
+    settings = Keyword.fetch!(run_context.opts, :settings)
+    head = run_context.progress.head
+
+    # `Merging` means a human approved the merge, so the repair's return must re-arm auto-merge:
+    # the lane's entry turned it off and held it (see `AutoMerge.disable_for_ci_fix/5`).
+    if merging_state?(origin) do
+      PrReviewPoller.release_auto_merge_hold(issue_id, pending_lookup_opts(issue, run_context.opts))
+    end
+
+    label = "returning #{issue_context(issue)} to #{origin} from CI Fix"
+    move = fn -> TransitionGuard.perform(issue_id, :ci_fix_mechanical, %{target: origin, settings: settings}) end
+
+    case with_linear_retry(move, label, run_context.opts) do
+      :ok ->
+        repo_key = run_repo_key(issue, run_context.opts)
+        # A repair that pushed a new head re-binds the origin's verdict to it, so the ticket carries
+        # forward rather than being reviewed or verified a second time; a repair that pushed nothing
+        # leaves the binding as it was.
+        CiFix.carry_verdict(repo_key, issue_id, origin, head, settings)
+        CiFix.record_origin(repo_key, issue_id, nil, run_context.opts)
+        CiFix.record_verdict(repo_key, issue_id, "mechanical", %{to: origin, carried: true, head: head, reason: reason})
+        record_move_signal(issue, "ci fix return", %{to: origin, kind: :ci_fix, head: head, move: true}, run_context.opts)
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  defp handoff_emitted?(%Issue{id: issue_id} = issue, run_context) when is_binary(issue_id) do
+    Handoff.emitted?(run_repo_key(issue, run_context.opts), issue_id, run_context.progress.head)
+  end
+
+  defp handoff_emitted?(_issue, _run_context), do: false
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
   # human's merge approval.
@@ -1778,6 +1973,18 @@ defmodule SymphonyElixir.AgentRunner do
   # still covers the PR's diff. Any other green fix, such as a run that started on a fix an earlier
   # run pushed, goes to the post-PR state, where review judges its head.
   defp hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, %{progress: %{head: head, start_head: start_head}} = run_context) do
+    if ci_fix_state?(issue, run_context) do
+      # A CI Fix ticket that pushed nothing returns to its recorded origin whatever the origin is —
+      # `Merging` included, where `return_from_ci_fix/3` releases the auto-merge hold.
+      Logger.info("CI is green on #{issue_context(issue)}'s PR head #{head} after a #{fix_run_name(kind)} with no new commit; returning it to its CI Fix origin")
+
+      return_from_ci_fix(issue, "with CI green on its PR head", run_context)
+    else
+      do_hand_off_green_fix(issue, {kind, approved, signal_head}, head, start_head, run_context)
+    end
+  end
+
+  defp do_hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, head, start_head, run_context) do
     if approved == true and head == start_head and head == signal_head do
       Logger.info("#{fix_run_name(kind)} for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
       PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
@@ -1798,11 +2005,12 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp return_to_merging(%Issue{id: issue_id} = issue, kind, head, run_context) do
     label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
-    move = fn -> Tracker.update_issue_state(issue_id, @merging_state) end
+    move = fn -> TransitionGuard.perform(issue_id, :merge_ready, %{settings: Keyword.fetch!(run_context.opts, :settings)}) end
     comment = fn -> Tracker.create_comment(issue_id, green_fix_note(kind, head)) end
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
          :ok <- with_linear_retry(comment, label, run_context.opts) do
+      record_move_signal(issue, "handoff", %{to: @merging_state, kind: kind, head: head, move: true}, run_context.opts)
       :ok
     else
       {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}
@@ -1851,8 +2059,9 @@ defmodule SymphonyElixir.AgentRunner do
 
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
 
-    with :ok <- with_linear_retry(fn -> Tracker.update_issue_state(issue_id, @idle_park_state) end, label, opts),
+    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, %{settings: Keyword.fetch!(opts, :settings)}) end, label, opts),
          :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
+      record_move_signal(issue, "blocked", %{to: @idle_park_state, reason: "idle_park"}, opts)
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
@@ -1938,10 +2147,13 @@ defmodule SymphonyElixir.AgentRunner do
     |> log_audit_error("record linear_state_change")
   end
 
+  # The machine's active states, not the raw `tracker.active_states`: tickets are dispatched from
+  # the phase states (`Code Review`, `QA`, `Rework`, the CI Fix lane) too, even though the config
+  # lists only the base states.
   defp active_issue_state?(state_name) when is_binary(state_name) do
     normalized_state = normalize_issue_state(state_name)
 
-    Config.settings!().tracker.active_states
+    StateMachine.active_states(Config.settings!())
     |> Enum.any?(fn active_state -> normalize_issue_state(active_state) == normalized_state end)
   end
 
@@ -1971,6 +2183,14 @@ defmodule SymphonyElixir.AgentRunner do
   defp issue_repo_key(%{repo_key: repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
   defp issue_repo_key(%{"repo_key" => repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
   defp issue_repo_key(_issue), do: nil
+
+  # Best-effort recording of a state move into the ticket's signals ledger (inert; a store failure
+  # never changes the move). Runs only after the move has succeeded.
+  defp record_move_signal(%Issue{id: issue_id} = issue, name, details, opts) when is_binary(issue_id) do
+    TicketSignals.record(Keyword.get(opts, :repo_key) || issue_repo_key(issue), issue_id, name, details)
+  end
+
+  defp record_move_signal(_issue, _name, _details, _opts), do: :ok
 
   defp worker_host_for_log(nil), do: "local"
   defp worker_host_for_log(worker_host), do: worker_host

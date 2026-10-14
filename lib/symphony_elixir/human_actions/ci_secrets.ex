@@ -18,13 +18,12 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
 
   require Logger
 
-  alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.Config
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.{Action, Collector}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.Repo.Status, as: RepoStatus
 
-  @est_minutes 5
   @max_secrets_per_run 5
   @project_first 10
   @name "[A-Za-z_][A-Za-z0-9_]*"
@@ -96,7 +95,7 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
     # A repository routed to no project has no update to list its actions in: GitHub is not read.
     with {:ok, project_filter} <- Client.repo_project_filter(repo, Keyword.fetch!(opts, :settings).tracker),
          gh_repo when is_binary(gh_repo) <- Keyword.get(opts, :github_repo, &RepoStatus.github_repo/1).(repo),
-         branch = Keyword.get(opts, :base_branch, &AutoReview.base_branch/1).(repo_key),
+         branch = Keyword.get(opts, :base_branch, &Config.base_branch/1).(repo_key),
          {:ok, runs} <- github.list_branch_runs(gh_repo, branch, []),
          {:ok, read} <- read_logs(failing_workflows(runs), gh_repo, previous.logs, github),
          failing = Enum.reject(read, fn {_workflow, secrets} -> secrets == [] end),
@@ -206,12 +205,12 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
     %Action{
       key: "ci_secret:#{target.repo}:#{workflow.name}:#{secret}",
       kind: :ci_secret,
-      title: "Add the `#{secret}` secret",
+      title: "Add the #{secret} secret",
       why:
-        "The `#{workflow.name}` workflow has failed on `#{target.branch}` #{workflow.failures} times in a row, " <>
-          "and the log of its latest run says the `#{secret}` secret is not set.",
-      unblocks: "the `#{workflow.name}` workflow on `#{target.branch}` in #{target.repo}",
-      est_minutes: @est_minutes,
+        "The #{workflow.name} workflow has failed on #{target.branch} #{workflow.failures} times in a row. " <>
+          "The log of its latest run says the #{secret} secret is not set.",
+      if_unanswered: "Every run of the #{workflow.name} workflow on #{target.branch} fails the same way.",
+      unblocks: "the #{workflow.name} workflow on #{target.branch} in the #{repo_name(target.repo)} repository",
       steps:
         [
           "Open #{secrets_url(target.repo)} (the repository's Settings → Secrets and variables → Actions).",
@@ -219,11 +218,13 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
           rerun_step(workflow.latest.url)
         ]
         |> Enum.reject(&is_nil/1),
-      done_when: "the next run of `#{workflow.name}` on `#{target.branch}` is green.",
+      done_when: "the next run of the #{workflow.name} workflow on #{target.branch} is green.",
       issue: nil,
       project: project
     }
   end
+
+  defp repo_name(gh_repo), do: gh_repo |> String.split("/") |> List.last()
 
   defp rerun_step(url) when is_binary(url), do: "Re-run the failed run: #{url}"
   defp rerun_step(_url), do: nil

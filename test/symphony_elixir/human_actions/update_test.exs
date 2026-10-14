@@ -12,16 +12,15 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         key: "request:comment-1",
         kind: :request,
         title: "Add the release signing secrets",
-        why: "Every Release run on `main` fails at the signing step without them.",
-        unblocks: "the Release workflow on `main`",
-        est_minutes: 10,
-        steps: [
-          "Open github.com/acme/cycle → Settings → Secrets and variables → Actions.",
-          "Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).",
-          "Add `MACOS_CERTIFICATE_PASSWORD` with its password.",
-          "Move MOT-24 to Todo."
+        why: "Every Release run on main fails at the signing step without them.",
+        if_unanswered: "Every Release run on main keeps failing, so no build ships.",
+        unblocks: "the Release workflow on main",
+        question: "Add the signing secrets, or ship unsigned builds?",
+        options: [
+          "**Add the secrets** (recommended): you add the signing certificate and its password to the repository's Actions secrets; releases are signed again.",
+          "**Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch."
         ],
-        done_when: "you remove the `human-action` label from MOT-24, or move it on once it is unblocked.",
+        done_when: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.",
         issue: issue("MOT-24", "Make the Release workflow green"),
         project: @project
       },
@@ -30,92 +29,41 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         kind: :task,
         title: "Turn on the pre-push hook on your laptop",
         steps: ["Run `git config core.hooksPath .githooks` in your cycle checkout."],
-        done_when: "you close MOT-31, or remove its `human-action` label.",
+        done_when: "you close MOT-31, or move it on.",
         issue: issue("MOT-31", "Turn on the pre-push hook on your laptop"),
-        project: @project
-      },
-      %Action{
-        key: "plan:id-MOT-40",
-        kind: :plan_review,
-        title: "Approve the plan for MOT-40",
-        why: "MOT-40 is split into sub-tickets, and none of them starts before you approve the plan.",
-        unblocks: "its sub-tickets, waiting in Backlog",
-        est_minutes: 10,
-        steps: [
-          "Read the plan in the `## Symphony Workpad` comment on MOT-40.",
-          "To approve, move MOT-40 to `Waiting on sub-tickets`; Symphony moves its sub-tickets to Todo.",
-          "To reject it, comment what to change and move MOT-40 to `Rework`."
-        ],
-        done_when: "MOT-40 leaves In Review.",
-        issue: issue("MOT-40", "Offline mode"),
-        project: @project
-      },
-      %Action{
-        key: "qa:id-MOT-52",
-        kind: :qa_blocked,
-        title: "Unblock QA for MOT-52",
-        why: "Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.",
-        unblocks: "the review of its PR",
-        steps: [
-          "Fix the cause above, on the machine QA runs on.",
-          "Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back."
-        ],
-        done_when: "MOT-52 leaves In Review, or its next QA report is not blocked.",
-        issue: issue("MOT-52", "Widget refresh"),
         project: @project
       }
     ]
   end
 
-  test "renders the documented format, quickest first" do
-    {body, []} = Update.render(example_actions(), "human-action")
+  test "renders the documented format, by issue" do
+    {body, []} = Update.render(example_actions())
 
     assert body == """
-           **4 actions need you.** Quickest first.
+           **2 actions need you.**
 
            ### 1. Add the release signing secrets
 
-           **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
+           Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on main
 
-           **Why:** Every Release run on `main` fails at the signing step without them.
+           **Why:** Every Release run on main fails at the signing step without them.
 
-           1. Open github.com/acme/cycle → Settings → Secrets and variables → Actions.
-           2. Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).
-           3. Add `MACOS_CERTIFICATE_PASSWORD` with its password.
-           4. Move MOT-24 to Todo.
+           **If unanswered:** Every Release run on main keeps failing, so no build ships.
 
-           **Done when:** you remove the `human-action` label from MOT-24, or move it on once it is unblocked.
+           **Decide:** Add the signing secrets, or ship unsigned builds?
 
-           ### 2. Approve the plan for MOT-40
+           1. **Add the secrets** (recommended): you add the signing certificate and its password to the repository's Actions secrets; releases are signed again.
+           2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
-           **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
+           **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.
 
-           **Why:** MOT-40 is split into sub-tickets, and none of them starts before you approve the plan.
-
-           1. Read the plan in the `## Symphony Workpad` comment on MOT-40.
-           2. To approve, move MOT-40 to `Waiting on sub-tickets`; Symphony moves its sub-tickets to Todo.
-           3. To reject it, comment what to change and move MOT-40 to `Rework`.
-
-           **Done when:** MOT-40 leaves In Review.
-
-           ### 3. Turn on the pre-push hook on your laptop
+           ### 2. Turn on the pre-push hook on your laptop
 
            Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
            1. Run `git config core.hooksPath .githooks` in your cycle checkout.
 
-           **Done when:** you close MOT-31, or remove its `human-action` label.
-
-           ### 4. Unblock QA for MOT-52
-
-           Unblocks [MOT-52](https://linear.app/acme/issue/MOT-52): the review of its PR
-
-           **Why:** Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.
-
-           1. Fix the cause above, on the machine QA runs on.
-           2. Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back.
-
-           **Done when:** MOT-52 leaves In Review, or its next QA report is not blocked.
+           **Done when:** you close MOT-31, or move it on.
 
            ---
            _Symphony posts a new update when this list changes · list `#{Update.list_id(example_actions())}`_\
@@ -124,43 +72,24 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.health(example_actions()) == "atRisk"
   end
 
-  test "lists actions on Human Review issues first, and says so" do
-    review = %Action{
-      key: "review:id-MOT-63",
-      kind: :human_review,
-      title: "Review MOT-63",
-      est_minutes: 30,
-      steps: ["Move MOT-63 to `Merging` to approve its PR."],
-      issue: %{issue("MOT-63", "Final verification: OpenRouter") | state: "Human Review"},
-      project: @project,
-      human_review: true
-    }
-
-    {body, []} = Update.render(example_actions() ++ [review], "human-action")
-
-    assert body =~ "**5 actions need you.** Human Review tickets first, then quickest first.\n\n### 1. Review MOT-63\n\n**Human Review** · **~30 min** · Unblocks"
-    assert body =~ "### 2. Add the release signing secrets"
-    assert [%Action{key: "review:id-MOT-63"} | _rest] = Update.sort(example_actions() ++ [review])
-  end
-
   test "renders exactly the example docs/configuration.md shows" do
     docs = File.read!(Path.expand("../../../docs/configuration.md", __DIR__))
     [_before, after_intro] = String.split(docs, "A rendered example, for a mix of", parts: 2)
     [_intro, example | _rest] = String.split(after_intro, ["```md\n", "\n```\n"], parts: 3)
 
-    assert {^example, []} = Update.render(example_actions(), "human-action")
+    assert {^example, []} = Update.render(example_actions())
   end
 
   test "renders a single action and the empty list" do
     [request | _rest] = example_actions()
-    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, steps: [], done_when: nil}], "human-action")
+    {single, []} = Update.render([%{request | unblocks: nil, if_unanswered: nil, why: nil, question: nil, options: [], done_when: nil}])
 
     assert single =~ "**1 action needs you.**\n\n### 1. Add the release signing secrets\n\nUnblocks [MOT-24](https://linear.app/acme/issue/MOT-24) Make the Release workflow green\n\n---"
 
-    {no_url, []} = Update.render([%{request | issue: %{request.issue | url: nil}}], "human-action")
+    {no_url, []} = Update.render([%{request | issue: %{request.issue | url: nil}}])
     assert no_url =~ "Unblocks MOT-24: the Release workflow"
 
-    {empty, []} = Update.render([], "human-action")
+    {empty, []} = Update.render([])
     assert empty == "**Nothing needs you.** Every action from the last update is closed.\n\n---\n_Symphony posts a new update when this list changes · list `#{Update.list_id([])}`_"
     assert Update.health([]) == "onTrack"
   end
@@ -169,21 +98,20 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     ci_secret = %Action{
       key: "ci_secret:acme/cycle:Release:SIGNING_KEY",
       kind: :ci_secret,
-      title: "Add the `SIGNING_KEY` secret",
-      unblocks: "the `Release` workflow on `main` in acme/cycle",
-      est_minutes: 5,
+      title: "Add the SIGNING_KEY secret",
+      unblocks: "the Release workflow on main in the cycle repository",
       steps: ["Open https://github.com/acme/cycle/settings/secrets/actions."],
       done_when: "the next run of `Release` on `main` is green.",
       issue: nil,
       project: @project
     }
 
-    {body, []} = Update.render(example_actions() ++ [ci_secret], "human-action")
+    {body, []} = Update.render(example_actions() ++ [ci_secret])
 
     assert body =~ """
-           ### 1. Add the `SIGNING_KEY` secret
+           ### 1. Add the SIGNING_KEY secret
 
-           **~5 min** · Unblocks the `Release` workflow on `main` in acme/cycle
+           Unblocks the Release workflow on main in the cycle repository
 
            1. Open https://github.com/acme/cycle/settings/secrets/actions.
 
@@ -193,23 +121,23 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
            """
   end
 
-  test "lists at most 25 actions and points to the label for the rest" do
+  test "lists at most 25 actions and points to the held issues for the rest" do
     [request | _rest] = example_actions()
     actions = for index <- 1..27, do: %{request | key: "request:#{index}", title: "Action #{index}"}
 
-    {body, []} = Update.render(actions, "needs-tony")
+    {body, []} = Update.render(actions)
 
     assert body =~ "**27 actions need you.**"
     assert body =~ "### 25. "
     refute body =~ "### 26. "
-    assert body =~ "_…and 2 more: see the issues labelled `needs-tony`._"
+    assert body =~ "_…and 2 more: see the issues labelled `Needs Decision`._"
   end
 
   test "never renders a secret value from any field" do
     [request | _rest] = example_actions()
     secret = "ghp_" <> String.duplicate("a", 36)
 
-    {body, patterns} = Update.render([%{request | why: "Use #{secret}", steps: ["Paste #{secret}"]}], "human-action")
+    {body, patterns} = Update.render([%{request | why: "Use #{secret}", steps: ["Paste #{secret}"]}])
 
     refute body =~ secret
     assert body =~ "[REDACTED:github_token]"
@@ -224,7 +152,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.list_id(Enum.reverse(actions)) == list_id
     refute Update.list_id(tl(actions)) == list_id
 
-    {body, []} = Update.render(actions, "human-action")
+    {body, []} = Update.render(actions)
     assert Update.list_id_from_body(body) == list_id
     assert Update.list_id_from_body("Shipped the wrapper.") == nil
     assert Update.list_id_from_body(nil) == nil

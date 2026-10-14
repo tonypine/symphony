@@ -7,7 +7,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.AgentCaches
   alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
   alias SymphonyElixir.{AgentPriority, AgentProcesses}
-  alias SymphonyElixir.ClaudeCode.McpConfig
+  alias SymphonyElixir.ClaudeCode.{AppLaunchHook, McpConfig}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.GitHub.Hosts
@@ -185,7 +185,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # The `settings.json` a Claude session starts with: the sandbox, and the permission rules that
   # deny pushing, the `gh` CLI, the file tools on the write-protected paths the sandbox keeps
   # from the shell, and reading the cloud-synced folders. A read-only session (`read_only: true`
-  # in `start_session/2`, the acceptance gate) also gets no file-editing tool and can't write its
+  # in `start_session/2`) also gets no file-editing tool and can't write its
   # working directory from the shell.
   @doc false
   @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], boolean()) :: map()
@@ -711,10 +711,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     deny_write_paths = host_deny_write_paths(settings, workspace, worker_host)
 
-    settings_json =
-      build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
-
     settings_dir = claude_settings_dir(worker_host, mcp_session)
+
+    settings_json =
+      network_access
+      |> build_claude_settings(allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
+      |> Map.put("hooks", AppLaunchHook.settings(settings_dir))
+
     settings_path = Path.join(settings_dir, "settings.json")
     mcp_config_path = Path.join(settings_dir, "mcp_config.json")
     plugin_dir = Path.join(settings_dir, "plugin")
@@ -727,7 +730,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
          {:ok, encoded_json_files} <- encode_runtime_files(json_runtime_files),
          # SKILL.md bodies are markdown, not JSON, so they bypass the JSON encoder and are written
          # verbatim alongside the encoded settings files.
-         runtime_files = encoded_json_files ++ SharedSkills.claude_plugin_files(plugin_dir),
+         runtime_files =
+           encoded_json_files ++ AppLaunchHook.files(settings_dir) ++ SharedSkills.claude_plugin_files(plugin_dir),
          :ok <- write_runtime_files(settings_dir, runtime_files, worker_host) do
       {:ok, %{settings_path: settings_path, mcp_config_path: mcp_config_path, plugin_dir: plugin_dir}}
     end
@@ -754,7 +758,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp host_allow_write_paths(_worker_host), do: []
 
-  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`), and the
+  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`), and the
   # config, hooks and attributes in the workspace's git dirs: Claude Code lets a worktree's
   # session write the shared repo's `.git` and protects only part of it. An SSH worker's
   # workspace isn't on this host, so it keeps the plain deny list.

@@ -3,8 +3,8 @@ defmodule SymphonyElixir.Playbook.FileSystem do
   `Solid.FileSystem` implementation that serves Symphony's playbook partials from
   the compile-time-embedded `SymphonyElixir.Playbook` map.
 
-  Used instead of `Solid.LocalFileSystem` because Symphony ships as an escript /
-  Burrito release where `priv/` is dropped, so partials must come from memory, not
+  Used instead of `Solid.LocalFileSystem` because Symphony ships as an escript
+  where `priv/` is dropped, so partials must come from memory, not
   disk.
   """
 

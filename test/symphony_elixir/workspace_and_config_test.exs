@@ -2485,7 +2485,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert variables == %{
              filter: %{
-               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
                "project" => %{"slugId" => %{"eq" => "project"}},
                "team" => %{"key" => %{"eq" => "Test"}},
                "assignee" => %{"id" => %{"in" => ["user-1"]}}
@@ -2505,7 +2505,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       raw_linear_issue("issue-1", "MT-1", "user-1")
       |> Map.merge(%{
         "team" => %{"key" => "ACME", "name" => "Acme Team"},
-        "project" => %{"id" => "project-1", "name" => "Multi-repo support"}
+        "project" => %{"id" => "project-1", "name" => "Multi-repo support", "slugId" => "a1b2c3d4e5f6"}
       })
 
     graphql_fun = fn query, variables ->
@@ -2517,11 +2517,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert {:ok, [issue]} = Client.fetch_candidate_issues_for_test(graphql_fun)
 
     assert issue.team == %{key: "ACME", name: "Acme Team"}
-    assert issue.project == %{id: "project-1", name: "Multi-repo support"}
+    assert issue.project == %{id: "project-1", name: "Multi-repo support", slug_id: "a1b2c3d4e5f6"}
 
     assert_receive {:candidate_query, query, _variables}
     assert query =~ ~r/team\s*\{\s*key\s*name\s*\}/
-    assert query =~ ~r/project\s*\{\s*id\s*name\s*\}/
+    assert query =~ ~r/project\s*\{\s*id\s*name\s*slugId\s*\}/
   end
 
   test "linear client resolves assignee me before sending candidate filter" do
@@ -2564,7 +2564,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"key" => %{"eq" => "ACME"}}
            }
 
@@ -2584,7 +2584,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"id" => %{"eq" => team_id}}
            }
   end
@@ -2600,7 +2600,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"id" => %{"eq" => team_id}}
            }
   end
@@ -2616,7 +2616,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"key" => %{"eq" => team}}
            }
   end
@@ -2631,7 +2631,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       variables = capture_candidate_variables!()
 
       assert variables.filter == %{
-               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
                "team" => %{"key" => %{"eq" => "Test"}},
                "labels" => %{"some" => %{"name" => %{"in" => labels}}}
              }
@@ -2661,7 +2661,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "team" => %{"key" => %{"eq" => "ACME"}},
              "labels" => %{"some" => %{"name" => %{"in" => ["backend"]}}}
            }
@@ -2679,7 +2679,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "project" => %{"slugId" => %{"eq" => "project"}},
              "team" => %{"key" => %{"eq" => "ACME"}},
              "labels" => %{"some" => %{"name" => %{"in" => ["backend"]}}},
@@ -2736,7 +2736,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:candidate_query, ^query, api_variables}
 
     assert web_variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "project" => %{
                "or" => [
                  %{"name" => %{"in" => ["Project Alpha"]}},
@@ -2749,7 +2749,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     assert api_variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets", "Code Review", "QA", "Epic Review", "CI Fix"]}},
              "project" => %{
                "or" => [
                  %{"name" => %{"in" => ["Project Beta"]}},
@@ -2901,7 +2901,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:fetch_issue_states_page, query, %{ids: ^first_batch_ids, first: 50, relationFirst: 50}}
     assert query =~ "SymphonyLinearIssuesById"
     assert query =~ ~r/team\s*\{\s*key\s*name\s*\}/
-    assert query =~ ~r/project\s*\{\s*id\s*name\s*\}/
+    assert query =~ ~r/project\s*\{\s*id\s*name\s*slugId\s*\}/
 
     assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5, relationFirst: 50}}
   end
@@ -3556,6 +3556,37 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, :pending_tool_report_after_ms, bad))
       assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
       assert message =~ "watchdog.pending_tool_report_after_ms"
+    end
+  end
+
+  test "the dispatch-loop limits come from symphony.yml, positive and runs at most 50" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    assert %{
+             dispatch_loop_runs: 4,
+             dispatch_loop_window_ms: 600_000,
+             dispatch_loop_long_runs: 8,
+             dispatch_loop_long_window_ms: 3_600_000
+           } = Config.settings!().watchdog
+
+    watchdog = %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000}
+
+    limits = %{
+      dispatch_loop_runs: 3,
+      dispatch_loop_window_ms: 300_000,
+      dispatch_loop_long_runs: 6,
+      dispatch_loop_long_window_ms: 7_200_000
+    }
+
+    write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.merge(watchdog, limits))
+    assert ^limits = Map.take(Config.settings!().watchdog, Map.keys(limits))
+
+    bad_values = for key <- Map.keys(limits), bad <- [0, "often"], do: {key, bad}
+
+    for {key, bad} <- bad_values ++ [{:dispatch_loop_runs, 51}, {:dispatch_loop_long_runs, 51}] do
+      write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, key, bad))
+      assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+      assert message =~ "watchdog.#{key}"
     end
   end
 
@@ -5307,7 +5338,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_configured_repo="
       assert trace =~ "~/primary-clone"
-      assert trace =~ "git -C \"$symphony_configured_repo\" remote get-url origin"
+      assert trace =~ "symphony_git \"$symphony_configured_repo\" remote get-url origin"
+      refute trace =~ "git -C \"$symphony_configured_repo\" remote get-url"
       assert trace =~ "workspace_worktree_list_failed"
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_git \"$repo\" worktree remove --force"
@@ -5713,6 +5745,47 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/MT-LOCK-REL"
       refute File.exists?(lock)
       assert git!(primary_repo, ["status", "--porcelain"]) == ""
+    end)
+  end
+
+  test "remote before_remove reads the worker repo's origin without the operator's global git config" do
+    with_real_exec_fake_ssh(fn ctx ->
+      login_dir = Path.join(ctx.test_root, "home")
+      primary_repo = Path.join(login_dir, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      env_marker = Path.join(ctx.test_root, "before-remove-env.log")
+      global_config = Path.join(ctx.test_root, "global.gitconfig")
+
+      # `remote get-url` applies `insteadOf`, so a plain git call would report the rewritten URL.
+      File.write!(global_config, """
+      [url "git@github.com:operator/"]
+        insteadOf = git@github.com:acme/
+      """)
+
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), "", login_dir, global_config)
+
+      # The repo path is relative to the worker's login dir, so the host can't read its origin
+      # and the hook's env comes from the worker script's fallback.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: "primary",
+        worker_ssh_hosts: ["worker-01"],
+        hook_before_remove: "printf '%s\\n' \"$SYMPHONY_REPO\" > \"#{env_marker}\""
+      )
+
+      assert {:ok, workspace_path} = Workspace.create_for_issue("MT-RM-ORIGIN", "worker-01")
+      git!(primary_repo, ["remote", "set-url", "origin", "git@github.com:acme/symphony.git"])
+
+      assert :ok = Workspace.remove_issue_workspaces("MT-RM-ORIGIN", "worker-01")
+
+      assert File.read!(env_marker) == "acme/symphony\n"
+      refute File.exists?(workspace_path)
+
+      trace = File.read!(ctx.trace_file)
+      assert trace =~ ~s(symphony_git "$symphony_configured_repo" remote get-url origin)
+      refute trace =~ ~s(git -C "$symphony_configured_repo" remote get-url)
     end)
   end
 
@@ -6808,12 +6881,14 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     fun.(%{test_root: test_root, trace_file: trace_file})
   end
 
-  # `path_prefix` puts directories ahead of the system ones on the remote's PATH.
-  defp write_real_exec_fake_ssh!(path, path_prefix \\ "", login_dir \\ nil) do
+  # `path_prefix` puts directories ahead of the system ones on the remote's PATH, and
+  # `global_git_config` stands in for the worker operator's global git config.
+  defp write_real_exec_fake_ssh!(path, path_prefix \\ "", login_dir \\ nil, global_git_config \\ nil) do
     File.write!(path, """
     #!/usr/bin/env bash
     set -u
     #{if login_dir, do: "cd #{login_dir}"}
+    #{if global_git_config, do: "export GIT_CONFIG_GLOBAL=#{global_git_config}"}
     trace_file="${SYMP_TEST_SSH_TRACE:-/dev/null}"
     printf 'ARGV:%s\\n' "$*" >> "$trace_file"
     export PATH="#{path_prefix}/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"

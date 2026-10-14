@@ -153,7 +153,7 @@ public final class ChildProcess {
         posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_adddup2(&actions, logFD, STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&actions, logFD, STDERR_FILENO)
-        posix_spawn_file_actions_addchdir_np(&actions, launch.workingDirectory)
+        posix_spawn_file_actions_addchdir(&actions, launch.workingDirectory)
 
         let argv = [launch.executable] + launch.arguments
         let envp = launch.environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }

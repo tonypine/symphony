@@ -10,7 +10,7 @@ defmodule SymphonyElixir.RunStore.RunIndex do
   which the orchestrator reads when it starts.
 
   It also versions the runs of each `kind`: `memoize/3` keeps a value derived from the runs of one
-  kind (the acceptance gate's verdicts) until a run of that kind is written.
+  kind until a run of that kind is written.
 
   `RunStore` owns the table: it builds it from Mnesia when it starts and updates it after each run
   write commits. Until it is built, or without the table, `take/2` answers `:unavailable` and the

@@ -1,0 +1,326 @@
+defmodule SymphonyElixir.EscalationRulesTest do
+  use ExUnit.Case, async: true
+
+  alias SymphonyElixir.Config.Escalate
+  alias SymphonyElixir.DependencyAudit.MixParser
+  alias SymphonyElixir.EscalationRules
+  alias SymphonyElixir.Linear.Issue
+
+  @rules %Escalate{}
+
+  defp issue(attrs \\ []) do
+    struct!(%Issue{id: "issue-1", identifier: "TP-1", title: "Add a button", description: "Adds a button to the toolbar.", labels: ["feature"]}, attrs)
+  end
+
+  defp file(path, attrs \\ []) do
+    Map.merge(%{path: path, additions: 10, deletions: 2, added_lines: ["def ok, do: :ok"]}, Map.new(attrs))
+  end
+
+  defp diff(files), do: %{files: files}
+
+  defp check(opts) do
+    EscalationRules.check(
+      Keyword.get(opts, :issue, issue()),
+      diff(Keyword.get(opts, :files, [file("lib/app/button.ex")])),
+      Keyword.get(opts, :busy_files, []),
+      Keyword.get(opts, :rules, @rules)
+    )
+  end
+
+  defp rules(fields), do: struct!(@rules, fields)
+
+  defp lock(entries) do
+    "%{\n" <> Enum.map_join(entries, ",\n", fn {name, version} -> ~s(  "#{name}": {:hex, :#{name}, "#{version}", "hash", [:mix], [], "hexpm", "hash"}) end) <> "\n}\n"
+  end
+
+  defp package_json(deps), do: Jason.encode!(%{"name" => "web", "dependencies" => deps})
+
+  test "a clean diff returns no reasons" do
+    assert check([]) == []
+    assert EscalationRules.check(issue(), diff([]), [], @rules) == []
+  end
+
+  test "label" do
+    assert check(issue: issue(labels: ["feature", " Needs-Human "])) == [%{rule: :label, detail: "the issue is labelled ` Needs-Human `"}]
+    assert check(issue: issue(labels: ["needs-human", "breakdown"])) == [%{rule: :label, detail: "the issue is labelled `needs-human`; the issue is labelled `breakdown`"}]
+    assert check(issue: issue(labels: ["Plan"])) == [%{rule: :label, detail: "the issue is labelled `Plan`"}]
+    assert check(issue: issue(labels: ["risky"]), rules: rules(labels: ["risky"])) == [%{rule: :label, detail: "the issue is labelled `risky`"}]
+  end
+
+  test "ticket pattern, in the title or the description" do
+    assert [
+             %{
+               rule: :ticket_pattern,
+               detail: "the ticket matches `(?i)\\b(human|manual)\\s+review\\s+(is\\s+)?(required|needed)\\b`"
+             }
+           ] =
+             check(issue: issue(description: "Manual review required for the copy."))
+
+    assert [%{rule: :ticket_pattern, detail: detail}] = check(issue: issue(title: "Needs human sign-off", description: nil))
+    assert detail =~ "needs?[- ]human"
+
+    assert [%{rule: :ticket_pattern}] = check(issue: issue(description: "This must not auto-merge."))
+    assert check(issue: issue(title: nil, description: nil)) == []
+  end
+
+  defp ticket_reasons(issue), do: EscalationRules.check(issue, diff([]), [], @rules)
+
+  test "ticket pattern skips the review states' names, but not a request for a human review" do
+    reasons = fn text -> ticket_reasons(issue(description: text, labels: [])) end
+
+    names_state =
+      "It moves it to Human Review, for a parent in `Human Review`, from **Human Review** into Human Review. " <>
+        ~s(Human Review tickets wait on a person; "Human Review" and In Review / Human Review hold them. ) <>
+        "Tickets in the human review state, the in review state or the `human review` states come first."
+
+    assert ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: [])) == []
+    assert EscalationRules.check(issue(description: names_state), diff([]), [], @rules) == []
+
+    for request <- [
+          "This needs human review before merge.",
+          "This change needs a human review before merge.",
+          "The copy must be manually reviewed.",
+          "Please manually review the SQL.",
+          "This needs a manual review of the migration.",
+          "Send it for human review.",
+          "Needs Human Review before it ships.",
+          "This requires a Human Review.",
+          "Human review required for the copy.",
+          "Have a human review this before merging.",
+          "This should get a human review.",
+          "Merge it after a human review.",
+          "This needs a human review before merging.",
+          "Manual review needed before release.",
+          "It must be reviewed by a person.",
+          "A human must review the copy.",
+          "I want to manually review the plan.",
+          "This asks for a manual review."
+        ] do
+      assert [%{rule: :ticket_pattern}] = reasons.(request), request
+    end
+
+    # Naming the state, or manual review as a topic, isn't asking for one.
+    for topic <- [
+          "Human review: check the migration.",
+          "Count the tickets waiting on human review.",
+          "Remove the human review flow and its manual review prompts.",
+          "Agents move tickets to In Review / Human Review.",
+          "Remove the Human Review state.",
+          "`Human Review`",
+          "A run that calls `request_human_review` needs `manual review` copy."
+        ] do
+      assert reasons.(topic) == [], topic
+    end
+
+    assert reasons.("It moves to `Human Review`.") == []
+    assert reasons.("Tickets in the human review state wait.") == []
+
+    # The names match case-sensitively.
+    assert [%{rule: :ticket_pattern}] = reasons.("Send it for human review, Human Review.")
+    assert [%{rule: :ticket_pattern}] = reasons.("It moves it to Needs Human Review.")
+  end
+
+  test "TP-886's ticket doesn't match the ticket patterns" do
+    tp_886 =
+      issue(
+        title: "Remove In Review and Human Review once the drain report is empty",
+        description: """
+        Remove In Review and Human Review from the workflow once the drain report is empty: agents
+        no longer move tickets to In Review / Human Review, and a ticket waiting on a person
+        carries a Needs Decision hold. The human review state and the `human_review_state` setting go.
+
+        ```text
+        In Review: 0 tickets
+        Human Review: 0 tickets, needs human review: 0
+        ```
+        """,
+        labels: []
+      )
+
+    assert ticket_reasons(tp_886) == []
+
+    asks = %{tp_886 | description: tp_886.description <> "\nThis needs a human review before merging."}
+    assert [%{rule: :ticket_pattern}] = ticket_reasons(asks)
+    assert [%{rule: :ticket_pattern}] = ticket_reasons(%{tp_886 | description: "Claude must not auto-approve this."})
+  end
+
+  test "an unclosed code fence blanks the rest of the description" do
+    assert ticket_reasons(issue(description: "Output:\n~~~\nneeds a human review\n", labels: [])) == []
+    assert [%{rule: :ticket_pattern}] = ticket_reasons(issue(description: "~~~\nlog\n~~~\nThis needs a human review.", labels: []))
+  end
+
+  test "path glob, ignoring docs and tests" do
+    assert check(files: [file("lib/app/auth/session.ex")]) == [%{rule: :path, detail: "lib/app/auth/session.ex matches `**/*auth*/**`"}]
+
+    assert check(files: [file(".github/workflows/ci.yml"), file("priv/repo/migrations/1_add.exs")]) == [
+             %{rule: :path, detail: ".github/workflows/ci.yml matches `.github/workflows/**`; priv/repo/migrations/1_add.exs matches `**/migrations/**`"}
+           ]
+
+    assert check(files: [file("test/app/auth_test.exs"), file("docs/tokens.md")]) == []
+    assert check(files: [file("api/billing/charge.ex")], rules: rules(paths: ["api/billing/**"])) == [%{rule: :path, detail: "api/billing/charge.ex matches `api/billing/**`"}]
+  end
+
+  test "diff pattern on added lines only" do
+    added = file("lib/app/cleanup.ex", added_lines: ["  # tidy up", ~s|  System.cmd("sh", ["-c", "rm -rf /tmp/x"])|])
+
+    assert check(files: [added]) == [
+             %{rule: :diff_pattern, detail: ~s|lib/app/cleanup.ex adds a line matching `\\brm\\s+-rf\\b`: System.cmd("sh", ["-c", "rm -rf /tmp/x"])|}
+           ]
+
+    long = file("priv/repo/seeds.sql", added_lines: ["DELETE FROM users WHERE " <> String.duplicate("x", 200)])
+    assert [%{rule: :diff_pattern, detail: detail}] = check(files: [long])
+    assert detail =~ "priv/repo/seeds.sql adds a line matching `(?i)\\bdelete\\s+from\\b`: DELETE FROM users WHERE xxx"
+    assert String.ends_with?(detail, "...")
+
+    # A file that only removes a matching line has no added lines.
+    assert check(files: [file("lib/app/cleanup.ex", added_lines: [])]) == []
+    assert check(files: [%{path: "lib/app/cleanup.ex", additions: 0, deletions: 1}]) == []
+  end
+
+  describe "dependency" do
+    test "a major bump or a new dependency in mix.lock" do
+      base = lock(jason: "1.4.4", plug: "1.18.0", req: "0.4.0")
+      mix_lock = file("mix.lock", base: base, head: lock(jason: "2.0.0", plug: "1.19.1", req: "0.5.0", bandit: "1.6.0"))
+
+      assert check(files: [mix_lock]) == [
+               %{rule: :dependency, detail: "mix.lock: new dependency bandit 1.6.0; mix.lock: jason 1.4.4 -> 2.0.0; mix.lock: req 0.4.0 -> 0.5.0"}
+             ]
+    end
+
+    test "a major bump or a new dependency in package.json" do
+      json = file("web/package.json", base: package_json(%{"react" => "^18.2.0", "zod" => "~3.22.0"}), head: package_json(%{"react" => "^19.0.0", "zod" => "~3.23.0", "left-pad" => "1.3.0"}))
+
+      assert check(files: [json]) == [
+               %{rule: :dependency, detail: "web/package.json: new dependency left-pad 1.3.0; web/package.json: react ^18.2.0 -> ^19.0.0"}
+             ]
+
+      assert check(files: [file("package.json", base: nil, head: package_json(%{"react" => "^18.2.0"}))]) == [
+               %{rule: :dependency, detail: "package.json: new dependency react ^18.2.0"}
+             ]
+    end
+
+    test "a minor bump passes under major, and escalates under any with removals" do
+      mix_lock = file("mix.lock", base: lock(jason: "1.4.4", plug: "1.18.0"), head: lock(jason: "1.4.5"))
+
+      assert check(files: [mix_lock]) == []
+
+      assert check(files: [mix_lock], rules: rules(dependencies: "any")) == [
+               %{rule: :dependency, detail: "mix.lock: jason 1.4.4 -> 1.4.5; mix.lock: removes plug"}
+             ]
+
+      assert check(files: [mix_lock], rules: rules(dependencies: "off")) == []
+    end
+
+    test "a version without a number counts as a major change, and other sources keep their spec" do
+      head = %{
+        "dependencies" => %{"react" => "latest", "zod" => "^3.23.0", "a" => "github:o/a", "b" => "file:../b", "c" => "https://npm.example.com/c.tgz", "d" => 1},
+        "devDependencies" => %{"e" => "git+ssh://weird"}
+      }
+
+      json = file("package.json", base: package_json(%{"react" => "^18.2.0", "zod" => "next"}), head: Jason.encode!(head))
+
+      assert [%{rule: :dependency, detail: detail}] = check(files: [json])
+
+      assert detail ==
+               Enum.join(
+                 [
+                   "package.json: new dependency a github:o/a",
+                   "package.json: new dependency b file:../b",
+                   "package.json: new dependency c https://npm.example.com/c.tgz",
+                   "package.json: new dependency d non_string_spec",
+                   "package.json: new dependency e git+ssh://weird",
+                   "package.json: react ^18.2.0 -> latest",
+                   "package.json: zod next -> ^3.23.0"
+                 ],
+                 "; "
+               )
+    end
+
+    test "a changed git ref, URL or path counts as a major change even when its first digits match" do
+      git_lock = fn ref -> ~s(%{\n  "foo": {:git, "https://github.com/o/foo.git", "#{ref}", [branch: "main"]}\n}\n) end
+      mix_lock = file("mix.lock", base: git_lock.("3f2a0c1"), head: git_lock.("3e9b7d4"))
+
+      assert check(files: [mix_lock]) == [%{rule: :dependency, detail: "mix.lock: foo git:3f2a0c1 -> git:3e9b7d4"}]
+
+      json =
+        file("package.json",
+          base: package_json(%{"a" => "github:o/a#1f00", "b" => "https://npm.example.com/b-1.0.0.tgz", "c" => "file:../c1"}),
+          head: package_json(%{"a" => "github:o/a#1abc", "b" => "https://npm.example.com/b-1.2.0.tgz", "c" => "file:../c1-new"})
+        )
+
+      assert check(files: [json]) == [
+               %{
+                 rule: :dependency,
+                 detail:
+                   "package.json: a github:o/a#1f00 -> github:o/a#1abc; " <>
+                     "package.json: b https://npm.example.com/b-1.0.0.tgz -> https://npm.example.com/b-1.2.0.tgz; " <>
+                     "package.json: c file:../c1 -> file:../c1-new"
+               }
+             ]
+
+      ranges = file("package.json", base: package_json(%{"a" => ">=1.0.0 <2.0.0", "b" => "v2.1.0"}), head: package_json(%{"a" => ">= 1.5.0", "b" => "v2.3.0"}))
+      assert check(files: [ranges]) == []
+    end
+
+    test "a manifest that can't be parsed escalates" do
+      assert check(files: [file("package.json", base: package_json(%{}), head: "{not json")]) == [%{rule: :dependency, detail: "package.json could not be parsed"}]
+      assert check(files: [file("mix.lock", base: "%{", head: lock(jason: "1.4.4"))]) == [%{rule: :dependency, detail: "mix.lock could not be parsed"}]
+    end
+  end
+
+  test "total size outside docs and tests" do
+    files = [file("lib/app/big.ex", additions: 1400, deletions: 101), file("test/app/big_test.exs", additions: 5000), file("README.md", additions: 900)]
+
+    assert check(files: files) == [%{rule: :size, detail: "1501 lines change outside docs and tests (limit 1500)"}]
+    assert check(files: [file("lib/app/big.ex", additions: 1400, deletions: 100)]) == []
+  end
+
+  test "busy file size" do
+    files = [file("lib/app/router.ex", additions: 250, deletions: 51), file("lib/app/other.ex", additions: 400)]
+
+    assert check(files: files, busy_files: ["lib/app/router.ex"]) == [
+             %{rule: :busy_file, detail: "lib/app/router.ex is a busy file and 301 of its lines change (limit 300)"}
+           ]
+
+    assert check(files: [file("lib/app/router.ex", additions: 300, deletions: 0)], busy_files: ["lib/app/router.ex"]) == []
+  end
+
+  test "a new symphony.yml setting is not an escalation: CI's settings UI coverage check owns it" do
+    files = [file("lib/symphony_elixir/config/schema.ex", added_lines: ["      field(:max_widgets, :integer, default: 3)"])]
+
+    assert check(files: files) == []
+  end
+
+  test "returns one reason per triggered rule, in rule order" do
+    files = [
+      file("lib/app/auth/session.ex", additions: 1600, added_lines: ["rm -rf build"]),
+      file("mix.lock", additions: 1, deletions: 1, base: lock(jason: "1.4.4"), head: lock(jason: "2.0.0"))
+    ]
+
+    reasons = check(issue: issue(labels: ["needs-human"], description: "Needs human review."), files: files, busy_files: ["lib/app/auth/session.ex"])
+
+    assert Enum.map(reasons, & &1.rule) == [:label, :ticket_pattern, :path, :diff_pattern, :dependency, :size, :busy_file]
+  end
+
+  test "person rules and risk rules split every rule" do
+    assert EscalationRules.person_rules() == [:label, :ticket_pattern]
+    assert EscalationRules.risk_rules() == [:path, :diff_pattern, :dependency, :size, :busy_file]
+  end
+
+  describe "MixParser.parse_lock/1" do
+    test "reads Hex versions and other SCMs' refs without creating atoms" do
+      content = """
+      %{
+        "bar" => {:hex, :bar},
+        1 => :odd,
+        "jason": {:hex, :jason, "1.4.4", "abc", [:mix], [], "hexpm", "def"},
+        "foo": {:git, "https://github.com/o/foo.git", "0123abc", [branch: "main"]}
+      }
+      """
+
+      assert MixParser.parse_lock(content) == {:ok, %{"jason" => "1.4.4", "foo" => "git:0123abc", "bar" => "unknown", "1" => "unknown"}}
+      assert MixParser.parse_lock("[1, 2]") == {:error, :lock_not_a_map}
+      assert {:error, _reason} = MixParser.parse_lock("%{")
+    end
+  end
+end

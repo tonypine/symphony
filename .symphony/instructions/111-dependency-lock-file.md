@@ -1,0 +1,1 @@
+- When changing packages/dependencies, follow the dependency-change guardrail below; the lock file for this repo is `mix.lock`.

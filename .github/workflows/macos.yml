@@ -11,6 +11,9 @@ on:
       - "macos/**"
       - "priv/qa_driver/**"
       - "scripts/install-macos.sh"
+      - "scripts/ci/xcode-developer-dir.sh"
+      - "scripts/ci/xcode-developer-dir-test.sh"
+      - ".xcode-version"
       - ".github/workflows/macos.yml"
 
 permissions:
@@ -31,7 +34,7 @@ jobs:
     steps:
       - name: Checkout
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -48,7 +51,7 @@ jobs:
           # HEAD is the PR merged into its base, so HEAD^1 is the base.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|\.github/workflows/macos\.yml$)'; then
+          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode-developer-dir(-test)?\.sh$|\.xcode-version$|\.github/workflows/macos\.yml$)'; then
             echo "macos=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos=false" >> "$GITHUB_OUTPUT"
@@ -56,16 +59,23 @@ jobs:
 
   build:
     name: macos build
-    runs-on: macos-latest
+    # The app targets macOS 26 (DD3): its tests run only on 26 or later, built with Xcode 26.
+    runs-on: macos-26
     timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.macos == 'true' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+
+      - name: Test the Xcode selection script
+        run: sh scripts/ci/xcode-developer-dir-test.sh
+
+      - name: Select the pinned Xcode
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
 
       - name: Show toolchain
         run: |
@@ -73,9 +83,19 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # Fails on any expression the type-checker takes over 100ms on. Swift gives up on an
+      # expression after a fixed budget, and the budget runs out sooner on an older Xcode than
+      # on the one here, so an expression near the limit on this runner is a build failure on
+      # another: see TicketPage.swift's ticketState.
       - name: Build app
         working-directory: macos
-        run: time make
+        run: |
+          set -o pipefail
+          time make SWIFT_FLAGS='-Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=100' 2>&1 | tee "$RUNNER_TEMP/build.log"
+          if grep -q 'expression took' "$RUNNER_TEMP/build.log"; then
+            echo "::error::An expression is slow to type-check (see the warning above); break it up before it fails on an older Xcode."
+            exit 1
+          fi
 
       - name: Run tests
         working-directory: macos
@@ -107,14 +127,14 @@ jobs:
 
   install-script:
     name: install script
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 15
     needs: changes
     if: ${{ needs.changes.outputs.macos == 'true' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
@@ -145,7 +165,17 @@ jobs:
           esac
           # The runner doesn't trust the Symphony certificate, so codesign may stop
           # at the trust check; any other failure is a broken signature.
-          for target in "$APP" "$APP/Contents/Resources/symphony"; do
+          # Resources/symphony is the release's launcher script, sealed by the
+          # bundle's signature; the Mach-O files inside symphony-release carry
+          # their own. An older release has a Mach-O at Resources/symphony.
+          targets=("$APP")
+          if [ -d "$APP/Contents/Resources/symphony-release" ]; then
+            while IFS= read -r file; do targets+=("$file"); done < <(
+              find "$APP/Contents/Resources/symphony-release" -type f -exec file {} + | grep Mach-O | cut -d: -f1)
+          else
+            targets+=("$APP/Contents/Resources/symphony")
+          fi
+          for target in "${targets[@]}"; do
             if ! output="$(codesign --verify --strict "$target" 2>&1)"; then
               echo "$output"
               case "$output" in

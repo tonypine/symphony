@@ -2,6 +2,7 @@ defmodule SymphonyElixir.WorkpadTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.Workpad
 
   @now_ms 1_791_000_000_000
@@ -36,11 +37,15 @@ defmodule SymphonyElixir.WorkpadTest do
 
     workspace = Path.join(System.tmp_dir!(), "symphony-workpad-bootstrap")
 
+    repo_key = "repo-workpad-claim"
+    RunStore.delete_ticket_state(repo_key, "issue-workpad-bootstrap")
+
     issue = %Issue{
       id: "issue-workpad-bootstrap",
       identifier: "MT-WORKPAD",
       title: "Bootstrap workpad",
-      state: "Todo"
+      state: "Todo",
+      repo_key: repo_key
     }
 
     now = ~U[2026-05-21 04:30:00Z]
@@ -60,6 +65,9 @@ defmodule SymphonyElixir.WorkpadTest do
     assert body =~ "## Symphony Workpad"
     assert body =~ "#{Path.expand(workspace)}@abc1234"
     assert body =~ "Symphony created this bootstrap workpad before the first agent turn."
+
+    assert [%{name: "claim", details: %{from: "Todo", to: "In Progress"}}] =
+             RunStore.get_ticket_state(repo_key, "issue-workpad-bootstrap").signals
   end
 
   test "bootstrap returns an error when the Todo state update fails" do
@@ -501,5 +509,142 @@ defmodule SymphonyElixir.WorkpadTest do
              short_sha: "unknown-host-sha",
              now: ~U[2026-05-21 04:30:00Z]
            ) =~ "unknown-host:/local/workspace@unknown-host-sha"
+  end
+
+  describe "supersede_body/4" do
+    test "nests the prior attempt under a Superseded heading and starts a fresh plan" do
+      body = "## Symphony Workpad\n\n### Plan\n\n- [x] Old plan\n\n### Validation\n\n- [x] old test\n"
+
+      rewritten = Workpad.supersede_body("## Symphony Workpad", body, 1, "2026-05-21T04:30:00Z")
+
+      assert rewritten =~ "## Symphony Workpad\n\n### Superseded — attempt 1\n\n#### Plan\n\n- [x] Old plan"
+      assert rewritten =~ "#### Validation\n\n- [x] old test"
+      assert rewritten =~ "### Plan\n\n- [ ] Reconcile this bootstrap workpad"
+      assert rewritten =~ "### Acceptance Criteria"
+      assert rewritten =~ "### Validation\n\n- [ ] targeted tests: `<pending>`"
+      assert rewritten =~ "A person restarted this ticket"
+      assert rewritten =~ "- 2026-05-21T04:30:00Z - A person restarted"
+      assert String.ends_with?(rewritten, "\n")
+      refute rewritten =~ "### Superseded — attempt 1\n\n### Superseded"
+    end
+
+    test "a body that is not text still produces a fresh attempt" do
+      rewritten = Workpad.supersede_body("## Symphony Workpad", nil, 1, "2026-05-21T04:30:00Z")
+
+      assert rewritten =~ "### Superseded — attempt 1\n\n### Plan"
+      assert rewritten =~ "### Plan\n\n- [ ] Reconcile this bootstrap workpad"
+    end
+
+    test "an empty body leaves nothing under the Superseded heading" do
+      rewritten = Workpad.supersede_body("## Symphony Workpad", "", 2, "2026-05-21T04:30:00Z")
+
+      assert rewritten =~ "## Symphony Workpad\n\n### Superseded — attempt 2\n\n### Plan"
+      assert rewritten =~ "### Acceptance Criteria"
+    end
+
+    test "a body with no workpad heading is kept whole instead of losing its first line" do
+      rewritten = Workpad.supersede_body("## Symphony Workpad", "### Plan\n\n- [x] Old", 1, "2026-05-21T04:30:00Z")
+
+      assert rewritten =~ "### Superseded — attempt 1\n\n#### Plan\n\n- [x] Old"
+    end
+  end
+
+  describe "supersede/2" do
+    test "a tracker whose comments Symphony cannot rewrite is a no-op" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+
+      issue = %Issue{id: "issue-supersede-memory", identifier: "MT-SUPERSEDE", title: "Supersede", state: "Rework"}
+
+      assert :ok = Workpad.supersede(issue, settings: Config.settings!())
+    end
+
+    test "rewrites the workpad comment, numbering a second restart attempt" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token", agent_kind: "claude")
+
+      issue = %Issue{id: "issue-supersede", identifier: "MT-SUPERSEDE", title: "Supersede", state: "Rework"}
+
+      linear_client = fn query, variables, _opts ->
+        cond do
+          String.contains?(query, "SymphonyAgentIssueComments") ->
+            {:ok,
+             %{
+               "data" => %{
+                 "issue" => %{
+                   "comments" => %{
+                     "nodes" => [
+                       %{
+                         "id" => "comment-workpad",
+                         "body" => "## Symphony Workpad\n\n### Superseded — attempt 1\n\n#### Plan\n\n- [x] Try one\n\n### Plan\n\n- [x] Try two",
+                         "user" => %{"name" => "Symphony"}
+                       },
+                       %{"id" => "comment-human", "body" => "Looks good", "user" => %{"name" => "Reporter"}}
+                     ]
+                   }
+                 }
+               }
+             }}
+
+          String.contains?(query, "SymphonyAgentUpdateComment") ->
+            send(self(), {:updated, variables})
+            {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+        end
+      end
+
+      assert :ok =
+               Workpad.supersede(issue,
+                 settings: Config.settings!(),
+                 linear_client: linear_client,
+                 now: ~U[2026-05-21 04:30:00Z]
+               )
+
+      assert_received {:updated, %{id: "comment-workpad", body: body}}
+      assert body =~ "### Superseded — attempt 2"
+      assert body =~ "#### Plan\n\n- [x] Try two"
+      assert body =~ "A person restarted this ticket"
+    end
+
+    test "a ticket with no workpad comment is left alone" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token", agent_kind: "claude")
+
+      issue = %Issue{id: "issue-supersede-none", identifier: "MT-NONE", title: "None", state: "Rework"}
+
+      linear_client = fn query, _variables, _opts ->
+        if String.contains?(query, "SymphonyAgentIssueComments"),
+          do: {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [%{"id" => "c1", "body" => "Just a note"}]}}}}},
+          else: flunk("a ticket with no workpad must not have one rewritten")
+      end
+
+      assert :ok = Workpad.supersede(issue, settings: Config.settings!(), linear_client: linear_client)
+    end
+
+    test "an update Linear refuses is reported" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token", agent_kind: "claude")
+
+      issue = %Issue{id: "issue-supersede-fails", identifier: "MT-FAILS", title: "Fails", state: "Rework"}
+
+      linear_client = fn query, _variables, _opts ->
+        cond do
+          String.contains?(query, "SymphonyAgentIssueComments") ->
+            {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [%{"id" => "cw", "body" => "## Symphony Workpad"}]}}}}}
+
+          String.contains?(query, "SymphonyAgentUpdateComment") ->
+            {:error, :comment_failed}
+        end
+      end
+
+      assert {:error, {:workpad_supersede_failed, :comment_failed}} =
+               Workpad.supersede(issue, settings: Config.settings!(), linear_client: linear_client)
+    end
+
+    test "a read Linear refuses is reported" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token", agent_kind: "claude")
+
+      issue = %Issue{id: "issue-supersede-read", identifier: "MT-READ", title: "Read", state: "Rework"}
+
+      linear_client = fn _query, _variables, _opts -> {:error, :comment_failed} end
+
+      assert {:error, {:workpad_supersede_failed, :comment_failed}} =
+               Workpad.supersede(issue, settings: Config.settings!(), linear_client: linear_client)
+    end
   end
 end

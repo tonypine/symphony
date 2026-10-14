@@ -3,7 +3,17 @@ defmodule SymphonyElixirWeb.ControlApiController do
   HTTP control plane for the Symphony daemon: pause, resume, stop, PR
   dispatch, and forcing a ticket. Used by `bin/symphony pr`,
   `bin/symphony force` and the `mix symphony.*` tasks via
-  `SymphonyElixir.ControlClient`.
+  `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
+  audit record.
+
+  The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
+  `backlog`, `unblock`, `decide` and `undo`) are made by
+  `SymphonyElixir.DirectorMoves`:
+  each takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
+  `move_incomplete` when Linear took one of the move's two writes and refused the other, 502
+  `restart_incomplete` when the reset behind `restart` stopped partway, and 200 with the states it
+  moved between. `decide` answers a decision request: it takes the `picks`, the
+  `request_comment_id` they answer and the optional `move` the decision directs.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -11,7 +21,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.Orchestrator
+  alias SymphonyElixir.{AuditLog, DirectorMoves, Orchestrator}
   alias SymphonyElixirWeb.Endpoint
 
   @spec pause(Conn.t(), map()) :: Conn.t()
@@ -27,7 +37,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec stop(Conn.t(), map()) :: Conn.t()
   def stop(conn, %{"issue_identifier" => identifier}) when is_binary(identifier) and identifier != "" do
-    respond(conn, Orchestrator.stop_running(orchestrator(conn), identifier))
+    result = Orchestrator.stop_running(orchestrator(conn), identifier)
+    record_stop(conn, result)
+    respond(conn, result)
   end
 
   def stop(conn, _params) do
@@ -60,6 +72,91 @@ defmodule SymphonyElixirWeb.ControlApiController do
         respond_force(conn, identifier, result)
     end
   end
+
+  @spec approve_plan(Conn.t(), map()) :: Conn.t()
+  def approve_plan(conn, params), do: director_move(conn, :approve_plan, params, %{})
+
+  @spec rework(Conn.t(), map()) :: Conn.t()
+  def rework(conn, params), do: director_move(conn, :rework, params, %{reason: string_param(params["reason"])})
+
+  @spec restart(Conn.t(), map()) :: Conn.t()
+  def restart(conn, params), do: director_move(conn, :restart, params, %{reason: string_param(params["reason"])})
+
+  @spec decisions(Conn.t(), map()) :: Conn.t()
+  def decisions(conn, params), do: director_move(conn, :decisions, params, %{picks: picks(params["picks"])})
+
+  @spec backlog(Conn.t(), map()) :: Conn.t()
+  def backlog(conn, params), do: director_move(conn, :backlog, params, %{note: string_param(params["note"])})
+
+  @spec unblock(Conn.t(), map()) :: Conn.t()
+  def unblock(conn, params), do: director_move(conn, :unblock, params, %{})
+
+  @spec decide(Conn.t(), map()) :: Conn.t()
+  def decide(conn, params) do
+    director_move(conn, :decide, params, %{
+      picks: picks(params["picks"]),
+      request_comment_id: string_param(params["request_comment_id"]),
+      move: string_param(params["move"])
+    })
+  end
+
+  @spec undo(Conn.t(), map()) :: Conn.t()
+  def undo(conn, params) do
+    case string_param(params["issue_identifier"]) do
+      nil -> error_response(conn, 422, "invalid_request", "issue_identifier is required")
+      identifier -> respond_move(conn, identifier, DirectorMoves.undo(identifier, director_opts(conn)))
+    end
+  end
+
+  # The Mac app's ticket timeline says "Stopped by you" from this record.
+  defp record_stop(conn, {:ok, %{stopped: true} = payload}) do
+    %{
+      event_type: "run_stopped",
+      repo_key: Map.get(payload, :repo_key),
+      issue_id: Map.get(payload, :issue_id),
+      issue_identifier: Map.get(payload, :issue_identifier),
+      session_id: Map.get(payload, :session_id)
+    }
+    |> AuditLog.record(Map.get(conn.assigns, :audit_log, []))
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record run_stopped audit event: issue_identifier=#{payload[:issue_identifier]} reason=#{inspect(reason)}")
+    end
+  end
+
+  defp record_stop(_conn, _result), do: :ok
+
+  defp director_move(conn, move, params, input) do
+    case string_param(params["issue_identifier"]) do
+      nil -> error_response(conn, 422, "invalid_request", "issue_identifier is required")
+      identifier -> respond_move(conn, identifier, DirectorMoves.move(move, identifier, input, director_opts(conn)))
+    end
+  end
+
+  defp picks(picks) when is_list(picks) do
+    for pick <- picks, do: %{question: string_param(pick_field(pick, "question")), answer: string_param(pick_field(pick, "answer"))}
+  end
+
+  defp picks(_picks), do: nil
+
+  defp pick_field(pick, key) when is_map(pick), do: pick[key]
+  defp pick_field(_pick, _key), do: nil
+
+  defp director_opts(conn), do: [orchestrator: orchestrator(conn)] ++ Map.get(conn.assigns, :director_moves, [])
+
+  defp respond_move(conn, _identifier, {:ok, payload}), do: json(conn, payload)
+  defp respond_move(conn, _identifier, {:error, {:invalid, message}}), do: error_response(conn, 422, "invalid_request", message)
+  defp respond_move(conn, _identifier, {:error, {:conflict, message}}), do: error_response(conn, 409, "move_not_allowed", message)
+
+  defp respond_move(conn, _identifier, {:error, {:partial, message}}), do: error_response(conn, 502, "move_incomplete", message)
+  defp respond_move(conn, _identifier, {:error, {:restart, message}}), do: error_response(conn, 502, "restart_incomplete", message)
+  defp respond_move(conn, _identifier, {:error, {:store, message}}), do: error_response(conn, 502, "store_error", message)
+
+  defp respond_move(conn, identifier, {:error, :issue_not_found}),
+    do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
+
+  defp respond_move(conn, identifier, {:error, {:linear, reason}}),
+    do: respond_force(conn, identifier, {:error, reason})
 
   defp respond_force(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")

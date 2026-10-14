@@ -55,9 +55,9 @@ public enum StatusMenu {
         case .stopped, .starting:
             lines = []
         case let .running(snapshot, _), let .paused(snapshot, _):
-            // What waits on the operator's review first, then the operator pause, then the usage-limit holds,
-            // then what an update would release.
-            lines = [countsLine(snapshot)] + (humanReviewLine(snapshot.humanReview).map { [$0] } ?? [])
+            // The operator pause first, then the usage-limit holds, then what an update would release. What waits on
+            // the operator's review has its own items (`waitingMenu`).
+            lines = [countsLine(snapshot)]
                 + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
                 + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
                 + (updateUnblocksLine(snapshot.updateUnblocks).map { [$0] } ?? [])
@@ -96,21 +96,137 @@ public enum StatusMenu {
         }
     }
 
-    /// "1 ticket waits on you in Human Review" while tickets wait in Human Review, nil when none does.
-    public static func humanReviewLine(_ count: Int) -> String? {
-        switch count {
-        case ...0:
-            return nil
-        case 1:
-            return "1 ticket waits on you in Human Review"
-        default:
-            return "\(count) tickets wait on you in Human Review"
+    /// Heading of the tickets waiting on the operator, shown only while there are some.
+    public static let waitingTitle = "Waiting on you"
+
+    /// How many waiting tickets the menu lists before "N more…".
+    public static let waitingLimit = 5
+
+    /// The longest headline a waiting ticket's item shows before it is cut with "…".
+    static let waitingHeadlineLimit = 60
+
+    /// The waiting tickets the menu lists, oldest first, and the title of the item that opens the dashboard for the
+    /// rest ("3 more…"), nil when none is left out.
+    public struct WaitingMenu: Equatable {
+        public var tickets: [StateSnapshot.WaitingTicket]
+        public var moreTitle: String?
+    }
+
+    /// Up to `limit` waiting tickets, none while Symphony doesn't answer.
+    public static func waitingMenu(_ status: SymphonyStatus, limit: Int = waitingLimit) -> WaitingMenu {
+        let tickets: [StateSnapshot.WaitingTicket]
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            tickets = snapshot.waitingOnYou
+        case .stopped, .starting, .error:
+            tickets = []
+        }
+        let left = tickets.count - limit
+        return WaitingMenu(tickets: Array(tickets.prefix(limit)), moreTitle: left > 0 ? "\(left) more…" : nil)
+    }
+
+    /// One waiting ticket, for example "TP-123 · Plan · Split the importer into four sub-tickets · 2h". Without a
+    /// review brief its title stands in for the headline.
+    public static func waitingLine(_ ticket: StateSnapshot.WaitingTicket) -> String {
+        let headline = [ticket.headline, ticket.title]
+            .compactMap { $0?.trimmingWhitespace() }
+            .first { !$0.isEmpty }
+            .map(shortened)
+        return [ticket.identifier, kindLabel(ticket.kind), headline, ticket.waitingSeconds.map(waitedLabel)]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    /// How the menu names what a ticket waits for.
+    public static func kindLabel(_ kind: StateSnapshot.WaitingTicket.Kind) -> String {
+        switch kind {
+        case .plan:
+            return "Plan"
+        case .pr:
+            return "PR"
+        case .action:
+            return "Action"
+        case .clarify:
+            return "Clarify"
+        case .blocked:
+            return "Blocked"
+        case .other:
+            return "Review"
         }
     }
 
-    /// For example "2 running · 1 retrying".
+    /// How long a ticket waited, in its largest unit: "45s", "12m", "2h", "3d".
+    public static func waitedLabel(_ seconds: Int) -> String {
+        switch seconds {
+        case ..<60:
+            return "\(max(seconds, 0))s"
+        case ..<3_600:
+            return "\(seconds / 60)m"
+        case ..<86_400:
+            return "\(seconds / 3_600)h"
+        default:
+            return "\(seconds / 86_400)d"
+        }
+    }
+
+    /// The number the menu bar icon's badge shows, nil while nothing waits on the operator.
+    public static func badgeCount(for status: SymphonyStatus) -> Int? {
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            return snapshot.waitingOnYou.isEmpty ? nil : snapshot.waitingOnYou.count
+        case .stopped, .starting, .error:
+            return nil
+        }
+    }
+
+    /// Tooltip and accessibility description for the status item, with what waits on the operator, for example
+    /// "Symphony: running, 2 tickets wait on you".
+    public static func iconLabel(for status: SymphonyStatus, badge: Int?) -> String {
+        switch badge {
+        case nil:
+            return iconLabel(for: status)
+        case 1?:
+            return "\(iconLabel(for: status)), 1 ticket waits on you"
+        case let count?:
+            return "\(iconLabel(for: status)), \(count) tickets wait on you"
+        }
+    }
+
+    private static func shortened(_ text: String) -> String {
+        let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard line.count > waitingHeadlineLimit else { return line }
+        return String(line.prefix(waitingHeadlineLimit - 1)) + "…"
+    }
+
+    /// For example "1 implementation run, 1 QA pass running · 2 retrying", or "Nothing is running"
+    /// when no session of any kind runs. A Symphony that predates `sessions` reads "2 running · 1 retrying".
     public static func countsLine(_ snapshot: StateSnapshot) -> String {
-        "\(snapshot.running) running · \(snapshot.retrying) retrying"
+        guard let kinds = snapshot.sessionKinds else {
+            return "\(snapshot.running) running · \(snapshot.retrying) retrying"
+        }
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for kind in kinds {
+            if counts[kind] == nil { order.append(kind) }
+            counts[kind, default: 0] += 1
+        }
+        let running = order.isEmpty
+            ? "Nothing is running"
+            : order.map { sessionCount(counts[$0]!, kind: $0) }.joined(separator: ", ") + " running"
+        return snapshot.retrying > 0 ? "\(running) · \(snapshot.retrying) retrying" : running
+    }
+
+    /// For example "1 QA pass", "2 QA runs" or "3 code review runs".
+    static func sessionCount(_ count: Int, kind: String) -> String {
+        let (singular, plural): (String, String)
+        switch kind {
+        case "qa_pass": (singular, plural) = ("QA pass", "QA passes")
+        case "qa": (singular, plural) = ("QA run", "QA runs")
+        default:
+            let name = kind.replacingOccurrences(of: "_", with: " ")
+            (singular, plural) = ("\(name) run", "\(name) runs")
+        }
+        return "\(count) \(count == 1 ? singular : plural)"
     }
 
     /// For example "Paused since 14:03: deploy freeze". Shows the date too when the pause began on another day.
@@ -193,7 +309,7 @@ public enum StatusMenu {
     }
 
     /// "14:05" on the day of `now`, otherwise `dateFormat`, for example "Oct 4 14:05".
-    private static func clockTime(_ date: Date, now: Date, timeZone: TimeZone, dateFormat: String) -> String {
+    static func clockTime(_ date: Date, now: Date, timeZone: TimeZone, dateFormat: String) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let formatter = DateFormatter()
@@ -220,11 +336,18 @@ public enum StatusMenu {
         }
     }
 
-    /// Titles of the menu items that open Symphony's dashboard in the browser, its terminal dashboard in
-    /// Terminal, and its log.
-    public static let openDashboardTitle = "Open Dashboard"
+    /// Title of the menu item that opens or focuses the Symphony window, and its key equivalent (⌘O).
+    public static let openSymphonyTitle = "Open Symphony"
+    public static let openSymphonyKeyEquivalent = "o"
+
+    /// Title of the submenu that holds the developer items below.
+    public static let developerTitle = "Developer"
+
+    /// Titles of the Developer items that open Symphony's terminal dashboard in Terminal, its log, and its web
+    /// dashboard in the browser.
     public static let openTerminalDashboardTitle = "Open Dashboard in Terminal"
     public static let openLogsTitle = "Open Logs"
+    public static let openWebDashboardTitle = "Open Web Dashboard"
 
     /// Title of the menu item that starts Symphony.
     public static let startTitle = "Start Symphony"
@@ -233,10 +356,17 @@ public enum StatusMenu {
     public static let stopTitle = "Stop Symphony"
     public static let stoppingTitle = "Stopping Symphony…"
 
-    /// Title of the menu item that pauses dispatch. A pause only holds new dispatch, so the title says
-    /// active runs carry on.
-    public static let pauseTitle = "Pause Dispatch (active runs continue)"
+    /// Title of the menu item that opens the Pause Dispatch sheet, which says active runs carry on.
+    public static let pauseTitle = DispatchControl.pauseTitle
     public static let pausingTitle = "Pausing Dispatch…"
+
+    /// Whether `action` pauses dispatch, with or without a reason.
+    public static func isPause(_ action: ControlAction) -> Bool {
+        switch action {
+        case .pause, .pauseWithReason: true
+        default: false
+        }
+    }
 
     /// Title of the menu item that resumes dispatch.
     public static let resumeTitle = "Resume Dispatch"
@@ -257,18 +387,9 @@ public enum StatusMenu {
     /// Heading of the forced tickets, shown only while there are some.
     public static let forcedTitle = "Forced"
 
-    /// Title of the menu item that asks for a ticket to force, and its title while the request is under way.
-    public static let forceTitle = "Force a ticket…"
+    /// Title of the menu item that opens the Force a Ticket sheet, and its title while the request is under way.
+    public static let forceTitle = DispatchControl.forceTitle
     public static func forcingTitle(_ identifier: String) -> String { "Forcing \(identifier)…" }
-
-    /// Text of the prompt Force a ticket… shows, and its buttons.
-    public static let forcePromptTitle = "Force a ticket"
-    public static let forcePromptMessage = """
-        Enter a Linear identifier, for example TP-123. Symphony adds its force label, so the ticket skips the \
-        dispatch limits. It still waits for its blockers, a pause and usage limits, and its reviews still apply.
-        """
-    public static let forcePromptButton = "Force"
-    public static let forcePromptPlaceholder = "TP-123"
 
     /// Force is offered while Symphony answers, whether or not dispatch is paused: a forced ticket waits out a pause.
     public static func canForce(_ status: SymphonyStatus) -> Bool {
@@ -343,6 +464,31 @@ public enum StatusMenu {
             return !external
         case .stopped, .starting, .error:
             return false
+        }
+    }
+
+    /// How Restart Symphony brings Symphony back.
+    public enum RestartPath: Equatable {
+        /// Pauses dispatch, waits for agent runs, stops and starts again, all through the API.
+        case graceful
+        /// Stops the app's Symphony and starts it once it has exited: one that doesn't answer can't pause or report
+        /// its runs.
+        case stopAndStart
+        /// Starts Symphony: the app's one has exited.
+        case start
+    }
+
+    /// How Restart Symphony runs for `status`, nil when it can't. `appRunsSymphony` is true while the app's Symphony
+    /// process is alive, answering or not.
+    public static func restartPath(_ status: SymphonyStatus, appRunsSymphony: Bool) -> RestartPath? {
+        if canRestart(status) { return appRunsSymphony ? .graceful : nil }
+        switch status {
+        case .error:
+            return appRunsSymphony ? .stopAndStart : .start
+        case .stopped:
+            return appRunsSymphony ? nil : .start
+        case .starting, .running, .paused:
+            return nil
         }
     }
 

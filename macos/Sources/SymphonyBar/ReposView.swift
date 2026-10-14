@@ -327,8 +327,8 @@ struct Badge: View {
     }
 }
 
-/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity and Acceptance gate, then
-/// Disconnect….
+/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity and Manual review,
+/// then Disconnect….
 struct RepoDetailView: View {
     let repo: RepoDetail
     @ObservedObject var model: ReposViewModel
@@ -347,12 +347,9 @@ struct RepoDetailView: View {
                 source
                 routing
                 live
-                if let gate = repo.gate {
-                    Section("Acceptance gate") {
-                        FieldRow(field: gate.mode)
-                        LabeledContent("Record") {
-                            Text(gate.record).multilineTextAlignment(.trailing)
-                        }
+                if let manualReview = repo.manualReview {
+                    Section("Manual review") {
+                        FieldRow(field: manualReview)
                     }
                 }
             }
@@ -395,7 +392,7 @@ struct RepoDetailView: View {
             Button(EditRepo.buttonTitle) { model.onEdit(repo.key) }
                 .disabled(repo.actions.editProblem != nil)
                 .help(repo.actions.editProblem ?? "Change where the code comes from, the base branch, the Linear route "
-                    + "and the acceptance gate.")
+                    + "and manual review.")
         }
     }
 

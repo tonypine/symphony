@@ -20,6 +20,11 @@ What Symphony does with each type is in the `ticket_types` playbook partial
 - **A bug run starts with a failing test** that reproduces the bug, then fixes it in the same PR.
 - **A plan ticket is never sent back.** What is unclear becomes a decision with a recommended
   default in its review.
+- **A plan ticket builds the artifacts it checks under "Artifacts wanted"** (domain brief, user
+  journeys, Kano feature map, screens, decisions), then splits the work, all handed over in one
+  review. The stages are in the `plan_pipeline` partial (`priv/playbook/plan_pipeline.liquid`), the
+  platform baseline in the [house standards](../standards/house-standards.md), and
+  [examples/plan.md](examples/plan.md) shows a filled plan ticket and what it produces.
 - **A ticket with no type label** gets the same prompt as before the types existed.
 - When a ticket has more than one type label, `plan` wins over `type:bug`, and `type:bug` over
   `type:feature`.

@@ -111,10 +111,18 @@ defmodule SymphonyElixir.Config.Schema do
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
       field(:waiting_on_sub_issues_state, :string, default: "Waiting on sub-tickets")
-      field(:human_review_state, :string, default: "Human Review")
+      field(:code_review_state, :string, default: "Code Review")
+      field(:qa_state, :string, default: "QA")
+      field(:plan_review_state, :string, default: "Plan Review")
+      field(:epic_review_state, :string, default: "Epic Review")
+      field(:ci_fix_state, :string, default: "CI Fix")
     end
 
-    @fields [
+    # The machine-owned phase states `SymphonyElixir.StateProvisioning` creates at startup. They are
+    # inert here: nothing dispatches on, enters or reads them yet.
+    @machine_state_fields [:code_review_state, :qa_state, :plan_review_state, :epic_review_state, :ci_fix_state]
+
+    @lifecycle_fields [
       :kind,
       :endpoint,
       :api_key,
@@ -125,9 +133,10 @@ defmodule SymphonyElixir.Config.Schema do
       :memory_issues_file,
       :active_states,
       :terminal_states,
-      :waiting_on_sub_issues_state,
-      :human_review_state
+      :waiting_on_sub_issues_state
     ]
+
+    @fields @lifecycle_fields ++ @machine_state_fields
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
@@ -138,18 +147,30 @@ defmodule SymphonyElixir.Config.Schema do
       |> normalize_string_list(:labels)
       |> normalize_optional_string(:waiting_on_sub_issues_state)
       |> put_waiting_on_sub_issues_state_active()
-      |> normalize_optional_string(:human_review_state)
-      |> validate_human_review_state_inactive()
+      |> normalize_machine_states()
+      |> validate_machine_states_distinct()
     end
 
-    # Symphony never dispatches an issue waiting on a person's review.
-    defp validate_human_review_state_inactive(changeset) do
-      active_states = get_field(changeset, :active_states) || []
-      state = get_field(changeset, :human_review_state)
+    defp normalize_machine_states(changeset) do
+      Enum.reduce(@machine_state_fields, changeset, &normalize_optional_string(&2, &1))
+    end
 
-      if is_binary(state) and Enum.any?(active_states, &(is_binary(&1) and String.downcase(String.trim(&1)) == String.downcase(state))),
-        do: add_error(changeset, :human_review_state, "must not be an active state"),
-        else: changeset
+    # The phase states are the board's columns: two names for one phase would make provisioning create
+    # the same column twice, so a repeated name is rejected before startup can act on it.
+    defp validate_machine_states_distinct(changeset) do
+      @machine_state_fields
+      |> Enum.map(&get_field(changeset, &1))
+      |> Enum.filter(&is_binary/1)
+      |> Enum.reduce({MapSet.new(), changeset}, fn name, {seen, changeset} ->
+        key = String.downcase(name)
+
+        if MapSet.member?(seen, key) do
+          {seen, add_error(changeset, :code_review_state, "machine-owned state names must be distinct, but #{name} is used twice")}
+        else
+          {MapSet.put(seen, key), changeset}
+        end
+      end)
+      |> elem(1)
     end
 
     # Breakdown parents wait in this state and are dispatched from it for close-out, so it is active.
@@ -189,6 +210,72 @@ defmodule SymphonyElixir.Config.Schema do
 
         nil ->
           []
+      end)
+    end
+  end
+
+  defmodule Tickets do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+
+    # Linear's priority names, in its own order, and the number each maps to. `none` is Linear's
+    # "No priority" (0), which an issue with no priority set reads as too.
+    @priorities ~w(none urgent high medium low)
+    @priority_numbers %{"none" => 0, "urgent" => 1, "high" => 2, "medium" => 3, "low" => 4}
+    @priority_aliases %{
+      "no priority" => "none",
+      "no_priority" => "none",
+      "0" => "none",
+      "1" => "urgent",
+      "2" => "high",
+      "3" => "medium",
+      "4" => "low"
+    }
+
+    embedded_schema do
+      # The Linear priorities allowed to start new work; empty means every priority may.
+      field(:priorities, {:array, :string}, default: [])
+    end
+
+    @doc "The Linear priority number for a canonical priority name."
+    @spec priority_number(String.t()) :: 0..4
+    def priority_number(name), do: Map.fetch!(@priority_numbers, name)
+
+    @doc "The canonical priority names Symphony accepts."
+    @spec priority_names() :: [String.t()]
+    def priority_names, do: @priorities
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:priorities], empty_values: [])
+      |> normalize_priorities()
+      |> validate_priorities()
+    end
+
+    # Names, aliases ("no priority") and Linear's numbers all become the canonical name, so
+    # `[1, 2]` and `[urgent, high]` are the same filter. `SystemSchema` stringifies the numbers
+    # before this changeset, since Ecto's `{:array, :string}` would reject them.
+    defp normalize_priorities(changeset) do
+      update_change(changeset, :priorities, fn values when is_list(values) ->
+        values |> Enum.map(&canonical_priority/1) |> Enum.uniq()
+      end)
+    end
+
+    defp canonical_priority(value) do
+      key = value |> to_string() |> String.trim() |> String.downcase()
+      Map.get(@priority_aliases, key, key)
+    end
+
+    defp validate_priorities(changeset) do
+      validate_change(changeset, :priorities, fn :priorities, values ->
+        case Enum.reject(values, &(&1 in @priorities)) do
+          [] -> []
+          unknown -> [priorities: "must be Linear priority names or numbers; got: #{Enum.join(unknown, ", ")}"]
+        end
       end)
     end
   end
@@ -248,6 +335,12 @@ defmodule SymphonyElixir.Config.Schema do
       field(:stray_process_cpu_minutes, :integer, default: 10)
       # How long one of Symphony's own MCP tool calls must run before the snapshot reports it as pending.
       field(:pending_tool_report_after_ms, :integer, default: 60_000)
+      # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`): runs of one kind a ticket may get
+      # without progress within each window before it is held instead of dispatched again.
+      field(:dispatch_loop_runs, :integer, default: 4)
+      field(:dispatch_loop_window_ms, :integer, default: 600_000)
+      field(:dispatch_loop_long_runs, :integer, default: 8)
+      field(:dispatch_loop_long_window_ms, :integer, default: 3_600_000)
     end
 
     @fields [
@@ -255,7 +348,11 @@ defmodule SymphonyElixir.Config.Schema do
       :tick_interval_ms,
       :no_progress_threshold_ms,
       :stray_process_cpu_minutes,
-      :pending_tool_report_after_ms
+      :pending_tool_report_after_ms,
+      :dispatch_loop_runs,
+      :dispatch_loop_window_ms,
+      :dispatch_loop_long_runs,
+      :dispatch_loop_long_window_ms
     ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -266,6 +363,11 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
       |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
       |> validate_number(:pending_tool_report_after_ms, greater_than: 0)
+      # A ticket's record keeps its newest 50 runs (`SymphonyElixir.TicketState`), so a higher limit could never trip.
+      |> validate_number(:dispatch_loop_runs, greater_than: 0, less_than_or_equal_to: 50)
+      |> validate_number(:dispatch_loop_window_ms, greater_than: 0)
+      |> validate_number(:dispatch_loop_long_runs, greater_than: 0, less_than_or_equal_to: 50)
+      |> validate_number(:dispatch_loop_long_window_ms, greater_than: 0)
     end
   end
 
@@ -1602,7 +1704,6 @@ defmodule SymphonyElixir.Config.Schema do
       field(:log_excerpt_lines, :integer, default: @default_log_excerpt_lines)
       field(:flaky_retry, :boolean, default: true)
       field(:max_retries, :integer, default: @default_max_retries)
-      field(:escalation_state, :string, default: "In Review")
       field(:merging_wait_timeout_ms, :integer, default: @default_merging_wait_timeout_ms)
     end
 
@@ -1617,29 +1718,14 @@ defmodule SymphonyElixir.Config.Schema do
           :log_excerpt_lines,
           :flaky_retry,
           :max_retries,
-          :escalation_state,
           :merging_wait_timeout_ms
         ],
         empty_values: []
       )
-      |> normalize_escalation_state()
       |> validate_number(:poll_interval_ms, greater_than: 0)
       |> validate_number(:log_excerpt_lines, greater_than: 0)
       |> validate_number(:max_retries, greater_than_or_equal_to: 1)
       |> validate_number(:merging_wait_timeout_ms, greater_than: 0)
-    end
-
-    defp normalize_escalation_state(changeset) do
-      update_change(changeset, :escalation_state, fn
-        value when is_binary(value) ->
-          case String.trim(value) do
-            "" -> "In Review"
-            trimmed -> trimmed
-          end
-
-        _value ->
-          "In Review"
-      end)
     end
   end
 
@@ -1699,6 +1785,7 @@ defmodule SymphonyElixir.Config.Schema do
       @stop_signals ["TERM", "INT", "QUIT", "HUP", "KILL"]
 
       embedded_schema do
+        field(:build_cmd, :string)
         field(:start_cmd, :string)
         field(:health_check_url, :string)
         field(:health_timeout_ms, :integer, default: 30_000)
@@ -1711,9 +1798,10 @@ defmodule SymphonyElixir.Config.Schema do
         schema
         |> cast(
           attrs,
-          [:start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
+          [:build_cmd, :start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
           empty_values: []
         )
+        |> normalize_optional_string(:build_cmd)
         |> normalize_optional_string(:start_cmd)
         |> normalize_optional_string(:health_check_url)
         |> normalize_stop_signal()
@@ -1967,10 +2055,10 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
-    alias SymphonyElixir.AcceptanceGate
+    alias SymphonyElixir.Config.DeprecatedGateSettings
 
-    # Recompile when the gate's defaults change (see the note in `SystemSchema`).
-    require AcceptanceGate.Settings
+    # Recompile when the deprecated gate block's defaults change (see the note in `SystemSchema`).
+    require DeprecatedGateSettings
 
     @type t :: %__MODULE__{}
 
@@ -2010,7 +2098,6 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @fields [
       :enabled,
-      :state,
       :kind,
       :command,
       :model,
@@ -2027,7 +2114,6 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
-      field(:state, :string, default: "Auto Review")
       field(:kind, :string)
       field(:command, :string)
       field(:model, :string)
@@ -2041,7 +2127,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:playbooks, :map, default: %{})
       field(:worker_host, :string)
       embeds_one(:android, Android, on_replace: :update, defaults_to_struct: true)
-      embeds_one(:acceptance_gate, AcceptanceGate.Settings, on_replace: :update, defaults_to_struct: true)
+      embeds_one(:acceptance_gate, DeprecatedGateSettings, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -2049,8 +2135,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(attrs, @fields, empty_values: [])
       |> cast_embed(:android, with: &Android.changeset/2)
-      |> cast_embed(:acceptance_gate, with: &AcceptanceGate.Settings.changeset/2)
-      |> Schema.validate_present([:state])
+      |> cast_embed(:acceptance_gate, with: &DeprecatedGateSettings.changeset/2)
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
@@ -2114,7 +2199,8 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: true)
-      field(:label, :string, default: "human-action")
+      # Deprecated: the retired label that marked an open request (`PersonWait.legacy_request_labels/1`).
+      field(:label, :string)
       field(:interval_ms, :integer, default: 300_000)
       field(:min_update_interval_ms, :integer, default: 900_000)
     end
@@ -2123,7 +2209,6 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
-      |> Schema.validate_present([:label])
       |> validate_format(:label, ~r/\S/, message: "must not be blank")
       |> validate_number(:interval_ms, greater_than: 0)
       |> validate_number(:min_update_interval_ms, greater_than_or_equal_to: 0)
@@ -2324,7 +2409,13 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   embedded_schema do
+    # The repo's manual review setting (`on` or `off`); the per-repo override merges in from
+    # `repositories[].manual_review`, and the deprecated acceptance-gate mode derives it when the
+    # key is absent (`SymphonyElixir.SystemSchema.manual_review_for_gate_mode/1`). With it `on`, the
+    # last step into `Merging` waits for a person's confirmation.
+    field(:manual_review, :string, default: "off")
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:tickets, Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:poller, Poller, on_replace: :update, defaults_to_struct: true)
     embeds_one(:watchdog, Watchdog, on_replace: :update, defaults_to_struct: true)
@@ -2539,8 +2630,10 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [])
+    |> cast(attrs, [:manual_review], empty_values: [])
+    |> validate_inclusion(:manual_review, ["on", "off"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
+    |> cast_embed(:tickets, with: &Tickets.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
     |> cast_embed(:poller, with: &Poller.changeset/2)
     |> cast_embed(:watchdog, with: &Watchdog.changeset/2)
@@ -2661,7 +2754,8 @@ defmodule SymphonyElixir.Config.Schema do
     with :ok <- validate_agent_approval_policy(settings.agent),
          :ok <- validate_agent_sandbox_runtime(settings.agent),
          :ok <- validate_agent_mcp(settings.agent),
-         :ok <- validate_openrouter_workers(settings) do
+         :ok <- validate_openrouter_workers(settings),
+         :ok <- validate_plan_review_state_inactive(settings) do
       validate_finalized_notification_urls(settings.notifications)
     end
   end
@@ -2676,6 +2770,16 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp validate_openrouter_workers(_settings), do: :ok
+
+  # Plan parents wait for a person in Plan Review, so dispatching from it would take the handoff
+  # away from them.
+  defp validate_plan_review_state_inactive(%__MODULE__{tracker: %Tracker{plan_review_state: state} = tracker}) when is_binary(state) do
+    if Enum.any?(tracker.active_states, &(String.downcase(String.trim(&1)) == String.downcase(state))),
+      do: {:error, "tracker.plan_review_state must not be an active state"},
+      else: :ok
+  end
+
+  defp validate_plan_review_state_inactive(_settings), do: :ok
 
   defp openrouter_provider_keys(%Agent{provider: provider, run_profiles: profiles}) do
     Enum.flat_map(RunKind.names(), fn kind ->
@@ -2884,7 +2988,11 @@ defmodule SymphonyElixir.Config.Schema do
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
-  defp preserve_explicit_nil_path?(["tracker", "human_review_state"]), do: true
+
+  defp preserve_explicit_nil_path?(["tracker", field])
+       when field in ["code_review_state", "qa_state", "plan_review_state", "epic_review_state", "ci_fix_state"],
+       do: true
+
   defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 
