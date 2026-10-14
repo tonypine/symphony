@@ -149,7 +149,7 @@ final class RepoHealthTests: XCTestCase {
     func testAPendingWorkflowTakesThePlaceOfMissing() {
         let pr = URL(string: "https://github.com/acme/app/pull/12")!
         XCTAssertEqual(
-            health(repo(workflow: .init(state: .missing)), pending: .pullRequest(pr)).problems,
+            health(repo(workflow: .init(state: .missing)), pending: .pullRequest(url: pr.absoluteString)).problems,
             [
                 .init(
                     id: "workflow",
@@ -161,7 +161,7 @@ final class RepoHealthTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            health(repo(workflow: .init(state: .missing)), pending: .written(path: "/Projects/app/WORKFLOW.md")).problems,
+            health(repo(workflow: .init(state: .missing)), pending: .localFile(path: "/Projects/app/WORKFLOW.md")).problems,
             [
                 .init(
                     id: "workflow",

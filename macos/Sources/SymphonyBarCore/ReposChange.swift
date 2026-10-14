@@ -2,7 +2,8 @@ import Foundation
 
 /// What a change made from the Repos window did: Add Repo, Edit, Disconnect or Remove Clone, or the write that failed.
 public enum ReposChange: Equatable {
-    case added(key: String, apply: AddRepoApply, madeDefault: String?)
+    /// `workflow` is the `WORKFLOW.md` the sheet added, nil when it added none.
+    case added(key: String, apply: AddRepoApply, madeDefault: String?, workflow: PendingWorkflow? = nil)
     /// `apply` is nil when Symphony reads the change from `symphony.yml` without a restart.
     case edited(key: String, apply: AddRepoApply?)
     /// `next` is the repo selected in its place.
@@ -16,8 +17,11 @@ public enum ReposChange: Equatable {
     /// The banner the change shows on its repo.
     public var banner: ReposBanner {
         switch self {
-        case let .added(key, apply, madeDefault):
-            return ReposBanner(key: key, text: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault))
+        case let .added(key, apply, madeDefault, workflow):
+            return ReposBanner(
+                key: key,
+                text: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault, workflow: workflow)
+            )
         case let .edited(key, apply):
             return ReposBanner(key: key, text: EditRepo.savedMessage(key: key, apply: apply))
         case let .disconnected(key, apply, newDefault, next):
@@ -34,7 +38,7 @@ public enum ReposChange: Equatable {
     /// The banner once the restart question is answered with Later.
     public var laterBanner: ReposBanner {
         switch self {
-        case let .added(key, _, _):
+        case let .added(key, _, _, _):
             return ReposBanner(key: key, text: "Added \(key). Restart Symphony from the menu to connect it.")
         case let .edited(key, _):
             return ReposBanner(key: key, text: "Saved \(key). Restart Symphony from the menu to apply it.")
