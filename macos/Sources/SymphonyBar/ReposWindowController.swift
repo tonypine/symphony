@@ -250,6 +250,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
         // Also on the repo, so the error is still there once the sheet is closed.
         sheet.onSaveError = { [weak self] message in self?.show(ReposChange.failed(key: key, message: message).banner) }
+        sheet.openSettings = { [weak self] in self?.openSettings() }
+        sheet.apply = { [weak self] in self.map { AddRepo.apply(status: $0.status) } ?? .onNextStart }
         model.addRepo = sheet
     }
 

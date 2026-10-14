@@ -248,8 +248,31 @@ public enum AddRepo {
 
     /// The entry the draft adds, or the first thing that stops it. `existing` is the `repositories:` list now.
     public static func entry(for draft: AddRepoDraft, existing: [RepositoryEntry]) -> Result<RepositoryEntry, AddRepoProblem> {
-        var workflow: String?
-        var workspace = RepositoryWorkspace()
+        let source: (workflow: String?, workspace: RepositoryWorkspace)
+        switch self.source(of: draft) {
+        case let .success(found):
+            source = found
+        case let .failure(problem):
+            return .failure(problem)
+        }
+        let key = draft.key.trimmingWhitespace()
+        if let problem = keyProblem(key, existing: existing.map(\.key)) { return .failure(problem) }
+        if let problem = baseBranchProblem(draft.baseBranch) { return .failure(problem) }
+        guard let route = route(of: draft) else {
+            return .failure(AddRepoProblem("Pick the Linear project whose issues go to this repo."))
+        }
+        if let problem = twinProblem(route, existing: existing) { return .failure(problem) }
+        return .success(RepositoryEntry(
+            key: key,
+            baseBranch: draft.baseBranch.trimmingWhitespace(),
+            workflow: source.workflow,
+            route: route,
+            workspace: source.workspace
+        ))
+    }
+
+    /// The `workflow` and `workspace` of the source the draft names, or why it names none yet.
+    static func source(of draft: AddRepoDraft) -> Result<(workflow: String?, workspace: RepositoryWorkspace), AddRepoProblem> {
         switch draft.mode {
         case .gitHub:
             let input = draft.gitHubInput.trimmingWhitespace()
@@ -259,7 +282,7 @@ public enum AddRepo {
                     "Use a GitHub repo as https://github.com/owner/repo, git@github.com:owner/repo.git or owner/repo."
                 ))
             }
-            workspace.source = gitHub
+            return .success((nil, RepositoryWorkspace(source: gitHub)))
         case .localFolder:
             switch draft.folder {
             case nil:
@@ -267,27 +290,34 @@ public enum AddRepo {
             case let .failure(problem)?:
                 return .failure(problem)
             case let .success(checkout)?:
-                workflow = checkout.workflowPath
-                workspace.strategy = "worktree"
-                workspace.repo = checkout.path
+                return .success((checkout.workflowPath, RepositoryWorkspace(strategy: "worktree", repo: checkout.path)))
             }
         }
+    }
 
-        let key = draft.key.trimmingWhitespace()
-        if let problem = keyProblem(key, existing: existing.map(\.key)) { return .failure(problem) }
-        let baseBranch = draft.baseBranch.trimmingWhitespace()
-        guard !baseBranch.isEmpty else { return .failure(AddRepoProblem("Enter a base branch, such as main.")) }
-        guard let project = draft.project?.trimmingWhitespace(), !project.isEmpty else {
-            return .failure(AddRepoProblem("Pick the Linear project whose issues go to this repo."))
-        }
+    /// Why `branch` can't be the base branch, nil when it can.
+    public static func baseBranchProblem(_ branch: String) -> AddRepoProblem? {
+        branch.trimmingWhitespace().isEmpty ? AddRepoProblem("Enter a base branch, such as main.") : nil
+    }
+
+    /// The route of the draft's project and labels, nil while no project is picked.
+    static func route(of draft: AddRepoDraft) -> RepositoryRoute? {
+        guard let project = draft.project?.trimmingWhitespace(), !project.isEmpty else { return nil }
         let labels = draft.labels.map { $0.trimmingWhitespace() }.filter { !$0.isEmpty }
-        let route = RepositoryRoute(projects: [project], labels: labels.isEmpty ? nil : labels)
-        if let twin = existing.first(where: { sameRoute($0.route, route) }) {
-            return .failure(AddRepoProblem(
-                "`\(twin.key)` already takes the issues of this project and labels. Pick other labels or another project."
-            ))
-        }
-        return .success(RepositoryEntry(key: key, baseBranch: baseBranch, workflow: workflow, route: route, workspace: workspace))
+        return RepositoryRoute(projects: [project], labels: labels.isEmpty ? nil : labels)
+    }
+
+    /// Why `route` can't be added: another repo in `existing` already takes the same issues.
+    static func twinProblem(_ route: RepositoryRoute, existing: [RepositoryEntry]) -> AddRepoProblem? {
+        guard let twin = existing.first(where: { sameRoute($0.route, route) }) else { return nil }
+        return AddRepoProblem("`\(twin.key)` already takes the issues of this project and labels. Pick other labels or another project.")
+    }
+
+    /// The repo made the default when one is added to `existing`: the only repo, when it has no route and isn't the
+    /// default yet. Symphony refuses two repos where one has no route.
+    public static func madeDefault(existing: [RepositoryEntry]) -> String? {
+        guard existing.count == 1, let only = existing.first, isUnscoped(only.route), only.isDefault != true else { return nil }
+        return only.key
     }
 
     /// `yaml` with `entry` added. When the file has one repo and it has no route and isn't the default, it becomes
@@ -296,11 +326,10 @@ public enum AddRepo {
     public static func adding(_ entry: RepositoryEntry, to yaml: String) throws -> (text: String, madeDefault: String?) {
         let existing = try RepositoriesConfig.entries(in: yaml)
         var text = yaml
-        var madeDefault: String?
-        if existing.count == 1, var only = existing.first, isUnscoped(only.route), only.isDefault != true {
+        let madeDefault = madeDefault(existing: existing)
+        if madeDefault != nil, var only = existing.first {
             only.isDefault = true
             text = try RepositoriesConfig.updating(only.key, to: only, in: text)
-            madeDefault = only.key
         }
         return (try RepositoriesConfig.adding(entry, to: text), madeDefault)
     }

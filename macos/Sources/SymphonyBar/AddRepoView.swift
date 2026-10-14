@@ -2,16 +2,12 @@ import AppKit
 import SwiftUI
 import SymphonyBarCore
 
-/// What the Add Repo sheet edits and shows, also as the Edit Repo sheet of a connected repo. Linear's projects load
-/// when it opens, with the stored `LINEAR_API_KEY`, and the picked project's labels each time one is picked; the repos
-/// in `symphony.yml` are read once, to check the key and the route against them.
+/// What the Add Repo sheet edits and shows, step by step, also as the Edit Repo sheet of a connected repo. Linear's
+/// projects load when it opens, with the stored `LINEAR_API_KEY`, and the picked project's labels each time one is
+/// picked; the repos in `symphony.yml` are read once, to check the key and the route against them.
 @MainActor
 final class AddRepoViewModel: ObservableObject {
-    enum LinearState: Equatable {
-        case loading
-        case loaded
-        case failed(String)
-    }
+    typealias LinearState = LinearLoad
 
     /// What Save wrote.
     enum Saved {
@@ -21,13 +17,19 @@ final class AddRepoViewModel: ObservableObject {
     }
 
     @Published var draft = AddRepoDraft()
+    /// The Add Repo page shown.
+    @Published private(set) var step = AddRepoStep.source
     @Published private(set) var projects: [LinearProject] = []
     @Published private(set) var labels: [LinearLabel] = []
     @Published private(set) var linear = LinearState.loading
     /// How `labels` loads for the picked project.
     @Published private(set) var labelsState = LinearState.loaded
-    /// Why the folder picked is still being checked.
+    /// True while the folder picked is still being checked.
     @Published private(set) var isInspectingFolder = false
+    /// The folder picked last, as it was picked, nil before one is.
+    @Published private(set) var pickedFolder: String?
+    /// The default branch of the repo picked, as GitHub or the checkout's `origin/HEAD` says.
+    @Published private(set) var defaultBranch: String?
     /// Why the last Save failed.
     @Published private(set) var saveError: String? {
         didSet {
@@ -36,6 +38,10 @@ final class AddRepoViewModel: ObservableObject {
     }
     /// Called with each new reason Save failed.
     var onSaveError: (String) -> Void = { _ in }
+    /// Opens the app's Settings, where `LINEAR_API_KEY` is.
+    var openSettings: () -> Void = {}
+    /// How a repo added now would reach Symphony, from its status now.
+    var apply: () -> AddRepoApply = { .onNextStart }
     /// True while Save adds the drafted `WORKFLOW.md`.
     @Published private(set) var isSaving = false
     /// Whether the repo picked has a `WORKFLOW.md`; never checked while editing a repo.
@@ -122,20 +128,29 @@ final class AddRepoViewModel: ObservableObject {
     var validation: Result<RepositoryEntry, AddRepoProblem> {
         if let configProblem { return .failure(AddRepoProblem(configProblem)) }
         if let editing { return EditRepo.entry(for: draft, editing: editing, existing: existing) }
-        return AddRepo.entry(for: draft, existing: existing).flatMap { entry in
-            let problem = workflowCheck.saveProblem(landing: landing, landed: landedWorkflow != nil, draft: workflowText)
-            return problem.map { .failure($0) } ?? .success(entry)
-        }
+        return flow.entry
     }
 
-    /// Whether the sheet shows its WORKFLOW.md step: while it checks the repo, and when the repo has none.
-    var showsWorkflowStep: Bool {
-        switch workflowCheck {
-        case .checking, .missing, .failed:
-            return true
-        case .idle, .present:
-            return false
-        }
+    /// The Add Repo sheet's state, for its steps' checks and lines.
+    var flow: AddRepoFlow {
+        AddRepoFlow(
+            draft: draft,
+            existing: existing,
+            inspectingFolder: isInspectingFolder,
+            defaultBranch: defaultBranch,
+            workflowCheck: workflowCheck,
+            landing: landing,
+            workflowText: workflowText,
+            landedWorkflow: landedWorkflow,
+            projects: linear,
+            labels: labelsState
+        )
+    }
+
+    /// Why Continue, or Connect on Review, is off on the page shown; nil while it is on.
+    var stepProblem: AddRepoProblem? {
+        if let configProblem { return AddRepoProblem(configProblem) }
+        return flow.problem(at: step)
     }
 
     /// `owner/repo`, or the local folder, the WORKFLOW.md step talks about.
@@ -208,6 +223,11 @@ final class AddRepoViewModel: ObservableObject {
         })
     }
 
+    /// The picked labels, as the label field edits them.
+    var pickedLabels: Binding<[String]> {
+        Binding(get: { self.draft.labels }, set: { self.draft.labels = $0 })
+    }
+
     func isLabelPicked(_ name: String) -> Binding<Bool> {
         Binding(get: { self.draft.labels.contains(name) }, set: { picked in
             self.draft.labels.removeAll { $0 == name }
@@ -216,6 +236,21 @@ final class AddRepoViewModel: ObservableObject {
     }
 
     // MARK: Actions
+
+    /// Goes on to the next page, or connects the repo on Review.
+    func goForward() {
+        guard stepProblem == nil, !isSaving else { return }
+        if let next = flow.step(after: step) {
+            step = next
+        } else {
+            save()
+        }
+    }
+
+    func goBack() {
+        guard !isSaving, let previous = flow.step(before: step) else { return }
+        step = previous
+    }
 
     /// Loads Linear's projects with the stored key, then the picked project's labels; again after a failure.
     func loadLinear() {
@@ -289,6 +324,7 @@ final class AddRepoViewModel: ObservableObject {
 
     func pickFolder(_ path: String) {
         isInspectingFolder = true
+        pickedFolder = path
         Task {
             let (result, stack) = await Task.detached { () -> (Result<LocalCheckout, AddRepoProblem>, WorkflowStack?) in
                 let result = LocalCheckout.inspect(path)
@@ -374,20 +410,25 @@ final class AddRepoViewModel: ObservableObject {
         case .localFolder:
             guard case let .success(checkout)? = draft.folder else {
                 workflowCheck = .idle
+                defaultBranch = nil
                 return
             }
+            defaultBranch = checkout.defaultBranch
             workflowCheck = checkout.hasWorkflow ? .present : .missing(folderStack ?? WorkflowStack(), branch: nil)
             redraftWorkflow()
         case .gitHub:
             guard let gitHub = draft.gitHub else {
                 workflowCheck = .idle
+                defaultBranch = nil
                 return
             }
             guard let cli = gitHubCLI() else {
+                defaultBranch = nil
                 workflowCheck = .failed(GitHubCLI.missingMessage)
                 return
             }
             workflowCheck = .checking
+            defaultBranch = nil
             let branch = baseBranchEdited ? draft.baseBranch : nil
             workflowProbe = Task {
                 try? await Task.sleep(nanoseconds: 600_000_000)
@@ -396,6 +437,7 @@ final class AddRepoViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 switch result {
                 case let .success(probe):
+                    defaultBranch = probe.defaultBranch
                     if !baseBranchEdited { draft.baseBranch = probe.defaultBranch }
                     workflowCheck = probe.hasWorkflow ? .present : .missing(probe.stack, branch: probe.branch)
                     redraftWorkflow()
@@ -419,244 +461,318 @@ final class AddRepoViewModel: ObservableObject {
     }
 }
 
-/// The Add Repo sheet: where the repo's code comes from, its key and base branch, and which Linear issues it takes.
+/// The Add Repo sheet, one question per page: where the repo's code comes from, which Linear issues it takes, its
+/// WORKFLOW.md when it has none, then a review with its key and base branch. 520pt square, so its footer stays on a
+/// 1024×768 screen on every page.
 struct AddRepoView: View {
+    static let size = CGSize(width: 520, height: 520)
+
     @ObservedObject var model: AddRepoViewModel
     let cancel: () -> Void
 
     var body: some View {
+        let flow = model.flow
         VStack(alignment: .leading, spacing: 0) {
-            Text(model.title)
-                .font(.headline)
-                .padding([.top, .horizontal], 16)
-            Form {
-                Section {
-                    Picker("Source", selection: model.mode) {
-                        ForEach(AddRepoDraft.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    source
-                }
-                Section {
-                    TextField("Repo key", text: model.key, prompt: Text("Filled in from the repo name"))
-                        .disabled(model.editing != nil)
-                    TextField(
-                        "Base branch",
-                        text: model.baseBranch,
-                        prompt: Text(model.editing == nil ? AddRepo.defaultBaseBranch : "origin's default branch")
-                    )
-                }
-                if model.showsWorkflowStep {
-                    Section(WorkflowTemplate.fileName) {
-                        workflowStep
-                    }
-                }
-                Section("Linear routing") {
-                    linear
-                }
-                if model.editing != nil {
-                    Section(ManualReview.pickerTitle) {
-                        ManualReviewPicker(choice: $model.draft.manualReview)
-                    }
-                    Section(BuiltInTicketPatterns.pickerTitle) {
-                        BuiltInTicketPatternsPicker(choice: $model.draft.ticketPatternsBuiltIn)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.title).font(.headline)
+                AddRepoStepIndicator(steps: flow.steps, current: model.step)
             }
-            .formStyle(.grouped)
-            // A late result of Save would otherwise land the WORKFLOW.md for a source or branch changed meanwhile.
-            .disabled(model.isSaving)
-
+            .padding([.top, .horizontal], 16)
+            .padding(.bottom, 8)
             Divider()
-            HStack(alignment: .firstTextBaseline) {
-                status
-                Spacer()
-                if model.isSaving {
-                    ProgressView().controlSize(.small)
-                    Text(model.savingMessage ?? "Saving…").foregroundStyle(.secondary)
-                }
-                Button("Cancel", role: .cancel, action: cancel)
-                    .keyboardShortcut(.cancelAction)
-                Button("Save", action: model.save)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!model.canSave)
-            }
-            .padding(12)
-        }
-        .frame(
-            width: model.showsWorkflowStep ? 640 : 520,
-            height: model.editing != nil || model.showsWorkflowStep ? 760 : 600
-        )
-    }
-
-    @ViewBuilder private var source: some View {
-        switch model.draft.mode {
-        case .gitHub:
-            TextField("GitHub repo", text: model.gitHubInput, prompt: Text(verbatim: "https://github.com/owner/repo"))
-            Text("Symphony keeps its own clone, made when it starts. Your own checkouts aren't touched.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            workflowFound
-        case .localFolder:
-            LabeledContent("Folder") {
-                HStack {
-                    Text(folderText)
-                        .foregroundStyle(folderColor)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                    Spacer()
-                    if model.isInspectingFolder { ProgressView().controlSize(.small) }
-                    Button("Choose…", action: model.chooseFolder)
+            Group {
+                if let configProblem = model.configProblem {
+                    AddRepoWarningBox(message: configProblem)
+                        .padding(16)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                } else {
+                    page(flow)
                 }
             }
-            Text("Agents work in worktrees of this checkout. It needs a GitHub origin.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            workflowFound
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // A late result of Connect would otherwise land the WORKFLOW.md for a source or branch changed meanwhile.
+            .disabled(model.isSaving)
+            Divider()
+            footer
+        }
+        .frame(width: Self.size.width, height: Self.size.height)
+    }
+
+    @ViewBuilder private func page(_ flow: AddRepoFlow) -> some View {
+        switch model.step {
+        case .source:
+            sourcePage(flow)
+        case .linear:
+            linearPage(flow)
+        case .workflow:
+            workflowPage
+        case .review:
+            reviewPage(flow)
         }
     }
 
-    @ViewBuilder private var workflowFound: some View {
-        if model.workflowCheck == .present {
-            Label("The repo has a WORKFLOW.md.", systemImage: "checkmark.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Says the repo has no `WORKFLOW.md`, and offers the draft and how to add it.
-    @ViewBuilder private var workflowStep: some View {
-        switch model.workflowCheck {
-        case .checking:
-            HStack {
+    private var footer: some View {
+        let problem = model.stepProblem
+        let isLast = model.step == .review
+        return HStack {
+            Button("Cancel", role: .cancel, action: cancel)
+                .keyboardShortcut(.cancelAction)
+            Spacer()
+            if model.isSaving {
                 ProgressView().controlSize(.small)
-                Text("Checking the repo for a WORKFLOW.md…").foregroundStyle(.secondary)
-            }
-        case let .failed(message):
-            Text(message)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Save connects the repo as it is; it shows WORKFLOW.md as missing until the repo has one.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case let .missing(stack, _):
-            Text(model.workflowCheck.missingMessage(source: model.workflowSource) ?? "")
-                .fixedSize(horizontal: false, vertical: true)
-            LabeledContent("Found", value: stack.summary)
-            if let landed = model.landedWorkflow {
-                Text(landed.savedSentence)
+                Text(model.savingMessage ?? "Saving…")
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Button(AddRepoFlow.backTitle, action: model.goBack)
+                .disabled(model.step == .source || model.isSaving)
+            Button(isLast ? AddRepoFlow.connectTitle : AddRepoFlow.continueTitle, action: model.goForward)
+                .keyboardShortcut(.defaultAction)
+                .disabled(problem != nil || model.isSaving || (isLast && !model.canSave))
+                .help(problem?.message ?? "")
+        }
+        .padding(12)
+    }
+
+    // MARK: Source
+
+    private func sourcePage(_ flow: AddRepoFlow) -> some View {
+        Form {
+            Section {
+                Picker("Source", selection: model.mode) {
+                    ForEach(AddRepoDraft.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                switch model.draft.mode {
+                case .gitHub:
+                    TextField("GitHub repo", text: model.gitHubInput, prompt: Text(verbatim: "https://github.com/owner/repo"))
+                    Text("Symphony keeps its own clone. Your checkouts aren't touched.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .localFolder:
+                    LabeledContent("Folder") {
+                        HStack {
+                            Text(model.pickedFolder.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "No folder chosen")
+                                .foregroundStyle(model.pickedFolder == nil ? .secondary : .primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button("Choose…", action: model.chooseFolder)
+                        }
+                    }
+                    Text("Agents work in worktrees of this checkout. It needs a GitHub origin.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let result = flow.sourceResult {
+                    AddRepoSourceResultRow(result: result)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: Linear
+
+    private func linearPage(_ flow: AddRepoFlow) -> some View {
+        Form {
+            Section("Linear routing") {
+                ForEach(flow.linearRows, id: \.self) { row in
+                    linearRow(row, flow: flow)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    @ViewBuilder private func linearRow(_ row: AddRepoFlow.LinearRow, flow: AddRepoFlow) -> some View {
+        switch row {
+        case .project:
+            HStack {
+                Picker("Project", selection: model.project) {
+                    Text(flow.projectPlaceholder).tag(String?.none)
+                    ForEach(model.projects) { project in
+                        Text(project.name).tag(String?.some(project.name))
+                    }
+                }
+                .disabled(!flow.canPickProject)
+                if model.linear == .loading { ProgressView().controlSize(.small) }
+            }
+        case .labels:
+            LabeledContent("Labels") {
+                HStack {
+                    LabelTokenField(labels: model.pickedLabels, suggestions: model.labelChoices, placeholder: flow.labelsPlaceholder)
+                        .disabled(!flow.canPickLabels)
+                    if model.labelsState == .loading { ProgressView().controlSize(.small) }
+                }
+            }
+        case let .twin(message):
+            Label(message, systemImage: "exclamationmark.circle")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        case .preview:
+            Label(flow.routePreview, systemImage: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        case let .warning(message):
+            AddRepoWarningBox(message: message) {
+                Button(AddRepoFlow.retryTitle, action: model.loadLinear)
+                Button(AddRepoFlow.openSettingsTitle) { model.openSettings() }
+            }
+        }
+    }
+
+    // MARK: WORKFLOW.md
+
+    @ViewBuilder private var workflowPage: some View {
+        if case let .missing(stack, _) = model.workflowCheck {
+            WorkflowSetupPage(
+                message: model.workflowCheck.missingMessage(source: model.workflowSource) ?? "",
+                found: stack.summary,
+                draft: model.workflowDraft,
+                landing: $model.landing,
+                choices: WorkflowLanding.choices(for: model.draft.mode),
+                baseBranch: model.draft.baseBranch.trimmingCharacters(in: .whitespaces),
+                landed: model.landedWorkflow
+            )
+            .padding(16)
+        }
+    }
+
+    // MARK: Review
+
+    private func reviewPage(_ flow: AddRepoFlow) -> some View {
+        let keyProblem = AddRepo.keyProblem(model.draft.key, existing: flow.existing.map(\.key))
+        let branchProblem = AddRepo.baseBranchProblem(model.draft.baseBranch)
+        return Form {
+            Section {
+                LabeledContent("Source") { summary(flow.sourceSummary) }
+                LabeledContent("Linear") { summary(flow.routePreview) }
+                LabeledContent(WorkflowTemplate.fileName) { summary(flow.workflowSummary) }
+            }
+            Section {
+                TextField("Repo key", text: model.key, prompt: Text("Filled in from the repo name"))
+                if let keyProblem { inlineProblem(keyProblem.message) }
+                TextField("Base branch", text: model.baseBranch, prompt: Text(AddRepo.defaultBaseBranch))
+                if let branchProblem { inlineProblem(branchProblem.message) }
+            }
+            Section {
+                if let defaultLine = flow.defaultLine {
+                    Text(defaultLine).fixedSize(horizontal: false, vertical: true)
+                }
+                Text(AddRepo.nextLine(apply: model.apply()))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let saveError = model.saveError {
+                    AddRepoWarningBox(message: saveError)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func summary(_ text: String) -> some View {
+        Text(text)
+            .multilineTextAlignment(.trailing)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func inlineProblem(_ message: String) -> some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// "1 Source › 2 Linear › 3 WORKFLOW.md › 4 Review", the page shown in bold and those done checked.
+struct AddRepoStepIndicator: View {
+    let steps: [AddRepoStep]
+    let current: AddRepoStep
+
+    var body: some View {
+        let index = steps.firstIndex(of: current) ?? 0
+        HStack(spacing: 6) {
+            ForEach(Array(steps.enumerated()), id: \.element) { position, step in
+                if position > 0 {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                HStack(spacing: 3) {
+                    if position < index {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
+                    } else {
+                        Text("\(position + 1)")
+                            .monospacedDigit()
+                    }
+                    Text(step.rawValue)
+                }
+                .font(.callout)
+                .fontWeight(step == current ? .semibold : .regular)
+                .foregroundStyle(step == current ? .primary : .secondary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(index + 1) of \(steps.count): \(current.rawValue)")
+    }
+}
+
+/// The Source page's line on what the sheet found, or why it can't use the source, in red.
+struct AddRepoSourceResultRow: View {
+    let result: AddRepoSourceResult
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            switch result.style {
+            case .checking:
+                ProgressView().controlSize(.small)
+            case .found:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .note:
+                Image(systemName: "info.circle").foregroundStyle(.secondary)
+            case .problem:
+                Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+            }
+            Text(result.text)
+                .foregroundStyle(result.style == .problem ? Color.red : result.style == .found ? .primary : .secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// A warning in a box, with the buttons that fix it.
+struct AddRepoWarningBox<Actions: View>: View {
+    let message: String
+    var showsActions = true
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text(message)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-            } else {
-                PlainTextEditor(text: model.workflowDraft)
-                    .frame(height: 240)
-                Picker("Add it by", selection: $model.landing) {
-                    ForEach(WorkflowLanding.choices(for: model.draft.mode), id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                Text(model.landing.help(baseBranch: model.draft.baseBranch.trimmingCharacters(in: .whitespaces)))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-        case .idle, .present:
-            EmptyView()
-        }
-    }
-
-    private var folderText: String {
-        switch model.draft.folder {
-        case nil:
-            if let repo = model.editing?.workspace.repo, model.editing?.workspace.source == nil { return "\(repo) (current)" }
-            return "No folder chosen"
-        case let .success(checkout)?:
-            return "\((checkout.path as NSString).abbreviatingWithTildeInPath) (\(checkout.gitHub))"
-        case let .failure(problem)?:
-            return problem.message
-        }
-    }
-
-    private var folderColor: Color {
-        switch model.draft.folder {
-        case nil:
-            return model.editing?.workspace.repo != nil && model.editing?.workspace.source == nil ? .primary : .secondary
-        case .success?:
-            return .primary
-        case .failure?:
-            return .red
-        }
-    }
-
-    @ViewBuilder private var linear: some View {
-        switch model.linear {
-        case .loading:
-            HStack {
-                ProgressView().controlSize(.small)
-                Text("Loading projects from Linear…").foregroundStyle(.secondary)
-            }
-        case let .failed(message):
-            HStack(alignment: .firstTextBaseline) {
-                Text(message)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                Button("Retry", action: model.loadLinear)
-            }
-        case .loaded:
-            Picker("Project", selection: model.project) {
-                Text(model.editing == nil ? "Choose a project…" : "No project").tag(String?.none)
-                if let unlisted = model.unlistedProject {
-                    Text(unlisted).tag(String?.some(unlisted))
-                }
-                ForEach(model.projects) { project in
-                    Text(project.name).tag(String?.some(project.name))
+            if showsActions {
+                HStack {
+                    Spacer()
+                    actions
                 }
             }
-            LabeledContent("Labels") {
-                if model.labelsState == .loading {
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text("Loading labels…").foregroundStyle(.secondary)
-                    }
-                } else if case let .failed(message) = model.labelsState {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(message)
-                            .foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer()
-                        Button("Retry", action: model.loadLabels)
-                    }
-                } else if model.labelChoices.isEmpty {
-                    Text(model.draft.project == nil && model.editing == nil ? "Pick a project to list its labels" : "No labels")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(model.labelChoices, id: \.self) { name in
-                                Toggle(name, isOn: model.isLabelPicked(name))
-                                    .toggleStyle(.checkbox)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(height: 110)
-                }
-            }
-            Text("Issues in the project go to this repo. With labels, only issues that carry all of them do.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
     }
+}
 
-    @ViewBuilder private var status: some View {
-        if let saveError = model.saveError {
-            Text(saveError).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
-        } else if case let .failure(problem) = model.validation {
-            Text(problem.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+extension AddRepoWarningBox where Actions == EmptyView {
+    init(message: String) {
+        self.init(message: message, showsActions: false) { EmptyView() }
     }
 }

@@ -28,7 +28,11 @@ struct ReposView: View {
         .frame(minWidth: Self.minWidth, minHeight: Self.minHeight)
         .sheet(isPresented: Binding(get: { model.addRepo != nil }, set: { if !$0 { model.addRepo = nil } })) {
             if let addRepo = model.addRepo {
-                AddRepoView(model: addRepo) { model.addRepo = nil }
+                if addRepo.editing == nil {
+                    AddRepoView(model: addRepo) { model.addRepo = nil }
+                } else {
+                    EditRepoFormView(model: addRepo) { model.addRepo = nil }
+                }
             }
         }
         .sheet(item: $model.disconnect) { sheet in
