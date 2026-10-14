@@ -68,6 +68,8 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public private(set) var style: ChipTextStyle
     /// A click on a chip, Return on a focused one, or VoiceOver's press.
     public var openMention: (Mention) -> Void = { _ in }
+    /// ⌘-click or ⌘Return: a ticket's page straight away, past the peek. Nil opens the chip as a click does.
+    public var openMentionDirectly: ((Mention) -> Void)?
     /// Copy Link, Open in Linear and Open on GitHub in a chip's menu.
     public var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     public var popover: ChipPopoverPresenting?
@@ -405,12 +407,13 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         popoverChip = nil
     }
 
-    /// Opens a chip's ticket or pull request.
-    public func open(_ index: Int) {
+    /// Opens a chip's ticket or pull request; `directly` (⌘) skips the peek.
+    public func open(_ index: Int, directly: Bool = false) {
         guard content.mentions.indices.contains(index) else { return }
         hoverWork?.cancel()
         popover?.close()
-        openMention(content.mentions[index])
+        let mention = content.mentions[index]
+        if directly, let openMentionDirectly { openMentionDirectly(mention) } else { openMention(mention) }
     }
 
     /// The pointer moved to `point` in the view, or left it: the chip under it lights, and its popover opens after
@@ -469,7 +472,9 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
             return
         }
         pressedChip = nil
-        if chipIndex(at: convert(event.locationInWindow, from: nil)) == pressed { open(pressed) }
+        if chipIndex(at: convert(event.locationInWindow, from: nil)) == pressed {
+            open(pressed, directly: event.modifierFlags.contains(.command))
+        }
     }
 
     /// Out of a control's text, a click outside a chip goes to the control.
@@ -577,11 +582,12 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     /// The keys a paragraph with chips answers.
     public enum Key: Equatable {
-        case tab, backtab, space, enter, escape
+        case tab, backtab, space, enter, commandEnter, escape
     }
 
     /// Tab and Shift-Tab move between the chips and then out of the paragraph, Space shows the focused chip's
-    /// popover, Return opens it, Escape closes the popover. False when the key isn't the chips'.
+    /// popover, Return opens it (⌘Return past the peek), Escape closes the popover. False when the key isn't the
+    /// chips'.
     @discardableResult
     public func handle(_ key: Key) -> Bool {
         switch key {
@@ -601,9 +607,9 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
             guard let focusedChip else { return false }
             showDetails(focusedChip)
             return true
-        case .enter:
+        case .enter, .commandEnter:
             guard let focusedChip else { return false }
-            open(focusedChip)
+            open(focusedChip, directly: key == .commandEnter)
             return true
         case .escape:
             guard popoverChip != nil else { return false }
@@ -612,16 +618,25 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         }
     }
 
+    /// ⌘Return is also Send Decision's shortcut: on a focused chip it opens the chip's page instead.
+    override open func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if window?.firstResponder === self, [36, 76].contains(event.keyCode), modifiers == .command, handle(.commandEnter) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override open func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key: Key? = switch event.keyCode {
         case 48: modifiers.contains(.shift) ? .backtab : .tab
         case 49: .space
-        case 36, 76: .enter
+        case 36, 76: modifiers == .command ? .commandEnter : .enter
         case 53: .escape
         default: nil
         }
-        if let key, modifiers.subtracting(.shift).isEmpty, handle(key) { return }
+        if let key, key == .commandEnter || modifiers.subtracting(.shift).isEmpty, handle(key) { return }
         // A read-only paragraph has no use for plain keys: the number keys that pick an option go on to the review.
         if modifiers.subtracting(.shift).isEmpty, let characters = event.charactersIgnoringModifiers,
             characters.unicodeScalars.allSatisfy(CharacterSet.decimalDigits.contains), !characters.isEmpty

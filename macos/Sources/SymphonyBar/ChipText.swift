@@ -10,10 +10,16 @@ extension EnvironmentValues {
         set { self[MentionReferencesKey.self] = newValue }
     }
 
-    /// A click on a chip: the ticket's page (D3), or the pull request on GitHub.
+    /// A click on a chip: its peek (N4) on the decision screen.
     var openMention: OpenMentionAction {
         get { self[OpenMentionKey.self] }
         set { self[OpenMentionKey.self] = newValue }
+    }
+
+    /// ⌘-click or ⌘Return on a chip: the ticket's page (D3), or the pull request on GitHub; nil opens it as a click.
+    var openMentionDirectly: OpenMentionAction? {
+        get { self[OpenMentionDirectlyKey.self] }
+        set { self[OpenMentionDirectlyKey.self] = newValue }
     }
 }
 
@@ -23,6 +29,10 @@ private struct MentionReferencesKey: EnvironmentKey {
 
 private struct OpenMentionKey: EnvironmentKey {
     static let defaultValue = OpenMentionAction { _ in }
+}
+
+private struct OpenMentionDirectlyKey: EnvironmentKey {
+    static let defaultValue: OpenMentionAction? = nil
 }
 
 /// What a click on a chip opens, as `OpenURLAction` is for a link.
@@ -68,8 +78,8 @@ struct ChipText: View {
         }
     }
 
-    /// What a click on a chip opens until the peek (TP-956) and the pull request page (TP-961): a ticket Symphony
-    /// sees opens its page, anything else its link.
+    /// What ⌘-click on a chip opens, past the peek, until the pull request page (TP-961): a ticket Symphony sees opens
+    /// its page, anything else its link.
     static func open(_ mention: Mention, openTicket: (String) -> Void, openURL: (URL) -> Void) {
         if mention.kind == .ticket, !mention.isMissing {
             openTicket(mention.key)
@@ -132,6 +142,7 @@ private struct ChipTextRepresentable: NSViewRepresentable {
         view.openURL = { openURL($0) }
         let openMention = context.environment.openMention
         view.openMention = { openMention($0) }
+        view.openMentionDirectly = context.environment.openMentionDirectly.map { direct in { direct($0) } }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: ChipTextView, context: Context) -> CGSize? {

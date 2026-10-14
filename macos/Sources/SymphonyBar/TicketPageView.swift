@@ -27,11 +27,19 @@ extension SymphonyWindowModel {
         showPlace()
     }
 
-    /// ⌘[.
+    /// ⌘[: the peek's page before, while the Inbox shows one; else the place before.
     func goBack() {
+        if peekCanGoBack {
+            peek.goBack()
+            return
+        }
         guard history.goBack() != nil else { return }
         showPlace()
     }
+
+    var canGoBack: Bool { peekCanGoBack || history.canGoBack }
+
+    private var peekCanGoBack: Bool { shownTicket == nil && selection == .inbox && peek.canGoBack }
 
     /// ⌘].
     func goForward() {
