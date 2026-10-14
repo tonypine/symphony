@@ -446,7 +446,10 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
   otherwise, one line per problem with its fixes:
   - `WORKFLOW.md` invalid (error): Symphony's error and **Open WORKFLOW.md** (the file in a local folder,
     the file on GitHub at the base branch for a managed clone).
-  - `WORKFLOW.md` missing (warning).
+  - `WORKFLOW.md` missing (warning): **Set Up WORKFLOW.md…** opens the Add Repo sheet's WORKFLOW.md page on
+    its own (see [Setting up a WORKFLOW.md for a connected repo](#setting-up-a-workflowmd-for-a-connected-repo)).
+  - `WORKFLOW.md` pending (warning), for a file the app added that Symphony can't read yet: **View Pull
+    Request**, or the file's path and **Reveal in Finder**.
   - The last fetch failed (error): git's error, selectable, **Copy Error** and **Open on GitHub**. Symphony
     tries again before the next dispatch.
   - An agent run with no activity for 10 minutes or more (warning): Symphony's stall timeout should have
@@ -468,7 +471,7 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
   error under it. Symphony keeps using the last good workflow until the file is fixed. With the default
   `workflow_source: ref`, this is the file committed on the base branch, so a broken `WORKFLOW.md` pushed
   there shows as invalid even though the last good one still runs. For a repo whose `WORKFLOW.md` Add Repo
-  added, it shows **Pending: pull request open** with the pull request's URL, or **Pending: written, not
+  or **Set Up WORKFLOW.md…** added, it shows **Pending: pull request open** with the pull request's URL, or **Pending: written, not
   pushed** with the file's path, until Symphony reports the file valid.
 - **Activity**: how long ago Symphony last ran `git fetch origin` before a dispatch, or **Failed** (in
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
@@ -579,6 +582,23 @@ again when Connect is pressed once more. Connect changes only `repositories:`: c
 stay as they are. When the file has a single repo with no route, Connect also marks it `default: true`, so it
 keeps the issues no route matches (Symphony refuses a second repo next to a repo with no route that isn't the
 default).
+
+#### Setting up a WORKFLOW.md for a connected repo
+
+A repo connected without a `WORKFLOW.md` (Add Repo's **Don't create one now**, or a file deleted since) shows
+`WORKFLOW.md is missing` in **Needs attention** once Symphony reports it, with **Set Up WORKFLOW.md…**. It
+opens a sheet, **Set Up WORKFLOW.md for billing-api**, with the same WORKFLOW.md page as Add Repo's step:
+what was found and the editable draft, read from the checkout's working tree for a local folder, or from the
+base branch on GitHub through `gh` for a managed clone, then **Add it by**: **Open a pull request** (the
+default) or, for a local folder, **Write it into the checkout**. Not creating one is **Cancel**.
+
+**Create** adds the file as Add Repo's Connect does: the same `symphony/add-workflow` branch and pull request,
+deleted again when the pull request fails, or the file uncommitted at the checkout's top. The sheet then
+closes, a banner names the pull request or the file, and the repo shows **Pending: pull request open** or
+**Pending: written, not pushed** until Symphony reports the file valid. `symphony.yml` isn't written, so
+nothing restarts. A failure (no `gh`, a repo `gh` can't read, a pull request that couldn't be opened, a
+`WORKFLOW.md` already in the checkout) stays in the sheet in a warning box, and **Create** tries again.
+The button needs the repo's `owner/repo`, so a local folder without a GitHub `origin` has none.
 
 Symphony reads a new route from `symphony.yml` while it runs, but sets up a repo's workflow and its own
 clone only when it starts. So after Connect:
