@@ -421,6 +421,18 @@ defmodule SymphonyElixir.RunStoreTest do
              RunStore.finish_ticket_pull_request(@repo_key, nil, "merged", later)
   end
 
+  test "inserts a ticket pull request record only when the ticket has none" do
+    first = %{repo_key: @repo_key, issue_id: "issue-1", pr_url: "https://github.com/acme/repo/pull/1", state: "open", source: "backfill"}
+    second = %{first | pr_url: "https://github.com/acme/repo/pull/2"}
+
+    assert {:ok, :inserted} = RunStore.insert_ticket_pull_request(first)
+    assert {:ok, :exists} = RunStore.insert_ticket_pull_request(second)
+    assert %{pr_url: "https://github.com/acme/repo/pull/1", repo_key: @repo_key} = RunStore.get_ticket_pull_request(@repo_key, "issue-1")
+
+    assert {:error, :invalid_ticket_pull_request_record} = RunStore.insert_ticket_pull_request(%{issue_id: "issue-1"})
+    assert {:error, :invalid_repo_key} = RunStore.insert_ticket_pull_request(%{first | repo_key: nil})
+  end
+
   test "records CI state per head, newest write wins, and refuses bad arguments" do
     at = ~U[2026-10-04 00:23:15Z]
     later = DateTime.add(at, 60, :second)

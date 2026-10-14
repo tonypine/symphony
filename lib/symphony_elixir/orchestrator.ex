@@ -42,6 +42,7 @@ defmodule SymphonyElixir.Orchestrator do
     StateProvisioning,
     StatusDashboard,
     SubIssueWait,
+    TicketPullRequest,
     TicketState,
     TicketStateReconciler,
     Tracker,
@@ -245,6 +246,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     mark_interrupted_runs_for_configured_repos(repo_key)
     TicketStateReconciler.reconcile_all()
+    TicketPullRequest.Backfill.run(configured_repo_keys(repo_key))
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -1287,6 +1289,7 @@ defmodule SymphonyElixir.Orchestrator do
     case start_async_task(fn ->
            RetiredStates.refresh_if_due()
            repo_result = fetch_due_repo_if_needed(due_repo)
+           TicketPullRequest.Lookup.start(due_repo, repo_result)
 
            {:repo_poll_result,
             %{
