@@ -162,6 +162,40 @@ final class ManagedClonesTests: XCTestCase {
         XCTAssertTrue(ManagedClones.isDirectory(mine.path))
     }
 
+    func testRemovesAfterTheLastCheckOnlyWhenItAllows() {
+        var deleted: [String] = []
+        let delete = { (path: String, _: URL) in deleted.append(path) }
+        XCTAssertEqual(
+            ManagedClones.remove(.blocked("TP-1 runs in a worktree of this clone."), root: root, delete: delete),
+            .kept(reason: "TP-1 runs in a worktree of this clone.")
+        )
+        XCTAssertEqual(deleted, [])
+        XCTAssertEqual(ManagedClones.remove(.allowed(path: "/clones/acme/web"), root: root, delete: delete), .removed(path: "/clones/acme/web"))
+        XCTAssertEqual(deleted, ["/clones/acme/web"])
+
+        struct Denied: LocalizedError { var errorDescription: String? { "permission denied" } }
+        XCTAssertEqual(
+            ManagedClones.remove(.allowed(path: "/clones/acme/web"), root: root) { _, _ in throw Denied() },
+            .failed(message: "Couldn't remove the clone: permission denied")
+        )
+    }
+
+    func testTheDefaultDeleteStillRefusesAPathOutsideTheRoot() throws {
+        let directory = uniqueTemporaryDirectory("managed-clones-outcome").resolvingSymlinksInPath()
+        let clones = directory.appendingPathComponent("repos")
+        let mine = directory.appendingPathComponent("mine")
+        try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+
+        let outcome = ManagedClones.remove(.allowed(path: mine.path), root: clones)
+        XCTAssertEqual(
+            outcome,
+            .failed(message: "Couldn't remove the clone: "
+                + ManagedCloneError.outsideRoot(path: mine.path, root: clones.path).localizedDescription)
+        )
+        XCTAssertTrue(ManagedClones.isDirectory(mine.path))
+    }
+
     func testQuestionAndMessage() {
         let question = ManagedClones.question(key: "web", gitHub: "acme/web", path: "/clones/acme/web")
         XCTAssertEqual(question.title, "Remove Symphony's clone of acme/web?")
