@@ -18,10 +18,22 @@ and checks what TP-272 used to leave to a person on the live app:
 4. **Rollback**: Quit, swap `Symphony (previous).app` back in as in [Rollback](../../README.md#rollback), open
    it and Start: it runs N's BEAM from its own bundle, and the agent runs it starts get the secret stored in
    Settings.
+5. **Automatic update** ([TP-541](https://linear.app/tonypine/issue/TP-541)'s walkthrough, steps 1 to 3):
+   with **Automatically when idle** chosen and Symphony running with no agent runs, N installs N+1 with no
+   press. N+1 passes its health check, starts Symphony and resumes dispatch, and notifies "Symphony updated
+   to vN+1" with the change count. Its menu shows "Updated to vN+1 (K changes)", and choosing it opens N+1's
+   release notes.
+6. **Automatic rollback** (TP-541's walkthrough, step 4): N is put back with a `symphony.yml` whose
+   `workspaces.repo` doesn't exist. N installs N+1 by itself, N+1's config check fails, and the helper puts N
+   back as `Symphony.app` and N+1 aside as `Symphony (rolled back).app`. N notifies "Symphony rolled back to
+   vN", naming vN+1 and the failed check; its menu line "vN+1 was rolled back: symphony check failed: …"
+   opens N+1's notes with the rollback steps; and its next check shows N+1 rolled back with Retry vN+1,
+   without installing it again.
 
 For each scenario the test checks the menu lines, the Symphony pid, the stub agent's log (a run that is
 stopped instead of finishing fails the drain checks) and a `before_run` hook's log, which records the release
-root and version each run came from and the stored secret Symphony was given.
+root and version each run came from and the stored secret Symphony was given. Scripted QA mode records the
+notifications and the release notes window in `status.json` with the alerts, so the test reads them there.
 
 The stub ticket is dispatched again and again without a state move, so the test's `symphony.yml` sets the
 dispatch-loop guard's `watchdog.dispatch_loop_*` limits to 50 runs within one second, out of reach of one test
@@ -38,7 +50,7 @@ make e2e
 ```
 
 It takes a while: it builds two Symphony releases (`make release` with build numbers 90001 and 90002), the app,
-and both bundles. It prints each step, then `all 4 scenarios passed`, and exits 1 on the first failure with
+and both bundles. It prints each step, then `all 6 scenarios passed`, and exits 1 on the first failure with
 the app's status, the update helper's, app's and stub agent's logs, and the processes still running. The
 work folder is removed on success and kept on failure (or with `--keep`).
 
