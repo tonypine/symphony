@@ -355,6 +355,7 @@ private struct ReviewHeader: View {
 private struct ActionButtons: View {
     let toolbar: InboxToolbar
     let perform: (InboxCommand) -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
@@ -370,7 +371,9 @@ private struct ActionButtons: View {
                         .disabled(!button.enabled)
                 }
             }
-            if !toolbar.overflow.isEmpty {
+            if !toolbar.overflow.isEmpty && offscreenSnapshot {
+                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+            } else if !toolbar.overflow.isEmpty {
                 Menu {
                     ForEach(Array(toolbar.overflow.enumerated()), id: \.offset) { _, command in
                         Button(command.title) { perform(command) }
@@ -847,6 +850,7 @@ private struct OptionCardView: View {
 private struct WriteInField: View {
     @Binding var text: String
     var focused: FocusState<Bool>.Binding
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     /// The height of one line of `type.body`.
     private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
@@ -862,13 +866,12 @@ private struct WriteInField: View {
                 .padding(.horizontal, Self.inset)
                 .frame(maxWidth: .infinity, minHeight: Self.lineHeight * 3, alignment: .topLeading)
                 .hidden()
-                .overlay {
-                    TextEditor(text: $text)
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .scrollContentBackground(.hidden)
-                        .focused(focused)
-                        .accessibilityLabel(OptionCard.writeInLabel)
-                        .accessibilityHint(OptionCard.writeInHint)
+                .overlay(alignment: .topLeading) {
+                    if offscreenSnapshot {
+                        Text(text).font(DesignTokens.TypeStyle.body.font).padding(.horizontal, Self.inset)
+                    } else {
+                        editor
+                    }
                 }
                 .padding(DesignTokens.Space.s2)
                 .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
@@ -882,6 +885,15 @@ private struct WriteInField: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)
         }
+    }
+
+    private var editor: some View {
+        TextEditor(text: $text)
+            .font(DesignTokens.TypeStyle.body.font)
+            .scrollContentBackground(.hidden)
+            .focused(focused)
+            .accessibilityLabel(OptionCard.writeInLabel)
+            .accessibilityHint(OptionCard.writeInHint)
     }
 }
 

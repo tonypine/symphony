@@ -125,7 +125,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   per item with the picks, so another item and back keeps it, until the answer is sent. **Send Decision…** is off
   while the field is blank; sending posts the text through `decide` as the pick's `answer`. On a merge confirmation,
   words that pick none of its options ask for a change, and the ticket goes to `In Progress`. A plan's decisions
-  (C16) have no write-in: the plan's Change move already takes free text.
+  (C16) have no write-in: the plan's Change move already takes free text. The picked write-in's offscreen snapshots, light and
+  dark, are in `macos/Tests/Snapshots` (`make snapshots` renders them again).
 - **Data:** the open human-action requests (section 2).
 
 #### D2d · Inbox: a ticket to clarify
