@@ -334,6 +334,13 @@ sentence, spaces it by the layout rather than the font, and reads word by word. 
 no hover. `ImageRenderer` can't draw an AppKit view, so in snapshots the text view draws itself into an image
 offscreen, with no window, and `ChipText` shows that image.
 
+N1 is used wherever the Director reads Symphony's text about tickets: on the decision review (D2c) in N5, N6, N7 and
+N8; on the plan and pull request reviews (D2a, D2b) in the ask, What to review, What changed, C16's questions and
+recommendation, and the moves; on the clarify review (D2d) in what the gate found and its questions; on the blocked
+review (D2f) in the reason and what clears it; and on the ticket page (D3) in the summary, the latest brief, Earlier
+decisions and the last message. External links stay links. Text whose item has no `references` (an older Symphony,
+or a ticket page whose ticket isn't in the Inbox) is drawn as a plain `Text`, as before chips.
+
 ## 6. Accessibility
 
 - Every status is symbol + word; color is never the only signal, including in charts (labels, legend, data table).

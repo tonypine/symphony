@@ -327,10 +327,7 @@ private struct ReviewHeader: View {
             .accessibilityHint("Opens the ticket page")
             // A decision's question, in the callout under the title, says what the ask would.
             if !item.isDecision {
-                Text(item.ask)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                ChipText(text: item.ask, color: .secondaryLabelColor)
             }
         }
     }
@@ -444,18 +441,14 @@ private struct BriefSections: View {
                 Card(title: "How to approve, change or reject") {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                         ForEach(Array(parsed.moves.enumerated()), id: \.offset) { _, move in
-                            Text("\(Text(move.move.capitalized + ": ").bold())\(move.text)")
-                                .font(DesignTokens.TypeStyle.body.font)
+                            ChipText(text: move.text, lead: move.move.capitalized + ":")
                         }
                     }
                 }
             }
         case let .raw(markdown):
             Card(title: "Review brief") {
-                Text(markdown)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                ChipText(text: markdown)
             }
         case nil:
             EmptyView()
@@ -493,7 +486,7 @@ private struct ReviewLineView: View {
                 LinkText(label: link.label, url: link.url)
             } else {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                    Text(line.text).textSelection(.enabled)
+                    ChipText(text: line.text)
                     ForEach(line.links, id: \.self) { link in
                         LinkText(label: link.label, url: link.url).font(DesignTokens.TypeStyle.callout.font)
                     }
@@ -515,10 +508,7 @@ private struct DecisionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            Text("\(number). \(decision.question)")
-                .font(DesignTokens.TypeStyle.rowTitle.font)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityHidden(true)
+            ChipText(text: decision.question, lead: "\(number).", font: DesignTokens.TypeStyle.rowTitle.nsFont)
             OptionCardList(
                 title: "Decision \(number), \(decision.question)",
                 cards: OptionCard.cards(for: decision),
@@ -529,9 +519,7 @@ private struct DecisionCard: View {
             )
             // A brief that names no recommended option still says what it recommends.
             if decision.initialPick == nil, let recommendation = decision.recommendation {
-                Text("Recommendation: \(recommendation)")
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
+                ChipText(text: recommendation, lead: "Recommendation:", font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -665,7 +653,7 @@ private struct ActionCards: View {
                     ForEach(Array(action.steps.enumerated()), id: \.offset) { index, step in
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
-                            Text(step).textSelection(.enabled)
+                            ChipText(text: step)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -960,7 +948,7 @@ private struct ClarifyCards: View {
     var body: some View {
         Card(title: "What the quality gate found") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let found = clarify.found { Text(found).textSelection(.enabled) }
+                if let found = clarify.found { ChipText(text: found) }
                 HStack(spacing: DesignTokens.Space.s4) {
                     if let score = clarify.scoreLine { Label("Score \(score)", systemImage: "gauge.with.needle") }
                     if let round = clarify.roundLine { Label(round, systemImage: "arrow.trianglehead.2.clockwise") }
@@ -983,8 +971,8 @@ private struct BlockedCards: View {
     var body: some View {
         Card(title: "Why it is blocked") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let reason = blocked.reason { Text(reason).textSelection(.enabled) }
-                Text(blocked.nextLine).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                if let reason = blocked.reason { ChipText(text: reason) }
+                ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
     }
@@ -998,7 +986,7 @@ private struct BulletList: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text("•").foregroundStyle(.secondary).accessibilityHidden(true)
-                    Text(line).textSelection(.enabled)
+                    ChipText(text: line)
                 }
             }
         }
