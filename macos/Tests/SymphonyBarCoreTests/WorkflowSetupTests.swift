@@ -359,4 +359,162 @@ final class WorkflowSetupTests: XCTestCase {
             "Added web. Symphony connects it when it starts. Wrote /code/web/WORKFLOW.md; commit and push it to the base branch."
         )
     }
+
+    // MARK: Connected repo
+
+    func testSetsUpAConnectedRepoFromWhatSymphonyReports() {
+        let local = RepoStatus(key: "web", baseBranch: " ", source: .local(path: "/code/web"), github: "acme/web")
+        XCTAssertEqual(ConnectedWorkflowSetup.of(local), ConnectedWorkflowSetup(key: "web", gitHub: "acme/web", checkout: "/code/web"))
+        XCTAssertNil(ConnectedWorkflowSetup.of(local)?.baseBranch)
+        XCTAssertEqual(ConnectedWorkflowSetup.of(local)?.choices, [.pullRequest, .localFile])
+        XCTAssertEqual(ConnectedWorkflowSetup.of(local)?.source, "/code/web")
+        XCTAssertEqual(ConnectedWorkflowSetup.of(local)?.sheetTitle, "Set Up WORKFLOW.md for web")
+
+        let managed = RepoStatus(key: "api", baseBranch: "dev", source: .managed(github: "acme/api", clonePath: "/clones/api", cloned: true))
+        let setup = ConnectedWorkflowSetup.of(managed)
+        XCTAssertEqual(setup, ConnectedWorkflowSetup(key: "api", gitHub: "acme/api", baseBranch: "dev"))
+        XCTAssertNil(setup?.checkout)
+        XCTAssertEqual(setup?.choices, [.pullRequest])
+        XCTAssertEqual(setup?.source, "acme/api")
+
+        // Without owner/repo there is nothing to draft for or open a pull request on.
+        XCTAssertNil(ConnectedWorkflowSetup.of(RepoStatus(key: "docs", source: .local(path: "/code/docs"))))
+        XCTAssertNil(ConnectedWorkflowSetup.of(RepoStatus(key: "docs", source: .local(path: nil), github: " ")))
+        XCTAssertEqual(ConnectedWorkflowSetup.of(RepoStatus(key: "docs", source: .local(path: " "), github: "acme/docs"))?.checkout, nil)
+    }
+
+    func testOffersSetUpOnTheMissingWorkflowRow() {
+        let repo = RepoStatus(key: "web", baseBranch: "main", source: .local(path: "/code/web"), github: "acme/web", workflow: .init(state: .missing))
+        let health = RepoHealth.of(repo, warning: nil, runs: [], pending: nil, now: Date())
+        let setup = ConnectedWorkflowSetup(key: "web", gitHub: "acme/web", baseBranch: "main", checkout: "/code/web")
+
+        XCTAssertEqual(health.problems.first?.fixes, [.setUpWorkflow(setup)])
+        XCTAssertEqual(RepoHealth.Fix.setUpWorkflow(setup).title, "Set Up WORKFLOW.md…")
+
+        // Once Create recorded it, the row says it is pending instead.
+        let store = PendingWorkflowStore(defaults: MemoryKeyValueStore())
+        store.record(.localFile(path: "/code/web/WORKFLOW.md"), for: setup.key)
+        let pending = RepoHealth.of(repo, warning: nil, runs: [], pending: store.all["web"], now: Date())
+        XCTAssertEqual(pending.problems.first?.title, "WORKFLOW.md is written but not pushed")
+        XCTAssertEqual(pending.problems.first?.fixes, [.revealInFinder(path: "/code/web/WORKFLOW.md")])
+    }
+
+    func testReadsALocalFolderFromItsWorkingTree() {
+        let setup = ConnectedWorkflowSetup(key: "web", gitHub: "acme/web", checkout: "/code/web/src")
+        let checkout = LocalCheckout(path: "/code/web", gitHub: "acme/web", hasWorkflow: false, defaultBranch: "trunk")
+        var listed: [String] = []
+        let files = { (path: String) -> RepoFiles in
+            listed.append(path)
+            return RepoFiles(names: ["mix.exs"]) { _ in nil }
+        }
+
+        let found = setup.read(cli: nil, inspect: { _ in .success(checkout) }, files: files)
+
+        guard case let .success(found) = found else { return XCTFail("expected a draft, got \(found)") }
+        XCTAssertEqual(listed, ["/code/web"])
+        XCTAssertEqual(found.baseBranch, "trunk")
+        XCTAssertEqual(found.checkout, checkout)
+        XCTAssertEqual(found.stack.language, "Elixir")
+        XCTAssertEqual(
+            found.message(source: setup.source),
+            "/code/web/src has no WORKFLOW.md on trunk. Symphony runs no agent on a repo without one, so the sheet drafted one from its files."
+        )
+        XCTAssertTrue(setup.draft(found).contains("acme/web"))
+
+        var named = setup
+        named.baseBranch = "dev"
+        XCTAssertEqual(try named.read(cli: nil, inspect: { _ in .success(checkout) }, files: files).get().baseBranch, "dev")
+        var noDefault = checkout
+        noDefault.defaultBranch = nil
+        XCTAssertEqual(try setup.read(cli: nil, inspect: { _ in .success(noDefault) }, files: files).get().baseBranch, "main")
+
+        let gone = AddRepoProblem("/code/web/src isn't a git checkout.")
+        XCTAssertEqual(setup.read(cli: nil, inspect: { _ in .failure(gone) }, files: files), .failure(gone))
+    }
+
+    func testReadsAManagedRepoOnItsBaseBranchThroughGh() {
+        let setup = ConnectedWorkflowSetup(key: "web", gitHub: "acme/web", baseBranch: "dev")
+        let (gh, calls) = cli([
+            "api repos/acme/web --jq .default_branch": (0, "main\n", ""),
+            "api repos/acme/web/contents?ref=dev --jq .[].name": (0, "Cargo.toml\n", ""),
+        ])
+
+        XCTAssertEqual(
+            setup.read(cli: gh),
+            .success(ConnectedWorkflowSetup.Found(stack: WorkflowTemplate.detect(RepoFiles(names: ["Cargo.toml"]) { _ in nil }), baseBranch: "dev"))
+        )
+        XCTAssertEqual(calls().count, 2)
+
+        XCTAssertEqual(setup.read(cli: nil), .failure(AddRepoProblem(GitHubCLI.missingMessage)))
+
+        let (failing, _) = cli([:])
+        XCTAssertEqual(setup.read(cli: failing), .failure(AddRepoProblem("Couldn't check acme/web on GitHub: gh: Not Found (HTTP 404)")))
+
+        let (added, _) = cli([
+            "api repos/acme/web --jq .default_branch": (0, "main\n", ""),
+            "api repos/acme/web/contents?ref=main --jq .[].name": (0, "WORKFLOW.md\n", ""),
+        ])
+        XCTAssertEqual(
+            ConnectedWorkflowSetup(key: "web", gitHub: "acme/web").read(cli: added),
+            .failure(AddRepoProblem("acme/web has a WORKFLOW.md on main now. Symphony reads it before the next dispatch."))
+        )
+    }
+
+    func testCreatesThePullRequestThroughGh() throws {
+        let setup = ConnectedWorkflowSetup(key: "web", gitHub: "acme/web")
+        let found = ConnectedWorkflowSetup.Found(stack: WorkflowStack(), baseBranch: "main")
+        let gh = try fakeGH([baseRef, newBranch("symphony/add-workflow"), commit, pullRequest])
+
+        let created = setup.create("---\nhooks: {}\n---", landing: .pullRequest, found: found, cli: gh.cli)
+
+        XCTAssertEqual(created, .success(.pullRequest(url: "https://github.com/acme/web/pull/7")))
+        let content = try XCTUnwrap(gh.calls()[2].first { $0.hasPrefix("content=") }?.dropFirst("content=".count))
+        XCTAssertEqual(Data(base64Encoded: String(content)).map { String(decoding: $0, as: UTF8.self) }, "---\nhooks: {}\n---\n")
+        XCTAssertEqual(setup.createdMessage(try created.get()), "Opened https://github.com/acme/web/pull/7 to add the WORKFLOW.md of web.")
+
+        // The pending store then shows it on the repo.
+        let store = PendingWorkflowStore(defaults: MemoryKeyValueStore())
+        store.record(try created.get(), for: setup.key)
+        XCTAssertEqual(store.all["web"]?.field.value, "Pending: pull request open")
+    }
+
+    func testAFailedPullRequestStaysInTheSheetAndLeavesNoBranch() throws {
+        let setup = ConnectedWorkflowSetup(key: "web", gitHub: "acme/web")
+        let found = ConnectedWorkflowSetup.Found(stack: WorkflowStack(), baseBranch: "main")
+        let gh = try fakeGH([
+            baseRef, newBranch("symphony/add-workflow"), commit,
+            Answer(pattern: "'pr create'*", error: "a pull request already exists", status: 1), deleteBranch,
+        ])
+
+        XCTAssertEqual(
+            setup.create(text, landing: .pullRequest, found: found, cli: gh.cli),
+            .failure(AddRepoProblem("Couldn't open the pull request from symphony/add-workflow of acme/web: a pull request already exists"))
+        )
+        XCTAssertEqual(gh.calls().last, ["api", "-X", "DELETE", "repos/acme/web/git/refs/heads/symphony/add-workflow"])
+        XCTAssertEqual(setup.create(text, landing: .pullRequest, found: found, cli: nil), .failure(AddRepoProblem(GitHubCLI.missingMessage)))
+    }
+
+    func testWritesIntoTheCheckout() throws {
+        let folder = uniqueTemporaryDirectory("connected-workflow")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let checkout = LocalCheckout(path: folder.path, gitHub: "acme/web", hasWorkflow: false)
+        let setup = ConnectedWorkflowSetup(key: "web", gitHub: "acme/web", checkout: folder.path)
+        let found = ConnectedWorkflowSetup.Found(stack: WorkflowStack(), baseBranch: "main", checkout: checkout)
+
+        XCTAssertEqual(
+            setup.create(" \n", landing: .localFile, found: found, cli: nil),
+            .failure(AddRepoProblem("The WORKFLOW.md draft is empty. Write one, or press Cancel."))
+        )
+        XCTAssertEqual(setup.create(text, landing: .skip, found: found, cli: nil), .failure(AddRepoProblem("Pick how to add the WORKFLOW.md.")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: checkout.workflowPath))
+
+        let written = setup.create(text, landing: .localFile, found: found, cli: nil)
+
+        XCTAssertEqual(written, .success(.localFile(path: checkout.workflowPath)))
+        XCTAssertEqual(try String(contentsOfFile: checkout.workflowPath, encoding: .utf8), text)
+        let shown = (checkout.workflowPath as NSString).abbreviatingWithTildeInPath
+        XCTAssertEqual(setup.createdMessage(try written.get()), "Wrote \(shown) for web; commit and push it to the base branch.")
+        XCTAssertEqual(try written.get().field.value, "Pending: written, not pushed")
+    }
 }

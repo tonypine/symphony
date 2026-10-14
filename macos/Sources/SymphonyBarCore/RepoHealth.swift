@@ -39,6 +39,8 @@ public struct RepoHealth: Equatable {
         case stopRun(issueIdentifier: String)
         case openInLinear(URL)
         case revealWorktree(path: String)
+        /// Opens the WORKFLOW.md page on its own, to draft the missing file and add it.
+        case setUpWorkflow(ConnectedWorkflowSetup)
 
         public var title: String {
             switch self {
@@ -50,6 +52,7 @@ public struct RepoHealth: Equatable {
             case .stopRun: return RepoHealth.stopRunTitle
             case .openInLinear: return "Open in Linear"
             case .revealWorktree: return ReposList.revealWorktreeTitle
+            case .setUpWorkflow: return ConnectedWorkflowSetup.buttonTitle
             }
         }
     }
@@ -222,7 +225,8 @@ public struct RepoHealth: Equatable {
                 id: "workflow",
                 severity: .warning,
                 title: "WORKFLOW.md is missing",
-                detail: "Symphony found no WORKFLOW.md on \(branchName(repo.baseBranch))."
+                detail: "Symphony found no WORKFLOW.md on \(branchName(repo.baseBranch)).",
+                fixes: ConnectedWorkflowSetup.of(repo).map { [.setUpWorkflow($0)] } ?? []
             )
         case .invalid:
             return Problem(

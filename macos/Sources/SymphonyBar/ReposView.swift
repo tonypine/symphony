@@ -35,6 +35,11 @@ struct ReposView: View {
                 }
             }
         }
+        .sheet(isPresented: Binding(get: { model.workflowSetup != nil }, set: { if !$0 { model.workflowSetup = nil } })) {
+            if let workflowSetup = model.workflowSetup {
+                WorkflowSetupSheet(model: workflowSetup) { model.workflowSetup = nil }
+            }
+        }
         .sheet(item: $model.disconnect) { sheet in
             DisconnectRepoView(
                 sheet: sheet,
