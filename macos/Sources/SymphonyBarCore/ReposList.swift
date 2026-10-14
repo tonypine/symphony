@@ -646,7 +646,8 @@ public enum ReposList {
     /// The window for Symphony's `status`, the last repos poll (nil before the first) and `symphony.yml`. The repos
     /// come from Symphony while it answers with them, otherwise from `symphony.yml` with what only Symphony knows
     /// folded into one line. `pending` is the `WORKFLOW.md` the app wrote for a repo key and that isn't on its base
-    /// branch yet. `cloneRemoval` says whether a managed repo's clone can be deleted.
+    /// branch yet, shown whether or not Symphony answers. `cloneRemoval` says whether a managed repo's clone can be
+    /// deleted.
     public static func window(
         status: SymphonyStatus,
         poll: ReposPoll?,
@@ -674,9 +675,11 @@ public enum ReposList {
                 return ReposWindow(chip: chip, content: .empty(.unreadable(path: config.path, message: message)))
             case let .entries(entries):
                 let live = folded(status: status, poll: poll)
-                let health = RepoHealth.notChecked(status: status, poll: poll)
                 details = entries.map { entry in
-                    detail(entry, live: live, health: health, config: config, isDirectory: isDirectory)
+                    let health = RepoHealth.notChecked(
+                        status: status, poll: poll, pending: pending(entry.key), baseBranch: entry.baseBranch
+                    )
+                    return detail(entry, live: live, health: health, config: config, isDirectory: isDirectory)
                         .withManualReview(entries)
                 }
             }

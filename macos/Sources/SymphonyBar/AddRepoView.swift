@@ -75,7 +75,9 @@ final class AddRepoViewModel: ObservableObject {
         configPath: String,
         secrets: SecretsReader,
         editing key: String? = nil,
-        linearClient: @escaping (_ apiKey: String) -> LinearClient = { LinearClient(apiKey: $0) },
+        linearClient: @escaping (_ apiKey: String) -> LinearClient = {
+            LinearClient(apiKey: $0, endpoint: AppStores.current.linearEndpoint)
+        },
         gitHubCLI: @escaping () -> GitHubCLI? = {
             GitHubCLI.locate(environment: AppStores.current.environment).map(GitHubCLI.process)
         },
@@ -284,6 +286,8 @@ final class AddRepoViewModel: ObservableObject {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
+        // A QA pass opens the panel in the checkout it prepared, then presses Choose.
+        if let folder = AppStores.current.qaMode?.openPanelDirectory { panel.directoryURL = folder }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         pickFolder(url.path)
     }

@@ -5,13 +5,16 @@ import UserNotifications
 /// Posts the Inbox's notifications (D14, C22): one per new item or problem, grouped by kind, with Open, and no
 /// sound; a pull request whose checks are green also gets Approve and Merge…, which opens the app on its sheet and
 /// approves nothing itself. Permission is asked the first time one is due. In scripted QA mode they are recorded
-/// instead.
+/// instead. It also posts the notification an update Automatically when released posts as it starts (S4c), with
+/// Cancel Update, as the app's one notification delegate.
 @MainActor
 final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate {
     nonisolated static let categoryID = "symphony.inbox"
     nonisolated static let mergeCategoryID = "symphony.inbox.green-pr"
     nonisolated static let openActionID = "symphony.inbox.open"
     nonisolated static let approveAndMergeActionID = "symphony.inbox.approve-and-merge"
+    nonisolated static let updateCategoryID = "symphony.update"
+    nonisolated static let cancelUpdateActionID = "symphony.update.cancel"
     nonisolated static let openTitle = "Open"
     nonisolated private static let issueKey = "issueID"
 
@@ -19,6 +22,8 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
     var onOpen: (String?) -> Void = { _ in }
     /// Approve and Merge… chosen on a pull request's notification: the Inbox item's issue id.
     var onApproveAndMerge: (String) -> Void = { _ in }
+    /// Cancel Update chosen on the update's start notification.
+    var onCancelUpdate: () -> Void = {}
 
     private let defaults: KeyValueStore
     private var notifier: InboxNotifier
@@ -38,9 +43,11 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
         center.delegate = self
         let open = UNNotificationAction(identifier: Self.openActionID, title: Self.openTitle, options: [.foreground])
         let merge = UNNotificationAction(identifier: Self.approveAndMergeActionID, title: InboxNotice.approveAndMergeTitle, options: [.foreground])
+        let cancelUpdate = UNNotificationAction(identifier: Self.cancelUpdateActionID, title: UpdateNotice.cancelUpdateTitle)
         center.setNotificationCategories([
             UNNotificationCategory(identifier: Self.categoryID, actions: [open], intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.mergeCategoryID, actions: [open, merge], intentIdentifiers: []),
+            UNNotificationCategory(identifier: Self.updateCategoryID, actions: [cancelUpdate], intentIdentifiers: []),
         ])
     }
 
@@ -82,6 +89,36 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
         }
     }
 
+    /// Posts the update's start notification, with Cancel Update and no sound. Nothing shows in its place when
+    /// notifications aren't allowed. Scripted QA mode records it, with its action.
+    func postUpdateStarted(_ notice: UpdateNotice) {
+        if let script = QAScriptDriver.shared {
+            script.record(alertTitle: notice.title, message: notice.messageWithCancelUpdate)
+            return
+        }
+        // UNUserNotificationCenter needs an app bundle; `swift run` has none.
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = notice.title
+        content.body = notice.body
+        content.sound = nil
+        content.categoryIdentifier = Self.updateCategoryID
+        let request = UNNotificationRequest(identifier: UpdateStartNotifier.requestIdentifier, content: content, trigger: nil)
+        Task {
+            guard (try? await center.requestAuthorization(options: [.alert])) == true else { return }
+            try? await center.add(request)
+        }
+    }
+
+    /// Removes the update's start notification from Notification Center, as when the update ends.
+    func withdrawUpdateStarted() {
+        guard QAScriptDriver.shared == nil, Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [UpdateStartNotifier.requestIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [UpdateStartNotifier.requestIdentifier])
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -91,7 +128,9 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
         let action = response.actionIdentifier
         let opens = [Self.openActionID, UNNotificationDefaultActionIdentifier].contains(action)
         Task { @MainActor in
-            if action == Self.approveAndMergeActionID, let issueID {
+            if action == Self.cancelUpdateActionID {
+                self.onCancelUpdate()
+            } else if action == Self.approveAndMergeActionID, let issueID {
                 self.onApproveAndMerge(issueID)
             } else if opens {
                 self.onOpen(issueID)

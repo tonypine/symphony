@@ -557,6 +557,53 @@ final class ReposListTests: XCTestCase {
         XCTAssertNotNil(shown.repos[1].manualReview)
     }
 
+    func testAStoppedRowStillShowsItsPendingWorkflow() {
+        let pr = URL(string: "https://github.com/acme/api/pull/9")!
+        let pending: [String: PendingWorkflow] = [
+            "symphony": .localFile(path: "/Projects/symphony/WORKFLOW.md"),
+            "api": .pullRequest(url: pr.absoluteString),
+        ]
+        let shown = ReposList.window(
+            status: .stopped,
+            poll: nil,
+            config: config,
+            now: now,
+            pending: { pending[$0] },
+            isDirectory: { _ in false },
+            cloneRemoval: { _ in .blocked("checking") }
+        )
+
+        XCTAssertEqual(shown.repos.map(\.live), Array(repeating: .folded(line: ReposList.stoppedLine, canStart: true), count: 2))
+        XCTAssertEqual(shown.repos.map(\.health.status), [.notChecked, .notChecked])
+        XCTAssertEqual(shown.repos.map(\.health.summary), Array(repeating: "Not checked: Symphony is stopped", count: 2))
+        XCTAssertEqual(shown.repos.map(\.health.showsBox), [true, true])
+        XCTAssertEqual(
+            shown.repos[0].health.problems,
+            [
+                .init(
+                    id: "workflow",
+                    severity: .warning,
+                    title: "WORKFLOW.md is written but not pushed",
+                    detail: "/Projects/symphony/WORKFLOW.md",
+                    note: "Symphony uses it once it is on the default branch.",
+                    fixes: [.revealInFinder(path: "/Projects/symphony/WORKFLOW.md")]
+                ),
+            ]
+        )
+        XCTAssertEqual(
+            shown.repos[1].health.problems,
+            [
+                .init(
+                    id: "workflow",
+                    severity: .warning,
+                    title: "WORKFLOW.md is waiting on its pull request",
+                    note: "Symphony uses it once the pull request merges into develop.",
+                    fixes: [.viewPullRequest(pr)]
+                ),
+            ]
+        )
+    }
+
     func testFoldsTheLiveSectionsWithWhySymphonyDoesntShowThem() {
         let cases: [(SymphonyStatus, ReposPoll?, String, Bool)] = [
             (.starting, nil, "Symphony is starting… Live status shows once it runs.", false),
@@ -677,7 +724,7 @@ final class ReposListTests: XCTestCase {
         let only = ReposConfig(path: "/etc/symphony.yml", repos: .entries([configured[0]]))
         XCTAssertEqual(
             window(.stopped, nil, config: only).repos[0].actions,
-            RepoActions(disconnectProblem: "symphony is the only repo, and Symphony needs at least one.")
+            RepoActions(disconnectProblem: "Symphony needs at least one repo.")
         )
 
         let unreadable = ReposConfig(path: "/etc/symphony.yml", repos: .unreadable("boom"))

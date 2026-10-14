@@ -1390,7 +1390,12 @@ The QA agent:
   total size, and MUST hold no symlinks), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
-  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  directory there), and `qa_put_checkout`, which clones a git bundle the agent wrote into a
+  checkout there, without hooks, with `origin` set to the GitHub URL the agent names.
+  `qa_launch_app` MAY point the app, in QA mode only, at stand-ins on the pass's host ports: a
+  fake `gh` that Symphony itself provides (never a script the agent wrote) forwarding each call to
+  the agent's stub, a Linear GraphQL stub, and a folder picker that opens in a checkout
+  `qa_put_checkout` made. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
@@ -2304,6 +2309,9 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   another to land first (the landing order below) is not updated: its state is `waiting_to_land`
   ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
   PR lands or leaves its way, and the first poll after that updates it once.
+- Only a `Merging` PR is updated. A `BEHIND` PR in the Code Review state, the QA state or `Rework`
+  MUST NOT get an update-branch: an agent run syncs its own branch with the base, and a Code Review
+  or QA run starts only on a green head, which an update on every base merge would keep restarting.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
   conflict context, and the fix returns through review. The approval covered the diff before the
@@ -2488,7 +2496,11 @@ Rules:
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
   approval. The implementation prompt reads the section in the description. A ruling a person
-  gives in a plain comment, not under a decision request, is not recorded.
+  gives in a plain comment that opens with `Decision:` or `Ruling:` (any case, bold or not), not as
+  a reply under a decision request, MUST be recorded on the same read, keyed by its comment
+  (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
+  answer the section already records MUST NOT be written again. The agents' comment tools MUST
+  refuse a body that opens that way, so only a person writes a ruling.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
@@ -2515,8 +2527,14 @@ Rules:
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
   waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
-  reused one keeps its priority. Only the same failure recurring with no new information escalates
-  to a `Needs Decision` hold.
+  reused one keeps its priority. A QA answer may name an open ticket that already tracks the
+  missing QA tool (`covered_by`); the hold then waits on that ticket, linked as blocked-by, and
+  nothing is filed. A missing QA tool or QA host capability is never `needs_person`: only a secret,
+  an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
+  for a fix merged into the repository the running build comes from: like the app-update hold on a
+  `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge
+  commit. Only the same failure recurring with no new information escalates to a
+  `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the

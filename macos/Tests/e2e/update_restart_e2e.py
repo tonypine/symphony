@@ -488,6 +488,9 @@ class Instance:
                 "startOnLaunch": False,
                 "restartTimeoutMinutes": 10,
                 "stopTimeoutSeconds": 30,
+                # Scenario 1 installs with Update to vX; the default, Automatically when released, would install by
+                # itself at the launch check.
+                "updateMode": "manual",
             }, file)
         secrets_file = self.qa / "secrets.json"
         secrets_file.write_text(json.dumps({"LINEAR_API_KEY": "e2e-not-a-real-key", "E2E_SECRET": self.secret}))
