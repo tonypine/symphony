@@ -171,6 +171,8 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
       end
 
       assert AgentSandboxConfig.workspace_link_targets(workspace) == ["priv/skills/pull", "lib/scripts"]
+      # A person unlocked the skills for the run: the links in them are not followed.
+      assert AgentSandboxConfig.workspace_link_targets(workspace, [".agents/skills", ".claude/skills"]) == []
       assert AgentSandboxConfig.workspace_link_targets(Path.join(workspace, "missing")) == []
     after
       File.rm_rf(workspace)

@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     BuildInfo,
     CiPoller,
     Config,
+    Decisions,
     DispatchLoop,
     EpicLanes,
     ForcedQueue,
@@ -1296,9 +1297,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that
   # `UpdateHold.hold/4` needs. Tickets of repos not polled this cycle were looked up when they were.
+  # The same task writes the rulings people gave in comments into the tickets' Decisions sections.
   defp resolve_update_holds({repo_name, {:ok, issues}}, cache) when is_list(issues) do
     terminal_states = Config.settings!().tracker.terminal_states
-    sweep_blocked_holds(repo_name, issues, terminal_states)
+    {_changed, cache} = sweep_blocked_holds(repo_name, issues, terminal_states, cache)
+    _ = Decisions.sweep(issues)
     UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, [])
   end
 
@@ -1306,12 +1309,13 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Runs in the poll task: reconciles each polled issue's Blocked hold against its blockers — a
   # ticket in Todo with an open blocker gains the hold (and pauses), and one whose blockers all went
-  # terminal loses it and dispatches, with no state move and no person involved. Resolving the
-  # repo's settings once here keeps it off the per-issue config read.
-  defp sweep_blocked_holds(repo_name, issues, terminal_states) do
+  # terminal loses it and dispatches, with no state move and no person involved. A fix-ticket hold
+  # whose fix merged into Symphony itself also waits for the running app, through the same cache as
+  # `UpdateHold`. Resolving the repo's settings once here keeps it off the per-issue config read.
+  defp sweep_blocked_holds(repo_name, issues, terminal_states, cache) do
     case Config.settings_for_repo(repo_name) do
-      {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings, repo_key: repo_name)
-      {:error, _reason} -> 0
+      {:ok, settings} -> BlockedHold.sweep(issues, terminal_states, settings: settings, repo_key: repo_name, update_hold_cache: cache)
+      {:error, _reason} -> {0, cache}
     end
   end
 
@@ -1819,7 +1823,8 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec sweep_blocked_holds_for_test(String.t(), [Issue.t()], [String.t()]) :: non_neg_integer()
   def sweep_blocked_holds_for_test(repo_name, issues, terminal_states) when is_list(issues) do
-    sweep_blocked_holds(repo_name, issues, terminal_states)
+    {changed, _cache} = sweep_blocked_holds(repo_name, issues, terminal_states, UpdateHold.empty_cache())
+    changed
   end
 
   @doc false

@@ -26,6 +26,12 @@ extension DesignTokens.SystemColor {
     }
 }
 
+extension EnvironmentValues {
+    /// True while a view renders offscreen with `ImageRenderer` (the snapshots in `Tests/Snapshots`), which can't
+    /// draw an AppKit-backed control: the few that are draw a SwiftUI stand-in of the same size instead.
+    @Entry var offscreenSnapshot = false
+}
+
 // The one exception to system colors: the chart palette's validated light and dark pair (§3.3).
 extension DesignTokens.ChartSeries {
     /// The series color, its light or dark value following the appearance.

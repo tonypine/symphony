@@ -34,7 +34,10 @@ defmodule SymphonyElixir.EpicReview do
            sub-issue in `Todo` inside the epic, and the parent returns to the waiting state
            (`:epic_review_gaps`), where the follow-up holds it until it lands. The review runs
            again when it does, so the epic closes itself once it is whole; the loop ends at the
-           first pass.
+           first pass. A gap that can only be checked once another change has merged is two
+           follow-ups: the step that checks it names the one it waits on (another gap of the same
+           answer, or a sub-ticket of the epic) in `blocked_by`, and is filed after it with that
+           blocked-by relation; a blocker that is neither is logged and left out.
          * `blocked` (tooling, environment, an answer that did not resolve the checklist, gaps none
            of which could be filed, or a run dispatched to a remote worker, where the flow does
            not run the QA agent) -> retried boundedly on the same commit, then handed to the
@@ -455,30 +458,129 @@ defmodule SymphonyElixir.EpicReview do
   # sub-ticket of the epic — same team, project, assignee, parent and priority, so
   # `tickets.priorities` dispatches it like the epic — and never lands in `Backlog`, where it would
   # not hold the epic.
+  #
+  # A failing step may name what it waits on (`blocked_by`): the `gap` label of another failing step
+  # in the same answer, or a sub-ticket of the epic. A follow-up that can only be checked after
+  # another one merges (TP-994) is filed after its blockers with the blocked-by relation, so the
+  # dependency gate — and on Symphony's own repository `SymphonyElixir.UpdateHold` — keeps it in
+  # `Todo` until they land, rather than both running at once and holding each other in QA.
   defp create_gaps(issue, outcome, opts) do
     {:ok, registry} = CommentRegistry.start_link()
-    context = %{issue: issue, comment_registry: registry}
+    gaps = gap_tickets(outcome, issue)
+    labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
+    context = %{issue: issue, comment_registry: registry, epic_tickets: epic_tickets(issue), labels: labels}
 
     try do
-      outcome
-      |> gap_tickets(issue)
-      |> Enum.flat_map(fn {title, description} ->
-        attrs = %{"title" => title, "description" => description}
-        create = fn -> AgentTools.Linear.create_subissue_in_state(context, @gap_state, attrs, linear_opts(opts)) end
-
-        case with_linear_retry(create, "filing an epic review follow-up for #{issue.identifier}", opts) do
-          {:ok, response} ->
-            [%{identifier: get_in(response, ["data", "issueCreate", "issue", "identifier"]), title: title}]
-
-          {:error, reason} ->
-            Logger.warning("Failed to file an epic review follow-up for #{issue.identifier}: #{inspect(reason)}")
-            []
-        end
-      end)
+      file_in_order(gaps, context, opts, %{}, [])
     after
       Agent.stop(registry)
     end
   end
+
+  # Files the gaps whose same-answer blockers are all settled (filed or failed), then the gaps that
+  # waited on them, until none is left. Gaps that only wait on each other (a cycle) are filed in
+  # their order, without the relations among them.
+  defp file_in_order([], _context, _opts, _settled, filed), do: Enum.reverse(filed)
+
+  defp file_in_order(gaps, context, opts, settled, filed) do
+    labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
+
+    {ready, waiting} =
+      case Enum.split_with(gaps, fn gap -> not Enum.any?(gap.blocked_by, &MapSet.member?(labels, gap_label(&1))) end) do
+        {[], [first | rest]} -> {[first], rest}
+        split -> split
+      end
+
+    {settled, filed} =
+      Enum.reduce(ready, {settled, filed}, fn gap, {settled, filed} ->
+        case file_gap(gap, context, opts, settled) do
+          {:ok, ticket} -> {settle(settled, gap, ticket.identifier), [ticket | filed]}
+          :error -> {settle(settled, gap, nil), filed}
+        end
+      end)
+
+    file_in_order(waiting, context, opts, settled, filed)
+  end
+
+  defp settle(settled, %{gap: nil}, _identifier), do: settled
+  defp settle(settled, %{gap: gap}, identifier), do: Map.put(settled, gap_label(gap), identifier)
+
+  defp file_gap(gap, %{issue: issue} = context, opts, settled) do
+    blocked_by = gap.blocked_by |> Enum.flat_map(&resolve_blocker(&1, gap, context, settled)) |> Enum.uniq()
+
+    case create_follow_up(gap, blocked_by, context, opts) do
+      {:ok, ticket} ->
+        {:ok, ticket}
+
+      {:error, reason} ->
+        Logger.warning("Failed to file an epic review follow-up for #{issue.identifier}: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  # A blocker the follow-up can be linked to: a gap of this answer that was filed, or a sub-ticket of
+  # the epic. Anything else is logged and dropped, so the follow-up is still filed.
+  defp resolve_blocker(name, gap, %{issue: issue} = context, settled) do
+    identifier = String.upcase(name)
+
+    cond do
+      is_binary(Map.get(settled, gap_label(name))) ->
+        [Map.fetch!(settled, gap_label(name))]
+
+      Map.has_key?(settled, gap_label(name)) ->
+        unlinked(issue, gap, name, "its gap could not be filed")
+
+      MapSet.member?(context.labels, gap_label(name)) ->
+        unlinked(issue, gap, name, "the gaps wait on each other")
+
+      MapSet.member?(context.epic_tickets, identifier) ->
+        [identifier]
+
+      true ->
+        unlinked(issue, gap, name, "it is neither a gap of this review nor a ticket of #{issue.identifier}")
+    end
+  end
+
+  defp unlinked(issue, gap, name, why) do
+    Logger.warning("Epic review follow-up \"#{gap.title}\" for #{issue.identifier} names #{inspect(name)} as its blocker, but #{why}; filing it without that relation")
+
+    []
+  end
+
+  defp create_follow_up(gap, blocked_by, %{issue: issue} = context, opts) do
+    attrs = %{"title" => gap.title, "description" => gap.description, "blocked_by" => blocked_by}
+    linear_context = %{issue: issue, comment_registry: context.comment_registry}
+    create = fn -> AgentTools.Linear.create_subissue_in_state(linear_context, @gap_state, attrs, linear_opts(opts)) end
+
+    case with_linear_retry(create, "filing an epic review follow-up for #{issue.identifier}", opts) do
+      {:ok, response} ->
+        {:ok, %{identifier: get_in(response, ["data", "issueCreate", "issue", "identifier"]), title: gap.title, blocked_by: blocked_by}}
+
+      # Linear no longer lists the blocker under the epic: the follow-up is still filed, without it.
+      {:error, {:blocked_by_not_sibling, unknown, _siblings}} ->
+        unlinked(issue, gap, Enum.join(unknown, ", "), "Linear does not list it under #{issue.identifier}")
+        create_follow_up(gap, blocked_by -- unknown, context, opts)
+
+      # The follow-up was filed; only its relation is missing, which a second filing would not mend.
+      {:error, {:blocked_by_relation_failed, identifier, blocker, reason}} ->
+        Logger.warning("Filed epic review follow-up #{identifier} for #{issue.identifier} without its blocker #{blocker}: #{inspect(reason)}")
+
+        {:ok, %{identifier: identifier, title: gap.title, blocked_by: Enum.take_while(blocked_by, &(&1 != blocker))}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp epic_tickets(%Issue{sub_issues: sub_issues}) do
+    sub_issues
+    |> List.wrap()
+    |> Enum.map(&sub_issue_label/1)
+    |> Enum.filter(&is_binary/1)
+    |> MapSet.new(&String.upcase/1)
+  end
+
+  defp gap_label(name), do: name |> String.trim() |> String.downcase()
 
   defp gap_tickets(outcome, issue) do
     case Enum.filter(Map.get(outcome, :steps, []), &(&1.status == "fail")) do
@@ -509,7 +611,12 @@ defmodule SymphonyElixir.EpicReview do
     - [ ] The epic's review passes this step when it runs #{issue.identifier} again.
     """
 
-    {title("Epic review fails: " <> step.name), body}
+    %{
+      title: title("Epic review fails: " <> step.name),
+      description: body,
+      gap: Map.get(step, :gap),
+      blocked_by: Map.get(step, :blocked_by, [])
+    }
   end
 
   defp finding_ticket(finding, outcome, issue) do
@@ -530,7 +637,7 @@ defmodule SymphonyElixir.EpicReview do
     - [ ] The epic's review passes when it runs #{issue.identifier} again.
     """
 
-    {title("Epic review finding: " <> first_line(finding)), body}
+    %{title: title("Epic review finding: " <> first_line(finding)), description: body, gap: nil, blocked_by: []}
   end
 
   defp ticket_intro(outcome, issue) do
@@ -652,6 +759,7 @@ defmodule SymphonyElixir.EpicReview do
       findings: Map.get(result, :findings, []),
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
+      covered_by: Map.get(result, :covered_by),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks),
       checks: checks

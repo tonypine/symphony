@@ -13,8 +13,9 @@ defmodule SymphonyElixir.QaAgent do
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
   `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
-  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts). An
-  answer without that object gets
+  is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts), or
+  `covered_by` naming an open ticket that already tracks a missing QA tool (self-heal then holds
+  the ticket on that one instead of filing a fix ticket). An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
@@ -58,6 +59,7 @@ defmodule SymphonyElixir.QaAgent do
   @max_verdict_follow_ups 1
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
+  @identifier_pattern ~r/\A[A-Za-z][A-Za-z0-9]*-\d+\z/
   @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window, " <>
                               "so layouts at 1400×900 pt were not checked"
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
@@ -72,7 +74,9 @@ defmodule SymphonyElixir.QaAgent do
           required(:status) => String.t(),
           required(:details) => String.t(),
           required(:evidence) => [String.t()],
-          optional(:checklist) => true
+          optional(:checklist) => true,
+          optional(:gap) => String.t(),
+          optional(:blocked_by) => [String.t()]
         }
   @type result :: %{
           required(:verdict) => verdict(),
@@ -81,6 +85,7 @@ defmodule SymphonyElixir.QaAgent do
           required(:findings) => [String.t()],
           optional(:reason) => String.t(),
           optional(:needs_person) => true,
+          optional(:covered_by) => String.t(),
           optional(:follow_ups) => pos_integer()
         }
   @type job :: %{
@@ -219,9 +224,15 @@ defmodule SymphonyElixir.QaAgent do
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
 
-    Set `needs_person` to true when only a person can do what is left: provide a missing secret,
-    API key or account, or check a step by hand or on a real device. Leave it false when the cause is
-    the build, the code, or this QA setup's tools, which an agent can fix.
+    Set `needs_person` to true only when the block is something only a person can hand over: a
+    missing secret or API key, an account, or a real device this QA host lacks. A missing QA tool or
+    QA host capability is never `needs_person`, even when a person could check the step by hand:
+    a fake CLI, a stub service, a checkout, a folder or a driver tool the QA setup lacks is fixed by
+    an agent through a fix ticket. Leave it false too when the cause is the build or the code.
+
+    When a QA tool or capability is missing and an open ticket already tracks adding it (one named
+    in the issue, its comments or its relations), put that ticket's identifier in `covered_by`, so
+    Symphony waits on that ticket instead of filing another. Leave `covered_by` out otherwise.
 
     When one playbook is blocked, mark its steps `blocked` and continue with the other playbooks'
     steps: report `pass` or `fail` for every step that could run. The verdict stays `blocked` while
@@ -245,7 +256,8 @@ defmodule SymphonyElixir.QaAgent do
       ],
       "findings": ["<required for fail: one actionable defect per entry>"],
       "reason": "<required for blocked>",
-      "needs_person": true | false
+      "needs_person": true | false,
+      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"
     }
     """
   end
@@ -438,12 +450,26 @@ defmodule SymphonyElixir.QaAgent do
     them one by one, is not a reason. Symphony does not accept `pass` when no checklist row is
     reported or most of them are skipped: it reports the review as `blocked` and hands it to a
     person.
+
+    Each gap must be checkable on its own PR, before that PR merges: the QA of a follow-up runs
+    against its own PR head, and the QA tools are served by the running Symphony app, not by that
+    head. A gap whose check needs another ticket that has not merged, or needs the change running in
+    Symphony (a new QA tool, or orchestrator behaviour on Symphony's own repository), is two gaps:
+    the first makes the change, the second checks it and is blocked by the first. A single follow-up
+    for both can never pass its QA and holds the epic until a person lifts it. Report each gap that
+    another one waits on as a failing step with a short `"gap"` label (such as `G1`), and name what a
+    gap waits on in its `"blocked_by"`: the `gap` labels of failing steps in this answer, or the
+    identifiers of this epic's sub-tickets. Symphony files the gaps in that order and links each
+    follow-up to its blockers, so the second one waits until the first has merged and, on Symphony's
+    own repository, until the running app includes it.
     """
   end
 
   defp epic_section(_job), do: ""
 
-  defp checklist_field(%{epic_review: true}), do: ~s(,\n      "checklist": true | false)
+  defp checklist_field(%{epic_review: true}),
+    do: ~s(,\n      "checklist": true | false,\n      "gap": "<optional: a short label for a failing step>",\n      "blocked_by": ["<optional: gap labels or epic sub-ticket identifiers it waits on>"])
+
   defp checklist_field(_job), do: ""
 
   defp fixer(%{epic_review: true}), do: "a follow-up ticket"
@@ -547,11 +573,21 @@ defmodule SymphonyElixir.QaAgent do
          :ok <- validate_verdict(verdict, steps, findings, reason) do
       result = %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings}
       result = if reason, do: Map.put(result, :reason, reason), else: result
-      {:ok, if(Map.get(decoded, "needs_person") == true, do: Map.put(result, :needs_person, true), else: result)}
+      result = if Map.get(decoded, "needs_person") == true, do: Map.put(result, :needs_person, true), else: result
+      {:ok, put_covered_by(result, Map.get(decoded, "covered_by"))}
     else
       {:error, reason} -> {:error, {:malformed_qa_response, reason}}
     end
   end
+
+  # The open ticket the agent says already tracks the missing QA tool; anything that is not a
+  # ticket identifier is dropped, so self-heal files its own fix ticket as before.
+  defp put_covered_by(result, covered_by) when is_binary(covered_by) do
+    identifier = String.trim(covered_by)
+    if identifier =~ @identifier_pattern, do: Map.put(result, :covered_by, String.upcase(identifier)), else: result
+  end
+
+  defp put_covered_by(result, _covered_by), do: result
 
   defp coerce_verdict("pass"), do: {:ok, :pass}
   defp coerce_verdict("fail"), do: {:ok, :fail}
@@ -581,7 +617,20 @@ defmodule SymphonyElixir.QaAgent do
       evidence: string_list(Map.get(step, "evidence"))
     }
 
-    if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
+    coerced = if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
+    coerced = put_trimmed(coerced, :gap, Map.get(step, "gap"))
+
+    case step |> Map.get("blocked_by") |> List.wrap() |> string_list() do
+      [] -> coerced
+      blocked_by -> Map.put(coerced, :blocked_by, blocked_by)
+    end
+  end
+
+  defp put_trimmed(map, key, value) do
+    case trimmed(value) do
+      nil -> map
+      trimmed -> Map.put(map, key, trimmed)
+    end
   end
 
   defp validate_verdict(:fail, steps, findings, _reason) do

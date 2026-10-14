@@ -124,6 +124,8 @@ defmodule SymphonyElixir.EpicReviewTest do
     recipient = self()
     create_result = Keyword.get(opts, :create)
     states = Keyword.get(opts, :states, [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}])
+    children = Keyword.get(opts, :children, [])
+    relation = Keyword.get(opts, :relation, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}})
 
     fn query, variables, _opts ->
       send(recipient, {:linear, query, variables})
@@ -143,20 +145,32 @@ defmodule SymphonyElixir.EpicReviewTest do
                  "id" => @issue_id,
                  "priority" => 1,
                  "team" => %{"id" => "team-1", "states" => %{"nodes" => states}},
-                 "children" => %{"nodes" => []}
+                 "children" => %{"nodes" => children}
                }
              }
            }}
 
         query =~ "SymphonyAgentCreateSubissue" ->
-          n = System.unique_integer([:positive])
-          create_result || {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => "new-#{n}", "identifier" => "TP-9#{n}"}}}}}
+          create_answer(create_result, variables.input)
 
         query =~ "SymphonyAgentCreateIssueRelation" ->
-          {:ok, %{"data" => %{"issueCreate" => %{"success" => true}}}}
+          relation
       end
     end
   end
+
+  # The fake's answer to a sub-issue creation: a fresh issue, unless the test names one.
+  defp create_answer(fun, input) when is_function(fun, 1), do: fun.(input) || create_answer(nil, input)
+
+  defp create_answer(nil, _input) do
+    n = System.unique_integer([:positive])
+    created_issue("new-#{n}", "TP-9#{n}")
+  end
+
+  defp create_answer(result, _input), do: result
+
+  defp created_issue(id, identifier),
+    do: {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => id, "identifier" => identifier}}}}}
 
   defp run(issue, opts \\ []) do
     EpicReview.run(
@@ -196,6 +210,23 @@ defmodule SymphonyElixir.EpicReviewTest do
 
   defp comments_posted(messages \\ peek()) do
     for {:memory_tracker_comment, issue_id, body} <- messages, do: {issue_id, body}
+  end
+
+  # The blocked-by relations filed, as `{blocker id, blocked id}`.
+  defp relations(messages \\ peek()) do
+    for {:linear, query, %{input: %{"type" => "blocks"} = input}} <- messages, query =~ "SymphonyAgentCreateIssueRelation", do: {input["issueId"], input["relatedIssueId"]}
+  end
+
+  # Files each follow-up named in `tickets` (title => `{id, identifier}` or an error) as that
+  # ticket, and any other one as the fake's default.
+  defp create_by_title(tickets) do
+    fn %{"title" => title} ->
+      case Map.get(tickets, title) do
+        {:error, _reason} = error -> error
+        {id, identifier} -> created_issue(id, identifier)
+        nil -> nil
+      end
+    end
   end
 
   defp created_subissues(messages \\ peek()) do
@@ -505,6 +536,151 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → TP-823 Epic Review (blocked, retrying)"
       assert report =~ "could not file any follow-up for them"
+    end
+
+    test "a gap that waits on another gap of the same answer is filed after it, blocked by it" do
+      agent_result(:fail, %{
+        summary: "The walkthrough needs a QA tool that is not there.",
+        steps: [
+          @checked_row,
+          %{name: "Record the Add Repo walkthrough", status: "fail", details: "No QA run.", evidence: [], checklist: true, gap: "G2", blocked_by: [" g1 "]},
+          %{name: "QA can serve a prepared checkout", status: "fail", details: "No tool.", evidence: [], gap: "G1"}
+        ]
+      })
+
+      client =
+        linear_client(
+          create:
+            create_by_title(%{
+              "Epic review fails: QA can serve a prepared checkout" => {"tool-id", "TP-950"},
+              "Epic review fails: Record the Add Repo walkthrough" => {"walk-id", "TP-951"}
+            })
+        )
+
+      assert :ok = run(epic(), linear_client: client)
+
+      # The blocker is filed first, whatever order the answer listed them in.
+      assert Enum.map(created_subissues(), & &1["title"]) == [
+               "Epic review fails: QA can serve a prepared checkout",
+               "Epic review fails: Record the Add Repo walkthrough"
+             ]
+
+      assert relations() == [{"tool-id", "walk-id"}]
+      assert [{@issue_id, "Epic Review"}, {@issue_id, "Waiting on sub-tickets"}] = state_updates()
+      assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 2}} | _] = signals()
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- TP-950 Epic review fails: QA can serve a prepared checkout\n"
+      assert report =~ "- TP-951 Epic review fails: Record the Add Repo walkthrough (blocked by TP-950)"
+    end
+
+    test "a gap that waits on a ticket of the epic is filed blocked by that ticket" do
+      agent_result(:fail, %{
+        summary: "The walkthrough waits on TP-824.",
+        steps: [%{name: "Record the walkthrough", status: "fail", details: "Not yet.", evidence: [], blocked_by: ["tp-824"]}]
+      })
+
+      client = linear_client(children: [%{"id" => "child-1", "identifier" => "TP-824"}])
+
+      assert :ok = run(epic(), linear_client: client)
+
+      assert [input] = created_subissues()
+      assert input["title"] == "Epic review fails: Record the walkthrough"
+      assert [{"child-1", new_id}] = relations()
+      assert new_id =~ "new-"
+    end
+
+    test "a gap whose blocker is neither in the epic nor in the answer is filed without it, and logged" do
+      agent_result(:fail, %{
+        summary: "Missing.",
+        steps: [%{name: "Record the walkthrough", status: "fail", details: "Not yet.", evidence: [], blocked_by: ["TP-555"]}]
+      })
+
+      log = capture_log(fn -> assert :ok = run(epic()) end)
+
+      assert [_input] = created_subissues()
+      assert relations() == []
+
+      assert log =~
+               ~s(Epic review follow-up "Epic review fails: Record the walkthrough" for TP-823 names "TP-555" as its blocker, ) <>
+                 "but it is neither a gap of this review nor a ticket of TP-823; filing it without that relation"
+
+      assert [{@issue_id, "Epic Review"}, {@issue_id, "Waiting on sub-tickets"}] = state_updates()
+    end
+
+    test "gaps that wait on each other are both filed, the first without the relation that loops" do
+      agent_result(:fail, %{
+        summary: "Missing.",
+        steps: [
+          %{name: "First", status: "fail", details: "", evidence: [], gap: "G1", blocked_by: ["G2"]},
+          %{name: "Second", status: "fail", details: "", evidence: [], gap: "G2", blocked_by: ["G1"]}
+        ]
+      })
+
+      client = linear_client(create: create_by_title(%{"Epic review fails: First" => {"first-id", "TP-950"}, "Epic review fails: Second" => {"second-id", "TP-951"}}))
+
+      log = capture_log(fn -> assert :ok = run(epic(), linear_client: client) end)
+
+      assert Enum.map(created_subissues(), & &1["title"]) == ["Epic review fails: First", "Epic review fails: Second"]
+      assert relations() == [{"first-id", "second-id"}]
+      assert log =~ ~s(names "G2" as its blocker, but the gaps wait on each other)
+    end
+
+    test "a gap whose blocker could not be filed is filed on its own, and logged" do
+      agent_result(:fail, %{
+        summary: "Missing.",
+        steps: [
+          %{name: "Make the tool", status: "fail", details: "", evidence: [], gap: "G1"},
+          %{name: "Check with the tool", status: "fail", details: "", evidence: [], blocked_by: ["G1"]}
+        ]
+      })
+
+      client = linear_client(create: create_by_title(%{"Epic review fails: Make the tool" => {:error, :linear_down}}))
+
+      log = capture_log(fn -> assert :ok = run(epic(), linear_client: client) end)
+
+      assert relations() == []
+      assert log =~ "Failed to file an epic review follow-up for TP-823: :linear_down"
+      assert log =~ ~s(names "G1" as its blocker, but its gap could not be filed)
+      assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 1}} | _] = signals()
+    end
+
+    test "a ticket of the epic that Linear no longer lists under it is left out, and the gap still filed" do
+      agent_result(:fail, %{
+        summary: "Missing.",
+        steps: [%{name: "Record the walkthrough", status: "fail", details: "", evidence: [], blocked_by: ["TP-824"]}]
+      })
+
+      log = capture_log(fn -> assert :ok = run(epic()) end)
+
+      # Refused before anything was created, then filed without the relation.
+      assert [_input] = created_subissues()
+      assert relations() == []
+      assert log =~ ~s(names "TP-824" as its blocker, but Linear does not list it under TP-823)
+      assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 1}} | _] = signals()
+    end
+
+    test "a follow-up whose relation Linear refused still counts as filed" do
+      agent_result(:fail, %{
+        summary: "Missing.",
+        steps: [%{name: "Record the walkthrough", status: "fail", details: "", evidence: [], blocked_by: ["TP-824"]}]
+      })
+
+      client =
+        linear_client(
+          children: [%{"id" => "child-1", "identifier" => "TP-824"}],
+          create: create_by_title(%{"Epic review fails: Record the walkthrough" => {"walk-id", "TP-951"}}),
+          relation: {:error, :linear_down}
+        )
+
+      log = capture_log(fn -> assert :ok = run(epic(), linear_client: client) end)
+
+      assert [_input] = created_subissues()
+      assert log =~ "Filed epic review follow-up TP-951 for TP-823 without its blocker TP-824"
+      assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 1}} | _] = signals()
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- TP-951 Epic review fails: Record the walkthrough\n"
     end
 
     test "a team with no Todo state leaves the gaps unfiled and blocks the run" do

@@ -88,6 +88,8 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var ticketPatternsBuiltInError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
+    /// Why this copy can't install updates with Development mode on or off, nil when it can.
+    var updateBlocker: (_ developmentMode: Bool) -> String? = { _ in nil }
     /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
     /// in the configured symphony.yml, in minutes.
     @Published var gitNetworkTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultGitNetworkMs)

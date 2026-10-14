@@ -44,7 +44,7 @@ public final class SettingsStore {
             startOnLaunch: defaults.object(forKey: Key.startOnLaunch) as? Bool ?? false,
             developmentMode: defaults.object(forKey: Key.developmentMode) as? Bool ?? false,
             updateMode: (defaults.object(forKey: Key.updateMode) as? String).flatMap(UpdateMode.init(rawValue:))
-                ?? .manual,
+                ?? AppSettings.defaultUpdateMode,
             updateTime: (defaults.object(forKey: Key.updateTime) as? Int).flatMap(TimeOfDay.init(minutesSinceMidnight:))
                 ?? .defaultUpdateTime
         )

@@ -371,6 +371,33 @@ defmodule SymphonyElixir.QaVerificationTest do
                Handoff.signals(@repo_key, @issue_id)
     end
 
+    # TP-834: the retired Auto Review decided from a snapshot taken at the start of a CI poll, so a
+    # verdict that landed inside the window started a second full pass on the same head. A dispatch
+    # whose issue snapshot still reads `QA` after the pass was stored must not run the agent again:
+    # the run reads the head's verdicts itself, just before it would start one.
+    test "a dispatch whose snapshot predates the pass on its head starts no second QA run" do
+      {workspace, head} = git_workspace!()
+      stale_snapshot = issue("QA")
+
+      assert :ok = run(workspace, [])
+      assert_received {:qa_agent_run, %{sha: ^head}, _settings}
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+
+      assert :ok =
+               QaVerification.run(stale_snapshot, workspace,
+                 settings: settings!(),
+                 repo_key: @repo_key,
+                 qa_policy: RunPolicy,
+                 qa_agent: FakeQaAgent
+               )
+
+      refute_received {:qa_agent_run, _, _}
+      assert [%{kind: "qa", head_sha: ^head, outcome: "pass"}] = verdicts()
+
+      assert [%{name: "qa", details: %{signal: "qa_pass", carried: true}} | _] =
+               Handoff.signals(@repo_key, @issue_id)
+    end
+
     test "a fail verdict carries the report and the ticket to Rework" do
       {workspace, head} = git_workspace!()
 
@@ -515,8 +542,34 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "**Verdict:** blocked → QA (blocked)"
     end
 
+    test "a block a QA answer says an open ticket already covers holds on that ticket and files nothing" do
+      {workspace, _head} = git_workspace!()
+
+      covering = %Issue{id: "covering-id", identifier: "TP-716", title: "Fake gh on the QA host", state: "Merging"}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [covering])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      blocked = %{verdict: :blocked, summary: "", steps: [], findings: [], reason: "the QA host has no fake gh", covered_by: "TP-716"}
+      Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{input: 1, output: 1}}})
+
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+
+      refute_received {:fixer_create, _}
+      assert_received {:fixer_block, "TP-716"}
+      assert_received {:fixer_attach, "TP-716", evidence}
+      assert evidence =~ "the QA host has no fake gh"
+
+      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}} = Hold.get(@repo_key, @issue_id, :blocked)
+    end
+
     test "a second ticket hitting the same break reuses the one fix ticket" do
       {workspace, _head} = git_workspace!()
+
+      # Self-heal reuses a fix ticket only while it is open, so the tracker must read it.
+      fix = %Issue{id: "fix-id", identifier: @fix_ticket, title: "Self-heal: repair the qa_environment block", state: "Todo"}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [fix])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
 
       Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
 

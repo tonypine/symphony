@@ -9,19 +9,29 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.loadSettings().stopTimeoutSeconds, AppSettings.defaultStopTimeoutSeconds)
         XCTAssertEqual(store.loadSettings().restartTimeoutMinutes, 30)
         XCTAssertFalse(store.loadSettings().startOnLaunch)
-        XCTAssertEqual(store.loadSettings().updateMode, .manual)
+        XCTAssertEqual(store.loadSettings().updateMode, .onRelease, "a fresh install updates when released")
         XCTAssertEqual(store.loadSettings().updateTime, TimeOfDay(hour: 3, minute: 0))
     }
 
-    func testAnExistingInstallWithoutUpdateSettingsGetsManual() {
+    func testAnExistingInstallWithoutAStoredUpdateModeGetsOnRelease() {
         let defaults = MemoryKeyValueStore()
         defaults.values[SettingsStore.Key.configPath] = "/src/symphony/symphony.yml"
         defaults.values[SettingsStore.Key.startOnLaunch] = true
 
         let settings = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
 
-        XCTAssertEqual(settings.updateMode, .manual)
+        XCTAssertEqual(settings.updateMode, .onRelease, "no migration keeps it on Manual")
         XCTAssertEqual(settings.updateTime, .defaultUpdateTime)
+        XCTAssertNil(defaults.values[SettingsStore.Key.updateMode], "loading stores nothing")
+    }
+
+    func testAStoredUpdateModeIsNeverChanged() {
+        for mode in UpdateMode.allCases {
+            let defaults = MemoryKeyValueStore()
+            defaults.values[SettingsStore.Key.updateMode] = mode.rawValue
+
+            XCTAssertEqual(SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings().updateMode, mode)
+        }
     }
 
     func testUpdateModeAndTimeRoundTripThroughANewStore() {
@@ -39,6 +49,19 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(defaults.values[SettingsStore.Key.updateTime] as? Int, 22 * 60 + 30)
     }
 
+    func testManualAndOnReleaseRoundTripThroughANewStore() {
+        let defaults = MemoryKeyValueStore()
+        for mode in [UpdateMode.manual, .onRelease] {
+            var settings = AppSettings()
+            settings.updateMode = mode
+
+            SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
+
+            XCTAssertEqual(defaults.values[SettingsStore.Key.updateMode] as? String, mode.rawValue)
+            XCTAssertEqual(SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings().updateMode, mode)
+        }
+    }
+
     func testUnreadableUpdateSettingsFallBackToTheDefaults() {
         for (mode, time) in [("hourly", 1440), ("", -5)] as [(Any, Any)] + [(3, "03:00")] {
             let defaults = MemoryKeyValueStore()
@@ -47,7 +70,7 @@ final class SettingsStoreTests: XCTestCase {
 
             let settings = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
 
-            XCTAssertEqual(settings.updateMode, .manual, "\(mode)")
+            XCTAssertEqual(settings.updateMode, .onRelease, "\(mode)")
             XCTAssertEqual(settings.updateTime, .defaultUpdateTime, "\(time)")
         }
     }
