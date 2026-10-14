@@ -12,9 +12,8 @@ defmodule SymphonyElixir.TicketPullRequest do
   Symphony did not open on GitHub, by the ticket's branch, each poll.
 
   Consumers read the ticket's PR with `current_url/1` (or `current_urls/1`, or `recorded_urls/2` for
-  a reader that asks what a finished ticket shipped). Until ticket reads stop
-  carrying Linear attachments, a ticket with no record falls back to the attachment-derived
-  `pull_request_url` / `pr_urls` of the issue.
+  a reader that asks what a finished ticket shipped). The record is the only source of a ticket's
+  PR: ticket reads carry no Linear attachments, so a ticket with no record has no PR.
 
   Writes are side effects next to an action already taken: a store failure is logged and swallowed,
   so it never fails the tool call or the poll that made it.
@@ -126,16 +125,11 @@ defmodule SymphonyElixir.TicketPullRequest do
 
   @doc """
   The URL of the ticket's in-flight PR: its `open` record's, and `nil` once that PR closed or
-  merged. A PR run's issue (`run_kind: :pr`) answers its own PR. A ticket with no record (or a
-  store that cannot be read) falls back to the issue's attachment-derived PR.
+  merged. A PR run's issue (`run_kind: :pr`) answers its own PR, from its PR context. A ticket with
+  no record (or a store that cannot be read) has no PR.
   """
   @spec current_url(Issue.t()) :: String.t() | nil
-  def current_url(%Issue{} = issue) do
-    case current(issue) do
-      {:record, url} -> url
-      :fallback -> URLUtils.pull_request_url(issue)
-    end
-  end
+  def current_url(%Issue{} = issue), do: current(issue)
 
   @doc """
   `current_url/1` for a lane that serves `repo_key`: an issue read without its repo (a single-repo
@@ -146,19 +140,13 @@ defmodule SymphonyElixir.TicketPullRequest do
 
   @doc "`current_url/1` as a list, for the readers that walk every PR of a ticket."
   @spec current_urls(Issue.t()) :: [String.t()]
-  def current_urls(%Issue{} = issue) do
-    case current(issue) do
-      {:record, nil} -> []
-      {:record, url} -> [url]
-      :fallback -> attachment_urls(issue)
-    end
-  end
+  def current_urls(%Issue{} = issue), do: issue |> current() |> List.wrap()
 
   @doc """
   The ticket's recorded PR whatever its state, as a list: for a reader that asks what a finished
   ticket shipped (the update hold looks for a blocker's merged PR), where `current_urls/1` answers
-  none once the PR merged. Falls back to the attachments like `current_urls/1`, under the lane's
-  `repo_key` when the issue was read without its repo.
+  none once the PR merged. Looked up under the lane's `repo_key` when the issue was read without its
+  repo.
   """
   @spec recorded_urls(Issue.t(), String.t() | nil) :: [String.t()]
   def recorded_urls(%Issue{} = issue, repo_key) do
@@ -170,16 +158,19 @@ defmodule SymphonyElixir.TicketPullRequest do
     end
   end
 
-  defp current(%Issue{run_kind: run_kind, pull_request_url: url}) when run_kind in [:pr, "pr"],
-    do: {:record, URLUtils.present_url(url)}
+  defp current(%Issue{run_kind: run_kind, pr_context: context}) when run_kind in [:pr, "pr"],
+    do: pr_context_url(context)
 
   defp current(%Issue{} = issue) do
     case record(issue) do
-      %{state: @open, pr_url: url} -> {:record, url}
-      %{state: state} when state in @finished_states -> {:record, nil}
-      _no_record -> :fallback
+      %{state: @open, pr_url: url} -> url
+      _closed_merged_or_none -> nil
     end
   end
+
+  defp pr_context_url(%{url: url}), do: URLUtils.present_url(url)
+  defp pr_context_url(%{"url" => url}), do: URLUtils.present_url(url)
+  defp pr_context_url(_context), do: nil
 
   defp record(%Issue{run_kind: run_kind}) when run_kind in [:pr, "pr"], do: nil
   defp record(%Issue{repo_key: repo_key, id: issue_id}) when is_binary(repo_key) and is_binary(issue_id), do: get(repo_key, issue_id)
@@ -189,9 +180,6 @@ defmodule SymphonyElixir.TicketPullRequest do
     do: %{issue | repo_key: repo_key}
 
   defp with_repo_key(issue, _repo_key), do: issue
-
-  defp attachment_urls(%Issue{pr_urls: [_ | _] = urls}), do: urls |> Enum.map(&URLUtils.present_url/1) |> Enum.reject(&is_nil/1)
-  defp attachment_urls(%Issue{} = issue), do: issue |> URLUtils.pull_request_url() |> List.wrap()
 
   defp require_url(url) do
     case URLUtils.present_url(url) do

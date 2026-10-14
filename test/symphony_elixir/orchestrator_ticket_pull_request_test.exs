@@ -17,7 +17,7 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
     :ok
   end
 
-  describe "a running ticket whose PR is only in Symphony's record" do
+  describe "a running ticket's PR, from Symphony's record" do
     test "shows that PR in the snapshot and /api/v1/state" do
       :ok = TicketPullRequest.record_created(Config.repo_key!(), "issue-running-pr", @pr_url, "auto/MT-1012")
       {name, pid} = start_orchestrator(:RunningRecordedPr)
@@ -27,17 +27,25 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
       assert %{running: [%{issue_identifier: "MT-1012", pull_request_url: @pr_url}]} = state_payload(name, pid)
     end
 
-    test "shows no PR once that PR closed or merged, even while Linear still shows it attached" do
+    test "shows no PR once that PR closed or merged" do
       for finished <- ["closed", "merged"] do
         :ok = TicketPullRequest.record_created(Config.repo_key!(), "issue-running-pr", @pr_url, "auto/MT-1012")
         :ok = TicketPullRequest.mark_finished(Config.repo_key!(), @pr_url, finished)
         {name, pid} = start_orchestrator(:"RunningFinishedPr#{finished}")
-        put_running(pid, %{issue("issue-running-pr", "In Progress") | pull_request_url: @pr_url, pr_urls: [@pr_url]})
+        put_running(pid, issue("issue-running-pr", "In Progress"))
 
         assert %{running: [%{pull_request_url: nil}]} = GenServer.call(pid, :snapshot)
         assert %{running: [%{pull_request_url: nil}]} = state_payload(name, pid)
         stop_process(pid)
       end
+    end
+
+    test "shows no PR when Symphony has no record for the ticket" do
+      {name, pid} = start_orchestrator(:RunningNoRecord)
+      put_running(pid, issue("issue-running-pr", "In Progress"))
+
+      assert %{running: [%{pull_request_url: nil}]} = GenServer.call(pid, :snapshot)
+      assert %{running: [%{pull_request_url: nil}]} = state_payload(name, pid)
     end
 
     test "keeps a PR URL the run itself reported" do
@@ -51,7 +59,7 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
     end
   end
 
-  describe "a watched ticket whose PR is only in Symphony's record" do
+  describe "a watched ticket's PR, from Symphony's record" do
     test "shows that PR in the snapshot, /api/v1/state and the terminal status" do
       watched = issue("issue-watched-pr", "In Review")
       :ok = TicketPullRequest.record_created(Config.repo_key!(), watched.id, @pr_url, "auto/MT-1012")
@@ -69,8 +77,8 @@ defmodule SymphonyElixir.OrchestratorTicketPullRequestTest do
       assert Regex.replace(~r/\e\[[0-9;]*m/, rendered, "") =~ "PR / LINEAR URL"
     end
 
-    test "shows no PR once the recorded PR merged, though Linear still shows it attached" do
-      watched = %{issue("issue-watched-pr", "In Review") | pull_request_url: @pr_url, pr_urls: [@pr_url]}
+    test "shows no PR once the recorded PR merged" do
+      watched = issue("issue-watched-pr", "In Review")
       :ok = TicketPullRequest.record_created(Config.repo_key!(), watched.id, @pr_url, "auto/MT-1012")
       :ok = TicketPullRequest.mark_finished(Config.repo_key!(), @pr_url, "merged")
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [watched])

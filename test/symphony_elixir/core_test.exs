@@ -866,10 +866,10 @@ defmodule SymphonyElixir.CoreTest do
       state: "In Review",
       title: "Awaiting review",
       url: issue_url,
-      pull_request_url: pull_request_url,
       labels: []
     }
 
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue_id, pull_request_url, nil)
     updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
 
     refute Map.has_key?(updated_state.running, issue_id)
@@ -1610,8 +1610,10 @@ defmodule SymphonyElixir.CoreTest do
 
     # The refetch carries no repo key, as `fetch_issue_states_by_ids` returns it.
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %Issue{id: issue_id, identifier: "MT-880", title: "Post PR", state: "In Progress", pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
+      %Issue{id: issue_id, identifier: "MT-880", title: "Post PR", state: "In Progress", updated_at: DateTime.add(last_ran_at, -10, :second)}
     ])
+
+    :ok = SymphonyElixir.TicketPullRequest.record_created("designed-repo", issue_id, pr_url, nil)
 
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
@@ -1661,8 +1663,10 @@ defmodule SymphonyElixir.CoreTest do
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "In Progress", pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
+        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "In Progress", updated_at: DateTime.add(last_ran_at, -10, :second)}
       ])
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("designed-repo", issue_id, pr_url, nil)
 
       RunStore.delete_ticket_state("designed-repo", issue_id)
 
@@ -1754,7 +1758,7 @@ defmodule SymphonyElixir.CoreTest do
 
     test "a quiet count is dropped once the issue leaves the active states", %{issue_id: issue_id, completed: completed} do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "Backlog", pull_request_url: completed.pull_request_url}
+        %Issue{id: issue_id, identifier: "MT-884", title: "Quiet", state: "Backlog"}
       ])
 
       capture_log(fn ->
@@ -1812,7 +1816,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   # Ends a run that was dispatched without a PR while another run holds the only slot, then
-  # fires its continuation retry. `pr_url` is the PR the refetched issue has attached, and
+  # fires its continuation retry. `pr_url` is the PR Symphony's record holds for the ticket, and
   # `run_opts[:workspace_path]` the workspace the run worked in.
   #
   # The orchestrator polls once on startup; the runs and their issues go in only after that poll
@@ -1867,9 +1871,11 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %{dispatched | pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)},
+      %{dispatched | updated_at: DateTime.add(last_ran_at, -10, :second)},
       busy
     ])
+
+    if pr_url, do: :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue_id, pr_url, nil)
 
     send(pid, {:DOWN, ref, :process, worker, :normal})
 
@@ -1904,10 +1910,11 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "MT-232",
         title: "Land after CI",
         state: "Merging",
-        pull_request_url: pr_url,
         updated_at: DateTime.add(last_ran_at, -10, :second)
       }
     ])
+
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue_id, pr_url, nil)
 
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
@@ -1980,7 +1987,8 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    issue = %Issue{id: issue_id, identifier: "MT-232", title: "Land after CI", state: "Merging", repo_key: "api", pull_request_url: pr_url}
+    issue = %Issue{id: issue_id, identifier: "MT-232", title: "Land after CI", state: "Merging", repo_key: "api"}
+    :ok = SymphonyElixir.TicketPullRequest.record_created("api", issue_id, pr_url, nil)
     initial_state = :sys.get_state(pid)
 
     :sys.replace_state(pid, fn _ ->
@@ -2702,7 +2710,6 @@ defmodule SymphonyElixir.CoreTest do
              "project" => %{"id" => "project-1", "name" => "Harness", "slugId" => "f00dfeed1234"},
              "branchName" => "acme-1-run-one-issue",
              "url" => "https://linear.app/example/issue/ACME-1",
-             "attachments" => %{"nodes" => []},
              "assignee" => %{"id" => "user-1"},
              "labels" => %{"nodes" => [%{"name" => "backend"}]},
              "comments" => %{"nodes" => []},
@@ -2716,7 +2723,8 @@ defmodule SymphonyElixir.CoreTest do
 
     assert {:ok, issue} = Client.fetch_issue_by_identifier_for_test("ACME-1", graphql_fun)
 
-    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, attachmentFirst: 100, commentLast: 20}}
+    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, commentLast: 20} = variables}
+    refute Map.has_key?(variables, :attachmentFirst)
 
     assert query =~ "SymphonyLinearIssueByIdentifier"
     assert %Issue{id: "issue-1", identifier: "ACME-1", state: "Todo", labels: ["backend"]} = issue
@@ -4171,7 +4179,7 @@ defmodule SymphonyElixir.CoreTest do
                  issue,
                  test_pid,
                  issue_state_fetcher: fn [_issue_id] ->
-                   {:ok, [%{issue | state: "Done", pr_urls: ["https://github.test/org/repo/pull/99"]}]}
+                   {:ok, [%{issue | state: "Done"}]}
                  end,
                  issue_enricher: no_op_issue_enricher()
                )
@@ -4219,10 +4227,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "RSM-CONFLICT",
         title: "Resolve the merge conflict",
         description: "PR has merge conflicts",
-        state: "In Progress",
-        pull_request_url: "https://github.test/org/repo/pull/7",
-        pr_urls: ["https://github.test/org/repo/pull/7"]
+        state: "In Progress"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, "https://github.test/org/repo/pull/7", nil)
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4282,10 +4290,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "RSM-REWORK",
         title: "Address reviewer comments",
         description: "PR has reviewer feedback",
-        state: "In Progress",
-        pull_request_url: "https://github.test/org/repo/pull/8",
-        pr_urls: ["https://github.test/org/repo/pull/8"]
+        state: "In Progress"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, "https://github.test/org/repo/pull/8", nil)
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4339,10 +4347,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "RSM-CI",
         title: "Fix CI",
         description: "PR has failing checks",
-        state: "In Progress",
-        pull_request_url: "https://github.test/org/repo/pull/10",
-        pr_urls: ["https://github.test/org/repo/pull/10"]
+        state: "In Progress"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, "https://github.test/org/repo/pull/10", nil)
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4396,10 +4404,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "RSM-CI-FORK",
         title: "Fix fork CI",
         description: "Fork PR has failing checks",
-        state: "In Progress",
-        pull_request_url: "https://github.test/org/repo/pull/11",
-        pr_urls: ["https://github.test/org/repo/pull/11"]
+        state: "In Progress"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, "https://github.test/org/repo/pull/11", nil)
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4443,10 +4451,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "RSM-REUSE",
         title: "Resolve the merge conflict",
         description: "PR has merge conflicts",
-        state: "In Progress",
-        pull_request_url: "https://github.test/org/repo/pull/9",
-        pr_urls: ["https://github.test/org/repo/pull/9"]
+        state: "In Progress"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, "https://github.test/org/repo/pull/9", nil)
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4497,10 +4505,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "TP-218",
         title: "Land the approved PR",
         description: "Renamed from TON-218",
-        state: "Merging",
-        pull_request_url: pr_url,
-        pr_urls: [pr_url]
+        state: "Merging"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, pr_url, nil)
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4549,10 +4557,10 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "TP-381",
         title: "Design how the hub updates itself",
         description: "Parent of TP-586",
-        state: "In Progress",
-        pull_request_url: pr_url,
-        pr_urls: [pr_url]
+        state: "In Progress"
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, pr_url, nil)
 
       log =
         capture_log(fn ->
@@ -4601,10 +4609,10 @@ defmodule SymphonyElixir.CoreTest do
           identifier: identifier,
           title: "Attached PR",
           description: "No rename",
-          state: "In Progress",
-          pull_request_url: pr_url,
-          pr_urls: [pr_url]
+          state: "In Progress"
         }
+
+        :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, pr_url, nil)
 
         assert :ok =
                  AgentRunner.run(issue, nil,
@@ -5017,10 +5025,11 @@ defmodule SymphonyElixir.CoreTest do
         identifier: "MT-232",
         title: "Land after CI",
         state: "Merging",
-        pull_request_url: "https://github.com/example/repo/pull/232",
         url: "https://example.org/issues/MT-232",
         labels: []
       }
+
+      :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, "https://github.com/example/repo/pull/232", nil)
 
       Process.delete(:merging_fetch_count)
 
@@ -5712,7 +5721,8 @@ defmodule SymphonyElixir.CoreTest do
         codex_binary = Path.join(test_root, "fake-codex")
         trace_file = Path.join(test_root, "codex.trace")
         pr_url = "https://github.com/example/repo/pull/461"
-        issue = %{review_agent_issue() | pull_request_url: pr_url}
+        issue = review_agent_issue()
+        :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, pr_url, nil)
 
         write_review_agent_fake_codex!(codex_binary, trace_file)
         write_review_agent_workflow!(codex_binary, max_turns: 4)
@@ -5805,8 +5815,10 @@ defmodule SymphonyElixir.CoreTest do
       refute_receive {:review_agent_start_session, _workspace, _opts}, 50
       refute_receive {:review_agent_call, _count, _session, _prompt, _issue, _opts}, 50
 
+      # The PR run answers its PR from its context; with that PR's head unreadable here, the run
+      # stops after its first turn, as a run on its PR does.
       turn_texts = review_agent_turn_texts!(trace_file)
-      assert length(turn_texts) == 2
+      assert length(turn_texts) == 1
       refute Enum.any?(turn_texts, &String.contains?(&1, "Review-agent gate"))
       refute Enum.any?(turn_texts, &String.contains?(&1, "Reviewer agent approved"))
     after

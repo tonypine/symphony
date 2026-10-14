@@ -323,11 +323,8 @@ defmodule SymphonyElixir.EpicReviewTest do
 
   describe "checks/2" do
     test "lists what the review must account for, with attention where there is something to answer" do
-      issue =
-        epic(%{
-          comments: [%{id: "c1", body: "Please check the settings window.", author: "kim"}],
-          pull_request_url: "https://github.com/acme/app/pull/7"
-        })
+      :ok = SymphonyElixir.TicketPullRequest.record_created(@repo_key, @issue_id, "https://github.com/acme/app/pull/7", "auto/TP-823")
+      issue = epic(%{comments: [%{id: "c1", body: "Please check the settings window.", author: "kim"}]})
 
       assert {:ok, checks} = EpicReview.checks(issue, settings!())
 
@@ -353,12 +350,12 @@ defmodule SymphonyElixir.EpicReviewTest do
 
       :ok = SymphonyElixir.TicketPullRequest.mark_finished(@repo_key, pr_url, "merged")
 
-      assert {:ok, checks} = EpicReview.checks(epic(%{pull_request_url: pr_url, pr_urls: [pr_url]}), settings!())
+      assert {:ok, checks} = EpicReview.checks(epic(), settings!())
       assert %{status: :ok} = Enum.find(checks, &(&1.name == :pull_requests))
     end
 
     test "an epic with nothing recorded and no checklist rows lists all four as evidence to derive" do
-      issue = epic(%{description: "Just context.", comments: [%{id: "c1"}], pr_urls: []})
+      issue = epic(%{description: "Just context.", comments: [%{id: "c1"}]})
 
       assert {:ok, checks} = EpicReview.checks(issue, settings!())
 

@@ -134,7 +134,8 @@ defmodule SymphonyElixir.MergeConfirmationTest do
           review_reason: "it is a one-line docs fix"
         })
 
-      summary = MergeConfirmation.summary(issue(%{pr_urls: ["https://github.com/acme/web/pull/7"]}), opts(), parts(%{review: nil}))
+      :ok = TicketPullRequest.record_created(@repo_key, @issue_id, "https://github.com/acme/web/pull/7", "auto/TP-825")
+      summary = MergeConfirmation.summary(issue(), opts(), parts(%{review: nil}))
       assert summary.review == "it is a one-line docs fix"
       assert summary.pr == "https://github.com/acme/web/pull/7"
     end
@@ -150,7 +151,7 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert MergeConfirmation.summary(issue(), opts(), parts(%{review: nil})).pr == nil
     end
 
-    test "links the PR Symphony recorded for the ticket when its attachments show none; a finished one links nothing" do
+    test "links the PR Symphony recorded for the ticket; a finished one links nothing" do
       pr_url = "https://github.com/acme/web/pull/8"
       :ok = TicketPullRequest.record_created(@repo_key, @issue_id, pr_url, "auto/TP-825")
 
@@ -161,12 +162,12 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       for state <- ["closed", "merged"] do
         :ok = TicketPullRequest.record_created(@repo_key, @issue_id, pr_url, "auto/TP-825")
         :ok = TicketPullRequest.mark_finished(@repo_key, pr_url, state)
-        assert MergeConfirmation.summary(issue(%{pr_urls: [pr_url]}), opts(), parts()).pr == nil
+        assert MergeConfirmation.summary(issue(), opts(), parts()).pr == nil
       end
     end
 
-    test "an issue carrying no PR list falls back to the caller's PR" do
-      summary = MergeConfirmation.summary(issue(%{pr_urls: nil}), opts(pr_url: "https://example.test/9"), parts())
+    test "a ticket with no recorded PR falls back to the caller's PR" do
+      summary = MergeConfirmation.summary(issue(), opts(pr_url: "https://example.test/9"), parts())
       assert summary.pr == "https://example.test/9"
     end
 

@@ -353,8 +353,7 @@ defmodule SymphonyElixir.NotificationsTest do
       identifier: "ACME-7",
       title: "Needs review",
       state: "In Review",
-      url: " https://linear.test/ACME-7 ",
-      pr_urls: ["", "https://github.test/org/repo/pull/7"]
+      url: " https://linear.test/ACME-7 "
     }
 
     assert {:ok,
@@ -364,7 +363,7 @@ defmodule SymphonyElixir.NotificationsTest do
               issue_identifier: "ACME-7",
               issue_title: "Needs review",
               issue_url: "https://linear.test/ACME-7",
-              pr_url: "https://github.test/org/repo/pull/7",
+              pr_url: nil,
               state: "In Review"
             }} = Event.from_issue(:awaiting_review, issue)
 
@@ -383,7 +382,7 @@ defmodule SymphonyElixir.NotificationsTest do
     :ok = SymphonyElixir.TicketPullRequest.mark_finished("repo-n", pr_url, "merged")
 
     assert {:ok, %Event{pr_url: nil}} =
-             Event.from_issue(:awaiting_review, %{issue | pr_urls: [pr_url]}, repo_key: "repo-n")
+             Event.from_issue(:awaiting_review, issue, repo_key: "repo-n")
   end
 
   test "event transcript link falls back cleanly when config cannot load" do

@@ -121,7 +121,7 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     write_auto_merge_workflow!()
     Application.put_env(:symphony_elixir, :auto_merge_test_recipient, self())
-    :ok
+    :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/ACME-1780")
   end
 
   test "a green, up-to-date PR gets auto-merge once and the issue is Done after GitHub merges it" do
@@ -1329,6 +1329,8 @@ defmodule SymphonyElixir.AutoMergeTest do
             {with_sub_issues(issue("Merging"), open), true}
           ] do
         if disabled?, do: disable_waiting_state!()
+        # The merge before marked the record merged; each round starts on an open PR.
+        :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/ACME-1780")
         put_run!(now)
         track([merging])
         activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
@@ -1360,7 +1362,8 @@ defmodule SymphonyElixir.AutoMergeTest do
   test "a Merging PR with no run on record is still watched and landed" do
     now = ~U[2026-10-03 12:00:00Z]
     merging = issue("Merging")
-    track([merging, %{issue("Code Review") | id: "issue-no-run", pr_urls: ["https://github.com/example/repo/pull/9"]}])
+    :ok = TicketPullRequest.record_created(@repo_key, "issue-no-run", "https://github.com/example/repo/pull/9", nil)
+    track([merging, %{issue("Code Review") | id: "issue-no-run"}])
     activity(head: "head-1", merge_state: "BLOCKED")
 
     assert AutoMerge.owns_issue?(merging)
@@ -1379,10 +1382,9 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert RunStore.list_pr_reviews(@repo_key) == []
   end
 
-  test "a Merging ticket whose PR is only in Symphony's record is owned and landed; a finished record owns nothing" do
+  test "a Merging ticket whose PR is in Symphony's record is owned and landed; a finished record or none owns nothing" do
     now = ~U[2026-10-03 12:00:00Z]
-    merging = %{issue("Merging") | pr_urls: [], repo_key: @repo_key}
-    :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/ACME-1780")
+    merging = issue("Merging")
     track([merging])
     activity(head: "head-1", merge_state: "BLOCKED")
 
@@ -1394,8 +1396,10 @@ defmodule SymphonyElixir.AutoMergeTest do
     for state <- ["closed", "merged"] do
       :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/ACME-1780")
       :ok = TicketPullRequest.mark_finished(@repo_key, @pr_url, state)
-      refute AutoMerge.owns_issue?(%{merging | pr_urls: [@pr_url]})
+      refute AutoMerge.owns_issue?(merging)
     end
+
+    refute AutoMerge.owns_issue?(%{merging | id: "issue-without-record"})
   end
 
   test "with auto-merge off, Merging issues are not watched and the landing agent owns them" do
@@ -1408,7 +1412,9 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     assert {:ok, %{discovered: 0, actions: []}} = poll(now)
     refute AutoMerge.owns_issue?(merging)
-    refute AutoMerge.owns_issue?(%{merging | pr_urls: []})
+
+    # A repository the settings don't know owns nothing, even with its PR on record.
+    :ok = TicketPullRequest.record_created("missing-repo", @issue_id, @pr_url, "auto/ACME-1780")
     refute AutoMerge.owns_issue?(%{merging | repo_key: "missing-repo"})
   end
 
@@ -1425,6 +1431,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     )
 
     other = %{issue("Merging") | repo_key: "other"}
+    :ok = TicketPullRequest.record_created("other", @issue_id, @pr_url, "auto/ACME-1780")
     track([other])
     activity(head: "head-1", merge_state: "BLOCKED")
 
@@ -1639,7 +1646,7 @@ defmodule SymphonyElixir.AutoMergeTest do
       title: "Ship it",
       state: state,
       url: "https://linear.app/example/issue/ACME-1780",
-      pr_urls: [@pr_url],
+      repo_key: @repo_key,
       updated_at: ~U[2026-10-03 11:00:00Z]
     }
   end

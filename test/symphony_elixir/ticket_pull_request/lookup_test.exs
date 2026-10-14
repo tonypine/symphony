@@ -162,7 +162,7 @@ defmodule SymphonyElixir.TicketPullRequest.LookupTest do
   defp repo, do: %SystemSchema.Repo{name: @repo_key, workspace: %{github: @slug}}
 
   defp issue(id, identifier, branch_name \\ nil) do
-    %Issue{id: id, identifier: identifier, branch_name: branch_name, repo_key: @repo_key, pull_request_url: "https://github.com/acme/repo/pull/99"}
+    %Issue{id: id, identifier: identifier, branch_name: branch_name, repo_key: @repo_key}
   end
 
   defp pull(number, branch), do: %{number: number, url: "https://github.com/acme/repo/pull/#{number}", head_branch: branch}

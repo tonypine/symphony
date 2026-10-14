@@ -6511,8 +6511,7 @@ defmodule SymphonyElixir.Orchestrator do
       identifier: Map.get(metadata, :identifier),
       title: Map.get(metadata, :title),
       state: Map.get(metadata, :state),
-      url: URLUtils.present_url(Map.get(metadata, :url)),
-      pull_request_url: URLUtils.pull_request_url(metadata)
+      url: URLUtils.present_url(Map.get(metadata, :url))
     }
   end
 

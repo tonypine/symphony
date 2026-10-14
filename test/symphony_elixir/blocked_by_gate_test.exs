@@ -113,7 +113,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
     test "stays held after the fix merges, until the running app includes its merge commit" do
       run_build(@old_build)
       issue = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | id: "verify", identifier: "TP-332", title: "Final verification: Pause"}
-      fix = %Issue{id: "id-TP-419", identifier: "TP-419", state: "Done", pr_urls: [@fix_pr]}
+      fix = merged_fix("TP-419", @fix_pr)
 
       state = poll(orchestrator_state(), [issue], fix)
 
@@ -149,7 +149,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
     test "a blocker merged in another repository releases its dependent at Done, as before" do
       run_build(@old_build)
       issue = todo_blocked_by(blocker("APP-1", "Done"))
-      fix = %Issue{id: "id-APP-1", identifier: "APP-1", state: "Done", pr_urls: ["https://github.com/acme/web-app/pull/5"]}
+      fix = merged_fix("APP-1", "https://github.com/acme/web-app/pull/5")
 
       state = poll(orchestrator_state(), [issue], fix)
 
@@ -189,6 +189,14 @@ defmodule SymphonyElixir.BlockedByGateTest do
       cache = SymphonyElixir.UpdateHold.resolve(issues, build, state.update_hold_cache, terminal_states(), lookups)
       Orchestrator.put_blocked_for_test(%{state | update_hold_cache: cache}, issues)
     end
+  end
+
+  # A done blocker whose PR Symphony's record shows merged.
+  defp merged_fix(identifier, pr_url) do
+    fix = %Issue{id: "id-" <> identifier, identifier: identifier, state: "Done", repo_key: "default"}
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", fix.id, pr_url, nil)
+    :ok = SymphonyElixir.TicketPullRequest.mark_finished("default", pr_url, "merged")
+    fix
   end
 
   defp todo_blocked_by(blocker) do
