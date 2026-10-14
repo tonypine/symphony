@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     BuildInfo,
     CiPoller,
     Config,
+    Decisions,
     DispatchLoop,
     EpicLanes,
     ForcedQueue,
@@ -1296,9 +1297,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that
   # `UpdateHold.hold/4` needs. Tickets of repos not polled this cycle were looked up when they were.
+  # The same task writes the rulings people gave in comments into the tickets' Decisions sections.
   defp resolve_update_holds({repo_name, {:ok, issues}}, cache) when is_list(issues) do
     terminal_states = Config.settings!().tracker.terminal_states
     sweep_blocked_holds(repo_name, issues, terminal_states)
+    _ = Decisions.sweep(issues)
     UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, [])
   end
 

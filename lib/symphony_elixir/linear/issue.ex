@@ -34,6 +34,7 @@ defmodule SymphonyElixir.Linear.Issue do
     blocked_by: [],
     sub_issues: [],
     comments: [],
+    rulings: [],
     linked_issues: [],
     conflict_repo_keys: [],
     labels: [],
@@ -64,6 +65,7 @@ defmodule SymphonyElixir.Linear.Issue do
           pr_urls: [String.t()],
           sub_issues: [%{id: String.t() | nil, identifier: String.t() | nil, state: String.t() | nil}],
           comments: [%{author: String.t(), body: String.t(), created_at: DateTime.t() | nil}],
+          rulings: [SymphonyElixir.Decisions.entry()],
           linked_issues: [
             %{relation: String.t(), identifier: String.t(), title: String.t() | nil, state: String.t() | nil}
           ],

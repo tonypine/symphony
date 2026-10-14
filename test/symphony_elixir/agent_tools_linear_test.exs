@@ -317,6 +317,17 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                )
     end
 
+    test "add_comment and update_comment refuse a body that reads as a person's ruling" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      Linear.CommentRegistry.record(registry, "comment-owned")
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      no_call = fn _query, _variables, _opts -> flunk("Linear should not be called for a ruling") end
+
+      assert {:error, :ruling_comment_body} = Linear.add_comment(context, "Decision: keep the partials", linear_client: no_call)
+      assert {:error, :ruling_comment_body} = Linear.add_comment(context, "**Ruling:** keep them", parent_id: "c1", linear_client: no_call)
+      assert {:error, :ruling_comment_body} = Linear.update_comment(context, "comment-owned", "Decision: keep them", linear_client: no_call)
+    end
+
     test "redacts secret patterns from returned comment bodies before wrapping" do
       workspace = tmp_workspace!("linear-agent-comment-read-redaction")
       audit_dir = Path.join(workspace, "audit")
