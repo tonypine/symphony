@@ -36,7 +36,7 @@ struct ConsequenceSheetView: View {
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !sheet.picks.isEmpty {
+            if sheet.listsPicks {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     Text("Your picks").font(DesignTokens.TypeStyle.label.font).foregroundStyle(.secondary)
                     ForEach(Array(sheet.picks.enumerated()), id: \.offset) { index, pick in

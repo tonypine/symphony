@@ -122,13 +122,25 @@ struct ConnectionState: View {
 /// C10: a titled section on the solid content surface.
 struct Card<Content: View>: View {
     let title: String
+    /// A quiet line at the title's trailing end, such as the keys that work in the card.
+    var hint: String?
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Text(title)
-                .font(DesignTokens.TypeStyle.section.font)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(title)
+                    .font(DesignTokens.TypeStyle.section.font)
+                    .accessibilityAddTraits(.isHeader)
+                    .layoutPriority(1)
+                if let hint {
+                    Spacer(minLength: DesignTokens.Space.s2)
+                    Text(hint)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
             content
         }
         .padding(DesignTokens.Space.s4)

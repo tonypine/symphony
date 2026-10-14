@@ -116,10 +116,12 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(action.review.action?.decision?.options, ["Close as duplicate", "Keep it open"])
         XCTAssertEqual(action.review.action?.decision?.initialPick, 1)
 
+        // The sheet names the pick; an option without an effect says what sending does.
         let sheet = ConsequenceSheet(move: .decide, item: action)
-        XCTAssertEqual(sheet.title, "Send your decision on X-1?")
-        XCTAssertEqual(sheet.happens, "Records your answer on X-1 as a reply to its request and clears the `Needs Decision` label: X-1 continues in In Progress.")
-        XCTAssertEqual(sheet.stays, "The ticket doesn't move: the decision is what it was waiting on.")
+        XCTAssertEqual(sheet.title, "Send \"Keep it open\"?")
+        XCTAssertEqual(sheet.happens, "Records your answer on X-1 as a reply to its request and clears the `Needs Decision` label.")
+        XCTAssertEqual(sheet.stays, "X-1 stays in In Progress until its next run picks up your answer.")
+        XCTAssertFalse(sheet.listsPicks)
         XCTAssertNil(sheet.targetState)
         XCTAssertFalse(sheet.needsReason)
         XCTAssertTrue(sheet.canSend(reason: ""))
@@ -163,6 +165,45 @@ final class InboxMovesTests: XCTestCase {
         unanswerable.review.action?.commentID = nil
         XCTAssertFalse(ConsequenceSheet(move: .decide, item: unanswerable).isDecision)
         XCTAssertNil(ConsequenceSheet(move: .decide, item: unanswerable).action())
+    }
+
+    func testSendDecisionNamesThePickedOptionAndItsEffectAndPostsItsLabel() throws {
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: decisionFixture)))
+        let item = inbox.items[1]
+        let request = try XCTUnwrap(item.review.action?.decision)
+
+        // The recommended option goes when nothing is picked.
+        let recommended = ConsequenceSheet(move: .decide, item: item)
+        XCTAssertEqual(recommended.title, "Send \"Leave them to TP-891\"?")
+        XCTAssertEqual(recommended.happens, "TP-892 goes back to Code Review with a note that TP-891 removes the old instructions.")
+
+        // Pressing 2 picks the second option, and the sheet and the answer follow it.
+        var picks = DecisionPicks()
+        picks.picks[0] = try XCTUnwrap(item.optionIndex(forKey: "2"))
+        let sheet = ConsequenceSheet(move: .decide, item: item, picks: picks)
+        XCTAssertEqual(sheet.title, "Send \"Update them in TP-892 now\"?")
+        XCTAssertEqual(sheet.happens, "The next run removes Final verification from the old instructions, and TP-892 goes back to Code Review.")
+        XCTAssertEqual(sheet.stays, "TP-892 stays in Rework until its next run picks up your answer.")
+        XCTAssertEqual(
+            sheet.action(),
+            .decide("TP-892", requestCommentID: "c-892-request", picks: [.init(question: request.question, answer: "Update them in TP-892 now")], move: nil)
+        )
+
+        // A request with no state, and nothing picked or recommended, falls back to plain words.
+        var unpicked = item
+        unpicked.state = nil
+        for index in unpicked.review.action!.options.indices { unpicked.review.action!.options[index].recommended = false }
+        XCTAssertNil(unpicked.review.action?.pickedOption(DecisionPicks()))
+        let plain = ConsequenceSheet(move: .decide, item: unpicked)
+        XCTAssertEqual(plain.title, "Send your decision on TP-892?")
+        XCTAssertEqual(plain.stays, "TP-892 stays in its phase until its next run picks up your answer.")
+    }
+
+    private var decisionFixture: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/inbox-decision/api/v1/inbox.json")
     }
 
     private var options: [InboxReview.Action.Option] {
@@ -221,6 +262,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.happens, "Posts one comment on SHOP-330 with your picks, and Symphony revises the plan from it.")
         XCTAssertNil(sheet.targetState)
         XCTAssertEqual(sheet.picks.map(\.answer), ["On a separate page", "The store's currency"])
+        XCTAssertTrue(sheet.listsPicks)
         XCTAssertEqual(sheet.action(), .decisions("SHOP-330", picks: sheet.picks))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions", undo: false))
         XCTAssertEqual(sheet.stays, "The plan stays in Plan Review and isn't approved: it comes back to the Inbox once Symphony has revised it.")
