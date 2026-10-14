@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RestartTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Restart
+  alias SymphonyElixir.{Restart, TicketPullRequest}
 
   @pr_url "https://github.com/acme/widgets/pull/41"
   @other_pr_url "https://github.com/acme/widgets/pull/42"
@@ -95,11 +95,25 @@ defmodule SymphonyElixir.RestartTest do
       end
     end
 
-    test "a pull request entry that is not a URL stops the reset" do
-      assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: [:nope]), opts())
+    test "closes the pull request Symphony recorded for the ticket when its attachments show none" do
+      :ok = RunStore.clear()
+      Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
+      :ok = TicketPullRequest.record_created("repo-a", "issue-restart", @pr_url, "auto/MT-RESTART")
 
-      assert message == "the pull request :nope is not a URL"
-      refute_received {:remove_workspaces, _identifier}
+      assert :ok = Restart.perform(issue(repo_key: "repo-a"), opts())
+      assert_received {:close, @pr_url}
+    end
+
+    test "a ticket whose recorded pull request closed or merged has none to close" do
+      :ok = RunStore.clear()
+
+      for state <- ["closed", "merged"] do
+        :ok = TicketPullRequest.record_created("repo-a", "issue-restart", @pr_url, "auto/MT-RESTART")
+        :ok = TicketPullRequest.mark_finished("repo-a", @pr_url, state)
+
+        assert :ok = Restart.perform(issue(repo_key: "repo-a", pr_urls: [@pr_url]), opts())
+        refute_received {:fetch_activity, _pr_url}
+      end
     end
 
     test "a pull request GitHub cannot read stops the reset before the workspace is touched" do

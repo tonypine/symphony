@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.MergeConfirmationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Handoff, Hold, MergeConfirmation, RunStore, TicketSignals, Workflow}
+  alias SymphonyElixir.{Handoff, Hold, MergeConfirmation, RunStore, TicketPullRequest, TicketSignals, Workflow}
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
 
@@ -148,6 +148,21 @@ defmodule SymphonyElixir.MergeConfirmationTest do
 
       assert MergeConfirmation.summary(issue(), opts(), parts(%{review: nil})).review == nil
       assert MergeConfirmation.summary(issue(), opts(), parts(%{review: nil})).pr == nil
+    end
+
+    test "links the PR Symphony recorded for the ticket when its attachments show none; a finished one links nothing" do
+      pr_url = "https://github.com/acme/web/pull/8"
+      :ok = TicketPullRequest.record_created(@repo_key, @issue_id, pr_url, "auto/TP-825")
+
+      assert MergeConfirmation.summary(issue(), opts(), parts()).pr == pr_url
+      # A ticket read without its repo is looked up under the caller's.
+      assert MergeConfirmation.summary(issue(%{repo_key: nil}), opts(), parts()).pr == pr_url
+
+      for state <- ["closed", "merged"] do
+        :ok = TicketPullRequest.record_created(@repo_key, @issue_id, pr_url, "auto/TP-825")
+        :ok = TicketPullRequest.mark_finished(@repo_key, pr_url, state)
+        assert MergeConfirmation.summary(issue(%{pr_urls: [pr_url]}), opts(), parts()).pr == nil
+      end
     end
 
     test "an issue carrying no PR list falls back to the caller's PR" do
