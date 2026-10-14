@@ -2304,6 +2304,9 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   another to land first (the landing order below) is not updated: its state is `waiting_to_land`
   ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
   PR lands or leaves its way, and the first poll after that updates it once.
+- Only a `Merging` PR is updated. A `BEHIND` PR in the Code Review state, the QA state or `Rework`
+  MUST NOT get an update-branch: an agent run syncs its own branch with the base, and a Code Review
+  or QA run starts only on a green head, which an update on every base merge would keep restarting.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
   conflict context, and the fix returns through review. The approval covered the diff before the
