@@ -67,6 +67,8 @@ struct ChipText: View {
                 ChipTextImage(content: content, style: style)
             } else {
                 ChipTextRepresentable(content: content, style: style)
+                    // In a control (an option card) the control reads for its text.
+                    .accessibilityHidden(!selectable)
             }
         }
         .alignmentGuide(.firstTextBaseline) { _ in baseline.ascent }

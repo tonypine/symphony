@@ -174,7 +174,8 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     private func apply() {
-        measured = nil
+        measured = []
+        setAccessibilityElement(style.selectable)
         textStorage?.setAttributedString(attributedText())
         needsLayout = true
         needsDisplay = true
@@ -233,11 +234,14 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     /// The paragraph laid out at `width` by a TextKit 2 layout of its own: the view's container never gets wider
-    /// than the view, so a width SwiftUI only proposes, or a snapshot's, is measured and drawn here. The last one is
-    /// kept, since SwiftUI asks for the same width again and again.
+    /// than the view, so a width SwiftUI only proposes, or a snapshot's, is measured and drawn here.
     private func layout(width: CGFloat) -> NSTextLayoutManager {
         let width = max(1, width)
-        if let measured, measured.width == width { return measured.manager }
+        if let index = measured.firstIndex(where: { $0.width == width }) {
+            let layout = measured.remove(at: index)
+            measured.append(layout)
+            return layout.manager
+        }
         let storage = NSTextContentStorage()
         let manager = NSTextLayoutManager()
         let container = NSTextContainer(size: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
@@ -247,15 +251,27 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         storage.addTextLayoutManager(manager)
         storage.attributedString = attributedText()
         manager.ensureLayout(for: manager.documentRange)
-        measured = (width, storage, manager)
+        measured.append((width, storage, manager))
+        if measured.count > Self.measuredWidths { measured.removeFirst() }
         return manager
     }
 
-    private var measured: (width: CGFloat, storage: NSTextContentStorage, manager: NSTextLayoutManager)?
+    /// The layouts measured last, most recent at the end. SwiftUI proposes a few widths in turn (none, the pane's,
+    /// a minimum) and VoiceOver asks at the view's own, so keeping one per width saves laying the text out again on
+    /// every request.
+    private var measured: [(width: CGFloat, storage: NSTextContentStorage, manager: NSTextLayoutManager)] = []
+    static let measuredWidths = 4
+
+    /// How many layouts the paragraph keeps.
+    var measuredCount: Int { measured.count }
 
     override open func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        textContainer?.size = CGSize(width: max(1, newSize.width), height: CGFloat.greatestFiniteMagnitude)
+        // A container given its own size again still lays its text out again, so only a new width resets it.
+        let width = max(1, newSize.width)
+        if textContainer?.size.width != width {
+            textContainer?.size = CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        }
     }
 
     // MARK: - Chips
@@ -524,11 +540,17 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     override open func becomeFirstResponder() -> Bool {
         guard super.becomeFirstResponder() else { return false }
         switch window?.keyViewSelectionDirection {
-        case .selectingNext?: focusedChip = content.mentions.isEmpty ? nil : 0
-        case .selectingPrevious?: focusedChip = content.mentions.isEmpty ? nil : content.mentions.count - 1
+        case .selectingNext?: enterChips(forward: true)
+        case .selectingPrevious?: enterChips(forward: false)
         default: break
         }
         return true
+    }
+
+    /// Tab or Shift-Tab came into the paragraph: the keyboard goes to its first chip, or its last going back.
+    public func enterChips(forward: Bool) {
+        guard focusedChip == nil, !content.mentions.isEmpty else { return }
+        focusedChip = forward ? 0 : content.mentions.count - 1
     }
 
     override open func resignFirstResponder() -> Bool {
@@ -555,6 +577,8 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
             }
             focusedChip = nil
             if key == .tab { window?.selectNextKeyView(self) } else { window?.selectPreviousKeyView(self) }
+            // Moved on by hand, the window sets no direction for the next paragraph to read.
+            (window?.firstResponder as? ChipTextView)?.enterChips(forward: key == .tab)
             return true
         case .space:
             guard let focusedChip else { return false }
@@ -594,9 +618,11 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     // MARK: - Accessibility
 
     /// The paragraph reads as one text; each chip is a link inside it. Reading the children changes nothing and lays
-    /// nothing out: each link works out its frame when asked for it.
+    /// nothing out: each link works out its frame when asked for it. Text in a control (an option card) is no
+    /// element at all: the control reads for it.
     override open func accessibilityChildren() -> [Any]? {
-        (super.accessibilityChildren() ?? []) + chipElements
+        guard style.selectable else { return [] }
+        return (super.accessibilityChildren() ?? []) + chipElements
     }
 
     /// The chips' link elements, in reading order.

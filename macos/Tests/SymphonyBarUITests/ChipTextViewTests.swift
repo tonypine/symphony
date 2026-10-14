@@ -54,6 +54,23 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertEqual(view.textContainer?.size.width, 140)
     }
 
+    func testItKeepsALayoutPerWidthSwiftUIAndVoiceOverAskFor() throws {
+        let view = try storyView()
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let container = try XCTUnwrap(view.textContainer)
+        for width in [nil, 600, 0, 600] as [CGFloat?] { _ = view.fittingSize(width: width) }
+        XCTAssertEqual(view.measuredCount, 3, "one per width")
+        _ = view.chipAccessibilityElements[0].accessibilityFrameInParentSpace()
+        XCTAssertEqual(view.measuredCount, 3, "VoiceOver reads the view's width from the same layout")
+        for width in [100.0, 200, 300, 400, 500] { _ = view.height(forWidth: width) }
+        XCTAssertEqual(view.measuredCount, ChipTextView.measuredWidths)
+        // The same frame again leaves the view's own layout alone.
+        let size = container.size
+        view.setFrameSize(view.frame.size)
+        XCTAssertTrue(view.textContainer === container)
+        XCTAssertEqual(container.size, size)
+    }
+
     // MARK: - Chips
 
     func testEveryMentionInTheDecisionIsAChipThatNeverSplitsAcrossLines() throws {
@@ -285,6 +302,20 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertFalse(view.handle(.escape))
     }
 
+    func testTabFromTheParagraphBeforeEntersAtItsFirstChipAndShiftTabAtItsLast() throws {
+        let view = try storyView()
+        view.enterChips(forward: true)
+        XCTAssertEqual(view.focusedChip, 0)
+        view.enterChips(forward: false)
+        XCTAssertEqual(view.focusedChip, 0, "a chip with the keyboard keeps it")
+        view.handle(.backtab)
+        view.enterChips(forward: false)
+        XCTAssertEqual(view.focusedChip, view.content.mentions.count - 1)
+        let plain = ChipTextView(content: ChipTextContent("No mentions.", references: [:]), style: ChipTextStyle(font: font))
+        plain.enterChips(forward: true)
+        XCTAssertNil(plain.focusedChip)
+    }
+
     func testAChipsMenuCopiesAndOpensItsLink() throws {
         let view = try storyView()
         var opened: [URL] = []
@@ -313,6 +344,9 @@ final class ChipTextViewTests: XCTestCase {
         let plain = ChipTextView(content: ChipTextContent("No mentions.", references: [:]), style: ChipTextStyle(font: font, selectable: false))
         XCTAssertFalse(plain.acceptsFirstResponder)
         XCTAssertFalse(plain.canBecomeKeyView)
+        // The control reads for its text, so VoiceOver finds neither the text nor its chips.
+        XCTAssertFalse(view.isAccessibilityElement())
+        XCTAssertEqual(view.accessibilityChildren()?.count, 0)
     }
 
     func testNewTextReplacesTheChipsAndTheSameTextChangesNothing() throws {
