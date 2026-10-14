@@ -2501,6 +2501,16 @@ Rules:
   (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
   answer the section already records MUST NOT be written again. The agents' comment tools MUST
   refuse a body that opens that way, so only a person writes a ruling.
+- **Unlocking a protected path for one run.** A recorded decision (or a ruling the poll read) that
+  says `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the
+  workspace's agent-protected paths and the ticket is the one the decision is on. The ticket's next
+  implementation run MUST claim the grant in the ticket's store record before its session starts,
+  and only an unclaimed grant unlocks: the run's sandbox write-deny lists (Claude `denyWrite` and
+  `Edit` rules, Codex filesystem permissions, SRT `denyWrite`) MUST leave the path out, its prompt
+  MUST name the path and the decision, and its `github_sync_base` and `github_push_branch` MUST
+  accept the branch's change to it. Every later run and every other ticket MUST keep the
+  protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
+  sub-issue tools MUST refuse text that reads as such a grant.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other

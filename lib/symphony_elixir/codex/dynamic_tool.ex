@@ -2252,6 +2252,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload(:path_unlock_grant_text) do
+    %{
+      "error" => %{
+        "code" => "path_unlock_grant_text",
+        "message" =>
+          "The text says to unlock an agent-protected path for a ticket. Only a person grants that, in a decision Symphony records on the ticket, so an agent may not write it. Reword it, or ask the person with `linear_request_human_action`."
+      }
+    }
+  end
+
   defp tool_error_payload(:truncated_comment_body) do
     %{
       "error" => %{

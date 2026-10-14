@@ -85,6 +85,8 @@ public struct RestartMachine: Equatable {
     public private(set) var error: String?
 
     private var alreadyPaused = false
+    /// False for an update the app started by itself: its failures show in the menu only.
+    private var alerts = true
     /// True until the first poll after the restart's own pause: a poll already under way may predate the pause.
     private var pollMayPredatePause = false
     private var runsTimeout: TimeInterval = 0
@@ -104,19 +106,22 @@ public struct RestartMachine: Equatable {
     /// Starts a restart. `alreadyPaused` is whether dispatch is paused now, as the app's last poll saw it; the next
     /// poll can show it resumed since, and then the restart pauses it. After `runsTimeout` seconds of waiting
     /// for agent runs the restart also offers Restart Now Anyway, or an `.automaticUpdate` gives up. An update ends
-    /// with `.stopped` instead of starting Symphony.
+    /// with `.stopped` instead of starting Symphony. With `alerts` false a failure shows in the menu only, as for an
+    /// `.automaticUpdate`.
     /// Does nothing while a restart is under way.
     public mutating func begin(
         alreadyPaused: Bool,
         purpose: Purpose = .restart,
         runsTimeout: TimeInterval,
         logPath: String,
+        alerts: Bool = true,
         now: Date = Date()
     ) -> [Effect] {
         guard phase == .idle else { return [] }
         self = RestartMachine()
         self.purpose = purpose
         self.alreadyPaused = alreadyPaused
+        self.alerts = alerts && purpose != .automaticUpdate
         self.runsTimeout = runsTimeout
         self.logPath = logPath
         enter(.checkingConfig, now: now)
@@ -226,6 +231,14 @@ public struct RestartMachine: Equatable {
         }
     }
 
+    /// `menuLine` for an update to `version`: while it waits for agent runs, "Updating to vX: waiting for N agent
+    /// runs…", with how long it has waited once that is past the timeout (S2c, S2d).
+    public func menuLine(updatingTo version: String?, now: Date = Date()) -> String? {
+        guard purpose.isUpdate, let version, case let .waitingForRuns(running: count?) = phase else { return menuLine }
+        let minutes = offersRestartNow ? Int(now.timeIntervalSince(phaseStart) / 60) : nil
+        return UpdateMenu.waitingLine(version: version, activeRuns: count, minutes: minutes)
+    }
+
     private mutating func configChecked(_ result: ConfigCheckResult, now: Date) -> [Effect] {
         if case let .failed(message) = result {
             return fail(notDoneTitle, "\(message)\n\nSymphony keeps running.", now: now)
@@ -284,7 +297,7 @@ public struct RestartMachine: Equatable {
     private mutating func fail(_ title: String, _ message: String, now: Date) -> [Effect] {
         enter(.idle, now: now)
         error = message.components(separatedBy: "\n").first
-        return purpose == .automaticUpdate ? [] : [.alert(title: title, message: message)]
+        return alerts ? [.alert(title: title, message: message)] : []
     }
 
     private mutating func enter(_ phase: Phase, now: Date) {

@@ -283,6 +283,16 @@ public enum UpdateMenu {
         "Updating: downloading and verifying v\(release.version)…"
     }
 
+    /// While an update waits for agent runs, for example "Updating to v0.0.1.42: waiting for 2 agent runs…", with
+    /// " (35 min)" once the wait is past the restart timeout and Update Now Anyway shows.
+    public static func waitingLine(version: String, activeRuns: Int, minutes: Int?) -> String {
+        let runs = activeRuns == 1 ? "1 agent run" : "\(activeRuns) agent runs"
+        return "Updating to v\(version): waiting for \(runs)…" + (minutes.map { " (\($0) min)" } ?? "")
+    }
+
+    /// Under a release whose on-release update Cancel Update called off (S2e).
+    public static let cancelledLine = "You cancelled this update. It waits for you; a newer release installs by itself."
+
     /// The confirmation before an update, which says what will happen to agent runs.
     public static func confirmation(_ release: Release, symphonyRunning: Bool) -> String {
         let swap = "Symphony downloads and verifies v\(release.version), then relaunches as the new version. "

@@ -139,6 +139,25 @@ public struct UpdateNotice: Equatable {
         self.body = body
     }
 
+    /// The action on the notification an on-release update posts when it starts, which calls the update off.
+    public static let cancelUpdateTitle = UpdateMenu.cancelUpdateTitle
+
+    /// Posted once an update Automatically when released started pauses dispatch (S4c), with Cancel Update.
+    public static func updateStarted(version: String, activeRuns: Int) -> UpdateNotice {
+        let runs = activeRuns == 1 ? "1 agent run finishes" : "\(activeRuns) agent runs finish"
+        return UpdateNotice(
+            title: "Updating Symphony to v\(version)",
+            body: activeRuns > 0
+                ? "Dispatch is paused until \(runs). Symphony then updates and resumes dispatch."
+                : "Symphony is updating and resumes dispatch when it is done."
+        )
+    }
+
+    /// What scripted QA mode records for the start notification: its body, then its action.
+    public var messageWithCancelUpdate: String {
+        "\(body) · \(Self.cancelUpdateTitle)"
+    }
+
     /// After an automatic update passed its health check. A manual update you just confirmed gets none.
     public static func updated(_ update: LastUpdate) -> UpdateNotice {
         let changes = update.details.changes.map { "\(UpdateMenu.changeCount($0)). " } ?? ""
