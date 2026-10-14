@@ -95,11 +95,19 @@ final class RepoHealthTests: XCTestCase {
 
     // MARK: - WORKFLOW.md
 
-    func testAMissingWorkflowIsAWarningWithoutAFixYet() {
+    func testAMissingWorkflowIsAWarningThatOffersSetUp() {
         XCTAssertEqual(
             health(repo(workflow: .init(state: .missing, error: "missing_workflow_file"))).problems,
-            [.init(id: "workflow", severity: .warning, title: "WORKFLOW.md is missing", detail: "Symphony found no WORKFLOW.md on main.")]
+            [.init(
+                id: "workflow",
+                severity: .warning,
+                title: "WORKFLOW.md is missing",
+                detail: "Symphony found no WORKFLOW.md on main.",
+                fixes: [.setUpWorkflow(ConnectedWorkflowSetup(key: "app", gitHub: "acme/app", baseBranch: "main", checkout: "/Projects/app"))]
+            )]
         )
+        // Without owner/repo there is nothing to set up.
+        XCTAssertEqual(health(repo(github: nil, workflow: .init(state: .missing))).problems.first?.fixes, [])
         XCTAssertEqual(
             health(repo(baseBranch: " ", workflow: .init(state: .missing))).problems.first?.detail,
             "Symphony found no WORKFLOW.md on the default branch."

@@ -21,6 +21,8 @@ final class ReposViewModel: ObservableObject {
     @Published var addRepo: AddRepoViewModel?
     /// The open Disconnect sheet, nil while none is.
     @Published var disconnect: DisconnectSheetModel?
+    /// The open Set Up WORKFLOW.md sheet of a connected repo, nil while none is.
+    @Published var workflowSetup: WorkflowSetupSheetModel?
     /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown at the top of its repo's detail.
     @Published var banner: ReposBanner? {
         didSet {
@@ -244,7 +246,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
 
     /// Opens the Add Repo sheet, or with `editing` the Edit sheet of that repo's `section`.
     private func showSheet(editing key: String?, section: EditRepo.Section = .routing) {
-        guard let model, model.addRepo == nil, model.disconnect == nil else { return }
+        guard let model, model.addRepo == nil, model.disconnect == nil, model.workflowSetup == nil else { return }
         let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, section: section) { [weak self] saved in
             self?.saved(saved)
         }
@@ -293,7 +295,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
 
     /// Opens the Disconnect sheet on `key`, unless `symphony.yml` can't be read or the repo can't be disconnected.
     private func disconnect(_ key: String) {
-        guard let model, model.addRepo == nil, model.disconnect == nil else { return }
+        guard let model, model.addRepo == nil, model.disconnect == nil, model.workflowSetup == nil else { return }
         let entries: [RepositoryEntry]
         switch ReposConfig.read(path: configPath).entries {
         case let .success(read):
@@ -405,6 +407,22 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             NSPasteboard.general.setString(error, forType: .string)
         case let .stopRun(identifier):
             stopRun(identifier)
+        case let .setUpWorkflow(setup):
+            setUpWorkflow(setup)
+        }
+    }
+
+    /// Opens the WORKFLOW.md page on its own for a connected repo that has none. Create keeps the file in the pending
+    /// store, so the repo shows it pending until Symphony reads it; `symphony.yml` is left as it is.
+    private func setUpWorkflow(_ setup: ConnectedWorkflowSetup) {
+        guard let model, model.addRepo == nil, model.disconnect == nil, model.workflowSetup == nil else { return }
+        model.workflowSetup = WorkflowSetupSheetModel(setup: setup) { [weak self] pending in
+            guard let self else { return }
+            pendingWorkflows.record(pending, for: setup.key)
+            // A Create that finishes after Cancel still added the file, but leaves a sheet opened since alone.
+            if self.model?.workflowSetup?.setup == setup { self.model?.workflowSetup = nil }
+            update(status: status)
+            show(ReposBanner(key: setup.key, text: setup.createdMessage(pending)))
         }
     }
 
