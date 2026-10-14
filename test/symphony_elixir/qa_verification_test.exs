@@ -566,6 +566,11 @@ defmodule SymphonyElixir.QaVerificationTest do
     test "a second ticket hitting the same break reuses the one fix ticket" do
       {workspace, _head} = git_workspace!()
 
+      # Self-heal reuses a fix ticket only while it is open, so the tracker must read it.
+      fix = %Issue{id: "fix-id", identifier: @fix_ticket, title: "Self-heal: repair the qa_environment block", state: "Todo"}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [fix])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
       Process.put(:qa_agent_result, {:error, :environment_unreachable, %{}})
 
       # Two attempts on the first ticket file the fix ticket and hold it.

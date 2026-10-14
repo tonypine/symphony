@@ -74,7 +74,9 @@ defmodule SymphonyElixir.QaAgent do
           required(:status) => String.t(),
           required(:details) => String.t(),
           required(:evidence) => [String.t()],
-          optional(:checklist) => true
+          optional(:checklist) => true,
+          optional(:gap) => String.t(),
+          optional(:blocked_by) => [String.t()]
         }
   @type result :: %{
           required(:verdict) => verdict(),
@@ -448,12 +450,26 @@ defmodule SymphonyElixir.QaAgent do
     them one by one, is not a reason. Symphony does not accept `pass` when no checklist row is
     reported or most of them are skipped: it reports the review as `blocked` and hands it to a
     person.
+
+    Each gap must be checkable on its own PR, before that PR merges: the QA of a follow-up runs
+    against its own PR head, and the QA tools are served by the running Symphony app, not by that
+    head. A gap whose check needs another ticket that has not merged, or needs the change running in
+    Symphony (a new QA tool, or orchestrator behaviour on Symphony's own repository), is two gaps:
+    the first makes the change, the second checks it and is blocked by the first. A single follow-up
+    for both can never pass its QA and holds the epic until a person lifts it. Report each gap that
+    another one waits on as a failing step with a short `"gap"` label (such as `G1`), and name what a
+    gap waits on in its `"blocked_by"`: the `gap` labels of failing steps in this answer, or the
+    identifiers of this epic's sub-tickets. Symphony files the gaps in that order and links each
+    follow-up to its blockers, so the second one waits until the first has merged and, on Symphony's
+    own repository, until the running app includes it.
     """
   end
 
   defp epic_section(_job), do: ""
 
-  defp checklist_field(%{epic_review: true}), do: ~s(,\n      "checklist": true | false)
+  defp checklist_field(%{epic_review: true}),
+    do: ~s(,\n      "checklist": true | false,\n      "gap": "<optional: a short label for a failing step>",\n      "blocked_by": ["<optional: gap labels or epic sub-ticket identifiers it waits on>"])
+
   defp checklist_field(_job), do: ""
 
   defp fixer(%{epic_review: true}), do: "a follow-up ticket"
@@ -601,7 +617,20 @@ defmodule SymphonyElixir.QaAgent do
       evidence: string_list(Map.get(step, "evidence"))
     }
 
-    if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
+    coerced = if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
+    coerced = put_trimmed(coerced, :gap, Map.get(step, "gap"))
+
+    case step |> Map.get("blocked_by") |> List.wrap() |> string_list() do
+      [] -> coerced
+      blocked_by -> Map.put(coerced, :blocked_by, blocked_by)
+    end
+  end
+
+  defp put_trimmed(map, key, value) do
+    case trimmed(value) do
+      nil -> map
+      trimmed -> Map.put(map, key, trimmed)
+    end
   end
 
   defp validate_verdict(:fail, steps, findings, _reason) do

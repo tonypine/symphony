@@ -886,6 +886,30 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "a session with an unlocked protected path neither sandboxes nor refuses edits to it" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-unlocked-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "TP-760")
+        File.mkdir_p!(workspace)
+        write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root, agent_kind: "claude")
+
+        for {unlocked, denied?} <- [{["config/settings_ui_exempt.yml"], false}, {[], true}] do
+          assert {:ok, session} = AppServer.start_session(workspace, unlocked_paths: unlocked)
+          {:ok, contents} = Jason.decode(File.read!(session.settings_path))
+
+          assert "./config/settings_ui_exempt.yml" in get_in(contents, ["sandbox", "filesystem", "denyWrite"]) == denied?
+          assert "Edit(./config/settings_ui_exempt.yml)" in get_in(contents, ["permissions", "deny"]) == denied?
+          assert "./WORKFLOW.md" in get_in(contents, ["sandbox", "filesystem", "denyWrite"])
+
+          assert :ok = AppServer.stop_session(session)
+        end
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "denies a worktree session writes to the shared repo's git config files, from the shell and the file tools" do
       test_root =
         Path.join(
