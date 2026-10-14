@@ -349,6 +349,34 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertFalse(view.handle(.escape))
     }
 
+    func testCommandClickAndCommandReturnOpenAChipDirectly() throws {
+        let view = try storyView()
+        var opened: [String] = []
+        var direct: [String] = []
+        view.openMention = { opened.append($0.key) }
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let chip = try XCTUnwrap(view.chipRects(0).first)
+        let point = CGPoint(x: chip.midX, y: chip.midY)
+
+        XCTAssertTrue(view.handle(.tab))
+        XCTAssertTrue(view.handle(.commandEnter))
+        XCTAssertEqual(opened, ["#448"], "nothing set for ⌘: it opens as a click does")
+
+        view.openMentionDirectly = { direct.append($0.key) }
+        view.mouseDown(with: try mouse(.leftMouseDown, at: point, in: view, modifiers: .command))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: point, in: view, modifiers: .command))
+        view.mouseDown(with: try mouse(.leftMouseDown, at: point, in: view))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: point, in: view))
+        XCTAssertTrue(view.handle(.commandEnter))
+        XCTAssertTrue(view.handle(.enter))
+        XCTAssertEqual(direct, ["#448", "#448"], "⌘-click and ⌘Return")
+        XCTAssertEqual(opened, ["#448", "#448", "#448"], "a click and Return")
+
+        view.keyDown(with: try key(36, modifiers: .command))
+        XCTAssertEqual(direct.count, 3, "⌘Return as a key press")
+        XCTAssertFalse(view.performKeyEquivalent(with: try key(36, modifiers: .command)), "not the window's first responder")
+    }
+
     func testTabFromTheParagraphBeforeEntersAtItsFirstChipAndShiftTabAtItsLast() throws {
         let view = try storyView()
         view.enterChips(forward: true)
@@ -474,6 +502,20 @@ final class ChipTextViewTests: XCTestCase {
     // MARK: - Helpers
 
     /// The What happened paragraph about #448, TP-880 and TP-891, at the body size.
+    private func mouse(_ type: NSEvent.EventType, at point: CGPoint, in view: NSView, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(
+            with: type, location: view.convert(point, to: nil), modifierFlags: modifiers, timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+    }
+
+    private func key(_ code: UInt16, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: code
+        ))
+    }
+
     private func storyView() throws -> ChipTextView {
         let item = try decision()
         let action = try XCTUnwrap(item.review.action)

@@ -41,7 +41,7 @@ struct ReferencePopoverView: View {
 }
 
 /// N2's body.
-private struct TicketPopover: View {
+struct TicketPopover: View {
     let ticket: ReferencePopover.Ticket
 
     var body: some View {
@@ -81,7 +81,7 @@ private struct TicketPopover: View {
 }
 
 /// N3's body: no commit hash, branch or file name, only what the Director decides on.
-private struct PullRequestPopover: View {
+struct PullRequestPopover: View {
     let pullRequest: ReferencePopover.PullRequest
 
     var body: some View {

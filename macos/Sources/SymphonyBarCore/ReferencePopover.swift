@@ -69,7 +69,12 @@ public struct ReferencePopover: Equatable {
     public var link: Link?
 
     public init(_ mention: Mention) {
-        switch mention.reference {
+        self.init(key: mention.key, kind: mention.kind, reference: mention.reference)
+    }
+
+    /// What `reference`, written `key` in the text, shows: a chip's popover, or the head of its peek (N4).
+    public init(key: String, kind: Mention.Kind, reference: Reference) {
+        switch reference {
         case let .ticket(ticket):
             var facts: [Fact] = []
             if let parent = ticket.parent {
@@ -84,7 +89,7 @@ public struct ReferencePopover: Equatable {
                 badge: ticket.state.map { Badge(status: Self.status(state: $0, waitingOn: ticket.waitingOn), word: $0) },
                 title: ticket.title, summary: ticket.summary, facts: facts
             ))
-            hint = "Click to open the ticket page"
+            hint = "Click to peek, ⌘-click for its page"
             link = ticket.url.map { Link(title: "Open in Linear", url: $0) }
         case let .pullRequest(pullRequest):
             var stats = [Stat(value: "\(pullRequest.reviewRounds)", label: pullRequest.reviewRounds == 1 ? "review round" : "review rounds")]
@@ -98,12 +103,12 @@ public struct ReferencePopover: Equatable {
                 state: Badge(status: pullRequest.reviewState.status, word: pullRequest.reviewState.word),
                 title: pullRequest.title, summary: pullRequest.summary, stats: stats
             ))
-            hint = "Click to open it on GitHub"
+            hint = "Click to peek, ⌘-click for GitHub"
             link = pullRequest.url.map { Link(title: "Open on GitHub", url: $0) }
         case let .missing(url):
-            content = .missing("Symphony can't see \(mention.key).")
+            content = .missing("Symphony can't see \(key).")
             hint = nil
-            link = url.map { Link(title: mention.kind == .pullRequest ? "Open on GitHub" : "Open in Linear", url: $0) }
+            link = url.map { Link(title: kind == .pullRequest ? "Open on GitHub" : "Open in Linear", url: $0) }
         }
     }
 

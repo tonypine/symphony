@@ -59,10 +59,18 @@ extension SymphonyWindowModel {
     }
 
     /// Whether the view shown has an inspector for ⌥⌘I.
-    var hasInspector: Bool { [.tickets, .audit].contains(selection) && shownTicket == nil }
+    var hasInspector: Bool {
+        guard shownTicket == nil else { return false }
+        return [.tickets, .audit].contains(selection) || selection == .inbox && peek.canToggle
+    }
+
+    /// The inspector's menu item and toolbar button: on the Inbox, the peek (N4).
+    var inspectorTitle: String {
+        (selection == .inbox ? peek.isShown : inspectorShown) ? "Hide Inspector" : "Show Inspector"
+    }
 
     func toggleInspector() {
-        inspectorShown.toggle()
+        if selection == .inbox { togglePeek() } else { inspectorShown.toggle() }
     }
 
     /// The control pressed while Symphony is stopped.
