@@ -52,6 +52,11 @@ struct ReposView: View {
             }
         }
         .listStyle(.sidebar)
+        // The focused outline view takes Delete before the − button's shortcut sees it.
+        .onDeleteCommand {
+            guard let repo = model.selected, repo.actions.disconnectProblem == nil else { return }
+            model.onDisconnect(repo.key)
+        }
         .focused($sidebarFocused)
         .onAppear { sidebarFocused = true }
         .safeAreaInset(edge: .bottom, spacing: 0) {
