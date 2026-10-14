@@ -295,6 +295,28 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertNil(view.popoverChip)
     }
 
+    func testAPopoverMovingToAnotherParagraphUnlightsTheChipItLeaves() throws {
+        let first = try storyView()
+        let second = try storyView()
+        let popover = ChipPopover(content: { _ in
+            let controller = NSViewController()
+            controller.view = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 80))
+            return controller
+        }, makePopover: { LateClosingPopover() })
+        for view in [first, second] {
+            view.popover = popover
+            view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        }
+
+        first.showDetails(0, hover: true)
+        XCTAssertEqual(first.popoverChip, 0)
+        second.showDetails(1, hover: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertNil(first.popoverChip, "the paragraph the popover left")
+        XCTAssertEqual(second.popoverChip, 1)
+        XCTAssertTrue(popover.isShown)
+    }
+
     func testTabMovesBetweenChipsSpaceShowsAndReturnOpens() throws {
         let view = try storyView()
         let popover = PopoverSpy()

@@ -39,6 +39,8 @@ public final class ChipPopover: NSObject, ChipPopoverPresenting, NSPopoverDelega
         let previous = popover
         popover = nil
         previous?.close()
+        // A popover moving to another paragraph tells the one it leaves, whose chip would otherwise stay lit.
+        if let owner, owner !== view { owner.popoverClosed() }
         let controller = content(mention)
         let popover = makePopover()
         popover.contentViewController = controller
