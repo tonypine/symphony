@@ -9,7 +9,10 @@ fix run, within seconds.
 A pull request that closes by merging also moves its base branch, so every other PR on it falls
 behind. That delivery makes the PR poller poll at once too: a `Merging` PR that is now `BEHIND`
 gets its update-branch in seconds, and once its head moves, the CI runs still going on the old head
-are cancelled, since that head can never merge.
+are cancelled, since that head can never merge. A PR still in Code Review, QA or Rework is left
+behind on purpose: a review or QA run starts only on a green head, so updating it on every merge
+would keep restarting its CI, and an agent run brings its own branch up to date. It is updated
+once it reaches `Merging`.
 
 Webhooks only speed up polling. The timed poll keeps running and catches up on any delivery lost
 while the Mac sleeps, Symphony restarts or the relay drops.
