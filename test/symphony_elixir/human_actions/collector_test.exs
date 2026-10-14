@@ -7,8 +7,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   @project %{"id" => "project-1", "name" => "Cycle"}
   @scope %{"team" => %{"key" => %{"eq" => "MOT"}}}
 
-  # Most tests read issues a config labelled that still sets the deprecated `human_actions.label`.
-  defp settings, do: put_in(%Schema{}.human_actions.label, "human-action")
+  defp settings, do: %Schema{}
 
   defp collect(nodes, opts \\ []) do
     test_pid = self()
@@ -31,7 +30,6 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
         "id" => "id-" <> identifier,
         "identifier" => identifier,
         "title" => "Title of " <> identifier,
-        "description" => nil,
         "url" => "https://linear.app/acme/issue/" <> identifier,
         "state" => %{"name" => "Backlog"},
         "project" => @project,
@@ -75,7 +73,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
   end
 
-  test "queries the route's scope for labelled or held issues that are not terminal" do
+  test "queries the route's scope for held issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -85,19 +83,14 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert variables.filter == %{
              "and" => [
                @scope,
-               %{
-                 "or" => [
-                   %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
-                   # A decision request leaves the ticket in its phase.
-                   %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
-                 ]
-               },
+               # A decision request leaves the ticket in its phase.
+               %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}},
                %{"state" => %{"name" => %{"nin" => ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]}}}
              ]
            }
   end
 
-  test "with the default settings, queries no label, and lists a request on an unlabelled issue in its phase" do
+  test "lists a request on an issue in its phase, and nothing for the retired human-action label alone" do
     issue =
       node("MOT-25", %{
         "state" => %{"name" => "Code Review"},
@@ -109,10 +102,10 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
         "history" => history([%{"createdAt" => "2026-10-03T09:00:05.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Code Review"}}])
       })
 
-    # Without the deprecated setting, the label marks nothing.
+    # The retired label marks nothing.
     labelled = node("MOT-26", %{"labels" => labels(["human-action"])})
 
-    assert {:ok, collected} = collect([issue, labelled], settings: %Schema{})
+    assert {:ok, collected} = collect([issue, labelled])
 
     assert [
              %Action{
@@ -123,18 +116,12 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                done_when: "you reply to the request, or the agent withdraws the request."
              }
            ] = actions(collected)
-
-    assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
-
-    assert wanted == [
-             %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}}
-           ]
   end
 
-  test "lists each open request on a labelled issue, and drops the ones the issue moved on from" do
+  test "lists each open request on a held issue, and drops the ones the issue moved on from" do
     issue =
       node("MOT-24", %{
-        "labels" => labels(["Human-Action"]),
+        "labels" => labels(["Needs Decision"]),
         "comments" =>
           comments([
             request_comment("comment-old", "Add the old secret", "2026-10-01T10:00:00.000Z"),
@@ -180,7 +167,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
         "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")])
       })
 
-    assert {:ok, collected} = collect([issue], settings: %Schema{})
+    assert {:ok, collected} = collect([issue])
 
     assert [%Action{kind: :request, options: [_ | _], done_when: done_when}] = actions(collected)
 
@@ -198,49 +185,34 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
           ])
       })
 
-    assert {:ok, collected} = collect([issue], settings: %Schema{})
+    assert {:ok, collected} = collect([issue])
 
     assert [%Action{kind: :request, options: [], done_when: done_when}] = actions(collected)
 
     assert done_when == "you reply to the request, or the agent withdraws the request."
   end
 
-  test "lists a labelled issue without a request as a task, and one whose requests all closed as nothing" do
-    task =
-      node("MOT-31", %{
-        "title" => "Turn on the pre-push hook",
-        "labels" => labels(["human-action"]),
-        "description" => "On your laptop:\n\n1. Run `git config core.hooksPath .githooks`\n2. Push once"
-      })
+  test "lists nothing for an issue without a request, or one whose requests all closed" do
+    no_request = node("MOT-31", %{"labels" => labels(["Needs Decision"])})
 
     closed =
       node("MOT-32", %{
-        "labels" => labels(["human-action"]),
+        "labels" => labels(["Needs Decision"]),
         "comments" => comments([request_comment("comment-1", "Old", "2026-10-01T10:00:00.000Z")]),
         "history" => history([%{"createdAt" => "2026-10-02T10:00:00.000Z", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}}])
       })
 
-    assert {:ok, collected} = collect([task, closed])
-
-    assert [
-             %Action{
-               key: "task:id-MOT-31",
-               kind: :task,
-               title: "Turn on the pre-push hook",
-               steps: ["Run `git config core.hooksPath .githooks`", "Push once"],
-               done_when: "you close MOT-31, or move it on."
-             }
-           ] = actions(collected)
+    assert {:ok, %{}} = collect([no_request, closed])
   end
 
-  test "drops a withdrawn or answered request, and lists a labelled issue whose requests were all withdrawn as nothing" do
+  test "drops a withdrawn or answered request, and lists an issue whose requests were all withdrawn as nothing" do
     withdrawal = fn id, parent_id ->
       %{"id" => id, "body" => Request.render_withdrawal("Not needed."), "createdAt" => "2026-10-04T19:00:00.000Z", "parent" => %{"id" => parent_id}}
     end
 
     partly =
       node("MOT-33", %{
-        "labels" => labels(["human-action"]),
+        "labels" => labels(["Needs Decision"]),
         "comments" =>
           comments([
             request_comment("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
@@ -252,7 +224,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     all_withdrawn =
       node("MOT-34", %{
-        "labels" => labels(["human-action"]),
+        "labels" => labels(["Needs Decision"]),
         "comments" => comments([request_comment("comment-4", "Re-run CI", "2026-10-04T18:57:00.000Z"), withdrawal.("reply-4", "comment-4")])
       })
 
@@ -266,22 +238,26 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   end
 
   test "skips issues outside a project and merges what several routes return" do
-    task = node("MOT-31", %{"labels" => labels(["human-action"])})
-    other_project = node("ENG-1", %{"labels" => labels(["human-action"]), "project" => %{"id" => "project-2", "name" => nil}})
-    no_project = node("MOT-60", %{"labels" => labels(["human-action"]), "project" => nil})
-    no_state = node("MOT-61", %{"labels" => labels(["human-action"]), "state" => nil})
+    held = fn identifier, attrs ->
+      node(identifier, Map.put(attrs, "comments", comments([request_comment("comment-" <> identifier, "Add the secret", "2026-10-03T10:00:00.000Z")])))
+    end
 
-    assert {:ok, collected} = collect([task, other_project, no_project, no_state], repos: [:web, :api])
+    in_project = held.("MOT-31", %{})
+    other_project = held.("ENG-1", %{"project" => %{"id" => "project-2", "name" => nil}})
+    no_project = held.("MOT-60", %{"project" => nil})
+    no_state = held.("MOT-61", %{"state" => nil})
+
+    assert {:ok, collected} = collect([in_project, other_project, no_project, no_state], repos: [:web, :api])
 
     assert Map.keys(collected) == ["project-1", "project-2"]
-    assert [%Action{key: "task:id-MOT-31"}, %Action{key: "task:id-MOT-61", issue: %{state: nil}}] = collected["project-1"].actions
-    assert %{project: %{id: "project-2", name: nil}, actions: [%Action{key: "task:id-ENG-1"}]} = collected["project-2"]
+    assert [%Action{key: "request:comment-MOT-31"}, %Action{key: "request:comment-MOT-61", issue: %{state: nil}}] = collected["project-1"].actions
+    assert %{project: %{id: "project-2", name: nil}, actions: [%Action{key: "request:comment-ENG-1"}]} = collected["project-2"]
   end
 
   test "reads every page of issues" do
     test_pid = self()
-    first = node("MOT-1", %{"labels" => labels(["human-action"])})
-    second = node("MOT-2", %{"labels" => labels(["human-action"])})
+    first = node("MOT-1", %{"comments" => comments([request_comment("comment-1", "Add the secret", "2026-10-03T10:00:00.000Z")])})
+    second = node("MOT-2", %{"comments" => comments([request_comment("comment-2", "Add the key", "2026-10-03T10:00:00.000Z")])})
 
     client = fn _query, variables, _opts ->
       send(test_pid, {:after, variables.after})
@@ -294,7 +270,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
     assert {:ok, result} = Collector.collect([:repo], opts)
-    assert ["task:id-MOT-1", "task:id-MOT-2"] = result |> actions() |> Enum.map(& &1.key)
+    assert ["request:comment-1", "request:comment-2"] = result |> actions() |> Enum.map(& &1.key)
     assert_received {:after, nil}
     assert_received {:after, "cursor-1"}
   end

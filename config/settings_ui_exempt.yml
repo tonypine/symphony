@@ -233,7 +233,6 @@ exemptions:
     keys:
       - human_actions.enabled
       - human_actions.interval_ms
-      - human_actions.label
       - human_actions.min_update_interval_ms
 
   # notifications

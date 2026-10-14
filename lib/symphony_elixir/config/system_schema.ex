@@ -116,8 +116,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "poller" => ~w(backoff_base_ms max_backoff_ms degraded_threshold),
     "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
-    # `label` is deprecated (see `normalize_human_actions/1`).
-    "human_actions" => ~w(enabled label interval_ms min_update_interval_ms),
+    "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
 
@@ -1068,7 +1067,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(escalate, @acceptance_gate_escalate_keys, path <> ".escalate"),
          {:ok, busy_files} <- section_map(Map.get(escalate, "busy_files"), path <> ".escalate.busy_files"),
          :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
-      warn_legacy_escalate_label(Map.get(escalate, "labels"), path)
       warn_deprecated_gate_mode(Map.get(config, "mode"), path)
       warn_retired_gate_keys(config, escalate, path)
 
@@ -1079,19 +1077,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("escalate", escalate)}
     end
   end
-
-  defp warn_legacy_escalate_label(labels, path) when is_list(labels) do
-    legacy = SymphonyElixir.PersonWait.legacy_request_label()
-
-    if Enum.any?(labels, &(is_binary(&1) and String.downcase(String.trim(&1)) == legacy)) do
-      deprecation_warning(
-        "symphony.yml `#{path}.escalate.labels` lists the deprecated `#{legacy}` label: an action request now pauses its issue " <>
-          "on a Needs Decision hold without the label. Remove `#{legacy}` from the list"
-      )
-    end
-  end
-
-  defp warn_legacy_escalate_label(_labels, _path), do: :ok
 
   # The acceptance gate is being retired in favour of the per-repo `manual_review` setting: a config
   # that still sets a mode loads unchanged and says once per config what its mode now means, and
@@ -1275,19 +1260,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  # `label` is retired: the Needs Decision hold says a person needs to act. A config that still
-  # sets it loads, and an issue carrying the label counts as one with an open request
-  # (`SymphonyElixir.PersonWait.legacy_request_labels/1`).
   defp normalize_human_actions(config) do
     with {:ok, config} <- section_map(config, "human_actions"),
          :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
-      if Map.has_key?(config, "label") do
-        deprecation_warning(
-          "symphony.yml `human_actions.label` is deprecated and will be removed: an action request now moves its issue " <>
-            "on a Needs Decision hold and adds no label. An issue carrying the label still counts as an open request"
-        )
-      end
-
       {:ok, config}
     end
   end
