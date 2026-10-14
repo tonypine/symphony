@@ -19,8 +19,8 @@ public enum BuiltInTicketPatternsError: LocalizedError, Equatable {
 
 /// `escalate.ticket_patterns_builtin`: whether Code Review's built-in ticket patterns (a ticket asking for a human
 /// or manual review, saying it must not be auto-approved, or that it needs a human) send a ticket to a person, on
-/// top of the `ticket_patterns` listed in `symphony.yml`. Settings edits the global key, the Edit Repo sheet a
-/// repo's override.
+/// top of the `ticket_patterns` listed in `symphony.yml`. Settings edits the global key, a repo's Review sheet its
+/// override.
 public enum BuiltInTicketPatterns {
     public static let toggleTitle = "Built-in ticket patterns"
     public static let pickerTitle = "Built-in ticket patterns"

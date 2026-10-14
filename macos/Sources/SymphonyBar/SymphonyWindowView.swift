@@ -167,7 +167,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     var onSelect: (SymphonyView) -> Void = { _ in }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var onOpenRepos: (String?) -> Void = { _ in }
     var onOpenWebDashboard: () -> Void = {}
     var onScopeChange: (OverviewScope) -> Void = { _ in }
@@ -504,7 +504,7 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Change Review…: the Repos window on `repoKey`'s Edit sheet, where its manual review is.
+    /// Change Review…: the Repos window on `repoKey`'s Review sheet, where its manual review is.
     func changeReview(_ repoKey: String) {
         onOpenRepos(repoKey)
     }

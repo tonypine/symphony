@@ -19,7 +19,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     /// Symphony's state directory, for the control URL Diagnostics shows.
     var stateRoot: () -> URL = { StateRoot.locate(environment: AppStores.current.environment) }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var openRepos: (String?) -> Void = { _ in }
     var openWebDashboard: () -> Void = {}
     var canOpenWebDashboard: () -> Bool = { false }
