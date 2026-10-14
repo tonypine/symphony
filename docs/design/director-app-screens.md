@@ -144,8 +144,10 @@ later journeys point back to it. The mock draws every screen under its ID.
   track shows only the reference's facts (Part of, Work, Waiting on). Then **Open Ticket Page** (D3, pushed in the
   window, ⌘[ returns to the decision) and **Open in Linear**. A **pull request** shows N3's head and figures and
   **Open on GitHub**; a mention Symphony can't see says so, with its link. Connected comes from the Inbox's
-  `context` of a ticket that waits on you, `/api/v1/initiatives` (a plan's sub-tickets, a sub-ticket's parent and
-  blockers) and the reference's parent. When the review would be under 560 pt beside the inspector (a 1200 pt
+  `context` of a ticket that waits on you, then the `connected` of its `/api/v1/:issue_identifier` (a ticket Symphony
+  runs or watches, TP-1001; a blocker or sub-ticket it names without a title takes the Inbox reference's), then
+  `/api/v1/initiatives` (a plan's sub-tickets, a sub-ticket's parent and blockers) and the reference's parent, each
+  group from the first source that has it. When the review would be under 560 pt beside the inspector (a 1200 pt
   window's Inbox leaves it about 260 pt), the peek is a sheet over the window instead. The ticket peek, the PR peek and the peek beside the review are offscreen snapshots,
   light and dark, in `macos/Tests/Snapshots` (`peek-ticket`, `peek-pr`, `peek-beside-review`).
 

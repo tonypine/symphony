@@ -3,6 +3,34 @@
     "current_retry_attempt": 0,
     "restart_count": 0
   },
+  "connected": {
+    "blocked_by": [
+      {
+        "identifier": "TP-892",
+        "state": "Rework",
+        "title": null
+      }
+    ],
+    "blocks": [
+      {
+        "identifier": "TP-893",
+        "state": "Todo",
+        "title": "Show the new review steps in the app"
+      }
+    ],
+    "parent": {
+      "children": [
+        "completed",
+        "started"
+      ],
+      "done": 1,
+      "identifier": "TP-880",
+      "title": "Remove the Supervisor check",
+      "total": 2
+    },
+    "related": [],
+    "sub_tickets": []
+  },
   "issue_id": "i-891",
   "issue_identifier": "TP-891",
   "last_error": null,

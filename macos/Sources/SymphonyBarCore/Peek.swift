@@ -291,8 +291,10 @@ public struct TicketPeek: Equatable {
         }
         now = Now(stage: stage, waitingOn: waitingOn, pullRequest: pullRequest)
 
-        // Connected.
+        // Connected: the Inbox's context first, then the ticket page's endpoint, then the Initiatives and the
+        // reference's parent.
         let context = item?.context
+        let endpoint = sources.issue.flatMap(Self.endpointConnected)
         let initiative = sources.initiatives.first { $0.identifier == identifier }
         let parentInitiative = sources.initiatives.first { $0.subTickets.contains { $0.identifier == identifier } }
         let asSubTicket = parentInitiative?.subTickets.first { $0.identifier == identifier }
@@ -300,13 +302,25 @@ public struct TicketPeek: Equatable {
             references[identifier] = references[identifier] ?? Self.ticket(identifier, title: title, state: state, url: url)
             return Row(text: Self.mention(identifier, title), state: state)
         }
-
-        var parent: Parent?
-        if let known = context?.parent {
-            parent = Parent(
+        // The endpoint's blockers and sub-tickets come without titles (Symphony's poll reads none): a reference the
+        // Inbox already holds names them.
+        func row(_ connected: TicketContext.Connected) -> Row {
+            let title = connected.title ?? {
+                if case let .ticket(known)? = references[connected.identifier] { return known.title }
+                return nil
+            }()
+            return row(connected.identifier, title: title, state: connected.state)
+        }
+        func parentRow(_ known: TicketContext.Parent) -> Parent {
+            Parent(
                 text: row(known.identifier, title: known.title, state: nil).text, done: known.done, total: known.total,
                 children: known.children.map(Self.status(stateType:))
             )
+        }
+
+        var parent: Parent?
+        if let known = context?.parent ?? endpoint?.context.parent {
+            parent = parentRow(known)
         } else if let parentInitiative {
             parent = Parent(
                 text: row(parentInitiative.identifier, title: parentInitiative.title, state: parentInitiative.state, url: parentInitiative.url).text,
@@ -319,11 +333,15 @@ public struct TicketPeek: Equatable {
 
         let subTickets: [Row] = if let plan = item?.review.subTickets, !plan.isEmpty {
             plan.map { row($0.identifier, title: $0.title, state: $0.state, url: $0.url) }
+        } else if let known = endpoint?.subTickets, !known.isEmpty {
+            known.map { row($0) }
         } else {
             (initiative?.subTickets ?? []).map { row($0.identifier, title: $0.title, state: $0.state, url: $0.url) }
         }
         let blockedBy: [Row] = if let known = context?.blockedBy, !known.isEmpty {
             known.map { row($0.identifier, title: $0.title, state: $0.state) }
+        } else if let known = endpoint?.context.blockedBy, !known.isEmpty {
+            known.map { row($0) }
         } else {
             (asSubTicket?.blockedBy ?? []).map { blocker in
                 let sibling = parentInitiative?.subTickets.first { $0.identifier == blocker }
@@ -334,8 +352,8 @@ public struct TicketPeek: Equatable {
             parent: parent,
             subTickets: subTickets,
             blockedBy: blockedBy,
-            blocks: (context?.blocks ?? []).map { row($0.identifier, title: $0.title, state: $0.state) },
-            related: (context?.related ?? []).map { row($0.identifier, title: $0.title, state: $0.state) }
+            blocks: Self.first(context?.blocks, endpoint?.context.blocks).map { row($0) },
+            related: Self.first(context?.related, endpoint?.context.related).map { row($0) }
         )
         self.connected = connected.isEmpty ? nil : connected
         if case let .parsed(brief)? = item?.review.brief, let line = brief.headline?.trimmingWhitespace(), !line.isEmpty {
@@ -380,8 +398,41 @@ public struct TicketPeek: Equatable {
         return Int(url.lastPathComponent)
     }
 
+    /// The first list with a ticket in it.
+    static func first(_ lists: [TicketContext.Connected]?...) -> [TicketContext.Connected] {
+        lists.lazy.compactMap { $0 }.first { !$0.isEmpty } ?? []
+    }
+
+    /// The ticket page endpoint's `connected` (TP-1001), in the Inbox context's shape plus its sub-tickets; nil when
+    /// the endpoint has none (an untracked ticket).
+    static func endpointConnected(_ data: Data) -> (context: TicketContext, subTickets: [TicketContext.Connected])? {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let connected = (try? decoder.decode(IssueConnected.self, from: data))?.connected else { return nil }
+        let context = TicketContext(TicketContext.Payload(
+            parent: connected.parent, pullRequest: nil, blockedBy: connected.blockedBy, blocks: connected.blocks,
+            related: connected.related, earlierDecisions: nil
+        ))
+        let subTickets = TicketContext(TicketContext.Payload(
+            parent: nil, pullRequest: nil, blockedBy: connected.subTickets, blocks: nil, related: nil, earlierDecisions: nil
+        )).blockedBy
+        return (context, subTickets)
+    }
+
     private struct IssueStatus: Decodable {
         let status: String?
+    }
+
+    private struct IssueConnected: Decodable {
+        struct Connected: Decodable {
+            let parent: TicketContext.Payload.ParentPayload?
+            let subTickets: [TicketContext.Payload.ConnectedPayload]?
+            let blockedBy: [TicketContext.Payload.ConnectedPayload]?
+            let blocks: [TicketContext.Payload.ConnectedPayload]?
+            let related: [TicketContext.Payload.ConnectedPayload]?
+        }
+
+        let connected: Connected?
     }
 }
 
