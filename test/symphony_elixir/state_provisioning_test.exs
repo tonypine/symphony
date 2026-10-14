@@ -18,8 +18,9 @@ defmodule SymphonyElixir.StateProvisioningTest do
     def workflow_states, do: Process.get({__MODULE__, :states}, {:ok, []})
     def labels, do: Process.get({__MODULE__, :labels}, {:ok, []})
 
-    def create_workflow_state(name, team) do
+    def create_workflow_state(name, team, color) do
       send(self(), {:create_workflow_state, name, team})
+      send(self(), {:create_workflow_state_color, name, color})
       Process.get({__MODULE__, :create_state_result}, {:ok, %{name: name, team_id: team}})
     end
 
@@ -121,6 +122,26 @@ defmodule SymphonyElixir.StateProvisioningTest do
       refute_received {:create_workflow_state, _name, _team}
       refute_received {:create_label, _name, _team}
       assert log =~ "0 created, 10 already present, 0 failed"
+    end
+
+    test "creates each phase state with its own hex color, and a renamed one keeps its phase's color" do
+      settings = Config.settings!()
+      assert :ok = StateProvisioning.provision(settings, ["TP"], tracker: FakeTracker)
+
+      colors =
+        for {_key, name} <- @machine_states do
+          assert_received {:create_workflow_state_color, ^name, color}
+          assert color =~ ~r/\A#[0-9a-f]{6}\z/
+          color
+        end
+
+      assert colors == Enum.uniq(colors)
+
+      renamed = %{settings | tracker: %{settings.tracker | qa_state: "Verification"}}
+      assert :ok = StateProvisioning.provision(renamed, ["TP"], tracker: FakeTracker)
+
+      qa_color = Enum.at(colors, 1)
+      assert_received {:create_workflow_state_color, "Verification", ^qa_color}
     end
 
     test "reports a missing state with its exact name and the config key before creating it" do

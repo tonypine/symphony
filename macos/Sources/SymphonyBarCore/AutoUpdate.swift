@@ -51,6 +51,10 @@ public enum SymphonyActivity: Equatable {
 ///   that didn't happen it waits for the next check, unless it gave up because a run was active.
 /// - Automatically at a set time checks for a release at the daily time and installs it, waiting for agent runs up to
 ///   the restart timeout. A time missed while the Mac slept or the app was closed waits for the next day.
+/// - Automatically when released installs an available release as soon as a check finds it, or a poll sees one,
+///   whatever runs are active: the drain waits for them as Update to vX does. After an install that didn't happen it
+///   waits for the next check. Cancel Update holds that release (`hold`) until it is installed by hand, skipped, or a
+///   newer one comes out.
 /// - Manual never installs by itself.
 ///
 /// Nothing installs while `UpdateEligibility.blocker` gives a reason.
@@ -62,9 +66,8 @@ public struct AutoUpdater: Equatable {
     public enum Action: Equatable {
         /// Check for a newer release now: the set time has come. Its result goes to `checked`.
         case check
-        /// Install `release` without asking. The drain waits up to `runsTimeout` for agent runs once dispatch is
-        /// paused and then gives up; 0 gives up as soon as a run is active.
-        case install(Release, runsTimeout: TimeInterval)
+        /// Install `release` without asking, draining as `kind` says.
+        case install(Release, kind: UpdateKind)
     }
 
     /// What the decisions read from the app each time.
@@ -104,9 +107,12 @@ public struct AutoUpdater: Equatable {
     private var scheduledTime: TimeOfDay?
     /// True from the set time's check until its result.
     private var checkingAtSetTime = false
-    /// True after an install started when idle, until the next check: an install that failed isn't retried on every
-    /// poll.
+    /// True after an install started when idle or when released, until the next check: an install that failed isn't
+    /// retried on every poll.
     private var waitingForCheck = false
+    /// The build Cancel Update called off in Automatically when released, which installs no more by itself. Kept in
+    /// memory only, so a relaunch forgets it.
+    public private(set) var heldBuild: Int?
 
     public init() {}
 
@@ -115,7 +121,11 @@ public struct AutoUpdater: Equatable {
         guard context.mode == .atTime else {
             nextSetTime = nil
             scheduledTime = nil
-            return context.mode == .whenIdle ? installWhenIdle(context) : nil
+            switch context.mode {
+            case .whenIdle: return installWhenIdle(context)
+            case .onRelease: return installOnRelease(context)
+            case .manual, .atTime: return nil
+            }
         }
         guard let due = nextSetTime, scheduledTime == context.time else {
             nextSetTime = context.time.nextDate(after: now, calendar: calendar)
@@ -142,8 +152,21 @@ public struct AutoUpdater: Equatable {
             return installWhenIdle(context)
         case .atTime:
             guard atSetTime, context.activity != .busy, let release = installable(context) else { return nil }
-            return .install(release, runsTimeout: context.runsTimeout)
+            return .install(release, kind: .automatic(runsTimeout: context.runsTimeout))
+        case .onRelease:
+            return installOnRelease(context)
         }
+    }
+
+    /// Cancel Update called off an update of `release` that the app started when released: no check or poll starts
+    /// it again.
+    public mutating func hold(_ release: Release) {
+        heldBuild = release.build
+    }
+
+    /// The held release was installed by hand or skipped.
+    public mutating func clearHold() {
+        heldBuild = nil
     }
 
     /// The drain gave up because agent runs were active: when idle, install again at the next idle moment without
@@ -155,12 +178,22 @@ public struct AutoUpdater: Equatable {
     private mutating func installWhenIdle(_ context: Context) -> Action? {
         guard !waitingForCheck, context.activity.isIdle, let release = installable(context) else { return nil }
         waitingForCheck = true
-        return .install(release, runsTimeout: 0)
+        return .install(release, kind: .automatic(runsTimeout: 0))
     }
 
-    /// The release to install: available, not skipped, and updates allowed.
+    private mutating func installOnRelease(_ context: Context) -> Action? {
+        guard !waitingForCheck, context.activity != .busy, let release = installable(context) else { return nil }
+        // A newer release than the one held installs, and ends the hold.
+        heldBuild = nil
+        waitingForCheck = true
+        return .install(release, kind: .onRelease)
+    }
+
+    /// The release to install: available, not skipped, not held by Cancel Update, and updates allowed.
     private func installable(_ context: Context) -> Release? {
-        guard context.blocker == nil, case let .available(release)? = context.offer else { return nil }
+        guard context.blocker == nil, case let .available(release)? = context.offer, release.build != heldBuild else {
+            return nil
+        }
         return release
     }
 }

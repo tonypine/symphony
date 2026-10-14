@@ -76,7 +76,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              settings,
              mcp_session,
              {remote_socket_path, remote_shim_path},
-             Keyword.get(opts, :read_only, false)
+             Keyword.take(opts, [:read_only, :unlocked_paths])
            ) do
       # Every turn of the session starts Claude with the profile chosen at dispatch, and with
       # the caller's `:extra_env` (a QA pass's own `CLAUDE_CODE_TMPDIR`) on the local host.
@@ -143,15 +143,23 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # --- Sandbox settings ---
 
   @doc false
-  @spec build_sandbox_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()]) :: map()
-  def build_sandbox_settings(%Agent.NetworkAccess{mode: mode} = network_access, allow_read_paths \\ [], allow_write_paths \\ [], deny_write_paths \\ []) do
+  @spec build_sandbox_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], [String.t()]) :: map()
+  def build_sandbox_settings(
+        %Agent.NetworkAccess{mode: mode} = network_access,
+        allow_read \\ [],
+        allow_write \\ [],
+        deny_write \\ [],
+        unlocked \\ []
+      ) do
+    filesystem = AgentSandboxConfig.claude_filesystem_settings(allow_read, allow_write, deny_write, unlocked)
+
     base =
       %{
         "sandbox" => %{
           "enabled" => true,
           "failIfUnavailable" => true,
           "allowUnsandboxedCommands" => false,
-          "filesystem" => AgentSandboxConfig.claude_filesystem_settings(allow_read_paths, allow_write_paths, deny_write_paths)
+          "filesystem" => filesystem
         }
       }
 
@@ -186,16 +194,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # deny pushing, the `gh` CLI, the file tools on the write-protected paths the sandbox keeps
   # from the shell, and reading the cloud-synced folders. A read-only session (`read_only: true`
   # in `start_session/2`) also gets no file-editing tool and can't write its
-  # working directory from the shell.
+  # working directory from the shell. `unlocked_paths` are the protected paths a person's decision
+  # unlocked for this run (`SymphonyElixir.PathUnlock`): neither the sandbox nor the file tools deny them.
   @doc false
-  @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], boolean()) :: map()
-  def build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths \\ [], read_only? \\ false) do
+  @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], keyword()) :: map()
+  def build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths \\ [], opts \\ []) do
+    unlocked_paths = Keyword.get(opts, :unlocked_paths, [])
+
     settings =
       network_access
-      |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths)
-      |> Map.put("permissions", %{"deny" => @denied_commands ++ file_tool_deny_rules(allow_read_paths, deny_write_paths)})
+      |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths, unlocked_paths)
+      |> Map.put("permissions", %{"deny" => @denied_commands ++ file_tool_deny_rules(allow_read_paths, deny_write_paths, unlocked_paths)})
 
-    if read_only? do
+    if Keyword.get(opts, :read_only, false) do
       settings
       |> update_in(["permissions", "deny"], &(&1 ++ @file_edit_tools))
       |> update_in(["sandbox", "filesystem", "denyWrite"], &(&1 ++ ["."]))
@@ -204,8 +215,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp file_tool_deny_rules(allow_read_paths, deny_write_paths) do
-    edit_rules = AgentSandboxConfig.claude_edit_deny_rules(deny_write_paths)
+  defp file_tool_deny_rules(allow_read_paths, deny_write_paths, unlocked_paths) do
+    edit_rules = AgentSandboxConfig.claude_edit_deny_rules(deny_write_paths, unlocked_paths)
     edit_rules ++ AgentSandboxConfig.claude_read_deny_rules(allow_read_paths)
   end
 
@@ -536,14 +547,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp create_session(workspace, worker_host, settings, mcp_session, {remote_socket_path, remote_shim_path}, read_only?) do
+  defp create_session(workspace, worker_host, settings, mcp_session, {remote_socket_path, remote_shim_path}, session_opts) do
     case write_claude_runtime_files(
            workspace,
            worker_host,
            settings,
            mcp_session,
            {remote_socket_path, remote_shim_path},
-           read_only?
+           session_opts
          ) do
       {:ok, runtime_files} ->
         {:ok,
@@ -650,7 +661,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp tool_opts(opts) do
     opts
-    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver])
+    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver, :unlocked_paths])
   end
 
   defp install_remote_shim(_mcp_session, nil), do: {:ok, nil}
@@ -702,20 +713,20 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp write_claude_runtime_files(workspace, worker_host, settings, mcp_session, {socket_path, remote_shim_path}, read_only?) do
+  defp write_claude_runtime_files(workspace, worker_host, settings, mcp_session, {socket_path, remote_shim_path}, session_opts) do
     network_access = settings.agent.network_access
     allow_read_paths = workspace_sandbox_allow_read_paths(settings)
     allow_write_paths = workspace_sandbox_allow_write_paths(settings) ++ host_allow_write_paths(worker_host)
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
     effective_socket_path = socket_path || mcp_session.socket_path
 
-    deny_write_paths = host_deny_write_paths(settings, workspace, worker_host)
+    deny_write_paths = host_deny_write_paths(settings, workspace, worker_host, Keyword.get(session_opts, :unlocked_paths, []))
 
     settings_dir = claude_settings_dir(worker_host, mcp_session)
 
     settings_json =
       network_access
-      |> build_claude_settings(allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
+      |> build_claude_settings(allow_read_paths, allow_write_paths, deny_write_paths, session_opts)
       |> Map.put("hooks", AppLaunchHook.settings(settings_dir))
 
     settings_path = Path.join(settings_dir, "settings.json")
@@ -762,14 +773,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # config, hooks and attributes in the workspace's git dirs: Claude Code lets a worktree's
   # session write the shared repo's `.git` and protects only part of it. An SSH worker's
   # workspace isn't on this host, so it keeps the plain deny list.
-  defp host_deny_write_paths(settings, workspace, nil) when is_binary(workspace) do
-    link_targets = for path <- AgentSandboxConfig.workspace_link_targets(workspace), do: "./" <> path
+  defp host_deny_write_paths(settings, workspace, nil, unlocked_paths) when is_binary(workspace) do
+    link_targets = for path <- AgentSandboxConfig.workspace_link_targets(workspace, unlocked_paths), do: "./" <> path
     git_dirs = settings |> Schema.runtime_workspace_write_roots(workspace) |> Enum.filter(&File.dir?/1)
 
     link_targets ++ AgentSandboxConfig.git_metadata_deny_write_paths(git_dirs)
   end
 
-  defp host_deny_write_paths(_settings, _workspace, _worker_host), do: []
+  defp host_deny_write_paths(_settings, _workspace, _worker_host, _unlocked_paths), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
     Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")
