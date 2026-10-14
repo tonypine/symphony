@@ -42,6 +42,8 @@ public enum ManualReviewChoice: String, CaseIterable, Identifiable {
 /// The manual review control's labels.
 public enum ManualReview {
     public static let pickerTitle = "Manual review"
+    /// The Review sheet's checkbox, on for `on`.
+    public static let checkboxTitle = "Ask me before merging (a merge-confirmation hold after QA)"
     static let repoFieldLabel = "Manual review"
 
     /// The repo's Manual review line in the Repos window: its setting (`On`/`Off`) and, while the repo

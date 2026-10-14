@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 import SymphonyBarCore
 
-/// What the Add Repo sheet edits and shows, step by step, also as the Edit Repo sheet of a connected repo. Linear's
-/// projects load when it opens, with the stored `LINEAR_API_KEY`, and the picked project's labels each time one is
-/// picked; the repos in `symphony.yml` are read once, to check the key and the route against them.
+/// What the Add Repo sheet edits and shows, step by step, also as the Edit sheet of one section of a connected repo.
+/// Linear's projects load when the Add Repo or Linear routing sheet opens, with the stored `LINEAR_API_KEY`, and the
+/// picked project's labels each time one is picked; the repos in `symphony.yml` are read once, to check the key and
+/// the route against them.
 @MainActor
 final class AddRepoViewModel: ObservableObject {
     typealias LinearState = LinearLoad
@@ -13,7 +14,8 @@ final class AddRepoViewModel: ObservableObject {
     enum Saved {
         /// `workflow` is the `WORKFLOW.md` the sheet added for the repo.
         case added(key: String, madeDefault: String?, workflow: PendingWorkflow?)
-        case edited(from: RepositoryEntry, to: RepositoryEntry)
+        /// `previousDefault` is the repo that lost `default: true` to this one.
+        case edited(from: RepositoryEntry, to: RepositoryEntry, previousDefault: String?)
     }
 
     @Published var draft = AddRepoDraft()
@@ -42,9 +44,11 @@ final class AddRepoViewModel: ObservableObject {
     var openSettings: () -> Void = {}
     /// How a repo added now would reach Symphony, from its status now.
     var apply: () -> AddRepoApply = { .onNextStart }
+    /// Runs `symphony check` on a copy of `symphony.yml` at the path given, before the Review sheet saves.
+    var configCheck: (_ path: String) async -> ConfigCheckResult = { _ in .passed }
     /// True while Save adds the drafted `WORKFLOW.md`.
     @Published private(set) var isSaving = false
-    /// Whether the repo picked has a `WORKFLOW.md`; never checked while editing a repo.
+    /// Whether the repo picked has a `WORKFLOW.md`; of the Edit sheets, only Source checks it.
     @Published private(set) var workflowCheck = WorkflowCheck.idle
     /// The `WORKFLOW.md` drafted for a repo that has none, as the engineer edited it.
     @Published private(set) var workflowText = ""
@@ -59,6 +63,8 @@ final class AddRepoViewModel: ObservableObject {
     let configPath: String
     /// The repo the sheet edits, as `symphony.yml` has it; nil while adding one.
     let editing: RepositoryEntry?
+    /// The section of `editing` the sheet edits.
+    let section: EditRepo.Section
     private let existing: [RepositoryEntry]
     private let secrets: SecretsReader
     /// True once the key was typed, so picking another source no longer replaces it.
@@ -76,11 +82,12 @@ final class AddRepoViewModel: ObservableObject {
     private var client: LinearClient?
     private let onSaved: (Saved) -> Void
 
-    /// With `editing`, the sheet opens on that repo's entry and Save rewrites it.
+    /// With `editing`, the sheet opens on that repo's `section` and Save rewrites its entry.
     init(
         configPath: String,
         secrets: SecretsReader,
         editing key: String? = nil,
+        section: EditRepo.Section = .routing,
         linearClient: @escaping (_ apiKey: String) -> LinearClient = {
             LinearClient(apiKey: $0, endpoint: AppStores.current.linearEndpoint)
         },
@@ -111,17 +118,21 @@ final class AddRepoViewModel: ObservableObject {
             configProblem = "symphony.yml has no repo `\(key)`."
         }
         self.editing = editing
+        self.section = section
         self.existing = existing
         self.configProblem = configProblem
         if let editing {
             draft = EditRepo.draft(for: editing)
             keyEdited = true
+            // A connected repo's base branch is never replaced by the source's default branch.
+            baseBranchEdited = true
         }
-        loadLinear()
+        if key == nil || section == .routing { loadLinear() }
     }
 
     var title: String {
-        editing.map { EditRepo.sheetTitle(key: $0.key) } ?? AddRepo.sheetTitle
+        if let key = editing?.key { return section.sheetTitle(key: key) }
+        return AddRepo.sheetTitle
     }
 
     /// The entry Save writes, or what stops it.
@@ -143,8 +154,20 @@ final class AddRepoViewModel: ObservableObject {
             workflowText: workflowText,
             landedWorkflow: landedWorkflow,
             projects: linear,
-            labels: labelsState
+            labels: labelsState,
+            editing: editing != nil
         )
+    }
+
+    /// The Source sheet's line on the source picked, nil while it is still the repo's own.
+    var editSourceResult: AddRepoSourceResult? {
+        guard let editing, !EditRepo.isSourceUnchanged(draft, editing: editing) else { return nil }
+        return flow.sourceResult
+    }
+
+    /// The Linear routing sheet's Default repo checkbox.
+    var defaultOption: EditRepo.DefaultOption? {
+        editing.map { EditRepo.defaultOption(editing: $0, existing: existing, isOn: draft.isDefault) }
     }
 
     /// Why Continue, or Connect on Review, is off on the page shown; nil while it is on.
@@ -164,6 +187,11 @@ final class AddRepoViewModel: ObservableObject {
     var canSave: Bool {
         if case .success = validation { return !isInspectingFolder && !isSaving && labelsState != .loading }
         return false
+    }
+
+    /// Whether the picked project's labels can be typed in the Linear routing sheet: once Linear answered.
+    var canEditLabels: Bool {
+        linear == .loaded && labelsState == .loaded
     }
 
     /// The labels an issue in the picked project can carry, and those the edited repo's route has already.
@@ -347,12 +375,20 @@ final class AddRepoViewModel: ObservableObject {
             addWorkflow(stack, then: entry)
             return
         }
+        if let editing, section == .review {
+            saveChecked(editing, to: entry)
+            return
+        }
         do {
             let file = SymphonyConfigFile(path: configPath)
             if let editing {
                 try file.editRepository(editing, to: entry)
                 saveError = nil
-                onSaved(.edited(from: editing, to: entry))
+                onSaved(.edited(
+                    from: editing,
+                    to: entry,
+                    previousDefault: EditRepo.previousDefault(from: editing, to: entry, existing: existing)
+                ))
             } else {
                 let madeDefault = try file.connectRepository(entry)
                 saveError = nil
@@ -360,6 +396,34 @@ final class AddRepoViewModel: ObservableObject {
             }
         } catch {
             saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// Writes the edited entry once `symphony check` passes on the result; a rejection stays in the sheet and nothing
+    /// is written.
+    private func saveChecked(_ editing: RepositoryEntry, to entry: RepositoryEntry) {
+        let file = SymphonyConfigFile(path: configPath)
+        let check = configCheck
+        isSaving = true
+        saveError = nil
+        savingMessage = "Running symphony check…"
+        Task {
+            let result: Result<ConfigCheckResult, Error>
+            do {
+                result = .success(try await file.rewrite({ try EditRepo.updating(editing, to: entry, in: $0) }, checkingWith: check))
+            } catch {
+                result = .failure(error)
+            }
+            isSaving = false
+            savingMessage = nil
+            switch result {
+            case .success(.passed):
+                onSaved(.edited(from: editing, to: entry, previousDefault: nil))
+            case let .success(.failed(message)):
+                saveError = "symphony check rejected this, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            case let .failure(error):
+                saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -405,7 +469,7 @@ final class AddRepoViewModel: ObservableObject {
     /// the typing pauses. A GitHub repo's default branch becomes the base branch until one is typed.
     private func checkWorkflow() {
         workflowProbe?.cancel()
-        guard editing == nil else { return }
+        guard editing == nil || section == .source else { return }
         switch draft.mode {
         case .localFolder:
             guard case let .success(checkout)? = draft.folder else {

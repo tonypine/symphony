@@ -125,6 +125,29 @@ final class AddRepoFlowTests: XCTestCase {
         XCTAssertEqual(flow.sourceResult, AddRepoSourceResult("/Users/me/code/web · acme/web · default branch main", style: .found))
     }
 
+    /// The Source sheet of a connected repo has no WORKFLOW.md step: it refuses a folder without one.
+    func testSourceResultRowWhileEditing() {
+        var flow = ready
+        flow.editing = true
+        flow.workflowCheck = .missing(WorkflowStack(), branch: "main")
+        XCTAssertEqual(flow.sourceResult, AddRepoSourceResult(
+            "acme/web · default branch main · No WORKFLOW.md on main: Symphony runs no agents on it until one is added",
+            style: .note
+        ))
+        flow.draft.mode = .localFolder
+        flow.draft.folder = .success(LocalCheckout(path: "/Users/me/code/web", gitHub: "acme/web", hasWorkflow: false))
+        XCTAssertEqual(flow.sourceResult, AddRepoSourceResult(
+            "/Users/me/code/web has no WORKFLOW.md. Add one before connecting the repo.",
+            style: .problem
+        ))
+        flow.workflowCheck = .present
+        flow.draft.folder = .success(checkout)
+        XCTAssertEqual(flow.sourceResult, AddRepoSourceResult(
+            "/Users/me/code/web · acme/web · default branch main · has WORKFLOW.md",
+            style: .found
+        ))
+    }
+
     // MARK: Linear
 
     func testLinearContinue() {
