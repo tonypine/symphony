@@ -932,13 +932,12 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
       denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Bad credentials", 1} end
 
-      assert {:ok, [%{number: 3, head_branch: "tony/tp-3"}]} = PullRequest.list_repo_open_pull_requests("org/repo", gh_runner: github_com)
-      assert {:ok, [%{number: 3}]} = PullRequest.list_repo_open_pull_requests("git.example.com/org/repo", gh_runner: enterprise)
+      list = &PullRequest.list_repo_open_pull_requests(&1, gh_runner: &2)
 
-      assert {:error, {:gh_failed, _args, 1, "gh: Bad credentials" <> _}} =
-               PullRequest.list_repo_open_pull_requests("org/repo", gh_runner: denied)
-
-      assert {:error, :invalid_github_repo} = PullRequest.list_repo_open_pull_requests("repo", gh_runner: denied)
+      assert {:ok, [%{number: 3, head_branch: "tony/tp-3"}]} = list.("org/repo", github_com)
+      assert {:ok, [%{number: 3}]} = list.("git.example.com/org/repo", enterprise)
+      assert {:error, {:gh_failed, _args, 1, "gh: Bad credentials" <> _}} = list.("org/repo", denied)
+      assert {:error, :invalid_github_repo} = list.("repo", denied)
     end
 
     test "list_open_pull_requests reports a bad URL, a gh failure and an unexpected answer" do
