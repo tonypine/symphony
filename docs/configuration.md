@@ -1061,7 +1061,7 @@ pull_requests:
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
   A conflict on an issue that waits on a person (outside `tracker.active_states` with
-  `needs-human`, a deprecated `human_actions.label` label or another `escalate.labels` label other
+  `needs-human` or another `escalate.labels` label other
   than `plan` and `breakdown`) gets no
   state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
   or removes the label. So does one on an issue in none of the active states, the review states
@@ -1078,7 +1078,7 @@ pull_requests:
   confirmation sends it to `Rework`. `checks.escalate_to_state` is deprecated: it loads with a
   warning and does nothing.
 - A red head on an issue that waits on a person (outside `tracker.active_states` with
-  `needs-human`, a deprecated `human_actions.label` label or another `escalate.labels` label other
+  `needs-human` or another `escalate.labels` label other
   than `plan` and `breakdown`) gets no
   re-run, CI-fix run, escalation or state move, and uses no fix attempt. So does one on an issue in
   none of the active states, the review states and `Merging` (`Backlog`,
@@ -1249,7 +1249,11 @@ only what it needs to use the change. The epic review judges a criterion that as
 coverage or CI to pass by CI's runs on the base branch head it tests, read with `gh run list` where
 the sandbox allows `gh`, else through GitHub's public API: green runs make the step `pass` with the
 run URLs, a failed run makes it `fail` naming the failing job and the run (so it is filed as a gap),
-and it is `skipped` only when no run can be read or a run is still in progress. The public API is
+and it is `skipped` only when no run can be read or a run is still in progress. Symphony waits for
+CI before it starts the epic review's agent: while a run on that commit is unfinished, the review
+starts again a minute later, without a verdict or a retry attempt, so a review that starts the
+moment the last sub-ticket merges does not judge a commit CI is still testing. A run still
+unfinished after two hours is not waited on. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
@@ -2171,13 +2175,9 @@ human_actions:
   With it off, Symphony reads none of that repository's issues for human actions, and
   `linear_request_human_action` refuses with `human_actions_disabled` so the agent writes a plain
   blocker comment instead.
-- `label` (deprecated, no default): the label that used to mark an issue as needing a person. A
-  request now pauses the ticket in its phase on the **Needs Decision** hold, whose label Symphony
-  sets itself; `linear_request_human_action` adds no label of its own. A config that still sets it loads with a
-  deprecation warning, and an issue carrying the label counts as one with an open request: the
-  pollers leave its red CI and merge conflicts to the person, and
-  the update lists it. So does `human-action` in `auto_review.acceptance_gate.escalate.labels`,
-  which also warns. Drop both once no issue carries the label.
+- `label` is retired: a request pauses the ticket in its phase on the **Needs Decision** hold,
+  whose label Symphony sets itself, and `linear_request_human_action` adds no label of its own. A
+  config that still sets `human_actions.label` fails to load as an unknown key.
 - `interval_ms` (default `300000`): how often Symphony reads the open actions. A read is one Linear
   request per repository route, plus one per project the first time Symphony sees it, plus one per
   update posted. They show as `human_actions` in the dashboard's Linear usage table.
@@ -2226,8 +2226,6 @@ lists:
   person's reply under the request (or **Send Decision…** in the Inbox) answers it and closes it
   too. Once no open request is left on the issue, the hold clears and the ticket continues where
   it stopped;
-- with the deprecated `human_actions.label`, an issue with the label and no such comment, as a task
-  in itself (its description's list items become the steps);
 - with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
   (`repositories[].base_branch`, default `main`) that keeps failing on a missing secret: its two
   latest finished runs failed (cancelled and skipped runs aside), and the failed-step log of the
@@ -2302,8 +2300,8 @@ health set by the project's previous update. No secret value reaches an update:
 `linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
-A rendered example, for a mix of a decision on release signing and a task labelled with the
-deprecated `human_actions.label`:
+A rendered example, for a mix of a decision on release signing and an older hand-written
+`## Action needed:` request with steps:
 
 ```md
 **2 actions need you.**
@@ -2325,14 +2323,14 @@ Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on
 
 ### 2. Turn on the pre-push hook on your laptop
 
-Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
+Unblocks [MOT-31](https://linear.app/acme/issue/MOT-31): clean pushes from your laptop
 
 1. Run `git config core.hooksPath .githooks` in your cycle checkout.
 
-**Done when:** you close MOT-31, or move it on.
+**Done when:** you reply to the request, or the agent withdraws the request.
 
 ---
-_Symphony posts a new update when this list changes · list `024ee477`_
+_Symphony posts a new update when this list changes · list `b1712c40`_
 ```
 
 ## `WORKFLOW.md`

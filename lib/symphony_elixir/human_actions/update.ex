@@ -99,8 +99,6 @@ defmodule SymphonyElixir.HumanActions.Update do
 
   defp issue_relation(%Action{issue: nil} = action), do: "Unblocks #{Request.one_line(action.unblocks)}"
 
-  defp issue_relation(%Action{kind: :task} = action), do: "Tracked in #{issue_link(action.issue)}"
-
   defp issue_relation(%Action{unblocks: unblocks} = action) when is_binary(unblocks),
     do: "Unblocks #{issue_link(action.issue)}: #{Request.one_line(unblocks)}"
 

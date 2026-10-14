@@ -49,6 +49,10 @@ Issue runs end with a pull request and validation evidence. PR runs push back to
 branch instead of opening a second one. If a claimed issue moves to a terminal state (`Done`,
 `Closed`, `Cancelled`, `Duplicate`), Symphony stops its agent and cleans up the workspace.
 
+Symphony keeps its own record of each ticket's pull request. A PR you open by hand on a ticket is
+found within one poll when its branch is the ticket's Symphony branch (`auto/<identifier>`) or the
+branch name Linear suggests for the ticket; a PR on a branch with any other name is not found.
+
 <details>
 <summary>Glossary</summary>
 

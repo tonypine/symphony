@@ -3,12 +3,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `Needs Decision` hold's label, or carries a deprecated request label
-  (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
-
-  - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
-    (see `SymphonyElixir.HumanActions.Request`); a withdrawn or answered one is not listed;
-  - an issue with a deprecated request label and no request comment is itself a `:task`.
+  that carries the `Needs Decision` hold's label. Each open `## Decision needed:` comment on one,
+  or older `## Action needed:` one, is a `:request` (see `SymphonyElixir.HumanActions.Request`); a
+  withdrawn or answered one is not listed.
 
   An issue's comments and history are read in full, past the first page the issue query returns,
   up to ten more pages of 100 each.
@@ -23,7 +20,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
   alias SymphonyElixir.Linear.Client
-  alias SymphonyElixir.{PersonWait, SubIssueWait}
+  alias SymphonyElixir.SubIssueWait
 
   @issue_first 50
   @comment_last 30
@@ -32,7 +29,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
   # many pages each.
   @more_page_size 100
   @more_pages_max 10
-  @max_task_steps 12
 
   @query """
   query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
@@ -41,7 +37,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
         id
         identifier
         title
-        description
         url
         state { name }
         project { id name }
@@ -248,12 +243,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp merge_pages("history", nodes, pages), do: Enum.concat([nodes | pages])
 
   defp filter(scope, settings) do
-    labelled = Enum.map(PersonWait.legacy_request_labels(settings), &label_filter/1)
     # A request leaves the ticket in its phase, so the hold's label is what finds it.
     held = label_filter(Hold.label(:needs_decision))
-    wanted = %{"or" => labelled ++ [held]}
 
-    %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
+    %{"and" => [scope, held, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
 
   defp label_filter(name), do: %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => name}}}}
@@ -275,21 +268,11 @@ defmodule SymphonyElixir.HumanActions.Collector do
     }
 
     context = %{node: node, issue: issue, project: %{id: project_id, name: project["name"]}, settings: settings}
-    labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
-    legacy_labelled? = Enum.any?(PersonWait.legacy_request_labels(settings), &(&1 in labels))
 
-    request_actions(context, legacy_labelled?)
+    for {comment_id, request} <- open_requests(node, settings), do: request_action(context, comment_id, request)
   end
 
   defp issue_actions(_node, _settings), do: []
-
-  # A deprecated request label on an issue with no request comment makes the issue itself the task.
-  defp request_actions(context, legacy_labelled?) do
-    case requests(context.node) do
-      [] when legacy_labelled? -> [task_action(context)]
-      _requests -> for {comment_id, request} <- open_requests(context.node, context.settings), do: request_action(context, comment_id, request)
-    end
-  end
 
   @doc """
   The open `## Action needed:` comments of an issue as read from Linear (its `comments` with
@@ -394,16 +377,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
     do: "you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request."
 
   defp request_done_when(_request), do: "you reply to the request, or the agent withdraws the request."
-
-  defp task_action(context) do
-    action(context, %{
-      key: "task:#{context.issue.id}",
-      kind: :task,
-      title: context.issue.title || context.issue.identifier,
-      steps: context.node["description"] |> Request.text_steps() |> Enum.take(@max_task_steps),
-      done_when: "you close #{context.issue.identifier}, or move it on."
-    })
-  end
 
   defp action(context, attrs), do: struct!(Action, Map.merge(attrs, %{issue: context.issue, project: context.project}))
 

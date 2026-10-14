@@ -43,6 +43,7 @@ defmodule SymphonyElixir.Orchestrator do
     StateProvisioning,
     StatusDashboard,
     SubIssueWait,
+    TicketPullRequest,
     TicketState,
     TicketStateReconciler,
     Tracker,
@@ -67,6 +68,9 @@ defmodule SymphonyElixir.Orchestrator do
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
+  # An epic review waiting for CI on the commit it reviews: not the issue's fault either, and CI takes
+  # minutes, so the review is started again after a fixed wait, without failure backoff.
+  @ci_wait_retry_delay_ms 60_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -243,6 +247,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     mark_interrupted_runs_for_configured_repos(repo_key)
     TicketStateReconciler.reconcile_all()
+    TicketPullRequest.Backfill.run(configured_repo_keys(repo_key))
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -776,6 +781,25 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The epic review found CI still running on the commit it reviews (`SymphonyElixir.EpicReview`).
+  # Nothing failed: the attempt stays, no `run_failed` goes out, and the review starts again once CI
+  # had a minute more to finish.
+  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:ci_pending, %{}} = reason) do
+    error = agent_exit_reason_summary(reason)
+    persist_run_completion(running_entry, "waiting_for_ci", error)
+    Logger.info("Agent task for issue_id=#{issue_id} session_id=#{session_id} is #{error}; retrying after CI")
+
+    schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
+      repo_key: running_entry_repo_key(running_entry),
+      identifier: running_entry.identifier,
+      title: running_entry_title(running_entry),
+      error: error,
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path),
+      delay_type: :ci_wait
+    })
+  end
+
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
     handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
   end
@@ -933,6 +957,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:linear_unavailable, reason}) do
     "waiting for Linear: #{inspect(reason)}"
+  end
+
+  defp agent_exit_reason_summary({:ci_pending, %{sha: sha, runs: runs}}) do
+    "waiting for CI on #{String.slice(sha, 0, 12)}: #{Enum.map_join(runs, ", ", &(&1.workflow_name || "a workflow"))} still running"
   end
 
   defp agent_exit_reason_summary({:tool_failure_circuit_breaker, payload}) do
@@ -1263,6 +1291,7 @@ defmodule SymphonyElixir.Orchestrator do
     case start_async_task(fn ->
            RetiredStates.refresh_if_due()
            repo_result = fetch_due_repo_if_needed(due_repo)
+           TicketPullRequest.Lookup.start(due_repo, repo_result)
 
            {:repo_poll_result,
             %{
@@ -1304,7 +1333,7 @@ defmodule SymphonyElixir.Orchestrator do
     terminal_states = Config.settings!().tracker.terminal_states
     {_changed, cache} = sweep_blocked_holds(repo_name, issues, terminal_states, cache)
     _ = Decisions.sweep(issues)
-    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, [])
+    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, repo_key: repo_name)
   end
 
   defp resolve_update_holds(_repo_result, cache), do: cache
@@ -4462,7 +4491,7 @@ defmodule SymphonyElixir.Orchestrator do
            %{
              issue_id: issue.id,
              identifier: issue.identifier,
-             pull_request_url: issue.pull_request_url,
+             pull_request_url: ticket_pr_url(issue, repo_key),
              repo_key: repo_key,
              worker_host: worker_host
            }, state}
@@ -4511,7 +4540,7 @@ defmodule SymphonyElixir.Orchestrator do
         running_attrs = %{
           run_kind: :pr,
           pr_context: Map.get(issue, :pr_context) || pr,
-          pull_request_url: issue.pull_request_url
+          pull_request_url: ticket_pr_url(issue, repo_key)
         }
 
         next_state =
@@ -5736,7 +5765,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> Map.put_new(:run_id, Map.get(running_entry, :run_id))
       |> Map.put_new(:repo_key, Map.get(running_entry, :repo_key))
       |> Map.put_new(:session_id, Map.get(running_entry, :session_id))
-      |> Map.put_new(:pr_url, URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue))
+      |> Map.put_new(:pr_url, running_entry_pr_url(running_entry))
       |> Map.put_new(:tokens, run_tokens(running_entry))
 
     Notifications.emit_issue_event(event, issue, attrs)
@@ -5879,6 +5908,7 @@ defmodule SymphonyElixir.Orchestrator do
     case retry_delay_type(metadata) do
       :continuation when attempt == 1 -> @continuation_retry_delay_ms
       :linear_wait -> @linear_wait_retry_delay_ms
+      :ci_wait -> @ci_wait_retry_delay_ms
       :usage_limit -> Map.get(metadata, :usage_limit_delay_ms, 0)
       _delay_type -> failure_retry_delay(attempt)
     end
@@ -5888,6 +5918,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_delay_type(%{delay_type: "continuation"}), do: :continuation
   defp retry_delay_type(%{delay_type: :linear_wait}), do: :linear_wait
   defp retry_delay_type(%{delay_type: "linear_wait"}), do: :linear_wait
+  defp retry_delay_type(%{delay_type: :ci_wait}), do: :ci_wait
+  defp retry_delay_type(%{delay_type: "ci_wait"}), do: :ci_wait
   defp retry_delay_type(%{delay_type: :usage_limit}), do: :usage_limit
   defp retry_delay_type(%{delay_type: "usage_limit"}), do: :usage_limit
   defp retry_delay_type(_metadata), do: nil
@@ -6093,6 +6125,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_repo_key(%Issue{repo_key: repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
   defp issue_repo_key(_issue), do: nil
+
+  # The ticket's in-flight PR, from Symphony's record. A run entry's issue may carry no repo key, so
+  # the entry's own finds the record.
+  defp ticket_pr_url(%Issue{} = issue, repo_key), do: TicketPullRequest.current_url(%{issue | repo_key: issue_repo_key(issue) || repo_key})
+  defp ticket_pr_url(_issue, _repo_key), do: nil
+
+  # The PR URL the run reported, else the ticket's from Symphony's record.
+  defp running_entry_pr_url(running_entry) do
+    URLUtils.pull_request_url(running_entry) ||
+      ticket_pr_url(Map.get(running_entry, :issue), running_entry_repo_key(running_entry))
+  end
 
   defp repo_key_from(%{repo_key: repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
   defp repo_key_from(%{"repo_key" => repo_key}) when is_binary(repo_key) and repo_key != "", do: repo_key
@@ -6479,8 +6522,7 @@ defmodule SymphonyElixir.Orchestrator do
       identifier: Map.get(metadata, :identifier),
       title: Map.get(metadata, :title),
       state: Map.get(metadata, :state),
-      url: URLUtils.present_url(Map.get(metadata, :url)),
-      pull_request_url: URLUtils.pull_request_url(metadata)
+      url: URLUtils.present_url(Map.get(metadata, :url))
     }
   end
 
@@ -6865,7 +6907,7 @@ defmodule SymphonyElixir.Orchestrator do
       runtime_seconds: 0,
       last_event: Map.get(running_entry, :last_codex_event),
       last_event_at: Map.get(running_entry, :last_event_at) || Map.get(running_entry, :last_codex_timestamp),
-      pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
+      pull_request_url: running_entry_pr_url(Map.put(running_entry, :issue, issue)),
       updated_at: now
     }
     |> Map.merge(run_profile_record(Map.get(running_entry, :run_profile)))
@@ -6882,8 +6924,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp run_profile_record(nil), do: %{}
 
   defp run_update_from_entry(running_entry) when is_map(running_entry) do
-    issue = Map.get(running_entry, :issue)
-
     %{
       worker_host: Map.get(running_entry, :worker_host),
       verification_port: verification_port(running_entry),
@@ -6899,7 +6939,7 @@ defmodule SymphonyElixir.Orchestrator do
       runtime_seconds: running_seconds(Map.get(running_entry, :started_at), DateTime.utc_now()),
       last_event: Map.get(running_entry, :last_codex_event),
       last_event_at: Map.get(running_entry, :last_event_at) || Map.get(running_entry, :last_codex_timestamp),
-      pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
+      pull_request_url: running_entry_pr_url(running_entry),
       updated_at: DateTime.utc_now()
     }
   end
@@ -7507,7 +7547,7 @@ defmodule SymphonyElixir.Orchestrator do
           title: running_entry_title(metadata),
           state: metadata.issue.state,
           url: issue_url(metadata.issue),
-          pull_request_url: URLUtils.pull_request_url(metadata) || URLUtils.pull_request_url(metadata.issue),
+          pull_request_url: running_entry_pr_url(metadata),
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
           session_id: Map.get(metadata, :session_id),
@@ -8137,7 +8177,7 @@ defmodule SymphonyElixir.Orchestrator do
       identifier: Map.get(running_entry, :identifier) || issue_identifier(issue),
       title: running_entry_title(running_entry),
       url: issue_url(issue),
-      pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
+      pull_request_url: running_entry_pr_url(running_entry),
       last_ran_at: DateTime.utc_now(),
       comment_ids: Map.get(running_entry, :comment_ids),
       session_id: Map.get(running_entry, :session_id),
@@ -8181,13 +8221,15 @@ defmodule SymphonyElixir.Orchestrator do
     # The parent and links the last run's enrichment read; each poll's issue carries neither.
     linked = watching_metadata(:linked, completed_metadata, existing)
 
+    repo_key = watching_repo_key(state, issue, completed_metadata, existing)
+
     watching_entry = %{
-      repo_key: watching_repo_key(state, issue, completed_metadata, existing),
+      repo_key: repo_key,
       identifier: watching_identifier(issue, issue_id, completed_metadata, existing),
       title: watching_title(issue, completed_metadata, existing),
       state: issue.state,
       url: watching_url(issue, completed_metadata, existing),
-      pull_request_url: watching_pull_request_url(issue, completed_metadata, existing),
+      pull_request_url: watching_pull_request_url(issue, repo_key, completed_metadata, existing),
       last_ran_at: watching_last_ran_at(completed_metadata, existing),
       session_id: watching_metadata(:session_id, completed_metadata, existing),
       started_at: watching_metadata(:started_at, completed_metadata, existing),
@@ -8236,8 +8278,8 @@ defmodule SymphonyElixir.Orchestrator do
       URLUtils.present_url(Map.get(existing, :url))
   end
 
-  defp watching_pull_request_url(issue, completed_metadata, existing) do
-    URLUtils.pull_request_url(issue) ||
+  defp watching_pull_request_url(issue, repo_key, completed_metadata, existing) do
+    ticket_pr_url(issue, repo_key) ||
       URLUtils.pull_request_url(completed_metadata) ||
       URLUtils.pull_request_url(existing)
   end
@@ -9031,7 +9073,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A run that went quiet on its PR. The run that opens the PR was dispatched without one, so the
-  # PR attached to the refetched issue counts too. Quiet never advances a ticket: a move takes the
+  # ticket's PR in Symphony's record counts too. Quiet never advances a ticket: a move takes the
   # session's explicit handoff signal (`SymphonyElixir.Handoff`).
   defp quiet_post_pr_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
@@ -9039,7 +9081,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     is_map(completed_metadata) and
       is_nil(Map.get(completed_metadata, :unpushed_head)) and
-      (completed_run_has_pr?(completed_metadata) or is_binary(URLUtils.pull_request_url(issue))) and
+      (completed_run_has_pr?(completed_metadata) or ticket_has_pr?(issue, completed_metadata, state)) and
       active_issue_state?(issue.state) and
       !rework_state?(issue.state) and
       !merging_state?(issue.state) and
@@ -9238,6 +9280,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp code_review_reviewer_disabled_recorded?(_issue), do: false
+
+  defp ticket_has_pr?(issue, completed_metadata, %State{} = state),
+    do: is_binary(ticket_pr_url(issue, repo_key_from(completed_metadata) || state.repo_key))
 
   defp completed_run_has_pr?(completed_metadata) when is_map(completed_metadata) do
     is_binary(URLUtils.pull_request_url(completed_metadata))

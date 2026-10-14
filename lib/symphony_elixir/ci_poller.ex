@@ -16,7 +16,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.{NeedsDecisionHold, Notifications, Orchestrator, PersonWait, RunStore, Tracker}
-  alias SymphonyElixir.TicketSignals
+  alias SymphonyElixir.{TicketPullRequest, TicketSignals}
   alias SymphonyElixir.TransitionGuard
 
   @merging_state "Merging"
@@ -181,8 +181,26 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   defp handle_ci_delivery(%State{} = state, event) do
-    state |> base_moved(event) |> apply_webhook_ci_state(event) |> queue_webhook_poll(event)
+    state
+    |> base_moved(event)
+    |> finish_pull_requests(event)
+    |> apply_webhook_ci_state(event)
+    |> queue_webhook_poll(event)
   end
+
+  # A closed or merged PR is no longer its ticket's in-flight PR: the delivery marks the ticket's
+  # PR record (`SymphonyElixir.TicketPullRequest`) in every repo the poller serves.
+  defp finish_pull_requests(%State{} = state, %{action: "closed", merged: merged?, pr_urls: pr_urls}) do
+    pr_state = if merged?, do: "merged", else: "closed"
+
+    for repo_key <- repo_keys_from_opts(state.opts), pr_url <- pr_urls do
+      TicketPullRequest.mark_finished(repo_key, pr_url, pr_state)
+    end
+
+    state
+  end
+
+  defp finish_pull_requests(%State{} = state, _event), do: state
 
   # A merged PR moved its base branch, so every other PR on it is now behind. The PR poller polls
   # now instead of on its timer: a `Merging` PR gets its update-branch (and its CI on the stale
@@ -512,7 +530,7 @@ defmodule SymphonyElixir.CiPoller do
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
-      Enum.each(issues, &warn_if_pr_url_lost(&1, Map.get(existing_by_issue, &1.id)))
+      Enum.each(issues, &warn_if_pr_url_lost(&1, Map.get(existing_by_issue, &1.id), repo_key))
 
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, existing_by_issue, run_store, repo_key, now))
 
@@ -521,20 +539,19 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # An issue the poller watches a PR for whose Linear attachments now show none (many other
-  # attachments once pushed it out of the page read): the agent runner reads the PR from the issue,
-  # so its CI and review checks would skip it. Issues that never had a PR, such as a final
-  # verification ticket, have no CI check record and stay quiet.
-  defp warn_if_pr_url_lost(%Issue{} = issue, %{pr_url: pr_url}) when is_binary(pr_url) do
-    if is_nil(first_pr_url(issue)) do
+  # An issue the poller watches a PR for whose record in Symphony (`SymphonyElixir.TicketPullRequest`)
+  # now holds no open PR: the lanes that read the ticket's PR from that record would skip it. Issues
+  # that never had a PR, such as a final verification ticket, have no CI check record and stay quiet.
+  defp warn_if_pr_url_lost(%Issue{} = issue, %{pr_url: pr_url}, repo_key) when is_binary(pr_url) do
+    if is_nil(first_pr_url(issue, repo_key)) do
       Logger.warning(
-        "issue_id=#{issue.id} issue_identifier=#{issue.identifier} is in #{issue.state} with no PR URL on its Linear attachments; " <>
+        "issue_id=#{issue.id} issue_identifier=#{issue.identifier} is in #{issue.state} with no open PR in Symphony's record of its pull request; " <>
           "Symphony still watches CI on #{pr_url} for it"
       )
     end
   end
 
-  defp warn_if_pr_url_lost(_issue, _existing), do: :ok
+  defp warn_if_pr_url_lost(_issue, _existing, _repo_key), do: :ok
 
   # `Merging` issues GitHub auto-merge lands: a CI-fix run for one turns auto-merge off first.
   defp auto_merge_issue_ids(settings, issues) do
@@ -595,7 +612,7 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   defp discover_ci_check_record(%Issue{} = issue, run_store, repo_key, existing, now) do
-    with pr_url when is_binary(pr_url) <- first_pr_url(issue),
+    with pr_url when is_binary(pr_url) <- first_pr_url(issue, repo_key),
          %{workspace_path: workspace_path} = run when is_binary(workspace_path) <-
            latest_run_for_issue(run_store, repo_key, issue.id) do
       base = %{
@@ -663,6 +680,7 @@ defmodule SymphonyElixir.CiPoller do
 
     case action do
       :closed ->
+        finish_pull_request(record, ci_status, opts)
         cleanup_ci(record, opts, now, "closed")
 
       :success ->
@@ -1406,6 +1424,11 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  defp finish_pull_request(record, ci_status, opts) do
+    pr_state = if normalize_status(Map.get(ci_status, :state)) == "MERGED", do: "merged", else: "closed"
+    TicketPullRequest.mark_finished(Map.get(record, :repo_key) || repo_key_from_opts(opts), Map.get(record, :pr_url), pr_state)
+  end
+
   defp cleanup_ci(record, opts, now, reason) do
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = Map.get(record, :repo_key) || repo_key_from_opts(opts)
@@ -2083,8 +2106,8 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp first_pr_url(%Issue{pr_urls: [url | _rest]}) when is_binary(url), do: url
-  defp first_pr_url(_issue), do: nil
+  # The ticket's in-flight PR, from Symphony's record of it.
+  defp first_pr_url(%Issue{} = issue, repo_key), do: TicketPullRequest.current_url(issue, repo_key)
 
   # The issue's newest finished run, or `{:error, reason}` when its runs can't be read.
   defp latest_run_for_issue(run_store, repo_key, issue_id) do

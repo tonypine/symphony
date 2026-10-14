@@ -3993,11 +3993,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       identifier: "MT-WATCH",
       title: "Waiting for review",
       state: "In Review",
-      url: issue_url,
-      pull_request_url: pull_request_url
+      url: issue_url
     }
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting_issue])
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue_id, pull_request_url, nil)
 
     orchestrator_name = Module.concat(__MODULE__, :WatchingOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -6791,8 +6791,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       state: "In Progress",
       run_kind: :pr,
       repo_key: "default",
-      pull_request_url: "https://github.com/example/repo/pull/320",
-      pr_urls: ["https://github.com/example/repo/pull/320"]
+      pr_context: %{number: 320, url: "https://github.com/example/repo/pull/320"}
     }
 
     orchestrator_name = Module.concat(__MODULE__, :PrRunNormalExitOrchestrator)
@@ -6809,7 +6808,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     running_entry =
       running_entry(issue, worker_pid, worker_ref, run_id, started_at, %{
         run_kind: :pr,
-        pull_request_url: issue.pull_request_url,
+        pull_request_url: issue.pr_context.url,
         session_id: "thread-pr-normal"
       })
 
@@ -6834,8 +6833,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       state: "In Progress",
       run_kind: :pr,
       repo_key: "default",
-      pull_request_url: "https://github.com/example/repo/pull/321",
-      pr_urls: ["https://github.com/example/repo/pull/321"]
+      pr_context: %{number: 321, url: "https://github.com/example/repo/pull/321"}
     }
 
     orchestrator_name = Module.concat(__MODULE__, :PrRunAbnormalExitOrchestrator)
@@ -6852,7 +6850,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     running_entry =
       running_entry(issue, worker_pid, worker_ref, run_id, started_at, %{
         run_kind: :pr,
-        pull_request_url: issue.pull_request_url,
+        pull_request_url: issue.pr_context.url,
         session_id: "thread-pr-abnormal"
       })
 

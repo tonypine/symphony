@@ -1375,6 +1375,29 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              )
   end
 
+  defmodule CiPendingWalkthrough do
+    def run(_issue, _workspace, _opts), do: {:error, {:ci_pending, %{sha: "c0ffee", runs: [%{workflow_name: "macos"}]}}}
+  end
+
+  test "AgentRunner exits waiting for CI when an epic review found CI still running", ctx do
+    write_usage_workflow!(ctx)
+    workspace = Path.join([ctx.test_root, "workspaces", "MT-FV-CI"])
+    File.mkdir_p!(workspace)
+    run_issue = issue("issue-fv-ci", "MT-FV-CI", %{title: "Final verification: Wait for CI"})
+
+    capture_log(fn ->
+      assert {:ci_pending, %{sha: "c0ffee", runs: [%{workflow_name: "macos"}]}} =
+               catch_exit(
+                 AgentRunner.run(run_issue, nil,
+                   workspace_path: workspace,
+                   epic_review: CiPendingWalkthrough,
+                   issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
+                   issue_enricher: fn issue -> {:ok, issue} end
+                 )
+               )
+    end)
+  end
+
   test "AgentRunner exits with the Codex usage limit instead of raising", ctx do
     limited_codex = Path.join(ctx.test_root, "limited-codex")
 

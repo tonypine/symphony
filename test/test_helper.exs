@@ -91,6 +91,10 @@ ExUnit.configure(exclude: [:qa_dashboard_e2e | Keyword.get(ExUnit.configuration(
 offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)
 
+# The ticket pull request lookup a repo poll starts never reaches GitHub in tests: a test that
+# needs it passes `:gh_runner` itself.
+Application.put_env(:symphony_elixir, :ticket_pull_request_gh_runner, fn _args, _opts -> {"gh is offline in tests", 1} end)
+
 # QA passes in tests find no leftover processes; a test that needs the real
 # process table passes `:table` itself.
 Application.put_env(:symphony_elixir, :leftover_process_table, fn -> {:ok, []} end)

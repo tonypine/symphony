@@ -184,12 +184,6 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
     assert Request.parse(body) == nil
   end
 
-  test "reads steps from free text such as a task description" do
-    assert Request.text_steps("Context.\n\n1. Create the key\n2) Paste it into 1Password") == ["Create the key", "Paste it into 1Password"]
-    assert Request.text_steps("Just do it.") == ["Just do it."]
-    assert Request.text_steps(nil) == []
-  end
-
   test "stays open until the issue leaves a state a person moves it out of" do
     request = %{created_at: @created_at}
     active = ["Todo", "In Progress"]

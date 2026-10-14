@@ -113,8 +113,6 @@ defmodule SymphonyElixir.PrRun do
          title: title,
          description: body,
          state: "In Progress",
-         pull_request_url: url,
-         pr_urls: [url],
          repo_key: repo_key,
          run_kind: :pr,
          intent: intent,

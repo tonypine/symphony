@@ -14,9 +14,9 @@ defmodule SymphonyElixir.QualityTest do
       issue: %Issue{
         id: "issue-1",
         identifier: "ACME-1",
-        labels: ["bug"],
-        pull_request_url: "https://github.com/example/repo/pull/1"
+        labels: ["bug"]
       },
+      pull_request_url: "https://github.com/example/repo/pull/1",
       session_id: "session-1",
       codex_input_tokens: 10,
       codex_cached_input_tokens: 7,
@@ -133,7 +133,8 @@ defmodule SymphonyElixir.QualityTest do
       Quality.build_eval_log_for_test(
         %{
           run_id: "run-quality-6",
-          issue: %Issue{id: "i6", identifier: "ACME-6", pull_request_url: "https://github.com/example/repo/pull/99"},
+          issue: %Issue{id: "i6", identifier: "ACME-6"},
+          pull_request_url: "https://github.com/example/repo/pull/99",
           started_at: DateTime.utc_now()
         },
         "failure",
@@ -145,12 +146,30 @@ defmodule SymphonyElixir.QualityTest do
     assert eval.outcome == "pr_opened"
   end
 
+  test "carries the ticket's PR from Symphony's record, and none once that PR closed" do
+    pr_url = "https://github.com/example/repo/pull/1012"
+    :ok = SymphonyElixir.TicketPullRequest.record_created("repo-q", "i-recorded", pr_url, "auto/ACME-12")
+
+    entry = %{run_id: "run-quality-12", repo_key: "repo-q", issue: %Issue{id: "i-recorded", identifier: "ACME-12"}, started_at: DateTime.utc_now()}
+    eval = Quality.build_eval_log_for_test(entry, "success", nil, agent_kind: "codex", transcript_events: nil)
+
+    assert eval.pull_request_url == pr_url
+    assert eval.outcome == "pr_opened"
+
+    :ok = SymphonyElixir.TicketPullRequest.mark_finished("repo-q", pr_url, "closed")
+    eval = Quality.build_eval_log_for_test(entry, "success", nil, agent_kind: "codex", transcript_events: nil)
+
+    assert eval.pull_request_url == nil
+    assert eval.outcome == "no_changes"
+  end
+
   test "stopped terminal status is not reported as failure error_kind" do
     eval =
       Quality.build_eval_log_for_test(
         %{
           run_id: "run-quality-7",
-          issue: %Issue{id: "i7", identifier: "ACME-7", pull_request_url: "https://github.com/example/repo/pull/100"},
+          issue: %Issue{id: "i7", identifier: "ACME-7"},
+          pull_request_url: "https://github.com/example/repo/pull/100",
           started_at: DateTime.utc_now()
         },
         "stopped",
