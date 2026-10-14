@@ -92,7 +92,9 @@ change it until a person other than the author adds the `protected-paths-approve
 
 To add a setting: add its control to the app, list its key in the manifest, and extend the line
 editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
-same PR, and labels the PR. `WORKFLOW.md` front matter (repo-owned settings) is not covered.
+same PR, and labels the PR. A person can also let the ticket's next agent run edit the file with a
+decision on the ticket, such as `Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop
+the stale exemption.` (see [Unlocking a protected path for one run](security.md#unlocking-a-protected-path-for-one-run)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
 
 ## Top-Level Sections
 

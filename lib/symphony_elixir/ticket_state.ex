@@ -64,6 +64,12 @@ defmodule SymphonyElixir.TicketState do
           outcome: %{exit: String.t(), head: String.t() | nil, at: DateTime.t() | nil} | nil
         }
 
+  @typedoc """
+  A person's grant to unlock a protected path that a run used (`SymphonyElixir.PathUnlock`): the
+  grant's id, the run that used it and when. A used grant never unlocks the path again.
+  """
+  @type path_unlock :: %{id: String.t(), run_id: String.t() | nil, at: DateTime.t() | nil}
+
   @typedoc "The CI state of one PR head."
   @type ci_state :: %{head_sha: String.t() | nil, status: String.t(), updated_at: DateTime.t() | nil}
 
@@ -94,6 +100,7 @@ defmodule SymphonyElixir.TicketState do
           signals: [signal()],
           self_heal: self_heal() | nil,
           dispatches: [dispatch()],
+          path_unlocks: [path_unlock()],
           updated_at: DateTime.t() | nil
         }
 
@@ -128,6 +135,7 @@ defmodule SymphonyElixir.TicketState do
       signals: normalize_signals(Map.get(record, :signals)),
       self_heal: normalize_self_heal(Map.get(record, :self_heal)),
       dispatches: normalize_dispatches(Map.get(record, :dispatches)),
+      path_unlocks: normalize_path_unlocks(Map.get(record, :path_unlocks)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -145,8 +153,29 @@ defmodule SymphonyElixir.TicketState do
       signals: [],
       self_heal: nil,
       dispatches: [],
+      path_unlocks: [],
       updated_at: nil
     }
+  end
+
+  @doc """
+  Marks the grants in `ids` that no run used yet as used by `run_id`, and returns them with the
+  record. A grant already used is left out, so each one unlocks its path for one run only.
+  """
+  @spec claim_path_unlocks(t(), [String.t()], String.t() | nil, DateTime.t()) :: {t(), [String.t()]}
+  def claim_path_unlocks(record, ids, run_id, at \\ DateTime.utc_now()) when is_list(ids) do
+    record = normalize(record)
+    used = MapSet.new(record.path_unlocks, & &1.id)
+    claimed = ids |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.reject(&MapSet.member?(used, &1))
+
+    case claimed do
+      [] ->
+        {record, []}
+
+      claimed ->
+        unlocks = Enum.map(claimed, &%{id: &1, run_id: normalize_string(run_id), at: at})
+        {%{record | path_unlocks: record.path_unlocks ++ unlocks, updated_at: at}, claimed}
+    end
   end
 
   @doc "Sets the record's phase, the state the machine believes the ticket is in."
@@ -486,6 +515,14 @@ defmodule SymphonyElixir.TicketState do
     outcome = %{exit: map_string(attrs, :exit) || "", head: map_string(attrs, :head), at: at}
     Enum.map(dispatches, &if(&1.run_id == run_id, do: %{&1 | outcome: outcome}, else: &1))
   end
+
+  defp normalize_path_unlocks(unlocks) when is_list(unlocks) do
+    for %{id: id} = unlock <- unlocks, is_binary(id) do
+      %{id: id, run_id: map_string(unlock, :run_id), at: map_datetime(unlock, :at)}
+    end
+  end
+
+  defp normalize_path_unlocks(_unlocks), do: []
 
   defp normalize_dispatches(dispatches) when is_list(dispatches) do
     dispatches
