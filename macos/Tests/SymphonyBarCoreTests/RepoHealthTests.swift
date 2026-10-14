@@ -304,6 +304,27 @@ final class RepoHealthTests: XCTestCase {
         XCTAssertEqual(RepoHealth.Status.notChecked.spoken, "not checked")
     }
 
+    func testAPendingWorkflowShowsWhileNothingIsChecked() {
+        let pr = URL(string: "https://github.com/acme/app/pull/12")!
+        let health = RepoHealth.notChecked(status: .starting, poll: nil, pending: .pullRequest(pr), baseBranch: "trunk")
+
+        XCTAssertEqual(health.status, .notChecked)
+        XCTAssertEqual(health.summary, "Not checked: Symphony is starting")
+        XCTAssertTrue(health.showsBox)
+        XCTAssertEqual(
+            health.problems,
+            [
+                .init(
+                    id: "workflow",
+                    severity: .warning,
+                    title: "WORKFLOW.md is waiting on its pull request",
+                    note: "Symphony uses it once the pull request merges into trunk.",
+                    fixes: [.viewPullRequest(pr)]
+                ),
+            ]
+        )
+    }
+
     // MARK: - Fixes
 
     func testFixTitles() {
