@@ -122,6 +122,14 @@ defmodule SymphonyElixir.HttpServerTest do
     end
   end
 
+  describe "HTTP/2" do
+    test "closes an HTTP/2 connection instead of serving it" do
+      start_supervised!({HttpServer, [host: "127.0.0.1", port: 0]})
+
+      assert TestSupport.send_http2_preface(HttpServer.bound_port()) == {:error, :closed}
+    end
+  end
+
   describe "migrate_legacy_secret_key_base/2" do
     test "moves the legacy file when only the old path exists", %{tmp: tmp} do
       old_path = Path.join([tmp, "legacy", "secret_key_base"])
