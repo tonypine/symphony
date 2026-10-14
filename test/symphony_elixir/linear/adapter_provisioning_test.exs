@@ -21,11 +21,33 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyIssueId", :issue_id}
     ]
 
-    def graphql(query, _variables) do
+    def graphql(query, variables) do
       case Enum.find(@operations, fn {operation, _key} -> String.contains?(query, operation) end) do
+        {_operation, :create_workflow_state} -> create_workflow_state(query, variables)
         {_operation, key} -> result(key, default(key))
         nil -> flunk("unexpected query: #{query}")
       end
+    end
+
+    # Answers like Linear: a state created without a color is refused with the 400 Linear sends.
+    defp create_workflow_state(query, variables) do
+      send(self(), {:create_workflow_state_variables, variables})
+
+      if String.contains?(query, "color: $color") and is_binary(variables[:color]) and variables[:color] != "" do
+        result(:create_workflow_state, default(:create_workflow_state))
+      else
+        {:error, {:linear_api_status, 400, missing_color_body()}}
+      end
+    end
+
+    defp missing_color_body do
+      %{
+        "errors" => [
+          %{
+            "message" => "Variable \"$input\" got invalid value; Field \"WorkflowStateCreateInput.color\" of required type \"String!\" was not provided."
+          }
+        ]
+      }
     end
 
     defp default(:teams), do: %{"data" => %{"teams" => %{"nodes" => []}}}
@@ -203,43 +225,86 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     end
   end
 
-  describe "create_workflow_state/2" do
+  describe "create_workflow_state/3" do
     test "resolves the team key to its id and returns the created state" do
       put(:teams, {:ok, @teams_response})
 
-      assert {:ok, state} = Adapter.create_workflow_state("QA", "TP")
+      assert {:ok, state} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
       assert state == %{id: "s9", name: "QA", team_id: "t1", team_key: "TP"}
     end
 
     test "resolves a team given by id" do
       put(:teams, {:ok, @teams_response})
 
-      assert {:ok, %{id: "s9"}} = Adapter.create_workflow_state("QA", "t1")
+      assert {:ok, %{id: "s9"}} = Adapter.create_workflow_state("QA", "t1", "#e5b53b")
     end
 
     test "reports an unknown team, a failed mutation and an unusable response" do
       put(:teams, {:ok, %{"data" => %{"teams" => %{"nodes" => []}}}})
-      assert {:error, {:team_not_found, "TP"}} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, {:team_not_found, "TP"}} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
 
       put(:teams, {:error, :down})
-      assert {:error, :down} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, :down} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
 
       put(:teams, {:ok, %{"data" => %{}}})
-      assert {:error, :teams_unavailable} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, :teams_unavailable} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
 
       put(:teams, {:ok, @teams_response})
       put(:create_workflow_state, {:ok, %{"data" => %{"workflowStateCreate" => %{"success" => false}}}})
-      assert {:error, :workflow_state_create_failed} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, :workflow_state_create_failed} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
 
       put(:create_workflow_state, {:ok, %{"data" => %{}}})
-      assert {:error, :workflow_state_create_failed} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, :workflow_state_create_failed} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
 
       # A success with no state object back is still a failure.
       put(:create_workflow_state, {:ok, %{"data" => %{"workflowStateCreate" => %{"success" => true, "workflowState" => nil}}}})
-      assert {:error, :workflow_state_create_failed} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, :workflow_state_create_failed} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
 
       put(:create_workflow_state, {:error, :nope})
-      assert {:error, :nope} = Adapter.create_workflow_state("QA", "TP")
+      assert {:error, :nope} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
+    end
+  end
+
+  describe "StateProvisioning through the adapter" do
+    alias SymphonyElixir.{Config, StateProvisioning}
+
+    import ExUnit.CaptureLog
+
+    defp state_node(name), do: %{"id" => "s-#{name}", "name" => name, "team" => @team}
+
+    test "the create mutation sends a non-empty color for every machine state" do
+      put(:teams, {:ok, @teams_response})
+      settings = Config.settings!()
+
+      assert log = capture_log(fn -> assert :ok = StateProvisioning.provision(settings, ["TP"], tracker: Adapter) end)
+
+      sent =
+        for {_key, name} <- StateProvisioning.machine_states(settings) do
+          assert_received {:create_workflow_state_variables, %{name: ^name, teamId: "t1", color: color}}
+          assert is_binary(color) and String.trim(color) != ""
+          name
+        end
+
+      assert length(sent) == 5
+      assert log =~ "10 created, 0 already present, 0 failed"
+    end
+
+    test "creates a missing CI Fix in a team that lacks it, against a Linear that requires the color" do
+      put(:teams, {:ok, @teams_response})
+      present = ["Code Review", "QA", "Plan Review", "Epic Review"]
+      put(:workflow_states, {:ok, %{"data" => %{"workflowStates" => %{"nodes" => Enum.map(present, &state_node/1)}}}})
+
+      labels = Enum.map(StateProvisioning.labels(), &%{"id" => "l-#{&1}", "name" => &1, "team" => @team})
+      put(:labels, {:ok, %{"data" => %{"issueLabels" => %{"nodes" => labels}}}})
+
+      settings = Config.settings!()
+
+      assert log = capture_log(fn -> assert :ok = StateProvisioning.provision(settings, ["TP"], tracker: Adapter) end)
+
+      assert_received {:create_workflow_state_variables, %{name: "CI Fix", teamId: "t1", color: "#" <> _hex}}
+      refute_received {:create_workflow_state_variables, _variables}
+      assert log =~ "Created Linear workflow state \"CI Fix\" in team \"TP\""
+      assert log =~ "State provisioning: 1 created, 9 already present, 0 failed"
     end
   end
 

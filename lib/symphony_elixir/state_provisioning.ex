@@ -31,6 +31,16 @@ defmodule SymphonyElixir.StateProvisioning do
     {:ci_fix_state, "issues.states.ci_fix"}
   ]
 
+  # Linear requires a color for a new state. Each phase has its own, by config key, so a renamed
+  # state keeps it; they sit near the warm yellow of Linear's In Progress.
+  @state_colors %{
+    "issues.states.code_review" => "#f2994a",
+    "issues.states.qa" => "#e5b53b",
+    "issues.states.plan_review" => "#d9a05b",
+    "issues.states.epic_review" => "#c98a3c",
+    "issues.states.ci_fix" => "#eb5757"
+  }
+
   @doc "The machine-owned labels Symphony keeps on the board."
   @spec labels() :: [String.t()]
   def labels, do: @labels
@@ -110,7 +120,7 @@ defmodule SymphonyElixir.StateProvisioning do
           "If it was renamed in Linear, point #{config_key} at the new name so Symphony finds it instead"
       )
 
-      create(:workflow_state, name, team, tracker)
+      create(:workflow_state, name, team, tracker, Map.fetch!(@state_colors, config_key))
     end
   end
 
@@ -123,8 +133,8 @@ defmodule SymphonyElixir.StateProvisioning do
     end
   end
 
-  defp create(:workflow_state, name, team, tracker) do
-    case tracker.create_workflow_state(name, team) do
+  defp create(:workflow_state, name, team, tracker, color) do
+    case tracker.create_workflow_state(name, team, color) do
       {:ok, _state} ->
         Logger.info("Created Linear workflow state #{inspect(name)} in team #{inspect(team)}")
         :created
