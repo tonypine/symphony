@@ -77,6 +77,8 @@ public struct AddRepoFlow: Equatable {
     public var landedWorkflow: PendingWorkflow?
     public var projects: LinearLoad
     public var labels: LinearLoad
+    /// True for the Source sheet of a connected repo, which has no WORKFLOW.md step to offer.
+    public var editing: Bool
 
     public init(
         draft: AddRepoDraft = AddRepoDraft(),
@@ -88,7 +90,8 @@ public struct AddRepoFlow: Equatable {
         workflowText: String = "",
         landedWorkflow: PendingWorkflow? = nil,
         projects: LinearLoad = .loaded,
-        labels: LinearLoad = .loaded
+        labels: LinearLoad = .loaded,
+        editing: Bool = false
     ) {
         self.draft = draft
         self.existing = existing
@@ -100,6 +103,7 @@ public struct AddRepoFlow: Equatable {
         self.landedWorkflow = landedWorkflow
         self.projects = projects
         self.labels = labels
+        self.editing = editing
     }
 
     // MARK: Steps
@@ -187,7 +191,16 @@ public struct AddRepoFlow: Equatable {
             parts.append("has WORKFLOW.md")
         case let .missing(_, branch):
             let place = branch.map { " on \($0)" } ?? ""
-            parts.append("No WORKFLOW.md\(place): you can set one up in a later step")
+            guard editing else {
+                parts.append("No WORKFLOW.md\(place): you can set one up in a later step")
+                break
+            }
+            // The Source sheet refuses a folder without one, and can't draft one.
+            if draft.mode == .localFolder, case let .success(checkout)? = draft.folder {
+                return AddRepoSourceResult(checkout.missingWorkflowProblem.message, style: .problem)
+            }
+            parts.append("No WORKFLOW.md\(place): Symphony runs no agents on it until one is added")
+            return AddRepoSourceResult(parts.joined(separator: " · "), style: .note)
         case let .failed(message):
             parts.append(message)
             return AddRepoSourceResult(parts.joined(separator: " · "), style: .note)

@@ -1,15 +1,52 @@
 import Foundation
 
-/// The Edit Repo sheet's checks and the entry it writes: the Add Repo sheet opened on a connected repo, kept free
-/// of SwiftUI so they can be unit tested.
+/// The Edit sheets of a connected repo, one per section of its detail: Source, Linear routing and Review. Their
+/// checks and the entry they write, kept free of SwiftUI so they can be unit tested.
 public enum EditRepo {
     public static let buttonTitle = "Edit…"
 
-    public static func sheetTitle(key: String) -> String {
-        "Edit \(key)"
+    /// A section of the repo's detail with its own Edit sheet. Each sheet changes only its own fields.
+    public enum Section: String, CaseIterable, Identifiable {
+        case source = "Source"
+        case routing = "Linear routing"
+        case review = "Review"
+
+        public var id: String { rawValue }
+
+        /// "Review of billing-api": the key shows in the title and can't change.
+        public func sheetTitle(key: String) -> String {
+            "\(rawValue) of \(key)"
+        }
+
+        /// The item in the sidebar row's context menu.
+        public var menuTitle: String {
+            switch self {
+            case .source: return "Edit Source…"
+            case .routing: return "Edit Linear Routing…"
+            case .review: return "Edit Review…"
+            }
+        }
+
+        /// The Edit… button's help.
+        public var help: String {
+            switch self {
+            case .source: return "Change where the code comes from and the base branch."
+            case .routing: return "Change which Linear issues go to this repo, or make it the default repo."
+            case .review: return "Change whether merges wait for you, and the built-in ticket patterns."
+            }
+        }
+
+        /// The sheet's fixed size. At most 520pt tall, so its footer stays on a 1024×768 screen.
+        public var sheetSize: CGSize {
+            switch self {
+            case .source: return CGSize(width: 480, height: 380)
+            case .routing: return CGSize(width: 480, height: 420)
+            case .review: return CGSize(width: 440, height: 360)
+            }
+        }
     }
 
-    /// The draft the sheet opens with. A local folder repo's draft has no folder picked: Save keeps the entry's
+    /// The draft the sheets open with. A local folder repo's draft has no folder picked: Save keeps the entry's
     /// folder until another one is chosen. An entry without a base branch leaves the field empty.
     public static func draft(for entry: RepositoryEntry) -> AddRepoDraft {
         let source = entry.workspace.source?.trimmingWhitespace() ?? ""
@@ -20,14 +57,16 @@ public enum EditRepo {
             baseBranch: entry.baseBranch ?? "",
             project: entry.route.projects?.first,
             labels: entry.route.labels ?? [],
+            isDefault: entry.isDefault == true,
             manualReview: ManualReviewChoice(override: entry.manualReview),
             ticketPatternsBuiltIn: BuiltInTicketPatternsChoice(override: entry.ticketPatternsBuiltIn)
         )
     }
 
-    /// `original` changed as the draft says, or the first thing that stops it. Only what the sheet edits changes:
-    /// the key, the default flag, the route's team and assignee, `fetch_before_dispatch` and keys the app doesn't
-    /// know stay. An unchanged source keeps the entry's workspace and workflow as they are. `existing` is the
+    /// `original` changed as the draft says, or the first thing that stops it. Only what the sheets edit changes:
+    /// the key, the route's team and assignee, `fetch_before_dispatch` and keys the app doesn't know stay. An
+    /// unchanged source keeps the entry's workspace and workflow as they are. `default` only moves here: turning it
+    /// on takes it from the current default, which `updating` does in the same write. `existing` is the
     /// `repositories:` list now, with `original` in it.
     public static func entry(
         for draft: AddRepoDraft,
@@ -35,7 +74,6 @@ public enum EditRepo {
         existing: [RepositoryEntry]
     ) -> Result<RepositoryEntry, AddRepoProblem> {
         var entry = original
-        let originalSource = original.workspace.source?.trimmingWhitespace() ?? ""
         let fetch = original.workspace.fetchBeforeDispatch
 
         switch draft.mode {
@@ -47,9 +85,7 @@ public enum EditRepo {
                     "Use a GitHub repo as https://github.com/owner/repo, git@github.com:owner/repo.git or owner/repo."
                 ))
             }
-            let unchanged = !originalSource.isEmpty
-                && (input == originalSource || GitHubRepoInput.normalize(originalSource) == gitHub)
-            if !unchanged {
+            if !isSourceUnchanged(draft, editing: original) {
                 // Symphony reads a managed repo's WORKFLOW.md from its clone, and refuses `repo` or
                 // `strategy: clone` next to `source`.
                 entry.workflow = nil
@@ -58,7 +94,9 @@ public enum EditRepo {
         case .localFolder:
             switch draft.folder {
             case nil:
-                if !originalSource.isEmpty { return .failure(AddRepoProblem("Choose the folder of a git checkout.")) }
+                if !isSourceUnchanged(draft, editing: original) {
+                    return .failure(AddRepoProblem("Choose the folder of a git checkout."))
+                }
             case let .failure(problem)?:
                 return .failure(problem)
             case let .success(checkout)?:
@@ -71,18 +109,17 @@ public enum EditRepo {
         let baseBranch = draft.baseBranch.trimmingWhitespace()
         entry.baseBranch = baseBranch.isEmpty ? nil : baseBranch
 
-        // A route with several projects keeps them while the first one stays picked.
-        let project = draft.project?.trimmingWhitespace() ?? ""
-        if project != (original.route.projects?.first ?? "") {
-            entry.route.projects = project.isEmpty ? nil : [project]
-        }
-        let labels = draft.labels.map { $0.trimmingWhitespace() }.filter { !$0.isEmpty }
-        if Set(labels) != Set(original.route.labels ?? []) {
-            entry.route.labels = labels.isEmpty ? nil : labels
+        entry.route = route(of: draft, editing: original)
+
+        if draft.isDefault, original.isDefault != true {
+            if let problem = defaultProblem(currentDefault(otherThan: original.key, in: existing)) {
+                return .failure(problem)
+            }
+            entry.isDefault = true
         }
 
-        // Manual review changes only when its picker moved, so a value Symphony rejects stays until another
-        // one is picked; Off removes the key, leaving the repo on the default.
+        // Manual review changes only when its checkbox moved, so a value Symphony rejects stays until the box is
+        // turned on or off; off removes the key, leaving the repo on the default.
         if draft.manualReview != ManualReviewChoice(override: original.manualReview) {
             entry.manualReview = draft.manualReview.override
         }
@@ -103,15 +140,147 @@ public enum EditRepo {
         return .success(entry)
     }
 
+    /// The route the draft gives `original`: its team and assignee stay, and a route with several projects keeps
+    /// them while the first one stays picked.
+    static func route(of draft: AddRepoDraft, editing original: RepositoryEntry) -> RepositoryRoute {
+        var route = original.route
+        let project = draft.project?.trimmingWhitespace() ?? ""
+        if project != (original.route.projects?.first ?? "") {
+            route.projects = project.isEmpty ? nil : [project]
+        }
+        let labels = draft.labels.map { $0.trimmingWhitespace() }.filter { !$0.isEmpty }
+        if Set(labels) != Set(original.route.labels ?? []) {
+            route.labels = labels.isEmpty ? nil : labels
+        }
+        return route
+    }
+
+    /// The Linear routing sheet's preview, as the detail will read once saved: "Issues in Billing with label
+    /// backend go to api.", then that it also takes the issues no route matches when it is the default.
+    public static func routePreview(for draft: AddRepoDraft, editing original: RepositoryEntry) -> [String] {
+        let routing = ReposList.routing(route(of: draft, editing: original), key: original.key, isDefault: draft.isDefault)
+        return [routing.sentence] + (routing.defaultLine.map { [$0] } ?? [])
+    }
+
+    /// True while the draft still names the entry's own source: the same GitHub repo however it is spelled, or the
+    /// entry's folder while no other one is chosen.
+    public static func isSourceUnchanged(_ draft: AddRepoDraft, editing original: RepositoryEntry) -> Bool {
+        let originalSource = original.workspace.source?.trimmingWhitespace() ?? ""
+        switch draft.mode {
+        case .gitHub:
+            let input = draft.gitHubInput.trimmingWhitespace()
+            guard !originalSource.isEmpty, !input.isEmpty else { return false }
+            return input == originalSource || GitHubRepoInput.normalize(originalSource) == GitHubRepoInput.normalize(input)
+        case .localFolder:
+            guard originalSource.isEmpty else { return false }
+            guard case let .success(checkout)? = draft.folder else { return draft.folder == nil }
+            return checkout.path == original.workspace.repo
+        }
+    }
+
+    // MARK: Source
+
+    /// The Source sheet's caption: what saving this source does on disk.
+    public static func sourceCaption(for draft: AddRepoDraft, editing original: RepositoryEntry) -> String {
+        let originalSource = original.workspace.source?.trimmingWhitespace() ?? ""
+        let clone = originalSource.isEmpty ? nil : ReposList.gitHubRepo(originalSource)
+        let unchanged = isSourceUnchanged(draft, editing: original)
+        switch draft.mode {
+        case .gitHub:
+            if unchanged { return "Symphony keeps its own clone. Your checkouts aren't touched." }
+            guard let clone else { return "Symphony makes its own clone on the next start. Your folder stays as it is." }
+            return "Symphony makes its own clone of the new repo on the next start. Its clone of \(clone) stays on disk."
+        case .localFolder:
+            guard !unchanged, case .success? = draft.folder else {
+                return "Agents work in worktrees of this checkout. It needs a GitHub origin and a WORKFLOW.md."
+            }
+            guard let clone else {
+                return "Agents work in worktrees of this folder from the next start. Both folders stay as they are."
+            }
+            return "Agents work in worktrees of this folder from the next start. The folder stays as it is, and "
+                + "Symphony's clone of \(clone) stays on disk."
+        }
+    }
+
+    // MARK: Default repo
+
+    public static let defaultTitle = "Default repo"
+    public static let defaultExplanation = "Take the issues no other repo's route matches."
+
+    /// The Linear routing sheet's Default repo checkbox: whether it can be turned on, and the caption under it.
+    public struct DefaultOption: Equatable {
+        public var isEnabled: Bool
+        public var caption: String?
+
+        public init(isEnabled: Bool, caption: String?) {
+            self.isEnabled = isEnabled
+            self.caption = caption
+        }
+    }
+
+    /// The checkbox for `original`, `isOn` as the sheet has it. The default only moves by turning it on in another
+    /// repo, so the default repo's own checkbox stays on. The caption names the default that loses it.
+    public static func defaultOption(editing original: RepositoryEntry, existing: [RepositoryEntry], isOn: Bool) -> DefaultOption {
+        if original.isDefault == true {
+            return DefaultOption(
+                isEnabled: false,
+                caption: "\(original.key) is the default repo. To move the default, turn this on in another repo's Linear routing."
+            )
+        }
+        let current = currentDefault(otherThan: original.key, in: existing)
+        if let problem = defaultProblem(current) { return DefaultOption(isEnabled: false, caption: problem.message) }
+        guard let current else {
+            return DefaultOption(isEnabled: true, caption: isOn ? "Saving makes \(original.key) the default repo." : nil)
+        }
+        return DefaultOption(
+            isEnabled: true,
+            caption: isOn
+                ? "Saving moves the default from \(current.key) to \(original.key)."
+                : "\(current.key) is the default repo now."
+        )
+    }
+
+    /// The repo whose `default: true` moves to `entry` once saved, nil when `entry` doesn't become the default or no
+    /// repo was the default.
+    public static func previousDefault(from original: RepositoryEntry, to entry: RepositoryEntry, existing: [RepositoryEntry]) -> String? {
+        guard entry.isDefault == true, original.isDefault != true else { return nil }
+        return currentDefault(otherThan: original.key, in: existing)?.key
+    }
+
+    static func currentDefault(otherThan key: String, in entries: [RepositoryEntry]) -> RepositoryEntry? {
+        entries.first { $0.isDefault == true && $0.key != key }
+    }
+
+    /// Why the default can't move away from `current`: with no route of its own, Symphony would refuse it as a
+    /// repo that isn't the default.
+    static func defaultProblem(_ current: RepositoryEntry?) -> AddRepoProblem? {
+        guard let current, AddRepo.isUnscoped(current.route) else { return nil }
+        return AddRepoProblem(
+            "\(current.key) has no Linear route of its own, so it stays the default. Give it a project or labels first."
+        )
+    }
+
+    // MARK: Saving
+
     /// True when Symphony must restart to use the change: it sets up a repo's source and workflow when it starts,
     /// but reads routes from `symphony.yml` while it runs.
     public static func needsRestart(from original: RepositoryEntry, to entry: RepositoryEntry) -> Bool {
         original.workspace != entry.workspace || original.workflow != entry.workflow || original.baseBranch != entry.baseBranch
     }
 
-    /// `yaml` with the repo `original.key` rewritten to `entry`.
+    /// `yaml` with the repo `original.key` rewritten to `entry`. When `entry` becomes the default, the current
+    /// default loses its `default: true` in the same text, so one write moves it; a current default with no route
+    /// keeps it, and nothing changes.
     public static func updating(_ original: RepositoryEntry, to entry: RepositoryEntry, in yaml: String) throws -> String {
-        try RepositoriesConfig.updating(original.key, to: entry, in: yaml)
+        var text = yaml
+        if entry.isDefault == true, original.isDefault != true {
+            for var current in try RepositoriesConfig.entries(in: yaml) where current.isDefault == true && current.key != original.key {
+                if let problem = defaultProblem(current) { throw RepositoriesConfigError.invalidEntry(problem.message) }
+                current.isDefault = nil
+                text = try RepositoriesConfig.updating(current.key, to: current, in: text)
+            }
+        }
+        return try RepositoriesConfig.updating(original.key, to: entry, in: text)
     }
 
     /// How the change reaches Symphony: nil when Symphony reads it from `symphony.yml` without a restart.
@@ -128,18 +297,29 @@ public enum EditRepo {
         )
     }
 
-    /// What the window says after saving, for how the change reaches Symphony.
-    public static func savedMessage(key: String, apply: AddRepoApply?) -> String {
+    /// What the window says after saving, for how the change reaches Symphony. `madeDefault` adds that the repo is
+    /// now the default, in place of `previousDefault` when there was one.
+    public static func savedMessage(
+        key: String,
+        apply: AddRepoApply?,
+        madeDefault: Bool = false,
+        previousDefault: String? = nil
+    ) -> String {
+        var message: String
         switch apply {
         case nil:
-            return "Saved \(key). Symphony reads the change from symphony.yml, so its next poll uses it."
+            message = "Saved \(key). Symphony reads the change from symphony.yml, so its next poll uses it."
         case .restart?, .askToRestart?:
-            return "Saved \(key). Symphony restarts to apply it."
+            message = "Saved \(key). Symphony restarts to apply it."
         case .onNextStart?:
-            return "Saved \(key). Symphony uses it when it starts."
+            message = "Saved \(key). Symphony uses it when it starts."
         case .restartManually?:
-            return "Saved \(key). Restart Symphony to apply it."
+            message = "Saved \(key). Restart Symphony to apply it."
         }
+        if madeDefault {
+            message += " \(key) is now the default repo" + (previousDefault.map { " in place of \($0)." } ?? ".")
+        }
+        return message
     }
 }
 

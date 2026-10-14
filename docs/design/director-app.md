@@ -16,7 +16,7 @@
   wording; the app on `main` follows the new life cycle:
   - The acceptance gate is retired. Quality's **Gate agreement** reads **Review agreement**: the Code Review
     approvals that the next judge upheld (QA, or the Director at the merge when the repo's manual review is on).
-    **Change Gate…** reads **Change Review…** and opens the repo's Edit sheet with its Manual review control.
+    **Change Gate…** reads **Change Review…** and opens the repo's Review sheet with its Manual review checkbox.
     **Disagreements** are tickets where Code Review approved and QA or the Director decided otherwise.
   - `In Review` and `Human Review` are retired. A plan waits on the Director in `Plan Review`, and an escalation or a
     merge confirmation waits as a `Needs Decision` hold on the ticket, in whatever phase it is. The Inbox lists both,

@@ -107,7 +107,7 @@ public struct LocalCheckout: Equatable {
         return .success(checkout)
     }
 
-    /// Why the Edit sheet can't move a repo to this checkout: it has no `WORKFLOW.md`.
+    /// Why the Source sheet can't move a repo to this checkout: it has no `WORKFLOW.md`.
     public var missingWorkflowProblem: AddRepoProblem {
         AddRepoProblem("\((path as NSString).abbreviatingWithTildeInPath) has no WORKFLOW.md. Add one before connecting the repo.")
     }
@@ -158,9 +158,12 @@ public struct AddRepoDraft: Equatable {
     /// The name of the Linear project picked.
     public var project: String?
     public var labels: [String]
-    /// The repo's manual review setting, which only the Edit sheet shows.
+    /// Whether the repo is the default one, which only the Edit sheet's Linear routing shows. Turning it on moves
+    /// `default: true` from the current default.
+    public var isDefault: Bool
+    /// The repo's manual review setting, which only the Review sheet shows.
     public var manualReview: ManualReviewChoice
-    /// Whether Code Review's built-in ticket patterns apply to the repo, which only the Edit sheet shows.
+    /// Whether Code Review's built-in ticket patterns apply to the repo, which only the Review sheet shows.
     public var ticketPatternsBuiltIn: BuiltInTicketPatternsChoice
 
     public init(
@@ -171,6 +174,7 @@ public struct AddRepoDraft: Equatable {
         baseBranch: String = AddRepo.defaultBaseBranch,
         project: String? = nil,
         labels: [String] = [],
+        isDefault: Bool = false,
         manualReview: ManualReviewChoice = .off,
         ticketPatternsBuiltIn: BuiltInTicketPatternsChoice = .inherit
     ) {
@@ -181,6 +185,7 @@ public struct AddRepoDraft: Equatable {
         self.baseBranch = baseBranch
         self.project = project
         self.labels = labels
+        self.isDefault = isDefault
         self.manualReview = manualReview
         self.ticketPatternsBuiltIn = ticketPatternsBuiltIn
     }
