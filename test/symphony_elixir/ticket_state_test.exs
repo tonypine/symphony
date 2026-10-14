@@ -19,6 +19,7 @@ defmodule SymphonyElixir.TicketStateTest do
                ci_fix_origin: nil,
                self_heal: nil,
                dispatches: [],
+               path_unlocks: [],
                updated_at: nil
              }
     end
@@ -37,6 +38,27 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
+  describe "claim_path_unlocks/4" do
+    test "marks each grant used once and returns only the ones no run used" do
+      {record, claimed} = TicketState.claim_path_unlocks(TicketState.new("repo-a", "issue-1"), ["g1", "g1", "g2", nil], "run-1", @at)
+
+      assert claimed == ["g1", "g2"]
+      assert [%{id: "g1", run_id: "run-1", at: @at}, %{id: "g2", run_id: "run-1", at: @at}] = record.path_unlocks
+      assert record.updated_at == @at
+
+      assert {^record, []} = TicketState.claim_path_unlocks(record, ["g1", "g2"], "run-2", @at)
+
+      assert {%{path_unlocks: [_, _, %{id: "g3", run_id: nil}]}, ["g3"]} =
+               TicketState.claim_path_unlocks(record, ["g2", "g3"], nil, @at)
+    end
+
+    test "drops malformed used grants when normalizing" do
+      record = TicketState.normalize(%{path_unlocks: [%{id: "g1", run_id: "run-1", at: @at}, %{id: 7}, :junk]})
+      assert record.path_unlocks == [%{id: "g1", run_id: "run-1", at: @at}]
+      assert TicketState.normalize(%{path_unlocks: :junk}).path_unlocks == []
+    end
+  end
+
   describe "normalize/1" do
     test "fills defaults for a non-map" do
       assert TicketState.normalize(:nonsense) == %{
@@ -51,6 +73,7 @@ defmodule SymphonyElixir.TicketStateTest do
                ci_fix_origin: nil,
                self_heal: nil,
                dispatches: [],
+               path_unlocks: [],
                updated_at: nil
              }
     end

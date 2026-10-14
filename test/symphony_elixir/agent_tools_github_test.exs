@@ -531,6 +531,28 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  test "sync_base and push_branch accept the branch's change to a path a person unlocked for the run, and only that path" do
+    fixture = sync_fixture!("github-agent-sync-base-unlocked")
+
+    try do
+      commit_files!(fixture.workspace, %{"config/settings_ui_exempt.yml" => "exempt: []\n"}, "drop the exemption")
+      commit_files!(fixture.upstream, %{"lib/app.ex" => "app v2\n"}, "main work")
+      git!(fixture.upstream, ["push", "origin", "main"])
+
+      assert {:error, {:protected_paths_changed, ["config/settings_ui_exempt.yml"]}} = GitHub.sync_base(fixture.context)
+
+      unlocked = [unlocked_paths: ["config/settings_ui_exempt.yml"]]
+      assert {:ok, %{"status" => "merge_staged"}} = GitHub.sync_base(fixture.context, unlocked)
+      git!(fixture.workspace, ["commit", "--no-edit"])
+
+      commit_files!(fixture.workspace, %{"WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
+      assert {:error, {:protected_paths_changed, ["WORKFLOW.md"]}} = GitHub.sync_base(fixture.context, unlocked)
+      assert {:error, {:protected_paths_changed, ["WORKFLOW.md"]}} = GitHub.push_branch(fixture.context, unlocked)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
   test "sync_base and push_branch refuse a branch that changes the files behind a symlinked skill" do
     fixture = sync_fixture!("github-agent-sync-base-skill-link")
 

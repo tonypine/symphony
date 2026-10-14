@@ -328,6 +328,21 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert {:error, :ruling_comment_body} = Linear.update_comment(context, "comment-owned", "Decision: keep them", linear_client: no_call)
     end
 
+    test "comment and sub-issue tools refuse text that would grant an unlock of a protected path" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      Linear.CommentRegistry.record(registry, "comment-owned")
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      no_call = fn _query, _variables, _opts -> flunk("Linear should not be called for an unlock grant") end
+      grant = "Unlock `config/settings_ui_exempt.yml` for TP-760."
+
+      opts = [linear_client: no_call]
+
+      assert {:error, :path_unlock_grant_text} = Linear.add_comment(context, grant, [parent_id: "request-1"] ++ opts)
+      assert {:error, :path_unlock_grant_text} = Linear.update_comment(context, "comment-owned", grant, opts)
+      assert {:error, :path_unlock_grant_text} = Linear.create_subissue(context, %{"title" => "Slice", "description" => grant}, opts)
+      assert {:error, :path_unlock_grant_text} = Linear.update_subissue(context, %{"identifier" => "TP-3", "description" => grant}, opts)
+    end
+
     test "redacts secret patterns from returned comment bodies before wrapping" do
       workspace = tmp_workspace!("linear-agent-comment-read-redaction")
       audit_dir = Path.join(workspace, "audit")
