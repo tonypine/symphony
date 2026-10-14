@@ -15,6 +15,12 @@ public struct AppSettings: Equatable {
     /// Restart timeout used until the user picks one.
     public static let defaultRestartTimeoutMinutes = 30
 
+    /// Bounds for how often Automatically when released checks for a release, in minutes.
+    public static let releaseCheckMinutesRange = 1...60
+
+    /// Release check interval used until the user picks one.
+    public static let defaultReleaseCheckMinutes = 5
+
     /// Update mode of every install that never saved one, fresh or not: there is no migration.
     public static let defaultUpdateMode = UpdateMode.onRelease
 
@@ -45,6 +51,9 @@ public struct AppSettings: Equatable {
     /// The daily time Automatically at a set time installs at, kept while another mode is chosen.
     public var updateTime: TimeOfDay
 
+    /// Minutes between release checks in Automatically when released, within `releaseCheckMinutesRange`.
+    public var releaseCheckMinutes: Int
+
     public init(
         checkoutPath: String = "",
         configPath: String = "",
@@ -54,7 +63,8 @@ public struct AppSettings: Equatable {
         startOnLaunch: Bool = false,
         developmentMode: Bool = false,
         updateMode: UpdateMode = AppSettings.defaultUpdateMode,
-        updateTime: TimeOfDay = .defaultUpdateTime
+        updateTime: TimeOfDay = .defaultUpdateTime,
+        releaseCheckMinutes: Int = AppSettings.defaultReleaseCheckMinutes
     ) {
         self.checkoutPath = checkoutPath
         self.configPath = configPath
@@ -65,6 +75,12 @@ public struct AppSettings: Equatable {
         self.developmentMode = developmentMode
         self.updateMode = updateMode
         self.updateTime = updateTime
+        self.releaseCheckMinutes = releaseCheckMinutes
+    }
+
+    /// `minutes` moved into `releaseCheckMinutesRange`.
+    public static func clampedReleaseCheckMinutes(_ minutes: Int) -> Int {
+        min(max(minutes, releaseCheckMinutesRange.lowerBound), releaseCheckMinutesRange.upperBound)
     }
 
     /// True while a path Start needs is still unset, so the app opens Settings at launch.
@@ -85,7 +101,8 @@ public struct AppSettings: Equatable {
             startOnLaunch: startOnLaunch,
             developmentMode: developmentMode,
             updateMode: updateMode,
-            updateTime: updateTime
+            updateTime: updateTime,
+            releaseCheckMinutes: releaseCheckMinutes
         )
     }
 }

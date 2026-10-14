@@ -14,6 +14,9 @@ public struct QAMode: Equatable {
     public static let scriptedKey = "SYMPHONY_BAR_QA_SCRIPTED"
     /// The releases/latest URL update checks read instead of GitHub's, for a local update feed.
     public static let updateURLKey = "SYMPHONY_BAR_UPDATE_URL"
+    /// Seconds between background update checks in every mode, in place of the mode's and the setting's, so a test
+    /// sees a release within seconds. A failed check still backs off to 6 hours.
+    public static let updateCheckIntervalKey = "SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"
     /// The API base of the OpenRouter stub QA starts (`symphony openrouter-stub`), such as
     /// `http://127.0.0.1:4100/api`. The Symphony the app runs reads it too, also only in QA mode.
     public static let openRouterURLKey = "SYMPHONY_QA_OPENROUTER_URL"
@@ -39,6 +42,8 @@ public struct QAMode: Equatable {
     public let scripted: Bool
     /// The update feed from `SYMPHONY_BAR_UPDATE_URL`, nil for GitHub's.
     public let updateURL: URL?
+    /// Seconds between update checks from `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, nil to follow the settings.
+    public let updateCheckInterval: TimeInterval?
     /// The OpenRouter stub from `SYMPHONY_QA_OPENROUTER_URL`, nil for openrouter.ai.
     public let openRouterURL: URL?
     /// The API fixtures directory from `SYMPHONY_BAR_QA_API_FIXTURES`, nil for Symphony's own API.
@@ -52,6 +57,7 @@ public struct QAMode: Equatable {
         root: URL,
         scripted: Bool = false,
         updateURL: URL? = nil,
+        updateCheckInterval: TimeInterval? = nil,
         openRouterURL: URL? = nil,
         apiFixturesDirectory: URL? = nil,
         linearURL: URL? = nil,
@@ -60,6 +66,7 @@ public struct QAMode: Equatable {
         self.root = root.standardizedFileURL
         self.scripted = scripted
         self.updateURL = updateURL
+        self.updateCheckInterval = updateCheckInterval
         self.openRouterURL = openRouterURL
         self.apiFixturesDirectory = apiFixturesDirectory?.standardizedFileURL
         self.linearURL = linearURL
@@ -74,6 +81,7 @@ public struct QAMode: Equatable {
             root: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true),
             scripted: environment[scriptedKey]?.trimmingWhitespace() == "1",
             updateURL: updateURL.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil },
+            updateCheckInterval: environment[updateCheckIntervalKey].flatMap(positiveSeconds),
             openRouterURL: environment[openRouterURLKey].flatMap(loopbackURL),
             apiFixturesDirectory: environment[apiFixturesKey].map { $0.trimmingWhitespace() }.flatMap { path in
                 path.isEmpty ? nil : URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
@@ -81,6 +89,12 @@ public struct QAMode: Equatable {
             linearURL: environment[linearURLKey].flatMap(loopbackURL),
             openPanelDirectory: environment[openPanelDirectoryKey].flatMap(absoluteFolder)
         )
+    }
+
+    /// `value` as a positive whole number of seconds, else nil.
+    static func positiveSeconds(_ value: String) -> TimeInterval? {
+        guard let seconds = Int(value.trimmingWhitespace()), seconds > 0 else { return nil }
+        return TimeInterval(seconds)
     }
 
     /// `value` as a folder URL when it is an absolute path, else nil.
@@ -131,6 +145,9 @@ public struct AppStores {
     public let updateCacheDirectory: URL?
     /// The releases/latest URL update checks read.
     public let updateURL: URL
+    /// Seconds between background update checks in every mode, only in QA mode with
+    /// `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`; nil to follow the settings.
+    public let updateCheckInterval: TimeInterval?
     /// The OpenRouter API base Settings talks to: openrouter.ai's, whatever the environment says, except in QA mode
     /// with a stub.
     public let openRouterBaseURL: URL
@@ -158,6 +175,7 @@ public struct AppStores {
             logDirectory = ChildLog.defaultDirectory(home: home)
             updateCacheDirectory = nil
             updateURL = UpdateChecker.latestReleaseURL
+            updateCheckInterval = nil
             openRouterBaseURL = OpenRouterClient.baseURL
             linearEndpoint = LinearClient.endpoint
             controlURLFallback = SymphonyState.defaultBaseURL
@@ -174,6 +192,7 @@ public struct AppStores {
         logDirectory = qaMode.logDirectory
         updateCacheDirectory = qaMode.updateCacheDirectory
         updateURL = qaMode.updateURL ?? UpdateChecker.latestReleaseURL
+        updateCheckInterval = qaMode.updateCheckInterval
         openRouterBaseURL = qaMode.openRouterURL.map(OpenRouterClient.baseURL(api:)) ?? OpenRouterClient.baseURL
         linearEndpoint = qaMode.linearURL ?? LinearClient.endpoint
         controlURLFallback = nil

@@ -1,39 +1,64 @@
 import AppKit
 import SymphonyBarCore
 
-/// Checks GitHub for a newer Symphony at launch, every 6 hours, and when Check for Updates is chosen.
+/// Checks GitHub for a newer Symphony at launch, on the interval `UpdateCheckSchedule` gives, and when Check for
+/// Updates or Check Now is chosen.
 @MainActor
-final class UpdatePoller {
-    /// Called after each check; `manual` is true for a check started from the menu.
+final class UpdatePoller: ObservableObject {
+    /// Called after each check; `manual` is true for a check started from the menu or Settings.
     var onResult: ((UpdateCheckResult, _ manual: Bool) -> Void)?
 
     let current = AppBuild(
         infoDictionary: Bundle.main.infoDictionary,
         hasEmbeddedSymphony: Bundle.main.url(forResource: "symphony", withExtension: nil) != nil
     )
-    private(set) var isChecking = false
+    /// The interval and the last check, which Settings and the menu show.
+    @Published private(set) var schedule: UpdateCheckSchedule
+
+    var isChecking: Bool { schedule.isChecking }
 
     private let checker = UpdateChecker(url: AppStores.current.updateURL)
     private var timer: Timer?
+
+    init() {
+        let settings = AppStores.current.settingsStore().loadSettings()
+        schedule = UpdateCheckSchedule(
+            mode: settings.updateMode,
+            releaseCheckMinutes: settings.releaseCheckMinutes,
+            override: AppStores.current.updateCheckInterval
+        )
+    }
 
     func start() {
         check(manual: false)
     }
 
+    /// Takes saved settings without a relaunch: checks now when the mode became Automatically when released or its
+    /// minutes changed, and otherwise re-arms the timer with the new interval.
+    func configure(_ settings: AppSettings) {
+        let interval = schedule.interval
+        if schedule.configure(mode: settings.updateMode, releaseCheckMinutes: settings.releaseCheckMinutes) {
+            check(manual: false)
+        } else if !isChecking, schedule.interval != interval {
+            arm()
+        }
+    }
+
     func check(manual: Bool) {
         guard !isChecking else { return }
-        isChecking = true
+        schedule.began()
         timer?.invalidate()
         Task {
             let result = await checker.check(current: current)
-            isChecking = false
-            schedule()
+            schedule.finished(result, at: Date())
+            arm()
             onResult?(result, manual)
         }
     }
 
-    private func schedule() {
-        let interval = UpdateChecker.interval
+    private func arm() {
+        timer?.invalidate()
+        let interval = schedule.interval
         let timer = Timer(timeInterval: interval, repeats: false) { _ in
             MainActor.assumeIsolated { self.check(manual: false) }
         }

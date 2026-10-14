@@ -10,14 +10,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
     private let secrets: SecretsReader
+    private let updates: UpdatePoller
 
-    /// `secrets` is shared with Start, so Settings and Start can't each put up a Keychain prompt.
-    init(secrets: SecretsReader) {
+    /// `secrets` is shared with Start, so Settings and Start can't each put up a Keychain prompt. `updates` runs
+    /// Check Now and gives the last check, shown under Update mode.
+    init(secrets: SecretsReader, updates: UpdatePoller) {
         self.secrets = secrets
+        self.updates = updates
     }
 
     /// Called after Save stored changed secrets, so a running Symphony restarts with them.
     var onSecretsChanged: () -> Void = {}
+
+    /// Called after Save stored the settings, so a new update mode or check interval takes effect without a relaunch.
+    var onSettingsSaved: (AppSettings) -> Void = { _ in }
 
     /// Today's tokens from the latest poll, nil while Symphony isn't answering. Shown under Agents.
     var budget: StateSnapshot.Budget? {
@@ -32,10 +38,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             let model = SettingsViewModel(secrets: secrets, onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
+            model.onSettingsSaved = { [weak self] settings in self?.onSettingsSaved(settings) }
             model.budget = budget
             model.updateBlocker = updateBlocker
             self.model = model
-            let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
+            let view = SettingsView(model: model, updates: updates) { [weak self] in self?.window?.close() }
             let hostingController = NSHostingController(rootView: view)
             // The default (.preferredContentSize) keeps resizing the window to SwiftUI's ideal size, which
             // collapses the scroll-backed Form after the first layout pass. Let SwiftUI set only the bounds.
