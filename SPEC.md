@@ -4925,6 +4925,13 @@ Minimum endpoints:
     with that list's name as its `status` (`slot_waiting` or `dispatch_skipped`) and an object under
     the same key with its `state`, the `reason` it waits and `since`. A running, retrying or watched
     issue keeps that status.
+  - A running, watched, slot-waiting or passed-over issue MAY carry `connected`: where it sits
+    among the others, from what the orchestrator already holds (no tracker read per request).
+    `parent` (`identifier`, `title`, `done`, `total`, `children` state types in landing order, or
+    null), and `sub_tickets`, `blocked_by`, `blocks`, `related`, each `identifier`, `title` and
+    `state`. Blockers and sub-tickets come from the poll (`title` null); the parent and the
+    `blocks` and `related` links come from the run's enrichment read at dispatch. An untracked
+    issue has no `connected`.
   - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
     first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
     reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with

@@ -147,7 +147,7 @@ final class PeekTests: XCTestCase {
 
     // MARK: - A ticket's page
 
-    func testATrackedTicketShowsNowAndConnected() throws {
+    func testAWatchedTicketOutsideTheInboxShowsConnectedFromItsEndpoint() throws {
         let item = try decision()
         let peek = TicketPeek(try ticket("TP-891", in: item), references: item.references, sources: try sources(issue: "TP-891"), now: now)
 
@@ -159,10 +159,21 @@ final class PeekTests: XCTestCase {
         XCTAssertEqual(peek.head.facts, [], "Now and Connected say it instead")
         XCTAssertEqual(peek.now, TicketPeek.Now(stage: "Code Review", waitingOn: nil, pullRequest: "PR #446 · checks running"))
         XCTAssertEqual(peek.references["PR #446"], .missing(url: URL(string: "https://github.com/tonypine/symphony/pull/446")))
-        let connected = try XCTUnwrap(peek.connected)
+        XCTAssertFalse(try payload().items.contains { $0.identifier == "TP-891" }, "it isn't in the Inbox")
+        let connected = try XCTUnwrap(peek.connected, "its endpoint's connected")
         XCTAssertEqual(connected.parent?.text, "TP-880 (Remove the Supervisor check)")
-        XCTAssertNil(connected.parent?.progress)
-        XCTAssertEqual(connected.groups.count, 0)
+        XCTAssertEqual(connected.parent?.progress, "1 of 2 done")
+        XCTAssertEqual(connected.parent?.children, [.done, .working])
+        XCTAssertEqual(connected.groups.map(\.label), ["Blocked by", "Blocks"])
+        XCTAssertEqual(
+            connected.blockedBy, [TicketPeek.Row(text: "TP-892 (Retire two old review steps)", state: "Rework")],
+            "the endpoint names no title: the Inbox's reference does"
+        )
+        XCTAssertEqual(connected.blocks, [TicketPeek.Row(text: "TP-893 (Show the new review steps in the app)", state: "Todo")])
+        XCTAssertEqual(
+            Mentions.find(in: connected.blockedBy[0].text, references: peek.references).map(\.isMissing), [false],
+            "the blocker is a chip"
+        )
         guard case let .ticket(parent)? = peek.references["TP-880"] else { return XCTFail("TP-880 is a chip") }
         XCTAssertEqual(parent.state, "Done", "the item's own reference, not a made-up one")
         XCTAssertNil(peek.headline)
@@ -172,6 +183,37 @@ final class PeekTests: XCTestCase {
         let mentions = Mentions.find(in: connected.parent?.text ?? "", references: peek.references)
         XCTAssertEqual(mentions.map(\.chipText), ["TP-880 · Remove the Supervisor check"])
         XCTAssertFalse(mentions[0].isMissing)
+    }
+
+    func testTheInboxContextComesBeforeTheEndpointsConnected() throws {
+        let issue = json([
+            "status": "watching",
+            "connected": [
+                "parent": ["identifier": "P-9", "title": "Elsewhere", "done": 0, "total": 1, "children": ["unstarted"]],
+                "sub_tickets": [["identifier": "S-9", "title": NSNull(), "state": "Todo"]],
+                "blocked_by": [["identifier": "B-9", "title": "Endpoint blocker", "state": "Todo"]],
+                "blocks": [["identifier": "K-9", "title": NSNull(), "state": NSNull()]],
+                "related": [["identifier": "R-9", "title": "Endpoint related", "state": "Done"]],
+            ],
+        ])
+        let item = try decision()
+        var inbox = try payload().items
+        let tp892 = try XCTUnwrap(inbox.firstIndex { $0.identifier == "TP-892" })
+        inbox[tp892].context?.blockedBy = [TicketContext.Connected(identifier: "TP-880", title: nil, state: "Done")]
+        let peek = TicketPeek(try ticket("TP-892", in: item), references: item.references, sources: PeekSources(inbox: inbox, issue: issue), now: now)
+        let connected = try XCTUnwrap(peek.connected)
+        XCTAssertEqual(connected.parent?.text, "TP-870 (Simplify the review flow)", "the Inbox's parent")
+        XCTAssertEqual(connected.blockedBy.map(\.text), ["TP-880"], "the Inbox's blockers, as it names them")
+        XCTAssertEqual(connected.blocks.map(\.text), ["TP-893 (Show the new review steps in the app)"])
+        XCTAssertEqual(connected.related.map(\.state), ["Code Review"])
+        XCTAssertEqual(connected.subTickets, [TicketPeek.Row(text: "S-9", state: "Todo")], "the Inbox has none: the endpoint's")
+
+        // A ticket the Inbox doesn't hold takes every group from its endpoint.
+        let watched = TicketPeek(Reference.Ticket(identifier: "W-1", title: nil), sources: PeekSources(issue: issue), now: now)
+        XCTAssertEqual(watched.connected?.parent?.text, "P-9 (Elsewhere)")
+        XCTAssertEqual(watched.connected?.groups.map(\.label), ["Sub-tickets", "Blocked by", "Blocks", "Related"])
+        XCTAssertEqual(watched.connected?.blocks, [TicketPeek.Row(text: "K-9", state: nil)])
+        XCTAssertNil(TicketPeek.endpointConnected(json(["status": "untracked"])), "an untracked ticket's endpoint has none")
     }
 
     func testAnUntrackedTicketShowsOnlyTheReferenceFacts() throws {

@@ -739,6 +739,16 @@ defmodule SymphonyElixirWeb.Presenter do
     payload
     |> put_watching_issue_payload(watching)
     |> put_waiting_issue_payload(waiting)
+    |> put_connected_payload(entries)
+  end
+
+  # Where a tracked ticket sits among the others, from what the orchestrator holds
+  # (`SymphonyElixir.Connected`); an untracked ticket has none.
+  defp put_connected_payload(payload, entries) do
+    case Enum.find_value(entries, &(&1 && Map.get(&1, :connected))) do
+      nil -> payload
+      connected -> Map.put(payload, :connected, connected)
+    end
   end
 
   defp put_watching_issue_payload(payload, nil), do: payload

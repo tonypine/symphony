@@ -2770,6 +2770,11 @@ defmodule SymphonyElixir.CoreTest do
                  }
                ]
              },
+             "parent" => %{
+               "identifier" => "MT-0",
+               "title" => "Parent epic",
+               "children" => %{"nodes" => [%{"createdAt" => "2026-05-01T00:00:00Z", "state" => %{"type" => "completed"}}]}
+             },
              "relations" => %{
                "nodes" => [
                  %{
@@ -2811,6 +2816,7 @@ defmodule SymphonyElixir.CoreTest do
     assert query =~ "description"
     assert query =~ "comments(last: $commentLast, orderBy: createdAt)"
     assert query =~ "relations(first: $relationFirst)"
+    assert query =~ "parent {"
     assert comment_last == 20
     assert relation_first == 50
 
@@ -2828,6 +2834,8 @@ defmodule SymphonyElixir.CoreTest do
              %{relation: "related", identifier: "MT-2", title: "Related context", state: "Todo"},
              %{relation: "blocks", identifier: "MT-3", title: "Downstream issue", state: "In Progress"}
            ]
+
+    assert enriched_issue.parent == %{identifier: "MT-0", title: "Parent epic", done: 1, total: 1, children: ["completed"]}
   end
 
   test "linear client pins claude workpad comment alongside recent comments" do
@@ -3779,7 +3787,7 @@ defmodule SymphonyElixir.CoreTest do
 
       log =
         capture_log(fn ->
-          assert :ok = AgentRunner.run(issue, self(), issue_enricher: &{:ok, &1})
+          assert :ok = AgentRunner.run(issue, self(), issue_enricher: &{:ok, %{&1 | parent: %{identifier: "S-1", title: "Epic", done: 0, total: 1, children: ["started"]}}})
         end)
 
       assert File.read!(hook_runs) == "run\nrun\n"
@@ -3796,6 +3804,8 @@ defmodule SymphonyElixir.CoreTest do
       refute_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: _hook}}
       # As the run ends, the orchestrator hears which comments it posted.
       assert_received {:worker_runtime_info, "issue-s-373", %{comment_ids: comment_ids}} when is_list(comment_ids)
+      # The ticket page reads the parent and links the enrichment found from the orchestrator.
+      assert_received {:worker_runtime_info, "issue-s-373", %{linked: %{parent: %{identifier: "S-1"}, linked_issues: []}}}
     after
       File.rm_rf(test_root)
     end

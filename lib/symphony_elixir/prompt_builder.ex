@@ -261,6 +261,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> update_list_field(:comments, &sanitize_issue_comments/1)
     |> update_list_field(:linked_issues, &sanitize_linked_issues/1)
     |> update_list_field(:sub_issues, &sanitize_sub_issues/1)
+    |> update_field(:parent, &sanitize_parent/1)
     |> put_repo_key(repo_key)
   end
 
@@ -290,6 +291,9 @@ defmodule SymphonyElixir.PromptBuilder do
     Enum.map(sub_issues, &update_string_field(&1, :state, fn state -> PromptSafety.linear_issue_state(state) end))
   end
 
+  defp sanitize_parent(parent) when is_map(parent), do: update_string_field(parent, :title, &PromptSafety.linear_issue_title/1)
+  defp sanitize_parent(parent), do: parent
+
   defp sanitize_reviewer_comments(comments) when is_list(comments) do
     Enum.map(comments, fn comment ->
       update_string_field(comment, :body, &PromptSafety.linear_reviewer_comment_body/1)
@@ -312,7 +316,8 @@ defmodule SymphonyElixir.PromptBuilder do
       {"issue.description", get_field(issue, :description)}
     ] ++
       issue_comment_warning_sources(get_field(issue, :comments)) ++
-      linked_issue_warning_sources(get_field(issue, :linked_issues))
+      linked_issue_warning_sources(get_field(issue, :linked_issues)) ++
+      [{"issue.parent.title", issue |> get_field(:parent) |> get_field(:title)}]
   end
 
   defp issue_comment_warning_sources(comments) when is_list(comments) do
