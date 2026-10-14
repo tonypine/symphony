@@ -223,16 +223,11 @@ final class ChipTextViewTests: XCTestCase {
         let view = try storyView()
         view.hoverDelay = 0.05
         view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
-        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = view
-        window.orderFrontRegardless()
-        defer { window.close() }
-        let popover = ChipPopover { _ in
+        let popover = ChipPopover(content: { _ in
             let controller = NSViewController()
             controller.view = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 80))
             return controller
-        }
+        }, makePopover: { LateClosingPopover() })
         view.popover = popover
         let first = try XCTUnwrap(view.chipRects(0).first)
         let second = try XCTUnwrap(view.chipRects(1).first)
@@ -430,6 +425,26 @@ final class ChipTextViewTests: XCTestCase {
 }
 
 /// Records what the view asks of its popover.
+/// A popover that opens without a window and, like an animated `NSPopover`, tells its delegate it closed on a
+/// later turn of the run loop.
+private final class LateClosingPopover: NSPopover {
+    private var open = false
+
+    override var isShown: Bool { open }
+
+    override func show(relativeTo positioningRect: NSRect, of positioningView: NSView, preferredEdge: NSRectEdge) {
+        open = true
+    }
+
+    override func close() {
+        guard open else { return }
+        DispatchQueue.main.async {
+            self.open = false
+            self.delegate?.popoverDidClose?(Notification(name: NSPopover.didCloseNotification, object: self))
+        }
+    }
+}
+
 private final class PopoverSpy: ChipPopoverPresenting {
     var shown: [(mention: Mention, rect: CGRect, hover: Bool)] = []
     var leftChip = 0

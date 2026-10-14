@@ -9,6 +9,7 @@ public final class ChipPopover: NSObject, ChipPopoverPresenting, NSPopoverDelega
     public static let closeDelay: TimeInterval = 0.3
 
     private let content: (Mention) -> NSViewController
+    private let makePopover: () -> NSPopover
     private var popover: NSPopover?
     private var shown: Mention?
     private weak var owner: ChipTextView?
@@ -16,8 +17,13 @@ public final class ChipPopover: NSObject, ChipPopoverPresenting, NSPopoverDelega
     private var pointerOnPopover = false
     private var closeWork: DispatchWorkItem?
 
-    public init(content: @escaping (Mention) -> NSViewController) {
+    /// `makePopover` lets tests stand in a popover that opens without a window.
+    public init(
+        content: @escaping (Mention) -> NSViewController,
+        makePopover: @escaping () -> NSPopover = { NSPopover() }
+    ) {
         self.content = content
+        self.makePopover = makePopover
     }
 
     public var isShown: Bool { popover?.isShown == true }
@@ -34,7 +40,7 @@ public final class ChipPopover: NSObject, ChipPopoverPresenting, NSPopoverDelega
         popover = nil
         previous?.close()
         let controller = content(mention)
-        let popover = NSPopover()
+        let popover = makePopover()
         popover.contentViewController = controller
         popover.animates = true
         popover.delegate = self
