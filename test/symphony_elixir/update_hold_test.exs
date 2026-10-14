@@ -55,6 +55,16 @@ defmodule SymphonyElixir.UpdateHoldTest do
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
     end
 
+    test "a blocker whose recorded link is not a GitHub pull request releases its dependents" do
+      issue = todo_blocked_by(blocker("TP-5", "Done"))
+      fix = fix_issue("TP-5", "https://linear.app/not-a-pr")
+
+      cache = resolve([issue], fetch_ok([fix]), merge_commit_sha: fn _url -> flunk("not a pull request") end)
+
+      assert cache.blockers == %{"id-TP-5" => :none}
+      assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
+    end
+
     test "a blocker with an unmerged or no pull request releases its dependents" do
       issue = %Issue{todo_blocked_by(blocker("TP-2", "Canceled")) | blocked_by: [blocker("TP-2", "Canceled"), blocker("TP-3", "Done")]}
 

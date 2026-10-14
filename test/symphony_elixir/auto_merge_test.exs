@@ -1412,6 +1412,9 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     assert {:ok, %{discovered: 0, actions: []}} = poll(now)
     refute AutoMerge.owns_issue?(merging)
+
+    # A repository the settings don't know owns nothing, even with its PR on record.
+    :ok = TicketPullRequest.record_created("missing-repo", @issue_id, @pr_url, "auto/ACME-1780")
     refute AutoMerge.owns_issue?(%{merging | repo_key: "missing-repo"})
   end
 
