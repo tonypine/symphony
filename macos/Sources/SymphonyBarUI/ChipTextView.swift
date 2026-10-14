@@ -593,18 +593,22 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     // MARK: - Accessibility
 
-    /// The paragraph reads as one text; each chip is a link inside it.
+    /// The paragraph reads as one text; each chip is a link inside it. Reading the children changes nothing and lays
+    /// nothing out: each link works out its frame when asked for it.
     override open func accessibilityChildren() -> [Any]? {
-        for element in chipElements {
-            element.setAccessibilityFrameInParentSpace(chipRects(element.index).first ?? .zero)
-        }
-        return (super.accessibilityChildren() ?? []) + chipElements
+        (super.accessibilityChildren() ?? []) + chipElements
     }
 
     /// The chips' link elements, in reading order.
     public var chipAccessibilityElements: [NSAccessibilityElement] {
-        _ = accessibilityChildren()
-        return chipElements
+        chipElements
+    }
+
+    /// A chip's rectangle in the view for VoiceOver, from the paragraph's own layout at the view's width, so an
+    /// accessibility read never lays out the text view while it answers.
+    func accessibilityChipRect(_ index: Int) -> CGRect {
+        let origin = textContainerOrigin
+        return chipFrames(index, in: layout(width: bounds.width)).first?.offsetBy(dx: origin.x, dy: origin.y) ?? .zero
     }
 
     private func makeChipElements() -> [ChipAccessibilityElement] {
@@ -688,6 +692,15 @@ final class ChipAccessibilityElement: NSAccessibilityElement {
     override func isAccessibilityElement() -> Bool { true }
 
     override func isAccessibilityFocused() -> Bool { view?.focusedChip == index }
+
+    override func accessibilityFrameInParentSpace() -> NSRect {
+        view?.accessibilityChipRect(index) ?? .zero
+    }
+
+    override func accessibilityFrame() -> NSRect {
+        guard let view else { return .zero }
+        return NSAccessibility.screenRect(fromView: view, rect: view.accessibilityChipRect(index))
+    }
 
     override func accessibilityPerformPress() -> Bool {
         view?.open(index)

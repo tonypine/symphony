@@ -348,7 +348,12 @@ final class ChipTextViewTests: XCTestCase {
         ])
         XCTAssertTrue(links.allSatisfy { $0.accessibilityHelp() == "Shows details" })
         XCTAssertEqual(links[1].accessibilityURL()?.absoluteString, "https://linear.app/tonypine/issue/TP-891")
+        // Reading the children lays nothing out; each link's frame is the chip's, worked out when asked for.
+        XCTAssertTrue(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.elementsEqual(links, by: ===) ?? false)
         XCTAssertEqual(links[1].accessibilityFrameInParentSpace(), view.chipRects(1).first)
+        XCTAssertEqual(links[1].accessibilityFrame(), NSAccessibility.screenRect(fromView: view, rect: try XCTUnwrap(view.chipRects(1).first)))
+        view.setFrameSize(CGSize(width: 300, height: view.height(forWidth: 300)))
+        XCTAssertEqual(links[1].accessibilityFrameInParentSpace(), view.chipRects(1).first, "it follows a new width")
         XCTAssertTrue(links[1].accessibilityParent() as AnyObject === view)
         XCTAssertTrue(view.accessibilityChildren()?.contains { $0 as AnyObject === links[1] } ?? false)
         XCTAssertTrue(links[1].isAccessibilityElement())

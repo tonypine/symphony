@@ -108,8 +108,9 @@ public enum Mentions {
     /// True when no word character or hyphen touches `range` (nor `&`, `#` or `/` before a bare `#448`), as the
     /// pattern's lookarounds ask.
     private static func standsAlone(_ range: NSRange, in string: NSString, bareNumber: Bool) -> Bool {
-        let before = range.location > 0 ? string.substring(with: NSRange(location: range.location - 1, length: 1)) : ""
-        let after = NSMaxRange(range) < string.length ? string.substring(with: NSRange(location: NSMaxRange(range), length: 1)) : ""
+        // Whole characters, so a surrogate pair next to the mention is read as one character, not half a pair.
+        let before = range.location > 0 ? string.substring(with: string.rangeOfComposedCharacterSequence(at: range.location - 1)) : ""
+        let after = NSMaxRange(range) < string.length ? string.substring(with: string.rangeOfComposedCharacterSequence(at: NSMaxRange(range))) : ""
         let joins: (String) -> Bool = { character in
             character.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-" }
         }

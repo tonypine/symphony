@@ -54,6 +54,12 @@ final class MentionsTests: XCTestCase {
         XCTAssertEqual(found("Merged in PR#448 today.", ["PR#448": pullRequest]), ["PR#448"])
     }
 
+    func testACharacterOutsideTheBasicPlaneNextToAMentionIsReadWhole() {
+        // 𝐀 (a letter) and 🎉 (not one) each take two UTF-16 units.
+        XCTAssertEqual(found("Merged in PR#448𝐀 and 𝐀PR#448 today.", ["PR#448": pullRequest]), [])
+        XCTAssertEqual(found("Merged in 🎉PR#448🎉 today.", ["PR#448": pullRequest]), ["PR#448"])
+    }
+
     func testATicketsShortNameInBracketsJoinsItsChip() {
         let text = "TP-891 (Remove the retired review states) deletes them."
         let mention = Mentions.find(in: text, references: ["TP-891": ticket]).first
