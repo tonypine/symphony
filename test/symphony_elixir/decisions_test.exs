@@ -3,7 +3,7 @@ defmodule SymphonyElixir.DecisionsTest do
 
   alias SymphonyElixir.{Decisions, IssueSummary}
   alias SymphonyElixir.HumanActions.Request
-  alias SymphonyElixir.Linear.Adapter
+  alias SymphonyElixir.Linear.{Adapter, Client}
   alias SymphonyElixir.Tracker.Memory
 
   @issue_id "issue-1"
@@ -240,7 +240,7 @@ defmodule SymphonyElixir.DecisionsTest do
 
       section = Decisions.prompt_section(description)
 
-      assert section =~ "Recorded decisions (a person's answers to this ticket's decision requests; they are part of its scope):"
+      assert section =~ "Recorded decisions (a person's answers to this ticket's decision requests and the rulings they gave in comments; they are part of its scope):"
       assert section =~ "<linear_issue_decisions>"
       assert section =~ "D1: Remove the legacy partials here, or leave them for TP-891? Answer: Defer to TP-891: don't make that change. Scope: Deferred to TP-891."
     end
@@ -293,7 +293,92 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
+  describe "ruling?/1 and rulings/1" do
+    test "a comment opening with Decision: or Ruling: is a ruling, in any case and bold or not" do
+      for body <- ["Decision: defer it to TP-891", "ruling: keep it", "  **Decision:** keep it", "**Ruling**: keep it", "DECISION : keep it"],
+          do: assert(Decisions.ruling?(body), body)
+
+      for body <- ["Decision:", "Decision:   ", "## Decision needed: Keep it", "The decision: keep it", "Decisions: keep it", nil],
+          do: refute(Decisions.ruling?(body), inspect(body))
+    end
+
+    test "reads a person's ruling, keyed by its comment, titled by its first sentence and scoped by its text" do
+      node = ticket([comment("c1", "Decision: defer the legacy partials to TP-891. They go with the retired states.", "2026-10-13T05:48:00Z")])
+
+      assert [
+               %{
+                 key: "ruling-c1",
+                 date: ~D[2026-10-13],
+                 title: "defer the legacy partials to TP-891.",
+                 question: "Ruling given in a comment.",
+                 answer: "defer the legacy partials to TP-891. They go with the retired states.",
+                 scope: "Deferred to TP-891"
+               }
+             ] = Decisions.rulings(node)
+    end
+
+    test "cuts a long first sentence on a word for the title" do
+      long = "keep " <> String.duplicate("every legacy partial ", 6) <> "here"
+      assert [%{title: title, answer: "keep every" <> _rest}] = Decisions.rulings(ticket([comment("c1", "Ruling: " <> long)]))
+      assert String.ends_with?(title, " every legacy…")
+      assert String.length(title) <= 81
+    end
+
+    test "Symphony's own comments, a supervisor's note and a reply under a decision request are no ruling" do
+      node =
+        ticket([
+          comment("w1", "## Symphony Workpad\n\nDecision: keep the partials"),
+          comment("b1", "## Review brief\n\n**Decisions needed:**\n\nNone."),
+          comment("s1", "Supervisor note: Decision: keep the partials"),
+          comment("c1", request_body()),
+          comment("r1", "Decision: Defer to TP-891", nil, "c1"),
+          comment("n1", "Just a note"),
+          %{"id" => "x1", "body" => nil},
+          %{"body" => "Decision: no id"},
+          comment("t1", "Ruling: keep it", nil, "n1")
+        ])
+
+      assert [%{key: "ruling-t1", answer: "keep it"}] = Decisions.rulings(node)
+      assert [%{key: "c1"}] = Decisions.answered(node)
+      assert Decisions.rulings(%{"id" => @issue_id}) == []
+      assert Decisions.rulings(nil) == []
+    end
+  end
+
   describe "sync/2 and record/3" do
+    test "writes a person's ruling once, and the same ruling commented again adds nothing" do
+      ruling = comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
+      node = ticket([comment("w1", "## Symphony Workpad\n\nWorking."), ruling])
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker)
+
+      assert_received {:description_written, @issue_id, description}
+      assert [%{id: "D1", key: "ruling-c1", answer: "defer the legacy partials to TP-891", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
+
+      Process.put({FakeTracker, :description}, {:error, :must_not_read})
+      again = comment("c2", "**Decision:** Defer the legacy partials to TP-891 ", "2026-10-14T06:00:00Z")
+      stored = linear_stored(description)
+
+      assert :ok = Decisions.sync(%{node | "description" => stored, "comments" => %{"nodes" => [ruling, again]}}, tracker: FakeTracker)
+      refute_received {:description_written, _issue_id, _description}
+
+      # Two copies of a new ruling in one read are written once, after an answered request.
+      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
+      node = ticket([comment("r0", request_body()), comment("a0", "Remove them", nil, "r0"), ruling, again])
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker)
+      assert_received {:description_written, @issue_id, description}
+      assert [%{id: "D1", key: "r0"}, %{id: "D2", key: "ruling-c1"}] = Decisions.recorded(description)
+    end
+
+    test "a ruling the section already records as a request's answer adds nothing, an escaped one neither" do
+      {:ok, description} = Decisions.put("Fix it.", [entry(%{key: "r0", answer: "Keep the \\_legacy\\_ partials"})])
+      Process.put({FakeTracker, :description}, {:ok, description})
+
+      assert :ok = Decisions.record(@issue_id, Decisions.rulings(ticket([comment("c1", "Ruling: keep the _legacy_ partials")])), tracker: FakeTracker)
+      refute_received {:description_written, _issue_id, _description}
+    end
+
     test "writes an answered request that the description does not record yet" do
       node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
 
@@ -366,6 +451,83 @@ defmodule SymphonyElixir.DecisionsTest do
       assert {:ok, ^description} = Memory.fetch_issue_description(@issue_id)
       assert {:ok, "Other."} = Memory.fetch_issue_description("other")
       assert {:error, :issue_not_found} = Memory.fetch_issue_description("missing")
+    end
+  end
+
+  describe "the poll" do
+    test "a polled issue carries the rulings its comments give" do
+      issue =
+        Client.normalize_issue_for_test(%{
+          "id" => @issue_id,
+          "identifier" => "TP-1",
+          "description" => "Fix it.",
+          "comments" => %{
+            "nodes" => [
+              comment("w1", "## Symphony Workpad\n\nWorking."),
+              comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
+            ]
+          }
+        })
+
+      assert [%{key: "ruling-c1", scope: "Deferred to TP-891"}] = issue.rulings
+      assert Client.normalize_issue_for_test(%{"id" => @issue_id}).rulings == []
+    end
+
+    test "sweep/2 writes the rulings a description does not record yet, and costs nothing otherwise" do
+      rulings = Decisions.rulings(ticket([comment("c1", "Decision: defer the legacy partials to TP-891")]))
+      {:ok, recorded} = Decisions.put("Fix it.", rulings)
+
+      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
+
+      issues = [
+        %Issue{id: @issue_id, description: "Fix it.", rulings: rulings},
+        %Issue{id: "recorded", description: recorded, rulings: rulings},
+        %Issue{id: "none", description: "Fix it."},
+        %Issue{id: nil, rulings: rulings}
+      ]
+
+      assert Decisions.sweep(issues, tracker: FakeTracker) == 1
+      assert_received {:description_written, @issue_id, description}
+      assert [%{id: "D1", key: "ruling-c1"}] = Decisions.recorded(description)
+      refute_received {:description_written, _issue_id, _description}
+
+      Process.put({FakeTracker, :update}, {:error, :boom})
+      assert capture_log(fn -> assert Decisions.sweep(issues, tracker: FakeTracker) == 0 end) =~ ":boom"
+      assert Decisions.sweep(nil) == 0
+    end
+
+    test "a poll cycle writes a person's ruling into the ticket's description" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      ruling = comment("c1", "Decision: defer the legacy partials to TP-891", "2026-10-14T05:00:00Z")
+
+      issue = %Issue{
+        id: "ruled",
+        identifier: "TP-2",
+        title: "Remove the legacy partials",
+        description: "Remove them.",
+        state: "In Progress",
+        team: %{key: "Test"},
+        rulings: Decisions.rulings(ticket([ruling])),
+        # Polled, never dispatched: the test starts no agent.
+        assigned_to_worker: false
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      end)
+
+      {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :RulingOrchestrator))
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+      send(pid, :run_poll_cycle)
+
+      assert_receive {:memory_tracker_description_update, "ruled", description}, 2_000
+      assert String.starts_with?(description, "Remove them.\n\n")
+      assert [%{id: "D1", key: "ruling-c1", answer: "defer the legacy partials to TP-891", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
     end
   end
 

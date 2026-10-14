@@ -2491,7 +2491,11 @@ Rules:
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
   approval. The implementation prompt reads the section in the description. A ruling a person
-  gives in a plain comment, not under a decision request, is not recorded.
+  gives in a plain comment that opens with `Decision:` or `Ruling:` (any case, bold or not), not as
+  a reply under a decision request, MUST be recorded on the same read, keyed by its comment
+  (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
+  answer the section already records MUST NOT be written again. The agents' comment tools MUST
+  refuse a body that opens that way, so only a person writes a ruling.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
