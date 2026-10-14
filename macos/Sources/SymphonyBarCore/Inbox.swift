@@ -344,18 +344,19 @@ public struct InboxReview: Equatable {
             return Array(paragraphs.prefix(2))
         }
 
-        /// The Options card's hint: "Press 1–3 to pick · ⌘↩ to send"; nil without options.
+        /// The pick of the write-in (N11), the card after the last option: the Director answers in their own words.
+        public var writeInIndex: Int { options.count }
+
+        /// The Options card's hint, counting the write-in after the options: "Press 1–4 to pick · ⌘↩ to send" for
+        /// three options; nil without options.
         public var keyHint: String? {
-            switch options.count {
-            case 0: nil
-            case 1: "Press 1 to pick · ⌘↩ to send"
-            default: "Press 1–\(min(options.count, 9)) to pick · ⌘↩ to send"
-            }
+            options.isEmpty ? nil : "Press 1–\(min(writeInIndex + 1, 9)) to pick · ⌘↩ to send"
         }
 
-        /// The option a number key picks: "2" picks the second; nil for any other key, or a number past the last.
+        /// The option a number key picks: "2" picks the second, and the number after the last option the write-in;
+        /// nil for any other key, a number past the write-in, or a request without options.
         public func optionIndex(forKey key: Character) -> Int? {
-            guard let number = key.wholeNumberValue, number >= 1, number <= min(options.count, 9) else { return nil }
+            guard !options.isEmpty, let number = key.wholeNumberValue, number >= 1, number <= min(writeInIndex + 1, 9) else { return nil }
             return number - 1
         }
 

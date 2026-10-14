@@ -226,7 +226,8 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(action.whyParagraphs[0].hasPrefix("Code Review sent #448 back twice."))
         XCTAssertTrue(action.whyParagraphs[1].hasPrefix("TP-880 already removed the Supervisor check."))
         XCTAssertNotNil(action.ifUnanswered)
-        XCTAssertEqual(action.keyHint, "Press 1–3 to pick · ⌘↩ to send")
+        // The write-in after the three options takes the fourth key.
+        XCTAssertEqual(action.keyHint, "Press 1–4 to pick · ⌘↩ to send")
 
         let cards = OptionCard.cards(for: action)
         XCTAssertEqual(cards.map(\.label), ["Leave them to TP-891", "Update them in TP-892 now", "Wait for TP-891 to land first"])
@@ -267,16 +268,19 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(paragraphs("\n \n"), [])
     }
 
-    func testNumberKeysPickTheOptionWithThatNumber() {
+    func testNumberKeysPickTheOptionWithThatNumberAndTheWriteInAfterThem() {
         func action(_ count: Int) -> InboxReview.Action {
             InboxReview.Action(steps: [], options: (1...max(count, 1)).prefix(count).map { .init(label: "O\($0)", effect: nil, recommended: false) }, commentID: "c-1")
         }
         XCTAssertNil(action(0).keyHint)
-        XCTAssertEqual(action(1).keyHint, "Press 1 to pick · ⌘↩ to send")
+        XCTAssertEqual(action(1).keyHint, "Press 1–2 to pick · ⌘↩ to send")
+        XCTAssertEqual(action(8).keyHint, "Press 1–9 to pick · ⌘↩ to send")
         XCTAssertEqual(action(12).keyHint, "Press 1–9 to pick · ⌘↩ to send")
         XCTAssertEqual(action(3).optionIndex(forKey: "2"), 1)
         XCTAssertEqual(action(3).optionIndex(forKey: "3"), 2)
-        XCTAssertNil(action(3).optionIndex(forKey: "4"))
+        // The number after the last option picks the write-in.
+        XCTAssertEqual(action(3).optionIndex(forKey: "4"), action(3).writeInIndex)
+        XCTAssertNil(action(3).optionIndex(forKey: "5"))
         XCTAssertNil(action(3).optionIndex(forKey: "0"))
         XCTAssertNil(action(3).optionIndex(forKey: "a"))
         XCTAssertNil(action(0).optionIndex(forKey: "1"))
