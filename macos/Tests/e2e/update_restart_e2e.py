@@ -589,6 +589,14 @@ class Instance:
     def alerts(self):
         return (self.status() or {}).get("alerts", [])
 
+    def wait_for_handoff(self, app_pid):
+        """Waits for the app this script launched to quit for the update helper.
+
+        Polling `alive` reaps it: until then it is a zombie, which the helper takes for a running app and waits on.
+        """
+        wait_for("the app to hand the update over and quit", lambda: not alive(app_pid), 180)
+        self.app_process = None
+
     def quit(self):
         """Chooses Quit Symphony and waits for the app and its Symphony to exit."""
         status = self.status()
@@ -1011,6 +1019,7 @@ def scenario_automatic_update(instance):
         raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
 
     # No press: the app starts Symphony, sees it idle and installs N+1, which checks its health and starts Symphony.
+    instance.wait_for_handoff(first["pid"])
     new = wait_for(
         f"build {BUILD_N1} to install itself and relaunch",
         lambda: (s := instance.status()) and s["pid"] != first["pid"] and s["build"] == BUILD_N1 and s,
@@ -1057,6 +1066,7 @@ def scenario_automatic_rollback(instance):
         raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
 
     # N installs N+1 by itself; N+1's symphony check fails, and the helper puts N back and opens it.
+    instance.wait_for_handoff(first["pid"])
     v, v1 = version(BUILD_N), version(BUILD_N1)
     title = f"Symphony rolled back to v{v}"
     restored = wait_for(
