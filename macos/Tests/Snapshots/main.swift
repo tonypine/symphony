@@ -32,7 +32,31 @@ func mention(_ key: String) -> Mention {
 /// TP-892 at `width`: the Inbox's narrow pane, or a 1200 pt window's.
 @MainActor
 func review(width: CGFloat, picks: DecisionPicks = DecisionPicks()) -> some View {
+    review(item, width: width, picks: picks)
+}
+
+/// Another item of the fixture's review, by its ticket: the plan, the pull request, the clarify or the blocked one.
+@MainActor
+func review(_ identifier: String) -> some View {
+    guard let other = inbox.items.first(where: { $0.identifier == identifier }) else { fatalError("\(identifier) is missing from \(fixture.path)") }
+    return review(other, width: 640)
+}
+
+@MainActor
+func review(_ item: InboxItem, width: CGFloat, picks: DecisionPicks = DecisionPicks()) -> some View {
     InboxReviewBody(item: item, picks: picks, perform: { _ in })
+        .frame(width: width)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// TP-892's ticket page (D3), its brief and earlier decisions from its Inbox item, in a 1200 pt window beside the
+/// sidebar.
+@MainActor
+func ticketPage() -> some View {
+    let state = try? Data(contentsOf: fixture.deletingLastPathComponent().appendingPathComponent("state.json"))
+    let page = TicketPage(identifier: "TP-892", sources: TicketPage.Sources(state: state), timeZone: TimeZone(identifier: "UTC")!)
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return TicketPageBody(page: page, brief: TicketPage.Brief(identifier: "TP-892", items: inbox.items), actions: TicketPageActions(), width: width)
         .frame(width: width)
         .background(DesignTokens.Surface.content.color)
 }
@@ -43,6 +67,40 @@ func review(width: CGFloat, picks: DecisionPicks = DecisionPicks()) -> some View
 func popover(_ key: String) -> some View {
     ReferencePopoverView(popover: ReferencePopover(mention(key)))
         .background(DesignTokens.Surface.window.color)
+}
+
+/// A peek page (N4) as the inspector shows it, 340 pt wide: TP-891 as Symphony tracks it (its endpoint answers), or a
+/// pull request.
+@MainActor
+func peekPage(_ key: String) -> some View {
+    let api = fixture.deletingLastPathComponent()
+    let entry = PeekEntry(mention(key))
+    let content: PeekContent = if case let .ticket(ticket) = entry.reference {
+        .ticket(TicketPeek(
+            ticket, references: item.references,
+            sources: PeekSources(
+                inbox: inbox.items,
+                state: try? Data(contentsOf: api.appendingPathComponent("state.json")),
+                issue: try? Data(contentsOf: api.appendingPathComponent("\(key).json"))
+            ),
+            now: ISO8601DateFormatter().date(from: "2026-10-07T14:20:00Z") ?? Date()
+        ))
+    } else {
+        .other(ReferencePopover(key: key, kind: entry.kind, reference: entry.reference))
+    }
+    return PeekPage(entry: entry, content: content, scrolls: false)
+        .frame(width: PeekPresentation.idealInspectorWidth)
+}
+
+/// The walkthrough's moment: option 3 picked, and the TP-891 peek beside the review, which keeps the pick.
+@MainActor
+func peekBesideReview() -> some View {
+    HStack(alignment: .top, spacing: 0) {
+        review(width: 660, picks: DecisionPicks(picks: [0: 2]))
+        Divider()
+        peekPage("TP-891")
+    }
+    .background(DesignTokens.Surface.window.color)
 }
 
 @MainActor
@@ -71,5 +129,14 @@ MainActor.assumeIsolated {
         render(popover("TP-891"), scheme, to: "ticket-popover-\(suffix).png")
         render(popover("#448"), scheme, to: "pr-popover-\(suffix).png")
         render(popover("TP-999"), scheme, to: "missing-popover-\(suffix).png")
+        // The peek (TP-956): a ticket Symphony tracks, a pull request, and the ticket beside the decision.
+        render(peekPage("TP-891"), scheme, to: "peek-ticket-\(suffix).png")
+        render(peekPage("#448"), scheme, to: "peek-pr-\(suffix).png")
+        render(peekBesideReview(), scheme, to: "peek-beside-review-\(suffix).png")
+        // The same chips in the other reviews and on the ticket page (TP-988).
+        for (identifier, name) in [("TP-923", "plan"), ("TP-895", "pr"), ("TP-896", "clarify"), ("TP-897", "blocked")] {
+            render(review(identifier), scheme, to: "\(name)-chips-\(suffix).png")
+        }
+        render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
     }
 }

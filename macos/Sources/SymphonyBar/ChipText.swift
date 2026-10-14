@@ -10,10 +10,16 @@ extension EnvironmentValues {
         set { self[MentionReferencesKey.self] = newValue }
     }
 
-    /// A click on a chip: the ticket's page (D3), or the pull request on GitHub.
+    /// A click on a chip: its peek (N4) on the decision screen.
     var openMention: OpenMentionAction {
         get { self[OpenMentionKey.self] }
         set { self[OpenMentionKey.self] = newValue }
+    }
+
+    /// ⌘-click or ⌘Return on a chip: the ticket's page (D3), or the pull request on GitHub; nil opens it as a click.
+    var openMentionDirectly: OpenMentionAction? {
+        get { self[OpenMentionDirectlyKey.self] }
+        set { self[OpenMentionDirectlyKey.self] = newValue }
     }
 }
 
@@ -23,6 +29,10 @@ private struct MentionReferencesKey: EnvironmentKey {
 
 private struct OpenMentionKey: EnvironmentKey {
     static let defaultValue = OpenMentionAction { _ in }
+}
+
+private struct OpenMentionDirectlyKey: EnvironmentKey {
+    static let defaultValue: OpenMentionAction? = nil
 }
 
 /// What a click on a chip opens, as `OpenURLAction` is for a link.
@@ -48,30 +58,56 @@ struct ChipText: View {
     @Environment(\.offscreenSnapshot) private var rendersImage
 
     var body: some View {
-        let content = ChipTextContent(text, references: references, lead: lead)
-        let style = ChipTextStyle(font: font, color: color, selectable: selectable)
-        // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
-        let baseline = ChipTextView.baseline(of: font)
-        Group {
-            if rendersImage {
-                ChipTextImage(content: content, style: style)
-            } else {
-                ChipTextRepresentable(content: content, style: style)
-                    // In a control (an option card) the control reads for its text.
-                    .accessibilityHidden(!selectable)
+        if let content = ChipTextContent.chips(text, references: references, lead: lead) {
+            let style = ChipTextStyle(font: font, color: color, selectable: selectable)
+            // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
+            let baseline = ChipTextView.baseline(of: font)
+            Group {
+                if rendersImage {
+                    ChipTextImage(content: content, style: style)
+                } else {
+                    ChipTextRepresentable(content: content, style: style)
+                        // In a control (an option card) the control reads for its text.
+                        .accessibilityHidden(!selectable)
+                }
             }
+            .alignmentGuide(.firstTextBaseline) { _ in baseline.ascent }
+            .alignmentGuide(.lastTextBaseline) { dimensions in dimensions.height - baseline.descent }
+        } else {
+            PlainText(text: text, lead: lead, font: font, color: color, selectable: selectable)
         }
-        .alignmentGuide(.firstTextBaseline) { _ in baseline.ascent }
-        .alignmentGuide(.lastTextBaseline) { dimensions in dimensions.height - baseline.descent }
     }
 
-    /// What a click on a chip opens until the peek (TP-956) and the pull request page (TP-961): a ticket Symphony
-    /// sees opens its page, anything else its link.
+    /// What ⌘-click on a chip opens, past the peek, until the pull request page (TP-961): a ticket Symphony sees opens
+    /// its page, anything else its link.
     static func open(_ mention: Mention, openTicket: (String) -> Void, openURL: (URL) -> Void) {
         if mention.kind == .ticket, !mention.isMissing {
             openTicket(mention.key)
         } else if let url = mention.reference.url {
             openURL(url)
+        }
+    }
+}
+
+/// A paragraph without `references`, as the Inbox drew it before chips: a wrapping `Text`, its lead bold.
+private struct PlainText: View {
+    let text: String
+    let lead: String?
+    let font: NSFont
+    let color: NSColor
+    let selectable: Bool
+
+    var body: some View {
+        let words = lead.map { Text("\(Text($0).bold()) \(text)") } ?? Text(text)
+        let paragraph = words
+            .font(Font(font as CTFont))
+            .foregroundStyle(Color(nsColor: color))
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+        if selectable {
+            paragraph.textSelection(.enabled)
+        } else {
+            paragraph
         }
     }
 }
@@ -106,6 +142,7 @@ private struct ChipTextRepresentable: NSViewRepresentable {
         view.openURL = { openURL($0) }
         let openMention = context.environment.openMention
         view.openMention = { openMention($0) }
+        view.openMentionDirectly = context.environment.openMentionDirectly.map { direct in { direct($0) } }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: ChipTextView, context: Context) -> CGSize? {

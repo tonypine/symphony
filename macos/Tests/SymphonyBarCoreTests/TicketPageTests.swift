@@ -355,7 +355,77 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(statusCode, 404)
     }
 
+    // MARK: - What the Inbox says about it
+
+    func testADecisionsPageShowsItsSummaryQuestionStoryAndEarlierDecisions() throws {
+        let items = try decisionItems()
+        let brief = try XCTUnwrap(TicketPage.Brief(identifier: "TP-892", items: items))
+        let action = try XCTUnwrap(items[1].review.action)
+        XCTAssertEqual(brief.title, "Your decision")
+        XCTAssertEqual(brief.summary, "PR open, sent back by Code Review twice over old wording.")
+        XCTAssertEqual(brief.paragraphs, [try XCTUnwrap(action.question)] + action.whyParagraphs)
+        XCTAssertTrue(brief.paragraphs[1].hasPrefix("Code Review sent #448 back twice."))
+        XCTAssertEqual(brief.decisions.map(\.answer), ["Remove it with the rest, in TP-880"])
+        XCTAssertEqual(brief.references, items[1].references)
+    }
+
+    func testEachOtherKindsPageShowsItsBriefFoundOrReason() throws {
+        let items = try decisionItems()
+        let plan = try XCTUnwrap(TicketPage.Brief(identifier: "TP-923", items: items))
+        XCTAssertEqual(plan.title, "Review brief")
+        XCTAssertEqual(plan.paragraphs, ["TP-947: agents write decisions in your words, with trade-offs and what waits."])
+        XCTAssertEqual(plan.summary, "The plan to redesign the Inbox decision screen, in ten sub-tickets.")
+
+        let pr = try XCTUnwrap(TicketPage.Brief(identifier: "TP-895", items: items))
+        XCTAssertEqual(pr.title, "Review brief")
+        XCTAssertEqual(pr.paragraphs, [
+            "PR #451",
+            "PR #451 counts each time Code Review sends a pull request back; #448 reads 2, as TP-892's popover shows.",
+            "Rebased on #448, so the two no longer touch the same lines.",
+        ])
+
+        let clarify = try XCTUnwrap(TicketPage.Brief(identifier: "TP-896", items: items))
+        XCTAssertEqual(clarify.title, "What the quality gate found")
+        XCTAssertEqual(clarify.paragraphs.count, 3)
+        XCTAssertEqual(clarify.paragraphs.last, "Did it start with #448, or before?")
+
+        let blocked = try XCTUnwrap(TicketPage.Brief(identifier: "TP-897", items: items))
+        XCTAssertEqual(blocked.title, "Why it is blocked")
+        XCTAssertEqual(blocked.paragraphs, ["The GitHub token can't comment on #448, so TP-897 can't post TP-892's QA screenshots there."])
+        XCTAssertTrue(blocked.decisions.isEmpty)
+
+        XCTAssertNil(TicketPage.Brief(identifier: "TP-999", items: items), "a ticket the Inbox doesn't hold has no brief")
+    }
+
+    func testABriefThatSaysNothingFallsBackToTheAsk() throws {
+        let raw = InboxItem(id: "r", identifier: "TP-1", kind: .pr, ask: "Review it", review: InboxReview(brief: .raw("First TP-2.\n\n  \n\nThen #3.")))
+        XCTAssertEqual(TicketPage.Brief(identifier: "TP-1", items: [raw])?.paragraphs, ["First TP-2.", "Then #3."])
+        XCTAssertNil(TicketPage.Brief(identifier: "TP-1", items: [raw])?.summary, "the item doesn't resolve itself")
+
+        let empty = InboxItem(id: "e", identifier: "TP-1", kind: .plan, ask: "The plan", review: InboxReview(brief: .raw("\n\n")))
+        XCTAssertEqual(TicketPage.Brief(identifier: "TP-1", items: [empty])?.paragraphs, ["The plan"])
+        let none = InboxItem(id: "n", identifier: "TP-1", kind: .pr, ask: "Merge it")
+        XCTAssertEqual(TicketPage.Brief(identifier: "TP-1", items: [none])?.paragraphs, ["Merge it"])
+        let older = InboxItem(id: "o", identifier: "TP-1", kind: .action, ask: "Add the key", review: InboxReview(
+            action: InboxReview.Action(title: "Add the key", steps: ["Add it"], options: [])
+        ))
+        let action = try XCTUnwrap(TicketPage.Brief(identifier: "TP-1", items: [older]))
+        XCTAssertEqual(action.title, "Action")
+        XCTAssertEqual(action.paragraphs, ["Add the key"])
+        let blocked = InboxItem(id: "b", identifier: "TP-1", kind: .blocked, ask: "The run reported a block")
+        XCTAssertEqual(TicketPage.Brief(identifier: "TP-1", items: [blocked])?.paragraphs, ["The run reported a block"])
+        let clarify = InboxItem(id: "c", identifier: "TP-1", kind: .clarify, ask: "Answer the gate")
+        XCTAssertEqual(TicketPage.Brief(identifier: "TP-1", items: [clarify])?.paragraphs, ["Answer the gate"])
+    }
+
     // MARK: - Helpers
+
+    /// The `inbox-decision` fixture's items: the plan TP-923, TP-892's decision, TP-895's pull request, TP-896's
+    /// clarify and TP-897's block.
+    private func decisionItems() throws -> [InboxItem] {
+        let url = fixture().deletingLastPathComponent().appendingPathComponent("inbox-decision/api/v1/inbox.json")
+        return try XCTUnwrap(InboxPayload.decode(Data(contentsOf: url))?.items)
+    }
 
     private func fixture() -> URL {
         URL(fileURLWithPath: #filePath)

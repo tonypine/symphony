@@ -68,7 +68,9 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked, each row with
   identifier, title, one-line ask and age. The review: header with kind, wait and state badges; the brief's headline;
   **What to review** (the plan's Linear documents and HTML); **Decisions needed** as radio groups with the recommended
-  option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker.
+  option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker. Every ticket and pull
+  request the ask, What to review, What changed, the decisions and the moves mention is a chip (N1) with its popover,
+  as on D2c; a line that is only a link stays a link. An item without `references` shows its text as plain text.
 - **Actions:** **Approve Plan…** (prominent), **Send Decisions** (enabled when a pick changes; posts one comment, which
   starts Symphony's plan revision run), **Open in Linear**, ⋯ **Send to Rework…**.
 - **States:** a scope that hides items says "2 more in other repos". (The final verification item and its
@@ -92,7 +94,8 @@ later journeys point back to it. The mock draws every screen under its ID.
 #### D2b · Inbox: a pull request to approve
 
 - **Shows:** the PR's purpose in one sentence; **Checks**: CI, Code Review (the review agent's verdict and reasons), QA
-  (with its report); **Change**: files and lines, the largest files; **QA screenshots**.
+  (with its report); **Change**: files and lines, the largest files; **QA screenshots**. The brief's mentions are
+  chips (N1), as on D2a.
 - **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub. Both
   moves answer the PR's decision request through `decide`: Approve and Merge picks the option that moves the ticket
   to the state its hold carries (`Merging`), and Send to Rework redirects it. Symphony has no PR move of its own.
@@ -116,8 +119,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   request the question, What happened and the options mention is a chip (N1) inside the sentence, its short name
   joined when the text gives one ("TP-891 · Remove the retired review states"); resting the pointer on it for half a
   second opens its popover (N2 for a ticket, N3 for a PR, "Symphony can't see TP-999." for one Symphony couldn't
-  read), and a click opens the ticket page or the PR on GitHub. The text wraps, selects and copies like any Mac text
-  (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
+  read), and a click opens its peek (N4, below); ⌘-click or ⌘Return opens the ticket page or the PR on GitHub. The
+  text wraps, selects and copies like any Mac text (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
   and dark, are in `macos/Tests/Snapshots`. The banner at the bottom is the Undo after D12d.
 - **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
   option with that number while the list or the review has the keyboard; a click on a card picks it.
@@ -133,11 +136,26 @@ later journeys point back to it. The mock draws every screen under its ID.
   (C16) have no write-in: the plan's Change move already takes free text. The picked write-in's offscreen snapshots, light and
   dark, are in `macos/Tests/Snapshots` (`make snapshots` renders them again).
 - **Data:** the open human-action requests (section 2), with each item's `references` for the chips.
+- **N4 · Peek:** a click on a chip (or Return on a focused one) opens what it names in the window's inspector column,
+  320–400 pt wide, beside the review; the decision, its pick, the write-in's words and the review's scroll position
+  stay as they were, and stay when the peek closes. The peek is a stack of pages inside the inspector: a chip inside
+  it pushes that ticket or PR, its back arrow and ⌘[ pop, Esc, its close button or the toolbar's inspector toggle (⌥⌘I) close it, and
+  the toggle shows the same pages again. A **ticket** shows N2's head (identifier · repo, stage, title, summary); when
+  Symphony tracks it (it waits on you, the state lists it, or `/api/v1/:issue_identifier` answers) **Now** (its stage
+  and for how long, what it waits on, its PR as a chip), **Connected** (its parent with the sub-tickets' progress
+  strip, N10; sub-tickets, blocked by, blocks, related) and its latest review brief's headline; one Symphony doesn't
+  track shows only the reference's facts (Part of, Work, Waiting on). Then **Open Ticket Page** (D3, pushed in the
+  window, ⌘[ returns to the decision) and **Open in Linear**. A **pull request** shows N3's head and figures and
+  **Open on GitHub**; a mention Symphony can't see says so, with its link. Connected comes from the Inbox's
+  `context` of a ticket that waits on you, `/api/v1/initiatives` (a plan's sub-tickets, a sub-ticket's parent and
+  blockers) and the reference's parent. When the review would be under 560 pt beside the inspector (a 1200 pt
+  window's Inbox leaves it about 260 pt), the peek is a sheet over the window instead. The ticket peek, the PR peek and the peek beside the review are offscreen snapshots,
+  light and dark, in `macos/Tests/Snapshots` (`peek-ticket`, `peek-pr`, `peek-beside-review`).
 
 #### D2d · Inbox: a ticket to clarify
 
 - **Shows:** a ticket the quality gate held or skipped: its score and round, each thing it found, the ticket as
-  written, what happens next.
+  written, what happens next. The mentions in what it found and its questions are chips (N1), as on D2a.
 - **Actions:** **Edit in Linear**.
 - **Data:** `awaiting_clarification` and `skipped` in `/api/v1/state` (they exist today).
 
@@ -148,7 +166,8 @@ later journeys point back to it. The mock draws every screen under its ID.
 #### D2f · Inbox: a blocked ticket
 
 - **Shows:** a ticket an access or dispatch-loop hold pauses in place: why it is blocked (the reason the hold
-  recorded; for a loop, the run kind, the count, the window and how the last runs ended) and what clears it.
+  recorded; for a loop, the run kind, the count, the window and how the last runs ended) and what clears it. The
+  mentions in both are chips (N1), as on D2a.
 - **Actions:** **Unblock…** (prominent), **Open in Linear**, and **Restart…** under ⋯. The sheet asks "Unblock SHOP-360?", says the ticket
   keeps its state and continues from where it stopped, and the banner afterwards says "Hold cleared" with no Undo
   (nothing moved).
@@ -210,14 +229,19 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **Shows:** header with repo, initiative and badges; **Now** (run, model and effort, running time, turn, last
   activity, workspace with Reveal, tokens against the per-ticket cap); **Timeline** of every run and event (C14);
   **Ticket** facts (state, type, initiative, PR, gate verdict, forced); the agent's last message; links (Linear,
-  transcript, audit records).
+  transcript, audit records). While the Inbox holds the ticket, its Symphony summary under the header, its latest
+  brief (the plan's or PR's What to review and What changed, a decision's question and story, what the quality gate
+  found, or why it is blocked) and **Earlier decisions** with their answers come from its Inbox item, and their
+  mentions, and the last message's, are chips (N1). The Inbox snapshots of D2a, D2b, D2d and D2f and TP-892's page,
+  light and dark, are in `macos/Tests/Snapshots`.
 - **Actions:** View Transcript, Open in Linear, **Stop Run…**; ⋯ Copy API URL, Show Audit Records, Reveal Worktree,
   Force / Stop Forcing.
 - **States:** working, waiting (says on what: you, CI, a blocker, a slot, a retry at a time), in review (gate and QA
   results), done (PR and when it merged).
 - **Conventions:** opens from any row with Return or a double-click, ⌘[ goes back; a single click shows the same facts
   in the inspector (D6).
-- **Data:** `/api/v1/:issue_identifier`, `run_history`, `/api/v1/runs`.
+- **Data:** `/api/v1/:issue_identifier`, `run_history`, `/api/v1/runs`; the brief, earlier decisions and `references`
+  from the ticket's `/api/v1/inbox` item.
 
 #### D4 · Run transcript
 

@@ -230,10 +230,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard window?.isKeyWindow == true else { return false }
         switch menuItem.action {
-        case #selector(goBack(_:)): return model?.history.canGoBack ?? false
+        case #selector(goBack(_:)): return model?.canGoBack ?? false
         case #selector(goForward(_:)): return model?.history.canGoForward ?? false
         case #selector(toggleInspector(_:)):
-            menuItem.title = model?.inspectorShown == true ? "Hide Inspector" : "Show Inspector"
+            menuItem.title = model?.inspectorTitle ?? "Show Inspector"
             return model?.hasInspector ?? false
         case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
         case #selector(searchTickets(_:)):
