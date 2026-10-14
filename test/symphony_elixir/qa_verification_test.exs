@@ -371,6 +371,33 @@ defmodule SymphonyElixir.QaVerificationTest do
                Handoff.signals(@repo_key, @issue_id)
     end
 
+    # TP-834: the retired Auto Review decided from a snapshot taken at the start of a CI poll, so a
+    # verdict that landed inside the window started a second full pass on the same head. A dispatch
+    # whose issue snapshot still reads `QA` after the pass was stored must not run the agent again:
+    # the run reads the head's verdicts itself, just before it would start one.
+    test "a dispatch whose snapshot predates the pass on its head starts no second QA run" do
+      {workspace, head} = git_workspace!()
+      stale_snapshot = issue("QA")
+
+      assert :ok = run(workspace, [])
+      assert_received {:qa_agent_run, %{sha: ^head}, _settings}
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+
+      assert :ok =
+               QaVerification.run(stale_snapshot, workspace,
+                 settings: settings!(),
+                 repo_key: @repo_key,
+                 qa_policy: RunPolicy,
+                 qa_agent: FakeQaAgent
+               )
+
+      refute_received {:qa_agent_run, _, _}
+      assert [%{kind: "qa", head_sha: ^head, outcome: "pass"}] = verdicts()
+
+      assert [%{name: "qa", details: %{signal: "qa_pass", carried: true}} | _] =
+               Handoff.signals(@repo_key, @issue_id)
+    end
+
     test "a fail verdict carries the report and the ticket to Rework" do
       {workspace, head} = git_workspace!()
 

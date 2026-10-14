@@ -975,6 +975,7 @@ make          # builds an ad-hoc-signed build/Symphony.app
 make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
+make snapshots  # renders the views in Tests/Snapshots offscreen (no window) and rewrites their PNGs
 make clean    # removes build/ and .build/
 make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```

@@ -13,6 +13,9 @@ public struct OptionCard: Equatable, Identifiable {
     public var tradeoffs: [InboxReview.Action.Tradeoff]
     /// Why we recommend it, on the recommended card only.
     public var reason: String?
+    /// True on the write-in (N11), the last card of a request the Inbox answers: picked, it takes the Director's own
+    /// words.
+    public var isWriteIn: Bool
 
     public var id: Int { number }
     /// The option's index in its decision: what a pick records.
@@ -25,7 +28,8 @@ public struct OptionCard: Equatable, Identifiable {
         effect: String? = nil,
         recommended: Bool = false,
         tradeoffs: [InboxReview.Action.Tradeoff] = [],
-        reason: String? = nil
+        reason: String? = nil,
+        isWriteIn: Bool = false
     ) {
         self.number = number
         self.count = count
@@ -34,17 +38,25 @@ public struct OptionCard: Equatable, Identifiable {
         self.recommended = recommended
         self.tradeoffs = tradeoffs
         self.reason = reason
+        self.isWriteIn = isWriteIn
     }
 
     /// The line on the recommended card: "Why we recommend it:" and the reason.
     public static let reasonLead = "Why we recommend it:"
 
-    /// The cards of a request's options, the recommendation's reason on the recommended one.
-    public static func cards(for action: InboxReview.Action) -> [OptionCard] {
-        action.options.enumerated().map { index, option in
+    /// N11's label, the line under it, and the hint under its field.
+    public static let writeInLabel = "Answer in my own words…"
+    public static let writeInEffect = "Tell the agent what to do instead."
+    public static let writeInHint = "The agent reads this as your answer. Name tickets by their number; they become links."
+
+    /// The cards of a request's options, the recommendation's reason on the recommended one; with `writeIn` (a request
+    /// the Inbox answers), the write-in after them, its number the one after the last option.
+    public static func cards(for action: InboxReview.Action, writeIn: Bool = false) -> [OptionCard] {
+        let count = action.options.count + (writeIn && !action.options.isEmpty ? 1 : 0)
+        let options = action.options.enumerated().map { index, option in
             OptionCard(
                 number: index + 1,
-                count: action.options.count,
+                count: count,
                 label: option.label,
                 effect: option.effect,
                 recommended: option.recommended,
@@ -52,6 +64,8 @@ public struct OptionCard: Equatable, Identifiable {
                 reason: option.recommended ? action.recommendationReason : nil
             )
         }
+        guard count > action.options.count else { return options }
+        return options + [OptionCard(number: count, count: count, label: writeInLabel, effect: writeInEffect, isWriteIn: true)]
     }
 
     /// The cards of a plan's decision: a brief gives labels only, and its recommendation line is the reason.
