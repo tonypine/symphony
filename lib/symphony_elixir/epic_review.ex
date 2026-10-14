@@ -549,7 +549,8 @@ defmodule SymphonyElixir.EpicReview do
 
   defp create_follow_up(gap, blocked_by, %{issue: issue} = context, opts) do
     attrs = %{"title" => gap.title, "description" => gap.description, "blocked_by" => blocked_by}
-    create = fn -> AgentTools.Linear.create_subissue_in_state(context, @gap_state, attrs, linear_opts(opts)) end
+    linear_context = %{issue: issue, comment_registry: context.comment_registry}
+    create = fn -> AgentTools.Linear.create_subissue_in_state(linear_context, @gap_state, attrs, linear_opts(opts)) end
 
     case with_linear_retry(create, "filing an epic review follow-up for #{issue.identifier}", opts) do
       {:ok, response} ->
