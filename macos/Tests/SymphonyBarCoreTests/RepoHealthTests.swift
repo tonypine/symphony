@@ -149,7 +149,7 @@ final class RepoHealthTests: XCTestCase {
     func testAPendingWorkflowTakesThePlaceOfMissing() {
         let pr = URL(string: "https://github.com/acme/app/pull/12")!
         XCTAssertEqual(
-            health(repo(workflow: .init(state: .missing)), pending: .pullRequest(pr)).problems,
+            health(repo(workflow: .init(state: .missing)), pending: .pullRequest(url: pr.absoluteString)).problems,
             [
                 .init(
                     id: "workflow",
@@ -161,7 +161,7 @@ final class RepoHealthTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            health(repo(workflow: .init(state: .missing)), pending: .written(path: "/Projects/app/WORKFLOW.md")).problems,
+            health(repo(workflow: .init(state: .missing)), pending: .localFile(path: "/Projects/app/WORKFLOW.md")).problems,
             [
                 .init(
                     id: "workflow",
@@ -306,7 +306,7 @@ final class RepoHealthTests: XCTestCase {
 
     func testAPendingWorkflowShowsWhileNothingIsChecked() {
         let pr = URL(string: "https://github.com/acme/app/pull/12")!
-        let health = RepoHealth.notChecked(status: .starting, poll: nil, pending: .pullRequest(pr), baseBranch: "trunk")
+        let health = RepoHealth.notChecked(status: .starting, poll: nil, pending: .pullRequest(url: pr.absoluteString), baseBranch: "trunk")
 
         XCTAssertEqual(health.status, .notChecked)
         XCTAssertEqual(health.summary, "Not checked: Symphony is starting")

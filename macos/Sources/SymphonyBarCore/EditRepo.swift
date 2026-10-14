@@ -62,6 +62,7 @@ public enum EditRepo {
             case let .failure(problem)?:
                 return .failure(problem)
             case let .success(checkout)?:
+                if !checkout.hasWorkflow { return .failure(checkout.missingWorkflowProblem) }
                 entry.workflow = checkout.workflowPath
                 entry.workspace = RepositoryWorkspace(strategy: "worktree", repo: checkout.path, fetchBeforeDispatch: fetch)
             }
