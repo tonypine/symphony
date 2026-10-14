@@ -130,9 +130,16 @@ public struct InboxItem: Equatable, Identifiable {
     /// The row's age: "3 h 12 min"; nil when unknown.
     public var age: String? { waitingSeconds.map(Overview.duration) }
 
+    /// True for a request that offers options to answer with: it reads "Decision" (DD-7). An older hand-written
+    /// request with steps stays an action.
+    public var isDecision: Bool { kind == .action && review.action?.options.isEmpty == false }
+
+    /// The kind in the review's badge and the row's VoiceOver label: "Decision" for a request with options.
+    public var kindWord: String { isDecision ? "Decision" : kind.word }
+
     /// What VoiceOver reads for the row, as one element: "SHOP-330, Gift card checkout, plan, 3 hours 12 minutes".
     public var accessibilityLabel: String {
-        [identifier, title, kind.word.lowercased(), waitingSeconds.map(Overview.spokenDuration)]
+        [identifier, title, kindWord.lowercased(), waitingSeconds.map(Overview.spokenDuration)]
             .compactMap { $0 }
             .joined(separator: ", ")
     }
@@ -288,10 +295,68 @@ public struct InboxReview: Equatable {
         public struct Tradeoff: Equatable {
             public enum Kind: String, Equatable {
                 case good, cost, risk
+
+                /// The word VoiceOver reads before the tag's text.
+                public var word: String {
+                    switch self {
+                    case .good: "Good"
+                    case .cost: "Cost"
+                    case .risk: "Risk"
+                    }
+                }
+
+                /// The tag's symbol (N8): its shape tells the kind apart without the color.
+                public var symbol: String {
+                    switch self {
+                    case .good: "checkmark.circle"
+                    case .cost: "exclamationmark.triangle"
+                    case .risk: "xmark.circle"
+                    }
+                }
+
+                /// The status color the symbol takes.
+                public var status: DesignTokens.Status {
+                    switch self {
+                    case .good: .done
+                    case .cost: .you
+                    case .risk: .problem
+                    }
+                }
             }
 
             public var kind: Kind
             public var text: String
+        }
+
+        /// The why as the What happened card tells it (N6): its paragraphs, split on blank lines, at most two.
+        public var whyParagraphs: [String] {
+            var paragraphs: [String] = []
+            var lines: [String] = []
+            for line in (why ?? "").components(separatedBy: .newlines) + [""] {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty {
+                    lines.append(trimmed)
+                } else if !lines.isEmpty {
+                    paragraphs.append(lines.joined(separator: "\n"))
+                    lines = []
+                }
+            }
+            return Array(paragraphs.prefix(2))
+        }
+
+        /// The Options card's hint: "Press 1–3 to pick · ⌘↩ to send"; nil without options.
+        public var keyHint: String? {
+            switch options.count {
+            case 0: nil
+            case 1: "Press 1 to pick · ⌘↩ to send"
+            default: "Press 1–\(min(options.count, 9)) to pick · ⌘↩ to send"
+            }
+        }
+
+        /// The option a number key picks: "2" picks the second; nil for any other key, or a number past the last.
+        public func optionIndex(forKey key: Character) -> Int? {
+            guard let number = key.wholeNumberValue, number >= 1, number <= min(options.count, 9) else { return nil }
+            return number - 1
         }
 
         /// The request as one decision (C16), so the Inbox's picks answer it: its question and its options, the
@@ -543,8 +608,10 @@ public struct InboxList: Equatable {
     public struct Group: Equatable, Identifiable {
         public var kind: InboxItem.Kind
         public var items: [InboxItem]
-        public var id: String { kind.rawValue }
-        public var title: String { kind.groupTitle }
+        /// True for the requests with options, listed apart from the older actions with steps (DD-7).
+        public var decisions = false
+        public var id: String { decisions ? "decision" : kind.rawValue }
+        public var title: String { decisions ? "Decisions" : kind.groupTitle }
     }
 
     public static let emptyTitle = "Nothing waits on you."
@@ -558,13 +625,17 @@ public struct InboxList: Equatable {
 
     public init(items: [InboxItem], scope: OverviewScope = .all) {
         let shown = items.filter { scope.includes($0.repoKey) }
-        groups = InboxItem.Kind.allCases.compactMap { kind in
+        groups = InboxItem.Kind.allCases.flatMap { kind in
             let inKind = shown.enumerated()
                 .filter { $0.element.kind == kind }
                 // Oldest first; an item whose wait is unknown goes last, in Symphony's order.
                 .sorted { ($0.element.waitingSeconds ?? -1, -$0.offset) > ($1.element.waitingSeconds ?? -1, -$1.offset) }
                 .map(\.element)
-            return inKind.isEmpty ? nil : Group(kind: kind, items: inKind)
+            // Decisions come before the older actions with steps, each under its own heading.
+            return [
+                Group(kind: kind, items: inKind.filter(\.isDecision), decisions: true),
+                Group(kind: kind, items: inKind.filter { !$0.isDecision }),
+            ].filter { !$0.items.isEmpty }
         }
         hiddenCount = items.count - shown.count
         totalCount = items.count

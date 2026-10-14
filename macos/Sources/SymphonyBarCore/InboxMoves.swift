@@ -128,6 +128,30 @@ extension InboxReview.Action {
         guard let confirm else { return nil }
         return options.first { $0.effect?.localizedCaseInsensitiveContains("moves to \(confirm)") == true }
     }
+
+    /// The index of the option Send Decision sends: the Director's pick, else the recommended one; nil when none is
+    /// picked.
+    public func pickedIndex(_ picks: DecisionPicks) -> Int? {
+        guard let decision, let index = picks.pick(0, in: decision), options.indices.contains(index) else { return nil }
+        return index
+    }
+
+    /// The option Send Decision sends, nil when none is picked.
+    public func pickedOption(_ picks: DecisionPicks) -> Option? {
+        pickedIndex(picks).map { options[$0] }
+    }
+}
+
+extension InboxItem {
+    /// True when the item carries a request the Inbox answers: its options are picked, and Send Decision sends one.
+    public var answerable: Bool { review.action?.commentID != nil && review.action?.decision != nil }
+
+    /// The option a number key picks in the item's request; nil for another key, or a request the Inbox doesn't
+    /// answer.
+    public func optionIndex(forKey key: Character) -> Int? {
+        guard kind == .action, answerable else { return nil }
+        return review.action?.optionIndex(forKey: key)
+    }
 }
 
 extension InboxReview {
@@ -193,6 +217,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
 
     public var id: String { "\(itemID):\(move.rawValue)" }
     public var verb: String { move.verb }
+    /// Whether the sheet lists the picks it posts: Send Decision names its one pick in the title instead.
+    public var listsPicks: Bool { !picks.isEmpty && move != .decide }
     /// Send to Rework and Restart use the destructive style.
     public var isDestructive: Bool { move == .sendToRework || move == .restart }
     /// Send to Rework and Restart can't be sent without a reason.
@@ -260,7 +286,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             happens = "Closes \(id)'s open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
             stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
         case .decide:
-            title = "Send your decision on \(id)?"
+            // The sheet names the pick and what it does (D12d): `Send "Leave it to TP-891"?` and the option's effect.
+            let picked = item.review.action?.pickedOption(picks)
+            title = picked.map { "Send \"\($0.label)\"?" } ?? "Send your decision on \(id)?"
             self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
             // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
             if let confirm = item.review.action?.confirm {
@@ -269,8 +297,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
             } else {
                 targetState = nil
-                happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
-                stays = "The ticket doesn't move: the decision is what it was waiting on."
+                happens = picked?.effect
+                    ?? "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label."
+                stays = "\(id) stays in \(item.state ?? "its phase") until its next run picks up your answer."
             }
         case .unblock:
             title = "Unblock \(id)?"
