@@ -32,7 +32,31 @@ func mention(_ key: String) -> Mention {
 /// TP-892 at `width`: the Inbox's narrow pane, or a 1200 pt window's.
 @MainActor
 func review(width: CGFloat, picks: DecisionPicks = DecisionPicks()) -> some View {
+    review(item, width: width, picks: picks)
+}
+
+/// Another item of the fixture's review, by its ticket: the plan, the pull request, the clarify or the blocked one.
+@MainActor
+func review(_ identifier: String) -> some View {
+    guard let other = inbox.items.first(where: { $0.identifier == identifier }) else { fatalError("\(identifier) is missing from \(fixture.path)") }
+    return review(other, width: 640)
+}
+
+@MainActor
+func review(_ item: InboxItem, width: CGFloat, picks: DecisionPicks = DecisionPicks()) -> some View {
     InboxReviewBody(item: item, picks: picks, perform: { _ in })
+        .frame(width: width)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// TP-892's ticket page (D3), its brief and earlier decisions from its Inbox item, in a 1200 pt window beside the
+/// sidebar.
+@MainActor
+func ticketPage() -> some View {
+    let state = try? Data(contentsOf: fixture.deletingLastPathComponent().appendingPathComponent("state.json"))
+    let page = TicketPage(identifier: "TP-892", sources: TicketPage.Sources(state: state), timeZone: TimeZone(identifier: "UTC")!)
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return TicketPageBody(page: page, brief: TicketPage.Brief(identifier: "TP-892", items: inbox.items), actions: TicketPageActions(), width: width)
         .frame(width: width)
         .background(DesignTokens.Surface.content.color)
 }
@@ -71,5 +95,10 @@ MainActor.assumeIsolated {
         render(popover("TP-891"), scheme, to: "ticket-popover-\(suffix).png")
         render(popover("#448"), scheme, to: "pr-popover-\(suffix).png")
         render(popover("TP-999"), scheme, to: "missing-popover-\(suffix).png")
+        // The same chips in the other reviews and on the ticket page (TP-988).
+        for (identifier, name) in [("TP-923", "plan"), ("TP-895", "pr"), ("TP-896", "clarify"), ("TP-897", "blocked")] {
+            render(review(identifier), scheme, to: "\(name)-chips-\(suffix).png")
+        }
+        render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
     }
 }

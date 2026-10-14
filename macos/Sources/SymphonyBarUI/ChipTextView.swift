@@ -23,6 +23,12 @@ public struct ChipTextContent: Equatable {
             return mention
         }
     }
+
+    /// The content of a text whose item resolved its mentions; nil when it has no `references` (an older Symphony, or
+    /// a ticket page whose ticket isn't in the Inbox), so the text is drawn as plain text, as it was before chips.
+    public static func chips(_ text: String, references: [String: Reference], lead: String? = nil) -> ChipTextContent? {
+        references.isEmpty ? nil : ChipTextContent(text, references: references, lead: lead)
+    }
 }
 
 /// How a `ChipTextView` draws its text.

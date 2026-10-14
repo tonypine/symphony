@@ -740,3 +740,63 @@ private extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
+
+// MARK: - What the Inbox says about the ticket
+
+extension TicketPage {
+    /// What the ticket page shows from the ticket's Inbox item (D3), the API's ticket having none of it: its summary,
+    /// its latest review brief and the decisions answered on it, each ticket and pull request they mention a chip
+    /// (N1) read from the item's `references`.
+    public struct Brief: Equatable {
+        /// The brief's card: "Review brief", "Your decision", "Action", "What the quality gate found" or "Why it is
+        /// blocked".
+        public var title: String
+        /// The ticket's Symphony status line, from its own reference; nil when the item doesn't resolve itself.
+        public var summary: String?
+        public var paragraphs: [String]
+        /// Requests on the ticket a person answered, newest first.
+        public var decisions: [TicketContext.EarlierDecision]
+        public var references: [String: Reference]
+
+        /// The brief of the first of `items` about ticket `identifier`; nil when the Inbox holds none.
+        public init?(identifier: String, items: [InboxItem]) {
+            guard let item = items.first(where: { $0.identifier == identifier }) else { return nil }
+            let review = item.review
+            switch item.kind {
+            case .plan, .pr:
+                title = "Review brief"
+                paragraphs = Self.paragraphs(of: review.brief) ?? [item.ask]
+            case .action:
+                title = item.isDecision ? "Your decision" : "Action"
+                paragraphs = [review.action?.question].compactMap { $0 } + (review.action?.whyParagraphs ?? [])
+            case .clarify:
+                title = "What the quality gate found"
+                paragraphs = [review.clarify?.found].compactMap { $0 } + (review.clarify?.questions ?? [])
+            case .blocked:
+                title = "Why it is blocked"
+                paragraphs = [review.blocked?.reason].compactMap { $0 }
+            }
+            if paragraphs.isEmpty { paragraphs = [item.ask] }
+            if case let .ticket(ticket)? = item.references[identifier] { summary = ticket.summary }
+            decisions = item.context?.earlierDecisions ?? []
+            references = item.references
+        }
+
+        /// A brief's What to review and What changed lines, or its paragraphs when it didn't parse; nil when it says
+        /// nothing.
+        static func paragraphs(of brief: InboxReview.Brief?) -> [String]? {
+            let paragraphs: [String]
+            switch brief {
+            case let .parsed(parsed):
+                paragraphs = parsed.whatToReview.map(\.text) + parsed.whatChanged
+            case let .raw(markdown):
+                paragraphs = markdown.components(separatedBy: "\n\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            case nil:
+                paragraphs = []
+            }
+            return paragraphs.isEmpty ? nil : paragraphs
+        }
+    }
+}

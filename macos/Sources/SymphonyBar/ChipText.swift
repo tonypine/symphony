@@ -48,21 +48,24 @@ struct ChipText: View {
     @Environment(\.offscreenSnapshot) private var rendersImage
 
     var body: some View {
-        let content = ChipTextContent(text, references: references, lead: lead)
-        let style = ChipTextStyle(font: font, color: color, selectable: selectable)
-        // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
-        let baseline = ChipTextView.baseline(of: font)
-        Group {
-            if rendersImage {
-                ChipTextImage(content: content, style: style)
-            } else {
-                ChipTextRepresentable(content: content, style: style)
-                    // In a control (an option card) the control reads for its text.
-                    .accessibilityHidden(!selectable)
+        if let content = ChipTextContent.chips(text, references: references, lead: lead) {
+            let style = ChipTextStyle(font: font, color: color, selectable: selectable)
+            // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
+            let baseline = ChipTextView.baseline(of: font)
+            Group {
+                if rendersImage {
+                    ChipTextImage(content: content, style: style)
+                } else {
+                    ChipTextRepresentable(content: content, style: style)
+                        // In a control (an option card) the control reads for its text.
+                        .accessibilityHidden(!selectable)
+                }
             }
+            .alignmentGuide(.firstTextBaseline) { _ in baseline.ascent }
+            .alignmentGuide(.lastTextBaseline) { dimensions in dimensions.height - baseline.descent }
+        } else {
+            PlainText(text: text, lead: lead, font: font, color: color, selectable: selectable)
         }
-        .alignmentGuide(.firstTextBaseline) { _ in baseline.ascent }
-        .alignmentGuide(.lastTextBaseline) { dimensions in dimensions.height - baseline.descent }
     }
 
     /// What a click on a chip opens until the peek (TP-956) and the pull request page (TP-961): a ticket Symphony
@@ -72,6 +75,29 @@ struct ChipText: View {
             openTicket(mention.key)
         } else if let url = mention.reference.url {
             openURL(url)
+        }
+    }
+}
+
+/// A paragraph without `references`, as the Inbox drew it before chips: a wrapping `Text`, its lead bold.
+private struct PlainText: View {
+    let text: String
+    let lead: String?
+    let font: NSFont
+    let color: NSColor
+    let selectable: Bool
+
+    var body: some View {
+        let words = lead.map { Text("\(Text($0).bold()) \(text)") } ?? Text(text)
+        let paragraph = words
+            .font(Font(font as CTFont))
+            .foregroundStyle(Color(nsColor: color))
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+        if selectable {
+            paragraph.textSelection(.enabled)
+        } else {
+            paragraph
         }
     }
 }
