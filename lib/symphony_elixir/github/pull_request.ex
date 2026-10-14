@@ -100,6 +100,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           url: String.t() | nil,
           title: String.t() | nil,
           head_sha: String.t() | nil,
+          head_branch: String.t() | nil,
           files: [String.t()]
         }
 
@@ -325,7 +326,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   query($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {
       pullRequests(states: OPEN, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes { number url title headRefOid files(first: 100) { nodes { path } } }
+        nodes { number url title headRefOid headRefName files(first: 100) { nodes { path } } }
       }
     }
   }
@@ -333,17 +334,36 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   @doc """
   The open pull requests of the repository `pr_url` belongs to, in one GraphQL query: the 100
-  most recently updated, each with its first 100 changed paths.
+  most recently updated, each with its head branch and its first 100 changed paths.
   """
   @spec list_open_pull_requests(String.t(), keyword()) :: {:ok, [open_pull_request()]} | {:error, term()}
   def list_open_pull_requests(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
-    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
-         args = github_api_args(host, "graphql") ++ ["-f", "query=#{@open_pull_requests_query}", "-f", "owner=#{owner}", "-f", "name=#{repo}"],
-         {:ok, output} <- run_gh(args, opts),
+    case parse_github_pr_url(pr_url, opts) do
+      {:ok, host, owner, repo, _number} -> query_open_pull_requests(host, owner, repo, opts)
+      :error -> {:error, :invalid_pr_url}
+    end
+  end
+
+  @doc """
+  `list_open_pull_requests/2` for the GitHub repository `repo` (`owner/repo`, or
+  `host/owner/repo` off github.com), when no pull request of it is known.
+  """
+  @spec list_repo_open_pull_requests(String.t(), keyword()) :: {:ok, [open_pull_request()]} | {:error, term()}
+  def list_repo_open_pull_requests(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
+    case String.split(repo, "/") do
+      [owner, name] -> query_open_pull_requests("github.com", owner, name, opts)
+      [host, owner, name] -> query_open_pull_requests(host, owner, name, opts)
+      _other -> {:error, :invalid_github_repo}
+    end
+  end
+
+  defp query_open_pull_requests(host, owner, repo, opts) do
+    args = github_api_args(host, "graphql") ++ ["-f", "query=#{@open_pull_requests_query}", "-f", "owner=#{owner}", "-f", "name=#{repo}"]
+
+    with {:ok, output} <- run_gh(args, opts),
          {:ok, %{"data" => %{"repository" => %{"pullRequests" => %{"nodes" => nodes}}}}} when is_list(nodes) <- Jason.decode(output) do
       {:ok, nodes |> Enum.filter(&is_map/1) |> Enum.map(&normalize_open_pull_request/1)}
     else
-      :error -> {:error, :invalid_pr_url}
       {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_open_pull_requests_payload, error.data}}
       {:error, reason} -> {:error, reason}
       {:ok, _decoded} -> {:error, :invalid_open_pull_requests_payload}
@@ -358,6 +378,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       url: node["url"],
       title: node["title"],
       head_sha: node["headRefOid"],
+      head_branch: node["headRefName"],
       files: if(is_list(files), do: for(%{"path" => path} when is_binary(path) <- files, do: path), else: [])
     }
   end
