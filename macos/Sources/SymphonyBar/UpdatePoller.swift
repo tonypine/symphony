@@ -44,7 +44,13 @@ final class UpdatePoller {
 
     /// Shows the release notes in an alert with scrollable text, with a button that opens the release page. A
     /// `message`, as after a rollback, shows above the notes, with a button that opens the README's rollback steps.
+    /// Scripted QA mode records the window, `message` above the notes, instead of showing it.
     static func showReleaseNotes(_ release: Release, message: String? = nil) {
+        if let script = QAScriptDriver.shared {
+            let text = [message, release.notes].compactMap { $0 }.joined(separator: "\n\n")
+            script.record(alertTitle: UpdateMenu.releaseNotesHeading(release), message: text)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = UpdateMenu.releaseNotesHeading(release)
         alert.addButton(withTitle: UpdateMenu.openReleasePageTitle)
