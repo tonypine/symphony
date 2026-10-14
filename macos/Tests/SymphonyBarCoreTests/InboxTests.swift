@@ -59,9 +59,9 @@ final class InboxTests: XCTestCase {
         }
 
         guard case let .ticket(ticket)? = decision.references["TP-891"] else { return XCTFail("TP-891 isn't a ticket") }
-        XCTAssertEqual(ticket.title, "Remove the retired review states")
-        XCTAssertEqual(ticket.state, "In Progress")
-        XCTAssertEqual(ticket.parent?.identifier, "TP-870")
+        XCTAssertEqual(ticket.title, "Remove the retired review states and the version switch from the code")
+        XCTAssertEqual(ticket.state, "Code Review")
+        XCTAssertEqual(ticket.parent?.identifier, "TP-880")
         XCTAssertEqual(ticket.pullRequest, .init(number: 446, url: URL(string: "https://github.com/tonypine/symphony/pull/446"), checks: .pending))
         XCTAssertNil(ticket.waitingOn)
         guard case let .ticket(blocked)? = decision.references["TP-893"] else { return XCTFail("TP-893 isn't a ticket") }
@@ -71,7 +71,7 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(pr.number, 448)
         XCTAssertEqual(pr.reviewState, .changesRequested)
         XCTAssertEqual(pr.reviewRounds, 2)
-        XCTAssertEqual([pr.files, pr.additions, pr.deletions], [14, 120, 610])
+        XCTAssertEqual([pr.files, pr.additions, pr.deletions], [14, 120, 486])
         XCTAssertEqual(pr.checks, .passed)
         XCTAssertEqual(pr.ticket, "TP-892")
         XCTAssertEqual(decision.references["#448"]?.url?.absoluteString, "https://github.com/tonypine/symphony/pull/448")
@@ -86,7 +86,7 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(context.pullRequest?.checks, .passed)
         XCTAssertEqual(context.blocks.map(\.identifier), ["TP-893"])
         XCTAssertEqual(context.related.map(\.identifier), ["TP-891"])
-        XCTAssertEqual(context.related.first?.state, "In Progress")
+        XCTAssertEqual(context.related.first?.state, "Code Review")
         XCTAssertTrue(context.blockedBy.isEmpty)
         XCTAssertEqual(context.earlierDecisions.count, 1)
         XCTAssertEqual(context.earlierDecisions.first?.at, ISO8601DateFormatter().date(from: "2026-10-07T05:48:00Z"))
