@@ -4,7 +4,6 @@ defmodule SymphonyElixir.RestartTest do
   alias SymphonyElixir.{Restart, TicketPullRequest}
 
   @pr_url "https://github.com/acme/widgets/pull/41"
-  @other_pr_url "https://github.com/acme/widgets/pull/42"
 
   defmodule FakeGitHub do
     def fetch_activity(pr_url, _opts) do
@@ -29,11 +28,17 @@ defmodule SymphonyElixir.RestartTest do
     def remove_issue_workspaces_checked(_issue), do: raise("workspace store is down")
   end
 
+  # The ticket; `pr_url:` routes it to `repo-a`, where Symphony's record holds that PR open.
   defp issue(fields) do
-    struct(
-      %Issue{id: "issue-restart", identifier: "MT-RESTART", title: "Restart me", state: "Rework"},
-      fields
-    )
+    {pr_url, fields} = Keyword.pop(fields, :pr_url)
+    issue = struct(%Issue{id: "issue-restart", identifier: "MT-RESTART", title: "Restart me", state: "Rework"}, fields)
+
+    if pr_url do
+      :ok = TicketPullRequest.record_created("repo-a", issue.id, pr_url, "auto/MT-RESTART")
+      %{issue | repo_key: "repo-a"}
+    else
+      issue
+    end
   end
 
   defp opts(extra \\ []) do
@@ -58,28 +63,15 @@ defmodule SymphonyElixir.RestartTest do
     test "closes the ticket's open pull request, removes the workspace, then supersedes the workpad" do
       Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
 
-      assert :ok = Restart.perform(issue(pr_urls: [@pr_url]), opts())
+      assert :ok = Restart.perform(issue(pr_url: @pr_url), opts())
 
       assert_received {:fetch_activity, @pr_url}
       assert_received {:close, @pr_url}
       assert_received {:remove_workspaces, "MT-RESTART"}
     end
 
-    test "closes every open pull request on the ticket" do
-      Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
-
-      assert :ok = Restart.perform(issue(pr_urls: [@pr_url, @other_pr_url]), opts())
-
-      assert_received {:fetch_activity, @pr_url}
-      assert_received {:close, @pr_url}
-      assert_received {:fetch_activity, @other_pr_url}
-      assert_received {:close, @other_pr_url}
-    end
-
     test "a ticket with no pull request at all still resets" do
-      for pr_urls <- [nil, []] do
-        assert :ok = Restart.perform(issue(pr_urls: pr_urls), opts())
-      end
+      assert :ok = Restart.perform(issue([]), opts())
 
       refute_received {:close, _pr_url}
       assert_received {:remove_workspaces, "MT-RESTART"}
@@ -89,13 +81,13 @@ defmodule SymphonyElixir.RestartTest do
       for state <- ["CLOSED", "closed", "MERGED", nil, 5] do
         Application.put_env(:symphony_elixir, :restart_test_activity, activity(state: state))
 
-        assert :ok = Restart.perform(issue(pr_urls: [@pr_url]), opts())
+        assert :ok = Restart.perform(issue(pr_url: @pr_url), opts())
         assert_received {:fetch_activity, @pr_url}
         refute_received {:close, _pr_url}
       end
     end
 
-    test "closes the pull request Symphony recorded for the ticket when its attachments show none" do
+    test "closes the pull request Symphony recorded for the ticket" do
       :ok = RunStore.clear()
       Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
       :ok = TicketPullRequest.record_created("repo-a", "issue-restart", @pr_url, "auto/MT-RESTART")
@@ -111,7 +103,7 @@ defmodule SymphonyElixir.RestartTest do
         :ok = TicketPullRequest.record_created("repo-a", "issue-restart", @pr_url, "auto/MT-RESTART")
         :ok = TicketPullRequest.mark_finished("repo-a", @pr_url, state)
 
-        assert :ok = Restart.perform(issue(repo_key: "repo-a", pr_urls: [@pr_url]), opts())
+        assert :ok = Restart.perform(issue(repo_key: "repo-a"), opts())
         refute_received {:fetch_activity, _pr_url}
       end
     end
@@ -119,7 +111,7 @@ defmodule SymphonyElixir.RestartTest do
     test "a pull request GitHub cannot read stops the reset before the workspace is touched" do
       Application.put_env(:symphony_elixir, :restart_test_activity, {:error, :gh_down})
 
-      assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: [@pr_url]), opts())
+      assert {:error, {:restart, message}} = Restart.perform(issue(pr_url: @pr_url), opts())
 
       assert message == "couldn't read #{@pr_url} (:gh_down)"
       refute_received {:remove_workspaces, _identifier}
@@ -129,7 +121,7 @@ defmodule SymphonyElixir.RestartTest do
       Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
       Application.put_env(:symphony_elixir, :restart_test_close, {:error, :forbidden})
 
-      assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: [@pr_url]), opts())
+      assert {:error, {:restart, message}} = Restart.perform(issue(pr_url: @pr_url), opts())
 
       assert message == "GitHub refused to close #{@pr_url} (:forbidden)"
       refute_received {:remove_workspaces, _identifier}
@@ -139,7 +131,7 @@ defmodule SymphonyElixir.RestartTest do
       Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
       Application.put_env(:symphony_elixir, :restart_test_workspace, {:error, :busy})
 
-      assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: [@pr_url]), opts())
+      assert {:error, {:restart, message}} = Restart.perform(issue(pr_url: @pr_url), opts())
 
       assert message == "couldn't remove the workspace of MT-RESTART ({:error, :busy})"
     end
@@ -148,7 +140,7 @@ defmodule SymphonyElixir.RestartTest do
       Application.put_env(:symphony_elixir, :restart_test_activity, activity([]))
 
       assert {:error, {:restart, message}} =
-               Restart.perform(issue(pr_urls: [@pr_url]), opts(workspace: RaisingWorkspace))
+               Restart.perform(issue(pr_url: @pr_url), opts(workspace: RaisingWorkspace))
 
       assert message == "couldn't remove the workspace of MT-RESTART (workspace store is down)"
     end
@@ -178,7 +170,7 @@ defmodule SymphonyElixir.RestartTest do
         ]
 
         capture_log(fn ->
-          assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: []), opts)
+          assert {:error, {:restart, message}} = Restart.perform(issue([]), opts)
           assert message =~ "couldn't remove the workspace of MT-RESTART"
           assert message =~ "workspace_outside_root"
         end)
@@ -200,7 +192,7 @@ defmodule SymphonyElixir.RestartTest do
           linear_client: fn _query, _variables, _opts -> {:error, :comment_failed} end
         )
 
-      assert {:error, {:restart, message}} = Restart.perform(issue(pr_urls: [@pr_url]), opts)
+      assert {:error, {:restart, message}} = Restart.perform(issue(pr_url: @pr_url), opts)
 
       assert message =~ "couldn't supersede the workpad of MT-RESTART"
     end
@@ -238,7 +230,7 @@ defmodule SymphonyElixir.RestartTest do
 
       assert :ok =
                Restart.perform(
-                 issue(pr_urls: [@pr_url]),
+                 issue(pr_url: @pr_url),
                  opts(settings: linear_settings(), linear_client: linear_client)
                )
 
@@ -261,7 +253,7 @@ defmodule SymphonyElixir.RestartTest do
 
       assert :ok =
                Restart.perform(
-                 issue(pr_urls: [@pr_url]),
+                 issue(pr_url: @pr_url),
                  opts(settings: linear_settings(), linear_client: linear_client)
                )
 

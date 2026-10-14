@@ -183,8 +183,6 @@ Fields:
 - `branch_name` (string or null)
   - Tracker-provided branch metadata if available.
 - `url` (string or null)
-- `pull_request_url` (string or null)
-- `pr_urls` (list of strings)
 - `assignee_id` (string or null)
 - `repo_key` (string or null)
   - Matched Symphony repo route name. Conflict rows use `null`.
@@ -412,12 +410,11 @@ Who writes it, and when it changes:
 Reading it: consumers ask `SymphonyElixir.TicketPullRequest.current_url/1` (or `current_urls/1`
 for the readers that walk every PR). It answers the `open` record's URL, and none once that PR
 closed or merged: a closed or merged PR is not the ticket's in-flight PR. A PR run's issue answers
-its own PR. A lane that serves one repo passes its repo key (`current_url/2`), so an issue read
-without its repo is looked up under that repo. While ticket reads still carry tracker attachments,
-a ticket with no record falls back to the issue's attachment-derived `pull_request_url` / `pr_urls`.
+its own PR, from its PR context (`pr.url`). A lane that serves one repo passes its repo key (`current_url/2`), so an issue read
+without its repo is looked up under that repo. The record is the only source of a ticket's PR: ticket
+reads carry no tracker attachments (Section 11.2), so a ticket with no record has no PR.
 
-The CI, review and merge lanes take a ticket's PR from this record and never read the issue's
-`pull_request_url` / `pr_urls` themselves:
+The CI, review and merge lanes take a ticket's PR from this record:
 
 - the CI poller and the PR review poller discover the PR to watch from it, and the PR review poller
   rebuilds a ticket it cannot read from its own record without a PR of its own;
@@ -2270,18 +2267,11 @@ The poller:
 
 - discovers issues in the Code Review, QA and `Rework` states (and `Merging` with auto-merge on)
   with a PR, read from Symphony's ticket pull request record (Section 4.1.10), so a PR the agent
-  just opened is seen on the next poll without waiting for the tracker's attachment; a `closed` or
-  `merged` record means the ticket has no PR to watch. A ticket with no record falls back to its
-  attached GitHub PR URLs (attachments whose Linear metadata
-  reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
-  reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
-  issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
-  attachment and many others, such as QA screenshots, do not hide the PR; a rate limit, transport
-  failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
-  as they retry the first page, rather than seeing the issue without its PR). An issue the CI poller
-  watches a PR for logs a warning naming the issue when Symphony's record holds no open PR for it,
-  and an agent run whose issue had a PR at dispatch logs one when the record no longer shows an open
-  PR;
+  just opened is seen on the next poll; a `closed` or `merged` record, or none, means the ticket has
+  no PR to watch, so a reopened issue whose PR was closed runs the normal pre-PR flow. An issue the
+  CI poller watches a PR for logs a warning naming the issue when Symphony's record holds no open PR
+  for it, and an agent run whose issue had a PR at dispatch logs one when the record no longer shows
+  an open PR;
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
@@ -3990,6 +3980,11 @@ Linear-specific requirements for `issues.provider == "linear"`:
   issues that no longer match `issues.linear.assignee`, with normalized `assigned_to_worker=false`, so
   reassignment can stop active workers.
 - Issue-state refresh query uses GraphQL issue IDs with variable type `[ID!]`
+- Ticket reads (the candidate poll, the refresh by id and the read by identifier) MUST NOT request
+  the issue's `attachments`, and no follow-up query pages through them: a ticket's PR comes only from
+  Symphony's ticket pull request record (Section 4.1.10). Linear's own GitHub integration keeps
+  showing the PR to people. The Inbox, its references, the agent's Linear tools and the pull request
+  page read attachments for their own purposes; they are not ticket reads.
 - Pagination REQUIRED for candidate issues
 - Page size default: `50`
 - Network timeout: `30000 ms`

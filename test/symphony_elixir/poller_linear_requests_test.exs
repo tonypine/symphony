@@ -4,7 +4,8 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   # key's hourly budget stays flat as watched issues and repositories grow.
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiPoller, PrReviewPoller}
+  alias SymphonyElixir.{CiPoller, PrReviewPoller, TicketPullRequest}
+  alias SymphonyElixir.Linear.Usage
 
   @repo_key "default"
 
@@ -22,6 +23,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       %{"query" => query, "variables" => variables} = Jason.decode!(body)
       [operation] = Regex.run(~r/(?:query|mutation)\s+(\w+)/, query, capture: :all_but_first)
       send(Keyword.fetch!(opts, :recipient), {:linear_request, operation})
+      send(Keyword.fetch!(opts, :recipient), {:linear_query, operation, query})
 
       conn
       |> put_resp_content_type("application/json")
@@ -122,6 +124,10 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       # steady-state budget stays flat as watched issues grow.
       assert {:ok, %{processed: unquote(watched)}} = CiPoller.poll_once(github: GreenGitHub, now: DateTime.add(@now, 1, :minute))
       assert linear_requests() == %{"SymphonyLinearPoll" => 2}
+
+      # Ticket reads carry no attachments: each watched ticket's PR comes from Symphony's record,
+      # and no attachment page is read, so none shows in `linear_usage`.
+      refute_ticket_reads_request_attachments()
     end
 
     test "the PR review poller sends one Linear read per repository and poll with #{watched} watched issues" do
@@ -136,6 +142,24 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
                PrReviewPoller.poll_once(github: GreenGitHub, current_gh_user: nil, now: DateTime.add(@now, 1, :minute))
 
       assert linear_requests() == %{"SymphonyLinearPoll" => 2}
+      refute_ticket_reads_request_attachments()
+    end
+  end
+
+  defp refute_ticket_reads_request_attachments do
+    queries = linear_queries()
+    assert queries != []
+    refute Enum.any?(queries, fn {_operation, query} -> query =~ "attachments" end)
+    recorded = Enum.map(Usage.snapshot().queries, & &1.query)
+    assert "SymphonyLinearPoll" in recorded
+    refute "SymphonyLinearIssueAttachments" in recorded
+  end
+
+  defp linear_queries(acc \\ []) do
+    receive do
+      {:linear_query, operation, query} -> linear_queries([{operation, query} | acc])
+    after
+      0 -> acc
     end
   end
 
@@ -184,14 +208,13 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       "url" => "https://linear.test/TEAM-#{index}",
       "assignee" => %{"id" => "viewer-1"},
       "labels" => %{"nodes" => []},
-      "attachments" => %{
-        "nodes" => [%{"title" => "PR", "url" => "https://github.com/example/repo/pull/#{index}", "sourceType" => "github", "metadata" => %{}}]
-      },
       "inverseRelations" => %{"nodes" => []}
     }
   end
 
   defp put_run(index) do
+    :ok = TicketPullRequest.record_created(@repo_key, "issue-#{index}", "https://github.com/example/repo/pull/#{index}", "auto/TEAM-#{index}")
+
     :ok =
       RunStore.put_run(%{
         repo_key: @repo_key,

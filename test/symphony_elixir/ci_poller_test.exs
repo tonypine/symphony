@@ -12,6 +12,7 @@ defmodule SymphonyElixir.CiPollerTest do
   @endpoint SymphonyElixirWeb.Endpoint
 
   @repo_key "default"
+  @in_review_pr "https://github.com/example/repo/pull/2401"
 
   defmodule FakeTracker do
     alias SymphonyElixir.Linear.Issue
@@ -342,6 +343,7 @@ defmodule SymphonyElixir.CiPollerTest do
     )
 
     Application.put_env(:symphony_elixir, :ci_test_recipient, self())
+    :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", @in_review_pr, "feature/fix-ci")
     {:ok, audit_dir: audit_root}
   end
 
@@ -733,8 +735,8 @@ defmodule SymphonyElixir.CiPollerTest do
   test "an issue whose record no longer holds an open PR is named in a warning; one that never had a PR is not" do
     now = ~U[2026-05-06 09:00:00Z]
     pr_url = "https://github.com/example/repo/pull/2401"
-    issue = %{in_review_issue() | pr_urls: []}
-    verification = %Issue{id: "issue-2402", identifier: "ACME-2402", title: "Final verification", state: "Code Review", pr_urls: []}
+    issue = in_review_issue()
+    verification = %Issue{id: "issue-2402", identifier: "ACME-2402", title: "Final verification", state: "Code Review"}
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue, verification])
     Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
     :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
@@ -759,10 +761,10 @@ defmodule SymphonyElixir.CiPollerTest do
     refute log =~ "ACME-2402"
   end
 
-  test "polls the PR Symphony recorded for a ticket whose attachments show none, also after a run store restart" do
+  test "polls the PR Symphony recorded for a ticket, also after a run store restart" do
     now = ~U[2026-05-06 09:00:00Z]
     pr_url = "https://github.com/example/repo/pull/2401"
-    issue = %{in_review_issue() | pr_urls: []}
+    issue = in_review_issue()
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
     :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "auto/ACME-2401")
@@ -776,10 +778,10 @@ defmodule SymphonyElixir.CiPollerTest do
     assert [%{issue_id: "issue-2401", pr_url: ^pr_url}] = RunStore.list_ci_checks(@repo_key)
   end
 
-  test "a ticket whose recorded PR closed or merged has no PR to poll, whatever its attachments show" do
+  test "a ticket whose recorded PR closed or merged has no PR to poll" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = in_review_issue()
-    [pr_url] = issue.pr_urls
+    pr_url = @in_review_pr
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
     put_run(issue, now)
@@ -1233,7 +1235,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 3,
@@ -1289,7 +1291,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "rerun_requested",
                ci_retry_count: 0,
@@ -1317,7 +1319,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "watching",
                ci_retry_count: 0,
@@ -1411,9 +1413,10 @@ defmodule SymphonyElixir.CiPollerTest do
       in_review_issue()
       | id: "issue-pin-84",
         identifier: "PIN4WOO-84",
-        url: "https://linear.test/PIN4WOO-84",
-        pr_urls: ["https://github.com/woocommerce/pinterest-for-woocommerce/pull/1185"]
+        url: "https://linear.test/PIN4WOO-84"
     }
+
+    :ok = TicketPullRequest.record_created("secondary", "issue-pin-84", "https://github.com/woocommerce/pinterest-for-woocommerce/pull/1185", nil)
 
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_statuses, [failed_status("abc123"), failed_status("abc123")])
@@ -1476,7 +1479,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "rerun_requested",
                ci_retry_count: 0,
@@ -1506,7 +1509,7 @@ defmodule SymphonyElixir.CiPollerTest do
       issue_id: issue.id,
       issue_identifier: issue.identifier,
       issue_url: issue.url,
-      pr_url: List.first(issue.pr_urls),
+      pr_url: ticket_pr(issue),
       workspace_path: "/tmp/workspaces/ACME-2401",
       status: "rerun_requested",
       ci_retry_count: 0,
@@ -1544,7 +1547,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 1,
@@ -1587,7 +1590,7 @@ defmodule SymphonyElixir.CiPollerTest do
                repo_key: @repo_key,
                issue_id: issue.id,
                issue_identifier: issue.identifier,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 1,
@@ -1632,7 +1635,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 1,
@@ -1679,7 +1682,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 2,
@@ -1718,7 +1721,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 2,
@@ -1774,9 +1777,10 @@ defmodule SymphonyElixir.CiPollerTest do
       issue_a
       | id: "issue-2402",
         identifier: "ACME-2402",
-        url: "https://linear.test/ACME-2402",
-        pr_urls: ["https://github.com/example/repo/pull/2402"]
+        url: "https://linear.test/ACME-2402"
     }
+
+    :ok = TicketPullRequest.record_created(@repo_key, "issue-2402", "https://github.com/example/repo/pull/2402", nil)
 
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue_a, issue_b])
     Application.put_env(:symphony_elixir, :ci_test_status, green_status("def456"))
@@ -1804,7 +1808,7 @@ defmodule SymphonyElixir.CiPollerTest do
                  issue_id: issue.id,
                  issue_identifier: issue.identifier,
                  issue_url: issue.url,
-                 pr_url: List.first(issue.pr_urls),
+                 pr_url: ticket_pr(issue),
                  workspace_path: "/tmp/workspaces/#{issue.identifier}",
                  status: "dispatch_requested",
                  ci_retry_count: 2,
@@ -1840,7 +1844,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 2,
@@ -1854,7 +1858,7 @@ defmodule SymphonyElixir.CiPollerTest do
                repo_key: @repo_key,
                issue_id: issue.id,
                issue_identifier: issue.identifier,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "rework_transition_pending",
                pending_reviewer_comments: [%{id: "comment-1", body: "Please adjust."}],
@@ -1877,7 +1881,7 @@ defmodule SymphonyElixir.CiPollerTest do
                repo_key: @repo_key,
                issue_id: issue.id,
                issue_identifier: issue.identifier,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "rework_requested",
                pending_reviewer_comments: [],
@@ -1910,7 +1914,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "rerun_requested",
                consecutive_errors: 2,
@@ -2023,7 +2027,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "rerun_requested",
                ci_retry_count: 0,
@@ -2101,7 +2105,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "escalated",
                ci_retry_count: 2,
@@ -2143,7 +2147,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "escalate_transition_pending",
                ci_retry_count: 2,
@@ -2191,7 +2195,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 1,
@@ -2228,7 +2232,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 1,
@@ -2267,7 +2271,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "dispatch_requested",
                ci_retry_count: 1,
@@ -2305,7 +2309,7 @@ defmodule SymphonyElixir.CiPollerTest do
                issue_id: issue.id,
                issue_identifier: issue.identifier,
                issue_url: issue.url,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "escalated",
                ci_retry_count: 3,
@@ -2782,6 +2786,16 @@ defmodule SymphonyElixir.CiPollerTest do
     %{green_status() | checks: [%{name: "specs", status: "IN_PROGRESS", conclusion: nil, run_id: "987"}]}
   end
 
+  # The PR Symphony's record holds for the ticket, whatever its state.
+  defp ticket_pr(%Issue{id: issue_id}) do
+    Enum.find_value([@repo_key, "secondary"], fn repo_key ->
+      case TicketPullRequest.get(repo_key, issue_id) do
+        %{pr_url: pr_url} -> pr_url
+        _none -> nil
+      end
+    end)
+  end
+
   defp in_review_issue do
     %Issue{
       id: "issue-2401",
@@ -2789,7 +2803,6 @@ defmodule SymphonyElixir.CiPollerTest do
       title: "Handle CI",
       state: "Code Review",
       url: "https://linear.test/ACME-2401",
-      pr_urls: ["https://github.com/example/repo/pull/2401"],
       labels: []
     }
   end
@@ -2864,7 +2877,7 @@ defmodule SymphonyElixir.CiPollerTest do
                repo_key: @repo_key,
                issue_id: issue.id,
                issue_identifier: issue.identifier,
-               pr_url: List.first(issue.pr_urls),
+               pr_url: ticket_pr(issue),
                workspace_path: "/tmp/workspaces/ACME-2401",
                status: "watching",
                pending_reviewer_comments: [%{id: "comment-1", body: "Please adjust."}],

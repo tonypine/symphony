@@ -459,10 +459,10 @@ defmodule SymphonyElixir.PrReviewPollerTest do
            ] = RunStore.list_pr_reviews()
   end
 
-  test "discovers the PR Symphony recorded for a ticket whose attachments show none" do
+  test "discovers the PR Symphony recorded for a ticket" do
     now = ~U[2026-05-01 09:00:00Z]
     pr_url = "https://github.com/example/repo/pull/1780"
-    issue = %{in_review_issue(updated_at: now, state: "Code Review") | pr_urls: []}
+    issue = in_review_issue(updated_at: now, state: "Code Review", pr_url: nil)
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
     :ok = TicketPullRequest.record_created(@repo_key, issue.id, pr_url, "auto/ACME-1780")
@@ -474,10 +474,10 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [%{issue_id: "issue-1780", pr_url: ^pr_url, status: "watching"}] = RunStore.list_pr_reviews()
   end
 
-  test "a ticket whose recorded PR closed or merged has no PR to review, whatever its attachments show" do
+  test "a ticket whose recorded PR closed or merged has no PR to review" do
     now = ~U[2026-05-01 09:00:00Z]
     issue = in_review_issue(updated_at: now, state: "Code Review")
-    [pr_url] = issue.pr_urls
+    pr_url = "https://github.com/example/repo/pull/1780"
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
     :ok = put_finished_run(issue, now)
@@ -566,6 +566,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         id: "issue-pin-84",
         identifier: "PIN4WOO-84",
         pr_url: "https://github.com/woocommerce/pinterest-for-woocommerce/pull/1185",
+        repo_key: "secondary",
         updated_at: now,
         state: "Code Review"
       )
@@ -4641,10 +4642,10 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       description: "Poll PR state",
       state: Keyword.get(opts, :state, "In Progress"),
       url: "https://linear.app/example/issue/#{identifier}",
-      pr_urls: [pr_url],
       comments: Keyword.get(opts, :comments, []),
       updated_at: updated_at
     }
+    |> tap(&if(pr_url, do: :ok = TicketPullRequest.record_created(Keyword.get(opts, :repo_key, @repo_key), &1.id, pr_url, nil)))
   end
 
   defp review_run(%Issue{} = issue, workspace_path, now, attrs \\ %{}) do

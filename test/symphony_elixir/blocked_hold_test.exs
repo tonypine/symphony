@@ -45,6 +45,12 @@ defmodule SymphonyElixir.BlockedHoldTest do
     :ok
   end
 
+  # Symphony's record shows the ticket's PR merged.
+  defp record_merged(%Issue{id: issue_id}, pr_url) do
+    :ok = SymphonyElixir.TicketPullRequest.record_created(@repo_key, issue_id, pr_url, nil)
+    :ok = SymphonyElixir.TicketPullRequest.mark_finished(@repo_key, pr_url, "merged")
+  end
+
   defp designed_settings do
     assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
     settings
@@ -343,8 +349,9 @@ defmodule SymphonyElixir.BlockedHoldTest do
 
     defp build(sha \\ @build_sha), do: %{version: "0.0.1.200", sha: sha, repo: "https://github.com/acme/symphony"}
 
-    defp merged_fix(attrs \\ %{}) do
-      fix = struct!(%Issue{id: "fix-id", identifier: "TP-900", state: "Done", pr_urls: [@symphony_pr]}, attrs)
+    defp merged_fix(pr_url \\ @symphony_pr) do
+      fix = %Issue{id: "fix-id", identifier: "TP-900", state: "Done", repo_key: @repo_key}
+      record_merged(fix, pr_url)
       Process.put({:fix_ticket, "TP-900"}, {:ok, fix})
     end
 
@@ -414,7 +421,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
 
     test "a fix merged in another repository lifts the hold when it is terminal, as before" do
       :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
-      merged_fix(%{pr_urls: ["https://github.com/acme/web-app/pull/5"]})
+      merged_fix("https://github.com/acme/web-app/pull/5")
 
       assert {1, _cache} = sweep_fix_hold(build(), UpdateHold.empty_cache())
       refute_received :merge_commit_sha
@@ -431,8 +438,9 @@ defmodule SymphonyElixir.BlockedHoldTest do
       }
     end
 
-    defp merged_blocker(attrs \\ %{}) do
-      blocker = struct!(%Issue{id: "blocker-TP-997", identifier: "TP-997", state: "Done", pr_urls: [@symphony_pr]}, attrs)
+    defp merged_blocker(pr_url \\ @symphony_pr) do
+      blocker = %Issue{id: "blocker-TP-997", identifier: "TP-997", state: "Done", repo_key: @repo_key}
+      record_merged(blocker, pr_url)
       Process.put({:fix_ticket, "TP-997"}, {:ok, blocker})
     end
 
@@ -458,7 +466,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
 
     test "lifts once every blocker is terminal, with no person's Unblock" do
       :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, block_report_attrs())
-      merged_blocker(%{pr_urls: ["https://github.com/acme/web-app/pull/5"]})
+      merged_blocker("https://github.com/acme/web-app/pull/5")
 
       assert {1, _cache} = sweep_dependency_hold(held("In Progress", "Done"), build(), UpdateHold.empty_cache())
       refute_received :merge_commit_sha

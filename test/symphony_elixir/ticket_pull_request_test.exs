@@ -7,7 +7,6 @@ defmodule SymphonyElixir.TicketPullRequestTest do
   @repo_key "repo-a"
   @pr "https://github.com/acme/repo/pull/1"
   @next_pr "https://github.com/acme/repo/pull/2"
-  @attachment_pr "https://github.com/acme/repo/pull/9"
 
   setup do
     :ok = RunStore.clear()
@@ -62,27 +61,23 @@ defmodule SymphonyElixir.TicketPullRequestTest do
              @repo_key |> TicketPullRequest.list() |> Enum.sort_by(& &1.issue_id)
   end
 
-  test "a PR run's issue answers its own PR" do
-    pr_run = %Issue{id: "pr:#{@repo_key}:7", repo_key: @repo_key, run_kind: :pr, pull_request_url: @pr, pr_urls: [@pr]}
+  test "a PR run's issue answers its own PR from its PR context" do
+    pr_run = %Issue{id: "pr:#{@repo_key}:7", repo_key: @repo_key, run_kind: :pr, pr_context: %{number: 7, url: " #{@pr} "}}
 
     assert TicketPullRequest.current_url(pr_run) == @pr
     assert TicketPullRequest.current_urls(pr_run) == [@pr]
-    assert TicketPullRequest.current_urls(%{pr_run | pull_request_url: nil}) == []
+    assert TicketPullRequest.current_url(%{pr_run | run_kind: "pr", pr_context: %{"url" => @pr}}) == @pr
+    assert TicketPullRequest.current_urls(%{pr_run | pr_context: %{url: " "}}) == []
+    assert TicketPullRequest.current_urls(%{pr_run | pr_context: nil}) == []
   end
 
-  test "a ticket with no record falls back to its attachment-derived PR" do
-    assert TicketPullRequest.current_url(issue("issue-1")) == @attachment_pr
-    assert TicketPullRequest.current_urls(issue("issue-1")) == [@attachment_pr, @pr]
+  test "a ticket with no record has no PR" do
+    assert TicketPullRequest.current_url(issue("issue-1")) == nil
+    assert TicketPullRequest.current_urls(issue("issue-1")) == []
+    assert TicketPullRequest.current_url(%{issue("issue-1") | repo_key: nil}) == nil
 
-    single = %Issue{id: "issue-1", repo_key: @repo_key, pull_request_url: @attachment_pr}
-    assert TicketPullRequest.current_urls(single) == [@attachment_pr]
-    assert TicketPullRequest.current_urls(%{single | pull_request_url: nil}) == []
-
-    no_repo = %{issue("issue-1") | repo_key: nil}
-    assert TicketPullRequest.current_url(no_repo) == @attachment_pr
-
-    # A store that cannot be read falls back too.
-    assert TicketPullRequest.current_url(%{issue("issue-1") | repo_key: "  "}) == @attachment_pr
+    # A store that cannot be read answers none too.
+    assert TicketPullRequest.current_url(%{issue("issue-1") | repo_key: "  "}) == nil
   end
 
   test "a lane's repo key finds the record of an issue read without its repo, never over the issue's own" do
@@ -91,14 +86,14 @@ defmodule SymphonyElixir.TicketPullRequestTest do
 
     assert TicketPullRequest.current_url(no_repo, @repo_key) == @pr
     assert TicketPullRequest.current_url(%{no_repo | repo_key: ""}, @repo_key) == @pr
-    assert TicketPullRequest.current_url(no_repo, nil) == @attachment_pr
+    assert TicketPullRequest.current_url(no_repo, nil) == nil
     assert TicketPullRequest.current_url(issue("issue-1"), "repo-b") == @pr
-    assert TicketPullRequest.current_url(%{issue("issue-1") | repo_key: "repo-b"}, @repo_key) == @attachment_pr
+    assert TicketPullRequest.current_url(%{issue("issue-1") | repo_key: "repo-b"}, @repo_key) == nil
   end
 
   test "the recorded PR is found whatever its state, for the readers that ask what a finished ticket shipped" do
     no_repo = %{issue("issue-1") | repo_key: nil}
-    assert TicketPullRequest.recorded_urls(no_repo, @repo_key) == [@attachment_pr, @pr]
+    assert TicketPullRequest.recorded_urls(no_repo, @repo_key) == []
 
     assert :ok = TicketPullRequest.record_created(@repo_key, "issue-1", @next_pr, nil)
     assert TicketPullRequest.recorded_urls(no_repo, @repo_key) == [@next_pr]
@@ -110,10 +105,10 @@ defmodule SymphonyElixir.TicketPullRequestTest do
       assert TicketPullRequest.current_urls(issue("issue-1")) == []
     end
 
-    pr_run = %Issue{id: "pr:#{@repo_key}:7", repo_key: @repo_key, run_kind: :pr, pull_request_url: @pr}
+    pr_run = %Issue{id: "pr:#{@repo_key}:7", repo_key: @repo_key, run_kind: :pr, pr_context: %{url: @pr}}
     assert TicketPullRequest.recorded_urls(pr_run, nil) == [@pr]
-    assert TicketPullRequest.recorded_urls(%Issue{id: nil, pr_urls: [@pr]}, @repo_key) == [@pr]
-    assert TicketPullRequest.recorded_urls(%{issue("issue-1") | repo_key: "  "}, nil) == [@attachment_pr, @pr]
+    assert TicketPullRequest.recorded_urls(%Issue{id: nil}, @repo_key) == []
+    assert TicketPullRequest.recorded_urls(%{issue("issue-1") | repo_key: "  "}, nil) == []
   end
 
   test "refuses a record without a PR URL or with an unknown source" do
@@ -157,6 +152,6 @@ defmodule SymphonyElixir.TicketPullRequestTest do
   end
 
   defp issue(issue_id) do
-    %Issue{id: issue_id, repo_key: @repo_key, pull_request_url: @attachment_pr, pr_urls: [@attachment_pr, @pr]}
+    %Issue{id: issue_id, repo_key: @repo_key}
   end
 end
