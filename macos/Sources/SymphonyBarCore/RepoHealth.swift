@@ -147,25 +147,37 @@ public struct RepoHealth: Equatable {
         "Stopped the run on \(issueIdentifier)."
     }
 
-    /// Why nothing is checked while the repos come from `symphony.yml`.
-    public static func notChecked(status: SymphonyStatus, poll: ReposPoll?) -> RepoHealth {
+    /// Why nothing is checked while the repos come from `symphony.yml`. A `WORKFLOW.md` the app wrote for the repo
+    /// still shows in the box, as only the app knows it: `baseBranch` is the branch it waits to reach.
+    public static func notChecked(
+        status: SymphonyStatus,
+        poll: ReposPoll?,
+        pending: PendingWorkflow? = nil,
+        baseBranch: String? = nil
+    ) -> RepoHealth {
+        var health = notChecked(notCheckedReason(status: status, poll: poll))
+        if let pending { health.problems = [pendingProblem(pending, branch: baseBranch)] }
+        return health
+    }
+
+    private static func notCheckedReason(status: SymphonyStatus, poll: ReposPoll?) -> String {
         switch status {
         case .stopped:
-            return notChecked("Symphony is stopped")
+            return "Symphony is stopped"
         case .starting:
-            return notChecked("Symphony is starting")
+            return "Symphony is starting"
         case .error:
-            return notChecked("Symphony isn't answering")
+            return "Symphony isn't answering"
         case .running, .paused:
             switch poll {
             case .unsupported?:
-                return notChecked("Symphony is too old to report it")
+                return "Symphony is too old to report it"
             case .failed?:
-                return notChecked("Symphony couldn't list the repos")
+                return "Symphony couldn't list the repos"
             case .unreachable?:
-                return notChecked("Symphony isn't answering")
+                return "Symphony isn't answering"
             case .repos?, nil:
-                return notChecked("asking Symphony")
+                return "asking Symphony"
             }
         }
     }
@@ -211,34 +223,14 @@ public struct RepoHealth: Equatable {
     // MARK: Problems
 
     private static func workflowProblem(_ repo: RepoStatus, pending: PendingWorkflow?) -> Problem? {
-        if let pending {
-            switch pending {
-            case let .pullRequest(url):
-                return Problem(
-                    id: "workflow",
-                    severity: .warning,
-                    title: "WORKFLOW.md is waiting on its pull request",
-                    note: "Symphony uses it once the pull request merges into \(branchName(repo)).",
-                    fixes: [.viewPullRequest(url)]
-                )
-            case let .written(path):
-                return Problem(
-                    id: "workflow",
-                    severity: .warning,
-                    title: "WORKFLOW.md is written but not pushed",
-                    detail: (path as NSString).abbreviatingWithTildeInPath,
-                    note: "Symphony uses it once it is on \(branchName(repo)).",
-                    fixes: [.revealInFinder(path: path)]
-                )
-            }
-        }
+        if let pending { return pendingProblem(pending, branch: repo.baseBranch) }
         switch repo.workflow.state {
         case .missing:
             return Problem(
                 id: "workflow",
                 severity: .warning,
                 title: "WORKFLOW.md is missing",
-                detail: "Symphony found no WORKFLOW.md on \(branchName(repo))."
+                detail: "Symphony found no WORKFLOW.md on \(branchName(repo.baseBranch))."
             )
         case .invalid:
             return Problem(
@@ -250,6 +242,28 @@ public struct RepoHealth: Equatable {
             )
         case .valid, .other:
             return nil
+        }
+    }
+
+    private static func pendingProblem(_ pending: PendingWorkflow, branch: String?) -> Problem {
+        switch pending {
+        case let .pullRequest(url):
+            return Problem(
+                id: "workflow",
+                severity: .warning,
+                title: "WORKFLOW.md is waiting on its pull request",
+                note: "Symphony uses it once the pull request merges into \(branchName(branch)).",
+                fixes: [.viewPullRequest(url)]
+            )
+        case let .written(path):
+            return Problem(
+                id: "workflow",
+                severity: .warning,
+                title: "WORKFLOW.md is written but not pushed",
+                detail: (path as NSString).abbreviatingWithTildeInPath,
+                note: "Symphony uses it once it is on \(branchName(branch)).",
+                fixes: [.revealInFinder(path: path)]
+            )
         }
     }
 
@@ -288,8 +302,8 @@ public struct RepoHealth: Equatable {
 
     // MARK: Helpers
 
-    private static func branchName(_ repo: RepoStatus) -> String {
-        let branch = repo.baseBranch?.trimmingWhitespace() ?? ""
+    private static func branchName(_ branch: String?) -> String {
+        let branch = branch?.trimmingWhitespace() ?? ""
         return branch.isEmpty ? "the default branch" : branch
     }
 
