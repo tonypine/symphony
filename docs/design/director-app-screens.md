@@ -112,8 +112,13 @@ later journeys point back to it. The mock draws every screen under its ID.
   instead.", its number the one after the last option. The card header reads "Press 1–N to pick · ⌘↩ to send", N
   counting the write-in. The recommended option starts picked. There is
   no time estimate (DD-2), and what the request unblocks waits for the context card (TP-955). Every field is written
-  in the Director's words ([the decision writing standard](../standards/decision-writing.md)). The banner at the
-  bottom is the Undo after D12d.
+  in the Director's words ([the decision writing standard](../standards/decision-writing.md)). Every ticket and pull
+  request the question, What happened and the options mention is a chip (N1) inside the sentence, its short name
+  joined when the text gives one ("TP-891 · Remove the retired review states"); resting the pointer on it for half a
+  second opens its popover (N2 for a ticket, N3 for a PR, "Symphony can't see TP-999." for one Symphony couldn't
+  read), and a click opens the ticket page or the PR on GitHub. The text wraps, selects and copies like any Mac text
+  (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
+  and dark, are in `macos/Tests/Snapshots`. The banner at the bottom is the Undo after D12d.
 - **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
   option with that number while the list or the review has the keyboard; a click on a card picks it.
 - **States:** an older hand-written request with steps and no options reads **Action** (group **Actions**), keeps its
@@ -127,7 +132,7 @@ later journeys point back to it. The mock draws every screen under its ID.
   words that pick none of its options ask for a change, and the ticket goes to `In Progress`. A plan's decisions
   (C16) have no write-in: the plan's Change move already takes free text. The picked write-in's offscreen snapshots, light and
   dark, are in `macos/Tests/Snapshots` (`make snapshots` renders them again).
-- **Data:** the open human-action requests (section 2).
+- **Data:** the open human-action requests (section 2), with each item's `references` for the chips.
 
 #### D2d · Inbox: a ticket to clarify
 

@@ -124,8 +124,8 @@
         "related": [
           {
             "identifier": "TP-891",
-            "state": "In Progress",
-            "title": "Remove the retired review states"
+            "state": "Code Review",
+            "title": "Remove the retired review states and the version switch from the code"
           }
         ]
       },
@@ -136,7 +136,7 @@
         "#448": {
           "additions": 120,
           "checks": "passed",
-          "deletions": 610,
+          "deletions": 486,
           "files": 14,
           "kind": "pull_request",
           "number": 448,
@@ -145,7 +145,7 @@
           "review_state": "changes_requested",
           "summary": "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.",
           "ticket": "TP-892",
-          "title": "TP-892 Retire two old review steps",
+          "title": "Remove the Final verification and Supervisor check flows",
           "url": "https://github.com/tonypine/symphony/pull/448"
         },
         "TP-880": {
@@ -171,8 +171,8 @@
           "identifier": "TP-891",
           "kind": "ticket",
           "parent": {
-            "identifier": "TP-870",
-            "title": "Simplify the review flow"
+            "identifier": "TP-880",
+            "title": "Remove the Supervisor check"
           },
           "pull_request": {
             "checks": "pending",
@@ -180,9 +180,9 @@
             "url": "https://github.com/tonypine/symphony/pull/446"
           },
           "repo_key": "symphony",
-          "state": "In Progress",
+          "state": "Code Review",
           "summary": "Removes the review states nobody uses any more, and the switch between the old and new flows.",
-          "title": "Remove the retired review states",
+          "title": "Remove the retired review states and the version switch from the code",
           "url": "https://linear.app/tonypine/issue/TP-891",
           "waiting_on": null
         },

@@ -1248,4 +1248,5 @@ touching the installed app.
 - **Pause or Resume shows an error under the status.** The app could not reach Symphony's control API or
   its token was rejected; the message says which. See [Pause and Resume](#pause-and-resume).
 
-`SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBar` is the AppKit app.
+`SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBarUI` holds the AppKit views the
+app wraps for SwiftUI (the chip text view), unit tested without a window; `SymphonyBar` is the AppKit app.
