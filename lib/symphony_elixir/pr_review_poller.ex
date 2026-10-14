@@ -637,6 +637,12 @@ defmodule SymphonyElixir.PrReviewPoller do
   # not this poller's to act on — each phase's own machinery decides its verdicts and review
   # comments — so `limited_to_conflicts?/3` keeps those records on `:watching`, and only a conflict,
   # a merged PR or a closed one is acted on.
+  #
+  # A PR a base merge put `BEHIND` gets no update-branch in those phases, on purpose: their branch
+  # is kept current by its owner. An agent run syncs it with the base itself, and a Code Review or
+  # QA run starts only on a green head, which an update-branch on every base merge would keep
+  # restarting (and would leave the run's workspace behind the PR it judges). Auto-merge updates
+  # it once the ticket is in `Merging`.
   defp watched_states(settings) do
     if AutoMerge.enabled?(settings),
       do: [@merging_state | phase_states(settings)],
