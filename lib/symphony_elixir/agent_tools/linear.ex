@@ -1444,8 +1444,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Withdraws open human-action requests on the current issue that are no longer needed: replies
   `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
   next human-action update drops them. Once no open request is left, the `Needs Decision` hold is
-  cleared so the ticket continues in place. An issue with no open request is left as it is. The reason is refused
-  when it holds a secret pattern.
+  cleared so the ticket continues in place. An issue with no open request is left as it is. The
+  reason is refused when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
