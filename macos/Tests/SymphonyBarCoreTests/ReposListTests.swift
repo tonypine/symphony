@@ -604,6 +604,31 @@ final class ReposListTests: XCTestCase {
         )
     }
 
+    func testTheWindowShowsTheStoresPendingWorkflowInsteadOfMissing() {
+        let store = PendingWorkflowStore(defaults: MemoryKeyValueStore())
+        store.record(.localFile(path: "/Projects/docs/WORKFLOW.md"), for: "docs")
+        store.record(.pullRequest(url: "https://github.com/tonypine/symphony/pull/3"), for: "symphony")
+
+        let shown = ReposList.window(
+            status: running,
+            poll: .repos([symphony, docs], warning: nil),
+            config: config,
+            pendingWorkflows: store,
+            now: now,
+            isDirectory: { _ in false },
+            cloneRemoval: { _ in .blocked("checking") }
+        )
+
+        let workflow = shown.repos[1].health.problems.first { $0.id == "workflow" }
+        XCTAssertEqual(workflow?.title, "WORKFLOW.md is written but not pushed")
+        XCTAssertEqual(workflow?.fixes, [.revealInFinder(path: "/Projects/docs/WORKFLOW.md")])
+        XCTAssertFalse(shown.repos[1].health.problems.contains { $0.title == "WORKFLOW.md is missing" })
+        guard case let .status(field, _, _, _) = shown.repos[1].live else { return XCTFail("expected live status") }
+        XCTAssertEqual(field.value, "Pending: written, not pushed")
+        XCTAssertEqual(shown.repos[0].health.status, .healthy)
+        XCTAssertEqual(store.all, ["docs": .localFile(path: "/Projects/docs/WORKFLOW.md")])
+    }
+
     func testFoldsTheLiveSectionsWithWhySymphonyDoesntShowThem() {
         let cases: [(SymphonyStatus, ReposPoll?, String, Bool)] = [
             (.starting, nil, "Symphony is starting… Live status shows once it runs.", false),

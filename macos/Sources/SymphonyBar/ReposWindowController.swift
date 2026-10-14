@@ -176,11 +176,12 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private func showDisplay() {
         guard let model else { return }
         let config = ReposConfig.read(path: configPath)
-        let shown = ReposList.window(status: status, poll: poll, config: config) { [status, poll] gitHub in
+        let shown = ReposList.window(
+            status: status, poll: poll, config: config, pendingWorkflows: pendingWorkflows
+        ) { [status, poll] gitHub in
             ManagedClones.removal(gitHub: gitHub, root: config.clonesRoot, status: status, poll: poll)
         }
-        ReposList.validWorkflows(poll).forEach(pendingWorkflows.clear)
-        model.window = ReposList.withPendingWorkflows(shown, pending: pendingWorkflows.all)
+        model.window = shown
         model.restartChip = ReposRestartChip(machine: restartMachine(), window: shown)
         select(in: model)
     }

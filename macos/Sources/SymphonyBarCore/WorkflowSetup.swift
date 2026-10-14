@@ -145,6 +145,26 @@ public final class PendingWorkflowStore {
 }
 
 extension ReposList {
+    /// The Repos window with the `WORKFLOW.md` files the sheet added in `store`: each one's health and status say it
+    /// is pending until Symphony reads it, and the entries Symphony now reads are forgotten first.
+    public static func window(
+        status: SymphonyStatus,
+        poll: ReposPoll?,
+        config: ReposConfig,
+        pendingWorkflows store: PendingWorkflowStore,
+        now: Date = Date(),
+        isDirectory: (String) -> Bool = ManagedClones.isDirectory,
+        cloneRemoval: (_ gitHub: String) -> ManagedClones.Removal
+    ) -> ReposWindow {
+        validWorkflows(poll).forEach(store.clear)
+        let pending = store.all
+        let shown = window(
+            status: status, poll: poll, config: config, now: now,
+            pending: { pending[$0] }, isDirectory: isDirectory, cloneRemoval: cloneRemoval
+        )
+        return withPendingWorkflows(shown, pending: pending)
+    }
+
     /// `window` with the `WORKFLOW.md` status of each repo in `pending` saying so, unless Symphony reads the file.
     public static func withPendingWorkflows(_ window: ReposWindow, pending: [String: PendingWorkflow]) -> ReposWindow {
         guard case var .repos(repos) = window.content else { return window }
