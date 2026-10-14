@@ -30,6 +30,25 @@ defmodule SymphonyElixir.OneShotTest do
              RunStore.list_runs("default", :all)
   end
 
+  test "the run record carries the ticket's PR from Symphony's record, and none once it closed" do
+    pr_url = "https://github.com/example/repo/pull/1012"
+    issue = memory_issue("issue-recorded-pr", "ACME-PR")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, pr_url, "auto/ACME-PR")
+
+    assert {:ok, %{status: "success"}} = OneShot.run("ACME-PR", deps: deps(), no_retry: true)
+    assert [%{issue_id: "issue-recorded-pr", pull_request_url: ^pr_url}] = RunStore.list_runs("default", :all)
+
+    :ok = RunStore.clear()
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", issue.id, pr_url, "auto/ACME-PR")
+    :ok = SymphonyElixir.TicketPullRequest.mark_finished("default", pr_url, "closed")
+    attached = %{issue | pull_request_url: pr_url, pr_urls: [pr_url]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [attached])
+
+    assert {:ok, %{status: "success"}} = OneShot.run("ACME-PR", deps: deps(), no_retry: true)
+    assert [%{issue_id: "issue-recorded-pr", pull_request_url: nil}] = RunStore.list_runs("default", :all)
+  end
+
   test "tool progress heartbeats are not recorded in the run-store record" do
     issue = memory_issue("issue-heartbeat", "ACME-HEARTBEAT")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])

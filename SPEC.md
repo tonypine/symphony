@@ -415,6 +415,21 @@ closed or merged: a closed or merged PR is not the ticket's in-flight PR. A PR r
 its own PR. While ticket reads still carry tracker attachments, a ticket with no record falls back
 to the issue's attachment-derived `pull_request_url` / `pr_urls`.
 
+Agent runs, the orchestrator and status reporting take a ticket's PR from this record; where this
+spec says a run's or a ticket's "attached PR", it means the PR the record answers:
+
+- The agent run: the renamed-team-key PR head the workspace syncs to, the PR known at dispatch, the
+  post-turn checks (the quiet hand-off on the PR head, the CI wait on a pushed head, a `Rework` that
+  is done, the landing run's CI wait, the reviewer agent's progress key) and the idle-park note. A
+  run whose ticket had a PR at dispatch logs a warning naming the issue when the record no longer
+  answers one.
+- The orchestrator: running and completed run entries, the run records it persists, watching
+  entries, the PR run's own PR and the "went quiet on its PR" check. A PR URL the run itself
+  reported stays on its entry; only the read off the ticket changes.
+- `/api/v1/state`, the dashboard and the terminal status read those entries. Quality eval records,
+  one-shot run records, issue notifications and the epic review's pull-request check carry the
+  recorded PR.
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
@@ -2248,8 +2263,8 @@ The poller:
   attachment and many others, such as QA screenshots, do not hide the PR; a rate limit, transport
   failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
   as they retry the first page, rather than seeing the issue without its PR; an issue the CI poller watches a PR
-  for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
-  attachments show no PR);
+  for logs a warning naming the issue when its attachments show no PR, and an agent run whose issue
+  had a PR at dispatch logs one when Symphony's record no longer shows an open PR);
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
