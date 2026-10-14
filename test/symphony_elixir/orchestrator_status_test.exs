@@ -858,6 +858,94 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            ] = snapshot.watching
   end
 
+  test "orchestrator serves a tracked ticket's connected tickets, keeping what its run read once it is watched" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"],
+      tracker_terminal_states: ["Done", "Canceled"]
+    )
+
+    issue_id = "issue-watch-connected"
+    parent = %{identifier: "MT-EPIC", title: "Epic", done: 0, total: 2, children: ["started", "unstarted"]}
+
+    links = [
+      %{relation: "blocks", identifier: "MT-NEXT", title: "Next", state: "Todo"},
+      %{relation: "related", identifier: "MT-REL", title: "Context", state: "Done"}
+    ]
+
+    running_issue = %Issue{
+      id: issue_id,
+      identifier: "MT-WATCH-CONN",
+      title: "Watch connected",
+      state: "In Progress",
+      blocked_by: [%{id: "blocker-1", identifier: "MT-BLOCKER", state: "In Progress"}],
+      sub_issues: [%{id: "sub-1", identifier: "MT-SUB", state: "Todo"}]
+    }
+
+    # Each poll's issue carries blockers and sub-tickets, never the parent or links.
+    watched_issue = %{running_issue | state: "In Review", blocked_by: [%{id: "blocker-1", identifier: "MT-BLOCKER", state: "Done"}]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [watched_issue])
+
+    orchestrator_name = Module.concat(__MODULE__, :WatchingConnectedOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+    wait_for_orchestrator_state(pid, &is_nil(&1.repo_poll_task_ref), 1_000)
+
+    worker_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        after
+          60_000 -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      if Process.alive?(pid), do: stop_process(pid)
+      if Process.alive?(worker_pid), do: Process.exit(worker_pid, :shutdown)
+    end)
+
+    running_entry = %{
+      pid: worker_pid,
+      ref: nil,
+      run_id: "run-watch-connected",
+      repo_key: "api",
+      identifier: running_issue.identifier,
+      issue: running_issue,
+      session_id: "thread-watch-connected",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn state ->
+      %{state | running: %{issue_id => running_entry}, claimed: MapSet.put(state.claimed, issue_id), retry_attempts: %{}}
+    end)
+
+    send(pid, {:worker_runtime_info, issue_id, %{linked: %{parent: parent, linked_issues: links}}})
+
+    snapshot = wait_for_snapshot(pid, &match?(%{running: [%{connected: %{parent: %{}}}]}, &1), 1_000)
+
+    assert [%{connected: running_connected}] = snapshot.running
+
+    assert running_connected == %{
+             parent: parent,
+             sub_tickets: [%{identifier: "MT-SUB", title: nil, state: "Todo"}],
+             blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "In Progress"}],
+             blocks: [%{identifier: "MT-NEXT", title: "Next", state: "Todo"}],
+             related: [%{identifier: "MT-REL", title: "Context", state: "Done"}]
+           }
+
+    send(pid, :run_poll_cycle)
+
+    snapshot = wait_for_snapshot(pid, &match?(%{watching: [%{identifier: "MT-WATCH-CONN"}]}, &1), 1_000)
+
+    assert [%{connected: watched_connected}] = snapshot.watching
+    assert watched_connected == %{running_connected | blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "Done"}]}
+  end
+
   test "orchestrator transcript buffer is bounded by observability config" do
     write_workflow_file!(Workflow.workflow_file_path(), observability_transcript_buffer_size: 2)
 

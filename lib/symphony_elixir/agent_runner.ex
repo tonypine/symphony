@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentRunner do
     CiPoller,
     CodeReview,
     Config,
+    Connected,
     DependencyAudit,
     DependencyGate,
     EpicReview,
@@ -200,6 +201,7 @@ defmodule SymphonyElixir.AgentRunner do
                        Verification.start_dev_server(verification, workspace, settings: settings) do
                   remember_verification_dev_server(dev_server_pid)
                   enriched_issue = enrich_issue_for_dispatch(issue, opts)
+                  send_linked_issues(codex_update_recipient, enriched_issue)
 
                   # Start the comment registry before workpad bootstrap so the
                   # bootstrap comment is recorded as run-owned at creation time
@@ -537,6 +539,15 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  # The ticket's parent and links the enrichment read, so the ticket page can show them without a
+  # Linear read of its own (see `SymphonyElixir.Connected`).
+  defp send_linked_issues(recipient, %Issue{id: issue_id} = issue) when is_binary(issue_id) and is_pid(recipient) do
+    send(recipient, {:worker_runtime_info, issue_id, %{linked: Connected.linked(issue)}})
+    :ok
+  end
+
+  defp send_linked_issues(_recipient, _issue), do: :ok
 
   # The comments the run posted, so the orchestrator can tell them from people's comments on a
   # breakdown parent's plan (see `SymphonyElixir.PlanComments`).

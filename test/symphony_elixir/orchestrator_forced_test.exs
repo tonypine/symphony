@@ -58,7 +58,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       assert %{forced: true} = Enum.find(snapshot.running, &(&1.issue_id == "forced-1"))
       assert %{forced: false} = Enum.find(snapshot.running, &(&1.issue_id == "impl-1"))
       # The row keeps the ticket's repo, so the Mac app's scope filters it.
-      assert [%{issue_id: "todo-1", forced: false, repo_key: "web"}] = snapshot.slot_waiting
+      assert [%{issue_id: "todo-1", forced: false, repo_key: "web", connected: %{blocked_by: []}}] = snapshot.slot_waiting
       assert %{epic_lanes: %{shared: %{used: 2}}, finishing: %{used: 0}} = snapshot
     end
 

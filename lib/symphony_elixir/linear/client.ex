@@ -4,7 +4,19 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{AgentLabels, AuditLog, Config, Decisions, IssueSummary, Linear.Issue, Secret, StateMachine}
+
+  alias SymphonyElixir.{
+    AgentLabels,
+    AuditLog,
+    Config,
+    Connected,
+    Decisions,
+    IssueSummary,
+    Linear.Issue,
+    Secret,
+    StateMachine
+  }
+
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
 
@@ -332,6 +344,18 @@ defmodule SymphonyElixir.Linear.Client do
             title
             state {
               name
+            }
+          }
+        }
+      }
+      parent {
+        identifier
+        title
+        children(first: #{@sub_issue_page_size}) {
+          nodes {
+            createdAt
+            state {
+              type
             }
           }
         }
@@ -996,7 +1020,8 @@ defmodule SymphonyElixir.Linear.Client do
              issue
              | description: IssueSummary.strip(Map.get(enrichment, "description", issue.description)),
                comments: extract_comments(enrichment),
-               linked_issues: extract_linked_issues(enrichment)
+               linked_issues: extract_linked_issues(enrichment),
+               parent: Connected.parent(enrichment["parent"])
            }}
         end
     end

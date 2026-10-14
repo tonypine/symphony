@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     BuildInfo,
     CiPoller,
     Config,
+    Connected,
     Decisions,
     DispatchLoop,
     EpicLanes,
@@ -519,6 +520,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:agent_module, runtime_info[:agent_module])
           |> maybe_put_runtime_value(:agent_session, runtime_info[:agent_session])
           |> maybe_put_runtime_value(:comment_ids, runtime_info[:comment_ids])
+          |> maybe_put_runtime_value(:linked, runtime_info[:linked])
           |> Map.put(:last_event_at, last_event_at)
           |> maybe_put_workspace_hook(runtime_info)
 
@@ -3478,7 +3480,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp put_dispatch_skipped(%State{} = state, %Issue{} = issue, reason) do
-    entry = %{identifier: issue.identifier, title: issue.title, state: issue.state, repo_key: issue.repo_key, reason: reason}
+    entry = %{
+      identifier: issue.identifier,
+      title: issue.title,
+      state: issue.state,
+      repo_key: issue.repo_key,
+      reason: reason,
+      connected: Connected.build(issue, nil)
+    }
+
     %{state | dispatch_skipped: Map.put(state.dispatch_skipped, issue.id, entry)}
   end
 
@@ -3572,7 +3582,8 @@ defmodule SymphonyElixir.Orchestrator do
         title: issue.title,
         state: issue.state,
         reason: reason,
-        since: Map.get(waiting, :since) || DateTime.utc_now()
+        since: Map.get(waiting, :since) || DateTime.utc_now(),
+        connected: Connected.build(issue, nil)
       })
 
     %{state | slot_waiting: Map.put(state.slot_waiting, issue.id, entry)}
@@ -7531,7 +7542,8 @@ defmodule SymphonyElixir.Orchestrator do
           forced: forced_entry?(metadata),
           linear_wait_until: active_linear_wait_until(metadata, now),
           pending_tool: pending_tool(metadata, now, pending_tool_report_after_ms),
-          runtime_seconds: running_seconds(metadata.started_at, now)
+          runtime_seconds: running_seconds(metadata.started_at, now),
+          connected: Connected.build(metadata.issue, Map.get(metadata, :linked))
         }
       end)
 
@@ -7577,7 +7589,8 @@ defmodule SymphonyElixir.Orchestrator do
           tokens: Map.get(watching_entry, :tokens, %{}),
           transcript_path: Map.get(watching_entry, :transcript_path),
           transcript_buffer: Map.get(watching_entry, :transcript_buffer, []),
-          transcript_buffer_size: Map.get(watching_entry, :transcript_buffer_size, 0)
+          transcript_buffer_size: Map.get(watching_entry, :transcript_buffer_size, 0),
+          connected: Map.get(watching_entry, :connected)
         }
       end)
 
@@ -7700,7 +7713,7 @@ defmodule SymphonyElixir.Orchestrator do
     slot_waiting
     |> Enum.map(fn {issue_id, entry} ->
       entry
-      |> Map.take([:identifier, :title, :state, :reason, :attempt, :since])
+      |> Map.take([:identifier, :title, :state, :reason, :attempt, :since, :connected])
       |> Map.merge(%{
         issue_id: issue_id,
         repo_key: Map.get(entry, :repo_key) || Map.get(entry, :issue_repo_key),
@@ -8140,6 +8153,7 @@ defmodule SymphonyElixir.Orchestrator do
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path)
     }
+    |> maybe_put_runtime_value(:linked, Map.get(running_entry, :linked))
   end
 
   defp put_watching_issue(%State{} = state, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
@@ -8164,6 +8178,8 @@ defmodule SymphonyElixir.Orchestrator do
       end
 
     completed_metadata = Map.get(state.completed_run_metadata, issue_id, completed_metadata)
+    # The parent and links the last run's enrichment read; each poll's issue carries neither.
+    linked = watching_metadata(:linked, completed_metadata, existing)
 
     watching_entry = %{
       repo_key: watching_repo_key(state, issue, completed_metadata, existing),
@@ -8182,9 +8198,11 @@ defmodule SymphonyElixir.Orchestrator do
       review_agent_enabled: watching_metadata(:review_agent_enabled, completed_metadata, existing, false),
       transcript_path: watching_metadata(:transcript_path, completed_metadata, existing),
       transcript_buffer: watching_metadata(:transcript_buffer, completed_metadata, existing, []),
-      transcript_buffer_size: watching_metadata(:transcript_buffer_size, completed_metadata, existing, 0)
+      transcript_buffer_size: watching_metadata(:transcript_buffer_size, completed_metadata, existing, 0),
+      linked: linked
     }
 
+    watching_entry = Map.put(watching_entry, :connected, Connected.build(issue, linked))
     %{state | watching: Map.put(state.watching, issue_id, watching_entry)}
   end
 
