@@ -25,11 +25,12 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         project: @project
       },
       %Action{
-        key: "task:id-MOT-31",
-        kind: :task,
+        key: "request:comment-2",
+        kind: :request,
         title: "Turn on the pre-push hook on your laptop",
+        unblocks: "clean pushes from your laptop",
         steps: ["Run `git config core.hooksPath .githooks` in your cycle checkout."],
-        done_when: "you close MOT-31, or move it on.",
+        done_when: "you reply to the request, or the agent withdraws the request.",
         issue: issue("MOT-31", "Turn on the pre-push hook on your laptop"),
         project: @project
       }
@@ -59,11 +60,11 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            ### 2. Turn on the pre-push hook on your laptop
 
-           Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
+           Unblocks [MOT-31](https://linear.app/acme/issue/MOT-31): clean pushes from your laptop
 
            1. Run `git config core.hooksPath .githooks` in your cycle checkout.
 
-           **Done when:** you close MOT-31, or move it on.
+           **Done when:** you reply to the request, or the agent withdraws the request.
 
            ---
            _Symphony posts a new update when this list changes · list `#{Update.list_id(example_actions())}`_\

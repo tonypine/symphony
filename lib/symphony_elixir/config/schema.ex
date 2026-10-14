@@ -2195,12 +2195,10 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @fields [:enabled, :label, :interval_ms, :min_update_interval_ms]
+    @fields [:enabled, :interval_ms, :min_update_interval_ms]
 
     embedded_schema do
       field(:enabled, :boolean, default: true)
-      # Deprecated: the retired label that marked an open request (`PersonWait.legacy_request_labels/1`).
-      field(:label, :string)
       field(:interval_ms, :integer, default: 300_000)
       field(:min_update_interval_ms, :integer, default: 900_000)
     end
@@ -2209,7 +2207,6 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
-      |> validate_format(:label, ~r/\S/, message: "must not be blank")
       |> validate_number(:interval_ms, greater_than: 0)
       |> validate_number(:min_update_interval_ms, greater_than_or_equal_to: 0)
     end
