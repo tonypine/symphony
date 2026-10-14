@@ -6895,7 +6895,7 @@ defmodule SymphonyElixir.Orchestrator do
       runtime_seconds: 0,
       last_event: Map.get(running_entry, :last_codex_event),
       last_event_at: Map.get(running_entry, :last_event_at) || Map.get(running_entry, :last_codex_timestamp),
-      pull_request_url: running_entry_pr_url(running_entry),
+      pull_request_url: running_entry_pr_url(Map.put(running_entry, :issue, issue)),
       updated_at: now
     }
     |> Map.merge(run_profile_record(Map.get(running_entry, :run_profile)))
