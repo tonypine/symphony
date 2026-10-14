@@ -784,6 +784,56 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
+    # Answers the description read with the node's description and sends the write back.
+    defmodule RulingTracker do
+      def fetch_issue_description(_issue_id), do: {:ok, "Reviewer findings need quoted evidence."}
+
+      def update_issue_description(issue_id, description) do
+        send(self(), {:description_written, issue_id, description})
+        :ok
+      end
+    end
+
+    test "TP-892's 05:48 ruling, given in a plain comment, reaches the Code Review prompt" do
+      test_root = unique_tmp("symphony-elixir-review-agent-ruling-prompt")
+
+      try do
+        ruling = "Decision: don't make that change. The legacy prompt partials stay for TP-891, which removes them."
+
+        node = %{
+          "id" => issue().id,
+          "description" => "Reviewer findings need quoted evidence.",
+          "comments" => %{
+            "nodes" => [
+              %{"id" => "workpad", "body" => "## Symphony Workpad\n\nRemoving the legacy prompt partials.", "createdAt" => "2026-10-13T05:30:00Z", "parent" => nil},
+              %{"id" => "comment-0548", "body" => ruling, "createdAt" => "2026-10-13T05:48:00Z", "parent" => nil}
+            ]
+          }
+        }
+
+        assert :ok = SymphonyElixir.Decisions.sync(node, tracker: RulingTracker)
+        assert_received {:description_written, _issue_id, description}
+
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
+        ruled = %{issue() | description: description}
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(ruled, repo, Config.settings!(), opts)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+
+        assert prompt =~
+                 "D1: Ruling given in a comment. Answer: don't make that change. The legacy prompt partials stay for TP-891, which removes them. Scope: As answered."
+
+        assert prompt =~ "A finding that contradicts a recorded decision is not a finding"
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
     test "a change request whose only findings name a recorded decision approves, keeping them as notes" do
       test_root = unique_tmp("symphony-elixir-review-agent-decisions-approve")
 

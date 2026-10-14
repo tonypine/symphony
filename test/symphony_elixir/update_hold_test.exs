@@ -157,6 +157,51 @@ defmodule SymphonyElixir.UpdateHoldTest do
     end
   end
 
+  describe "awaiting_update/4" do
+    test "names a terminal fix ticket until the running build includes its merge commit" do
+      fix = fix_issue("TP-900", [@fix_pr])
+
+      empty = UpdateHold.empty_cache()
+
+      assert {%{identifier: "TP-900", merge_sha: @merge_sha}, cache} = awaiting(fix, empty, included: false)
+      assert cache.blockers == %{"id-TP-900" => {:merged, @fix_pr, @merge_sha}}
+      assert cache.included == %{{@merge_sha, @build_sha} => false}
+
+      # The cached answers are not looked up again.
+      no_lookups = [
+        merge_commit_sha: fn _url -> flunk("cached") end,
+        commit_included?: fn _url, _sha, _build -> flunk("cached") end
+      ]
+
+      assert {%{identifier: "TP-900"}, ^cache} = awaiting(fix, cache, no_lookups)
+
+      assert {nil, _cache} = awaiting(fix, empty, included: true)
+    end
+
+    test "a fix merged elsewhere, opted out, unreadable or with no build sha is not waited on" do
+      elsewhere = fix_issue("APP-1", ["https://github.com/acme/web-app/pull/5"])
+      assert {nil, %{blockers: %{"id-APP-1" => :none}}} = awaiting(elsewhere, UpdateHold.empty_cache())
+
+      skipped = %Issue{fix_issue("TP-901", [@fix_pr]) | labels: [UpdateHold.skip_label()]}
+      assert {nil, %{blockers: %{"id-TP-901" => :skip}}} = awaiting(skipped, UpdateHold.empty_cache())
+
+      fix = fix_issue("TP-900", [@fix_pr])
+      empty = UpdateHold.empty_cache()
+      assert awaiting(fix, empty, merge_commit_sha: fn @fix_pr -> {:error, :rate_limited} end) == {nil, empty}
+
+      assert UpdateHold.awaiting_update(fix, %{@build | sha: nil}, empty, []) == {nil, empty}
+    end
+  end
+
+  defp awaiting(fix, cache, opts \\ []) do
+    included = Keyword.get(opts, :included, false)
+
+    UpdateHold.awaiting_update(fix, @build, cache,
+      merge_commit_sha: Keyword.get(opts, :merge_commit_sha, fn @fix_pr -> {:ok, @merge_sha} end),
+      commit_included?: Keyword.get(opts, :commit_included?, fn @fix_pr, @merge_sha, @build_sha -> {:ok, included} end)
+    )
+  end
+
   defp resolve(issues, fetch_issues, opts \\ []) do
     included = Keyword.get(opts, :included, false)
 

@@ -809,6 +809,14 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("qa_launch_app", %{"env" => %{"FOO" => "1"}}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      stand_ins = %{"gh_stub_port" => 4100, "linear_stub_port" => 4101, "open_panel_dir" => "/tmp/co"}
+      response = DynamicTool.execute("qa_launch_app", stand_ins, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+      checkout = %{"local_path" => "qa-evidence/w.bundle", "remote_url" => "https://github.com/acme/widgets", "remote_name" => "w"}
+      response = DynamicTool.execute("qa_put_checkout", checkout, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
     end
 
     test "only the QA scope lists and runs the qa_android tools, routed to the Android driver" do
@@ -1827,6 +1835,20 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              Jason.decode!(response["output"])
 
     assert message =~ "linear_get_comments"
+  end
+
+  test "add_comment refuses a body that reads as a person's ruling" do
+    response =
+      DynamicTool.execute(
+        "linear_add_comment",
+        %{"body" => "Decision: defer the legacy partials to TP-891"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: fn _query, _variables, _opts -> flunk("linear client should not be called for a ruling") end
+      )
+
+    assert response["success"] == false
+    assert %{"error" => %{"code" => "ruling_comment_body", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "linear_request_human_action"
   end
 
   test "attach_file rejects paths outside the workspace before upload" do

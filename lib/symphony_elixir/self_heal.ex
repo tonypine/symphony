@@ -10,13 +10,16 @@ defmodule SymphonyElixir.SelfHeal do
     * names the broken **component** and the repo that owns its fix — Symphony for orchestration
       and structural causes, the managed project's repo for its own build/test/run setup
       (`scope/3`);
-    * files **one** fix ticket per broken component — High, or Urgent for an Urgent affected
+    * waits on the open ticket the run named as already covering the gap (`covered_by`), or
+      files **one** fix ticket per broken component — High, or Urgent for an Urgent affected
       ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
       component is reused, not filed again, keeping its priority, and the new failure is attached to
       it as evidence;
     * links the affected ticket to the fix ticket as blocked-by and gives it a `Blocked` hold
       waiting on that ticket, which lifts on its own when the fix goes terminal
-      (`SymphonyElixir.BlockedHold`) — no decision request and no check for a person;
+      (`SymphonyElixir.BlockedHold`), or, for a fix merged into the repo the running Symphony was
+      built from, once the running build includes it — no decision request and no check for a
+      person;
     * when a repair has landed and the block recurs, compares the new failure against the last one
       (`compare/2`): a narrowed or otherwise changed failure is progress and earns another attempt,
       and only the same failure with no new information escalates to a `Needs Decision` hold.
@@ -105,8 +108,13 @@ defmodule SymphonyElixir.SelfHeal do
   pauses it for that person. Returns the action taken, or `{:error, reason}` when nothing could be
   recorded.
 
+  An outcome whose `covered_by` names an open ticket (one that already tracks the missing
+  capability) holds the ticket on that ticket instead: it is linked as the blocker and gets the
+  evidence, and no fix ticket is filed.
+
   `opts` carries `:outcome` (required), `:attempts` (the retries already spent), `:repo_key`, and
-  the injectable `:store`, `:tracker`, `:fixer`, `:symphony_repo_key`.
+  the injectable `:store`, `:tracker`, `:fixer`, `:symphony_repo_key` and `:terminal_states`
+  (default the configured ones).
   """
   @spec heal(Issue.t(), keyword()) :: action() | {:error, term()}
   def heal(%Issue{} = issue, opts) do
@@ -236,7 +244,7 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp fix_ticket(ctx) do
-    case find_open_fix_ticket(ctx.scope, ctx.component, ctx.opts) do
+    case covering_ticket(ctx) || find_open_fix_ticket(ctx.scope, ctx.component, ctx.opts) do
       %{identifier: identifier} = ticket ->
         attach(%{fix_ticket: identifier}, ctx.issue, ctx.signature, ctx.outcome, ctx.opts)
         {:ok, ticket}
@@ -255,6 +263,23 @@ defmodule SymphonyElixir.SelfHeal do
         )
     end
   end
+
+  # The open ticket the blocked run named as already tracking the missing capability (`covered_by`,
+  # say a ticket the acceptance gate filed for the same QA tools): the ticket waits on that one
+  # instead of a new fix ticket for the same gap. A ticket that is terminal, unreadable, or the
+  # affected ticket itself covers nothing, and the lane files or reuses its own fix ticket.
+  defp covering_ticket(%{outcome: %{covered_by: identifier}} = ctx) when is_binary(identifier) do
+    case tracker(ctx.opts).fetch_issue_by_identifier(identifier) do
+      {:ok, %Issue{id: id, state: state}} when id != ctx.issue.id ->
+        if terminal?(state, ctx.opts), do: nil, else: %{identifier: identifier}
+
+      _other ->
+        Logger.info("Self-heal for #{label(ctx.issue)} cannot wait on #{identifier}: it is not an open ticket of its own")
+        nil
+    end
+  end
+
+  defp covering_ticket(_ctx), do: nil
 
   # The open fix ticket for this broken component, whichever affected ticket filed it. The fix
   # tickets are found through the tickets' own self-heal records, so no second index is kept.
@@ -328,7 +353,7 @@ defmodule SymphonyElixir.SelfHeal do
 
     case Hold.set(ctx.repo_key, ctx.issue.id, @blocked_hold, attrs, hold_opts(ctx.opts)) do
       :ok ->
-        Logger.warning("Self-heal filed #{identifier} for #{label(ctx.issue)}'s #{ctx.component} block; the ticket is Blocked")
+        Logger.warning("Self-heal holds #{label(ctx.issue)} on #{identifier} for its #{ctx.component} block; the ticket is Blocked")
         :ok
 
       {:error, reason} ->
@@ -428,6 +453,17 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.replace(~r/\s+/, " ")
 
+  defp terminal?(state, opts) when is_binary(state) do
+    normalized = normalize_state(state)
+    opts |> terminal_states() |> Enum.any?(&(normalize_state(&1) == normalized))
+  end
+
+  defp terminal?(_state, _opts), do: false
+
+  defp terminal_states(opts), do: Keyword.get_lazy(opts, :terminal_states, fn -> Config.settings!().tracker.terminal_states end)
+
+  defp normalize_state(state), do: state |> String.trim() |> String.downcase()
+
   defp needs_person?(%{needs_person: true}), do: true
   defp needs_person?(_outcome), do: false
 
@@ -450,6 +486,8 @@ defmodule SymphonyElixir.SelfHeal do
   defp hold_opts(opts), do: Keyword.take(opts, [:store, :tracker])
 
   defp store(opts), do: Keyword.get(opts, :store, RunStore)
+
+  defp tracker(opts), do: Keyword.get(opts, :tracker, SymphonyElixir.Tracker)
 
   defp fixer(opts), do: Keyword.get(opts, :fixer, SymphonyElixir.SelfHeal.Fixer)
 end

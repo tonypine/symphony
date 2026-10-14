@@ -84,7 +84,8 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **States:** for a PR: "Move BIL-206 to Merging? Symphony turns on auto-merge, and GitHub merges once checks pass."
   For Send to Rework: a required reason field and "Symphony closes the PR and starts over" in the destructive style.
   For Send Decision (D2c): the pick as the title, `Send "Update them in TP-892 now"?`, the option's effect, then
-  "TP-892 stays in Rework until its next run picks up your answer."
+  "TP-892 stays in Rework until its next run picks up your answer." For a write-in answer: "Send your answer?" and
+  the Director's words quoted under it.
 - **Conventions:** sheet with a default button; afterwards a banner "Moved to Merging · Undo" for 10 s (seen on D2c).
 - **Data:** writes through Symphony's control API (decision DD4).
 
@@ -107,7 +108,9 @@ later journeys point back to it. The mock draws every screen under its ID.
   **What happened** (N6), the `why` in at most two paragraphs and, when the request says what waits, a row with
   `exclamationmark.triangle` and "If you don't answer: …"; **Options**, one card per option (N7) stacked, each with
   its label, its effect under the label, its trade-offs (N8) and, on the recommended card, "Why we recommend it:" and
-  the reason. The card header reads "Press 1–N to pick · ⌘↩ to send". The recommended option starts picked. There is
+  the reason. After the options, the write-in (N11): **Answer in my own words…** with "Tell the agent what to do
+  instead.", its number the one after the last option. The card header reads "Press 1–N to pick · ⌘↩ to send", N
+  counting the write-in. The recommended option starts picked. There is
   no time estimate (DD-2), and what the request unblocks waits for the context card (TP-955). Every field is written
   in the Director's words ([the decision writing standard](../standards/decision-writing.md)). The banner at the
   bottom is the Undo after D12d.
@@ -116,7 +119,14 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **States:** an older hand-written request with steps and no options reads **Action** (group **Actions**), keeps its
   ask line and lists its numbered **Steps**, with **Copy Steps**. A request missing `why` or `if_unanswered` leaves out
   that part; without both, What happened isn't drawn. A narrow review (under 560 pt) moves each Recommended badge under
-  its label and hides the key hints.
+  its label and hides the key hints. The write-in picked (D2c "Answer in your own words") shows a text field under it,
+  three lines tall and growing to eight, with the hint "The agent reads this as your answer. Name tickets by their
+  number; they become links."; picking it puts the keyboard in the field, where number keys type. The text is kept
+  per item with the picks, so another item and back keeps it, until the answer is sent. **Send Decision…** is off
+  while the field is blank; sending posts the text through `decide` as the pick's `answer`. On a merge confirmation,
+  words that pick none of its options ask for a change, and the ticket goes to `In Progress`. A plan's decisions
+  (C16) have no write-in: the plan's Change move already takes free text. The picked write-in's offscreen snapshots, light and
+  dark, are in `macos/Tests/Snapshots` (`make snapshots` renders them again).
 - **Data:** the open human-action requests (section 2).
 
 #### D2d · Inbox: a ticket to clarify

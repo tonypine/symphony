@@ -22,7 +22,7 @@ public enum ManagedClones {
     public static let defaultRoot = "~/.local/share/symphony/repos"
 
     /// Whether the app may delete a repo's clone now.
-    public enum Removal: Equatable {
+    public enum Removal: Equatable, Sendable {
         /// Nothing uses the clone at `path`.
         case allowed(path: String)
         /// The reason the app shows instead.
@@ -113,6 +113,35 @@ public enum ManagedClones {
 
     public static func removedMessage(key: String, path: String) -> String {
         "Removed Symphony's clone of \(key) at \((path as NSString).abbreviatingWithTildeInPath)."
+    }
+
+    /// What deleting a clone after the last check did.
+    public enum Outcome: Equatable, Sendable {
+        case removed(path: String)
+        /// The check found the clone in use or outside the clones folder, so it stays.
+        case kept(reason: String)
+        /// The delete itself failed.
+        case failed(message: String)
+    }
+
+    /// Deletes the clone `removal` allows, after the caller checked again whether a run uses it. Keeps a clone the
+    /// check blocks.
+    public static func remove(
+        _ removal: Removal,
+        root: URL,
+        delete: (_ path: String, _ root: URL) throws -> Void = { try ManagedClones.remove($0, root: $1) }
+    ) -> Outcome {
+        switch removal {
+        case let .blocked(reason):
+            return .kept(reason: reason)
+        case let .allowed(path):
+            do {
+                try delete(path, root)
+                return .removed(path: path)
+            } catch {
+                return .failed(message: "Couldn't remove the clone: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Deletes the clone at `path` after checking, with symlinks resolved, that it is inside `root` and isn't

@@ -7,7 +7,7 @@ Description:
 Reviewer findings need quoted evidence.
 </linear_issue_body>
 
-Recorded decisions (a person's answers to this ticket's decision requests; they are part of its scope):
+Recorded decisions (a person's answers to this ticket's decision requests and the rulings they gave in comments; they are part of its scope):
 <linear_issue_decisions>
 D1: Remove the legacy prompt partials here, or leave them for TP-891? Answer: Defer to TP-891: don't make that change. Scope: Deferred to TP-891.
 </linear_issue_decisions>
