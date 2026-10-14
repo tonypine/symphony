@@ -78,6 +78,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
   describe "fetch/3" do
     test "an unknown repo, a repo without a GitHub repository and a number that isn't one" do
       assert PullRequestPage.fetch("elsewhere", "448", opts()) == {:error, :unknown_repo}
+      assert PullRequestPage.fetch("odd", "448", opts(github_repos: %{"odd" => "a/b/c/d"})) == {:error, :unknown_repo}
       assert PullRequestPage.fetch("symphony", "x", opts()) == {:error, :not_found}
       assert PullRequestPage.fetch("symphony", "0", opts()) == {:error, :not_found}
       assert PullRequestPage.fetch("symphony", nil, opts()) == {:error, :not_found}

@@ -96,13 +96,22 @@ defmodule SymphonyElixir.PullRequestPage do
 
     with {:ok, slug} <- Map.fetch(github_repos, repo_key) |> ok_or(:unknown_repo),
          {:ok, number} <- parse_number(number),
-         {:ok, page} <- cached_page(repo_key, number, slug, opts) do
+         {:ok, url} <- github_url(slug, number) |> ok_or(:unknown_repo),
+         {:ok, page} <- cached_page(repo_key, number, url, opts) do
       {:ok, live_page(page, opts)}
     end
   end
 
   defp ok_or({:ok, value}, _reason), do: {:ok, value}
   defp ok_or(:error, reason), do: {:error, reason}
+
+  defp github_url(slug, number) do
+    case String.split(slug, "/") do
+      [owner, repo] -> {:ok, "https://github.com/#{owner}/#{repo}/pull/#{number}"}
+      [host, owner, repo] -> {:ok, "https://#{host}/#{owner}/#{repo}/pull/#{number}"}
+      _other -> :error
+    end
+  end
 
   defp parse_number(number) when is_integer(number) and number > 0, do: {:ok, number}
 
@@ -124,14 +133,14 @@ defmodule SymphonyElixir.PullRequestPage do
 
   # Cache
 
-  defp cached_page(repo_key, number, slug, opts) do
+  defp cached_page(repo_key, number, url, opts) do
     key = {repo_key, number}
     now = Keyword.get_lazy(opts, :now_ms, fn -> System.monotonic_time(:millisecond) end)
     ttl = Keyword.get_lazy(opts, :ttl_ms, fn -> Config.settings!().polling.interval_ms end)
 
     case lookup(key) do
       {at, page} when now - at < ttl -> {:ok, page}
-      _stale_or_none -> repo_key |> build(number, github_url(slug, number), opts) |> keep(key, now)
+      _stale_or_none -> repo_key |> build(number, url, opts) |> keep(key, now)
     end
   end
 
@@ -155,13 +164,6 @@ defmodule SymphonyElixir.PullRequestPage do
     :ets.insert(@table, {key, entry})
   rescue
     ArgumentError -> false
-  end
-
-  defp github_url(slug, number) do
-    case String.split(slug, "/") do
-      [owner, repo] -> "https://github.com/#{owner}/#{repo}/pull/#{number}"
-      [host, owner, repo] -> "https://#{host}/#{owner}/#{repo}/pull/#{number}"
-    end
   end
 
   # The page
