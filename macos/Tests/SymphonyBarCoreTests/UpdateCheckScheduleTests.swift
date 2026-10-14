@@ -178,6 +178,29 @@ final class UpdateCheckScheduleTests: XCTestCase {
         )
     }
 
+    func testACommittedValueOutOfRangeIsMovedWithTheNote() {
+        let low = UpdateCheckSchedule.committed(0, current: 5, note: nil)
+        XCTAssertEqual(low.minutes, 1)
+        XCTAssertEqual(low.note, "Between 1 and 60 minutes. 0 was changed to 1.")
+        let high = UpdateCheckSchedule.committed(120, current: 5, note: nil)
+        XCTAssertEqual(high.minutes, 60)
+        XCTAssertEqual(high.note, "Between 1 and 60 minutes. 120 was changed to 60.")
+    }
+
+    func testTheFieldWritingBackTheMovedValueKeepsTheNote() {
+        let note = UpdateCheckSchedule.clampedLine(typed: 0, to: 1)
+        let written = UpdateCheckSchedule.committed(1, current: 1, note: note)
+        XCTAssertEqual(written.minutes, 1)
+        XCTAssertEqual(written.note, note)
+    }
+
+    func testANewValueInRangeClearsTheNote() {
+        let note = UpdateCheckSchedule.clampedLine(typed: 0, to: 1)
+        let typed = UpdateCheckSchedule.committed(10, current: 1, note: note)
+        XCTAssertEqual(typed.minutes, 10)
+        XCTAssertNil(typed.note)
+    }
+
     func testTheFailureReasonDropsThePrefix() {
         XCTAssertEqual(
             UpdateChecker.failureReason("Couldn't check for updates: couldn't reach GitHub"),

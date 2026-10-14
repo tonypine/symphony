@@ -105,6 +105,15 @@ public struct UpdateCheckSchedule: Equatable {
         return "Between \(range.lowerBound) and \(range.upperBound) minutes. \(typed) was changed to \(minutes)."
     }
 
+    /// The minutes to store and the note to show after the field commits `typed` over `current`: a value out of
+    /// range is moved into it with `clampedLine`. A commit of the value already stored, such as the field writing
+    /// back the moved value, keeps `note`; another value in range clears it.
+    public static func committed(_ typed: Int, current: Int, note: String?) -> (minutes: Int, note: String?) {
+        let minutes = AppSettings.clampedReleaseCheckMinutes(typed)
+        if minutes != typed { return (minutes, clampedLine(typed: typed, to: minutes)) }
+        return (minutes, typed == current ? note : nil)
+    }
+
     /// "just now" under a minute, otherwise for example "2 min ago".
     static func ago(_ date: Date, now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(date))

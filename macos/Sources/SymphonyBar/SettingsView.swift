@@ -13,10 +13,13 @@ struct SettingsView: View {
         Binding(
             get: { model.settings.releaseCheckMinutes },
             set: { typed in
-                let minutes = AppSettings.clampedReleaseCheckMinutes(typed)
-                model.releaseCheckNote =
-                    minutes == typed ? nil : UpdateCheckSchedule.clampedLine(typed: typed, to: minutes)
-                model.settings.releaseCheckMinutes = minutes
+                let committed = UpdateCheckSchedule.committed(
+                    typed,
+                    current: model.settings.releaseCheckMinutes,
+                    note: model.releaseCheckNote
+                )
+                model.releaseCheckNote = committed.note
+                model.settings.releaseCheckMinutes = committed.minutes
             }
         )
     }
