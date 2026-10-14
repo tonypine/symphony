@@ -12,6 +12,11 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   ticket is linked to it as blocked-by, and a recurring failure attaches its evidence as a comment
   on the fix ticket it already has. A reused fix ticket keeps the priority it was filed at.
 
+  The fix ticket is assigned to the user the scope repo's route polls with (its `assignee`, else
+  `issues.linear.assignee`, `me` being the API key's user), so Symphony dispatches it: an unassigned
+  ticket falls outside an assignee-filtered poll. With no assignee configured, or when it cannot be
+  resolved, it takes the affected ticket's assignee.
+
   `SymphonyElixir.SelfHeal` takes this module through `opts[:fixer]`, so tests use a fake and no
   Linear call is made.
   """
@@ -19,7 +24,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   require Logger
 
   alias SymphonyElixir.{Config, Linear}
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Client, Issue}
 
   # Linear's priority scale: 0 none, 1 urgent, 2 high, 3 medium, 4 low.
   @priority 2
@@ -27,14 +32,16 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
 
   @doc "Files the fix ticket `attrs` (a `scope`, a `component`, a `title` and a `description`)."
   @spec create(map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def create(%{scope: _scope} = attrs, opts) do
-    with {:ok, team, project} <- target(attrs, opts) do
+  def create(%{scope: scope} = attrs, opts) do
+    with {:ok, repo} <- repo(scope, opts),
+         {:ok, team, project} <- target(attrs, repo) do
       Linear.Adapter.create_issue(%{
         title: attrs.title,
         description: attrs.description,
         priority: Keyword.get(opts, :priority, priority(Map.get(attrs, :issue))),
         team: team,
         project: project,
+        assignee_id: assignee_id(scope, repo, Map.get(attrs, :issue), opts),
         state: @todo_state
       })
     end
@@ -64,16 +71,35 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   # is the affected ticket's when the fix belongs to its own repo, so Symphony picks it up there,
   # else the scope repo's first routed project. With no team at all the lane reports it rather than
   # filing somewhere arbitrary.
-  defp target(%{scope: scope} = attrs, opts) do
-    with {:ok, repo} <- repo(scope, opts) do
-      issue = Map.get(attrs, :issue)
-      own_repo? = scope == Map.get(attrs, :repo_key)
+  defp target(%{scope: scope} = attrs, repo) do
+    issue = Map.get(attrs, :issue)
+    own_repo? = scope == Map.get(attrs, :repo_key)
 
-      case present(issue_team(issue)) || present(Map.get(repo, :team)) do
-        nil -> {:error, {:self_heal_team_unknown, scope}}
-        team -> {:ok, team, (own_repo? && present(issue_project(issue))) || List.first(Map.get(repo, :projects) || [])}
-      end
+    case present(issue_team(issue)) || present(Map.get(repo, :team)) do
+      nil -> {:error, {:self_heal_team_unknown, scope}}
+      team -> {:ok, team, (own_repo? && present(issue_project(issue))) || List.first(Map.get(repo, :projects) || [])}
     end
+  end
+
+  # The user the scope repo's route polls with, read from its issue filter (`me` already resolved to
+  # the API key's user), else the affected ticket's assignee. `nil` leaves the ticket unassigned,
+  # which only happens when neither names anyone.
+  defp assignee_id(scope, repo, issue, opts) do
+    routed =
+      case Keyword.get(opts, :scope_filter, &Client.repo_scope_filter/1).(repo) do
+        {:ok, filter} ->
+          filter |> get_in(["assignee", "id", "in"]) |> List.wrap() |> List.first()
+
+        {:error, reason} ->
+          Logger.warning(
+            "Self-heal could not resolve the fix ticket's assignee #{issue_context(issue)} repo=#{scope} reason=#{inspect(reason)}; " <>
+              "using the affected ticket's assignee"
+          )
+
+          nil
+      end
+
+    present(routed) || present(issue_assignee_id(issue))
   end
 
   # High, unless the affected ticket is more urgent: its fix must be dispatched wherever it is.
@@ -85,6 +111,12 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
 
   defp issue_project(%Issue{project: %{name: name}}), do: name
   defp issue_project(_issue), do: nil
+
+  defp issue_assignee_id(%Issue{assignee_id: assignee_id}), do: assignee_id
+  defp issue_assignee_id(_issue), do: nil
+
+  defp issue_context(%Issue{id: id, identifier: identifier}), do: "issue_id=#{id} issue_identifier=#{identifier}"
+  defp issue_context(_issue), do: "issue_id= issue_identifier="
 
   defp present(value) when is_binary(value) and value != "", do: value
   defp present(_value), do: nil
