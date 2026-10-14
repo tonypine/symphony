@@ -75,7 +75,12 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
     :ok
   end
 
-  defp repo(team, projects), do: [repo: fn _scope -> {:ok, %{team: team, projects: projects}} end]
+  # The scope repo, and the issue filter its route polls with (no assignee unless a test gives one).
+  defp repo(team, projects, scope_filter \\ {:ok, %{}}) do
+    [repo: fn _scope -> {:ok, %{team: team, projects: projects}} end, scope_filter: fn _repo -> scope_filter end]
+  end
+
+  defp assignee_filter(ids), do: {:ok, %{"assignee" => %{"id" => %{"in" => ids}}}}
 
   defp created_input do
     {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssue("))
@@ -96,6 +101,53 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
       assert input["projectId"] == "p1"
       assert input["title"] == "Self-heal: repair the qa_environment block"
       assert input["priority"] == 2
+      refute Map.has_key?(input, "assigneeId")
+    end
+
+    test "assigns the fix ticket to the user the scope repo's route polls with, so Symphony picks it up" do
+      opts = [
+        repo: fn _scope -> {:ok, %{team: "TP", projects: ["Fix Project"], assignee: "me"}} end,
+        scope_filter: fn repo ->
+          send(self(), {:scope_filter, repo})
+          assignee_filter(["viewer-id"])
+        end
+      ]
+
+      assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, %Issue{assignee_id: "someone-else"}), opts)
+
+      assert_received {:scope_filter, %{assignee: "me"}}
+      assert created_input()["assigneeId"] == "viewer-id"
+    end
+
+    test "a route with no assignee gives the fix ticket the affected ticket's assignee" do
+      issue = %Issue{assignee_id: "affected-assignee"}
+
+      assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, issue), repo("TP", ["Fix Project"]))
+      assert created_input()["assigneeId"] == "affected-assignee"
+
+      Process.delete(:graphql_calls)
+      assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, issue), repo("TP", ["Fix Project"], assignee_filter([])))
+      assert created_input()["assigneeId"] == "affected-assignee"
+    end
+
+    test "an assignee that cannot be resolved still files the fix ticket, with the affected ticket's assignee" do
+      opts = repo("TP", ["Fix Project"], {:error, :missing_linear_api_token})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          issue = %Issue{id: "affected-id", identifier: "TP-1", assignee_id: "affected-assignee"}
+          assert {:ok, _ticket} = Fixer.create(Map.put(create_attrs(), :issue, issue), opts)
+        end)
+
+      assert log =~ "issue_id=affected-id issue_identifier=TP-1 repo=#{@scope} reason=:missing_linear_api_token"
+      assert created_input()["assigneeId"] == "affected-assignee"
+
+      Process.delete(:graphql_calls)
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, _ticket} = Fixer.create(create_attrs(), opts) end)
+
+      assert log =~ "issue_id= issue_identifier= repo=#{@scope}"
+      refute Map.has_key?(created_input(), "assigneeId")
     end
 
     test "an Urgent affected ticket files an Urgent fix ticket, so tickets.priorities dispatches it" do

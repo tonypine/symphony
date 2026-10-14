@@ -2615,11 +2615,14 @@ Rules:
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
   waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
-  reused one keeps its priority. A fix ticket is reused only while it is open and was filed for the
-  same failure (the same normalized cause); a terminal one, or one for another failure of the same
-  component, gets a new fix ticket instead. A QA answer may name an open ticket that already tracks the
-  missing QA tool (`covered_by`); the hold then waits on that ticket, linked as blocked-by, and
-  nothing is filed. A missing QA tool or QA host capability is never `needs_person`: only a secret,
+  reused one keeps its priority. A new fix ticket is assigned to the user the fix's repo polls for
+  (its route's `assignee`, else `issues.linear.assignee`), so Symphony dispatches it; with none
+  configured, or one that cannot be resolved, it takes the affected ticket's assignee. A fix ticket
+  is reused only while it is open and was filed for the same failure (the same normalized cause); a
+  terminal one, or one for another failure of the same component, gets a new fix ticket instead. A
+  QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
+  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A missing QA tool or
+  QA host capability is never `needs_person`: only a secret,
   an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a
   `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge
