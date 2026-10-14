@@ -2,7 +2,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentSandboxConfig
-  alias SymphonyElixir.ClaudeCode.AppServer
+  alias SymphonyElixir.ClaudeCode.{AppLaunchHook, AppServer}
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.OpenRouter.{Models, Stub}
   import Bitwise, only: [band: 2]
@@ -789,6 +789,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert get_in(contents, ["sandbox", "enabled"]) == true
         refute Map.has_key?(contents, "mcpServers")
 
+        # The hook that keeps Bash from starting a macOS app sits next to the settings.
+        settings_dir = Path.dirname(settings_path)
+        assert contents["hooks"] == AppLaunchHook.settings(settings_dir)
+        assert [{hook_path, hook_script}] = AppLaunchHook.files(settings_dir)
+        assert File.read!(hook_path) == hook_script
+
         {:ok, mcp_config} = Jason.decode(File.read!(mcp_config_path))
 
         {shim_command, shim_args, shim_env} =
@@ -1395,6 +1401,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert traced_command =~ "mkdir -p"
         assert traced_command =~ ".claude-plugin/plugin.json"
         assert traced_command =~ "SKILL.md"
+        assert traced_command =~ "app-launch-hook.pl"
+        assert traced_command =~ "PreToolUse"
         # A worker keeps its own tool caches: this host's cache folder is not writable there.
         refute traced_command =~ SymphonyElixir.AgentCaches.config().root
       after

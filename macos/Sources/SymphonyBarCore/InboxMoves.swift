@@ -8,7 +8,6 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
     case approveAndMerge
     case sendToRework
     case restart
-    case signOff
     /// Answers a decision request: the ticket continues in its phase, or the answer directs a move.
     case decide
     case unblock
@@ -23,7 +22,6 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge…"
         case .sendToRework: "Send to Rework…"
         case .restart: "Restart…"
-        case .signOff: "Sign Off…"
         case .decide: "Send Decision…"
         case .unblock: "Unblock…"
         }
@@ -37,7 +35,6 @@ public enum InboxMove: String, CaseIterable, Equatable, Identifiable {
         case .approveAndMerge: "Approve and Merge"
         case .sendToRework: "Send to Rework"
         case .restart: "Restart"
-        case .signOff: "Sign Off"
         case .decide: "Send Decision"
         case .unblock: "Unblock"
         }
@@ -72,8 +69,9 @@ public struct InboxToolbar: Equatable {
     public var defaultCommand: InboxCommand? { buttons.first.flatMap { $0.enabled ? $0.command : nil } }
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
-    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR Approve and Merge… and Send to Rework…, with Open PR
-    /// the default while a check is red (D2b), and ⋯ Restart…; a final verification Sign Off…; a blocked ticket
+    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR waiting on its merge confirmation Approve and Merge…
+    /// and Send to Rework…, which answer the request, with Open PR the default while a check is red (D2b), and
+    /// ⋯ Restart…; a PR with no request to answer only its links and ⋯ Restart…; a blocked ticket
     /// Unblock… and ⋯ Restart…, which also lifts a dispatch-loop hold. Actions and clarify items keep their links.
     /// Restart (the human-only full reset) sits under ⋯ on all three, so it takes a deliberate trip through the menu
     /// and its consequence sheet. An action carrying an
@@ -93,13 +91,16 @@ public struct InboxToolbar: Equatable {
                 overflow: [.move(.sendToRework)] + restart
             )
         case .pr:
+            // Symphony has no move of its own for a PR: it reaches the Inbox on its merge confirmation, a decision
+            // request, and both moves answer that request through `decide`.
+            guard item.review.action?.commentID != nil, item.review.action?.confirmingOption != nil else {
+                return InboxToolbar(buttons: links, overflow: restart)
+            }
             let moves = [move(.approveAndMerge), move(.sendToRework)]
             if item.review.pullRequest?.hasRedCheck == true, let openPR = links.first, case .link(.openPR) = openPR.command {
                 return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: restart)
             }
             return InboxToolbar(buttons: moves + links, overflow: restart)
-        case .finalVerification:
-            return InboxToolbar(buttons: [move(.signOff)] + links, overflow: [])
         case .blocked:
             return InboxToolbar(buttons: [move(.unblock)] + links, overflow: restart)
         case .action:
@@ -110,13 +111,63 @@ public struct InboxToolbar: Equatable {
                 if case .link(.copySteps) = button.command, action?.options.isEmpty == false { return false }
                 return true
             }
-            guard action?.commentID != nil, action?.decision != nil else {
+            guard let action, action.commentID != nil, action.decision != nil else {
                 return InboxToolbar(buttons: actionLinks, overflow: [])
             }
-            return InboxToolbar(buttons: [move(.decide)] + actionLinks, overflow: [.move(.sendToRework)])
+            // The write-in picked with nothing in it has no answer to send.
+            let blankWriteIn = action.isWriteIn(picks) && action.answer(picks) == nil
+            return InboxToolbar(buttons: [move(.decide, enabled: !blankWriteIn)] + actionLinks, overflow: [.move(.sendToRework)])
         case .clarify:
             return InboxToolbar(buttons: links, overflow: [])
         }
+    }
+}
+
+extension InboxReview.Action {
+    /// The option that confirms the request: the one whose effect moves the ticket to the state its hold carries
+    /// (a merge confirmation's Merge), as Symphony reads a pick. Nil for an ordinary decision, which carries none.
+    public var confirmingOption: Option? {
+        guard let confirm else { return nil }
+        return options.first { $0.effect?.localizedCaseInsensitiveContains("moves to \(confirm)") == true }
+    }
+
+    /// The index of the option Send Decision sends: the Director's pick, else the recommended one; `writeInIndex`
+    /// for the write-in; nil when none is picked.
+    public func pickedIndex(_ picks: DecisionPicks) -> Int? {
+        guard let decision, let index = picks.pick(0, in: decision), options.indices.contains(index) || index == writeInIndex else {
+            return nil
+        }
+        return index
+    }
+
+    /// The option Send Decision sends, nil when none is picked or the write-in is.
+    public func pickedOption(_ picks: DecisionPicks) -> Option? {
+        pickedIndex(picks).flatMap { options.indices.contains($0) ? options[$0] : nil }
+    }
+
+    /// True when the write-in (N11) is picked: Send Decision sends the Director's own words.
+    public func isWriteIn(_ picks: DecisionPicks) -> Bool {
+        pickedIndex(picks) == writeInIndex
+    }
+
+    /// What Send Decision posts: the question with the picked option's label, or with the Director's own words when
+    /// the write-in is picked; nil when nothing is picked, or the write-in is blank.
+    public func answer(_ picks: DecisionPicks) -> ControlAction.DecisionPick? {
+        guard let index = pickedIndex(picks) else { return nil }
+        let text = index == writeInIndex ? picks.writeIn.trimmingWhitespace() : options[index].label
+        return text.isEmpty ? nil : ControlAction.DecisionPick(question: question ?? "", answer: text)
+    }
+}
+
+extension InboxItem {
+    /// True when the item carries a request the Inbox answers: its options are picked, and Send Decision sends one.
+    public var answerable: Bool { review.action?.commentID != nil && review.action?.decision != nil }
+
+    /// The option a number key picks in the item's request; nil for another key, or a request the Inbox doesn't
+    /// answer.
+    public func optionIndex(forKey key: Character) -> Int? {
+        guard kind == .action, answerable else { return nil }
+        return review.action?.optionIndex(forKey: key)
     }
 }
 
@@ -132,9 +183,12 @@ extension InboxReview {
 /// option.
 public struct DecisionPicks: Equatable {
     public var picks: [Int: Int]
+    /// What the Director wrote in a request's write-in (N11), kept with the picks while they look at other items.
+    public var writeIn: String
 
-    public init(picks: [Int: Int] = [:]) {
+    public init(picks: [Int: Int] = [:], writeIn: String = "") {
         self.picks = picks
+        self.writeIn = writeIn
     }
 
     /// The option shown picked in decision `index`: the Director's pick, else the recommended one.
@@ -157,13 +211,40 @@ public struct DecisionPicks: Equatable {
     }
 }
 
+/// The Director's picks and write-ins across the Inbox, by issue id: each item keeps its own while the Director looks
+/// at other items, until its answer is sent.
+public struct InboxPicks: Equatable {
+    private var byItem: [String: DecisionPicks] = [:]
+
+    public init() {}
+
+    /// The picks of the item with issue id `itemID`; an item not touched yet has none.
+    public subscript(itemID: String) -> DecisionPicks { byItem[itemID] ?? DecisionPicks() }
+
+    /// Picks option `option` in decision `decision` of the item.
+    public mutating func pick(_ option: Int, decision: Int, itemID: String) {
+        byItem[itemID, default: DecisionPicks()].picks[decision] = option
+    }
+
+    /// Keeps the words written in the item's write-in (N11). Returns true when they turned blank or stopped being
+    /// blank, the one change Send Decision… shows; the field shows the words themselves.
+    @discardableResult
+    public mutating func writeIn(_ text: String, itemID: String) -> Bool {
+        let wasBlank = self[itemID].writeIn.trimmingWhitespace().isEmpty
+        byItem[itemID, default: DecisionPicks()].writeIn = text
+        return wasBlank != text.trimmingWhitespace().isEmpty
+    }
+
+    /// Forgets the item's picks once they were sent.
+    public mutating func clear(_ itemID: String) {
+        byItem[itemID] = nil
+    }
+}
+
 /// The consequence sheet of a move (C17, P5, D12d): the question as its title, what happens in Linear, what stays
 /// the same, the options (Rework's required reason), and Cancel with the verb.
 public struct ConsequenceSheet: Equatable, Identifiable {
     public static let waitingState = "Waiting on sub-tickets"
-    public static let reviewState = "In Review"
-    public static let humanReviewState = "Human Review"
-    public static let todoState = "Todo"
 
     public var move: InboxMove
     /// The Inbox item's issue id.
@@ -174,18 +255,24 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var stays: String
     /// The picks a decisions sheet posts, listed in it.
     public var picks: [ControlAction.DecisionPick]
+    /// True when Send Decision sends the Director's own words (N11) instead of an option.
+    public var isWriteIn: Bool
+    /// Those words, quoted in the sheet; nil while the write-in is blank, and for every other sheet.
+    public var quote: String?
     /// True when the move answers a decision request instead of moving the ticket on its own.
     public var isDecision: Bool
     /// The request a decision answers, as one decision; nil for the moves that don't answer one.
     public var request: InboxReview.Decision?
     /// The id of the request comment the answer replies under, nil for the moves that don't answer one.
     public var requestCommentID: String?
-    /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in In Review).
+    /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in Plan Review).
     /// The banner follows Symphony's answer instead, which knows the workflow's states.
     public var targetState: String?
 
     public var id: String { "\(itemID):\(move.rawValue)" }
     public var verb: String { move.verb }
+    /// Whether the sheet lists the picks it posts: Send Decision names its one pick in the title instead.
+    public var listsPicks: Bool { !picks.isEmpty && move != .decide }
     /// Send to Rework and Restart use the destructive style.
     public var isDestructive: Bool { move == .sendToRework || move == .restart }
     /// Send to Rework and Restart can't be sent without a reason.
@@ -200,14 +287,16 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         itemID = item.id
         identifier = item.identifier
         let id = item.identifier
-        // An action carrying a request is answered through `decide`, whatever the button: the reply under the
-        // request comment is what closes it, and a plain move would leave the hold behind. Without the request
-        // comment there is nothing to reply under, so neither button answers one.
-        let answersRequest = item.kind == .action && item.review.action?.commentID != nil
-        isDecision = (move == .decide || move == .sendToRework) && answersRequest
+        // An action or a PR carrying a request is answered through `decide`, whatever the button: the reply under
+        // the request comment is what closes it, and a plain move would leave the hold behind. Without the request
+        // comment there is nothing to reply under, so no button answers one.
+        let answersRequest = [.action, .pr].contains(item.kind) && item.review.action?.commentID != nil
+        isDecision = [.decide, .sendToRework, .approveAndMerge].contains(move) && answersRequest
         request = isDecision ? item.review.action?.decision : nil
         requestCommentID = isDecision ? item.review.action?.commentID : nil
         self.picks = []
+        isWriteIn = false
+        quote = nil
         switch move {
         case .approvePlan:
             title = "Approve the plan of \(id)?"
@@ -218,17 +307,21 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 : "The plan stays as written. To change it, send decisions or comment on it in Linear instead."
         case .sendDecisions:
             title = "Send your decisions on \(id)?"
-            // A plan waits in the Inbox in In Review or in the workflow's Human Review state, whatever its name.
-            let humanReview = item.state.map { $0.caseInsensitiveCompare(Self.reviewState) != .orderedSame } ?? false
-            targetState = humanReview ? Self.reviewState : nil
+            // The comment goes in place: a person's comment on a plan under review starts its revision run.
+            targetState = nil
             self.picks = picks.answers(item.review.decisions)
-            happens = (humanReview ? "Moves \(id) from \(item.state ?? "") to \(Self.reviewState), then posts" : "Posts")
-                + " one comment on \(id) with your picks, and Symphony revises the plan from it."
-            stays = "The plan isn't approved: it comes back to the Inbox once Symphony has revised it."
+            happens = "Posts one comment on \(id) with your picks, and Symphony revises the plan from it."
+            stays = "The plan stays in \(item.state ?? "Plan Review") and isn't approved: it comes back to the Inbox once Symphony has revised it."
         case .approveAndMerge:
-            title = "Move \(id) to Merging?"
-            targetState = "Merging"
-            happens = "Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
+            // Confirming picks the request's option that moves the ticket to the state its hold carries, so
+            // Symphony continues it there exactly as with manual review off.
+            let confirm = item.review.action?.confirm ?? "Merging"
+            title = "Move \(id) to \(confirm)?"
+            targetState = confirm
+            if let request, let option = item.review.action?.confirmingOption {
+                self.picks = [.init(question: request.question.isEmpty ? id : request.question, answer: option.label)]
+            }
+            happens = "Records your answer on \(id) as a reply to its merge request, clears the `Needs Decision` label and moves \(id) to \(confirm): Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
             stays = "Nothing merges while a check is red or pending, and the diff stays on GitHub."
         case .sendToRework:
             title = "Send \(id) to Rework?"
@@ -248,29 +341,32 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = "In Progress"
             happens = "Closes \(id)'s open pull request, removes its workspace so the next run branches fresh from main, supersedes the workpad, and moves \(id) to In Progress."
             stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
-        case .signOff:
-            title = "Sign off \(id)?"
-            targetState = "Done"
-            happens = "Moves \(id) to Done; the parent's close-out run follows."
-            stays = "Nothing else changes in Linear."
         case .decide:
-            title = "Send your decision on \(id)?"
-            self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
-            // A merge confirmation continues into the state its hold names. A request that parked its ticket in
-            // Human Review set no hold: answering it moves the ticket to Todo, so the next run carries the decision
-            // out. An ordinary decision moves nothing.
-            if let confirm = item.review.action?.confirm {
+            // The sheet names the pick and what it does (D12d): `Send "Leave it to TP-891"?` and the option's effect.
+            // A write-in (N11) asks "Send your answer?" and quotes the Director's words.
+            let action = item.review.action
+            let picked = action?.pickedOption(picks)
+            let writeIn = action?.isWriteIn(picks) == true
+            isWriteIn = writeIn
+            title = writeIn ? "Send your answer?" : picked.map { "Send \"\($0.label)\"?" } ?? "Send your decision on \(id)?"
+            self.picks = [action?.answer(picks)].compactMap { $0 }
+            quote = writeIn ? self.picks.first?.answer : nil
+            if action?.confirm != nil, writeIn {
+                // Words that pick none of a confirmation's options ask for a change: Symphony moves the ticket to
+                // In Progress, where its next run takes them up on the same pull request.
+                targetState = "In Progress"
+                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to In Progress, where its next run takes up your answer."
+                stays = "Nothing merges, and the pull request stays open."
+            } else if let confirm = action?.confirm {
+                // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
                 targetState = confirm
                 happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
-            } else if item.state?.caseInsensitiveCompare(Self.humanReviewState) == .orderedSame {
-                targetState = Self.todoState
-                happens = "Records your answer on \(id) as a reply to its request and moves \(id) to \(Self.todoState): the next run carries it out."
-                stays = "Your answer stays on the ticket as the recorded decision, even after Undo."
             } else {
                 targetState = nil
-                happens = "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label: \(id) continues in \(item.state ?? "its phase")."
-                stays = "The ticket doesn't move: the decision is what it was waiting on."
+                happens = picked?.effect
+                    ?? "Records your answer on \(id) as a reply to its request and clears the `Needs Decision` label."
+                stays = "\(id) stays in \(item.state ?? "its phase") until its next run picks up your answer."
             }
         case .unblock:
             title = "Unblock \(id)?"
@@ -290,9 +386,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         return " and promotes \(count) to Todo; \(first.identifier) starts first"
     }
 
-    /// Whether the sheet's button is on for `reason`.
+    /// Whether the sheet's button is on for `reason`; a blank write-in has nothing to send.
     public func canSend(reason: String) -> Bool {
-        !needsReason || !reason.trimmingWhitespace().isEmpty
+        (!isWriteIn || quote != nil) && (!needsReason || !reason.trimmingWhitespace().isEmpty)
     }
 
     /// The control request the sheet's button sends, nil while a required reason is missing.
@@ -302,7 +398,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         switch move {
         case .approvePlan: return .approvePlan(identifier)
         case .sendDecisions: return .decisions(identifier, picks: picks)
-        case .approveAndMerge: return .approvePR(identifier)
+        case .approveAndMerge:
+            guard let requestCommentID, !picks.isEmpty else { return nil }
+            return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
         case .sendToRework:
             guard isDecision, let requestCommentID else { return .rework(identifier, reason: answer) }
             return .decide(
@@ -312,7 +410,6 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 move: "rework"
             )
         case .restart: return .restart(identifier, reason: answer)
-        case .signOff: return .signOff(identifier)
         case .decide:
             guard let requestCommentID else { return nil }
             return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)

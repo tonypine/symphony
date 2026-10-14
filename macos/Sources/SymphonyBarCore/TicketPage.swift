@@ -263,11 +263,11 @@ public struct TicketPage: Equatable {
             phase = .working(stuck: stuck)
         } else if let shipped {
             phase = .done(pullRequest: pullRequest, mergedAt: shipped.completedAt.flatMap(Self.date))
-        } else if waitingOnYou != nil || Self.isState(watching?.state, "Human Review") {
+        } else if waitingOnYou != nil {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
             phase = .waiting(on: landingLeader.map { "\($0) to land\(sharedFiles)" } ?? "CI")
-        } else if let watching, ["In Review", "Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
+        } else if let watching, ["Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
             phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
             let due = retry.dueAt.flatMap(Self.date)
@@ -476,10 +476,10 @@ public struct TicketPage: Equatable {
     static func moveTitle(_ move: AuditRecord) -> String {
         switch move.move {
         case "approve_plan": return "Plan approved by you"
+        // A move Symphony retired; older audit records still name it.
         case "approve_pr": return "Moved to Merging by you"
         case "rework": return "Sent to Rework by you"
         case "decisions": return "Decisions sent by you"
-        case "sign_off": return "Signed off by you"
         case "backlog": return "Moved to Backlog by you"
         case "undo": return "Move undone by you"
         default: return "Moved to \(move.toState ?? "another state") by you"
@@ -502,7 +502,6 @@ public struct TicketPage: Equatable {
 
     private static func type(title: String?, inboxKind: String?) -> String {
         if inboxKind == "plan" { return "Plan" }
-        if title?.hasPrefix("Final verification:") == true || inboxKind == "final_verification" { return "Final verification" }
         return "Ticket"
     }
 

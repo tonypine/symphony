@@ -32,7 +32,6 @@
     "claimed": 0,
     "conflicts": 0,
     "forced": 0,
-    "human_review": 0,
     "retrying": 0,
     "running": 0,
     "shipped_today": 0,
@@ -85,7 +84,6 @@
   },
   "forced": [],
   "generated_at": "2026-10-07T14:20:00Z",
-  "human_review": [],
   "linear_usage": {
     "callers": [
       {

@@ -5,8 +5,15 @@ public enum ReposChange: Equatable {
     case added(key: String, apply: AddRepoApply, madeDefault: String?)
     /// `apply` is nil when Symphony reads the change from `symphony.yml` without a restart.
     case edited(key: String, apply: AddRepoApply?)
-    /// `next` is the repo selected in its place.
-    case disconnected(key: String, apply: AddRepoApply, newDefault: String?, next: String?)
+    /// `next` is the repo selected in its place. `clone` is what deleting Symphony's clone did, nil when it wasn't
+    /// asked for.
+    case disconnected(
+        key: String,
+        apply: AddRepoApply,
+        newDefault: String?,
+        next: String?,
+        clone: ManagedClones.Outcome? = nil
+    )
     case cloneRemoved(key: String, path: String)
     /// Symphony's clone wasn't deleted, because an agent uses it or it isn't in the clones folder.
     case cloneKept(key: String, reason: String)
@@ -20,8 +27,9 @@ public enum ReposChange: Equatable {
             return ReposBanner(key: key, text: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault))
         case let .edited(key, apply):
             return ReposBanner(key: key, text: EditRepo.savedMessage(key: key, apply: apply))
-        case let .disconnected(key, apply, newDefault, next):
-            return ReposBanner(key: next, text: DisconnectRepo.message(key: key, apply: apply, newDefault: newDefault))
+        case let .disconnected(key, apply, newDefault, next, clone):
+            let text = DisconnectRepo.message(key: key, apply: apply, newDefault: newDefault)
+            return Self.withClone(ReposBanner(key: next, text: text), clone, key: key)
         case let .cloneRemoved(key, path):
             return ReposBanner(key: key, text: ManagedClones.removedMessage(key: key, path: path))
         case let .cloneKept(key, reason):
@@ -38,11 +46,30 @@ public enum ReposChange: Equatable {
             return ReposBanner(key: key, text: "Added \(key). Restart Symphony from the menu to connect it.")
         case let .edited(key, _):
             return ReposBanner(key: key, text: "Saved \(key). Restart Symphony from the menu to apply it.")
-        case let .disconnected(key, _, _, next):
-            return ReposBanner(key: next, text: "Disconnected \(key). Restart Symphony from the menu to drop it.")
+        case let .disconnected(key, _, _, next, clone):
+            let text = "Disconnected \(key). Restart Symphony from the menu to drop it."
+            return Self.withClone(ReposBanner(key: next, text: text), clone, key: key)
         case .cloneRemoved, .cloneKept, .failed:
             return banner
         }
+    }
+
+    /// `banner` followed by what deleting the clone did; an error once the clone stays.
+    private static func withClone(_ banner: ReposBanner, _ clone: ManagedClones.Outcome?, key: String) -> ReposBanner {
+        var banner = banner
+        switch clone {
+        case nil:
+            break
+        case let .removed(path)?:
+            banner.text += " " + ManagedClones.removedMessage(key: key, path: path)
+        case let .kept(reason)?:
+            banner.text += " Kept Symphony's clone: \(reason)"
+            banner.style = .error
+        case let .failed(message)?:
+            banner.text += " \(message)"
+            banner.style = .error
+        }
+        return banner
     }
 }
 

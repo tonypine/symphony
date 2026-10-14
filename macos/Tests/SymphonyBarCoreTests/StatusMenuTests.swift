@@ -106,7 +106,7 @@ final class StatusMenuTests: XCTestCase {
 
     func testDetailLinesLeaveWhatWaitsOnYouToItsItems() {
         var waiting = StateSnapshot(
-            running: 2, retrying: 1, updateUnblocks: 1, humanReview: 3,
+            running: 2, retrying: 1, updateUnblocks: 1,
             waitingOnYou: [.init(identifier: "TP-1", kind: .pr, waitingSeconds: 60)]
         )
         waiting.pause = .init(reason: "deploy freeze", since: pausedAt)
@@ -147,7 +147,7 @@ final class StatusMenuTests: XCTestCase {
             StatusMenu.waitingLine(.init(identifier: "TP-2", title: "Fix the poller", kind: .pr, headline: " ", waitingSeconds: 30)),
             "TP-2 · PR · Fix the poller · 30s"
         )
-        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-3", kind: .finalVerification)), "TP-3 · Final verification")
+        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-3", kind: .clarify)), "TP-3 · Clarify")
         XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-4", kind: .action, waitingSeconds: 200_000)), "TP-4 · Action · 2d")
         XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-5", kind: .other("audit"), waitingSeconds: 900)), "TP-5 · Review · 15m")
 

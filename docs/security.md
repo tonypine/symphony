@@ -231,8 +231,30 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   sandbox gets no window server connection and can't draw. Offscreen `ImageRenderer` snapshots
   still work.
 - The profiles still allow LaunchServices (`com.apple.coreservices.launchservicesd`), which the
-  runtimes don't let Symphony turn off. An AppKit program that crashes without a window server
-  may still produce a crash dialog, so the prompt rule is what keeps agents from starting one.
+  runtimes don't let Symphony turn off. The `appkit-dialog` workflow showed what that leaves open,
+  on a disposable macOS runner (run 38452505961): a minimal `NSApplication` + `NSWindow` program
+  started under the agent profile draws no window, but it checks in with LaunchServices, so
+  ReportCrash treats it as an app, and when it crashes the "quit unexpectedly" dialog appears.
+- So Claude Code sessions get a `PreToolUse` hook on the Bash tool
+  (`priv/claude_hooks/app_launch_hook.pl`, written next to the session's `settings.json` and run
+  with `/usr/bin/perl`) that refuses a command starting a macOS app: a Mach-O program naming
+  `NSApplication`, `NSApplicationMain`, `NSWindow`, `NSPanel`, `NSAlert`, `NSStatusBar` or
+  SwiftUI's `App.main`, the products `swift run` would start, or a Swift script run with `swift`
+  that uses one of them. It looks at the program of each command in the line, following `cd`, so
+  `otool -L` or `codesign` on an app still run, and so does a program that only renders SwiftUI
+  views offscreen with `ImageRenderer`. A harness the same line builds isn't on disk yet, and its
+  first run is the one that crashes, so the hook also refuses to run what an earlier command in the
+  line builds from app sources (`swiftc`, `clang`, `cc` or `gcc`, also through `xcrun`, and
+  `swift build`), counts the line's own text as the source when the line writes it (a heredoc),
+  and judges `swift run` of a package by its sources. A copy of an app counts as an app, and the
+  line a shell runs with `-c` (`bash -c '...'`) is checked like the outer one. The hook reads
+  command lines, not what a script runs later or a program named through a variable (`$P`), so
+  the prompt rule still applies. Codex has no such hook.
+- The workflow runs the probe twice outside the sandbox first, to show that the runner draws the
+  window and sees the check-in, then twice in the sandbox, plainly and made to crash. It fails if
+  the sandboxed probe draws a window or the hook lets either command run, and its job summary
+  records the check-in and the dialog. It runs weekly, to catch an SRT or macOS release, and on
+  pull requests that change the probe, the hook or the agent's SRT settings.
 
 ### Optional outer sandbox (Codex + SRT)
 

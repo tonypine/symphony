@@ -546,7 +546,7 @@ defmodule SymphonyElixir.EpicReview do
   defp short_sha(sha) when is_binary(sha), do: String.slice(sha, 0, 12)
 
   # The checklist is the epic's own definition of done, so a `pass` that reports none of its rows,
-  # or skipped most of them, verified nothing (the rule TP-545 set for the final verification). It
+  # or skipped most of them, verified nothing (the rule TP-545 set for epic verification). It
   # is not a pass but a block: retried boundedly, then handed to the self-heal lane, which takes it
   # to a person when only a person can clear it.
   # A carried pass has no steps of its own: the checklist was resolved by the review that earned
@@ -652,6 +652,7 @@ defmodule SymphonyElixir.EpicReview do
       findings: Map.get(result, :findings, []),
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
+      covered_by: Map.get(result, :covered_by),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks),
       checks: checks

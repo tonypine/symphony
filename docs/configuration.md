@@ -660,10 +660,11 @@ agent:
   terminal: the epic review), `breakdown` (other plan ticket: a new, resumed or revised plan),
   `landing` (`Merging`), `code_review` (`Code Review`), `qa` (`QA`), `rework` (`Rework`), `ci_fix`
   (continuation after red CI), `review_feedback` (continuation after PR review comments), and
-  `implementation` (everything else). `close_out` and `final_verification` named the retired
-  legacy machine's runs: they still load and match no run. `pre_push_review` names the pre-push reviewer run, and `qa` the QA
-  agent's runs. `acceptance_gate` is deprecated with the retired gate: it loads with a warning and
-  does nothing.
+  `implementation` (everything else). `close_out` named the retired legacy machine's close-out
+  run: it still loads and matches no run. `pre_push_review` names the pre-push reviewer run, and
+  `qa` the QA agent's runs. `acceptance_gate` is deprecated with the retired gate, and
+  `final_verification` with the retired `Final verification:` tickets: each loads with a warning
+  and does nothing.
 - Resolution per field, for the repository the issue is routed to:
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
   `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
@@ -1506,7 +1507,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
@@ -1517,6 +1518,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
 | `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
+| `qa_put_checkout` | puts a git checkout where the app can open it: clones a `git bundle` the agent made into `checkouts/<remote_name>` in the driver's directory (the run directory on a `worker_host`) with no hooks, sets its `origin` to `remote_url`, and returns its path. Nothing is fetched from GitHub | the bundle files `qa_put_file` refuses, a `remote_url` that is not `https://github.com/<owner>/<repo>`, a `remote_name` that is not a plain file name, a checkout name already taken in the pass |
 | `qa_api_requests` | returns the requests an app launched with `api_fixtures` logged to `api-requests.jsonl` in its QA root since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; on a `worker_host` it reads the log there | a log that cannot be read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
@@ -1630,7 +1632,8 @@ host and the worktree checks still apply there. Then:
   the bundle into the run directory;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
   set, plus `SYMPHONY_BAR_QA_API_FIXTURES` when the agent passes `api_fixtures` (the checked files
-  go over SSH as a tar into a fresh `api-fixtures-<n>/` in the run directory), over an SSH session that forwards the URL's loopback port on the QA host back to the
+  go over SSH as a tar into a fresh `api-fixtures-<n>/` in the run directory) and the stand-ins the
+  agent asks for, over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
 - at the start of the pass Symphony picks three free loopback ports on the Symphony host and
   hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment) and to `build`
@@ -2203,9 +2206,13 @@ lists:
 
 - each open `## Decision needed:` comment. Agents post one with `linear_request_human_action`
   (`title`, `why`, a `decision` with one `question` and 2 to 4 `options`, each with a `label`
-  and an `effect` and exactly one `recommended`, optional `unblocks` and `est_minutes`) when only a
+  and an `effect`, up to three `tradeoffs` and exactly one `recommended`, an optional
+  `decision.recommendation_reason`, and optional `if_unanswered` and `unblocks`) when only a
   person can decide: a product call, a missing secret or permission (add it, or drop what needs
-  it), an account to set up. A request without options is refused, and a person never gets a check
+  it), an account to set up. Every field is written in the Director's words
+  ([the decision writing standard](standards/decision-writing.md)): a request holding backticks,
+  template syntax, a path or file name, a commit hash or an `auto/` or `origin/` branch is refused,
+  with each token and its field named. A request without options is refused, and a person never gets a check
   to run: a check an agent can't run (launching the app, a host crash check, a check on a device)
   belongs to CI or a QA playbook. The update lists the question and the options, the recommended
   one marked. The tool leaves the issue in its phase and sets the **Needs Decision** hold; the hold
@@ -2244,17 +2251,24 @@ a comment in the request format:
 ## Decision needed: Turn on the pre-push hook
 
 **Question:** Turn on the pre-push hook on your laptop?
-**Why:** Pushes skip the format and credo checks without it.
+**Why:** Pushes from your laptop skip the format and lint checks without it.
+**If unanswered:** CI keeps catching what the hook would, a few minutes later.
 **Unblocks:** clean pushes from your laptop
-**Time:** about 2 min
 
 **Options:**
-1. **Turn it on** (recommended): you run `git config core.hooksPath .githooks` in your checkout.
+1. **Turn it on** (recommended): pushes from your laptop run the checks first.
+   - Good: A broken push never reaches CI.
+   - Cost: Each push takes a few seconds longer.
 2. **Leave it off**: CI keeps catching what the hook would.
+
+**Why recommended:** It catches the mistake before anyone waits on CI.
 ```
 
-The older `## Action needed: <title>` heading, with a `**Steps:**` list, is still read. Only the
-heading is required.
+Write it in the Director's words ([the decision writing standard](standards/decision-writing.md)).
+`**If unanswered:**`, `**Why recommended:**` and an option's indented `- Good:`, `- Cost:` and
+`- Risk:` lines are optional. The older `## Action needed: <title>` heading, with a `**Steps:**`
+list, is still read, and so is an older `**Time:**` line, which is ignored. Only the heading is
+required.
 
 **When an action closes.** A request closes when a person replies under it (or answers it in the
 Inbox), when the agent withdraws it, or when its issue reaches a terminal state. A blocked QA
@@ -2273,11 +2287,11 @@ closed while Symphony was stopped keeps its last update until a new action opens
 **The update.** It is written to be read on a phone and acted on without opening anything else:
 
 - one numbered heading per action, so the list scans on a narrow screen;
-- under it, how long it takes and what it unblocks, so the reader can pick what to do first;
-- the why, then the steps as a numbered list, one instruction per line (no tables, which scroll
-  sideways on a phone);
+- under it, what it unblocks, so the reader can pick what to do first;
+- the why and what waits until it is answered, then the steps as a numbered list, one instruction
+  per line (no tables, which scroll sideways on a phone);
 - a closing **Done when** line, saying how the action leaves the list;
-- quickest first, so a short session clears the small ones;
+- ordered by issue, so the list stays put between updates;
 - a footer with the list id, which is how Symphony recognises its own last update.
 
 The update sets the project health: `atRisk` while any action is open, `onTrack` when none is.
@@ -2290,17 +2304,19 @@ A rendered example, for a mix of a decision on release signing and a task labell
 deprecated `human_actions.label`:
 
 ```md
-**2 actions need you.** Quickest first.
+**2 actions need you.**
 
 ### 1. Add the release signing secrets
 
-**~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
+Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on main
 
-**Why:** Every Release run on `main` fails at the signing step without them.
+**Why:** Every Release run on main fails at the signing step without them.
+
+**If unanswered:** Every Release run on main keeps failing, so no build ships.
 
 **Decide:** Add the signing secrets, or ship unsigned builds?
 
-1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
+1. **Add the secrets** (recommended): you add the signing certificate and its password to the repository's Actions secrets; releases are signed again.
 2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
 
 **Done when:** you reply with your pick (or answer it in the Symphony Inbox), or the agent withdraws the request.

@@ -820,7 +820,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
          :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
-         agent = drop_repo_gate_run_profile(agent, repo_agent_path(Map.get(repo, "key"), index)),
+         agent = drop_repo_retired_run_profiles(agent, repo_agent_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
            normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", section_keys("repositories[].acceptance_gate")) do
       normalized =
@@ -981,7 +981,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("effort", Map.get(config, "effort"))
         |> maybe_put("provider", Map.get(config, "provider"))
         |> maybe_put("small_model", Map.get(config, "small_model"))
-        |> maybe_put("run_profiles", drop_gate_run_profile(Map.get(config, "run_profiles"), "agent.run_profiles"))
+        |> maybe_put("run_profiles", drop_retired_run_profiles(Map.get(config, "run_profiles"), "agent.run_profiles"))
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))
         |> maybe_put("epic_lanes", Map.get(concurrency, "epic_lanes"))
@@ -1157,19 +1157,31 @@ defmodule SymphonyElixir.Config.SystemSchema do
     :ok
   end
 
-  # The gate's run profile goes with the gate: the key still loads, says so, and is dropped before
-  # the run kinds are checked.
-  defp drop_gate_run_profile(%{"acceptance_gate" => _profile} = profiles, path) do
-    deprecation_warning("symphony.yml `#{path}.acceptance_gate` is deprecated and has no effect: the acceptance gate is retired. Remove it")
-    Map.delete(profiles, "acceptance_gate")
+  # A retired run kind's profile goes with it: the key still loads, says so, and is dropped before
+  # the run kinds are checked. The acceptance gate is retired, and so are `Final verification:`
+  # tickets: an epic closes in its epic review.
+  @retired_run_profiles [
+    {"acceptance_gate", "the acceptance gate is retired"},
+    {"final_verification", "`Final verification:` tickets are retired, and an epic closes in its epic review"}
+  ]
+
+  defp drop_retired_run_profiles(profiles, path) when is_map(profiles) do
+    Enum.reduce(@retired_run_profiles, profiles, fn {kind, reason}, acc ->
+      if Map.has_key?(acc, kind) do
+        deprecation_warning("symphony.yml `#{path}.#{kind}` is deprecated and has no effect: #{reason}. Remove it")
+        Map.delete(acc, kind)
+      else
+        acc
+      end
+    end)
   end
 
-  defp drop_gate_run_profile(profiles, _path), do: profiles
+  defp drop_retired_run_profiles(profiles, _path), do: profiles
 
-  defp drop_repo_gate_run_profile(%{"run_profiles" => profiles} = agent, path) when is_map(profiles),
-    do: Map.put(agent, "run_profiles", drop_gate_run_profile(profiles, path <> ".run_profiles"))
+  defp drop_repo_retired_run_profiles(%{"run_profiles" => profiles} = agent, path) when is_map(profiles),
+    do: Map.put(agent, "run_profiles", drop_retired_run_profiles(profiles, path <> ".run_profiles"))
 
-  defp drop_repo_gate_run_profile(agent, _path), do: agent
+  defp drop_repo_retired_run_profiles(agent, _path), do: agent
 
   # CI the fix runs could not make green no longer moves to a configured state: it pauses the ticket
   # on a Needs Decision hold.

@@ -1,10 +1,10 @@
 {
   "commented": true,
-  "from_state": "Human Review",
-  "issue_id": "i-90",
-  "issue_identifier": "NOTE-90",
+  "from_state": "QA",
+  "issue_id": "i-206",
+  "issue_identifier": "BIL-206",
   "move": "decide",
-  "moved": false,
-  "to_state": "Human Review",
-  "undo_window_ms": null
+  "moved": true,
+  "to_state": "Merging",
+  "undo_window_ms": 10000
 }

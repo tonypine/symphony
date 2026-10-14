@@ -89,10 +89,10 @@ defmodule SymphonyElixir.MergeConfirmation do
   def request(%Issue{} = issue, summary) do
     %{
       title: "Merge #{label(issue)}",
-      question: "Merge #{label(issue)} into its base branch?",
+      question: "Merge #{mention(issue)} into its base branch?",
       why: why(summary),
-      options: options(summary),
-      est_minutes: 1
+      if_unanswered: "#{label(issue)} waits#{in_state(issue)} and is not merged.",
+      options: options(summary)
     }
   end
 
@@ -253,10 +253,11 @@ defmodule SymphonyElixir.MergeConfirmation do
       {"Recommendation", Map.get(summary, :recommendation)},
       {"Code Review", Map.get(summary, :review)},
       {"QA", Map.get(summary, :qa)},
-      {"PR", Map.get(summary, :pr)}
+      {nil, Request.pull_request(Map.get(summary, :pr))}
     ]
     |> Enum.flat_map(fn
       {_name, nil} -> []
+      {nil, value} -> [value]
       {name, value} -> ["#{name}: #{part(value)}"]
     end)
     |> Enum.join(" · ")
@@ -271,7 +272,7 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   defp options(summary) do
     [
-      %{label: "Merge", effect: "the ticket moves to #{@merging_state} and the machinery merges it", recommended: true},
+      %{label: "Merge", effect: "the ticket moves to #{@merging_state} and Symphony merges its pull request", recommended: true},
       %{
         label: @rework_label,
         effect: "the ticket moves to #{@rework_state} with this summary#{pr_clause(summary)}",
@@ -280,8 +281,17 @@ defmodule SymphonyElixir.MergeConfirmation do
     ]
   end
 
-  defp pr_clause(%{pr: pr}) when is_binary(pr), do: " and the PR #{pr}"
+  defp pr_clause(%{pr: pr}) do
+    case Request.pull_request(pr) do
+      nil -> ""
+      pr -> ", where a run changes #{pr}"
+    end
+  end
+
   defp pr_clause(_summary), do: ""
+
+  defp in_state(%Issue{state: state}) when is_binary(state) and state != "", do: " in #{state}"
+  defp in_state(_issue), do: ""
 
   # The reviewer's own reason, from the ticket's newest `code_review` signal: the approve rows
   # record it as `review_reason` (`SymphonyElixir.CodeReview`). A ticket whose reviewer left none
@@ -301,6 +311,10 @@ defmodule SymphonyElixir.MergeConfirmation do
   end
 
   defp pr_link(_issue, opts), do: Keyword.get(opts, :pr_url)
+
+  # A ticket as the question names it the first time: its identifier and its title.
+  defp mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{label(issue)} (#{title})"
+  defp mention(issue), do: label(issue)
 
   defp label(%Issue{identifier: identifier}) when is_binary(identifier), do: identifier
   defp label(%Issue{id: id}), do: inspect(id)

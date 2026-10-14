@@ -1390,7 +1390,12 @@ The QA agent:
   total size, and MUST hold no symlinks), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
-  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  directory there), and `qa_put_checkout`, which clones a git bundle the agent wrote into a
+  checkout there, without hooks, with `origin` set to the GitHub URL the agent names.
+  `qa_launch_app` MAY point the app, in QA mode only, at stand-ins on the pass's host ports: a
+  fake `gh` that Symphony itself provides (never a script the agent wrote) forwarding each call to
+  the agent's stub, a Linear GraphQL stub, and a folder picker that opens in a checkout
+  `qa_put_checkout` made. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
@@ -1838,9 +1843,10 @@ not require recognizing or validating extension fields unless that extension is 
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`,
-  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` and `final_verification`
-  named the retired close-out and final verification runs: an entry naming them still loads, and
-  no run uses it. Each field resolves, for the issue's routed
+  `pre_push_review`, `qa`, `code_review`, `epic_review`. `close_out` named the retired close-out run: an entry
+  naming it still loads, and no run uses it. `final_verification` (retired with
+  `Final verification:` tickets) and `acceptance_gate` load with a deprecation warning and do
+  nothing. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
   else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
   null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
@@ -2303,6 +2309,9 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   another to land first (the landing order below) is not updated: its state is `waiting_to_land`
   ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
   PR lands or leaves its way, and the first poll after that updates it once.
+- Only a `Merging` PR is updated. A `BEHIND` PR in the Code Review state, the QA state or `Rework`
+  MUST NOT get an update-branch: an agent run syncs its own branch with the base, and a Code Review
+  or QA run starts only on a green head, which an update on every base merge would keep restarting.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
   conflict context, and the fix returns through review. The approval covered the diff before the
@@ -2487,7 +2496,11 @@ Rules:
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
   approval. The implementation prompt reads the section in the description. A ruling a person
-  gives in a plain comment, not under a decision request, is not recorded.
+  gives in a plain comment that opens with `Decision:` or `Ruling:` (any case, bold or not), not as
+  a reply under a decision request, MUST be recorded on the same read, keyed by its comment
+  (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
+  answer the section already records MUST NOT be written again. The agents' comment tools MUST
+  refuse a body that opens that way, so only a person writes a ruling.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
@@ -2514,8 +2527,14 @@ Rules:
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
   waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
-  reused one keeps its priority. Only the same failure recurring with no new information escalates
-  to a `Needs Decision` hold.
+  reused one keeps its priority. A QA answer may name an open ticket that already tracks the
+  missing QA tool (`covered_by`); the hold then waits on that ticket, linked as blocked-by, and
+  nothing is filed. A missing QA tool or QA host capability is never `needs_person`: only a secret,
+  an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
+  for a fix merged into the repository the running build comes from: like the app-update hold on a
+  `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge
+  commit. Only the same failure recurring with no new information escalates to a
+  `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
@@ -3650,14 +3669,21 @@ Scoped Linear tool extension contract:
   never reads its own summary as requirements. The read-only reviewer and QA scopes MUST NOT
   advertise or execute it.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
-  `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
-  one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
-  exactly one of them `recommended`; a request without it, or with fewer than 2 options, MUST be
+  `why`, a `decision`, an optional `unblocks` and an optional `if_unanswered` (what waits or
+  repeats until someone answers). The `decision` holds one non-blank `question`, 2 to 4 `options`,
+  each with a non-blank `label` and `effect` and up to three `tradeoffs` (`kind` `good`, `cost` or
+  `risk`, and a non-blank `text`), exactly one of them `recommended`, and an optional
+  `recommendation_reason`; a request without it, or with fewer than 2 options, MUST be
   refused with an error that says so. A person only gets decisions: a check an agent can't run
   belongs to CI or a QA playbook instead. Every field MUST pass the
-  same secret scan as comments before any Linear call. It posts a
-  `## Decision needed: <title>` comment (the question, then the numbered options with the
-  recommended one marked, and no steps) that Symphony's human-action project updates list, and
+  same secret scan as comments before any Linear call, and MUST be refused when it holds code the
+  Director doesn't read (`docs/standards/decision-writing.md`): backticks, `{%` or `%}`, a path or a
+  file name with an extension, a 7 to 40 character hex run with a digit and a letter, or an
+  `auto/` or `origin/` branch. The error names each token and its field; ticket identifiers and PR
+  numbers (`PR #448`) pass. It posts a
+  `## Decision needed: <title>` comment (the question, the why, `**If unanswered:**`, then the
+  numbered options with the recommended one marked and each option's trade-offs indented under it
+  as `- Good:`, `- Cost:` or `- Risk:` lines, then `**Why recommended:**`, and no steps) that Symphony's human-action project updates list, and
   those updates still read a hand-written `## Action needed: <title>` comment. It MUST NOT move the
   current issue: it sets the `Needs Decision` hold, which pauses the issue in its phase, and adds
   no label of its own. The request stays open until a person answers it (a reply under it, or the
@@ -4598,15 +4624,37 @@ Minimum endpoints:
     - `plan`: `brief`, the latest `## Review brief` comment parsed into
       `headline`, `what_to_review` (`text` and `links`), `what_changed`, `decisions` (`question`,
       `options`, `recommendation`, `recommended`: the index of the recommended option, null when it
-      can't be told), `moves` (`approve`, `change`, `reject`) and `supervisor_check`, with `format`
+      can't be told), `moves` (`approve`, `change`, `reject`), with `format`
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, and `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order.
-    - `action`: `title`, `question`, `why`, `unblocks`, `est_minutes`, `steps`, `options` (`label`,
-      `effect`, `recommended`) and `requested_at`.
+    - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
+      (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
+      and `requested_at`.
     - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
       `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
       `questions`.
+  - Each item also has `references` and `context`, resolved on the same poll
+    (`SymphonyElixir.Inbox.References`):
+    - `references` maps each ticket identifier (`TP-891`) and pull request (`PR #448`, or a bare
+      `#448`, read as a pull request of the item's repo) the item's text mentions, written exactly as
+      in the text, to a `ticket` (`identifier`, `title`, `repo_key`, `state`, `summary`: its Symphony
+      status line, else its description's first sentence, plain text of at most 160 characters,
+      `url`, `parent` `{identifier, title}`, `pull_request` `{number, url, checks}`, `waiting_on`:
+      what it waits on in the ticket page's words, null while it runs or once done), a
+      `pull_request` (`number`, `repo_key`, `url`, `title`, `summary`: the first sentence of its
+      `## This PR` section, else of its body, `review_state` `open`/`changes_requested`/`approved`/
+      `merged`/`closed`, `review_rounds`: Symphony's Code Review rounds on it, `files`, `additions`,
+      `deletions`, `checks` `passed`/`failed`/`pending`/null, `ticket`), or `missing` with the best
+      guess at its `url` when it can't be read. A failed read never fails the item.
+    - `context` is where the item's ticket sits: `parent` (`identifier`, `title`, `done`, `total`,
+      `children`: each sub-ticket's Linear state type in landing order, canceled ones left out),
+      `pull_request` (`number`, `url`, `checks`, `sent_back`: how many times Code Review sent it
+      back), `blocked_by`, `blocks` and `related` (`identifier`, `title`, `state`), and
+      `earlier_decisions` (`at`, `title`, `answer`: the requests on the ticket a person answered,
+      newest first, at most 3).
+    - One Linear query per poll reads every item's ticket and every ticket mentioned; GitHub is read
+      once per pull request, and a read is reused for two minutes.
   - `counts` has `total` and the number of items of each kind.
   - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
     in place of the list, as `/api/v1/state` does.
@@ -4615,7 +4663,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 1, "pr": 0, "final_verification": 0, "action": 0, "clarify": 1, "blocked": 0},
+      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0},
       "items": [
         {
           "issue_id": "i-330",
@@ -4629,7 +4677,7 @@ Minimum endpoints:
           "waiting_seconds": 5460,
           "url": "https://linear.app/acme/issue/SHOP-330",
           "review": {
-            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": [], "supervisor_check": null},
+            "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": []
           }
         },
@@ -4644,6 +4692,28 @@ Minimum endpoints:
     }
     ```
 
+- `GET /api/v1/pull_requests/<repo_key>/<number>`
+  - Returns a pull request's page for the Mac app (`SymphonyElixir.PullRequestPage`), read-only:
+    `number`, `url`, `title`, `repo_key`, `ticket` (`identifier`, `title`, `state`, `waiting_on`)
+    when the pull request belongs to a ticket, `github` (`available`/`unavailable`), `state`
+    (`open`/`merged`/`closed`), `review_state` (as in the Inbox's references), `opened_at`,
+    `last_pushed_at`, `merged_at`, `summary` (the body's `## This PR` section as plain text, else
+    its first paragraph), `review_history` (Symphony's Code Review and QA verdicts on the pull
+    request, oldest first: `at`, `kind` `code_review`/`qa`, `verdict`, `reason`: the one-line
+    reason the run recorded with it), `areas` (the changed files grouped by area, never named:
+    `name` `Agent instructions`/`App`/`Server`/`Documentation`/`Tests`/`Other`, `files`,
+    `additions`, `deletions`), `health` (`checks` with `state` `passed`/`failed`/`pending` and the
+    count of each, `code_review` with the latest `verdict` and the `round`, `qa`: the latest QA
+    verdict, `overlaps`: the other open pull requests Symphony tracks that change one of the same
+    files, `{number, ticket}`) and `size` (`files`, `additions`, `deletions`, `commits`).
+  - The ticket is the one Linear has the pull request attached to, else the one Symphony's PR
+    review record or the pull request's title or branch names.
+  - When GitHub can't be read, return `200` with what Linear and Symphony's records know and
+    `github: "unavailable"` (`state`, `summary`, `size` and `health.checks` null, `areas` empty).
+    An unknown repo returns `404` `unknown_repo`, a pull request GitHub doesn't have `404`
+    `not_found`.
+  - A page GitHub answered is kept for one poll interval (`polling.interval_ms`) per pull request.
+
 - `GET /api/v1/initiatives`
   - Returns the plan tickets (label `plan` or `breakdown`) the operator follows to done, for the Mac
     app's Initiatives: active ones, then those in review (the Plan Review state or `Epic Review`), then those done in the last 7 days. A canceled plan, one in
@@ -4655,20 +4725,16 @@ Minimum endpoints:
     their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
     the last list. Its Linear requests count as `initiatives`.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `final_verification`, `counts`
+    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `counts`
     and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out and a final verification
-    sub-issue left from before the drain set apart. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
     `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
     state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
     Review, QA, Merging, CI Fix or Epic Review with nothing running) or `slot` (it can run and waits
     for a free slot).
-  - `final_verification` is, for an epic planned before the drain, its `Final verification:`
-    sub-issue in the same shape plus `open_tickets`, the number of sub-tickets not done yet; null
-    without one, as for every epic planned since.
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
   - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),

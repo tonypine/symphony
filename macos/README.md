@@ -213,7 +213,7 @@ set (or, in Development mode, no checkout folder).
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
   overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
-  (breakdown, close-out, final verification, implementation, rework, CI fix, review feedback, landing,
+  (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
   pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
   the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
   inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
@@ -342,8 +342,8 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
 Open Logs opens `menubar-child.log`.
 
-While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans and PRs in
-`In Review` or `Human Review`, final verifications to sign off, open decisions, tickets the quality gate
+While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans in
+`Plan Review`, open decisions, tickets the quality gate
 holds or skipped, and tickets an access hold pauses in place), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
 each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
 ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
@@ -475,8 +475,8 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
 - **Disconnect…** at the foot, in red.
 
 While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
-few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete disconnects the selected one (after
-the same confirmation), and ⌘W closes the window.
+few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete opens the same Disconnect sheet as
+**Disconnect…** and **−**, and ⌘W closes the window.
 
 When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
 set in Settings instead. Their source, Linear routing and manual review come from the file, and
@@ -555,12 +555,19 @@ or no longer has the repo.
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
   them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
-- **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
-  lines right above it (with no blank line between), and leaves one blank line between its neighbours.
-  It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
-  stays until you remove it. It is disabled for the only repo. For the `default: true` repo, the alert
-  asks which repo becomes the default. Symphony then restarts as after Add Repo.
-- **Remove Clone…** (managed repos only) deletes Symphony's clone under `workspaces.clones_root`
+- **Disconnect…** (the detail's foot, the sidebar **−**, the context menu or Delete) opens a sheet,
+  "Disconnect <key>?", saying what happens and what stays on disk, with **Cancel** and **Disconnect**.
+  Disconnect removes the entry from `repositories:` together with the comment lines right above it
+  (with no blank line between), and leaves one blank line between its neighbours. It never deletes a
+  local folder: a local checkout and its branches stay as they are. It is disabled for the only repo,
+  with "Symphony needs at least one repo." on hover and next to it, and the sheet doesn't open. For
+  the `default: true` repo, the sheet's **New default** pop-up picks the repo that becomes the default.
+  For a managed repo whose clone exists, **Also delete Symphony's clone (<path>)** deletes the clone
+  in the same step. It can be checked only when Remove Clone… could run (below), and otherwise shows
+  why under it, following each poll. After removing the entry the app checks again as Remove Clone
+  does, so a clone that became busy is kept and the banner says why. Symphony then restarts as after
+  Add Repo.
+- **Remove Clone…** (managed repos only), for a repo that stays connected, deletes Symphony's clone under `workspaces.clones_root`
   after you confirm; the repo stays connected and Symphony clones it again when it starts or on its
   next dispatch. It is disabled, with the reason next to it, while an agent runs in a worktree of
   the clone (any repo with the same source), and while Symphony is starting or doesn't list its running
@@ -867,20 +874,21 @@ state. The window opens on the Inbox the first time.
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
   Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
-  **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
-  verification **Sign Off…**; an action asking a decision **Send Decision…** (its options are the picks) and,
+  waiting on its merge confirmation **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the
+  default), which answer that request like **Send Decision…**: Approve and Merge picks the option that moves the ticket
+  to `Merging`, and a PR with no request to answer offers only its links; an action asking a decision **Send Decision…** (its options are the picks) and,
   under ⋯, **Send to Rework…** as the redirect; a blocked ticket **Unblock…**, which clears the access or
   dispatch-loop hold and lets it continue in place, and **Restart…** under ⋯. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
   Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
   the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
   verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
-  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`, `decide`, `unblock`), and what went wrong
+  (`POST /api/v1/control/approve_plan`, `rework`, `decisions`, `decide`, `unblock`), and what went wrong
   shows in the sheet. After a move the selection moves to the next item (the moved one leaves the list once
   Symphony's next poll sees the move), and a banner at the foot says "Moved to Merging" with **Undo** for 10
   seconds, which moves the ticket back (`POST /api/v1/control/undo`). The banner and the selection follow
-  Symphony's answer (`moved`, `to_state`), so decisions that moved a plan out of the workflow's Human Review
-  state, whatever its name, offer Undo too. Unblock moves no ticket, so its banner just says "Hold cleared" with
-  no Undo.
+  Symphony's answer (`moved`, `to_state`). Send Decisions posts its comment in place and leaves the plan in
+  `Plan Review`, so its banner just says "Sent your decisions" with no Undo. Unblock moves no ticket, so its banner
+  just says "Hold cleared" with no Undo.
 
 - **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), in three columns like the
   Inbox. The list groups the plan tickets as Active, In review and Done recently (a week after they are done),
@@ -934,8 +942,9 @@ state. The window opens on the Inbox the first time.
 
 - **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
   under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
-  moves from the app (approve, merge, rework, decisions, sign-off, Backlog, Stop Run) are recorded like any
-  other. The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  moves from the app (approve, merge, rework, decisions, Backlog, Stop Run) are recorded like any
+  other; older records may still show a sign-off, a move retired with `Final verification:` tickets.
+  The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
   it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
   whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
   that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the
@@ -992,6 +1001,7 @@ make          # builds an ad-hoc-signed build/Symphony.app
 make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
+make snapshots  # renders the views in Tests/Snapshots offscreen (no window) and rewrites their PNGs
 make clean    # removes build/ and .build/
 make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
@@ -1064,7 +1074,7 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Four more variables, read only in QA mode:
+Six more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -1087,8 +1097,12 @@ Four more variables, read only in QA mode:
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
-  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and
-  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
+  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
+  `inbox-empty` and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
+  and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
+  earlier decision; and the plan TP-923, whose brief mentions TP-947), of the pull request page: `pull-request`
+  (`inbox-decision`'s content plus PR #448's page: two Code Review verdicts, four areas and TP-891's PR #446
+  overlapping it), of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
   conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
   shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
@@ -1100,6 +1114,11 @@ Four more variables, read only in QA mode:
   SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \
     ./build/Symphony.app/Contents/MacOS/SymphonyBar
   ```
+- `SYMPHONY_QA_LINEAR_URL` points the Add Repo sheet's Linear queries (projects and labels) at a stub GraphQL
+  endpoint instead of `https://api.linear.app/graphql`, such as `http://localhost:4101/graphql`. Only an `http`
+  or `https` URL on a loopback host counts, since the sheet sends `LINEAR_API_KEY` with each query.
+- `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` makes the Add Repo sheet's folder picker open in that absolute folder, so a
+  QA pass, which can't type a path into the panel, picks a prepared checkout with the panel's Choose button.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses

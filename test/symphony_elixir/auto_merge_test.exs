@@ -350,6 +350,29 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:issue_state_update, @issue_id, "Done"}
   end
 
+  # Before `Merging` the branch is left to the phase's owner on purpose: the agent syncs it in its
+  # own run, and a Code Review or QA run starts only on a green head, which an update-branch on
+  # every base merge would keep restarting. Auto-merge brings it current once it is approved.
+  test "a PR a base merge put BEHIND gets no update-branch in Code Review, QA or Rework, and one in Merging" do
+    now = ~U[2026-10-03 12:00:00Z]
+
+    for state <- ["Code Review", "QA", "Rework"] do
+      RunStore.delete_pr_review(@repo_key, @issue_id)
+      put_run!(now)
+      track([issue(state)])
+      activity(head: "head-1", base: "base-2", merge_state: "BEHIND")
+
+      assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(now)
+      refute_received {:update_branch, _url, _head}
+      refute_received {:enable_auto_merge, _url, _request}
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+    end
+
+    track([issue("Merging")])
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "updating_branch"}]}} = poll(DateTime.add(now, 30))
+    assert_received {:update_branch, @pr_url, "head-1"}
+  end
+
   test "a BEHIND PR that waits for another to land gets no update-branch until that one lands" do
     now = ~U[2026-10-03 12:00:00Z]
     settings = Config.settings!()
@@ -540,8 +563,8 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert %{state: "enabled", enabled_head_sha: "head-2", disabled_at: nil} = PrReviewPoller.auto_merge(@issue_id)
   end
 
-  test "a designed repo's conflicting Merging PR enters CI Fix, stays off on its head and lands after the fix" do
-    repo = [key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+  test "a conflicting Merging PR enters CI Fix, stays off on its head and lands after the fix" do
+    repo = [key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]
     write_auto_merge_workflow!(repos: [repo])
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)

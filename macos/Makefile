@@ -35,7 +35,7 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all app bundle qa-app install run test e2e clean
+.PHONY: all app bundle qa-app install run test e2e snapshots clean
 
 all: app
 
@@ -103,7 +103,7 @@ bundle: app
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict --deep "$(APP)"
 
-# Builds the app with this checkout's Symphony embedded, for Auto Review's macos_app QA
+# Builds the app with this checkout's Symphony embedded, for the QA state's macos_app playbook
 # (see docs/configuration.md), so the app's `symphony check` runs this code. Symphony is
 # the checkout's escript with its shebang pointed at this Mac's Erlang, so it runs without
 # mise or PATH. It reports the commit in source-commit, which `git archive` fills in (a QA
@@ -134,6 +134,18 @@ test:
 # rollback end to end in an isolated instance. See Tests/e2e/README.md.
 e2e:
 	python3 Tests/e2e/update_restart_e2e.py
+
+# Renders the snapshots in Tests/Snapshots offscreen with ImageRenderer (no NSApplication, no window) and
+# writes their PNGs there: the app's views, minus main.swift, compiled with the snapshot program.
+# `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
+snapshots:
+	swift build $(SWIFT_FLAGS) --product SymphonyBarCore
+	mkdir -p $(BUILD_DIR)
+	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/snapshot-module-cache \
+		-I "$$(swift build $(SWIFT_FLAGS) --show-bin-path)/Modules" -o $(BUILD_DIR)/render-snapshots \
+		Tests/Snapshots/main.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
+		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o
+	$(BUILD_DIR)/render-snapshots
 
 clean:
 	rm -rf $(BUILD_DIR) .build

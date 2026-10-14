@@ -65,14 +65,14 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D2a · Inbox: a plan to review
 
-- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked (and Final verifications), each row with
+- **Shows:** the list grouped as Plans, Pull requests, Actions, Clarify, Blocked, each row with
   identifier, title, one-line ask and age. The review: header with kind, wait and state badges; the brief's headline;
   **What to review** (the plan's Linear documents and HTML); **Decisions needed** as radio groups with the recommended
   option marked and picked; **Sub-tickets** in landing order with their Kano class or blocker.
 - **Actions:** **Approve Plan…** (prominent), **Send Decisions** (enabled when a pick changes; posts one comment, which
   starts Symphony's plan revision run), **Open in Linear**, ⋯ **Send to Rework…**.
-- **States:** a final verification item shows its checklist with each requirement's evidence, and **Sign Off…** (moves
-  it to Done) instead of Approve. A scope that hides items says "2 more in other repos".
+- **States:** a scope that hides items says "2 more in other repos". (The final verification item and its
+  **Sign Off…** were retired with `Final verification:` tickets: an epic closes in its epic review.)
 - **Conventions:** three-column `NavigationSplitView` like Mail; after an answer the selection moves to the next item;
   ↑↓ and Return work in the list.
 - **Data:** the Inbox list and the review brief (section 2).
@@ -83,24 +83,50 @@ later journeys point back to it. The mock draws every screen under its ID.
   its 7 sub-tickets… SHOP-331 starts first"); the decisions posted with it; how to change the plan instead.
 - **States:** for a PR: "Move BIL-206 to Merging? Symphony turns on auto-merge, and GitHub merges once checks pass."
   For Send to Rework: a required reason field and "Symphony closes the PR and starts over" in the destructive style.
+  For Send Decision (D2c): the pick as the title, `Send "Update them in TP-892 now"?`, the option's effect, then
+  "TP-892 stays in Rework until its next run picks up your answer." For a write-in answer: "Send your answer?" and
+  the Director's words quoted under it.
 - **Conventions:** sheet with a default button; afterwards a banner "Moved to Merging · Undo" for 10 s (seen on D2c).
 - **Data:** writes through Symphony's control API (decision DD4).
 
 #### D2b · Inbox: a pull request to approve
 
-- **Shows:** the PR's purpose in one sentence; **Checks**: CI, Auto Review QA (with its report), the acceptance gate's
-  verdict and its agreement record on this repo, the review agent; **Change**: files and lines, the largest files;
-  **QA screenshots**.
-- **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub.
-- **States:** a red check turns its row red and makes Open PR the default button; with the gate in Enforce, the PR
-  reaches the Inbox only on the gate's escalations, and says so.
-- **Data:** the ticket's PR, CI checks, QA result and gate verdict (section 2).
+- **Shows:** the PR's purpose in one sentence; **Checks**: CI, Code Review (the review agent's verdict and reasons), QA
+  (with its report); **Change**: files and lines, the largest files; **QA screenshots**.
+- **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub. Both
+  moves answer the PR's decision request through `decide`: Approve and Merge picks the option that moves the ticket
+  to the state its hold carries (`Merging`), and Send to Rework redirects it. Symphony has no PR move of its own.
+- **States:** a red check turns its row red and makes Open PR the default button; the PR reaches the Inbox only when
+  the repo's manual review holds the step into `Merging` for you, or Code Review escalates it, and says so. A PR with
+  no request to answer offers only its links.
+- **Data:** the ticket's PR, CI checks, Code Review verdict and QA result (section 2).
 
-#### D2c · Inbox: an action only the Director can do
+#### D2c · Inbox: a decision only the Director can make
 
-- **Shows:** a `linear_request_human_action` request: why, the numbered steps, about how long, what it unblocks, which
-  run asked. The banner at the bottom is the Undo after D12d.
-- **Actions:** **Open in Linear** (prominent), **Copy Steps**.
+- **Shows:** a `linear_request_human_action` request, question first. The header's badge, and the list's group, read
+  **Decision** (DD-7); the title has no ask line under it. Then, in order: **Your decision** (N5), the full question;
+  **What happened** (N6), the `why` in at most two paragraphs and, when the request says what waits, a row with
+  `exclamationmark.triangle` and "If you don't answer: …"; **Options**, one card per option (N7) stacked, each with
+  its label, its effect under the label, its trade-offs (N8) and, on the recommended card, "Why we recommend it:" and
+  the reason. After the options, the write-in (N11): **Answer in my own words…** with "Tell the agent what to do
+  instead.", its number the one after the last option. The card header reads "Press 1–N to pick · ⌘↩ to send", N
+  counting the write-in. The recommended option starts picked. There is
+  no time estimate (DD-2), and what the request unblocks waits for the context card (TP-955). Every field is written
+  in the Director's words ([the decision writing standard](../standards/decision-writing.md)). The banner at the
+  bottom is the Undo after D12d.
+- **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
+  option with that number while the list or the review has the keyboard; a click on a card picks it.
+- **States:** an older hand-written request with steps and no options reads **Action** (group **Actions**), keeps its
+  ask line and lists its numbered **Steps**, with **Copy Steps**. A request missing `why` or `if_unanswered` leaves out
+  that part; without both, What happened isn't drawn. A narrow review (under 560 pt) moves each Recommended badge under
+  its label and hides the key hints. The write-in picked (D2c "Answer in your own words") shows a text field under it,
+  three lines tall and growing to eight, with the hint "The agent reads this as your answer. Name tickets by their
+  number; they become links."; picking it puts the keyboard in the field, where number keys type. The text is kept
+  per item with the picks, so another item and back keeps it, until the answer is sent. **Send Decision…** is off
+  while the field is blank; sending posts the text through `decide` as the pick's `answer`. On a merge confirmation,
+  words that pick none of its options ask for a change, and the ticket goes to `In Progress`. A plan's decisions
+  (C16) have no write-in: the plan's Change move already takes free text. The picked write-in's offscreen snapshots, light and
+  dark, are in `macos/Tests/Snapshots` (`make snapshots` renders them again).
 - **Data:** the open human-action requests (section 2).
 
 #### D2d · Inbox: a ticket to clarify
@@ -135,9 +161,9 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D1 · Overview: flowing
 
-- **Shows:** the status sentence (P1); the flow strip (P2): Queued → Working → Auto Review → Waiting on you → Merging →
-  Shipped today, each tile a count with one line of context, only Waiting on you tinted; **Now working** (agent runs,
-  QA passes and landings, with phase, turn, last activity, time and tokens); **Next up**; on the right **Today**
+- **Shows:** the status sentence (P1); the flow strip (P2): Queued → Working → Code Review & QA → Waiting on you →
+  Merging → Shipped today, each tile a count with one line of context, only Waiting on you tinted; **Now working** (agent
+  runs, QA passes and landings, with phase, turn, last activity, time and tokens); **Next up**; on the right **Today**
   (tokens against the daily budget and each provider's limit), **Initiatives** (progress by state), repos health in
   one line.
 - **States:** flowing (here), needs attention (J3), paused (J4), idle (below). Sections with nothing to say are not
@@ -255,7 +281,6 @@ later journeys point back to it. The mock draws every screen under its ID.
 | 1 | Opens Initiatives: BIL-200, 4 of 8 | D5 |
 | 2 | Reads its sub-tickets in landing order; BIL-206 waits on them | D5 |
 | 3 | Clicks Review on BIL-206 | D2b |
-| 4 | Sees the final verification waiting on 3 tickets | D5 |
 
 #### D5 · Initiatives
 
@@ -363,7 +388,10 @@ Most of the dashboard reads data `/api/v1/state` already serves. These are the g
 | --- | --- | --- | --- |
 | **Inbox list**: `In Review` and `Human Review` tickets, open human-action requests, quality-gate holds and skips, each with kind, ask and age | D1, D2, D13, D14 | `human_review` counts `Human Review` only; holds and skips are listed | A list endpoint: ADR 0001's "Waiting on you" (TP-617) plus the Clarify kind |
 | **Review content**: a plan's documents, decisions with options and recommendation, sub-tickets; a PR's checks, QA result, gate verdict and size | D2a, D2b | Agents write a `## Review brief` comment at each handoff (TP-723); it isn't served | The brief in a structured form, per ticket |
-| **Director's moves**: approve a plan, approve and merge a PR, send to Rework with a reason, send decisions, move to Backlog with a note, sign off a final verification | D2, D12c, D12d | Pause, resume, stop and force exist in the control API | New control API endpoints that make the Linear move and write the audit record (DD4) |
+| **Reference details** (TP-949): what each ticket and pull request an item's text mentions is, for its chip and popover (N1–N3) | D2c, all Inbox kinds | Mentions are plain text | `references` on every `/api/v1/inbox` item, keyed by the mention as written: a `ticket` (`identifier`, `title`, `repo_key`, `state`, `summary`, `url`, `parent`, `pull_request` with its `checks`, `waiting_on` in the ticket page's words), a `pull_request` (`number`, `repo_key`, `url`, `title`, `summary`, `review_state`, `review_rounds`, `files`, `additions`, `deletions`, `checks`, `ticket`), or `missing` with its best-guess `url`; resolved on Symphony's poll (DD-6) |
+| **Ticket context** (TP-949): where the ticket sits, for the context card and progress strip (N9, N10) | D2c, all Inbox kinds | "Time and what it unblocks" only | `context` on every `/api/v1/inbox` item: `parent` (`identifier`, `title`, `done`, `total`, `children` state types in landing order), `pull_request` (`number`, `url`, `checks`, `sent_back`), `blocked_by`, `blocks`, `related` (`identifier`, `title`, `state`), `earlier_decisions` (`at`, `title`, `answer`, newest first, at most 3) |
+| **Pull request page** (TP-959): a pull request's story, Symphony's verdicts on it, what it changes and how healthy it is (D15, DS8) | D15, reached from any pull request mention (DD-3) | The Inbox's references carry a pull request's one-line summary and counts only | `GET /api/v1/pull_requests/:repo_key/:number`: `number`, `url`, `title`, `repo_key`, `ticket` (`identifier`, `title`, `state`, `waiting_on`), `state`, `review_state`, `opened_at`, `last_pushed_at`, `merged_at`, `summary` (the `## This PR` section as plain text), `review_history` (Code Review and QA verdicts oldest first: `at`, `kind`, `verdict`, `reason`), `areas` (changed files by area, never named: `name`, `files`, `additions`, `deletions`), `health` (`checks` with counts, latest `code_review` verdict and round, latest `qa` verdict, `overlaps` with other open tracked PRs sharing a file), `size` (`files`, `additions`, `deletions`, `commits`); `github: "unavailable"` with what Linear and Symphony's records know when GitHub is down; `404` `unknown_repo` or `not_found`; kept for one poll interval |
+| **Director's moves**: approve a plan, approve and merge a PR, send to Rework with a reason, send decisions, move to Backlog with a note | D2, D12c, D12d | Pause, resume, stop and force exist in the control API | New control API endpoints that make the Linear move and write the audit record (DD4) |
 | **Initiatives**: plan tickets with sub-tickets, states and blocked-by links | D5, D1 | `epic_lanes` (slots only) | An initiatives endpoint |
 | **History**: tokens per day and per ticket, merged tickets per day | D8, D9, D1 | Today's budget only | A history endpoint over the run records |
 

@@ -248,7 +248,8 @@ defmodule SymphonyElixir.CodeReview do
       person != [] ->
         head = workspace_head(workspace, opts)
         record_verdict(issue, opts, head, "approve")
-        escalate(issue, opts, settings, head, "the reviewer approved; " <> reasons_text(person), :continue)
+        Logger.info("Code Review for #{issue_label(issue)} matched a person rule: #{reasons_text(person)}")
+        escalate(issue, opts, settings, head, person_why(person), :continue)
 
       risk != [] ->
         deepen(issue, workspace, opts, settings)
@@ -628,7 +629,8 @@ defmodule SymphonyElixir.CodeReview do
       {:error, {:code_review_inconclusive, reason}}
     else
       record_verdict(issue, opts, head, "inconclusive_escalated")
-      escalate(issue, opts, settings, head, "inconclusive after #{retries} retries: #{inspect(reason)}", :rework)
+      Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} stayed inconclusive: #{inspect(reason)}")
+      escalate(issue, opts, settings, head, "The reviewer could not reach a decision on the change after #{retries} more tries.", :rework)
     end
   end
 
@@ -670,13 +672,13 @@ defmodule SymphonyElixir.CodeReview do
   defp escalation_request(issue, reason, qa_state, recommend) do
     %{
       title: "Code Review escalated #{issue_label(issue)}",
-      question: "How should #{issue_label(issue)} continue after Code Review escalated it?",
+      question: "Code Review could not settle #{issue_mention(issue)} on its own. How should it continue?",
       why: reason,
       options: [
         %{label: "Continue to #{qa_state}", effect: "the ticket moves to #{qa_state} and its QA run starts", recommended: recommend == :continue},
         %{label: "Send to Rework", effect: "the ticket moves to Rework with these reasons", recommended: recommend == :rework}
       ],
-      est_minutes: 5
+      if_unanswered: "#{issue_label(issue)} stays in Code Review and goes no further."
     }
   end
 
@@ -749,9 +751,24 @@ defmodule SymphonyElixir.CodeReview do
   # then binds to nothing rather than to the wrong commit.
   defp workspace_head(workspace, opts), do: WorkspaceHead.read(workspace, Keyword.get(opts, :worker_host))
 
+  # The person rules that matched an approved ticket, as the Director reads them: what asks for a
+  # person, without the rule's pattern or the label's spelling.
+  defp person_why(reasons) do
+    ["The reviewer approved the change." | Enum.map(reasons, &person_reason/1)]
+    |> Enum.uniq()
+    |> Enum.join(" ")
+  end
+
+  defp person_reason(%{rule: :label}), do: "The ticket carries a label that asks for a person to review it before it goes on."
+  defp person_reason(%{rule: :ticket_pattern}), do: "The ticket's own words ask for a person to review it before it goes on."
+
   defp verdict_reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason
   defp verdict_reason(%{comments: [comment | _]}) when is_binary(comment), do: comment
   defp verdict_reason(_result), do: "reviewer blocked the change"
+
+  # A ticket as a question names it the first time: its identifier and its title.
+  defp issue_mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{issue_label(issue)} (#{title})"
+  defp issue_mention(issue), do: issue_label(issue)
 
   defp issue_label(%Issue{identifier: identifier}) when is_binary(identifier), do: identifier
   defp issue_label(%Issue{id: id}), do: inspect(id)

@@ -26,6 +26,12 @@ extension DesignTokens.SystemColor {
     }
 }
 
+extension EnvironmentValues {
+    /// True while a view renders offscreen with `ImageRenderer` (the snapshots in `Tests/Snapshots`), which can't
+    /// draw an AppKit-backed control: the few that are draw a SwiftUI stand-in of the same size instead.
+    @Entry var offscreenSnapshot = false
+}
+
 // The one exception to system colors: the chart palette's validated light and dark pair (§3.3).
 extension DesignTokens.ChartSeries {
     /// The series color, its light or dark value following the appearance.
@@ -122,13 +128,25 @@ struct ConnectionState: View {
 /// C10: a titled section on the solid content surface.
 struct Card<Content: View>: View {
     let title: String
+    /// A quiet line at the title's trailing end, such as the keys that work in the card.
+    var hint: String?
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Text(title)
-                .font(DesignTokens.TypeStyle.section.font)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(title)
+                    .font(DesignTokens.TypeStyle.section.font)
+                    .accessibilityAddTraits(.isHeader)
+                    .layoutPriority(1)
+                if let hint {
+                    Spacer(minLength: DesignTokens.Space.s2)
+                    Text(hint)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
             content
         }
         .padding(DesignTokens.Space.s4)

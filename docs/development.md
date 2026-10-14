@@ -155,6 +155,14 @@ macOS runner image, on pull requests and pushes to `main` that change `lib/symph
 `lib/symphony_elixir/agent_sandbox_config.ex`, `lib/symphony_elixir/http_server.ex`,
 `scripts/qa-dashboard-server.sh` or the tests themselves. It is not a required check.
 
+The test tagged `:appkit_dialog` runs a minimal AppKit program under the agent profile, checks
+that it draws no window and that the Bash hook refuses to start it, and records whether it checks
+in with LaunchServices and shows a crash dialog (see [security](security.md#no-windows-on-the-host-desktop)).
+It puts windows and dialogs on screen itself, so never run it on your Mac: the
+[`appkit-dialog` workflow](../.github/workflows/appkit-dialog.yml) runs it on a disposable macOS
+runner, weekly and on pull requests that change the probe, the test, the hook or
+`lib/symphony_elixir/agent_sandbox_config.ex`. It is not a required check.
+
 ## Required checks
 
 `main` requires the `make-all`, `macos` and `validate-pr-description` checks. A required check

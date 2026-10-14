@@ -11,6 +11,16 @@ defmodule SymphonyElixir.IssueSummaryTest do
     summary
   end
 
+  describe "status/1" do
+    test "reads the block's status line, and nil without a block or a status" do
+      {:ok, description} = IssueSummary.put("Intro.", summary!(%{"status" => "PR open, waiting on Code Review"}), ~D[2026-10-13])
+      assert IssueSummary.status(description) == "PR open, waiting on Code Review"
+      assert IssueSummary.status("Intro.") == nil
+      assert IssueSummary.status("Intro. " <> @start <> " no status " <> @finish) == nil
+      assert IssueSummary.status(nil) == nil
+    end
+  end
+
   describe "new/1" do
     test "folds text onto one line and drops comment markers, so a field can't close the block" do
       assert {:ok, summary} =

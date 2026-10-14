@@ -124,6 +124,7 @@ public struct AuditRecord: Equatable, Identifiable {
     static func moveTitle(_ move: String) -> String {
         switch move {
         case "approve_plan": "Approved the plan"
+        // A move Symphony retired; older audit records still name it.
         case "approve_pr": "Approved the PR"
         case "rework": "Sent to Rework"
         case "decisions": "Sent decisions"

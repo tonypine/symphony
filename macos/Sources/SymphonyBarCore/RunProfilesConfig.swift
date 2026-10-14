@@ -21,7 +21,6 @@ public enum RunProfilesConfigError: LocalizedError, Equatable {
 public enum RunKind: String, CaseIterable, Identifiable {
     case breakdown
     case closeOut = "close_out"
-    case finalVerification = "final_verification"
     case implementation
     case rework
     case ciFix = "ci_fix"
@@ -36,7 +35,6 @@ public enum RunKind: String, CaseIterable, Identifiable {
         switch self {
         case .breakdown: return "Breakdown"
         case .closeOut: return "Close-out"
-        case .finalVerification: return "Final verification"
         case .implementation: return "Implementation"
         case .rework: return "Rework"
         case .ciFix: return "CI fix"

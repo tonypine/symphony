@@ -129,7 +129,7 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
   in review, then done in the last 7 days, each with its sub-tickets in landing order, what each
-  waits on, its final verification, counts by stage and its slot line from `epic_lanes`. Read from
+  waits on, counts by stage and its slot line from `epic_lanes`. Read from
   what Symphony cached on its last poll: it makes no Linear request.
   """
   @spec initiatives_payload(GenServer.name(), timeout(), GenServer.name(), GenServer.name()) :: map()
@@ -177,8 +177,7 @@ defmodule SymphonyElixirWeb.Presenter do
       completed_at: initiative.completed_at,
       counts: initiative.counts,
       slot: initiative_slot(lanes, initiative.id),
-      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload/1),
-      final_verification: initiative.final_verification && initiative.final_verification |> sub_ticket_payload() |> Map.put(:open_tickets, initiative.final_verification.open_tickets)
+      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload/1)
     }
   end
 
@@ -228,7 +227,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
         %{
           generated_at: generated_at,
-          counts: Map.new(~w(plan pr final_verification action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          counts: Map.new(~w(plan pr action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
           items: Enum.map(items, &inbox_item_payload(&1, now))
         }
 
@@ -252,7 +251,9 @@ defmodule SymphonyElixirWeb.Presenter do
       waiting_since: iso8601(item.waiting_since),
       waiting_seconds: waiting_seconds(item.waiting_since, now),
       url: URLUtils.present_url(item.url),
-      review: inbox_review_payload(item.review)
+      review: inbox_review_payload(item.review),
+      references: Map.get(item, :references, %{}),
+      context: Map.get(item, :context)
     }
   end
 

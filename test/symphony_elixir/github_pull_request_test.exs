@@ -1062,4 +1062,147 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, :invalid_pr_url} = PullRequest.commit_included?("not a url", "m1", "b", gh_runner: runner)
     end
   end
+
+  describe "fetch_summary/2" do
+    test "reads a pull request's title, body, state, review decision, size and checks in one gh call" do
+      test_pid = self()
+      pr_url = "https://github.com/acme/app/pull/448"
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        {Jason.encode!(%{
+           "number" => 448,
+           "url" => pr_url,
+           "title" => "TP-892 Retire two review steps",
+           "body" => "## This PR\n\nGone.",
+           "state" => "OPEN",
+           "reviewDecision" => "",
+           "changedFiles" => 12,
+           "additions" => 120,
+           "deletions" => 480,
+           "headRefName" => "auto/TP-892",
+           "headRefOid" => "abc",
+           "statusCheckRollup" => [
+             %{"name" => "test", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+             %{"name" => "lint", "status" => "IN_PROGRESS", "conclusion" => nil}
+           ]
+         }), 0}
+      end
+
+      assert {:ok,
+              %{
+                number: 448,
+                url: ^pr_url,
+                title: "TP-892 Retire two review steps",
+                body: "## This PR\n\nGone.",
+                state: "OPEN",
+                review_decision: nil,
+                changed_files: 12,
+                additions: 120,
+                deletions: 480,
+                head_ref_name: "auto/TP-892",
+                checks: "pending"
+              }} = PullRequest.fetch_summary(pr_url, gh_runner: runner)
+
+      assert_received {:gh, ["pr", "view", ^pr_url, "--json", fields]}
+      assert fields =~ "statusCheckRollup"
+    end
+
+    test "answers an error for a bad URL, a failed gh call or an unreadable payload" do
+      pr_url = "https://github.com/acme/app/pull/448"
+      assert {:error, :invalid_pr_url} = PullRequest.fetch_summary("https://example.com/x", gh_runner: fn _args, _opts -> flunk("no call") end)
+
+      answering = fn output, status ->
+        PullRequest.fetch_summary(pr_url, gh_runner: fn _args, _opts -> {output, status} end)
+      end
+
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = answering.("Not Found", 1)
+      assert {:error, :invalid_pr_payload} = answering.("[]", 0)
+      assert {:error, {:invalid_pr_payload, _message}} = answering.("not json", 0)
+      assert {:ok, %{url: ^pr_url, checks: nil}} = answering.("{}", 0)
+    end
+  end
+
+  describe "fetch_page/2" do
+    test "reads the summary plus dates, changed files, commits and check counts in one gh call" do
+      test_pid = self()
+      pr_url = "https://github.com/acme/app/pull/448"
+
+      runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        {Jason.encode!(%{
+           "number" => 448,
+           "url" => pr_url,
+           "title" => "TP-892 Retire two review steps",
+           "body" => "## This PR\n\nGone.",
+           "state" => "MERGED",
+           "reviewDecision" => "APPROVED",
+           "changedFiles" => 2,
+           "additions" => 12,
+           "deletions" => 48,
+           "headRefName" => "auto/TP-892",
+           "headRefOid" => "c2",
+           "createdAt" => "2026-10-12T09:00:00Z",
+           "mergedAt" => "2026-10-13T15:00:00Z",
+           "files" => [%{"path" => "lib/a.ex", "additions" => 10, "deletions" => 8}, %{"path" => "README.md", "additions" => 2}, %{"additions" => 1}],
+           "commits" => [
+             %{"oid" => "c1", "committedDate" => "2026-10-12T09:00:00Z"},
+             %{"oid" => "c2", "committedDate" => "2026-10-13T08:00:00Z"},
+             %{"oid" => "c3", "committedDate" => "not a date"},
+             %{"committedDate" => "2026-10-14T08:00:00Z"}
+           ],
+           "statusCheckRollup" => [
+             %{"name" => "test", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+             %{"name" => "lint", "status" => "COMPLETED", "conclusion" => "FAILURE"},
+             %{"name" => "docs", "status" => "IN_PROGRESS", "conclusion" => nil}
+           ]
+         }), 0}
+      end
+
+      assert {:ok, page} = PullRequest.fetch_page(pr_url, gh_runner: runner)
+
+      assert %{
+               number: 448,
+               title: "TP-892 Retire two review steps",
+               state: "MERGED",
+               review_decision: "APPROVED",
+               changed_files: 2,
+               checks: "failed",
+               created_at: ~U[2026-10-12 09:00:00Z],
+               merged_at: ~U[2026-10-13 15:00:00Z],
+               last_pushed_at: ~U[2026-10-13 08:00:00Z],
+               commits: ["c1", "c2", "c3"],
+               check_counts: %{passed: 1, failed: 1, pending: 1}
+             } = page
+
+      assert page.files == [%{path: "lib/a.ex", additions: 10, deletions: 8}, %{path: "README.md", additions: 2, deletions: 0}]
+      assert_received {:gh, ["pr", "view", ^pr_url, "--json", fields]}
+      assert fields =~ "files,commits"
+    end
+
+    test "a pull request GitHub doesn't have is not found, without dates it has none" do
+      pr_url = "https://github.com/acme/app/pull/9999"
+      missing = "GraphQL: Could not resolve to a PullRequest with the number of 9999. (repository.pullRequest)\n"
+
+      answering = fn output, status ->
+        PullRequest.fetch_page(pr_url, gh_runner: fn _args, _opts -> {output, status} end)
+      end
+
+      assert {:error, :not_found} = answering.(missing, 1)
+      assert {:error, {:gh_failed, _args, 1, "HTTP 502"}} = answering.("HTTP 502", 1)
+      assert {:ok, %{created_at: nil, merged_at: nil, last_pushed_at: nil} = page} = answering.("{}", 0)
+      assert %{files: [], commits: []} = page
+      assert page.check_counts == %{passed: 0, failed: 0, pending: 0}
+      assert {:error, :timeout} = PullRequest.fetch_page(pr_url, gh_runner: fn _args, _opts -> {:error, :timeout} end)
+    end
+  end
+
+  test "a head's checks fail when one finished without passing, else wait while one runs, else pass" do
+    assert PullRequest.checks_outcome([]) == nil
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "COMPLETED", conclusion: "SKIPPED"}]) == "passed"
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "QUEUED", conclusion: nil}]) == "pending"
+    assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "FAILURE"}, %{status: "QUEUED", conclusion: nil}]) == "failed"
+  end
 end

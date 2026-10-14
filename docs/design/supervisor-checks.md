@@ -6,9 +6,10 @@ DB-backed — as **CI** (write the test), **QA** (its VM, emulator and host driv
 left out. This is that settlement at capability level: every check an agent used to hand a person as
 a `## Supervisor check` block, and where it lives now.
 
-Designed repos no longer offer the escape hatch (`priv/playbook/escape_hatches.designed.liquid`);
-a check is CI's or QA's, and a block that stops work is an environment block the self-heal lane
-handles. Legacy repos are untouched: their instructions still hand a check to the supervisor.
+The escape hatches (`priv/playbook/escape_hatches.liquid`) no longer hand a check to a person: a
+check is CI's or QA's, and a block that stops work is an environment block the self-heal lane
+handles. Supervisor checks are retired: no repo's instructions hand a check to the supervisor, and
+no code reads a `## Supervisor check` block.
 
 | Old capability, handed to the supervisor | Home now | Where |
 |---|---|---|

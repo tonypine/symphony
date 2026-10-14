@@ -471,6 +471,11 @@ class Instance:
             f"workspaces:\n  root: {self.work / 'workspaces'}\n"
             f"agent:\n  runtime: claude\n  command: {stub}\n  concurrency:\n    max_total: 1\n"
             "  limits:\n    max_turns: 1\n"
+            # E2E-1 is dispatched again and again across the scenarios without a state move or a PR head, which
+            # the dispatch-loop guard would hold on a Blocked hold after 4 runs in 10 minutes. These limits keep
+            # the guard on but out of reach of one test run: 50 runs within one second.
+            "watchdog:\n  dispatch_loop_runs: 50\n  dispatch_loop_window_ms: 1000\n"
+            "  dispatch_loop_long_runs: 50\n  dispatch_loop_long_window_ms: 1000\n"
             # A free port, so the live Symphony's 4000 is never taken.
             "dashboard:\n  port: 0\n"
         )
@@ -634,13 +639,29 @@ class Instance:
             runs = self.runs()[after:]
             return runs[-1] if runs else None
 
-        fields = wait_for("a new agent run", started, timeout)
+        try:
+            fields = wait_for("a new agent run", started, timeout)
+        except Failure as failure:
+            held = self.hold_note()
+            raise Failure(f"{failure}; {held}" if held else str(failure)) from None
         release = self.app / "Contents" / "Resources" / "symphony-release"
         if os.path.realpath(fields.get("root", "")) != os.path.realpath(release):
             raise Failure(f"the run's Symphony runs from {fields.get('root')}, not the installed app's {release}")
         if fields.get("vsn") != f"0.0.1-{build}":
             raise Failure(f"the run's Symphony is release {fields.get('vsn')}, not build {build}'s")
         return fields.get("secret")
+
+    def hold_note(self):
+        """Why Symphony isn't dispatching E2E-1, when its state says so: a hold, such as the dispatch-loop guard's."""
+        state = self.symphony_state() or {}
+        notes = [
+            f"Symphony skips {ISSUE} ({entry.get('reason')})"
+            for entry in state.get("dispatch_skipped", []) if entry.get("issue_identifier") == ISSUE
+        ] + [
+            f"{ISSUE} waits on a person: {entry.get('headline')}"
+            for entry in state.get("waiting_on_you", []) if entry.get("issue_identifier") == ISSUE
+        ]
+        return "; ".join(notes)
 
     @staticmethod
     def app_build(app):

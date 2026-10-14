@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-10-07T14:20:00Z",
+  "repos": [
+    {
+      "base_branch": "main",
+      "default": true,
+      "github": "tonypine/symphony",
+      "key": "symphony",
+      "last_fetch": {
+        "at": "2026-10-07T14:15:00Z",
+        "error": null,
+        "result": "ok"
+      },
+      "routing": {
+        "assignee": null,
+        "labels": [],
+        "projects": [
+          "symphony"
+        ],
+        "team": null
+      },
+      "source": {
+        "kind": "local",
+        "path": "/Users/director/Projects/symphony"
+      },
+      "workflow": {
+        "error": null,
+        "found": true,
+        "path": "/Users/director/Projects/symphony/WORKFLOW.md",
+        "status": "valid"
+      },
+      "worktrees": []
+    }
+  ]
+}

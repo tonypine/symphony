@@ -144,8 +144,6 @@ public enum StatusMenu {
             return "Plan"
         case .pr:
             return "PR"
-        case .finalVerification:
-            return "Final verification"
         case .action:
             return "Action"
         case .clarify:

@@ -81,6 +81,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.DirectorMoves,
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
+          SymphonyElixir.PullRequestPage,
           SymphonyElixir.Repo.Fetcher,
           SymphonyElixir.McpServer,
           {Registry, keys: :unique, name: SymphonyElixir.Repo.Registry},

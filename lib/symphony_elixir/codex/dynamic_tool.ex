@@ -10,6 +10,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.QaDriver
 
+  # The decision writing standard (`docs/standards/decision-writing.md`), as the tool states it.
+  @decision_writing_standard "Write every field in the Director's words: they decide from the Inbox and do not read code. " <>
+                               "The question stands alone: name each ticket by identifier and a short name the first time, and explain any term a director wouldn't know in the same sentence. " <>
+                               "No file names or paths, code identifiers, branch names, commit hashes, template syntax or backticks, and no internal jargon (partials, head, verdict, hold): say what a thing does, not where it lives. A pull request is PR #448. " <>
+                               "`why` is at most two short paragraphs, one fact per sentence, subject first. Each option's `effect` says what will happen to the work. " <>
+                               "Add `if_unanswered` (what waits or repeats until someone answers), up to three `tradeoffs` per option (good, cost, risk) and `decision.recommendation_reason` (one line). " <>
+                               "The tool refuses a request holding backticks, template syntax, a path or file name, a commit hash or an auto/ or origin/ branch, and names each token. " <>
+                               ~s|Before: "How should TP-892 handle the legacy partials that Code Review keeps flagging?", why "Code Review sent PR #448 back again (head 2f5af5ab). Its only finding is that the legacy partials (parent_tickets.liquid, …) still describe [a retired review step]." | <>
+                               ~s|After: "TP-892 (Retire two old review steps) keeps failing Code Review because the older set of agent instructions still describes one of those steps. Should TP-892 leave that text to TP-891 (Remove the retired review states), which deletes it anyway?", why "Code Review sent PR #448 back a second time. Its only finding is the old step's text. You decided earlier today that TP-891 removes it.", if_unanswered "TP-892 stays in Rework, and each hand-back to Code Review is sent back for the same reason."|
+
   @tool_schemas [
     %{
       "name" => "linear_get_current_issue",
@@ -73,7 +83,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_add_comment",
-      "description" => "Add a comment to the current Linear issue. Pass `parent_id` to reply under one of its comments.",
+      "description" =>
+        "Add a comment to the current Linear issue. Pass `parent_id` to reply under one of its comments. A body opening with `Decision:` or `Ruling:` is refused: that opener marks a person's ruling.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -197,7 +208,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_add_blocked_by",
       "description" =>
-        "Mark the current Linear issue blocked by existing issues, such as the gap tickets a final verification filed. Symphony holds an issue in Todo until every blocker is Done or Canceled, then dispatches it again on its own.",
+        "Mark the current Linear issue blocked by existing issues, such as the tickets its work depends on. Symphony holds an issue in Todo until every blocker is Done or Canceled, then dispatches it again on its own.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -311,20 +322,32 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the hold ends your run shortly after.",
+        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) belongs to CI or a QA playbook, and a manual check that could be a test becomes a test. It leaves the issue in its phase on a Needs Decision hold, where the person finds it, and Symphony lists the decision in a Linear project update until the person answers it. It adds no label itself. Never put a secret value in any field. A request with the same title that is still open is not posted again, and one a person already answered (the Decisions section of the description) is not raised again: the result carries the recorded answer, which you apply. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the hold ends your run shortly after. " <>
+          @decision_writing_standard,
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
         "required" => ["title", "why", "decision"],
         "properties" => %{
           "title" => %{"type" => "string", "maxLength" => 120, "description" => "The decision in a few words: `Close TP-612 as a duplicate of TP-668`."},
-          "why" => %{"type" => "string", "description" => "Why it is needed and what waits on it, in one or two sentences."},
+          "why" => %{
+            "type" => "string",
+            "description" => "What happened and why it needs a person: at most two short paragraphs, one fact per sentence, subject first."
+          },
+          "if_unanswered" => %{
+            "type" => "string",
+            "description" => "What waits or repeats until someone answers, e.g. `TP-892 stays in Rework and every hand-back to Code Review is sent back the same way`."
+          },
           "decision" => %{
             "type" => "object",
             "additionalProperties" => false,
             "required" => ["question", "options"],
             "properties" => %{
-              "question" => %{"type" => "string", "description" => "The one question the person answers."},
+              "question" => %{
+                "type" => "string",
+                "description" => "The one question the person answers. It stands alone: name each ticket by identifier and a short name the first time."
+              },
+              "recommendation_reason" => %{"type" => "string", "description" => "One line on why the recommended option is the one to pick."},
               "options" => %{
                 "type" => "array",
                 "minItems" => 2,
@@ -336,15 +359,31 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                   "required" => ["label", "effect"],
                   "properties" => %{
                     "label" => %{"type" => "string", "description" => "A short name for the option: `Close as duplicate`."},
-                    "effect" => %{"type" => "string", "description" => "What happens once it is picked: `TP-612 moves to Done, linked to TP-668`."},
-                    "recommended" => %{"type" => "boolean", "description" => "True on the one option you recommend."}
+                    "effect" => %{
+                      "type" => "string",
+                      "description" => "What will happen to the work once it is picked, in the Director's terms: `TP-612 moves to Done, linked to TP-668`."
+                    },
+                    "recommended" => %{"type" => "boolean", "description" => "True on the one option you recommend."},
+                    "tradeoffs" => %{
+                      "type" => "array",
+                      "maxItems" => 3,
+                      "description" => "Up to three things picking this option gains, costs or risks, one line each.",
+                      "items" => %{
+                        "type" => "object",
+                        "additionalProperties" => false,
+                        "required" => ["kind", "text"],
+                        "properties" => %{
+                          "kind" => %{"type" => "string", "enum" => ["good", "cost", "risk"]},
+                          "text" => %{"type" => "string"}
+                        }
+                      }
+                    }
                   }
                 }
               }
             }
           },
-          "unblocks" => %{"type" => "string", "description" => "What becomes possible once it is decided, e.g. `the Release workflow on main`."},
-          "est_minutes" => %{"type" => "integer", "minimum" => 1, "maximum" => 480, "description" => "Rough minutes the person needs to decide."}
+          "unblocks" => %{"type" => "string", "description" => "What becomes possible once it is decided, e.g. `the Release workflow on main`."}
         }
       }
     },
@@ -485,7 +524,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear) and open its folder picker in a qa_put_checkout checkout.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -494,7 +533,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "string",
             "description" =>
               "A directory relative to the PR checkout, e.g. macos/Tests/Fixtures/director-app/running. Symphony copies it to the QA host and launches the app with SYMPHONY_BAR_QA_API_FIXTURES pointing at the copy. Regular files only, at most 5 MB; no symlinks."
-          }
+          },
+          "gh_stub_port" => %{
+            "type" => "integer",
+            "description" =>
+              "A QA_HOST_PORTS port where your gh stub listens. The app runs Symphony's fake gh (SYMPHONY_BAR_GH), which POSTs each call's arguments there (form fields argc, arg, arg…) and prints your answer: 200 → stdout, exit 0; other → stderr, exit 1."
+          },
+          "linear_stub_port" => %{
+            "type" => "integer",
+            "description" => "A QA_HOST_PORTS port where your Linear GraphQL stub listens; the app sends Linear queries to http://localhost:<port>/graphql."
+          },
+          "open_panel_dir" => %{"type" => "string", "description" => "A path qa_put_checkout returned; the app's folder picker opens in it."}
         }
       }
     },
@@ -661,6 +710,21 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "properties" => %{
           "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/qa-config/symphony.yml."},
           "remote_name" => %{"type" => "string", "description" => "File name on the QA host: letters, digits, `.`, `_`, `-`. Defaults to the local file name."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_put_checkout",
+      "description" =>
+        "Put a git checkout where the app can open it: clones a bundle you made (`git bundle create <file> --all`, at most 1 MB, under the worktree or $TMPDIR) and sets its origin to remote_url. Returns its path; nothing is fetched from GitHub.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["local_path", "remote_url"],
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The bundle file, absolute or relative to the worktree."},
+          "remote_url" => %{"type" => "string", "description" => "The GitHub repo the checkout's origin names, e.g. https://github.com/acme/widgets."},
+          "remote_name" => %{"type" => "string", "description" => "Folder name: letters, digits, `.`, `_`, `-`. Defaults to the repo name."}
         }
       }
     },
@@ -852,7 +916,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_update_document" => ["document_id", "content", "title"],
     "linear_get_document" => ["document_id"],
     "linear_update_issue_summary" => ["status", "links", "changelog_entry"],
-    "linear_request_human_action" => ["title", "why", "decision", "unblocks", "est_minutes"],
+    # `est_minutes` left the schema; an older caller that still sends it is not refused, and it is ignored.
+    "linear_request_human_action" => ["title", "why", "decision", "unblocks", "if_unanswered", "est_minutes"],
     "linear_withdraw_human_action" => ["reason", "title"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
@@ -869,7 +934,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => ["api_fixtures"],
+    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
@@ -881,6 +946,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],
+    "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
     "qa_api_requests" => [],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
@@ -2172,6 +2238,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "invalid_failed_run_log_max_bytes",
         "message" => "github.failed_run_log_max_bytes must be a positive integer."
+      }
+    }
+  end
+
+  defp tool_error_payload(:ruling_comment_body) do
+    %{
+      "error" => %{
+        "code" => "ruling_comment_body",
+        "message" =>
+          "A comment opening with `Decision:` or `Ruling:` is a person's ruling, which Symphony writes into the ticket's Decisions section, so an agent may not post one. Reword the opening, or ask the person with `linear_request_human_action`."
       }
     }
   end

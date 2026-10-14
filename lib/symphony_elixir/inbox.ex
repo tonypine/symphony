@@ -13,7 +13,11 @@ defmodule SymphonyElixir.Inbox do
      their description, comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
   3. each becomes an `SymphonyElixir.Inbox.Item`, with, for a ticket no request or plan review
-     covers, the access or dispatch-loop hold its store record carries.
+     covers, the access or dispatch-loop hold its store record carries;
+  4. `SymphonyElixir.Inbox.References` adds what each item's text mentions (`references`) and where
+     its ticket sits (`context`), in one more Linear query for every item together and a GitHub read
+     per pull request. The quality gate's held and skipped tickets, which `items/2` lists from the
+     orchestrator snapshot, are resolved here too and kept by issue id.
 
   `items/2` adds the quality gate's holds and skips from the orchestrator snapshot (kind
   `clarify`), drops an issue that is running or that the orchestrator saw leave the state the read
@@ -34,10 +38,10 @@ defmodule SymphonyElixir.Inbox do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, NeedsDecisionHold, PlanReview}
+  alias SymphonyElixir.{Config, Hold, NeedsDecisionHold, Orchestrator, PlanReview}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Collector
-  alias SymphonyElixir.Inbox.Item
+  alias SymphonyElixir.Inbox.{Item, References}
   alias SymphonyElixir.Linear.{Client, Usage}
 
   @initial_delay_ms 1_000
@@ -47,6 +51,7 @@ defmodule SymphonyElixir.Inbox do
   @history_first 50
   @children_first 50
   @attachments_first 10
+  @snapshot_timeout_ms 1_000
 
   @list_query """
   query SymphonyInboxList($filter: IssueFilter!, $first: Int!, $after: String) {
@@ -125,19 +130,31 @@ defmodule SymphonyElixir.Inbox do
     running_ids = snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id)
     watched_states = snapshot |> Map.get(:watching, []) |> Map.new(&{&1.issue_id, &1.state})
 
-    clarify =
-      (Map.get(snapshot, :awaiting_clarification, []) ++ Map.get(snapshot, :skipped, []))
-      |> Enum.filter(&is_binary(Map.get(&1, :issue_id)))
-      |> Enum.uniq_by(& &1.issue_id)
-      |> Enum.map(&Item.from_quality_gate/1)
+    resolved = :persistent_term.get(clarify_key(server), %{})
 
-    server
-    |> cached()
-    |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states)))
-    |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
-    |> Enum.concat(clarify)
+    clarify =
+      snapshot
+      |> clarify_items()
+      |> Enum.map(&Map.merge(&1, Map.get(resolved, &1.issue_id, %{})))
+
+    items =
+      server
+      |> cached()
+      |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states)))
+      |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
+      |> Enum.concat(clarify)
+      |> Enum.uniq_by(& &1.issue_id)
+      |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
+
+    live = %{running: running_ids, you: MapSet.new(items, & &1.issue_id)}
+    Enum.map(items, &References.live(&1, live))
+  end
+
+  defp clarify_items(snapshot) do
+    (Map.get(snapshot, :awaiting_clarification, []) ++ Map.get(snapshot, :skipped, []))
+    |> Enum.filter(&is_binary(Map.get(&1, :issue_id)))
     |> Enum.uniq_by(& &1.issue_id)
-    |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
+    |> Enum.map(&Item.from_quality_gate/1)
   end
 
   # Whether the orchestrator saw the ticket leave what the read listed it for: `Plan Review`, or for
@@ -164,11 +181,13 @@ defmodule SymphonyElixir.Inbox do
 
   defp cache_key(server), do: {__MODULE__, :items, server}
   defp read_key(server), do: {__MODULE__, :read, server}
+  defp clarify_key(server), do: {__MODULE__, :clarify, server}
 
   # Writes only on a change: a persistent term write is global.
-  defp put_items(state, items) do
+  defp put_items(state, items, clarify) do
     server = Keyword.get(state.opts, :name, __MODULE__)
     if cached(server) != items, do: :persistent_term.put(cache_key(server), items)
+    if :persistent_term.get(clarify_key(server), %{}) != clarify, do: :persistent_term.put(clarify_key(server), clarify)
     unless :persistent_term.get(read_key(server), false), do: :persistent_term.put(read_key(server), true)
   end
 
@@ -207,12 +226,50 @@ defmodule SymphonyElixir.Inbox do
             item != nil,
             do: item
 
-      put_items(state, items)
-      %{state | nodes: nodes}
+      github_repos = github_repos(repos, state)
+      {items, clarify, pull_requests} = resolve_references(items, nodes, github_repos, state)
+      put_items(state, items, clarify)
+      Map.merge(state, %{nodes: nodes, pull_requests: pull_requests, github_repos: {repos, github_repos}})
     else
       {:error, reason} ->
         Logger.warning("Inbox: could not read what waits on you from Linear: #{inspect(reason)}")
         state
+    end
+  end
+
+  # What the items mention and where their tickets sit (`References`), in one Linear query for all of
+  # them, the quality gate's held and skipped tickets included: those are listed from the
+  # orchestrator snapshot at GET time, so theirs are kept by issue id.
+  defp resolve_references(items, nodes, github_repos, state) do
+    item_ids = MapSet.new(items, & &1.issue_id)
+    clarify = state |> snapshot() |> clarify_items() |> Enum.reject(&MapSet.member?(item_ids, &1.issue_id))
+
+    opts =
+      Keyword.take(state.opts, [:pull_request, :verdicts, :now_ms]) ++
+        [
+          linear_client: linear_client(state),
+          github_repos: github_repos,
+          cache: Map.get(state, :pull_requests, %{})
+        ]
+
+    {resolved, pull_requests} = References.resolve(items ++ clarify, Map.new(nodes, fn {id, entry} -> {id, entry.node} end), opts)
+    {resolved_items, resolved_clarify} = Enum.split(resolved, length(items))
+    {resolved_items, Map.new(resolved_clarify, &{&1.issue_id, Map.take(&1, [:references, :context])}), pull_requests}
+  end
+
+  # Reading a local checkout's GitHub repository runs git, so it is read again only when the repos change.
+  defp github_repos(repos, state) do
+    case {Keyword.fetch(state.opts, :github_repos), Map.get(state, :github_repos)} do
+      {{:ok, github_repos}, _cached} -> github_repos
+      {:error, {^repos, github_repos}} -> github_repos
+      {:error, _stale} -> References.github_repos(repos)
+    end
+  end
+
+  defp snapshot(state) do
+    case Keyword.get(state.opts, :snapshot, fn -> Orchestrator.snapshot(Orchestrator, @snapshot_timeout_ms) end).() do
+      %{} = snapshot -> snapshot
+      _unavailable -> %{}
     end
   end
 

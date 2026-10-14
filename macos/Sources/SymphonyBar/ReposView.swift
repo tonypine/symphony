@@ -31,6 +31,14 @@ struct ReposView: View {
                 AddRepoView(model: addRepo) { model.addRepo = nil }
             }
         }
+        .sheet(item: $model.disconnect) { sheet in
+            DisconnectRepoView(
+                sheet: sheet,
+                repo: model.window.repos.first { $0.key == sheet.content.key },
+                cancel: { model.disconnect = nil },
+                confirm: { model.onConfirmDisconnect(sheet) }
+            )
+        }
     }
 
     // MARK: Sidebar
@@ -44,6 +52,11 @@ struct ReposView: View {
             }
         }
         .listStyle(.sidebar)
+        // The focused outline view takes Delete before the − button's shortcut sees it.
+        .onDeleteCommand {
+            guard let repo = model.selected, repo.actions.disconnectProblem == nil else { return }
+            model.onDisconnect(repo.key)
+        }
         .focused($sidebarFocused)
         .onAppear { sidebarFocused = true }
         .safeAreaInset(edge: .bottom, spacing: 0) {

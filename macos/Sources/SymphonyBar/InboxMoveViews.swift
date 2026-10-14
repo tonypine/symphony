@@ -1,9 +1,9 @@
 import SwiftUI
 import SymphonyBarCore
 
-/// C17 (P5, D12d): the consequence sheet of a move. The title is the question; then what happens in Linear, what
-/// stays the same, the options (the picks posted, Rework's required reason), and Cancel with the verb. A spinner
-/// shows while the move is on its way, and what went wrong shows inline.
+/// C17 (P5, D12d): the consequence sheet of a move. The title is the question; then a write-in answer's words
+/// quoted, what happens in Linear, what stays the same, the options (the picks posted, Rework's required reason), and
+/// Cancel with the verb. A spinner shows while the move is on its way, and what went wrong shows inline.
 struct ConsequenceSheetView: View {
     let sheet: ConsequenceSheet
     let working: Bool
@@ -28,6 +28,20 @@ struct ConsequenceSheetView: View {
                 .font(DesignTokens.TypeStyle.sentence.font)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
+            if let quote = sheet.quote {
+                // The Director's own words (N11), as the agent will read them.
+                Text(quote)
+                    .font(DesignTokens.TypeStyle.body.font)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, DesignTokens.Space.s2)
+                    .padding(.horizontal, DesignTokens.Space.s3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+                    .overlay(alignment: .leading) { Color.accentColor.frame(width: 3) }
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+                    .accessibilityLabel("Your answer: \(quote)")
+            }
             Text(sheet.happens)
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(sheet.isDestructive ? AnyShapeStyle(DesignTokens.Status.problem.tint) : AnyShapeStyle(.primary))
@@ -36,7 +50,7 @@ struct ConsequenceSheetView: View {
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !sheet.picks.isEmpty {
+            if sheet.listsPicks {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     Text("Your picks").font(DesignTokens.TypeStyle.label.font).foregroundStyle(.secondary)
                     ForEach(Array(sheet.picks.enumerated()), id: \.offset) { index, pick in

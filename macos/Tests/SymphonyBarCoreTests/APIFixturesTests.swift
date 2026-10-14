@@ -90,6 +90,19 @@ final class APIFixturesTests: XCTestCase {
         guard case .repos = repos else { return XCTFail("the shipped repos fixture doesn't read as repos: \(repos)") }
     }
 
+    func testTheInboxFixturesServeTheirInboxStateAndRepos() async {
+        for name in ["inbox", "inbox-empty", "inbox-decision"] {
+            let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+            let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+            let inbox = shipped.answer(request(InboxPayload.path))
+            XCTAssertEqual(inbox.1.statusCode, 200, name)
+            XCTAssertNotNil(InboxPayload.decode(inbox.0), name)
+            XCTAssertNotNil(OverviewState.decode(shipped.answer(request("api/v1/state")).0), name)
+            let repos = await ReposAPI.fetch(stateRoot: root, fallback: APIFixtures.baseURL, transport: shipped.transport)
+            guard case .repos = repos else { return XCTFail("\(name)'s repos fixture doesn't read as repos: \(repos)") }
+        }
+    }
+
     func testTheOverviewFixturesServeTheirStateAndLogTheOverviewsControls() async throws {
         for name in ["flowing", "attention", "paused", "idle"] {
             let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)

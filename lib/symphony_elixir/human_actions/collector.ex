@@ -3,8 +3,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `Needs Decision` hold's label, is a `Final verification:` ticket, or carries a
-  deprecated request label (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
+  that carries the `Needs Decision` hold's label, or carries a deprecated request label
+  (`SymphonyElixir.PersonWait.legacy_request_labels/1`). From those:
 
   - each open `## Decision needed:` comment, or older `## Action needed:` one, is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn or answered one is not listed;
@@ -23,7 +23,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   alias SymphonyElixir.Hold
   alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
   alias SymphonyElixir.Linear.Client
-  alias SymphonyElixir.{PersonWait, RunKind, SubIssueWait}
+  alias SymphonyElixir.{PersonWait, SubIssueWait}
 
   @issue_first 50
   @comment_last 30
@@ -249,10 +249,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp filter(scope, settings) do
     labelled = Enum.map(PersonWait.legacy_request_labels(settings), &label_filter/1)
-    final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
     # A request leaves the ticket in its phase, so the hold's label is what finds it.
     held = label_filter(Hold.label(:needs_decision))
-    wanted = %{"or" => labelled ++ [final_verification, held]}
+    wanted = %{"or" => labelled ++ [held]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -329,6 +328,31 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @spec newest_request(map(), Schema.t()) :: Request.t() | nil
   def newest_request(node, settings), do: node |> newest_open_request(settings) |> then(&(&1 && elem(&1, 1)))
 
+  @doc """
+  The requests on the issue node a person answered, newest answer first: each one's title, the
+  answer (the `**Decision:**` lines of the Inbox's Decide, else the first reply on one line) and
+  when it was given. A withdrawn request was never answered and is left out.
+  """
+  @spec answered_requests(map()) :: [%{at: DateTime.t() | nil, title: String.t(), answer: String.t()}]
+  def answered_requests(node) do
+    replies = node |> comments() |> Enum.filter(&is_binary(&1["body"])) |> Enum.group_by(&get_in(&1, ["parent", "id"]))
+
+    for {comment_id, request} <- requests(node),
+        under = Enum.sort_by(Map.get(replies, comment_id, []), &(&1["createdAt"] || "")),
+        not Enum.any?(under, &Request.withdrawal?(&1["body"])),
+        %{"body" => body} = reply <- Enum.take(under, 1) do
+      %{at: parse_datetime(reply["createdAt"]), title: request.title, answer: answer(body)}
+    end
+    |> Enum.sort_by(&((&1.at && DateTime.to_unix(&1.at, :microsecond)) || 0), :desc)
+  end
+
+  defp answer(body) do
+    case Regex.scan(~r/^\s*\*\*Decision:\*\*\s*(.+)$/m, body) do
+      [] -> Request.one_line(body)
+      decisions -> Enum.map_join(decisions, "; ", fn [_, decision] -> Request.one_line(decision) end)
+    end
+  end
+
   defp withdrawn_ids(node) do
     for %{"parent" => %{"id" => parent_id}} = comment <- comments(node), Request.withdrawal?(comment["body"]), into: MapSet.new(), do: parent_id
   end
@@ -355,8 +379,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
       kind: :request,
       title: request.title,
       why: request.why,
+      if_unanswered: request.if_unanswered,
       unblocks: request.unblocks,
-      est_minutes: request.est_minutes,
       question: request.question,
       options: request.options,
       steps: request.steps,
