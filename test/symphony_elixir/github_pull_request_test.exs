@@ -590,6 +590,22 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: failing)
   end
 
+  test "list_commit_runs reads the workflow runs on one commit, of the repo given or the checkout's" do
+    runner = fn
+      ["run", "list", "--commit", "abc123", "--limit", "100", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
+        assert opts[:stderr_to_stdout]
+        {Jason.encode!([%{"databaseId" => 21, "workflowName" => "macos", "status" => "in_progress", "conclusion" => ""}]), 0}
+
+      ["run", "list", "--commit", "def456", "--limit", "5", "--json", _fields, "-R", "acme/cycle"], _opts ->
+        {"{}", 0}
+    end
+
+    assert {:ok, [%{id: "21", workflow_name: "macos", status: "IN_PROGRESS"}]} = PullRequest.list_commit_runs("abc123", gh_runner: runner)
+
+    assert {:error, :invalid_workflow_runs_payload} =
+             PullRequest.list_commit_runs("def456", gh_runner: runner, limit: 5, repo: "acme/cycle")
+  end
+
   test "fetch_pr_comments reads paginated top-level PR comments" do
     pr_url = "https://github.example.com/org/repo/pull/42"
 

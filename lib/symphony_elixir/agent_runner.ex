@@ -111,10 +111,7 @@ defmodule SymphonyElixir.AgentRunner do
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
 
-          terminal_review_agent_block?(reason) ->
-            exit(reason)
-
-          terminal_tool_failure_circuit_breaker?(reason) ->
+          exits_as_is?(reason) ->
             exit(reason)
 
           linear_unavailable?(reason) ->
@@ -135,6 +132,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
   defp provider_hold_reason(_reason), do: nil
+
+  # The reasons the orchestrator reads as they are: a reviewer block, the tool-failure circuit
+  # breaker, and an epic review waiting for CI.
+  defp exits_as_is?(reason), do: terminal_review_agent_block?(reason) or terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
+
+  # An epic review that found CI still running on the commit it reviews: the orchestrator starts it
+  # again after a short wait instead of failing the run (`SymphonyElixir.EpicReview`).
+  defp ci_pending?({:ci_pending, %{}}), do: true
+  defp ci_pending?(_reason), do: false
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false

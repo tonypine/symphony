@@ -1487,6 +1487,10 @@ The QA agent:
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and
   the epic review judges a criterion that only asks for tests or CI to pass by CI's runs on the
   base branch head. QA exercises the change the way a user would.
+- The epic review MUST NOT start its agent while a workflow run on the base branch head it reviews
+  is still unfinished: it records no verdict, leaves the parent in `Epic Review`, and starts again
+  after a fixed wait without counting a retry attempt or reaching the self-heal lane. A run still
+  unfinished two hours after it was created, or runs that cannot be read, are not waited on.
 - The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
