@@ -422,6 +422,105 @@ defmodule SymphonyElixir.BlockedHoldTest do
     end
   end
 
+  describe "the dependency hold a run's block report set outside Todo" do
+    defp block_report_attrs do
+      %{
+        reason: "the run reported a block: waiting on TP-997",
+        clearing_condition: "when every blocker is terminal",
+        waits_on: %{type: "dependency", keys: ["TP-997"]}
+      }
+    end
+
+    defp merged_blocker(attrs \\ %{}) do
+      blocker = struct!(%Issue{id: "blocker-TP-997", identifier: "TP-997", state: "Done", pr_urls: [@symphony_pr]}, attrs)
+      Process.put({:fix_ticket, "TP-997"}, {:ok, blocker})
+    end
+
+    defp held(state, blocker_state, labels \\ []) do
+      issue(%{state: state, labels: labels, blocked_by: [blocker("TP-997", blocker_state)]})
+    end
+
+    defp sweep_dependency_hold(issue, build, cache) do
+      opts = [settings: designed_settings(), tracker: FixTicketTracker, build: build, update_hold_cache: cache]
+      BlockedHold.sweep([issue], @terminal, opts ++ lookups())
+    end
+
+    test "stays in the ticket's phase while a blocker is open" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, block_report_attrs())
+
+      for state <- ["In Progress", "Rework"] do
+        assert {0, _cache} = sweep_dependency_hold(held(state, "Merging"), build(), UpdateHold.empty_cache())
+        assert stored_hold().reason == "the run reported a block: waiting on TP-997"
+      end
+
+      refute_received :merge_commit_sha
+    end
+
+    test "lifts once every blocker is terminal, with no person's Unblock" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, block_report_attrs())
+      merged_blocker(%{pr_urls: ["https://github.com/acme/web-app/pull/5"]})
+
+      assert {1, _cache} = sweep_dependency_hold(held("In Progress", "Done"), build(), UpdateHold.empty_cache())
+      refute_received :merge_commit_sha
+      assert stored_hold() == nil
+    end
+
+    test "waits for the running app to include a blocker that fixed Symphony itself, then lifts" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, block_report_attrs())
+      merged_blocker()
+
+      assert {1, cache} = sweep_dependency_hold(held("Rework", "Done"), build(), UpdateHold.empty_cache())
+      assert_received :merge_commit_sha
+      assert_received {:commit_included?, @build_sha}
+
+      assert %{reason: reason, clearing_condition: condition, waits_on: %{type: "dependency", keys: ["TP-997"]}} = stored_hold()
+      assert reason == "waiting for an app update: TP-997 merged in `aaaaaaa`, running `bbbbbbb`"
+      assert condition == "when the running app includes the merge of TP-997"
+
+      # The next poll on the same build changes nothing and reads nothing again, not even the
+      # blocker: an unreadable blocker would have lifted the hold.
+      Process.delete({:fix_ticket, "TP-997"})
+      assert {0, ^cache} = sweep_dependency_hold(held("Rework", "Done"), build(), cache)
+      refute_received :merge_commit_sha
+      refute_received {:commit_included?, _sha}
+      assert stored_hold().reason == reason
+
+      # The app updates to a build that includes the merge: the hold lifts, the ticket stays in Rework.
+      assert {1, _cache} = sweep_dependency_hold(held("Rework", "Done"), build(@next_build_sha), cache)
+      assert_received {:commit_included?, @next_build_sha}
+      assert stored_hold() == nil
+    end
+
+    test "lifts at once when the build has no sha, the blocker can't be read, or a skip label opts out" do
+      unnamed = issue(%{state: "In Progress", blocked_by: [%{id: "blocker-x", identifier: nil, state: "Done"}]})
+
+      for {issue, build, readable?} <- [
+            {held("In Progress", "Done"), build(nil), true},
+            {held("In Progress", "Done"), build(), false},
+            {unnamed, build(), true},
+            {held("In Progress", "Done", [UpdateHold.skip_label()]), build(), true}
+          ] do
+        :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, block_report_attrs())
+        if readable?, do: merged_blocker(), else: Process.delete({:fix_ticket, "TP-997"})
+        opts = [settings: designed_settings(), tracker: FixTicketTracker, build: build] ++ lookups()
+
+        assert BlockedHold.sync(issue, @terminal, opts) == :clear
+        assert stored_hold() == nil
+      end
+
+      refute_received :merge_commit_sha
+    end
+
+    test "a Todo ticket's dependency hold clears at once: its dispatch gate waits for the app update" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, block_report_attrs())
+      merged_blocker()
+
+      assert {1, _cache} = sweep_dependency_hold(held("Todo", "Done"), build(), UpdateHold.empty_cache())
+      refute_received :merge_commit_sha
+      assert stored_hold() == nil
+    end
+  end
+
   describe "sweep/3" do
     test "counts the holds it set and cleared over a repo's issues" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})

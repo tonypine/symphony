@@ -145,6 +145,24 @@ defmodule SymphonyElixir.QualityTest do
     assert eval.outcome == "pr_opened"
   end
 
+  test "carries the ticket's PR from Symphony's record, and none once that PR closed" do
+    pr_url = "https://github.com/example/repo/pull/1012"
+    :ok = SymphonyElixir.TicketPullRequest.record_created("repo-q", "i-recorded", pr_url, "auto/ACME-12")
+
+    entry = %{run_id: "run-quality-12", repo_key: "repo-q", issue: %Issue{id: "i-recorded", identifier: "ACME-12"}, started_at: DateTime.utc_now()}
+    eval = Quality.build_eval_log_for_test(entry, "success", nil, agent_kind: "codex", transcript_events: nil)
+
+    assert eval.pull_request_url == pr_url
+    assert eval.outcome == "pr_opened"
+
+    :ok = SymphonyElixir.TicketPullRequest.mark_finished("repo-q", pr_url, "closed")
+    entry = put_in(entry.issue.pull_request_url, pr_url)
+    eval = Quality.build_eval_log_for_test(entry, "success", nil, agent_kind: "codex", transcript_events: nil)
+
+    assert eval.pull_request_url == nil
+    assert eval.outcome == "no_changes"
+  end
+
   test "stopped terminal status is not reported as failure error_kind" do
     eval =
       Quality.build_eval_log_for_test(

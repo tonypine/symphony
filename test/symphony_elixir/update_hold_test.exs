@@ -1,7 +1,9 @@
 defmodule SymphonyElixir.UpdateHoldTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.UpdateHold
+  alias SymphonyElixir.{TicketPullRequest, UpdateHold}
+
+  @repo_key "repo-a"
 
   @build_sha "d3d301b0123456789abcdef0123456789abcdef0"
   @merge_sha "9f54098b96666e6e233247d53fc995c3b293c4f2"
@@ -142,6 +144,30 @@ defmodule SymphonyElixir.UpdateHoldTest do
       assert cache.blockers == %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}
     end
 
+    test "a blocker's pull request is the one Symphony recorded for it, merged or closed, whatever its attachments show" do
+      :ok = RunStore.clear()
+      issue = todo_blocked_by(blocker("TP-419", "Done"))
+      # Read by id, the blocker carries no repo and its attachments no PR.
+      fix = fix_issue("TP-419", [])
+      :ok = TicketPullRequest.record_created(@repo_key, fix.id, @fix_pr, "auto/TP-419")
+      :ok = TicketPullRequest.mark_finished(@repo_key, @fix_pr, "merged")
+
+      cache = resolve([issue], fetch_ok([fix]), repo_key: @repo_key)
+
+      assert cache.blockers == %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}
+      assert %{blockers: [%{identifier: "TP-419"}]} = UpdateHold.hold(issue, @build, cache, @terminal)
+
+      # A closed record merged nothing; the attachment's PR elsewhere is not the blocker's.
+      :ok = TicketPullRequest.record_created(@repo_key, fix.id, @fix_pr, "auto/TP-419")
+      :ok = TicketPullRequest.mark_finished(@repo_key, @fix_pr, "closed")
+      fix = fix_issue("TP-419", ["https://github.com/acme/symphony/pull/7"])
+
+      cache = resolve([issue], fetch_ok([fix]), repo_key: @repo_key, merge_commit_sha: fn @fix_pr -> {:ok, nil} end)
+
+      assert cache.blockers == %{"id-TP-419" => :none}
+      assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
+    end
+
     test "a blocker reopened since the poll, or not asked for, is left out" do
       issue = todo_blocked_by(blocker("TP-419", "Done"))
       reopened = %Issue{fix_issue("TP-419", [@fix_pr]) | state: "In Progress"}
@@ -178,6 +204,16 @@ defmodule SymphonyElixir.UpdateHoldTest do
       assert {nil, _cache} = awaiting(fix, empty, included: true)
     end
 
+    test "finds the fix ticket's pull request in Symphony's record when its attachments show none" do
+      :ok = RunStore.clear()
+      fix = fix_issue("TP-900", [])
+      :ok = TicketPullRequest.record_created(@repo_key, fix.id, @fix_pr, "auto/TP-900")
+      :ok = TicketPullRequest.mark_finished(@repo_key, @fix_pr, "merged")
+
+      assert {%{identifier: "TP-900", merge_sha: @merge_sha}, _cache} =
+               awaiting(fix, UpdateHold.empty_cache(), repo_key: @repo_key)
+    end
+
     test "a fix merged elsewhere, opted out, unreadable or with no build sha is not waited on" do
       elsewhere = fix_issue("APP-1", ["https://github.com/acme/web-app/pull/5"])
       assert {nil, %{blockers: %{"id-APP-1" => :none}}} = awaiting(elsewhere, UpdateHold.empty_cache())
@@ -198,7 +234,8 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
     UpdateHold.awaiting_update(fix, @build, cache,
       merge_commit_sha: Keyword.get(opts, :merge_commit_sha, fn @fix_pr -> {:ok, @merge_sha} end),
-      commit_included?: Keyword.get(opts, :commit_included?, fn @fix_pr, @merge_sha, @build_sha -> {:ok, included} end)
+      commit_included?: Keyword.get(opts, :commit_included?, fn @fix_pr, @merge_sha, @build_sha -> {:ok, included} end),
+      repo_key: Keyword.get(opts, :repo_key)
     )
   end
 
@@ -208,7 +245,8 @@ defmodule SymphonyElixir.UpdateHoldTest do
     UpdateHold.resolve(issues, @build, Keyword.get(opts, :cache, UpdateHold.empty_cache()), @terminal,
       fetch_issues: fetch_issues,
       merge_commit_sha: Keyword.get(opts, :merge_commit_sha, fn @fix_pr -> {:ok, @merge_sha} end),
-      commit_included?: Keyword.get(opts, :commit_included?, fn @fix_pr, @merge_sha, @build_sha -> {:ok, included} end)
+      commit_included?: Keyword.get(opts, :commit_included?, fn @fix_pr, @merge_sha, @build_sha -> {:ok, included} end),
+      repo_key: Keyword.get(opts, :repo_key)
     )
   end
 

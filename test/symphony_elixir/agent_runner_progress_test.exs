@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.PrReviewPoller
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.WorkspaceHead
 
   @pr_url "https://github.com/example/repo/pull/337"
@@ -324,7 +325,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     assert log =~
              "Parking issue_id=issue-progress issue_identifier=TP-337 in Backlog after 2 turns with no new commit or state change; " <>
-               "it has no attached PR, so CI on its head was not checked"
+               "Symphony has no open PR recorded for it, so CI on its head was not checked"
 
     refute log =~ "at dispatch"
   end
@@ -336,7 +337,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     warning =
       "issue_id=issue-progress issue_identifier=TP-337 had PR #{@pr_url} at dispatch, " <>
-        "but its refreshed Linear attachments show no PR; checks on its PR will not run"
+        "but Symphony's record of its PR now shows no open PR; checks on its PR will not run"
 
     # The PR URL dropping out of the first refresh counts as a change, so the run parks after three turns.
     assert turns() == 3
@@ -349,6 +350,76 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     assert turns() == 2
     refute log =~ "at dispatch"
+  end
+
+  describe "the ticket's PR from Symphony's record, with none attached in Linear" do
+    setup do
+      :ok = TicketPullRequest.record_created("default", "issue-progress", @pr_url, "auto/TP-337")
+    end
+
+    test "a Rework run moves to Code Review once its commits are the recorded PR's head" do
+      run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework", pr_url: nil)
+
+      assert turns() == 1
+      assert_received {:pr_head_fetched, @pr_url}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    end
+
+    test "empty Rework turns wait for CI pending on the recorded PR's head instead of parking" do
+      pending = [%{name: "macos-e2e", status: "IN_PROGRESS", conclusion: nil}]
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: pending}})
+
+      run_issue!("Rework", heads: ["sha-pushed"], max_turns: 4, pr_url: nil)
+
+      assert turns() == 4
+      assert_received {:pr_head_fetched, @pr_url}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "the pre-push reviewer reviews the pushed head before the run moves on the recorded PR" do
+      pending = [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: pending}})
+
+      log =
+        capture_log(fn ->
+          run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], handoff: "sha-fixed", max_turns: 6, reviewer: true, pr_url: nil)
+        end)
+
+      assert turns() == 2
+      assert_received {:progress_reviewed, 1}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert log =~ "its PR head sha-fixed has not passed the pre-push reviewer, continuing"
+    end
+
+    test "a closed or merged PR is no in-flight PR, even while Linear still shows it attached" do
+      for finished <- ["closed", "merged"] do
+        :ok = TicketPullRequest.record_created("default", "issue-progress", @pr_url, "auto/TP-337")
+        :ok = TicketPullRequest.mark_finished("default", @pr_url, finished)
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5) end)
+
+        assert turns() == 2
+        refute_received {:pr_head_fetched, _pr_url}
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        assert log =~ "Symphony has no open PR recorded for it, so CI on its head was not checked"
+        refute log =~ "at dispatch"
+      end
+    end
+
+    test "a run whose recorded PR closes mid-run warns that its PR checks will not run" do
+      Application.put_env(:symphony_elixir, :progress_turn_hook, fn _opts ->
+        :ok = TicketPullRequest.mark_finished("default", @pr_url, "closed")
+      end)
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5, pr_url: nil) end)
+
+      assert log =~
+               "issue_id=issue-progress issue_identifier=TP-337 had PR #{@pr_url} at dispatch, " <>
+                 "but Symphony's record of its PR now shows no open PR; checks on its PR will not run"
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
   end
 
   test "empty Rework turns while CI on the pushed PR head is pending do not park the issue" do

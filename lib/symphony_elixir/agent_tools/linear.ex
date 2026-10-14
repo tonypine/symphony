@@ -215,6 +215,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
         name
         type
       }
+      inverseRelations(first: 50) {
+        nodes {
+          type
+          issue {
+            identifier
+            state {
+              name
+            }
+          }
+        }
+      }
       team {
         states {
           nodes {
@@ -705,9 +716,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp record_fix_verdict(_context, _issue_id, _move), do: :ok
 
   # The Backlog escape hatch is retired: the guard turned the request into a Blocked
-  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
-  # hold lifts on its own; the access hold this reports is lifted by a person's `Unblock` (or by the
-  # self-heal fix ticket). The agent did not move the issue.
+  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A run that
+  # marked the issue blocked by open tickets gets a dependency hold, which lifts on its own once they
+  # are terminal; otherwise the access hold is lifted by a person's `Unblock` (or by the self-heal fix
+  # ticket). The agent did not move the issue.
   defp apply_hold(context, issue_id, kind, attrs, opts) do
     with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
       {:ok,
@@ -1914,7 +1926,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp guard_state(state, settings, issue) do
     from_state = get_in(issue, ["state", "name"])
 
-    ctx = %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}
+    ctx = %{
+      settings: settings,
+      from_state: from_state,
+      plan_parent?: plan_parent?(issue),
+      open_blockers: open_blockers(issue, settings.tracker.terminal_states)
+    }
 
     case TransitionGuard.resolve_request(state, ctx) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
@@ -1951,6 +1968,21 @@ defmodule SymphonyElixir.AgentTools.Linear do
       end
     end
   end
+
+  # The identifiers of the issue's blocked-by blockers still outside a terminal state, the way
+  # `Issue.open_blockers/2` counts them: a blocker without a known state is open.
+  defp open_blockers(issue, terminal_states) do
+    terminal = MapSet.new(terminal_states, &normalize_state_name/1)
+
+    for %{"type" => "blocks", "issue" => %{"identifier" => identifier} = blocker} <-
+          issue |> get_in(["inverseRelations", "nodes"]) |> List.wrap(),
+        is_binary(identifier),
+        not MapSet.member?(terminal, normalize_state_name(get_in(blocker, ["state", "name"]))),
+        uniq: true,
+        do: identifier
+  end
+
+  defp normalize_state_name(name), do: name |> to_string() |> String.trim() |> String.downcase()
 
   # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
   # request, and it is the ticket whose handoff enters `Plan Review`.

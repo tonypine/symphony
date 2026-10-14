@@ -412,8 +412,36 @@ Who writes it, and when it changes:
 Reading it: consumers ask `SymphonyElixir.TicketPullRequest.current_url/1` (or `current_urls/1`
 for the readers that walk every PR). It answers the `open` record's URL, and none once that PR
 closed or merged: a closed or merged PR is not the ticket's in-flight PR. A PR run's issue answers
-its own PR. While ticket reads still carry tracker attachments, a ticket with no record falls back
-to the issue's attachment-derived `pull_request_url` / `pr_urls`.
+its own PR. A lane that serves one repo passes its repo key (`current_url/2`), so an issue read
+without its repo is looked up under that repo. While ticket reads still carry tracker attachments,
+a ticket with no record falls back to the issue's attachment-derived `pull_request_url` / `pr_urls`.
+
+The CI, review and merge lanes take a ticket's PR from this record and never read the issue's
+`pull_request_url` / `pr_urls` themselves:
+
+- the CI poller and the PR review poller discover the PR to watch from it, and the PR review poller
+  rebuilds a ticket it cannot read from its own record without a PR of its own;
+- auto-merge owns a `Merging` ticket only while the record holds an open PR;
+- the merge confirmation links the record's open PR, unless its caller names one;
+- the Director's Restart closes the record's PR when GitHub still shows it open;
+- the update hold asks what a finished blocker shipped, so it reads the recorded PR whatever its
+  state (`recorded_urls/2`): a merged one is checked against the running build, and a closed one
+  merged nothing.
+
+Agent runs, the orchestrator and status reporting take a ticket's PR from this record; where this
+spec says a run's or a ticket's "attached PR", it means the PR the record answers:
+
+- The agent run: the renamed-team-key PR head the workspace syncs to, the PR known at dispatch, the
+  post-turn checks (the quiet hand-off on the PR head, the CI wait on a pushed head, a `Rework` that
+  is done, the landing run's CI wait, the reviewer agent's progress key) and the idle-park note. A
+  run whose ticket had a PR at dispatch logs a warning naming the issue when the record no longer
+  answers one.
+- The orchestrator: running and completed run entries, the run records it persists, watching
+  entries, the PR run's own PR and the "went quiet on its PR" check. A PR URL the run itself
+  reported stays on its entry; only the read off the ticket changes.
+- `/api/v1/state`, the dashboard and the terminal status read those entries. Quality eval records,
+  one-shot run records, issue notifications and the epic review's pull-request check carry the
+  recorded PR.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -2240,15 +2268,19 @@ writes.
 The poller:
 
 - discovers issues in the Code Review, QA and `Rework` states (and `Merging` with auto-merge on)
-  with attached GitHub PR URLs (attachments whose Linear metadata
+  with a PR, read from Symphony's ticket pull request record (Section 4.1.10), so a PR the agent
+  just opened is seen on the next poll without waiting for the tracker's attachment; a `closed` or
+  `merged` record means the ticket has no PR to watch. A ticket with no record falls back to its
+  attached GitHub PR URLs (attachments whose Linear metadata
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
   reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
   issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
   attachment and many others, such as QA screenshots, do not hide the PR; a rate limit, transport
   failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
-  as they retry the first page, rather than seeing the issue without its PR; an issue the CI poller watches a PR
-  for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
-  attachments show no PR);
+  as they retry the first page, rather than seeing the issue without its PR). An issue the CI poller
+  watches a PR for logs a warning naming the issue when Symphony's record holds no open PR for it,
+  and an agent run whose issue had a PR at dispatch logs one when the record no longer shows an open
+  PR;
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
@@ -2525,8 +2557,13 @@ Rules:
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
   blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
-  `In Progress` or `Rework`, or a self-heal fix ticket, and clears by itself when what it waits on
-  goes terminal (an access hold clears on a person's `Unblock`). `Needs Decision` is set by an
+  `In Progress` or `Rework` (its block report), or a self-heal fix ticket, and clears by itself when
+  what it waits on goes terminal (an access hold clears on a person's `Unblock`). A block report
+  from a ticket with open blocked-by blockers MUST record a dependency hold on those blockers, which
+  clears by itself once every one is terminal, in whatever phase the ticket is, and the ticket
+  dispatches again in that phase; outside `Todo`, a blocker whose fix merged into Symphony itself
+  also waits until the running app includes its merge commit. A block report with no open blocker
+  records an access hold. `Needs Decision` is set by an
   agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal or a manual
   review confirmation, and clears when the decision is recorded (a reply under the request, the
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision

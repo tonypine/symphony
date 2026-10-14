@@ -29,7 +29,7 @@ defmodule SymphonyElixir.MergeConfirmation do
 
   require Logger
 
-  alias SymphonyElixir.{Handoff, Hold, NeedsDecisionHold, TransitionGuard}
+  alias SymphonyElixir.{Handoff, Hold, NeedsDecisionHold, TicketPullRequest, TransitionGuard}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
 
@@ -306,11 +306,8 @@ defmodule SymphonyElixir.MergeConfirmation do
     end
   end
 
-  defp pr_link(%Issue{pr_urls: pr_urls}, opts) when is_list(pr_urls) do
-    Keyword.get(opts, :pr_url) || List.first(pr_urls)
-  end
-
-  defp pr_link(_issue, opts), do: Keyword.get(opts, :pr_url)
+  # The ticket's in-flight PR, from Symphony's record of it, unless the caller names one.
+  defp pr_link(issue, opts), do: Keyword.get(opts, :pr_url) || TicketPullRequest.current_url(issue, repo_key(issue, opts))
 
   # A ticket as the question names it the first time: its identifier and its title.
   defp mention(%Issue{title: title} = issue) when is_binary(title) and title != "", do: "#{label(issue)} (#{title})"
