@@ -7,6 +7,7 @@ defmodule SymphonyElixir.CiPollerTest do
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Notifications
+  alias SymphonyElixir.TicketPullRequest
 
   @endpoint SymphonyElixirWeb.Endpoint
 
@@ -767,6 +768,24 @@ defmodule SymphonyElixir.CiPollerTest do
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
     refute_receive {:issue_state_update, _, _}
+  end
+
+  test "a merged or closed PR the poll reads marks its ticket's PR record" do
+    now = ~U[2026-05-06 09:00:00Z]
+    pr_url = "https://github.com/example/repo/pull/2401"
+    issue = in_review_issue()
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+
+    for {gh_state, pr_state} <- [{"MERGED", "merged"}, {"CLOSED", "closed"}] do
+      :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
+      Application.put_env(:symphony_elixir, :ci_test_status, %{green_status() | state: gh_state})
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:cleanup, "issue-2401", "closed"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert %{state: ^pr_state} = TicketPullRequest.get(@repo_key, "issue-2401")
+    end
   end
 
   test "first failure reruns failed jobs without dispatching" do
@@ -2511,6 +2530,25 @@ defmodule SymphonyElixir.CiPollerTest do
 
       deliver_webhook("pull_request", put_in(pull_request_closed(), ["pull_request", "merged"], true), 202)
       assert_receive :base_moved, 5_000
+    end
+
+    test "a closed or merged PR marks its ticket's PR record", %{name: name} do
+      pr_url = "https://github.com/example/repo/pull/2401"
+      start_webhook_poller(name, on_base_moved: fn -> :ok end)
+
+      :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
+      deliver_webhook("pull_request", put_in(pull_request_closed(), ["pull_request", "merged"], true), 202)
+      assert_eventually(fn -> match?(%{state: "merged"}, TicketPullRequest.get(@repo_key, "issue-2401")) end)
+
+      :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
+      deliver_webhook("pull_request", pull_request_closed(), 202)
+      assert_eventually(fn -> match?(%{state: "closed"}, TicketPullRequest.get(@repo_key, "issue-2401")) end)
+
+      # A push to the PR leaves the record as it is.
+      :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
+      deliver_webhook("pull_request", pull_request_synchronized("newsha"), 202)
+      :sys.get_state(name)
+      assert %{state: "open"} = TicketPullRequest.get(@repo_key, "issue-2401")
     end
 
     test "closing a PR clears the CI labels and leaves the recorded state", %{name: name} do

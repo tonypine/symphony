@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Repo.Fetcher
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.Workspace
 
   @merging_state "Merging"
@@ -104,9 +105,11 @@ defmodule SymphonyElixir.AgentTools.GitHub do
                draft_args(draft?),
              github_opts(context, opts)
            ) do
+      pr_url = String.trim(output)
       CommentRegistry.record_pull_request(Map.get(context, :comment_registry))
-      record_handoff(context, opts, %{branch: branch, pr_url: String.trim(output)})
-      {:ok, %{"url" => String.trim(output), "repo" => origin_repo, "head" => branch, "draft" => draft?}}
+      TicketPullRequest.record_created(issue_repo_key(context), handoff_issue_id(context), pr_url, branch)
+      record_handoff(context, opts, %{branch: branch, pr_url: pr_url})
+      {:ok, %{"url" => pr_url, "repo" => origin_repo, "head" => branch, "draft" => draft?}}
     end
   end
 

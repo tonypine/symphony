@@ -16,7 +16,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.{NeedsDecisionHold, Notifications, Orchestrator, PersonWait, RunStore, Tracker}
-  alias SymphonyElixir.TicketSignals
+  alias SymphonyElixir.{TicketPullRequest, TicketSignals}
   alias SymphonyElixir.TransitionGuard
 
   @merging_state "Merging"
@@ -181,8 +181,26 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   defp handle_ci_delivery(%State{} = state, event) do
-    state |> base_moved(event) |> apply_webhook_ci_state(event) |> queue_webhook_poll(event)
+    state
+    |> base_moved(event)
+    |> finish_pull_requests(event)
+    |> apply_webhook_ci_state(event)
+    |> queue_webhook_poll(event)
   end
+
+  # A closed or merged PR is no longer its ticket's in-flight PR: the delivery marks the ticket's
+  # PR record (`SymphonyElixir.TicketPullRequest`) in every repo the poller serves.
+  defp finish_pull_requests(%State{} = state, %{action: "closed", merged: merged?, pr_urls: pr_urls}) do
+    pr_state = if merged?, do: "merged", else: "closed"
+
+    for repo_key <- repo_keys_from_opts(state.opts), pr_url <- pr_urls do
+      TicketPullRequest.mark_finished(repo_key, pr_url, pr_state)
+    end
+
+    state
+  end
+
+  defp finish_pull_requests(%State{} = state, _event), do: state
 
   # A merged PR moved its base branch, so every other PR on it is now behind. The PR poller polls
   # now instead of on its timer: a `Merging` PR gets its update-branch (and its CI on the stale
@@ -663,6 +681,7 @@ defmodule SymphonyElixir.CiPoller do
 
     case action do
       :closed ->
+        finish_pull_request(record, ci_status, opts)
         cleanup_ci(record, opts, now, "closed")
 
       :success ->
@@ -1404,6 +1423,11 @@ defmodule SymphonyElixir.CiPoller do
       status when is_binary(status) -> status
       _ -> "watching"
     end
+  end
+
+  defp finish_pull_request(record, ci_status, opts) do
+    pr_state = if normalize_status(Map.get(ci_status, :state)) == "MERGED", do: "merged", else: "closed"
+    TicketPullRequest.mark_finished(Map.get(record, :repo_key) || repo_key_from_opts(opts), Map.get(record, :pr_url), pr_state)
   end
 
   defp cleanup_ci(record, opts, now, reason) do

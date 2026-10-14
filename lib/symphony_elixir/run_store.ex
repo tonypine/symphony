@@ -15,6 +15,7 @@ defmodule SymphonyElixir.RunStore do
   @pr_review_table :symphony_run_store_pr_reviews
   @ci_check_table :symphony_run_store_ci_checks
   @ticket_state_table :symphony_run_store_ticket_states
+  @ticket_pull_request_table :symphony_run_store_ticket_pull_requests
   @verification_allocation_table :symphony_run_store_verification_allocations
   @eval_logs_table :symphony_run_store_eval_logs
   @pause_table :symphony_run_store_pause
@@ -30,6 +31,7 @@ defmodule SymphonyElixir.RunStore do
     {@pr_review_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@ci_check_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@ticket_state_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
+    {@ticket_pull_request_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
     {@verification_allocation_table, [:key, :repo_key, :run_id, :record], [index: [:repo_key]]},
     {@pause_table, [:key, :record], []},
     {@eval_logs_table, @eval_log_attributes, [type: :bag, index: @eval_log_indexes]},
@@ -700,6 +702,62 @@ defmodule SymphonyElixir.RunStore do
       end)
     end
   end
+
+  @doc """
+  Writes the ticket's pull request record (`SymphonyElixir.TicketPullRequest`), replacing the one
+  the ticket held.
+  """
+  @spec put_ticket_pull_request(map()) :: :ok | {:error, term()}
+  def put_ticket_pull_request(%{repo_key: repo_key, issue_id: issue_id} = record) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      normalized = record |> normalize_record() |> Map.put(:repo_key, repo_key)
+
+      durable_transaction(fn ->
+        :mnesia.write({@ticket_pull_request_table, scoped_key(repo_key, issue_id), repo_key, issue_id, normalized})
+        :ok
+      end)
+    end
+  end
+
+  def put_ticket_pull_request(_record), do: {:error, :invalid_ticket_pull_request_record}
+
+  @spec get_ticket_pull_request(String.t(), String.t()) :: map() | nil | {:error, term()}
+  def get_ticket_pull_request(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> read_ticket_pull_request(repo_key, issue_id) end)
+    end
+  end
+
+  def get_ticket_pull_request(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @spec list_ticket_pull_requests(String.t()) :: [map()] | {:error, term()}
+  def list_ticket_pull_requests(repo_key) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn ->
+        @ticket_pull_request_table
+        |> scoped_records(repo_key)
+        |> Enum.sort_by(&datetime_sort_key(Map.get(&1, :updated_at)), :desc)
+      end)
+    end
+  end
+
+  @doc """
+  Sets `state` on every pull request record of `repo_key` whose PR is `pr_url`, in one durable
+  transaction, and returns how many it changed. A record already in `state` is left as it is.
+  """
+  @spec finish_ticket_pull_request(String.t(), String.t(), String.t(), DateTime.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def finish_ticket_pull_request(repo_key, pr_url, state, %DateTime{} = at) when is_binary(pr_url) and is_binary(state) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_finished_pull_requests(repo_key, pr_url, state, at) end)
+    end
+  end
+
+  def finish_ticket_pull_request(_repo_key, _pr_url, _state, _at), do: {:error, :invalid_ticket_pull_request_record}
 
   @doc """
   Appends a named signal to the ticket's signals ledger, creating the record when none exists. The
@@ -1565,6 +1623,24 @@ defmodule SymphonyElixir.RunStore do
           {:error, :ticket_state_not_found}
       end
     end)
+  end
+
+  defp read_ticket_pull_request(repo_key, issue_id) do
+    case :mnesia.read(@ticket_pull_request_table, scoped_key(repo_key, issue_id)) do
+      [{@ticket_pull_request_table, _key, ^repo_key, ^issue_id, record}] -> record
+      [] -> nil
+    end
+  end
+
+  defp write_finished_pull_requests(repo_key, pr_url, state, at) do
+    changed =
+      :mnesia.match_object({@ticket_pull_request_table, :_, repo_key, :_, :_})
+      |> Enum.filter(fn {_table, _key, _repo_key, _issue_id, record} -> Map.get(record, :pr_url) == pr_url and Map.get(record, :state) != state end)
+      |> Enum.map(fn {table, key, ^repo_key, issue_id, record} ->
+        :mnesia.write({table, key, repo_key, issue_id, Map.merge(record, %{state: state, updated_at: at})})
+      end)
+
+    {:ok, length(changed)}
   end
 
   defp write_ticket_signal(repo_key, issue_id, name, details) do
