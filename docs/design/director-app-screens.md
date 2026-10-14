@@ -117,7 +117,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   joined when the text gives one ("TP-891 · Remove the retired review states"); resting the pointer on it for half a
   second opens its popover (N2 for a ticket, N3 for a PR, "Symphony can't see TP-999." for one Symphony couldn't
   read), and a click opens the ticket page or the PR on GitHub. The text wraps, selects and copies like any Mac text
-  (DD-5). The banner at the bottom is the Undo after D12d.
+  (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
+  and dark, are in `macos/Tests/Snapshots`. The banner at the bottom is the Undo after D12d.
 - **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
   option with that number while the list or the review has the keyboard; a click on a card picks it.
 - **States:** an older hand-written request with steps and no options reads **Action** (group **Actions**), keeps its

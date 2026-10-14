@@ -139,12 +139,13 @@ e2e:
 # writes their PNGs there: the app's views, minus main.swift, compiled with the snapshot program.
 # `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
 snapshots:
-	swift build $(SWIFT_FLAGS) --product SymphonyBarCore
+	swift build $(SWIFT_FLAGS) --product SymphonyBarUI
 	mkdir -p $(BUILD_DIR)
 	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/snapshot-module-cache \
 		-I "$$(swift build $(SWIFT_FLAGS) --show-bin-path)/Modules" -o $(BUILD_DIR)/render-snapshots \
 		Tests/Snapshots/main.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
-		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o
+		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o \
+		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarUI.build/*.o
 	$(BUILD_DIR)/render-snapshots
 
 clean:

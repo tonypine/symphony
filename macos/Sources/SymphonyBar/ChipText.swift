@@ -15,13 +15,6 @@ extension EnvironmentValues {
         get { self[OpenMentionKey.self] }
         set { self[OpenMentionKey.self] = newValue }
     }
-
-    /// True in `ImageRenderer` snapshots, which can't draw an AppKit view: `ChipText` draws its text view into an
-    /// image instead, offscreen.
-    var chipTextRendersImage: Bool {
-        get { self[ChipTextRendersImageKey.self] }
-        set { self[ChipTextRendersImageKey.self] = newValue }
-    }
 }
 
 private struct MentionReferencesKey: EnvironmentKey {
@@ -30,10 +23,6 @@ private struct MentionReferencesKey: EnvironmentKey {
 
 private struct OpenMentionKey: EnvironmentKey {
     static let defaultValue = OpenMentionAction { _ in }
-}
-
-private struct ChipTextRendersImageKey: EnvironmentKey {
-    static let defaultValue = false
 }
 
 /// What a click on a chip opens, as `OpenURLAction` is for a link.
@@ -55,7 +44,8 @@ struct ChipText: View {
     /// False in a control: the text can't be selected and a click outside a chip goes to the control.
     var selectable = true
     @Environment(\.mentionReferences) private var references
-    @Environment(\.chipTextRendersImage) private var rendersImage
+    /// `ImageRenderer` can't draw an AppKit view, so a snapshot shows the text view drawn into an image, offscreen.
+    @Environment(\.offscreenSnapshot) private var rendersImage
 
     var body: some View {
         let content = ChipTextContent(text, references: references, lead: lead)

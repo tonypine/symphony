@@ -106,6 +106,31 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertNil(view.chipIndex(at: CGPoint(x: 590, y: 400)))
     }
 
+    func testAChipsTintSitsInTheRoomTheKerningMakesNotOverTheWordsAroundIt() throws {
+        // TextKit's segments and caret offsets put half of the kerning before "#" on "#", which drew the tint and the
+        // pull request symbol over "sent".
+        let font = NSFont.systemFont(ofSize: 13)
+        let view = ChipTextView(
+            content: ChipTextContent("Code Review sent #448 back twice.", references: try decision().references),
+            style: ChipTextStyle(font: font)
+        )
+        view.setFrameSize(CGSize(width: 300, height: view.height(forWidth: 300)))
+        let chip = try XCTUnwrap(view.chipRects(0).first)
+        let manager = try XCTUnwrap(view.textLayoutManager)
+        let contentManager = try XCTUnwrap(manager.textContentManager)
+        var caret: [Int: CGFloat] = [:]
+        manager.enumerateTextLayoutFragments(from: contentManager.documentRange.location, options: []) { fragment in
+            let line = fragment.textLineFragments[0]
+            for index in [16, 22] { caret[index] = fragment.layoutFragmentFrame.minX + line.locationForCharacter(at: index).x }
+            return false
+        }
+        let space = NSAttributedString(string: " ", attributes: [.font: font]).size().width
+        let origin = view.textContainerOrigin.x
+        // The no-break space at 16 follows "sent", and "b" at 22 a space: neither boundary carries kerning.
+        XCTAssertEqual(chip.minX, try XCTUnwrap(caret[16]) + space + origin, accuracy: 0.5, "the space before the chip stays clear")
+        XCTAssertEqual(chip.maxX, try XCTUnwrap(caret[22]) - space + origin, accuracy: 0.5, "the chip ends where the space after it starts")
+    }
+
     func testAChipKeepsItsCharactersAndRoomForItsTint() throws {
         let view = try storyView()
         let text = view.attributedText()

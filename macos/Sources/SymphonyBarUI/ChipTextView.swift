@@ -283,29 +283,40 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         return chipFrames(index, in: manager).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
     }
 
-    /// A chip's tint in a layout's text container, from the segments of its characters.
+    /// A chip's tint in a layout's text container, from where its glyphs sit on their lines. TextKit's text segments
+    /// and caret offsets put half of a character's kerning on its neighbour, so they miss the room before and after a
+    /// chip by half; the glyph origins don't.
     private func chipFrames(_ index: Int, in manager: NSTextLayoutManager) -> [CGRect] {
         guard content.mentions.indices.contains(index), let contentManager = manager.textContentManager else { return [] }
         let mention = content.mentions[index]
         manager.ensureLayout(for: manager.documentRange)
-        guard let start = contentManager.location(contentManager.documentRange.location, offsetBy: mention.range.location),
+        let documentStart = contentManager.documentRange.location
+        guard let start = contentManager.location(documentStart, offsetBy: mention.range.location),
             let end = contentManager.location(start, offsetBy: mention.range.length),
             let range = NSTextRange(location: start, end: end)
         else { return [] }
-        // One rectangle per line: TextKit can give a line's characters in more than one segment.
+        let room = leadingRoom(for: mention)
         var frames: [CGRect] = []
-        manager.enumerateTextSegments(in: range, type: .standard, options: []) { _, frame, _, _ in
-            if let line = frames.firstIndex(where: { $0.minY == frame.minY }) {
-                frames[line] = frames[line].union(frame)
-            } else {
-                frames.append(frame)
+        manager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            guard fragment.rangeInElement.location.compare(range.endLocation) == .orderedAscending else { return false }
+            let paragraphStart = contentManager.offset(from: documentStart, to: fragment.rangeInElement.location)
+            let fragmentFrame = fragment.layoutFragmentFrame
+            for line in fragment.textLineFragments {
+                let lineRange = NSRange(location: paragraphStart + line.characterRange.location, length: line.characterRange.length)
+                let chars = NSIntersectionRange(lineRange, mention.range)
+                guard chars.length > 0 else { continue }
+                let bounds = line.typographicBounds
+                let glyphs = GlyphOrigins(line)
+                let x = { (location: Int) in
+                    fragmentFrame.minX + bounds.minX + glyphs.x(at: location - paragraphStart - line.characterRange.location)
+                }
+                let minX = x(chars.location) - (chars.location == mention.range.location ? room : 0)
+                let maxX = x(NSMaxRange(chars))
+                frames.append(CGRect(x: minX, y: fragmentFrame.minY + bounds.minY, width: maxX - minX, height: bounds.height))
             }
             return true
         }
-        let room = leadingRoom(for: mention)
-        return frames.enumerated().map { line, frame in
-            line == 0 ? CGRect(x: frame.minX - room, y: frame.minY, width: frame.width + room, height: frame.height) : frame
-        }
+        return frames
     }
 
     /// The chip at `point` in the view, nil in plain text.
@@ -736,5 +747,32 @@ final class ChipAccessibilityElement: NSAccessibilityElement {
     override func accessibilityPerformShowAlternateUI() -> Bool {
         view?.showDetails(index)
         return view != nil
+    }
+}
+
+/// Where each character's glyph starts on a line, as CoreText draws it: with the kerning of the character before.
+private struct GlyphOrigins {
+    private var origins: [Int: CGFloat] = [:]
+    private let width: CGFloat
+
+    init(_ line: NSTextLineFragment) {
+        let ctLine = CTLineCreateWithAttributedString(line.attributedString.attributedSubstring(from: line.characterRange))
+        width = CGFloat(CTLineGetTypographicBounds(ctLine, nil, nil, nil))
+        for run in CTLineGetGlyphRuns(ctLine) as? [CTRun] ?? [] {
+            let count = CTRunGetGlyphCount(run)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            var indices = [CFIndex](repeating: 0, count: count)
+            CTRunGetPositions(run, CFRange(location: 0, length: count), &positions)
+            CTRunGetStringIndices(run, CFRange(location: 0, length: count), &indices)
+            for (index, position) in zip(indices, positions) where origins[index] == nil {
+                origins[index] = position.x
+            }
+        }
+    }
+
+    /// The glyph origin of the character at `index` in the line, or of the next one with a glyph of its own (inside
+    /// a ligature); the line's end past its last character.
+    func x(at index: Int) -> CGFloat {
+        origins[index] ?? origins.filter { $0.key > index }.min { $0.key < $1.key }?.value ?? width
     }
 }
