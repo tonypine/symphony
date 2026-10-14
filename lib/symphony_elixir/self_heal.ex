@@ -13,8 +13,8 @@ defmodule SymphonyElixir.SelfHeal do
     * waits on the open ticket the run named as already covering the gap (`covered_by`), or
       files **one** fix ticket per broken component — High, or Urgent for an Urgent affected
       ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
-      component is reused, not filed again, keeping its priority, and the new failure is attached to
-      it as evidence;
+      component and the same failure is reused, not filed again, keeping its priority, and the new
+      failure is attached to it as evidence; a terminal one, or one for another failure, is not;
     * links the affected ticket to the fix ticket as blocked-by and gives it a `Blocked` hold
       waiting on that ticket, which lifts on its own when the fix goes terminal
       (`SymphonyElixir.BlockedHold`), or, for a fix merged into the repo the running Symphony was
@@ -161,8 +161,8 @@ defmodule SymphonyElixir.SelfHeal do
     end
   end
 
-  # No fix ticket for this component yet: reuse the open one if another ticket already filed it
-  # (one fix ticket per broken component, however many tickets hit the break), else file it.
+  # No fix ticket for this component yet: reuse the open one if another ticket already filed it for
+  # the same failure (one fix ticket per break, however many tickets hit it), else file it.
   defp open(ctx) do
     case fix_ticket(ctx) do
       {:ok, %{identifier: identifier} = ticket} ->
@@ -244,7 +244,7 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp fix_ticket(ctx) do
-    case covering_ticket(ctx) || find_open_fix_ticket(ctx.scope, ctx.component, ctx.opts) do
+    case covering_ticket(ctx) || find_open_fix_ticket(ctx) do
       %{identifier: identifier} = ticket ->
         attach(%{fix_ticket: identifier}, ctx.issue, ctx.signature, ctx.outcome, ctx.opts)
         {:ok, ticket}
@@ -281,20 +281,37 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp covering_ticket(_ctx), do: nil
 
-  # The open fix ticket for this broken component, whichever affected ticket filed it. The fix
-  # tickets are found through the tickets' own self-heal records, so no second index is kept.
-  defp find_open_fix_ticket(scope, component, opts) do
-    opts
+  # The open fix ticket for this same failure, whichever affected ticket filed it. The fix tickets
+  # are found through the tickets' own self-heal records, so no second index is kept. A record is
+  # reused only when its failure (`signature/1`) is the new one and its fix ticket is still open:
+  # a fix ticket for another failure of the same component, or one already terminal or unreadable,
+  # would hold the ticket on a gap it does not track, so a new fix ticket is filed instead.
+  defp find_open_fix_ticket(ctx) do
+    %{component: component, scope: scope, signature: signature} = ctx
+
+    ctx.opts
     |> ticket_states()
     |> Enum.find_value(fn record ->
       case TicketState.self_heal(record) do
-        %{component: ^component, scope: ^scope, fix_ticket: identifier} when is_binary(identifier) ->
-          %{identifier: identifier}
+        %{component: ^component, scope: ^scope, signature: ^signature, fix_ticket: identifier}
+        when is_binary(identifier) ->
+          open_fix_ticket(identifier, ctx)
 
         _none ->
           nil
       end
     end)
+  end
+
+  defp open_fix_ticket(identifier, ctx) do
+    case tracker(ctx.opts).fetch_issue_by_identifier(identifier) do
+      {:ok, %Issue{state: state}} ->
+        if terminal?(state, ctx.opts), do: nil, else: %{identifier: identifier}
+
+      _other ->
+        Logger.info("Self-heal for #{label(ctx.issue)} cannot reuse fix ticket #{identifier}: it could not be read")
+        nil
+    end
   end
 
   defp ticket_states(opts) do
