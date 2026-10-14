@@ -2552,8 +2552,11 @@ Rules:
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
   machine enters `Epic Review` and runs the QA agent against the default branch; it files follow-ups
   in `Todo` under the epic, never in `Backlog`, each with the epic's priority so
-  `tickets.priorities` dispatches them like the epic. No `Final verification:` ticket or close-out run is
-  created.
+  `tickets.priorities` dispatches them like the epic. Each follow-up must be checkable on its own
+  PR before it merges: a gap whose check needs another unmerged ticket, or the change running in
+  Symphony, is filed as two follow-ups, the second blocked by the first (a gap names its blocker,
+  another gap of the same answer or a sub-ticket of the epic; any other blocker is logged and left
+  out). No `Final verification:` ticket or close-out run is created.
 - **Prompt.** The rendered prompt MUST NOT name Auto Review, `In Review`, the Human Review state,
   supervisor checks or `Final verification:` tickets. Prompt assembly still passes `state_machine`,
   always `designed`, so an instruction file that branches on it keeps rendering.
