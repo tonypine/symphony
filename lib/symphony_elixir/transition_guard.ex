@@ -280,10 +280,14 @@ defmodule SymphonyElixir.TransitionGuard do
 
   An agent asking to park its issue in `Backlog` while it is `In Progress` or `Rework` is not a
   move: the guard returns `{:hold, :blocked, attrs}`, which pauses the ticket in its phase with a
-  recorded reason instead of moving it (the Backlog escape hatch is retired).
+  recorded reason instead of moving it (the Backlog escape hatch is retired). When the issue has
+  open blocked-by blockers (`ctx`'s `:open_blockers`), the hold waits on them as a `dependency`
+  hold, which `SymphonyElixir.BlockedHold` lifts on its own once they are all terminal; without one
+  it is an `access` hold, which a person lifts with `Unblock`.
 
-  `ctx` carries `:settings`, `:from_state` (the issue's current state) and `:plan_parent?` (the
-  issue carries the `plan` label, so it is an epic parent).
+  `ctx` carries `:settings`, `:from_state` (the issue's current state), `:plan_parent?` (the
+  issue carries the `plan` label, so it is an epic parent) and `:open_blockers` (the identifiers of
+  the issue's blockers still outside a terminal state).
   """
   @spec resolve_request(map(), context()) ::
           {:ok, map()} | {:hold, :blocked | :needs_decision, map()} | {:error, term()}
@@ -313,15 +317,29 @@ defmodule SymphonyElixir.TransitionGuard do
   # the ticket keeps its phase. Every other request is not a hold.
   defp hold_request(state_name, ctx) do
     if state_name_matches?(state_name, @backlog_state) and running_phase?(Map.get(ctx, :from_state)) do
-      {:hold, :blocked,
-       %{
-         reason: "the run reported a block",
-         clearing_condition: "when the block is resolved; a person clears an access hold",
-         waits_on: %{type: "access", keys: []}
-       }}
+      {:hold, :blocked, block_report_attrs(Map.get(ctx, :open_blockers, []))}
     else
       :not_a_hold
     end
+  end
+
+  # A run that marked its issue blocked by other tickets waits on them: the hold lifts on its own
+  # once they are all terminal, in whatever phase the issue is. With no open blocker, what the run
+  # waits on is unknown to the machine, so the hold waits on a person's Unblock.
+  defp block_report_attrs([_ | _] = keys) do
+    %{
+      reason: "the run reported a block: waiting on " <> Enum.join(keys, ", "),
+      clearing_condition: "when every blocker is terminal",
+      waits_on: %{type: "dependency", keys: keys}
+    }
+  end
+
+  defp block_report_attrs(_keys) do
+    %{
+      reason: "the run reported a block",
+      clearing_condition: "when the block is resolved; a person clears an access hold",
+      waits_on: %{type: "access", keys: []}
+    }
   end
 
   defp running_phase?(from) when is_binary(from),
