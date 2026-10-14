@@ -29,21 +29,41 @@ final class InboxMovesTests: XCTestCase {
 
     func testAPullRequestOffersApproveAndMergeUnlessACheckIsRed() throws {
         let pr = try shipped("BIL-206")
+        let shippedPR = try XCTUnwrap(pr.review.pullRequest?.url)
         let toolbar = InboxToolbar.toolbar(for: pr)
         XCTAssertEqual(toolbar.buttons.map(\.command.title), ["Approve and Merge…", "Send to Rework…", "Open PR", "Open in Linear"])
         XCTAssertEqual(toolbar.defaultCommand, .move(.approveAndMerge))
         XCTAssertEqual(toolbar.overflow, [.move(.restart)])
 
-        var red = item(.pr)
-        red.review.pullRequest = InboxReview.PullRequest(url: prURL, ci: .failed)
+        var red = pr
+        red.review.pullRequest?.ci = .failed
         XCTAssertEqual(InboxToolbar.toolbar(for: red).buttons.map(\.command), [
-            .link(.openPR(prURL)), .move(.approveAndMerge), .move(.sendToRework), .link(.openInLinear(linear)),
+            .link(.openPR(shippedPR)), .move(.approveAndMerge), .move(.sendToRework), .link(.openInLinear(try XCTUnwrap(pr.url))),
         ])
 
         // A red check on a PR Symphony has no link for keeps Approve and Merge… first.
         var unlinked = red
         unlinked.review.pullRequest?.url = nil
         XCTAssertEqual(InboxToolbar.toolbar(for: unlinked).defaultCommand, .move(.approveAndMerge))
+    }
+
+    func testAPullRequestWithNoMergeConfirmationToAnswerOffersOnlyItsLinks() throws {
+        // Symphony has no move of its own for a PR: without the request to answer, there is nothing to send.
+        var bare = item(.pr)
+        bare.review.pullRequest = InboxReview.PullRequest(url: prURL, ci: .passed)
+        let toolbar = InboxToolbar.toolbar(for: bare)
+        XCTAssertEqual(toolbar.buttons.map(\.command), [.link(.openPR(prURL)), .link(.openInLinear(linear))])
+        XCTAssertEqual(toolbar.defaultCommand, .link(.openPR(prURL)))
+        XCTAssertEqual(toolbar.overflow, [.move(.restart)])
+
+        // Nor without the request comment to reply under, or with a request no option of which confirms.
+        var uncommented = try shipped("BIL-206")
+        uncommented.review.action?.commentID = nil
+        XCTAssertFalse(InboxToolbar.toolbar(for: uncommented).buttons.contains { $0.command == .move(.approveAndMerge) })
+        var ordinary = try shipped("BIL-206")
+        ordinary.review.action?.confirm = nil
+        XCTAssertNil(ordinary.review.action?.confirmingOption)
+        XCTAssertEqual(InboxToolbar.toolbar(for: ordinary).buttons.map(\.command.title), ["Open PR", "Open in Linear"])
     }
 
     func testEveryPlanAndPROffersRestart() throws {
@@ -136,7 +156,7 @@ final class InboxMovesTests: XCTestCase {
         )
         XCTAssertEqual(redirect.banner(after: redirect.expectedOutcome).text, "Moved to Rework")
 
-        // A PR's Send to Rework is still the plain move.
+        // A PR with no request to answer has nothing to reply under either.
         XCTAssertEqual(ConsequenceSheet(move: .sendToRework, item: item(.pr)).isDecision, false)
         // And a request without its comment id answers nothing.
         var unanswerable = action
@@ -228,16 +248,72 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(ControlResult.done.moveOutcome)
     }
 
-    func testApproveAndMergeSaysGitHubMergesOnceChecksPass() throws {
-        let sheet = ConsequenceSheet(move: .approveAndMerge, item: try shipped("BIL-206"))
+    func testApproveAndMergeAnswersTheMergeConfirmationAndSaysGitHubMergesOnceChecksPass() throws {
+        let pr = try shipped("BIL-206")
+        let sheet = ConsequenceSheet(move: .approveAndMerge, item: pr)
         XCTAssertEqual(sheet.title, "Move BIL-206 to Merging?")
-        XCTAssertEqual(sheet.happens, "Symphony turns on auto-merge, and GitHub merges the pull request once checks pass.")
-        XCTAssertEqual(sheet.action(), .approvePR("BIL-206"))
-        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Moved to Merging")
+        XCTAssertEqual(
+            sheet.happens,
+            "Records your answer on BIL-206 as a reply to its merge request, clears the `Needs Decision` label and moves BIL-206 to Merging: Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
+        )
+        XCTAssertEqual(sheet.stays, "Nothing merges while a check is red or pending, and the diff stays on GitHub.")
+        XCTAssertTrue(sheet.isDecision)
+        XCTAssertFalse(sheet.isDestructive)
+        XCTAssertFalse(sheet.needsReason)
+        XCTAssertEqual(sheet.targetState, "Merging")
+        XCTAssertEqual(sheet.requestCommentID, "c-206-merge")
+        // It picks the option that moves the ticket to the state the hold carries, so Symphony continues it there.
+        let pick = ControlAction.DecisionPick(question: "Merge BIL-206 (Prorate plan changes mid-cycle) into its base branch?", answer: "Merge")
+        XCTAssertEqual(sheet.picks, [pick])
+        XCTAssertEqual(sheet.action(), .decide("BIL-206", requestCommentID: "c-206-merge", picks: [pick], move: nil))
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-206", identifier: "BIL-206", text: "Moved to Merging", undo: true))
+
+        // The confirmation's option is found by what it does, not by where it sits or whether it is recommended.
+        var reordered = pr
+        let flipped = (pr.review.action?.options ?? []).reversed().map { option in
+            var option = option
+            option.recommended.toggle()
+            return option
+        }
+        reordered.review.action?.options = flipped
+        XCTAssertEqual(ConsequenceSheet(move: .approveAndMerge, item: reordered).picks.map(\.answer), ["Merge"])
+
+        // The hold names the state, so a repo that calls it something else is moved there.
+        var renamed = pr
+        renamed.review.action?.confirm = "Ready to Merge"
+        renamed.review.action?.options[0].effect = "the ticket moves to Ready to Merge and Symphony merges its pull request"
+        XCTAssertEqual(ConsequenceSheet(move: .approveAndMerge, item: renamed).title, "Move BIL-206 to Ready to Merge?")
+        XCTAssertEqual(ConsequenceSheet(move: .approveAndMerge, item: renamed).targetState, "Ready to Merge")
+
+        // With nothing to answer, nothing is sent.
+        XCTAssertNil(ConsequenceSheet(move: .approveAndMerge, item: item(.pr)).action())
+        var ordinary = pr
+        ordinary.review.action?.confirm = nil
+        XCTAssertNil(ConsequenceSheet(move: .approveAndMerge, item: ordinary).action())
+    }
+
+    func testAPullRequestsSendToReworkRedirectsItsMergeConfirmation() throws {
+        let sheet = ConsequenceSheet(move: .sendToRework, item: try shipped("BIL-206"))
+        XCTAssertTrue(sheet.isDecision)
+        XCTAssertTrue(sheet.isDestructive)
+        XCTAssertEqual(sheet.happens, "Records your answer on BIL-206 and moves it to Rework through the guard.")
+        XCTAssertNil(sheet.action(reason: " "))
+        XCTAssertEqual(
+            sheet.action(reason: " Totals are off \n"),
+            .decide(
+                "BIL-206",
+                requestCommentID: "c-206-merge",
+                picks: [.init(question: "Merge BIL-206 (Prorate plan changes mid-cycle) into its base branch?", answer: "Totals are off")],
+                move: "rework"
+            )
+        )
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Moved to Rework")
     }
 
     func testSendToReworkNeedsAReasonAndIsDestructive() throws {
-        let sheet = ConsequenceSheet(move: .sendToRework, item: try shipped("BIL-206"))
+        var pr = item(.pr)
+        pr.identifier = "BIL-206"
+        let sheet = ConsequenceSheet(move: .sendToRework, item: pr)
         XCTAssertEqual(sheet.title, "Send BIL-206 to Rework?")
         XCTAssertEqual(sheet.happens, "Posts your reason on BIL-206 and moves it to Rework: Symphony continues on the same pull request. Restart instead closes the pull request and starts over from main.")
         XCTAssertTrue(sheet.isDestructive)
@@ -324,7 +400,6 @@ final class InboxMovesTests: XCTestCase {
         let picks = [ControlAction.DecisionPick(question: "Where?", answer: "B")]
         let cases: [(ControlAction, String, [String: Any])] = [
             (.approvePlan("SHOP-330"), "approve_plan", ["issue_identifier": "SHOP-330"]),
-            (.approvePR("BIL-206"), "approve_pr", ["issue_identifier": "BIL-206"]),
             (.rework("BIL-206", reason: "No"), "rework", ["issue_identifier": "BIL-206", "reason": "No"]),
             (.restart("BIL-206", reason: "No"), "restart", ["issue_identifier": "BIL-206", "reason": "No"]),
             (.decisions("SHOP-330", picks: picks), "decisions", ["issue_identifier": "SHOP-330", "picks": [["question": "Where?", "answer": "B"]]]),
@@ -355,10 +430,10 @@ final class InboxMovesTests: XCTestCase {
     }
 
     func testARefusedMoveSaysWhy() {
-        let body = Data(#"{"error":{"code":"move_not_allowed","message":"BIL-206 is Merging; the Director answers it only from Plan Review"}}"#.utf8)
+        let body = Data(#"{"error":{"code":"move_not_allowed","message":"BIL-206 is not waiting on a decision"}}"#.utf8)
         XCTAssertEqual(
-            ControlAPI.result(.approvePR("BIL-206"), statusCode: 409, data: body),
-            .failed("Couldn't move BIL-206 to Merging: BIL-206 is Merging; the Director answers it only from Plan Review (HTTP 409)")
+            ControlAPI.result(.decide("BIL-206", requestCommentID: "c-206-merge", picks: [], move: nil), statusCode: 409, data: body),
+            .failed("Couldn't send the decision on BIL-206: BIL-206 is not waiting on a decision (HTTP 409)")
         )
         let prefixes = [
             ControlAction.approvePlan("X"), .rework("X", reason: "r"), .restart("X", reason: "r"), .decisions("X", picks: []),
@@ -404,7 +479,6 @@ final class InboxMovesTests: XCTestCase {
             try XCTUnwrap(ConsequenceSheet(move: .sendToRework, item: pr).action(reason: "The proration rounds the wrong way")),
             try XCTUnwrap(ConsequenceSheet(move: .restart, item: pr).action(reason: "The proration rounds the wrong way")),
             .backlog("BIL-206", note: nil),
-            .decide("NOTE-90", requestCommentID: "c-1", picks: [.init(question: "Add it?", answer: "Add it")], move: nil),
             try XCTUnwrap(ConsequenceSheet(move: .unblock, item: blocked).action()),
         ]
         for action in actions {
@@ -417,16 +491,22 @@ final class InboxMovesTests: XCTestCase {
         let lines = try String(contentsOf: fixtures.requestLog, encoding: .utf8).split(separator: "\n")
         let entries = try lines.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
         XCTAssertEqual(entries.map { $0["path"] as? String }, [
-            "/api/v1/control/decisions", "/api/v1/control/approve_plan", "/api/v1/control/undo", "/api/v1/control/approve_pr",
-            "/api/v1/control/rework", "/api/v1/control/restart", "/api/v1/control/backlog", "/api/v1/control/decide",
-            "/api/v1/control/unblock",
+            "/api/v1/control/decisions", "/api/v1/control/approve_plan", "/api/v1/control/undo", "/api/v1/control/decide",
+            "/api/v1/control/decide", "/api/v1/control/restart", "/api/v1/control/backlog", "/api/v1/control/unblock",
         ])
         let decisions = try XCTUnwrap(entries[0]["body"] as? [String: Any])
         XCTAssertEqual(decisions["picks"] as? [[String: String]], [
             ["question": "Where are gift cards bought?", "answer": "On a separate page"],
             ["question": "Which currency does a card hold?", "answer": "The store's currency"],
         ])
-        XCTAssertEqual(entries[4]["body"] as? [String: String], ["issue_identifier": "BIL-206", "reason": "The proration rounds the wrong way"])
+        let question = "Merge BIL-206 (Prorate plan changes mid-cycle) into its base branch?"
+        XCTAssertEqual(entries[3]["body"] as? NSDictionary, [
+            "issue_identifier": "BIL-206", "request_comment_id": "c-206-merge", "picks": [["question": question, "answer": "Merge"]],
+        ] as NSDictionary)
+        XCTAssertEqual(entries[4]["body"] as? NSDictionary, [
+            "issue_identifier": "BIL-206", "request_comment_id": "c-206-merge",
+            "picks": [["question": question, "answer": "The proration rounds the wrong way"]], "move": "rework",
+        ] as NSDictionary)
         XCTAssertEqual(entries[5]["body"] as? [String: String], ["issue_identifier": "BIL-206", "reason": "The proration rounds the wrong way"])
     }
 

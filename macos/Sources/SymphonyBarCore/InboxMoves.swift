@@ -69,8 +69,9 @@ public struct InboxToolbar: Equatable {
     public var defaultCommand: InboxCommand? { buttons.first.flatMap { $0.enabled ? $0.command : nil } }
 
     /// The toolbar of `item`: a plan offers Approve Plan…, Send Decisions (on once a pick differs from the
-    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR Approve and Merge… and Send to Rework…, with Open PR
-    /// the default while a check is red (D2b), and ⋯ Restart…; a blocked ticket
+    /// recommendation) and ⋯ Send to Rework… and Restart…; a PR waiting on its merge confirmation Approve and Merge…
+    /// and Send to Rework…, which answer the request, with Open PR the default while a check is red (D2b), and
+    /// ⋯ Restart…; a PR with no request to answer only its links and ⋯ Restart…; a blocked ticket
     /// Unblock… and ⋯ Restart…, which also lifts a dispatch-loop hold. Actions and clarify items keep their links.
     /// Restart (the human-only full reset) sits under ⋯ on all three, so it takes a deliberate trip through the menu
     /// and its consequence sheet. An action carrying an
@@ -90,6 +91,11 @@ public struct InboxToolbar: Equatable {
                 overflow: [.move(.sendToRework)] + restart
             )
         case .pr:
+            // Symphony has no move of its own for a PR: it reaches the Inbox on its merge confirmation, a decision
+            // request, and both moves answer that request through `decide`.
+            guard item.review.action?.commentID != nil, item.review.action?.confirmingOption != nil else {
+                return InboxToolbar(buttons: links, overflow: restart)
+            }
             let moves = [move(.approveAndMerge), move(.sendToRework)]
             if item.review.pullRequest?.hasRedCheck == true, let openPR = links.first, case .link(.openPR) = openPR.command {
                 return InboxToolbar(buttons: [openPR] + moves + links.dropFirst(), overflow: restart)
@@ -112,6 +118,15 @@ public struct InboxToolbar: Equatable {
         case .clarify:
             return InboxToolbar(buttons: links, overflow: [])
         }
+    }
+}
+
+extension InboxReview.Action {
+    /// The option that confirms the request: the one whose effect moves the ticket to the state its hold carries
+    /// (a merge confirmation's Merge), as Symphony reads a pick. Nil for an ordinary decision, which carries none.
+    public var confirmingOption: Option? {
+        guard let confirm else { return nil }
+        return options.first { $0.effect?.localizedCaseInsensitiveContains("moves to \(confirm)") == true }
     }
 }
 
@@ -192,11 +207,11 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         itemID = item.id
         identifier = item.identifier
         let id = item.identifier
-        // An action carrying a request is answered through `decide`, whatever the button: the reply under the
-        // request comment is what closes it, and a plain move would leave the hold behind. Without the request
-        // comment there is nothing to reply under, so neither button answers one.
-        let answersRequest = item.kind == .action && item.review.action?.commentID != nil
-        isDecision = (move == .decide || move == .sendToRework) && answersRequest
+        // An action or a PR carrying a request is answered through `decide`, whatever the button: the reply under
+        // the request comment is what closes it, and a plain move would leave the hold behind. Without the request
+        // comment there is nothing to reply under, so no button answers one.
+        let answersRequest = [.action, .pr].contains(item.kind) && item.review.action?.commentID != nil
+        isDecision = [.decide, .sendToRework, .approveAndMerge].contains(move) && answersRequest
         request = isDecision ? item.review.action?.decision : nil
         requestCommentID = isDecision ? item.review.action?.commentID : nil
         self.picks = []
@@ -216,9 +231,15 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             happens = "Posts one comment on \(id) with your picks, and Symphony revises the plan from it."
             stays = "The plan stays in \(item.state ?? "Plan Review") and isn't approved: it comes back to the Inbox once Symphony has revised it."
         case .approveAndMerge:
-            title = "Move \(id) to Merging?"
-            targetState = "Merging"
-            happens = "Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
+            // Confirming picks the request's option that moves the ticket to the state its hold carries, so
+            // Symphony continues it there exactly as with manual review off.
+            let confirm = item.review.action?.confirm ?? "Merging"
+            title = "Move \(id) to \(confirm)?"
+            targetState = confirm
+            if let request, let option = item.review.action?.confirmingOption {
+                self.picks = [.init(question: request.question.isEmpty ? id : request.question, answer: option.label)]
+            }
+            happens = "Records your answer on \(id) as a reply to its merge request, clears the `Needs Decision` label and moves \(id) to \(confirm): Symphony turns on auto-merge, and GitHub merges the pull request once checks pass."
             stays = "Nothing merges while a check is red or pending, and the diff stays on GitHub."
         case .sendToRework:
             title = "Send \(id) to Rework?"
@@ -281,7 +302,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         switch move {
         case .approvePlan: return .approvePlan(identifier)
         case .sendDecisions: return .decisions(identifier, picks: picks)
-        case .approveAndMerge: return .approvePR(identifier)
+        case .approveAndMerge:
+            guard let requestCommentID, !picks.isEmpty else { return nil }
+            return .decide(identifier, requestCommentID: requestCommentID, picks: picks, move: nil)
         case .sendToRework:
             guard isDecision, let requestCommentID else { return .rework(identifier, reason: answer) }
             return .decide(

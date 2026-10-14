@@ -90,9 +90,12 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Shows:** the PR's purpose in one sentence; **Checks**: CI, Code Review (the review agent's verdict and reasons), QA
   (with its report); **Change**: files and lines, the largest files; **QA screenshots**.
-- **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub.
+- **Actions:** **Approve and Merge…** (prominent), **Send to Rework…**, **Open PR**. The diff stays on GitHub. Both
+  moves answer the PR's decision request through `decide`: Approve and Merge picks the option that moves the ticket
+  to the state its hold carries (`Merging`), and Send to Rework redirects it. Symphony has no PR move of its own.
 - **States:** a red check turns its row red and makes Open PR the default button; the PR reaches the Inbox only when
-  the repo's manual review holds the step into `Merging` for you, or Code Review escalates it, and says so.
+  the repo's manual review holds the step into `Merging` for you, or Code Review escalates it, and says so. A PR with
+  no request to answer offers only its links.
 - **Data:** the ticket's PR, CI checks, Code Review verdict and QA result (section 2).
 
 #### D2c · Inbox: an action only the Director can do
