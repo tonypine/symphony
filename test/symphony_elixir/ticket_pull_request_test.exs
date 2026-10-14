@@ -94,6 +94,14 @@ defmodule SymphonyElixir.TicketPullRequestTest do
     assert %{source: "backfill", state: "open"} = TicketPullRequest.get(@repo_key, "issue-1")
   end
 
+  test "put_new writes only for a ticket with no record" do
+    assert {:ok, :inserted} = TicketPullRequest.put_new(@repo_key, "issue-1", %{pr_url: @pr, branch: "auto/ACME-1", source: "backfill"})
+    assert {:ok, :exists} = TicketPullRequest.put_new(@repo_key, "issue-1", %{pr_url: @next_pr, source: "backfill"})
+    assert %{pr_url: @pr, branch: "auto/ACME-1", state: "open", source: "backfill"} = TicketPullRequest.get(@repo_key, "issue-1")
+
+    assert {:error, :invalid_pr_url} = TicketPullRequest.put_new(@repo_key, "issue-2", %{pr_url: nil, source: "backfill"})
+  end
+
   test "no-ops without a repo key, an issue id, a URL or a finished state" do
     assert :ok = TicketPullRequest.record_created(nil, "issue-1", @pr, nil)
     assert :ok = TicketPullRequest.record_created(@repo_key, nil, @pr, nil)

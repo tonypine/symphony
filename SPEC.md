@@ -388,6 +388,25 @@ Who writes it, and when it changes:
 - Wherever Symphony already sees a PR finish, it marks the record holding that PR `closed` or
   `merged`: the GitHub `pull_request` webhook's `closed` delivery, the CI poller's PR read, and the
   PR review poller's PR read (the auto-merge lane). A record holding another PR is left alone.
+- At startup, the backfill seeds a record, source `backfill`, for each ticket of each configured repo
+  that has none, from the PR URLs Symphony already stores, first found wins: the CI poller's
+  record, the PR review poller's record (unless the auto-merge lane saw that PR merge), then the
+  newest `handoff` signal in the ticket's signals ledger that carries a `pr_url`. It makes no
+  GitHub or tracker request and never overwrites a record, whatever its PR or state.
+- The branch lookup finds a PR Symphony did not open (a person opened it by hand, or the backfill
+  missed it). Once per repo per poll cycle, on the active tickets the poll just read, and off the
+  poll so a slow GitHub read never holds it up:
+  - When every one of those tickets has an `open` record, it does nothing: the steady state costs no
+    GitHub request.
+  - Otherwise it lists the repo's open PRs, each with its head branch, in one GitHub query (the 100
+    most recently updated).
+  - An `open` record whose PR is not in that list is re-checked with one PR read and marked
+    `closed` or `merged`; one GitHub still reports open is left as it is.
+  - Each ticket then left with no `open` record gets the open PR whose head branch is its Symphony
+    branch (`auto/<identifier>`, the workspace branch) or the tracker's branch name for it
+    (Linear's `branchName`), written `open` with source `github_lookup`.
+  - A PR on a branch with any other name is not found. A GitHub failure is logged once and leaves
+    every record as it is.
 - A store failure while writing is logged and never fails the tool call or the poll.
 
 Reading it: consumers ask `SymphonyElixir.TicketPullRequest.current_url/1` (or `current_urls/1`

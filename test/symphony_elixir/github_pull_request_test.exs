@@ -887,6 +887,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
                     "url" => "https://github.com/org/repo/pull/7",
                     "title" => "Human change",
                     "headRefOid" => "abc123",
+                    "headRefName" => "auto/TP-7",
                     "files" => %{"nodes" => [%{"path" => "lib/app.ex"}, %{"path" => nil}, %{"path" => "README.md"}]}
                   },
                   %{"number" => "8", "url" => nil, "title" => nil, "headRefOid" => nil, "files" => nil},
@@ -903,11 +904,41 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       end
 
       assert {:ok, [first, second]} = PullRequest.list_open_pull_requests(pr_url, gh_runner: runner)
-      assert first == %{number: 7, url: "https://github.com/org/repo/pull/7", title: "Human change", head_sha: "abc123", files: ["lib/app.ex", "README.md"]}
-      assert second == %{number: nil, url: nil, title: nil, head_sha: nil, files: []}
+
+      assert first == %{
+               number: 7,
+               url: "https://github.com/org/repo/pull/7",
+               title: "Human change",
+               head_sha: "abc123",
+               head_branch: "auto/TP-7",
+               files: ["lib/app.ex", "README.md"]
+             }
+
+      assert second == %{number: nil, url: nil, title: nil, head_sha: nil, head_branch: nil, files: []}
       assert_received {:query, query}
       assert query =~ "pullRequests(states: OPEN, first: 100"
+      assert query =~ "headRefName"
       assert query =~ "files(first: 100)"
+    end
+
+    test "list_repo_open_pull_requests reads a repository named by its slug, on github.com or an enterprise host" do
+      payload = ~s({"data":{"repository":{"pullRequests":{"nodes":[{"number":3,"url":"https://github.com/org/repo/pull/3","headRefName":"tony/tp-3"}]}}}})
+
+      github_com = fn ["api", "graphql", "-f", "query=" <> _query, "-f", "owner=org", "-f", "name=repo"], _opts -> {payload, 0} end
+
+      enterprise = fn ["api", "--hostname", "git.example.com", "graphql", "-f", "query=" <> _query, "-f", "owner=org", "-f", "name=repo"], _opts ->
+        {payload, 0}
+      end
+
+      denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Bad credentials", 1} end
+
+      assert {:ok, [%{number: 3, head_branch: "tony/tp-3"}]} = PullRequest.list_repo_open_pull_requests("org/repo", gh_runner: github_com)
+      assert {:ok, [%{number: 3}]} = PullRequest.list_repo_open_pull_requests("git.example.com/org/repo", gh_runner: enterprise)
+
+      assert {:error, {:gh_failed, _args, 1, "gh: Bad credentials" <> _}} =
+               PullRequest.list_repo_open_pull_requests("org/repo", gh_runner: denied)
+
+      assert {:error, :invalid_github_repo} = PullRequest.list_repo_open_pull_requests("repo", gh_runner: denied)
     end
 
     test "list_open_pull_requests reports a bad URL, a gh failure and an unexpected answer" do

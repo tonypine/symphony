@@ -722,6 +722,22 @@ defmodule SymphonyElixir.RunStore do
 
   def put_ticket_pull_request(_record), do: {:error, :invalid_ticket_pull_request_record}
 
+  @doc """
+  Writes the ticket's pull request record only when the ticket has none, in one durable
+  transaction: `{:ok, :inserted}`, or `{:ok, :exists}` leaving the record it holds as it is.
+  """
+  @spec insert_ticket_pull_request(map()) :: {:ok, :inserted | :exists} | {:error, term()}
+  def insert_ticket_pull_request(%{repo_key: repo_key, issue_id: issue_id} = record) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      normalized = record |> normalize_record() |> Map.put(:repo_key, repo_key)
+
+      durable_transaction(fn -> insert_new_ticket_pull_request(repo_key, issue_id, normalized) end)
+    end
+  end
+
+  def insert_ticket_pull_request(_record), do: {:error, :invalid_ticket_pull_request_record}
+
   @spec get_ticket_pull_request(String.t(), String.t()) :: map() | nil | {:error, term()}
   def get_ticket_pull_request(repo_key, issue_id) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
@@ -1629,6 +1645,17 @@ defmodule SymphonyElixir.RunStore do
     case :mnesia.read(@ticket_pull_request_table, scoped_key(repo_key, issue_id)) do
       [{@ticket_pull_request_table, _key, ^repo_key, ^issue_id, record}] -> record
       [] -> nil
+    end
+  end
+
+  defp insert_new_ticket_pull_request(repo_key, issue_id, record) do
+    case read_ticket_pull_request(repo_key, issue_id) do
+      nil ->
+        :mnesia.write({@ticket_pull_request_table, scoped_key(repo_key, issue_id), repo_key, issue_id, record})
+        {:ok, :inserted}
+
+      _record ->
+        {:ok, :exists}
     end
   end
 
