@@ -208,6 +208,122 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(none.hiddenLine, "7 more in other repos")
     }
 
+    func testTheDecisionFixtureReadsQuestionFirstWithItsStoryAndThreeOptionCards() throws {
+        let inbox = try payload("inbox-decision")
+        let list = InboxList(items: inbox.items)
+        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Decisions"])
+        XCTAssertEqual(list.groups.map(\.id), ["plan", "decision"])
+
+        let decision = inbox.items[1]
+        XCTAssertTrue(decision.isDecision)
+        XCTAssertTrue(decision.answerable)
+        XCTAssertEqual(decision.kindWord, "Decision")
+        XCTAssertEqual(decision.ask, "Update the old workflow's instructions now, or leave them to TP-891?")
+        XCTAssertEqual(decision.accessibilityLabel, "TP-892, Retire two old review steps, decision, 1 hour")
+
+        let action = try XCTUnwrap(decision.review.action)
+        XCTAssertEqual(action.whyParagraphs.count, 2)
+        XCTAssertTrue(action.whyParagraphs[0].hasPrefix("Code Review sent #448 back twice."))
+        XCTAssertTrue(action.whyParagraphs[1].hasPrefix("TP-880 already removed the Supervisor check."))
+        XCTAssertNotNil(action.ifUnanswered)
+        XCTAssertEqual(action.keyHint, "Press 1–3 to pick · ⌘↩ to send")
+
+        let cards = OptionCard.cards(for: action)
+        XCTAssertEqual(cards.map(\.label), ["Leave them to TP-891", "Update them in TP-892 now", "Wait for TP-891 to land first"])
+        XCTAssertEqual(cards.map(\.recommended), [true, false, false])
+        XCTAssertEqual(cards.map(\.reason), [action.recommendationReason, nil, nil])
+        XCTAssertEqual(cards.map(\.count), [3, 3, 3])
+        XCTAssertEqual(action.pickedIndex(DecisionPicks()), 0)
+        XCTAssertEqual(
+            cards[1].accessibilityLabel(selected: false),
+            "Option 2 of 3, Update them in TP-892 now. The next run removes Final verification from the old instructions, and TP-892 goes back to Code Review. Cost: Another review round, about half a day. Risk: TP-891 then has to work around the change and may conflict with it."
+        )
+        XCTAssertEqual(
+            cards[0].accessibilityLabel(selected: true),
+            "Option 1 of 3, Leave them to TP-891, recommended, selected. TP-892 goes back to Code Review with a note that TP-891 removes the old instructions. Good: TP-892 can merge today, and TP-893 can start. Risk: The old instructions stay until TP-891 lands, about two days. Why we recommend it: TP-891 removes these instructions this week, so updating them twice adds work without changing what you see."
+        )
+    }
+
+    func testDecisionsAndOlderActionsAreListedApart() {
+        var decision = item("D-1", .action, seconds: 10)
+        decision.review.action = InboxReview.Action(steps: [], options: [.init(label: "Yes", effect: nil, recommended: true)])
+        var steps = item("S-1", .action, seconds: 20)
+        steps.review.action = InboxReview.Action(steps: ["Add the key."], options: [])
+        let list = InboxList(items: [steps, decision, item("P-1", .plan)])
+        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Decisions", "Actions"])
+        XCTAssertEqual(list.ordered.map(\.identifier), ["P-1", "D-1", "S-1"])
+        XCTAssertEqual([decision.kindWord, steps.kindWord], ["Decision", "Action"])
+        XCTAssertFalse(steps.isDecision)
+        // A plan's decisions don't make it a decision item.
+        XCTAssertFalse(item("P-2", .plan).isDecision)
+        XCTAssertEqual(InboxList(items: [steps]).groups.map(\.id), ["action"])
+    }
+
+    func testTheStoryKeepsTwoParagraphsSplitOnBlankLines() {
+        func paragraphs(_ why: String?) -> [String] { InboxReview.Action(why: why, steps: [], options: []).whyParagraphs }
+        XCTAssertEqual(paragraphs("One.\n  \nTwo,\nstill two.\n\n\nThree."), ["One.", "Two,\nstill two."])
+        XCTAssertEqual(paragraphs("  Just one.  "), ["Just one."])
+        XCTAssertEqual(paragraphs(nil), [])
+        XCTAssertEqual(paragraphs("\n \n"), [])
+    }
+
+    func testNumberKeysPickTheOptionWithThatNumber() {
+        func action(_ count: Int) -> InboxReview.Action {
+            InboxReview.Action(steps: [], options: (1...max(count, 1)).prefix(count).map { .init(label: "O\($0)", effect: nil, recommended: false) }, commentID: "c-1")
+        }
+        XCTAssertNil(action(0).keyHint)
+        XCTAssertEqual(action(1).keyHint, "Press 1 to pick · ⌘↩ to send")
+        XCTAssertEqual(action(12).keyHint, "Press 1–9 to pick · ⌘↩ to send")
+        XCTAssertEqual(action(3).optionIndex(forKey: "2"), 1)
+        XCTAssertEqual(action(3).optionIndex(forKey: "3"), 2)
+        XCTAssertNil(action(3).optionIndex(forKey: "4"))
+        XCTAssertNil(action(3).optionIndex(forKey: "0"))
+        XCTAssertNil(action(3).optionIndex(forKey: "a"))
+        XCTAssertNil(action(0).optionIndex(forKey: "1"))
+
+        var request = item("D-1", .action)
+        request.review.action = action(3)
+        XCTAssertEqual(request.optionIndex(forKey: "1"), 0)
+        // Only a request the Inbox answers takes the keys.
+        request.review.action?.commentID = nil
+        XCTAssertNil(request.optionIndex(forKey: "1"))
+        var pr = item("P-1", .pr)
+        pr.review.action = action(3)
+        XCTAssertNil(pr.optionIndex(forKey: "1"))
+    }
+
+    func testAnOptionCardReadsItsNumberLabelAndStateThenItsEffectAndTags() {
+        let plain = OptionCard(number: 2, count: 2, label: "Keep it open")
+        XCTAssertEqual(plain.accessibilityLabel(selected: false), "Option 2 of 2, Keep it open.")
+        XCTAssertEqual(plain.id, 2)
+        XCTAssertEqual(plain.index, 1)
+        let full = OptionCard(
+            number: 1,
+            count: 2,
+            label: "Close it!",
+            effect: "  ",
+            recommended: true,
+            tradeoffs: [.init(kind: .cost, text: "Half a day")],
+            reason: "It is a duplicate?"
+        )
+        XCTAssertEqual(full.accessibilityLabel(selected: true), "Option 1 of 2, Close it!, recommended, selected. Cost: Half a day. Why we recommend it: It is a duplicate?")
+
+        XCTAssertEqual([InboxReview.Action.Tradeoff.Kind.good, .cost, .risk].map(\.word), ["Good", "Cost", "Risk"])
+        XCTAssertEqual([InboxReview.Action.Tradeoff.Kind.good, .cost, .risk].map(\.symbol), ["checkmark.circle", "exclamationmark.triangle", "xmark.circle"])
+        XCTAssertEqual([InboxReview.Action.Tradeoff.Kind.good, .cost, .risk].map(\.status), [.done, .you, .problem])
+    }
+
+    func testAPlanDecisionDrawsTheSameCardsWithTheBriefsRecommendationAsTheReason() {
+        let decision = InboxReview.Decision(question: "Where?", options: ["A", "B"], recommendation: "B, because it is quicker.", recommended: 1)
+        let cards = OptionCard.cards(for: decision)
+        XCTAssertEqual(cards.map(\.label), ["A", "B"])
+        XCTAssertEqual(cards.map(\.effect), [nil, nil])
+        XCTAssertEqual(cards.map(\.recommended), [false, true])
+        XCTAssertEqual(cards.map(\.reason), [nil, "B, because it is quicker."])
+        XCTAssertEqual(cards[1].accessibilityLabel(selected: true), "Option 2 of 2, B, recommended, selected. Why we recommend it: B, because it is quicker.")
+        XCTAssertTrue(OptionCard.cards(for: InboxReview.Decision(question: "Q", options: [], recommendation: nil, recommended: nil)).isEmpty)
+    }
+
     func testSelectionFallsBackToTheFirstAndMovesToTheNeighbor() {
         let list = InboxList(items: [item("P-1", .plan, seconds: 9), item("R-1", .pr, seconds: 5), item("R-2", .pr, seconds: 1)])
         XCTAssertEqual(list.selection(nil)?.identifier, "P-1")

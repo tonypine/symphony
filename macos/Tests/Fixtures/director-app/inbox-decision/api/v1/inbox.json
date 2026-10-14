@@ -83,7 +83,7 @@
       "waiting_since": "2026-10-07T12:05:00Z"
     },
     {
-      "ask": "Leave the old review wording to TP-891",
+      "ask": "Update the old workflow's instructions now, or leave them to TP-891?",
       "context": {
         "blocked_by": [],
         "blocks": [
@@ -228,8 +228,8 @@
         "if_unanswered": "TP-892 stays in Rework, and TP-893 can't start because it waits on TP-892.",
         "options": [
           {
-            "effect": "TP-892 goes back to Code Review with a note that TP-891 removes the wording.",
-            "label": "Leave it to TP-891",
+            "effect": "TP-892 goes back to Code Review with a note that TP-891 removes the old instructions.",
+            "label": "Leave them to TP-891",
             "recommended": true,
             "tradeoffs": [
               {
@@ -238,13 +238,13 @@
               },
               {
                 "kind": "risk",
-                "text": "The old wording stays on screen until TP-891 lands, about two days."
+                "text": "The old instructions stay until TP-891 lands, about two days."
               }
             ]
           },
           {
-            "effect": "The next run deletes the wording in TP-892 as well.",
-            "label": "Remove it now",
+            "effect": "The next run removes Final verification from the old instructions, and TP-892 goes back to Code Review.",
+            "label": "Update them in TP-892 now",
             "recommended": false,
             "tradeoffs": [
               {
@@ -256,15 +256,30 @@
                 "text": "TP-891 then has to work around the change and may conflict with it."
               }
             ]
+          },
+          {
+            "effect": "TP-892 waits in Rework until TP-891 is done, then goes back to Code Review unchanged.",
+            "label": "Wait for TP-891 to land first",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "TP-892 needs no change at all."
+              },
+              {
+                "kind": "cost",
+                "text": "TP-892 and TP-893 wait about two days."
+              }
+            ]
           }
         ],
-        "question": "TP-892 is done except for some old review wording that TP-891 deletes anyway. Should TP-892 leave that wording to TP-891?",
-        "recommendation_reason": "TP-891 removes this wording this week, so doing it twice adds work without changing what you see.",
+        "question": "TP-892 (Retire two old review steps) is done except that the old workflow's instructions still describe the Final verification step. TP-891 (Remove the retired review states) deletes those instructions anyway. Should TP-892 update them now, or leave them to TP-891?",
+        "recommendation_reason": "TP-891 removes these instructions this week, so updating them twice adds work without changing what you see.",
         "requested_at": "2026-10-07T13:20:00Z",
         "steps": [],
-        "title": "Leave the old review wording to TP-891",
+        "title": "Update the old workflow's instructions now, or leave them to TP-891?",
         "unblocks": "TP-893, the app's view of the new review steps",
-        "why": "Code Review sent #448 back twice, both times only over that old wording. TP-880 already removed the rest of the old checks."
+        "why": "Code Review sent #448 back twice. Both times its only finding was that the old instructions still describe Final verification.\n\nTP-880 already removed the Supervisor check. TP-891 removes the rest of the old review states, with these instructions, this week."
       },
       "state": "Rework",
       "title": "Retire two old review steps",

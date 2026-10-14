@@ -83,6 +83,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   its 7 sub-tickets… SHOP-331 starts first"); the decisions posted with it; how to change the plan instead.
 - **States:** for a PR: "Move BIL-206 to Merging? Symphony turns on auto-merge, and GitHub merges once checks pass."
   For Send to Rework: a required reason field and "Symphony closes the PR and starts over" in the destructive style.
+  For Send Decision (D2c): the pick as the title, `Send "Update them in TP-892 now"?`, the option's effect, then
+  "TP-892 stays in Rework until its next run picks up your answer."
 - **Conventions:** sheet with a default button; afterwards a banner "Moved to Merging · Undo" for 10 s (seen on D2c).
 - **Data:** writes through Symphony's control API (decision DD4).
 
@@ -98,13 +100,23 @@ later journeys point back to it. The mock draws every screen under its ID.
   no request to answer offers only its links.
 - **Data:** the ticket's PR, CI checks, Code Review verdict and QA result (section 2).
 
-#### D2c · Inbox: an action only the Director can do
+#### D2c · Inbox: a decision only the Director can make
 
-- **Shows:** a `linear_request_human_action` request: why, what waits if nobody answers, the question and its options
-  (each with its effect and up to three trade-offs, and why the recommended one), or the numbered steps of an older
-  request, what it unblocks, which run asked. Every field is written in the Director's words
-  ([the decision writing standard](../standards/decision-writing.md)). The banner at the bottom is the Undo after D12d.
-- **Actions:** **Open in Linear** (prominent), **Copy Steps**.
+- **Shows:** a `linear_request_human_action` request, question first. The header's badge, and the list's group, read
+  **Decision** (DD-7); the title has no ask line under it. Then, in order: **Your decision** (N5), the full question;
+  **What happened** (N6), the `why` in at most two paragraphs and, when the request says what waits, a row with
+  `exclamationmark.triangle` and "If you don't answer: …"; **Options**, one card per option (N7) stacked, each with
+  its label, its effect under the label, its trade-offs (N8) and, on the recommended card, "Why we recommend it:" and
+  the reason. The card header reads "Press 1–N to pick · ⌘↩ to send". The recommended option starts picked. There is
+  no time estimate (DD-2), and what the request unblocks waits for the context card (TP-955). Every field is written
+  in the Director's words ([the decision writing standard](../standards/decision-writing.md)). The banner at the
+  bottom is the Undo after D12d.
+- **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
+  option with that number while the list or the review has the keyboard; a click on a card picks it.
+- **States:** an older hand-written request with steps and no options reads **Action** (group **Actions**), keeps its
+  ask line and lists its numbered **Steps**, with **Copy Steps**. A request missing `why` or `if_unanswered` leaves out
+  that part; without both, What happened isn't drawn. A narrow review (under 560 pt) moves each Recommended badge under
+  its label and hides the key hints.
 - **Data:** the open human-action requests (section 2).
 
 #### D2d · Inbox: a ticket to clarify

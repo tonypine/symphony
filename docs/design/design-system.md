@@ -236,8 +236,8 @@ poll after its problem clears, with `motion.standard`.
 
 ### P4. Inbox: list and review
 
-A three-pane layout like Mail: sidebar, the list grouped by kind (oldest first inside each group), and the review of
-the selected item. The review's actions live in the toolbar over the detail pane, the default one prominent. After an
+A three-pane layout like Mail: sidebar, the list grouped by kind (oldest first inside each group; decisions apart from
+older actions with steps), and the review of the selected item. The review's actions live in the toolbar over the detail pane, the default one prominent. After an
 item is answered, the selection moves to the next item.
 
 ### P5. Consequence sheet
@@ -306,14 +306,18 @@ Each component names its SwiftUI base, its parts, its states and what VoiceOver 
 | C12 | Bar and column charts | Swift Charts `BarMark` / `RuleMark` | Bars ≤ 24 pt thick with 4 pt rounded data-ends; stacked segments split by a 2 pt gap; hairline grid; one reference line (budget); value on the last bar | Hover tooltip per bar; a table view behind **Show Data** | `AXChartDescriptor` with the series |
 | C13 | Sparkline | Swift Charts `LineMark`, no axes | 2 pt line in `text.tertiary`, last point in the accent with a surface ring | | Summarised in the tile label |
 | C14 | Run timeline | `List` of steps with a connecting line | Time, step symbol, step ("Implementation run", "QA pass", "Gate: approve"), result, duration, tokens; current step live | Done, current, failed, stopped | "13:03, implementation run 1, failed, 22 minutes" |
-| C15 | Review view | `ScrollView` of C10 sections | Headline, what to review (links), decisions (C16), sub-tickets or checks, what changed | Plan, PR, action, clarify, blocked | Headings per section |
-| C16 | Decision card | `GroupBox` with a `Picker(.radioGroup)` | Question, options (A/B/C, one line each), "Recommended" badge on one, the pick | Recommended picked by default; changed (enables **Send Decisions**) | "Decision 1, where gift cards are bought, option A, recommended, selected" |
-| C17 | Consequence sheet | `.sheet` with `Form` | Title as a question, what happens, what stays, options, Cancel + verb | Default, working (spinner in the footer), error inline | Standard sheet |
+| C15 | Review view | `ScrollView` of C10 sections | Header (kind badge, waiting, state, repo, actions), title, then by kind: a decision's question (N5), what happened (N6) and options (N7); a plan's what to review, decisions (C16), sub-tickets and moves; a PR's checks; an older action's steps | Plan, PR, decision, action, clarify, blocked; narrow under 560 pt | Headings per section |
+| C16 | Decision card | The question (`type.rowTitle`) over N7 cards | Question, one N7 card per option (label only, since a brief gives no effect), "Recommended" on one with the brief's recommendation as its reason | Recommended picked by default; changed (enables **Send Decisions**) | A radio group named "Decision 1, <question>"; each option as N7 reads |
+| C17 | Consequence sheet | `.sheet` with `Form` | Title as a question, what happens, what stays, options, Cancel + verb. Send Decision: `Send "<label>"?`, the option's effect, "<ID> stays in <stage> until its next run picks up your answer." | Default, working (spinner in the footer), error inline | Standard sheet |
 | C18 | Banner | Custom `HStack` on glass at the foot of the window, or tinted `surface.raised` inline | Symbol, text, actions (Undo), close | Info, warning, error, success with Undo | Announced once when it appears; not repeated on later polls |
 | C19 | Data table | `Table` with sortable columns | Columns per view, context menu per row | Sorted, filtered (scope bar above; extra filters fold into **More** when narrow) | Standard table |
 | C20 | Empty state | `ContentUnavailableView` | Symbol, sentence, one action | | Standard |
 | C21 | Menu bar menu | `NSStatusItem` menu (AppKit, as today) | Header (status, counts), Waiting on you items (top 5, age), Open Symphony, dispatch, force, Symphony start/stop, updates, Repos, Settings, Developer, Quit | Badge when the Inbox isn't empty | Standard menu |
 | C22 | Notification | `UNUserNotificationCenter` with categories | Title (ticket and ask), body (title of the ticket and its state), actions | Per kind | Standard |
+| N5 | Question callout | `VStack` on `surface.raised` tinted 10 % with `status.you`, `radius.row`, 3 pt leading bar in `status.you` | Label "YOUR DECISION" (`type.label`, `status.you`), the question (16 pt semibold) | | One element, a heading: "Your decision, <question>" |
+| N6 | Story card | C10 titled **What happened** | `why` split on blank lines (at most two paragraphs); a row with `exclamationmark.triangle` (`status.you`) and "If you don't answer:" + `if_unanswered` | Either part left out when missing; not drawn without both | Title as a heading; the row as one element |
+| N7 | Option card | Full-width `Button(.plain)`, `radius.row`, hairline | Leading radio; first line: label (13.5 pt semibold), **Recommended** badge, trailing key hint; effect under the label in secondary, at the label's leading edge; N8 tags; on the recommended card a tinted "Why we recommend it:" line. Never label and effect in one row | Default, selected (2 pt accent ring and 7 % accent tint), not answerable (no radio, no button); narrow: badge under the label, no key hint | The cards are a radio group; each reads "Option 1 of 3, <label>, recommended, selected. <effect>. <tags>" |
+| N8 | Trade-off tag | `Label`, 12 pt, text wraps | good `checkmark.circle` in `status.done`; cost `exclamationmark.triangle` in `status.you`; risk `xmark.circle` in `status.problem` | | "Good: <text>", "Cost: <text>", "Risk: <text>" |
 
 ## 6. Accessibility
 

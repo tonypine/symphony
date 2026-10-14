@@ -134,5 +134,8 @@ public enum DesignTokens {
         public static let listColumnWidth: Double = 340
         public static let minListColumnWidth: Double = 300
         public static let maxListColumnWidth: Double = 420
+        /// Under this width the Inbox's review is a narrow pane: an option card's Recommended badge moves under its
+        /// label, and the key hints hide.
+        public static let narrowReviewWidth: Double = 560
     }
 }
