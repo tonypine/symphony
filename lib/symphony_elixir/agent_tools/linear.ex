@@ -26,7 +26,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PathUnlock
-  alias SymphonyElixir.PersonWait
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.Tracker
@@ -494,14 +493,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
       history(first: 50) {
         nodes { createdAt fromState { name } toState { name } }
       }
-    }
-  }
-  """
-
-  @remove_label_mutation """
-  mutation SymphonyAgentRemoveLabel($issueId: String!, $labelId: String!) {
-    issueRemoveLabel(id: $issueId, labelId: $labelId) {
-      success
     }
   }
   """
@@ -1469,10 +1460,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Withdraws open human-action requests on the current issue that are no longer needed: replies
   `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
-  next human-action update drops them. Once no open request is left, a deprecated request label
-  (`PersonWait.legacy_request_labels/1`) comes off and the `Needs Decision` hold is cleared so the
-  ticket continues in place. An issue with no open request is left as it is. The reason is refused
-  when it holds a secret pattern.
+  next human-action update drops them. Once no open request is left, the `Needs Decision` hold is
+  cleared so the ticket continues in place. An issue with no open request is left as it is. The
+  reason is refused when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1523,7 +1513,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       if withdrawing == [] do
         {:ok, %{"withdrawn" => false, "reason" => "no_open_request"}}
       else
-        withdraw_requests(issue, withdrawing, remaining, reason, settings, opts)
+        withdraw_requests(issue, withdrawing, remaining, reason, opts)
       end
     end
   end
@@ -1531,43 +1521,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp withdrawing?(_request, nil), do: true
   defp withdrawing?({_comment_id, request}, title), do: Request.normalize_title(request.title) == Request.normalize_title(title)
 
-  # Replies first: a withdrawn request stays out of the update even if removing its label fails.
-  defp withdraw_requests(issue, withdrawing, remaining, reason, settings, opts) do
-    with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts),
-         {:ok, state} <- release_issue(issue, remaining, settings, opts) do
+  defp withdraw_requests(issue, withdrawing, remaining, reason, opts) do
+    with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts) do
       {:ok,
        %{
          "withdrawn" => true,
          "requestCommentIds" => Enum.map(withdrawing, fn {comment_id, _request} -> comment_id end),
          "replyCommentIds" => reply_ids,
          "remaining" => length(remaining),
-         "state" => state
+         "state" => get_in(issue, ["state", "name"])
        }}
     end
-  end
-
-  # Another open request still waits on a person: the issue stays where it is.
-  defp release_issue(issue, [_open | _rest], _settings, _opts), do: {:ok, get_in(issue, ["state", "name"])}
-
-  defp release_issue(issue, [], settings, opts) do
-    with :ok <- remove_legacy_request_labels(issue, settings, opts), do: {:ok, get_in(issue, ["state", "name"])}
-  end
-
-  defp remove_legacy_request_labels(issue, settings, opts) do
-    legacy = PersonWait.legacy_request_labels(settings)
-
-    issue
-    |> get_in(["labels", "nodes"])
-    |> List.wrap()
-    |> Enum.filter(&(String.downcase(to_string(&1["name"])) in legacy))
-    |> Enum.reduce_while(:ok, fn %{"id" => label_id}, :ok ->
-      with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
-           {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
-        {:cont, :ok}
-      else
-        error -> {:halt, error}
-      end
-    end)
   end
 
   defp reply_withdrawals(issue_id, withdrawing, reason, opts) do

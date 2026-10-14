@@ -366,4 +366,57 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
       assert log =~ "`pull_requests.checks.escalate_to_state` is deprecated and has no effect"
     end
   end
+
+  describe "deprecation warnings from symphony.yml" do
+    @mode_warning "`auto_review.acceptance_gate.mode` is deprecated"
+
+    defp append_symphony_yml!(yaml) do
+      path = Workflow.symphony_file_path()
+      File.write!(path, File.read!(path) <> yaml)
+      Cache.clear()
+    end
+
+    defp count(log, fragment), do: length(String.split(log, fragment)) - 1
+
+    test "are logged once per load of symphony.yml, not on every settings read" do
+      write_workflow_file!(Workflow.workflow_file_path())
+      base = File.read!(Workflow.symphony_file_path())
+      yaml = "auto_review:\n  acceptance_gate:\n    mode: shadow\n"
+
+      log =
+        capture_log(fn ->
+          append_symphony_yml!(yaml)
+          for _read <- 1..100, do: Config.settings!()
+        end)
+
+      assert count(log, @mode_warning) == 1
+
+      # A reload of a changed file that still sets the key warns once more.
+      log =
+        capture_log(fn ->
+          File.write!(Workflow.symphony_file_path(), base <> String.replace(yaml, "shadow", "enforce"))
+          Cache.clear()
+          for _read <- 1..100, do: Config.settings!()
+        end)
+
+      assert count(log, @mode_warning) == 1
+    end
+
+    test "are logged once when many components read the settings at the same time at startup" do
+      write_workflow_file!(Workflow.workflow_file_path())
+
+      log =
+        capture_log(fn ->
+          append_symphony_yml!("auto_review:\n  acceptance_gate:\n    mode: enforce\n")
+
+          # One reader per component that reads settings on boot (a repo each, the gate, the
+          # pollers), all parsing the freshly loaded config before any of them has warned.
+          1..50
+          |> Enum.map(fn _component -> Task.async(fn -> for _read <- 1..20, do: Config.settings!() end) end)
+          |> Task.await_many(30_000)
+        end)
+
+      assert count(log, @mode_warning) == 1
+    end
+  end
 end

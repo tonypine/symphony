@@ -2060,7 +2060,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
             "SymphonyAgentUpdateIssueState" -> {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
             "SymphonyAgentAddComment" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-new", "url" => "https://linear.app/c"}}}}}
             "SymphonyAgentAddReply" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply-to-" <> variables.parentId}}}}}
-            "SymphonyAgentRemoveLabel" -> {:ok, %{"data" => %{"issueRemoveLabel" => %{"success" => true}}}}
           end
 
         Map.get(overrides, name, default)
@@ -2302,8 +2301,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       %{"id" => id, "body" => Request.render_hold(decision_request(title), "In Progress"), "createdAt" => created_at}
     end
 
-    defp withdrawal_scope(comments, issue \\ %{}) do
-      human_action_scope(%{issue: Map.merge(%{"comments" => %{"nodes" => comments}}, issue)})
+    defp withdrawal_scope(comments) do
+      human_action_scope(%{issue: %{"comments" => %{"nodes" => comments}}})
     end
 
     defp withdraw_human_action(context, scope, overrides \\ %{}, attrs \\ @withdrawal) do
@@ -2328,7 +2327,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:tracker_moved, _issue_id, _state}
       assert_received {:machine_label_cleared, "MOT-24", "Needs Decision"}
       refute_received {:linear_called, "SymphonyAgentUpdateIssueState", _variables}
-      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
       assert_received :refreshed
       assert reply == "## Action withdrawn\n\nThe dialyzer run had started minutes earlier, not 11 hours ago."
 
@@ -2372,26 +2370,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:tracker_moved, _issue_id, _state}
     end
 
-    test "a deprecated request label comes off with the last request" do
-      legacy = put_in(Config.settings!().human_actions.label, "human-action")
-      labels = %{"nodes" => [%{"id" => "label-on-issue", "name" => "Human-Action"}, %{"id" => "label-other", "name" => "bug"}]}
-      scope = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => labels})
-      client = human_action_client(self(), scope)
-
-      context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}}
-
-      assert {:ok, %{"withdrawn" => true, "remaining" => 0, "state" => "In Progress"}} =
-               Linear.withdraw_human_action(context, @withdrawal, human_action_opts(client, settings: legacy))
-
-      assert_received {:linear_called, "SymphonyAgentRemoveLabel", %{issueId: "issue-24", labelId: "label-on-issue"}}
-      refute_received {:linear_called, "SymphonyAgentRemoveLabel", %{labelId: "label-other"}}
-      refute_received {:tracker_moved, _issue_id, _state}
-
-      # Without the deprecated setting, the label is left alone.
-      assert {:ok, %{"withdrawn" => true}} = withdraw_human_action(context, scope)
-      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
-    end
-
     test "changes nothing when no open request matches" do
       open = request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z")
       withdrawn = %{"id" => "reply-1", "body" => Request.render_withdrawal("Not needed."), "parent" => %{"id" => "comment-1"}}
@@ -2429,13 +2407,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       # The hold the withdrawal clears needs the repo it is recorded under.
       assert {:error, :missing_repo_key} = withdraw_human_action(%{issue_id: "issue-24"}, scope)
-
-      legacy = put_in(Config.settings!().human_actions.label, "human-action")
-      labelled = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")], %{"labels" => %{"nodes" => [%{"id" => "l-1", "name" => "human-action"}]}})
-      client = human_action_client(self(), labelled, %{"SymphonyAgentRemoveLabel" => refused.("issueRemoveLabel")})
-
-      assert {:error, {:linear_mutation_failed, "issueRemoveLabel", _body}} =
-               Linear.withdraw_human_action(%{issue_id: "issue-24"}, @withdrawal, human_action_opts(client, settings: legacy))
 
       refute_received :refreshed
     end

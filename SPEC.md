@@ -922,8 +922,7 @@ flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a p
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
 the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
-with `needs-human`, a deprecated request label (`human_actions.label`, or `human-action` in the
-escalate labels) or another `escalate.labels` label other than `plan` and `breakdown`, gets the
+with `needs-human` or another `escalate.labels` label other than `plan` and `breakdown`, gets the
 same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. So does a red head on
 an issue in none of `tracker.active_states`, the review states and `Merging`
 (`Backlog`, say), which waits for a person to promote it, label or not. The normal flow
@@ -2748,9 +2747,8 @@ An issue is dispatch-eligible only if all are true:
     because a human moving a parent there approves its plan (next rule).
 - Waiting on a person:
   - A person is asked through the `Needs Decision` hold (Section 7.6), never a state; Symphony
-    adds the hold's label itself. A config that still sets the deprecated `human_actions.label`,
-    or lists `human-action` in `escalate.labels`, MUST load with a deprecation warning, and an
-    issue carrying that label counts as one with an open request.
+    adds the hold's label itself. A config that still sets the retired `human_actions.label` MUST
+    fail to load as an unknown key.
   - The state API reports `waiting_on_you`, the Inbox's items (`GET /api/v1/inbox`) in short:
     oldest first, each with its identifier, repo, title, URL, kind (`action`, `plan`, `clarify`
     or `blocked`), its one-line ask as `headline` and how long it has waited, and
@@ -3802,8 +3800,7 @@ Scoped Linear tool extension contract:
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
   before any Linear call. It replies `## Action withdrawn` with the reason under each open request
   on the issue (only the one whose title matches, when `title` is given). Once no open request is
-  left, the `Needs Decision` hold clears and a deprecated request label comes off, so the issue
-  continues where it stopped. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
+  left, the `Needs Decision` hold clears, so the issue continues where it stopped. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
   open request to withdraw it MUST change nothing. The read-only reviewer scope MUST NOT advertise
   or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
