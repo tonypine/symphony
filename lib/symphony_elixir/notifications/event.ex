@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Notifications.Event do
   @moduledoc false
 
-  alias SymphonyElixir.{Config, HttpServer, URLUtils}
+  alias SymphonyElixir.{Config, HttpServer, TicketPullRequest, URLUtils}
   alias SymphonyElixir.Linear.Issue
 
   @known_events [
@@ -112,16 +112,19 @@ defmodule SymphonyElixir.Notifications.Event do
 
   @spec from_issue(atom() | String.t(), term(), map() | keyword()) :: {:ok, t()} | {:error, term()}
   def from_issue(event, %Issue{} = issue, attrs) do
+    attrs = attrs_map(attrs)
+    repo_key = issue.repo_key || string_value(attrs, [:repo_key, "repo_key"])
+
     attrs =
       %{
         issue_id: issue.id,
         issue_identifier: issue.identifier,
         issue_title: issue.title,
         issue_url: URLUtils.present_url(issue.url),
-        pr_url: URLUtils.pull_request_url(issue),
+        pr_url: TicketPullRequest.current_url(%{issue | repo_key: repo_key}),
         state: issue.state
       }
-      |> Map.merge(attrs_map(attrs))
+      |> Map.merge(attrs)
 
     new(event, attrs)
   end

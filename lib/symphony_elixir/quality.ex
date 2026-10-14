@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Quality do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, Tracker, URLUtils}
+  alias SymphonyElixir.{Config, RunStore, TicketPullRequest, Tracker, URLUtils}
   alias SymphonyElixir.Linear.Issue
 
   @default_window_limit 50
@@ -159,7 +159,7 @@ defmodule SymphonyElixir.Quality do
     started_at = Map.get(running_entry, :started_at)
     ended_at = Keyword.get(opts, :ended_at, Map.get(running_entry, :ended_at, now))
     run_id = Map.get(running_entry, :run_id) || "run-#{System.system_time(:microsecond)}"
-    pull_request_url = URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue)
+    pull_request_url = URLUtils.pull_request_url(running_entry) || ticket_pr_url(issue, Map.get(running_entry, :repo_key))
 
     %{
       eval_id: run_id,
@@ -221,6 +221,9 @@ defmodule SymphonyElixir.Quality do
   end
 
   defp refresh_issue(_issue, _tracker), do: nil
+
+  # The ticket's PR from Symphony's record, when the run did not report one itself.
+  defp ticket_pr_url(%Issue{} = issue, repo_key), do: TicketPullRequest.current_url(%{issue | repo_key: issue.repo_key || repo_key})
 
   defp outcome_for(_status, _error, url) when is_binary(url) and url != "", do: "pr_opened"
   defp outcome_for(_status, error, _url) when is_binary(error), do: "error"

@@ -71,6 +71,7 @@ defmodule SymphonyElixir.EpicReview do
     QaVerification,
     SelfHeal,
     SubIssueWait,
+    TicketPullRequest,
     TicketSignals,
     TransitionGuard,
     Verification,
@@ -879,11 +880,7 @@ defmodule SymphonyElixir.EpicReview do
   defp comment_author(%{author: author}) when is_binary(author) and author != "", do: author
   defp comment_author(_comment), do: "unknown"
 
-  defp pull_request_urls(issue) do
-    [Map.get(issue, :pull_request_url) | List.wrap(Map.get(issue, :pr_urls))]
-    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-    |> Enum.uniq()
-  end
+  defp pull_request_urls(issue), do: issue |> TicketPullRequest.current_urls() |> Enum.uniq()
 
   defp checklist_rows(%Issue{} = issue), do: count_rows(issue.description)
 
