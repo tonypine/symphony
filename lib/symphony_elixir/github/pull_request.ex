@@ -381,8 +381,20 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   """
   @spec list_branch_runs(String.t(), String.t(), keyword()) :: {:ok, [workflow_run()]} | {:error, term()}
   def list_branch_runs(repo, branch, opts \\ []) when is_binary(repo) and is_binary(branch) and is_list(opts) do
-    args = ["run", "list", "-R", repo, "--branch", branch, "--limit", to_string(Keyword.get(opts, :limit, 50)), "--json", @run_fields]
+    list_runs(["run", "list", "-R", repo, "--branch", branch, "--limit", to_string(Keyword.get(opts, :limit, 50)), "--json", @run_fields], opts)
+  end
 
+  @doc """
+  The workflow runs on commit `sha`, newest first, in one request: at most `:limit` runs (default
+  100). The repository is `:repo` when given, else the one `gh` reads from the git checkout at
+  `:cwd`.
+  """
+  @spec list_commit_runs(String.t(), keyword()) :: {:ok, [workflow_run()]} | {:error, term()}
+  def list_commit_runs(sha, opts \\ []) when is_binary(sha) and is_list(opts) do
+    list_runs(["run", "list", "--commit", sha, "--limit", to_string(Keyword.get(opts, :limit, 100)), "--json", @run_fields] ++ repo_args(opts), opts)
+  end
+
+  defp list_runs(args, opts) do
     with {:ok, output} <- run_gh(args, opts) do
       case Jason.decode(output) do
         {:ok, runs} when is_list(runs) -> {:ok, runs |> Enum.filter(&is_map/1) |> Enum.map(&normalize_workflow_run/1)}

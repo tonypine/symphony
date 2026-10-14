@@ -1249,7 +1249,11 @@ only what it needs to use the change. The epic review judges a criterion that as
 coverage or CI to pass by CI's runs on the base branch head it tests, read with `gh run list` where
 the sandbox allows `gh`, else through GitHub's public API: green runs make the step `pass` with the
 run URLs, a failed run makes it `fail` naming the failing job and the run (so it is filed as a gap),
-and it is `skipped` only when no run can be read or a run is still in progress. The public API is
+and it is `skipped` only when no run can be read or a run is still in progress. Symphony waits for
+CI before it starts the epic review's agent: while a run on that commit is unfinished, the review
+starts again a minute later, without a verdict or a retry attempt, so a review that starts the
+moment the last sub-ticket merges does not judge a commit CI is still testing. A run still
+unfinished after two hours is not waited on. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 

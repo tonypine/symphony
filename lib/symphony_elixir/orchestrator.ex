@@ -66,6 +66,9 @@ defmodule SymphonyElixir.Orchestrator do
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
+  # An epic review waiting for CI on the commit it reviews: not the issue's fault either, and CI takes
+  # minutes, so the review is started again after a fixed wait, without failure backoff.
+  @ci_wait_retry_delay_ms 60_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -774,6 +777,25 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The epic review found CI still running on the commit it reviews (`SymphonyElixir.EpicReview`).
+  # Nothing failed: the attempt stays, no `run_failed` goes out, and the review starts again once CI
+  # had a minute more to finish.
+  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:ci_pending, %{}} = reason) do
+    error = agent_exit_reason_summary(reason)
+    persist_run_completion(running_entry, "waiting_for_ci", error)
+    Logger.info("Agent task for issue_id=#{issue_id} session_id=#{session_id} is #{error}; retrying after CI")
+
+    schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
+      repo_key: running_entry_repo_key(running_entry),
+      identifier: running_entry.identifier,
+      title: running_entry_title(running_entry),
+      error: error,
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path),
+      delay_type: :ci_wait
+    })
+  end
+
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
     handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
   end
@@ -931,6 +953,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:linear_unavailable, reason}) do
     "waiting for Linear: #{inspect(reason)}"
+  end
+
+  defp agent_exit_reason_summary({:ci_pending, %{sha: sha, runs: runs}}) do
+    "waiting for CI on #{String.slice(sha, 0, 12)}: #{Enum.map_join(runs, ", ", &(&1.workflow_name || "a workflow"))} still running"
   end
 
   defp agent_exit_reason_summary({:tool_failure_circuit_breaker, payload}) do
@@ -5868,6 +5894,7 @@ defmodule SymphonyElixir.Orchestrator do
     case retry_delay_type(metadata) do
       :continuation when attempt == 1 -> @continuation_retry_delay_ms
       :linear_wait -> @linear_wait_retry_delay_ms
+      :ci_wait -> @ci_wait_retry_delay_ms
       :usage_limit -> Map.get(metadata, :usage_limit_delay_ms, 0)
       _delay_type -> failure_retry_delay(attempt)
     end
@@ -5877,6 +5904,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_delay_type(%{delay_type: "continuation"}), do: :continuation
   defp retry_delay_type(%{delay_type: :linear_wait}), do: :linear_wait
   defp retry_delay_type(%{delay_type: "linear_wait"}), do: :linear_wait
+  defp retry_delay_type(%{delay_type: :ci_wait}), do: :ci_wait
+  defp retry_delay_type(%{delay_type: "ci_wait"}), do: :ci_wait
   defp retry_delay_type(%{delay_type: :usage_limit}), do: :usage_limit
   defp retry_delay_type(%{delay_type: "usage_limit"}), do: :usage_limit
   defp retry_delay_type(_metadata), do: nil
