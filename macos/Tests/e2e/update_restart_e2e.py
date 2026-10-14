@@ -3,7 +3,7 @@
 
 Builds releases N and N+1 of Symphony.app from this checkout, installs N in a
 temporary folder, runs it in scripted QA mode against a fake Linear (the memory
-tracker) and a stub agent, and checks four scenarios:
+tracker) and a stub agent, and checks six scenarios:
 
 1. Update N -> N+1 while a run is active: the old Symphony drains and stops, the
    new app starts its Symphony on its own, dispatch resumes, every Symphony BEAM
@@ -15,6 +15,13 @@ tracker) and a stub agent, and checks four scenarios:
    running Symphony is left as it was.
 4. Rollback to `Symphony (previous).app`: it starts N's BEAM from its own bundle
    and still reads its secrets.
+5. Automatically when idle, from N with Symphony running and no agent runs: it
+   installs N+1 by itself, which passes its health check, says so in a
+   notification, and shows "Updated to vN+1 (K changes)", which opens N+1's notes.
+6. Automatically when idle with a symphony.yml whose workspaces.repo doesn't
+   exist: N+1 fails its health check and is rolled back; N says so in a
+   notification naming N+1 and the failed check, and in a menu line that opens
+   N+1's notes, and doesn't install N+1 again.
 
 It never touches the installed app: the app, its settings, secrets, logs,
 update downloads, Symphony's state and logs, HOME and the epmd port are all its
@@ -37,6 +44,7 @@ import secrets
 import shutil
 import signal
 import socket
+import string
 import subprocess
 import sys
 import tempfile
@@ -386,6 +394,8 @@ class Instance:
         self.stub_log = work / "logs" / "stub.log"
         self.runs_log = work / "logs" / "runs.log"
         self.secret = secrets.token_hex(8)
+        # N+1's notes as the feed serves them: the notes window shows them.
+        self.release_notes = (feed.folder / "release_notes.md").read_text()
         self.epmd_port = free_port()
         self.app_process = None
         self.launches = 0
@@ -463,13 +473,17 @@ class Instance:
             "\\\"usage\\\":{\\\"input_tokens\\\":1,\\\"output_tokens\\\":1}}\"\n"
         )
         stub.chmod(0o755)
+        self.write_config("clone", repo)
+
+    def write_config(self, strategy, repo):
+        """Writes symphony.yml with the e2e repo's workspace `strategy` and `repo`."""
         self.config.write_text(
             "issues:\n  provider: memory\n  poll_interval_ms: 1000\n  memory:\n    issues_file: issues.json\n"
             "  states:\n    active: [Todo, In Progress]\n    terminal: [Done]\n"
             "repositories:\n  - key: e2e\n    workflow: WORKFLOW.md\n"
-            f"    workspace:\n      strategy: clone\n      repo: {repo}\n"
+            f"    workspace:\n      strategy: {strategy}\n      repo: {repo}\n"
             f"workspaces:\n  root: {self.work / 'workspaces'}\n"
-            f"agent:\n  runtime: claude\n  command: {stub}\n  concurrency:\n    max_total: 1\n"
+            f"agent:\n  runtime: claude\n  command: {self.work / 'bin' / 'stub-claude'}\n  concurrency:\n    max_total: 1\n"
             "  limits:\n    max_turns: 1\n"
             # E2E-1 is dispatched again and again across the scenarios without a state move or a PR head, which
             # the dispatch-loop guard would hold on a Blocked hold after 4 runs in 10 minutes. These limits keep
@@ -495,6 +509,23 @@ class Instance:
         secrets_file = self.qa / "secrets.json"
         secrets_file.write_text(json.dumps({"LINEAR_API_KEY": "e2e-not-a-real-key", "E2E_SECRET": self.secret}))
         secrets_file.chmod(0o600)
+
+    def update_settings(self, **values):
+        """Changes the app's settings, as Settings… would, while the app isn't running."""
+        path = self.qa / "settings.plist"
+        with open(path, "rb") as file:
+            settings = plistlib.load(file)
+        settings.update(values)
+        with open(path, "wb") as file:
+            plistlib.dump(settings, file)
+
+    def set_issue_state(self, state):
+        """Moves the fake Linear's issue to `state`; outside the active states Symphony dispatches nothing."""
+        issues_file = self.config.parent / "issues.json"
+        issues = json.loads(issues_file.read_text())
+        for issue in issues:
+            issue["state"] = state
+        issues_file.write_text(json.dumps(issues))
 
     def _app_environment(self, feed):
         user = pwd.getpwuid(os.getuid()).pw_name
@@ -560,6 +591,23 @@ class Instance:
 
     def alerts(self):
         return (self.status() or {}).get("alerts", [])
+
+    def wait_for_handoff(self, app_pid):
+        """Waits for the app this script launched to quit for the update helper.
+
+        Polling `alive` reaps it: until then it is a zombie, which the helper takes for a running app and waits on.
+        """
+        wait_for("the app to hand the update over and quit", lambda: not alive(app_pid), 180)
+        self.app_process = None
+
+    def quit(self):
+        """Chooses Quit Symphony and waits for the app and its Symphony to exit."""
+        status = self.status()
+        app_pid, symphony = status["pid"], status["symphony_pid"]
+        self.press("Quit Symphony")
+        wait_for("the app to quit", lambda: not alive(app_pid), 120)
+        wait_for("Symphony to stop", lambda: not alive(symphony), 60)
+        self.app_process = None
 
     # -- Symphony -----------------------------------------------------------
 
@@ -727,6 +775,7 @@ class Instance:
         lines.append(f"Symphony state: {json.dumps(self.symphony_state())[:600]}")
         logs = [
             self.qa / "updates" / "update-helper.log",
+            self.qa / "updates" / "rollback-helper.log",
             self.qa / "logs" / "menubar-child.log",
             self.stub_log,
             self.runs_log,
@@ -909,11 +958,7 @@ def scenario_broken_config(instance):
 
 def scenario_rollback(instance):
     log("scenario 4: Rollback to Symphony (previous).app")
-    status = instance.status()
-    app_pid, symphony = status["pid"], status["symphony_pid"]
-    instance.press("Quit Symphony")
-    wait_for("the app to quit", lambda: not alive(app_pid), 120)
-    wait_for("Symphony to stop", lambda: not alive(symphony), 60)
+    instance.quit()
     instance.app.rename(instance.applications / "Symphony (rolled back).app")
     instance.previous.rename(instance.app)
     log("swapped Symphony (previous).app back in")
@@ -929,6 +974,156 @@ def scenario_rollback(instance):
     if instance.alerts():
         raise Failure(f"the rolled-back app showed alerts: {instance.alerts()}")
     log("scenario 4 passed")
+
+
+def change_count(notes):
+    """'12 changes' or '1 change' from the notes' first line, as the app reads it; None when it names no count."""
+    first = next((line for line in notes.splitlines() if line.strip()), "")
+    words = first.strip().split(" ", 2)
+    if len(words) < 2 or not words[0].isdigit() or words[1].strip(string.punctuation) not in ("change", "changes"):
+        return None
+    count = int(words[0])
+    return "1 change" if count == 1 else f"{count} changes"
+
+
+def new_alert(instance, title, timeout):
+    """Waits for the alert or notification titled `title` and returns it."""
+    return wait_for(
+        f"'{title}' (alerts: {[a['title'] for a in instance.alerts()]})",
+        lambda: next((a for a in instance.alerts() if a["title"] == title), None),
+        timeout,
+    )
+
+
+def check_notes(instance, line, build, message=None):
+    """Chooses the menu line `line` and checks it opens build's release notes, with `message` above them."""
+    before = len(instance.alerts())
+    instance.press(line)
+    window = wait_for(f"the notes '{line}' opens", lambda: instance.alerts()[before:][:1], 15)[0]
+    expected = {
+        "title": f"Symphony {version(build)}",
+        "message": "\n\n".join(text for text in (message, instance.release_notes) if text),
+    }
+    if window != expected:
+        raise Failure(f"'{line}' opened {json.dumps(window)[:600]}, not {json.dumps(expected)[:600]}")
+    log(f"'{line}' opened the notes of {version(build)}")
+
+
+def scenario_automatic_update(instance):
+    log("scenario 5: Automatically when idle installs N+1 by itself, notifies, and the menu line opens its notes")
+    # Scenario 4 left N as Symphony.app.
+    instance.quit()
+    # Symphony runs with no agent runs: the issue leaves the active states, so nothing is dispatched.
+    instance.set_issue_state("Backlog")
+    instance.update_settings(updateMode="whenIdle", startOnLaunch=True)
+    log("Automatically when idle and Start at launch on, nothing to dispatch")
+    first = instance.launch()
+    if first["build"] != BUILD_N:
+        raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
+
+    # No press: the app starts Symphony, sees it idle and installs N+1, which checks its health and starts Symphony.
+    instance.wait_for_handoff(first["pid"])
+    new = wait_for(
+        f"build {BUILD_N1} to install itself and relaunch",
+        lambda: (s := instance.status()) and s["pid"] != first["pid"] and s["build"] == BUILD_N1 and s,
+        300,
+    )
+    instance.app_process = None
+    log(f"build {BUILD_N1} relaunched as pid {new['pid']}")
+    v1 = version(BUILD_N1)
+    changes = change_count(instance.release_notes)
+    notice = new_alert(instance, f"Symphony updated to v{v1}", 240)
+    body = (f"{changes}. " if changes else "") + f"Choose Updated to v{v1} in the menu for the release notes."
+    if notice["message"] != body:
+        raise Failure(f"the update notification says {notice['message']!r}, not {body!r}")
+    log(f"notified: {notice['title']}: {notice['message']}")
+    if instance.alerts() != [notice]:
+        raise Failure(f"the updated app showed other alerts: {instance.alerts()}")
+
+    wait_for("the updated app to run Symphony", lambda: instance.symphony_pid(), 60)
+    instance.check_runs_from_bundle(instance.app, BUILD_N1)
+    wait_for("dispatch to be resumed", lambda: (s := instance.symphony_state()) and not s["pause"]["paused"], 60)
+    if instance.app_build(instance.app) != BUILD_N1 or instance.app_build(instance.previous) != BUILD_N:
+        raise Failure("the app folder doesn't hold N+1 as Symphony.app and N as Symphony (previous).app")
+
+    line = f"Updated to v{v1}" + (f" ({changes})" if changes else "")
+    wait_for(f"the enabled '{line}' line (menu: {list(instance.menu())})", lambda: instance.menu().get(line), 30)
+    check_notes(instance, line, BUILD_N1)
+    log("scenario 5 passed")
+
+
+def scenario_automatic_rollback(instance):
+    log("scenario 6: N+1 fails its health check (workspaces.repo doesn't exist) and is rolled back to N")
+    instance.quit()
+    shutil.rmtree(instance.app)
+    instance.previous.rename(instance.app)
+    # Scenario 4's, so the one found afterwards is the rollback's.
+    rolled_back = instance.applications / "Symphony (rolled back).app"
+    shutil.rmtree(rolled_back, ignore_errors=True)
+    missing = instance.work / "missing-repo"
+    instance.write_config("worktree", missing)
+    instance.update_settings(startOnLaunch=False)
+    log(f"installed N again; symphony.yml's workspaces.repo is {missing}, which doesn't exist")
+    first = instance.launch()
+    if first["build"] != BUILD_N:
+        raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
+
+    # N installs N+1 by itself; N+1's symphony check fails, and the helper puts N back and opens it.
+    instance.wait_for_handoff(first["pid"])
+    v, v1 = version(BUILD_N), version(BUILD_N1)
+    title = f"Symphony rolled back to v{v}"
+    restored = wait_for(
+        f"build {BUILD_N} to be put back and say '{title}'",
+        lambda: (s := instance.status()) and s["pid"] != first["pid"] and s["build"] == BUILD_N
+        and any(a["title"] == title for a in s["alerts"]) and s,
+        300,
+    )
+    instance.app_process = None
+    log(f"build {BUILD_N} was put back as pid {restored['pid']}")
+    if instance.app_build(instance.app) != BUILD_N or instance.app_build(rolled_back) != BUILD_N1:
+        raise Failure("the app folder doesn't hold N as Symphony.app and N+1 as Symphony (rolled back).app")
+
+    line = next((t for t, enabled in instance.menu().items() if t.startswith(f"v{v1} was rolled back: ") and enabled),
+                None)
+    if not line:
+        raise Failure(f"the restored app's menu has no enabled 'v{v1} was rolled back: …' line: {instance.menu()}")
+    reason = line.removeprefix(f"v{v1} was rolled back: ")
+    if not reason.startswith("symphony check failed: ") or "workspaces.repo does not exist" not in reason:
+        raise Failure(f"the rollback's reason isn't the failed config check: {reason!r}")
+    notice = new_alert(instance, title, 0)
+    body = (f"v{v1} failed its health check ({reason}). It won't be installed by itself again; "
+            f"choose Retry v{v1} in the menu to install it.")
+    if notice["message"] != body:
+        raise Failure(f"the rollback notification says {notice['message']!r}, not {body!r}")
+    log(f"notified: {notice['title']}: {notice['message']}")
+    if instance.alerts() != [notice]:
+        raise Failure(f"the restored app showed other alerts: {instance.alerts()}")
+
+    check_notes(
+        instance, line, BUILD_N1,
+        message=f"{line}. To roll back by hand, or to keep the app from installing a version again, "
+        "choose Open Rollback Steps.",
+    )
+    # Pinned: the restored app's update check finds N+1 rolled back, offers Retry, and doesn't install it again.
+    changes = change_count(instance.release_notes)
+    pinned = f"Update rolled back: v{v1}" + (f" ({changes})" if changes else "")
+    wait_for(f"'{pinned}' (menu: {list(instance.menu())})", lambda: pinned in instance.menu(), 60)
+    if f"Retry v{v1}" not in instance.menu():
+        raise Failure(f"the restored app's menu has no 'Retry v{v1}': {instance.menu()}")
+    status = instance.status()
+    if status["pid"] != restored["pid"] or status["build"] != BUILD_N:
+        raise Failure(f"the restored app didn't stay: now pid {status['pid']}, build {status['build']}")
+    log("scenario 6 passed")
+
+
+SCENARIOS = (
+    scenario_update,
+    scenario_restart,
+    scenario_broken_config,
+    scenario_rollback,
+    scenario_automatic_update,
+    scenario_automatic_rollback,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -963,7 +1158,7 @@ def main():
         instance = Instance(work, app_n, feed)
         log(f"launching build {BUILD_N} from {instance.app} (QA root {instance.qa}, epmd port {instance.epmd_port})")
         instance.launch()
-        for scenario in (scenario_update, scenario_restart, scenario_broken_config, scenario_rollback):
+        for scenario in SCENARIOS:
             scenario(instance)
         failed = False
     except Failure as error:
@@ -992,7 +1187,7 @@ def main():
             log(f"kept {work}")
         else:
             shutil.rmtree(work, ignore_errors=True)
-    log("FAILED" if failed else "all 4 scenarios passed")
+    log("FAILED" if failed else f"all {len(SCENARIOS)} scenarios passed")
     return 1 if failed else 0
 
 

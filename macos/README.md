@@ -1126,8 +1126,10 @@ Six more variables, read only in QA mode:
   It keeps `status.json` current: its pid, version, build and bundle path, the pid of the Symphony it runs,
   every visible menu item (submenu items right after the item they open from) with whether it is enabled,
   the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
-  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt is answered with
-  the rest of the command file and cancelled when there is none. Pause Dispatch… and Force a Ticket…, which
+  no alerts: it records them there, and answers confirmations (Update, Quit) yes. Notifications and the
+  release notes window are recorded the same way, the window as its heading ("Symphony 0.0.1.43") and the
+  text above the notes, then the notes. A prompt is answered with the rest of the command file and cancelled
+  when there is none. Pause Dispatch… and Force a Ticket…, which
   open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the first line
   and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that reason, and
   without one pauses with the menu's.
