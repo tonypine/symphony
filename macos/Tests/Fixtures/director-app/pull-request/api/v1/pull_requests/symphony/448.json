@@ -23,13 +23,13 @@
     {
       "at": "2026-10-06T11:40:00Z",
       "kind": "code_review",
-      "reason": "The review instructions still describe the Final verification step.",
+      "reason": "The old workflow's instructions still describe the Final verification step.",
       "verdict": "request_changes"
     },
     {
       "at": "2026-10-07T10:15:00Z",
       "kind": "code_review",
-      "reason": "The older set of agent instructions still describes the Supervisor check.",
+      "reason": "The old workflow's instructions still describe Final verification, the only finding left.",
       "verdict": "request_changes"
     }
   ],

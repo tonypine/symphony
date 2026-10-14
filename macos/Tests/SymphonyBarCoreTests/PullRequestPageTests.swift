@@ -28,7 +28,7 @@ final class PullRequestPageTests: XCTestCase {
 
         XCTAssertEqual(page.reviewHistory.map(\.kind), [.codeReview, .codeReview])
         XCTAssertEqual(page.reviewHistory.map(\.verdict), ["request_changes", "request_changes"])
-        XCTAssertEqual(page.reviewHistory.first?.reason, "The review instructions still describe the Final verification step.")
+        XCTAssertEqual(page.reviewHistory.first?.reason, "The old workflow's instructions still describe the Final verification step.")
         XCTAssertLessThan(try XCTUnwrap(page.reviewHistory.first?.at), try XCTUnwrap(page.reviewHistory.last?.at))
 
         XCTAssertEqual(page.areas.map(\.name), ["Agent instructions", "Server", "Documentation", "Tests"])
