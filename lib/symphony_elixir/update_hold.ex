@@ -12,6 +12,9 @@ defmodule SymphonyElixir.UpdateHold do
   The `skip-update-hold` label opts out, on the held ticket or on the blocker (a docs-only or
   `WORKFLOW.md` change needs no app update).
 
+  The self-heal lane's fix-ticket hold waits the same way for a fix ticket merged in that repository
+  (`awaiting_update/4`, called by `SymphonyElixir.BlockedHold` for a ticket in any phase).
+
   `resolve/5` does the lookups (Linear for the blocker's pull requests, GitHub for the merge commit
   and whether the build includes it) and keeps their answers in a cache; `hold/4` only reads the
   cache. A lookup that fails is left out of the cache, so the ticket is not held, as before.
@@ -91,6 +94,44 @@ defmodule SymphonyElixir.UpdateHold do
 
   def hold(_issue, _build, _cache, _terminal_states), do: nil
 
+  @doc """
+  Whether the running build still lacks the fix `ticket` merged: the ticket a self-heal hold waits
+  on (`SymphonyElixir.BlockedHold`), already terminal. Returns the ticket and its merge commit while
+  its merged pull request is in the build's repository and the running build is known not to
+  include that commit, else nil (merged elsewhere, not merged, opted out with the skip label, no
+  build sha, or a lookup that failed), with the cache the lookups extended. Takes the same lookup
+  options as `resolve/5`.
+  """
+  @spec awaiting_update(Issue.t(), BuildInfo.t(), cache(), keyword()) ::
+          {%{identifier: String.t() | nil, merge_sha: String.t()} | nil, cache()}
+  def awaiting_update(%Issue{id: ticket_id} = ticket, %{sha: build_sha, repo: build_repo} = build, cache, opts)
+      when is_binary(ticket_id) and is_binary(build_sha) and is_binary(build_repo) do
+    cache = cache_fact(cache, ticket, build, opts)
+
+    case Map.get(cache.blockers, ticket_id) do
+      {:merged, pr_url, merge_sha} ->
+        cache = cache_included(cache, [{pr_url, merge_sha}], build_sha, opts)
+        waiting = if Map.get(cache.included, {merge_sha, build_sha}) == false, do: %{identifier: ticket.identifier, merge_sha: merge_sha}
+        {waiting, cache}
+
+      _not_merged_here ->
+        {nil, cache}
+    end
+  end
+
+  def awaiting_update(_ticket, _build, cache, _opts), do: {nil, cache}
+
+  defp cache_fact(cache, %Issue{id: ticket_id} = ticket, build, opts) do
+    if Map.has_key?(cache.blockers, ticket_id) do
+      cache
+    else
+      case blocker_fact(ticket, build, opts) do
+        {:ok, fact} -> %{cache | blockers: Map.put(cache.blockers, ticket_id, fact)}
+        {:error, _reason} -> cache
+      end
+    end
+  end
+
   # A `Todo` ticket whose blockers are all terminal: the plain blocked-by gate would release it.
   defp candidate?(%Issue{state: state, blocked_by: [_ | _]} = issue, terminal_states) when is_binary(state) do
     normalize(state) == @todo_state and Issue.open_blockers(issue, terminal_states) == [] and not skip_labelled?(issue)
@@ -147,18 +188,23 @@ defmodule SymphonyElixir.UpdateHold do
   end
 
   defp resolve_included(cache, candidates, %{sha: build_sha}, opts) do
-    commit_included? = Keyword.get(opts, :commit_included?, &PullRequest.commit_included?/3)
-
     merged =
       for %Issue{blocked_by: blockers} <- candidates,
           %{id: blocker_id} <- blockers,
           {:merged, pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
-          not Map.has_key?(cache.included, {merge_sha, build_sha}),
           uniq: true,
           do: {pr_url, merge_sha}
 
+    cache_included(cache, merged, build_sha, opts)
+  end
+
+  # Whether the build includes each merge commit not already in the cache.
+  defp cache_included(cache, merged, build_sha, opts) do
+    commit_included? = Keyword.get(opts, :commit_included?, &PullRequest.commit_included?/3)
+
     included =
       for {pr_url, merge_sha} <- merged,
+          not Map.has_key?(cache.included, {merge_sha, build_sha}),
           {:ok, included?} <- [commit_included?.(pr_url, merge_sha, build_sha)],
           into: %{},
           do: {{merge_sha, build_sha}, included?}

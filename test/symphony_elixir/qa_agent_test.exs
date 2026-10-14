@@ -575,6 +575,18 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(blocked, :needs_person)
     end
 
+    test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
+      assert {:ok, %{verdict: :blocked, covered_by: "TP-716"} = blocked} =
+               QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":" tp-716 "}))
+
+      refute Map.has_key?(blocked, :needs_person)
+
+      for covered_by <- [~s("TP-716 and TP-694"), ~s(""), "716", "null"] do
+        assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":#{covered_by}}))
+        refute Map.has_key?(blocked, :covered_by)
+      end
+    end
+
     test "marks the steps a parent walkthrough reports for its verification checklist" do
       text =
         ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":"yes"},{"name":"Quit","status":"pass"}]})
@@ -604,6 +616,17 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   describe "prompt/2 and settings" do
+    test "a missing QA tool is never needs_person, and an open ticket covering it is named in covered_by" do
+      prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
+
+      assert prompt =~
+               "A missing QA tool or QA host capability is never `needs_person`, even when a person could check the step by hand"
+
+      assert prompt =~ "a missing secret or API key, an account, or a real device this QA host lacks"
+      refute prompt =~ "check a step by hand or on a real device"
+      assert prompt =~ "put that ticket's identifier in `covered_by`, so Symphony waits on that ticket instead of filing another"
+    end
+
     test "includes the ticket, the parent's criteria and the playbooks" do
       prompt = QaAgent.prompt(job(), %{"identifier" => "TP-243", "title" => "Parent", "description" => "- [ ] parent criterion"})
 
@@ -617,7 +640,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
       assert prompt =~ ~s("needs_person": true | false)
-      assert prompt =~ "Set `needs_person` to true when only a person can do what is left"
+      assert prompt =~ "Set `needs_person` to true only when the block is something only a person can hand over"
+      assert prompt =~ ~s("covered_by": )
       assert prompt =~ "Ending your turn ends the session"
       assert prompt =~ ~r/Do not leave\s+work running in the background/
 

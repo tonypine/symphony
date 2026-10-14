@@ -542,6 +542,27 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "**Verdict:** blocked → QA (blocked)"
     end
 
+    test "a block a QA answer says an open ticket already covers holds on that ticket and files nothing" do
+      {workspace, _head} = git_workspace!()
+
+      covering = %Issue{id: "covering-id", identifier: "TP-716", title: "Fake gh on the QA host", state: "Merging"}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [covering])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      blocked = %{verdict: :blocked, summary: "", steps: [], findings: [], reason: "the QA host has no fake gh", covered_by: "TP-716"}
+      Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{input: 1, output: 1}}})
+
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+
+      refute_received {:fixer_create, _}
+      assert_received {:fixer_block, "TP-716"}
+      assert_received {:fixer_attach, "TP-716", evidence}
+      assert evidence =~ "the QA host has no fake gh"
+
+      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}} = Hold.get(@repo_key, @issue_id, :blocked)
+    end
+
     test "a second ticket hitting the same break reuses the one fix ticket" do
       {workspace, _head} = git_workspace!()
 

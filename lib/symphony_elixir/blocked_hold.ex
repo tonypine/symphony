@@ -10,7 +10,11 @@ defmodule SymphonyElixir.BlockedHold do
 
   The other hold that lifts on its own is the self-heal lane's: a ticket blocked on the fix ticket
   `SymphonyElixir.SelfHeal` filed waits for that ticket, and resumes in place the moment it goes
-  terminal — the fix landed, so the flow retries with nothing asked of a person. Only the stale
+  terminal — the fix landed, so the flow retries with nothing asked of a person. A fix to Symphony
+  itself (its pull request merged in the repository the running build comes from) only helps once
+  the running app includes it, as `SymphonyElixir.UpdateHold` holds a `Todo` ticket: the hold stays,
+  its reason saying it waits for the app update, until the running build includes the fix's merge
+  commit, then lifts on its own. Only the stale
   fix-ticket pointer is dropped with the hold: the failure signature stays, so a break that comes
   back after the repair is compared against the failure the repair was for rather than judged as a
   fresh one that files another fix ticket.
@@ -21,7 +25,7 @@ defmodule SymphonyElixir.BlockedHold do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Hold, RunStore}
+  alias SymphonyElixir.{BuildInfo, Config, Hold, RunStore, UpdateHold}
   alias SymphonyElixir.Linear.Issue
 
   @todo_state "todo"
@@ -75,24 +79,40 @@ defmodule SymphonyElixir.BlockedHold do
   `opts[:repo_key]` names the repo it was polled for, and the hold is read and written under it.
   Returns `:skipped` when the issue's repo can't be resolved, else the action taken (`:set`,
   `:clear` or `:none`).
+
+  A fix-ticket hold whose fix is terminal checks the running build (`opts[:build]`, default
+  `SymphonyElixir.BuildInfo.current/0`) through `SymphonyElixir.UpdateHold.awaiting_update/4`, with
+  its lookup options and `opts[:update_hold_cache]` (default empty).
   """
   @spec sync(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :skipped | :set | :clear | :none
   def sync(issue, terminal_states, opts \\ []) do
-    with %Issue{} = issue <- with_repo_key(issue, Keyword.get(opts, :repo_key)),
-         %{} <- settings(issue, opts) do
-      sync_issue(issue, terminal_states, opts)
-    else
-      _skipped -> :skipped
-    end
+    {action, _cache} = sync_cached(issue, terminal_states, update_hold_cache(opts), opts)
+    action
   end
 
   @doc """
-  Runs `sync/3` over a repo's polled issues and returns how many holds it changed. A hand-added
-  `Blocked` label with no store record is reported and cleared, so the board matches the store.
+  Runs `sync/3` over a repo's polled issues and returns how many holds it changed, with the
+  `SymphonyElixir.UpdateHold` cache its build lookups extended, so the next poll does not look them
+  up again. A hand-added `Blocked` label with no store record is reported and cleared, so the board
+  matches the store.
   """
-  @spec sweep([Issue.t()] | term(), Enumerable.t(String.t()), keyword()) :: non_neg_integer()
+  @spec sweep([Issue.t()] | term(), Enumerable.t(String.t()), keyword()) :: {non_neg_integer(), UpdateHold.cache()}
   def sweep(issues, terminal_states, opts \\ []) do
-    if is_list(issues), do: Enum.count(issues, &(sync(&1, terminal_states, opts) in [:set, :clear])), else: 0
+    issues = if is_list(issues), do: issues, else: []
+
+    Enum.reduce(issues, {0, update_hold_cache(opts)}, fn issue, {count, cache} ->
+      {action, cache} = sync_cached(issue, terminal_states, cache, opts)
+      {if(action in [:set, :clear], do: count + 1, else: count), cache}
+    end)
+  end
+
+  defp sync_cached(issue, terminal_states, cache, opts) do
+    with %Issue{} = issue <- with_repo_key(issue, Keyword.get(opts, :repo_key)),
+         %{} <- settings(issue, opts) do
+      sync_issue(issue, terminal_states, cache, opts)
+    else
+      _skipped -> {:skipped, cache}
+    end
   end
 
   defp with_repo_key(%Issue{repo_key: key} = issue, repo_key) when key in [nil, ""] and is_binary(repo_key),
@@ -100,38 +120,77 @@ defmodule SymphonyElixir.BlockedHold do
 
   defp with_repo_key(issue, _repo_key), do: issue
 
-  defp sync_issue(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, opts) do
+  defp sync_issue(%Issue{id: issue_id, repo_key: repo_key} = issue, terminal_states, cache, opts) do
     repair_drift(repo_key, issue_id, issue.labels, opts)
     current = Hold.get(repo_key, issue_id, :blocked, opts)
 
-    case action(issue, terminal_states, current, opts) do
-      {:set, attrs} ->
-        apply_action(:set, repo_key, issue_id, attrs, opts)
+    case action(issue, terminal_states, current, cache, opts) do
+      {{:set, attrs}, cache} ->
+        {apply_action(:set, repo_key, issue_id, attrs, opts), cache}
 
-      :clear ->
-        apply_action(:clear, repo_key, issue_id, current, opts)
+      {:clear, cache} ->
+        {apply_action(:clear, repo_key, issue_id, current, opts), cache}
 
-      :none ->
-        :none
+      {:none, cache} ->
+        {:none, cache}
     end
   end
 
   # A fix-ticket hold is judged by the fix ticket's own state, everything else by the issue's
   # blockers. The fix ticket is read from the tracker by the identifier the hold records.
-  defp action(_issue, terminal_states, %{waits_on: %{type: @fix_ticket_type}} = hold, opts) do
-    fix_ticket_desired(hold, fix_ticket_state(hold, opts), terminal_states)
+  defp action(issue, terminal_states, %{waits_on: %{type: @fix_ticket_type}} = hold, cache, opts) do
+    fix = fix_ticket(hold, opts)
+
+    case fix_ticket_desired(hold, fix && fix.state, terminal_states) do
+      :clear -> after_fix_landed(issue, fix, hold, cache, opts)
+      :none -> {:none, cache}
+    end
   end
 
-  defp action(issue, terminal_states, current, _opts), do: desired(issue, terminal_states, current)
+  defp action(issue, terminal_states, current, cache, _opts), do: {desired(issue, terminal_states, current), cache}
 
-  defp fix_ticket_state(%{waits_on: %{keys: [identifier | _]}}, opts) when is_binary(identifier) do
+  defp fix_ticket(%{waits_on: %{keys: [identifier | _]}}, opts) when is_binary(identifier) do
     case tracker(opts).fetch_issue_by_identifier(identifier) do
-      {:ok, %Issue{state: state}} -> state
+      {:ok, %Issue{} = fix} -> fix
       _unreadable -> nil
     end
   end
 
-  defp fix_ticket_state(_hold, _opts), do: nil
+  defp fix_ticket(_hold, _opts), do: nil
+
+  # The fix ticket is terminal. A fix to Symphony itself helps only once the running app includes
+  # it, so while the running build lacks its merge commit the hold stays, its reason saying so
+  # (written once, then left alone), and it lifts on the poll that sees the updated app.
+  defp after_fix_landed(issue, fix, hold, cache, opts) do
+    build = Keyword.get_lazy(opts, :build, &BuildInfo.current/0)
+
+    case awaiting_update(issue, fix, build, cache, opts) do
+      {nil, cache} ->
+        {:clear, cache}
+
+      {%{merge_sha: merge_sha}, cache} ->
+        attrs = update_wait_attrs(hold, fix, merge_sha, build.sha)
+        {if(attrs.reason == Map.get(hold, :reason), do: :none, else: {:set, attrs}), cache}
+    end
+  end
+
+  defp awaiting_update(issue, fix, build, cache, opts) do
+    if skip_labelled?(issue), do: {nil, cache}, else: UpdateHold.awaiting_update(fix, build, cache, opts)
+  end
+
+  defp update_wait_attrs(hold, fix, merge_sha, build_sha) do
+    %{
+      reason:
+        "waiting for an app update: fix ticket #{fix.identifier} merged in `#{BuildInfo.short_sha(merge_sha)}`, " <>
+          "running `#{BuildInfo.short_sha(build_sha)}`",
+      clearing_condition: "when the running app includes the fix ticket #{fix.identifier}'s merge",
+      waits_on: hold.waits_on
+    }
+  end
+
+  defp skip_labelled?(%Issue{labels: labels}), do: Enum.any?(labels, &(is_binary(&1) and normalize(&1) == UpdateHold.skip_label()))
+
+  defp update_hold_cache(opts), do: Keyword.get_lazy(opts, :update_hold_cache, &UpdateHold.empty_cache/0)
 
   defp apply_action(:set, repo_key, issue_id, attrs, opts) do
     case Hold.set(repo_key, issue_id, :blocked, attrs, opts) do
