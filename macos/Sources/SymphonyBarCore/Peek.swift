@@ -92,6 +92,28 @@ public struct PeekNavigation: Equatable {
     public var canToggle: Bool { isShown || !pages.isEmpty }
 }
 
+/// The peeked tickets whose `/api/v1/:issue_identifier` is on its way, by identifier: a ticket opened or pushed while
+/// another's read is in flight is read at once, and a ticket is never read twice at the same time.
+public struct PeekReads: Equatable {
+    public private(set) var inFlight: Set<String> = []
+
+    public init() {}
+
+    /// The ticket to read now: the page shown, when the peek shows it, Symphony answers and its read isn't on its
+    /// way. Marks it in flight until `finish`.
+    public mutating func start(_ peek: PeekNavigation, countsKnown: Bool) -> String? {
+        guard peek.isShown, countsKnown, let identifier = peek.current?.ticketIdentifier,
+              !inFlight.contains(identifier) else { return nil }
+        inFlight.insert(identifier)
+        return identifier
+    }
+
+    /// `identifier`'s read answered.
+    public mutating func finish(_ identifier: String) {
+        inFlight.remove(identifier)
+    }
+}
+
 /// Where the peek shows: the window's inspector column beside the review, or a sheet over the window when the detail
 /// would be too narrow with the inspector open.
 public enum PeekPresentation: Equatable {

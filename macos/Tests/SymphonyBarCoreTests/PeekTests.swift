@@ -62,6 +62,32 @@ final class PeekTests: XCTestCase {
         XCTAssertTrue(peek.isShown)
     }
 
+    func testPushingTP880WhileTP891sReadIsPendingReadsTP880AtOnce() throws {
+        let item = try decision()
+        var peek = PeekNavigation()
+        var reads = PeekReads()
+        peek.open(try entry("TP-891", in: item))
+        XCTAssertNil(reads.start(peek, countsKnown: false), "nothing is read before Symphony answers")
+        XCTAssertEqual(reads.start(peek, countsKnown: true), "TP-891")
+        XCTAssertNil(reads.start(peek, countsKnown: true), "a state poll doesn't read TP-891 twice")
+
+        peek.push(try entry("TP-880", in: item))
+        XCTAssertEqual(reads.start(peek, countsKnown: true), "TP-880", "TP-891's pending read doesn't hold it back")
+        XCTAssertEqual(reads.inFlight, ["TP-891", "TP-880"])
+
+        reads.finish("TP-891")
+        XCTAssertTrue(peek.goBack())
+        XCTAssertEqual(reads.start(peek, countsKnown: true), "TP-891", "read again after each state poll")
+        reads.finish("TP-891")
+        reads.finish("TP-880")
+        XCTAssertEqual(reads.inFlight, [])
+
+        peek.push(try entry("#448", in: item))
+        XCTAssertNil(reads.start(peek, countsKnown: true), "a pull request has no ticket page")
+        peek.close()
+        XCTAssertNil(reads.start(peek, countsKnown: true), "a closed peek reads nothing")
+    }
+
     func testAnEntryIsTitledByItsTicketOrPullRequest() throws {
         let item = try decision()
         let pullRequest = try entry("#448", in: item)

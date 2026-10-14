@@ -65,15 +65,14 @@ extension SymphonyWindowModel {
     /// Reads the peeked ticket's `/api/v1/:issue_identifier`, the ticket page's endpoint, when it opens and after each
     /// state poll while it shows: it says whether Symphony tracks the ticket, and what it does now.
     func readPeek() {
-        guard peek.isShown, let identifier = peek.current?.ticketIdentifier, !readingPeek, state.countsKnown else { return }
-        readingPeek = true
+        guard let identifier = peekReads.start(peek, countsKnown: state.countsKnown) else { return }
         Task {
             if case let .loaded(data) = await client.get(TicketPage.issuePath(identifier)) {
                 peekIssues[identifier] = data
             } else {
                 peekIssues[identifier] = nil
             }
-            readingPeek = false
+            peekReads.finish(identifier)
         }
     }
 }

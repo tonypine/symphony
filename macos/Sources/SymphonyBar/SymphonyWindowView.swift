@@ -56,7 +56,7 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var peek = PeekNavigation()
     /// Each peeked ticket's `/api/v1/:issue_identifier`, by identifier; absent while it answers 404.
     @Published var peekIssues: [String: Data] = [:]
-    var readingPeek = false
+    var peekReads = PeekReads()
     /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.
     @Published var inboxSheet: ConsequenceSheet?
     /// True while the sheet's move is on its way to Symphony.
