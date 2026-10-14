@@ -123,15 +123,8 @@ final class AddRepoViewModel: ObservableObject {
         if let configProblem { return .failure(AddRepoProblem(configProblem)) }
         if let editing { return EditRepo.entry(for: draft, editing: editing, existing: existing) }
         return AddRepo.entry(for: draft, existing: existing).flatMap { entry in
-            switch workflowCheck {
-            case .checking:
-                return .failure(AddRepoProblem("Checking the repo for a WORKFLOW.md…"))
-            case .missing where landing != .skip && landedWorkflow == nil
-                && workflowText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-                return .failure(AddRepoProblem("The WORKFLOW.md draft is empty. Write one, or pick \"\(WorkflowLanding.skip.rawValue)\"."))
-            default:
-                return .success(entry)
-            }
+            let problem = workflowCheck.saveProblem(landing: landing, landed: landedWorkflow != nil, draft: workflowText)
+            return problem.map { .failure($0) } ?? .success(entry)
         }
     }
 
@@ -191,6 +184,8 @@ final class AddRepoViewModel: ObservableObject {
 
     var baseBranch: Binding<String> {
         Binding(get: { self.draft.baseBranch }, set: { branch in
+            // The field commits on focus loss too, as Save is pressed: only a typed change checks the repo again.
+            guard branch != self.draft.baseBranch else { return }
             self.draft.baseBranch = branch
             self.baseBranchEdited = true
             // A GitHub repo is checked on the branch typed; a folder's draft only names it.

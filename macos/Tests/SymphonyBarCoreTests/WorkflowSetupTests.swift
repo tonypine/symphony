@@ -266,6 +266,24 @@ final class WorkflowSetupTests: XCTestCase {
         XCTAssertNil(WorkflowCheck.present.missingMessage(source: "acme/web"))
     }
 
+    func testSaysWhatStopsSave() {
+        let missing = WorkflowCheck.missing(WorkflowStack(), branch: "main")
+        XCTAssertEqual(
+            WorkflowCheck.checking.saveProblem(landing: .pullRequest, landed: false, draft: "x"),
+            AddRepoProblem("Checking the repo for a WORKFLOW.md…")
+        )
+        XCTAssertEqual(
+            missing.saveProblem(landing: .pullRequest, landed: false, draft: " \n"),
+            AddRepoProblem("The WORKFLOW.md draft is empty. Write one, or pick \"Don't create one now\".")
+        )
+        XCTAssertNil(missing.saveProblem(landing: .skip, landed: false, draft: ""))
+        XCTAssertNil(missing.saveProblem(landing: .pullRequest, landed: false, draft: "---\n"))
+        XCTAssertNil(WorkflowCheck.present.saveProblem(landing: .pullRequest, landed: false, draft: ""))
+        // Once Save opened the pull request, a check that runs again doesn't hold back adding the repo.
+        XCTAssertNil(WorkflowCheck.checking.saveProblem(landing: .pullRequest, landed: true, draft: "x"))
+        XCTAssertNil(missing.saveProblem(landing: .pullRequest, landed: true, draft: ""))
+    }
+
     // MARK: Pending
 
     func testKeepsPendingWorkflowsByRepo() {

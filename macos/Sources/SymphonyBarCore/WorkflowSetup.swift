@@ -62,6 +62,20 @@ public enum WorkflowCheck: Equatable {
     /// The repo couldn't be checked; Save connects it without the step.
     case failed(String)
 
+    /// What stops Save from adding the repo: a check still running, or an empty draft it would add. Nothing once
+    /// `landed`: Save already added the file, so a check that runs again meanwhile must not hold back the entry.
+    public func saveProblem(landing: WorkflowLanding, landed: Bool, draft: String) -> AddRepoProblem? {
+        guard !landed else { return nil }
+        switch self {
+        case .checking:
+            return AddRepoProblem("Checking the repo for a WORKFLOW.md…")
+        case .missing where landing != .skip && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            return AddRepoProblem("The WORKFLOW.md draft is empty. Write one, or pick \"\(WorkflowLanding.skip.rawValue)\".")
+        default:
+            return nil
+        }
+    }
+
     /// What the step says about the file: that `source` (`owner/repo` or a folder) has none.
     public func missingMessage(source: String) -> String? {
         guard case let .missing(_, branch) = self else { return nil }
