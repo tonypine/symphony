@@ -557,6 +557,89 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertNil(machine.error)
     }
 
+    // MARK: Update when released
+
+    /// The drain of an update Automatically when released started, as the app begins it for `UpdateKind.onRelease`.
+    private func beginOnRelease() -> (RestartMachine, [Effect]) {
+        let kind = UpdateKind.onRelease
+        var machine = RestartMachine()
+        let effects = machine.begin(
+            alreadyPaused: false,
+            purpose: kind.drainPurpose,
+            runsTimeout: kind.runsTimeout(restartTimeout: runsTimeout),
+            logPath: log,
+            alerts: !kind.isAutomatic,
+            now: began
+        )
+        return (machine, effects)
+    }
+
+    func testOnReleaseUpdateWaitsWithoutGivingUpAndOffersUpdateNowAnyway() {
+        var (machine, effects) = beginOnRelease()
+        XCTAssertEqual(effects, [.checkConfig])
+        XCTAssertEqual(machine.purpose, .update, "the manual update's purpose")
+        _ = machine.handle(.configChecked(.passed), now: began)
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began), [])
+        XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42", now: began), "Updating to v0.0.1.42: waiting for 1 agent run…")
+        XCTAssertFalse(machine.offersRestartNow)
+
+        let late = began.addingTimeInterval(runsTimeout + 5 * 60)
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 2)), now: late), [], "no giving up")
+        XCTAssertTrue(machine.isRestarting)
+        XCTAssertFalse(machine.postponed)
+        XCTAssertTrue(machine.offersRestartNow, "Update Now Anyway after the restart timeout")
+        XCTAssertTrue(machine.canCancel)
+        XCTAssertEqual(
+            machine.menuLine(updatingTo: "0.0.1.42", now: late),
+            "Updating to v0.0.1.42: waiting for 2 agent runs… (35 min)"
+        )
+
+        XCTAssertEqual(machine.handle(.restartNow, now: late), [.stop])
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: late), [.stopped])
+        XCTAssertTrue(machine.pausedByRestart, "the relaunched app resumes the dispatch the update paused")
+    }
+
+    func testOnReleaseUpdateCancelResumesTheDispatchItPaused() {
+        var (machine, _) = beginOnRelease()
+        _ = machine.handle(.configChecked(.passed), now: began)
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        _ = machine.handle(.polled(pausedPoll(running: 1)), now: began)
+
+        XCTAssertEqual(machine.handle(.cancel, now: began), [.send(.resume)])
+        XCTAssertEqual(machine.handle(.controlFinished(.resume, .done), now: began), [])
+        XCTAssertFalse(machine.isRestarting)
+    }
+
+    func testOnReleaseUpdateFailuresShowNoAlert() {
+        var (machine, _) = beginOnRelease()
+        XCTAssertEqual(machine.handle(.configChecked(.failed("Config error: unknown key")), now: began), [])
+        XCTAssertEqual(machine.menuLine, "Config error: unknown key")
+
+        var manual = beginUpdate().0
+        XCTAssertEqual(
+            manual.handle(.configChecked(.failed("Config error: unknown key")), now: began),
+            [.alert(title: RestartMachine.notUpdatedTitle, message: "Config error: unknown key\n\nSymphony keeps running.")],
+            "Update to vX still alerts"
+        )
+    }
+
+    func testTheUpdateLineNamesTheVersionOnlyWhileWaitingForRuns() {
+        var (machine, _) = beginUpdate()
+        XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42"), "Updating: checking symphony.yml…")
+        _ = machine.handle(.configChecked(.passed), now: began)
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42"), "Updating: waiting for dispatch to pause…")
+        _ = machine.handle(.polled(pausedPoll(running: 3)), now: began)
+        XCTAssertEqual(machine.menuLine(updatingTo: nil), "Waiting for 3 agent runs…")
+
+        var (restart, _) = begin()
+        _ = restart.handle(.configChecked(.passed), now: began)
+        _ = restart.handle(.controlFinished(.pause, .done), now: began)
+        _ = restart.handle(.polled(pausedPoll(running: 1)), now: began)
+        XCTAssertEqual(restart.menuLine(updatingTo: "0.0.1.42"), "Waiting for 1 agent run…", "a restart names no version")
+    }
+
     func testOnlyRestartIsNotAnUpdate() {
         XCTAssertFalse(RestartMachine.Purpose.restart.isUpdate)
         XCTAssertTrue(RestartMachine.Purpose.update.isUpdate)

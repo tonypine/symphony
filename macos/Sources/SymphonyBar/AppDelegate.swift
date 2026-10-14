@@ -66,8 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var health = UpdateHealthCheck()
     /// The update the health check is about.
     private var checkedUpdate: PendingUpdate?
-    /// Decides when Automatically when idle or Automatically at a set time installs a release.
+    /// Decides when an automatic update mode installs a release.
     private var autoUpdater = AutoUpdater()
+    /// Posts and withdraws the notification an update Automatically when released posts as it starts.
+    private var startNotifier = UpdateStartNotifier()
     /// Fires at the set time, so the attempt doesn't wait for the next status poll.
     private var setTimeTimer: Timer?
     /// Stops an owned Symphony before the app exits on SIGTERM, SIGINT or SIGHUP.
@@ -167,12 +169,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         runner.onEvent = { [weak self] event in self?.handle(event) }
         runner.onKeychainChange = { [weak self] in self?.showStatus() }
         restarter.onChange = { [weak self] in
-            self?.showStatus()
-            self?.reposWindow.restartChanged()
+            guard let self else { return }
+            showStatus()
+            reposWindow.restartChanged()
+            startNotice(startNotifier.drained(restarter.machine.phase))
         }
         // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
         settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
-        updater.onChange = { [weak self] in self?.showUpdateItems() }
+        settingsWindow.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
+        updater.onChange = { [weak self] in
+            guard let self else { return }
+            showUpdateItems()
+            // Cancel Update shows while the release downloads.
+            showStatus()
+            if !updater.isUpdating { startNotice(startNotifier.ended()) }
+        }
         poller.stateRoot = { [weak self] in
             self?.runner.stateRoot ?? StateRoot.locate(environment: AppStores.current.environment)
         }
@@ -206,7 +217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         inboxNotifications.onApproveAndMerge = { [weak self] issueID in
             self?.symphonyWindow.showInbox(selecting: issueID, opening: .approveAndMerge)
         }
+        inboxNotifications.onCancelUpdate = { [weak self] in self?.cancelUpdate() }
         inboxNotifications.start()
+        // An update that started this app, or one the last run left behind, has ended.
+        inboxNotifications.withdrawUpdateStarted()
         stateSubscription = apiClient.$stateJSON
             .compactMap { $0.flatMap(OverviewState.decode) }
             .sink { [weak self] state in self?.inboxNotifications.update(state) }
@@ -426,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(restartNow(_:)):
             return restarter.machine.offersRestartNow
         case #selector(cancelRestart(_:)):
-            return restarter.machine.canCancel
+            return offersCancel
         case #selector(pauseDispatch(_:)):
             menuItem.title = controlInFlight.map(StatusMenu.isPause) == true ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
             return controlInFlight == nil && !restarting && StatusMenu.canPause(machine.status)
@@ -500,8 +514,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         restarter.handle(.restartNow)
     }
 
+    /// Cancel Restart, or Cancel Update while an update downloads or waits for agent runs.
     @objc private func cancelRestart(_ sender: Any?) {
-        restarter.handle(.cancel)
+        if !cancelUpdate() { restarter.handle(.cancel) }
+    }
+
+    /// Cancel Update, from the menu or the update's start notification. On an update Automatically when released
+    /// started it holds the release, so no check starts it again (AU1). Returns false, doing nothing, when no update
+    /// can be called off, as once it reached the swap.
+    @discardableResult
+    private func cancelUpdate() -> Bool {
+        guard updater.isUpdating,
+            let cancel = UpdateCancel(
+                downloading: updater.preparing != nil,
+                drain: restarter.machine,
+                kind: updater.kind,
+                release: updater.release
+            )
+        else { return false }
+        if let release = cancel.hold { autoUpdater.hold(release) }
+        switch cancel.step {
+        case .download:
+            updater.cancelPreparing()
+        case .drain:
+            restarter.handle(.cancel)
+        }
+        return true
+    }
+
+    private var offersCancel: Bool {
+        updater.preparing != nil || restarter.machine.canCancel
+    }
+
+    private func startNotice(_ effect: UpdateStartNotifier.Effect?) {
+        switch effect {
+        case let .post(notice)?:
+            inboxNotifications.postUpdateStarted(notice)
+        case .withdraw?:
+            inboxNotifications.withdrawUpdateStarted()
+        case nil:
+            break
+        }
     }
 
     private var restarting: Bool { restarter.machine.isRestarting }
@@ -693,6 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc private func skipUpdate(_ sender: Any?) {
         guard let release = availableRelease, !updater.isUpdating else { return }
         updater.skips.record(SkippedRelease(release, reason: .skipped))
+        autoUpdater.clearHold()
         showUpdateItems()
     }
 
@@ -708,14 +762,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard SymphonyRunner.confirm(alert) else { return }
 
         controlError = nil
-        // Installing by hand overrides Skip This Version for this build.
+        // Installing by hand overrides Skip This Version and a Cancel Update's hold for this build.
         updater.skips.clear(build: release.build)
-        updater.prepare(release) { [weak self] update in self?.drainForUpdate(update) }
+        autoUpdater.clearHold()
+        startNotifier.began(release, kind: .manual)
+        updater.prepare(release) { [weak self] update in self?.drainForUpdate(update, kind: .manual) }
     }
 
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
-    /// is left alone. An automatic update passes `automaticRunsTimeout`: see `RestartController.drainForUpdate`.
-    private func drainForUpdate(_ update: PreparedUpdate, automaticRunsTimeout: TimeInterval? = nil) {
+    /// is left alone. `kind` decides how the drain waits: see `UpdateKind`.
+    private func drainForUpdate(_ update: PreparedUpdate, kind: UpdateKind) {
         guard !runner.isStarting else {
             updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
             return
@@ -729,7 +785,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return
         }
         let alreadyPaused = StatusMenu.canResume(machine.status)
-        restarter.drainForUpdate(alreadyPaused: alreadyPaused, automaticRunsTimeout: automaticRunsTimeout) {
+        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind) {
             [weak self] stopped, pausedByUpdate in
             guard let self else { return }
             guard stopped else {
@@ -821,13 +877,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch action {
         case .check?:
             updates.check(manual: false)
-        case let .install(release, runsTimeout)?:
+        case let .install(release, kind)?:
             // No confirmation: a failure shows on the update line, not in an alert.
             guard !updater.isUpdating, !restarting else { return }
             controlError = nil
-            updater.prepare(release, automatic: true) { [weak self] update in
-                self?.drainForUpdate(update, automaticRunsTimeout: runsTimeout)
-            }
+            startNotifier.began(release, kind: kind)
+            updater.prepare(release, kind: kind) { [weak self] update in self?.drainForUpdate(update, kind: kind) }
         case nil:
             break
         }
@@ -846,7 +901,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         skipUpdateItem.isHidden = offer?.offersSkip != true
         releaseNotesItem.isHidden = release == nil
 
-        let line = updater.menuLine ?? health.menuLine ?? (release == nil ? nil : updateBlocker)
+        // Skip This Version still shows for a release Cancel Update holds (S2e).
+        let held = offer?.offersSkip == true && release?.build == autoUpdater.heldBuild
+        let line = updater.menuLine ?? health.menuLine ?? (held ? UpdateMenu.cancelledLine : nil)
+            ?? (release == nil ? nil : updateBlocker)
         updateLineItem.title = line ?? ""
         updateLineItem.isHidden = line == nil
         let outcome = updateOutcome
@@ -942,16 +1000,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         sourceItem.title = runner.sourceLine
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
-        let updating = restarter.machine.purpose.isUpdate
+        let updating = restarter.machine.purpose.isUpdate || updater.preparing != nil
         restartNowItem.title = updating ? UpdateMenu.updateNowTitle : StatusMenu.restartNowTitle
         cancelRestartItem.title = updating ? UpdateMenu.cancelUpdateTitle : StatusMenu.cancelRestartTitle
         restartNowItem.isHidden = !restarter.machine.offersRestartNow
-        cancelRestartItem.isHidden = !restarter.machine.canCancel
+        cancelRestartItem.isHidden = !offersCancel
         detailItems = StatusMenu.detailLines(
             status,
             slowToAnswer: machine.slowToAnswer,
             waitingForKeychain: runner.isWaitingForKeychain,
-            restartLine: restarter.machine.menuLine,
+            restartLine: restarter.machine.menuLine(updatingTo: updater.release?.version),
             controlError: controlError
         ).map { line in
             let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")

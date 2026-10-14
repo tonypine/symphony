@@ -24,12 +24,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         didSet { model?.budget = budget }
     }
 
+    /// Why this copy can't install updates with Development mode on or off, nil when it can. Shown under Update mode.
+    var updateBlocker: (_ developmentMode: Bool) -> String? = { _ in nil }
+
     private var model: SettingsViewModel?
 
     func show() {
         if window == nil {
             let model = SettingsViewModel(secrets: secrets, onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
             model.budget = budget
+            model.updateBlocker = updateBlocker
             self.model = model
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
             let hostingController = NSHostingController(rootView: view)

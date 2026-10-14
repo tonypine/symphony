@@ -119,7 +119,7 @@ final class AutoUpdateTests: XCTestCase {
 
         let action = updater.checked(.available(release()), context(.whenIdle))
 
-        XCTAssertEqual(action, .install(release(), runsTimeout: 0), "gives up at once if a run starts during the drain")
+        XCTAssertEqual(action, .install(release(), kind: .automatic(runsTimeout: 0)), "gives up at once if a run starts during the drain")
     }
 
     func testIdleModeWaitsForRunsAndInstallsAtTheFirstIdlePoll() {
@@ -131,7 +131,7 @@ final class AutoUpdateTests: XCTestCase {
 
         let action = updater.tick(context(.whenIdle), now: at(10, 2), calendar: utc)
 
-        XCTAssertEqual(action, .install(release(), runsTimeout: 0))
+        XCTAssertEqual(action, .install(release(), kind: .automatic(runsTimeout: 0)))
         XCTAssertNil(updater.nextSetTime, "no set time outside Automatically at a set time")
     }
 
@@ -152,30 +152,30 @@ final class AutoUpdateTests: XCTestCase {
 
         let action = updater.tick(context(.whenIdle, activity: .notRunning), now: at(10, 0), calendar: utc)
 
-        XCTAssertEqual(action, .install(release(), runsTimeout: 0))
+        XCTAssertEqual(action, .install(release(), kind: .automatic(runsTimeout: 0)))
     }
 
     func testAFailedInstallIsRetriedAtTheNextCheck() {
         var updater = AutoUpdater()
-        XCTAssertEqual(updater.tick(context(.whenIdle), now: at(10, 0), calendar: utc), .install(release(), runsTimeout: 0))
+        XCTAssertEqual(updater.tick(context(.whenIdle), now: at(10, 0), calendar: utc), .install(release(), kind: .automatic(runsTimeout: 0)))
 
         // The install failed (download, verification, symphony.yml): later polls don't try again.
         XCTAssertNil(updater.tick(context(.whenIdle), now: at(10, 1), calendar: utc))
         XCTAssertNil(updater.checked(.failed("Couldn't check for updates: couldn't reach GitHub"), context(.whenIdle)))
         XCTAssertNil(updater.tick(context(.whenIdle), now: at(10, 2), calendar: utc), "a failed check doesn't count")
 
-        XCTAssertEqual(updater.checked(.available(release()), context(.whenIdle)), .install(release(), runsTimeout: 0))
+        XCTAssertEqual(updater.checked(.available(release()), context(.whenIdle)), .install(release(), kind: .automatic(runsTimeout: 0)))
     }
 
     func testAPostponedInstallIsRetriedAtTheNextIdleMoment() {
         var updater = AutoUpdater()
-        XCTAssertEqual(updater.tick(context(.whenIdle), now: at(10, 0), calendar: utc), .install(release(), runsTimeout: 0))
+        XCTAssertEqual(updater.tick(context(.whenIdle), now: at(10, 0), calendar: utc), .install(release(), kind: .automatic(runsTimeout: 0)))
 
         // A run started before dispatch paused: the drain gave up and resumed dispatch.
         updater.postponed()
         XCTAssertNil(updater.tick(context(.whenIdle, activity: .running(activeRuns: 1)), now: at(10, 1), calendar: utc))
 
-        XCTAssertEqual(updater.tick(context(.whenIdle), now: at(10, 20), calendar: utc), .install(release(), runsTimeout: 0))
+        XCTAssertEqual(updater.tick(context(.whenIdle), now: at(10, 20), calendar: utc), .install(release(), kind: .automatic(runsTimeout: 0)))
     }
 
     func testIdleModeNeverInstallsASkippedRelease() {
@@ -194,7 +194,7 @@ final class AutoUpdateTests: XCTestCase {
 
         let action = updater.checked(.available(newer), context(.whenIdle, offer: .available(newer)))
 
-        XCTAssertEqual(action, .install(newer, runsTimeout: 0))
+        XCTAssertEqual(action, .install(newer, kind: .automatic(runsTimeout: 0)))
     }
 
     func testNothingInstallsWhileUpdatesAreBlocked() {
@@ -232,6 +232,110 @@ final class AutoUpdateTests: XCTestCase {
         XCTAssertNil(updater.nextSetTime)
     }
 
+    // MARK: Automatically when released
+
+    func testOnReleaseInstallsOnTheCheckThatFindsARelease() {
+        var updater = AutoUpdater()
+        let running = context(.onRelease, activity: .running(activeRuns: 2))
+
+        let action = updater.checked(.available(release()), running)
+
+        XCTAssertEqual(action, .install(release(), kind: .onRelease), "no idle wait, no set time")
+        XCTAssertNil(updater.nextSetTime)
+    }
+
+    func testOnReleaseInstallsOnAPollThatSeesARelease() {
+        var updater = AutoUpdater()
+
+        let action = updater.tick(context(.onRelease, activity: .running(activeRuns: 1)), now: at(14, 0), calendar: utc)
+
+        XCTAssertEqual(action, .install(release(), kind: .onRelease))
+    }
+
+    func testOnReleaseInstallsWithSymphonyStopped() {
+        var updater = AutoUpdater()
+
+        XCTAssertEqual(
+            updater.checked(.available(release()), context(.onRelease, activity: .notRunning)),
+            .install(release(), kind: .onRelease)
+        )
+    }
+
+    func testOnReleaseNeverInstallsASkippedOrRolledBackRelease() {
+        for reason in [SkippedRelease.Reason.skipped, .rolledBack] {
+            var updater = AutoUpdater()
+            let skipped = context(.onRelease, offer: .skipped(release(), reason))
+
+            XCTAssertNil(updater.checked(.available(release()), skipped), reason.rawValue)
+            XCTAssertNil(updater.tick(skipped, now: at(14, 0), calendar: utc), reason.rawValue)
+        }
+    }
+
+    func testOnReleaseWaitsWhileBusyOrBlocked() {
+        var updater = AutoUpdater()
+
+        XCTAssertNil(updater.checked(.available(release()), context(.onRelease, activity: .busy)))
+        XCTAssertNil(updater.tick(context(.onRelease, activity: .busy), now: at(14, 0), calendar: utc))
+        XCTAssertNil(updater.checked(.available(release()), context(.onRelease, blocker: blocker)))
+        XCTAssertNil(updater.tick(context(.onRelease, blocker: blocker), now: at(14, 1), calendar: utc))
+        XCTAssertNil(updater.checked(.upToDate(release(build: 41)), context(.onRelease, offer: nil)))
+
+        XCTAssertEqual(
+            updater.tick(context(.onRelease), now: at(14, 2), calendar: utc),
+            .install(release(), kind: .onRelease),
+            "installs once nothing is under way"
+        )
+    }
+
+    func testOnReleaseRetriesAFailedInstallAtTheNextCheckNotOnEachPoll() {
+        var updater = AutoUpdater()
+        XCTAssertEqual(updater.checked(.available(release()), context(.onRelease)), .install(release(), kind: .onRelease))
+
+        // The download or verification failed: polls don't try again, and neither does a failed check.
+        XCTAssertNil(updater.tick(context(.onRelease), now: at(14, 0), calendar: utc))
+        XCTAssertNil(updater.checked(.failed("Couldn't check for updates: couldn't reach GitHub"), context(.onRelease)))
+        XCTAssertNil(updater.tick(context(.onRelease), now: at(14, 1), calendar: utc))
+
+        XCTAssertEqual(updater.checked(.available(release()), context(.onRelease)), .install(release(), kind: .onRelease))
+    }
+
+    func testCancelUpdateHoldsTheReleaseUntilANewerOneComesOut() {
+        var updater = AutoUpdater()
+        XCTAssertEqual(updater.checked(.available(release()), context(.onRelease)), .install(release(), kind: .onRelease))
+
+        updater.hold(release())
+
+        XCTAssertEqual(updater.heldBuild, 42)
+        XCTAssertNil(updater.checked(.available(release()), context(.onRelease)), "no check starts it again")
+        XCTAssertNil(updater.tick(context(.onRelease), now: at(14, 0), calendar: utc), "nor a poll")
+        XCTAssertNil(updater.checked(.available(release()), context(.onRelease, activity: .notRunning)))
+
+        let newer = release(build: 43)
+        XCTAssertEqual(
+            updater.checked(.available(newer), context(.onRelease, offer: .available(newer))),
+            .install(newer, kind: .onRelease)
+        )
+        XCTAssertNil(updater.heldBuild, "a newer release ends the hold")
+    }
+
+    func testTheHoldAppliesInTheOtherAutomaticModesToo() {
+        var updater = AutoUpdater()
+        updater.hold(release())
+
+        XCTAssertNil(updater.checked(.available(release()), context(.whenIdle)))
+        XCTAssertNil(updater.tick(context(.whenIdle), now: at(14, 0), calendar: utc))
+    }
+
+    func testInstallingOrSkippingTheHeldReleaseClearsTheHold() {
+        var updater = AutoUpdater()
+        updater.hold(release())
+
+        updater.clearHold()
+
+        XCTAssertNil(updater.heldBuild)
+        XCTAssertEqual(updater.checked(.available(release()), context(.onRelease)), .install(release(), kind: .onRelease))
+    }
+
     // MARK: Automatically at a set time
 
     func testSetTimeChecksAtTheTimeThenInstallsWaitingForRuns() {
@@ -243,14 +347,14 @@ final class AutoUpdateTests: XCTestCase {
 
         let running = context(.atTime, activity: .running(activeRuns: 2))
         let action = updater.checked(.available(release()), running)
-        XCTAssertEqual(action, .install(release(), runsTimeout: restartTimeout), "pauses dispatch and waits for the runs")
+        XCTAssertEqual(action, .install(release(), kind: .automatic(runsTimeout: restartTimeout)), "pauses dispatch and waits for the runs")
     }
 
     func testSetTimeInstallsWithNoRunsActive() {
         var updater = scheduledAtThree()
         XCTAssertEqual(updater.tick(context(.atTime), now: at(3, 0, second: 4), calendar: utc), .check)
 
-        XCTAssertEqual(updater.checked(.available(release()), context(.atTime)), .install(release(), runsTimeout: restartTimeout))
+        XCTAssertEqual(updater.checked(.available(release()), context(.atTime)), .install(release(), kind: .automatic(runsTimeout: restartTimeout)))
     }
 
     func testSetTimeInstallsOnlyAfterItsOwnCheck() {
