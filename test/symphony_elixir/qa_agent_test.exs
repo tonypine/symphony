@@ -597,6 +597,27 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(plain, :checklist)
     end
 
+    test "keeps the gap label and the blockers a failing step names" do
+      text =
+        Jason.encode!(%{
+          "verdict" => "fail",
+          "steps" => [
+            %{"name" => "Make the tool", "status" => "fail", "gap" => " G1 "},
+            %{"name" => "Check with it", "status" => "fail", "gap" => "G2", "blocked_by" => [" G1 ", "TP-824", "", 7]},
+            %{"name" => "One blocker", "status" => "fail", "blocked_by" => "TP-824"},
+            %{"name" => "Nothing named", "status" => "fail", "gap" => " ", "blocked_by" => []}
+          ]
+        })
+
+      assert {:ok, %{steps: [tool, check, single, plain]}} = QaAgent.parse_response(text)
+      assert tool.gap == "G1"
+      refute Map.has_key?(tool, :blocked_by)
+      assert %{gap: "G2", blocked_by: ["G1", "TP-824"]} = check
+      assert single.blocked_by == ["TP-824"]
+      refute Map.has_key?(plain, :gap)
+      refute Map.has_key?(plain, :blocked_by)
+    end
+
     test "rejects answers that do not follow the contract" do
       for {text, reason} <- [
             {"no json here", :no_verdict_object},
@@ -644,6 +665,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ ~s("covered_by": )
       assert prompt =~ "Ending your turn ends the session"
       assert prompt =~ ~r/Do not leave\s+work running in the background/
+      # The gap rule and its fields are the epic review's alone.
+      refute prompt =~ "Each gap must be checkable"
+      refute prompt =~ ~s("blocked_by")
 
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
     end
@@ -697,6 +721,19 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert flat =~ "Symphony does not accept `pass` when no checklist row is reported or most of them are skipped"
       assert flat =~ "a follow-up sub-ticket"
+
+      # A follow-up must be checkable on its own PR; one that needs another merge first is two.
+      assert flat =~ "Each gap must be checkable on its own PR, before that PR merges"
+      assert flat =~ "the QA tools are served by the running Symphony app, not by that head"
+
+      assert flat =~
+               "A gap whose check needs another ticket that has not merged, or needs the change running in Symphony " <>
+                 "(a new QA tool, or orchestrator behaviour on Symphony's own repository), is two gaps: " <>
+                 "the first makes the change, the second checks it and is blocked by the first."
+
+      assert flat =~ "name what a gap waits on in its `\"blocked_by\"`: the `gap` labels of failing steps in this answer, or the identifiers of this epic's sub-tickets"
+      assert prompt =~ ~s("gap": "<optional: a short label for a failing step>")
+      assert prompt =~ ~s("blocked_by": [)
 
       # The epic is its own parent: no parent section and no verification ticket.
       refute prompt =~ "Parent issue (this is a sub-ticket"

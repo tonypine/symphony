@@ -29,7 +29,8 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   A run on the head of a branch also passes `:ref` (the branch the commit heads, in place of a PR),
   `:target_issue` (the identifier of the verification ticket `:target_state` applies to) and
-  `:filed` (the tickets filed for failing steps, as `%{identifier, title}`).
+  `:filed` (the tickets filed for failing steps, as `%{identifier, title}` with an optional
+  `blocked_by` list of the identifiers each one waits on).
 
   The epic review (`SymphonyElixir.EpicReview`) also passes `:checks`, its deterministic
   pre-checks as `%{name: atom, status: :ok | :attention, detail: String.t()}`; they render as a
@@ -143,8 +144,11 @@ defmodule SymphonyElixir.QaAgent.Report do
   defp filed_block([]), do: nil
 
   defp filed_block(filed) do
-    Enum.join(["### Filed tickets", "" | Enum.map(filed, &"- #{&1.identifier} #{&1.title}")], "\n") <> "\n"
+    Enum.join(["### Filed tickets", "" | Enum.map(filed, &"- #{&1.identifier} #{&1.title}#{blocked_by_suffix(&1)}")], "\n") <> "\n"
   end
+
+  defp blocked_by_suffix(%{blocked_by: [_ | _] = blocked_by}), do: " (blocked by #{Enum.join(blocked_by, ", ")})"
+  defp blocked_by_suffix(_ticket), do: ""
 
   defp truncate(text) when byte_size(text) > @details_limit, do: binary_part(text, 0, @details_limit) <> "\n[... truncated ...]"
   defp truncate(text), do: text
