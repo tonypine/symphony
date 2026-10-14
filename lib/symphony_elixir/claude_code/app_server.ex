@@ -7,7 +7,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.AgentCaches
   alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
   alias SymphonyElixir.{AgentPriority, AgentProcesses}
-  alias SymphonyElixir.ClaudeCode.McpConfig
+  alias SymphonyElixir.ClaudeCode.{AppLaunchHook, McpConfig}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.GitHub.Hosts
@@ -711,10 +711,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     deny_write_paths = host_deny_write_paths(settings, workspace, worker_host)
 
-    settings_json =
-      build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
-
     settings_dir = claude_settings_dir(worker_host, mcp_session)
+
+    settings_json =
+      network_access
+      |> build_claude_settings(allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
+      |> Map.put("hooks", AppLaunchHook.settings(settings_dir))
+
     settings_path = Path.join(settings_dir, "settings.json")
     mcp_config_path = Path.join(settings_dir, "mcp_config.json")
     plugin_dir = Path.join(settings_dir, "plugin")
@@ -727,7 +730,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
          {:ok, encoded_json_files} <- encode_runtime_files(json_runtime_files),
          # SKILL.md bodies are markdown, not JSON, so they bypass the JSON encoder and are written
          # verbatim alongside the encoded settings files.
-         runtime_files = encoded_json_files ++ SharedSkills.claude_plugin_files(plugin_dir),
+         runtime_files =
+           encoded_json_files ++ AppLaunchHook.files(settings_dir) ++ SharedSkills.claude_plugin_files(plugin_dir),
          :ok <- write_runtime_files(settings_dir, runtime_files, worker_host) do
       {:ok, %{settings_path: settings_path, mcp_config_path: mcp_config_path, plugin_dir: plugin_dir}}
     end
