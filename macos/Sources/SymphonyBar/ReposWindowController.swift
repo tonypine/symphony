@@ -37,7 +37,7 @@ final class ReposViewModel: ObservableObject {
     @Published var stopFailures: [String: String] = [:]
     var onSelect: (_ key: String) -> Void = { _ in }
     var onAddRepo: () -> Void = {}
-    var onEdit: (_ key: String) -> Void = { _ in }
+    var onEdit: (_ key: String, _ section: EditRepo.Section) -> Void = { _, _ in }
     var onDisconnect: (_ key: String) -> Void = { _ in }
     var onConfirmDisconnect: (_ sheet: DisconnectSheetModel) -> Void = { _ in }
     var onRemoveClone: (_ key: String) -> Void = { _ in }
@@ -99,13 +99,13 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private var poll: ReposPoll?
     private var inFlight = false
 
-    /// Shows the window; with `editing`, on that repo's Edit sheet, where its manual review is.
+    /// Shows the window; with `editing`, on that repo's Review sheet, where its manual review is.
     func show(status: SymphonyStatus, editing key: String? = nil) {
         if window == nil {
             let model = ReposViewModel()
             model.onSelect = { key in AppStores.current.defaults.set(key, forKey: Self.selectionKey) }
             model.onAddRepo = { [weak self] in self?.showSheet(editing: nil) }
-            model.onEdit = { [weak self] key in self?.showSheet(editing: key) }
+            model.onEdit = { [weak self] key, section in self?.showSheet(editing: key, section: section) }
             model.onDisconnect = { [weak self] key in self?.disconnect(key) }
             model.onConfirmDisconnect = { [weak self] sheet in self?.confirmDisconnect(sheet) }
             model.onRemoveClone = { [weak self] key in self?.removeClone(key) }
@@ -141,7 +141,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         window?.orderFrontRegardless()
         if let key {
             model?.selection = key
-            showSheet(editing: key)
+            showSheet(editing: key, section: .review)
         }
     }
 
@@ -242,12 +242,13 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         showSheet(editing: nil)
     }
 
-    /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
-    private func showSheet(editing key: String?) {
+    /// Opens the Add Repo sheet, or with `editing` the Edit sheet of that repo's `section`.
+    private func showSheet(editing key: String?, section: EditRepo.Section = .routing) {
         guard let model, model.addRepo == nil, model.disconnect == nil else { return }
-        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key) { [weak self] saved in
+        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, section: section) { [weak self] saved in
             self?.saved(saved)
         }
+        sheet.configCheck = { [secrets] path in await Self.configCheck(path, secrets: secrets) }
         // Also on the repo, so the error is still there once the sheet is closed.
         sheet.onSaveError = { [weak self] message in self?.show(ReposChange.failed(key: key, message: message).banner) }
         sheet.openSettings = { [weak self] in self?.openSettings() }
@@ -267,14 +268,27 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
                 apply: apply,
                 question: { AddRepo.restartQuestion(key: key, runs: $0) }
             )
-        case let .edited(original, entry):
+        case let .edited(original, entry, previousDefault):
             let apply = EditRepo.apply(status: status, from: original, to: entry)
+            let madeDefault = entry.isDefault == true && original.isDefault != true
             finish(
-                .edited(key: entry.key, apply: apply),
+                .edited(key: entry.key, apply: apply, madeDefault: madeDefault, previousDefault: previousDefault),
                 apply: apply,
                 question: { EditRepo.restartQuestion(key: entry.key, runs: $0) }
             )
         }
+    }
+
+    /// `symphony check` on the copy of `symphony.yml` at `path`, run as Start would run Symphony now.
+    private static func configCheck(_ path: String, secrets: SecretsReader) async -> ConfigCheckResult {
+        let settings = AppStores.current.settingsStore().loadSettings()
+        let read = await withCheckedContinuation { continuation in
+            secrets.read { continuation.resume(returning: $0) }
+        }
+        guard case let .success(values) = read else {
+            return .failed("Couldn't read the app's secrets to run symphony check.")
+        }
+        return await SettingsViewModel.runConfigCheck(configPath: path, settings: settings, secrets: values)
     }
 
     /// Opens the Disconnect sheet on `key`, unless `symphony.yml` can't be read or the repo can't be disconnected.

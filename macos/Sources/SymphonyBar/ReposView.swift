@@ -31,7 +31,7 @@ struct ReposView: View {
                 if addRepo.editing == nil {
                     AddRepoView(model: addRepo) { model.addRepo = nil }
                 } else {
-                    EditRepoFormView(model: addRepo) { model.addRepo = nil }
+                    EditRepoSheet(model: addRepo) { model.addRepo = nil }
                 }
             }
         }
@@ -91,8 +91,10 @@ struct ReposView: View {
     }
 
     @ViewBuilder private func contextMenu(_ repo: RepoDetail) -> some View {
-        Button(EditRepo.buttonTitle) { model.onEdit(repo.key) }
-            .disabled(repo.actions.editProblem != nil)
+        ForEach([EditRepo.Section.routing, .source, .review]) { section in
+            Button(section.menuTitle) { model.onEdit(repo.key, section) }
+                .disabled(repo.actions.editProblem != nil)
+        }
         Button(ReposList.revealTitle) { repo.source.path.map(reveal) }
             .disabled(repo.source.path == nil)
         Button(ReposList.openOnGitHubTitle) {
@@ -336,8 +338,8 @@ struct Badge: View {
     }
 }
 
-/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity and Manual review,
-/// then Disconnect….
+/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity and Review, each section that can
+/// change with its own Edit…, then Disconnect….
 struct RepoDetailView: View {
     let repo: RepoDetail
     @ObservedObject var model: ReposViewModel
@@ -357,8 +359,10 @@ struct RepoDetailView: View {
                 routing
                 live
                 if let manualReview = repo.manualReview {
-                    Section("Manual review") {
+                    Section {
                         FieldRow(field: manualReview)
+                    } header: {
+                        sectionHeader(.review)
                     }
                 }
             }
@@ -397,16 +401,24 @@ struct RepoDetailView: View {
                 Badge(text: ReposList.defaultBadge)
                     .help(ReposList.defaultHelp)
             }
+        }
+    }
+
+    /// A section's title with its Edit…, which opens the section's own sheet.
+    private func sectionHeader(_ section: EditRepo.Section) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(section.rawValue)
             Spacer()
-            Button(EditRepo.buttonTitle) { model.onEdit(repo.key) }
+            Button(EditRepo.buttonTitle) { model.onEdit(repo.key, section) }
+                .controlSize(.small)
                 .disabled(repo.actions.editProblem != nil)
-                .help(repo.actions.editProblem ?? "Change where the code comes from, the base branch, the Linear route "
-                    + "and manual review.")
+                .help(repo.actions.editProblem ?? section.help)
+                .accessibilityLabel("Edit \(section.rawValue)…")
         }
     }
 
     private var source: some View {
-        Section("Source") {
+        Section {
             LabeledContent("Kind", value: repo.source.kindTitle)
             if let path = repo.source.path, let shown = repo.source.shownPath {
                 LabeledContent(repo.source.pathLabel) {
@@ -438,11 +450,13 @@ struct RepoDetailView: View {
                         .help(cloneRemovalHelp(removal))
                 }
             }
+        } header: {
+            sectionHeader(.source)
         }
     }
 
     private var routing: some View {
-        Section("Linear routing") {
+        Section {
             VStack(alignment: .leading, spacing: 2) {
                 Text(repo.routing.sentence)
                 if let line = repo.routing.defaultLine {
@@ -451,6 +465,8 @@ struct RepoDetailView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             ForEach(repo.routing.fields, id: \.label) { FieldRow(field: $0) }
+        } header: {
+            sectionHeader(.routing)
         }
     }
 

@@ -149,8 +149,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: a sidebar of the connected repos and the detail of the selected one
   (its health, source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
-  manual review, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
-  managed clone, **Remove Clone…**. See [Repos](#repos).
+  manual review, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo an **Edit…** on its Source, Linear routing and Review,
+  **Disconnect…** and, for a managed clone, **Remove Clone…**. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -435,12 +435,12 @@ the repo that takes the issues no other repo's route matches, and the number of 
 glyph differs in shape as well as colour: a green circle for healthy, an orange triangle for needs
 attention, a red diamond for not working, and a hollow grey circle for not checked (Symphony isn't
 answering with the repos). VoiceOver reads a row as, for example, "symphony, needs attention, default, 2
-agents running". A row's context menu has **Edit…**, **Reveal in
-Finder**, **Open on GitHub** and **Disconnect…**; **+** and **−** under the list add and disconnect.
+agents running". A row's context menu has **Edit Linear Routing…**, **Edit
+Source…**, **Edit Review…**, **Reveal in Finder**, **Open on GitHub** and **Disconnect…**; **+** and **−** under the list add and disconnect.
 
 While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/repos` reports it:
 
-- The key, its `owner/repo` as a link to GitHub, the **Default** capsule and **Edit…**, then a health line:
+- The key, its `owner/repo` as a link to GitHub and the **Default** capsule, then a health line:
   **Healthy**, **1 problem**, **2 problems**, or **Not checked: Symphony is stopped**.
 - **Needs attention**, above the sections while the repo has a problem, red when one is an error and orange
   otherwise, one line per problem with its fixes:
@@ -474,6 +474,10 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
   it runs on, how long it has run and its last activity, and **Reveal Worktree** for a worktree on this
   Mac. **No agents running** otherwise.
+- **Review**: the repo's manual review, **On** or **Off** with what it does (**Off**, the default, when
+  `symphony.yml` sets none).
+- **Source**, **Linear routing** and **Review** each have an **Edit…** in their header, which opens that
+  section's sheet (see [Edit, disconnect or remove a clone](#edit-disconnect-or-remove-a-clone)).
 - **Disconnect…** at the foot, in red.
 
 While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
@@ -599,19 +603,40 @@ from `symphony.yml`.
 
 ### Edit, disconnect or remove a clone
 
-Edit… sits in the detail's header, Disconnect… at its foot, and both in the sidebar row's context menu.
-They are disabled, with the reason on hover (and next to Disconnect…), while `symphony.yml` can't be read
-or no longer has the repo.
+Each of the detail's Source, Linear routing and Review sections has its own **Edit…**, also in the sidebar
+row's context menu (**Edit Source…**, **Edit Linear Routing…**, **Edit Review…**); Disconnect… sits at the
+detail's foot and in the context menu. They are disabled, with the reason on hover (and next to Disconnect…),
+while `symphony.yml` can't be read or no longer has the repo.
 
-- **Edit…** opens the Add Repo sheet on the repo. Switch between **GitHub URL** and **Local folder**
-  (in either direction), change the base branch (empty uses `origin`'s default branch), and pick
-  another Linear project or labels; **No project** is allowed while labels, a team or an assignee still
-  route issues, or for the default repo. The key can't change. A local repo keeps its folder until you
-  choose another. Save rewrites only that entry: comments, the other entries, the route's team and
-  assignee, `default` and `fetch_before_dispatch` stay. Switching to a GitHub URL drops `repo`,
-  `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
-  them as Add Repo does, and needs a `WORKFLOW.md` at the checkout's top (only Add Repo drafts one). A new route applies to the next dispatch without a restart; a new source,
-  workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
+Each Edit… opens a small sheet titled for its section and the repo, such as "Review of billing-api"; the key
+can't change. Every sheet is at most 520pt tall with **Cancel** and **Save** in a fixed footer, so they stay
+on a 1024×768 screen. Save rewrites only that repo's entry (and, for Make Default, the old default's
+`default` line): comments, the other entries, the route's team and assignee, and `fetch_before_dispatch`
+stay. A new route, default or review setting applies without a restart; a new source, workflow or base branch
+restarts Symphony as Add Repo does, asking first while agents run. The banner at the top of the detail says
+which.
+
+- **Source** (480×380): **GitHub URL** or **Local folder**, in either direction, with the same check as Add
+  Repo's Source step once you pick another repo or folder, and the base branch (empty uses `origin`'s default
+  branch). A caption says what switching does on disk: Symphony makes its own clone on the next start and
+  your folder stays as it is, or agents work in worktrees of the new folder and Symphony's old clone stays on
+  disk until you remove it. A local repo keeps its folder until you choose another. Switching to a GitHub URL
+  drops `repo`, `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder
+  sets them as Add Repo does, and refuses a checkout without a `WORKFLOW.md` at its top (only Add Repo drafts
+  one).
+- **Linear routing** (480×420): the project, the labels (the token field of Add Repo, completing from the
+  project's labels), the route preview, and **Default repo** ("Take the issues no other repo's route
+  matches."). A project or label Linear doesn't list stays selectable; **No project** is allowed while
+  labels, a team or an assignee still route issues, or for the default repo. A route another repo already has
+  shows under the labels and keeps Save off. Turning **Default repo** on names the current default that loses
+  it, and Save moves `default: true` from that repo to this one in the same write. On the default repo the
+  checkbox stays on (turn it on in another repo to move it). While the current default has no route of its
+  own the checkbox stays off and says so: Symphony refuses a repo with no route that isn't the default.
+- **Review** (440×360): **Ask me before merging (a merge-confirmation hold after QA)**, the repo's
+  `manual_review`, with what it does under it, and the repo's **Built-in ticket patterns** (Same as Settings,
+  On, Off). Save runs `symphony check` on the result first, with a spinner in the footer; when it rejects the
+  change, the reason shows in the sheet and nothing is written. **Change Review…** in the Symphony window's
+  Quality view opens this sheet.
 - **Disconnect…** (the detail's foot, the sidebar **−**, the context menu or Delete) opens a sheet,
   "Disconnect <key>?", saying what happens and what stays on disk, with **Cancel** and **Disconnect**.
   Disconnect removes the entry from `repositories:` together with the comment lines right above it

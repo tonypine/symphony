@@ -43,7 +43,7 @@ final class EditRepoTests: XCTestCase {
 
     func testDraftOfALocalRepoKeepsItsFolderUntilAnotherIsChosen() {
         let draft = EditRepo.draft(for: symphony)
-        XCTAssertEqual(draft, AddRepoDraft(mode: .localFolder, key: "symphony", baseBranch: "", project: "Harness"))
+        XCTAssertEqual(draft, AddRepoDraft(mode: .localFolder, key: "symphony", baseBranch: "", project: "Harness", isDefault: true))
         XCTAssertEqual(EditRepo.entry(for: draft, editing: symphony, existing: entries), .success(symphony))
     }
 
@@ -53,7 +53,21 @@ final class EditRepoTests: XCTestCase {
             mode: .gitHub, gitHubInput: "acme/web", key: "web", baseBranch: "develop", project: "Web", labels: ["web"]
         ))
         XCTAssertEqual(EditRepo.entry(for: draft, editing: web, existing: entries), .success(web))
-        XCTAssertEqual(EditRepo.sheetTitle(key: "web"), "Edit web")
+    }
+
+    // MARK: Sections
+
+    func testEachSectionHasItsOwnSheetThatFitsA768ptScreen() {
+        XCTAssertEqual(EditRepo.Section.allCases.map { $0.sheetTitle(key: "web") }, [
+            "Source of web", "Linear routing of web", "Review of web",
+        ])
+        XCTAssertEqual(EditRepo.Section.allCases.map(\.menuTitle), ["Edit Source…", "Edit Linear Routing…", "Edit Review…"])
+        XCTAssertTrue(EditRepo.Section.allCases.allSatisfy { !$0.help.isEmpty })
+        // A 1024×768 screen less the menu bar and the window's title bar, where a sheet hangs.
+        for section in EditRepo.Section.allCases {
+            XCTAssertLessThanOrEqual(section.sheetSize.height, 520, section.rawValue)
+            XCTAssertLessThanOrEqual(section.sheetSize.width, 520, section.rawValue)
+        }
     }
 
     // MARK: Editing
@@ -283,8 +297,200 @@ final class EditRepoTests: XCTestCase {
         XCTAssertEqual(EditRepo.savedMessage(key: "web", apply: .askToRestart(runs: 1)), "Saved web. Symphony restarts to apply it.")
         XCTAssertEqual(EditRepo.savedMessage(key: "web", apply: .onNextStart), "Saved web. Symphony uses it when it starts.")
         XCTAssertEqual(EditRepo.savedMessage(key: "web", apply: .restartManually), "Saved web. Restart Symphony to apply it.")
+        XCTAssertEqual(
+            EditRepo.savedMessage(key: "web", apply: nil, madeDefault: true, previousDefault: "symphony"),
+            "Saved web. Symphony reads the change from symphony.yml, so its next poll uses it. "
+                + "web is now the default repo in place of symphony."
+        )
+        XCTAssertEqual(
+            EditRepo.savedMessage(key: "web", apply: .onNextStart, madeDefault: true),
+            "Saved web. Symphony uses it when it starts. web is now the default repo."
+        )
         XCTAssertEqual(EditRepo.restartQuestion(key: "web", runs: 1).title, "Restart Symphony to apply the change to web?")
         XCTAssertTrue(EditRepo.restartQuestion(key: "web", runs: 1).message.hasPrefix("1 agent run is active. Restart pauses"))
+    }
+
+    // MARK: Make Default
+
+    func testMakeDefaultMovesTheDefaultInOneWriteKeepingComments() throws {
+        var draft = EditRepo.draft(for: web)
+        XCTAssertFalse(draft.isDefault)
+        XCTAssertEqual(
+            EditRepo.defaultOption(editing: web, existing: entries, isOn: false),
+            EditRepo.DefaultOption(isEnabled: true, caption: "symphony is the default repo now.")
+        )
+        draft.isDefault = true
+        draft.labels = ["web", "frontend"]
+        XCTAssertEqual(
+            EditRepo.defaultOption(editing: web, existing: entries, isOn: true),
+            EditRepo.DefaultOption(isEnabled: true, caption: "Saving moves the default from symphony to web.")
+        )
+        let entry = try EditRepo.entry(for: draft, editing: web, existing: entries).get()
+        XCTAssertEqual(entry.isDefault, true)
+        XCTAssertFalse(EditRepo.needsRestart(from: web, to: entry))
+        XCTAssertEqual(EditRepo.previousDefault(from: web, to: entry, existing: entries), "symphony")
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edit-default-\(UUID().uuidString).yml")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try config.write(to: url, atomically: true, encoding: .utf8)
+        try SymphonyConfigFile(path: url.path).editRepository(web, to: entry)
+
+        let updated = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(updated, config
+            .replacingOccurrences(of: "  - key: symphony\n    default: true\n", with: "  - key: symphony\n")
+            .replacingOccurrences(of: "  - key: web\n", with: "  - key: web\n    default: true\n")
+            .replacingOccurrences(of: "      labels: [web]\n", with: "      labels: [web, frontend]\n"))
+        var former = symphony
+        former.isDefault = nil
+        XCTAssertEqual(try RepositoriesConfig.entries(in: updated), [former, entry])
+    }
+
+    func testMakeDefaultWithNoDefaultYet() throws {
+        var routed = symphony
+        routed.isDefault = nil
+        let existing = [routed, web]
+        XCTAssertEqual(
+            EditRepo.defaultOption(editing: web, existing: existing, isOn: false),
+            EditRepo.DefaultOption(isEnabled: true, caption: nil)
+        )
+        XCTAssertEqual(
+            EditRepo.defaultOption(editing: web, existing: existing, isOn: true),
+            EditRepo.DefaultOption(isEnabled: true, caption: "Saving makes web the default repo.")
+        )
+        var draft = EditRepo.draft(for: web)
+        draft.isDefault = true
+        // The default takes the issues no route matches, so it may drop its own route.
+        draft.project = nil
+        draft.labels = []
+        let entry = try EditRepo.entry(for: draft, editing: web, existing: existing).get()
+        XCTAssertEqual(entry.isDefault, true)
+        XCTAssertEqual(entry.route, RepositoryRoute(team: "ENG"))
+        XCTAssertNil(EditRepo.previousDefault(from: web, to: entry, existing: existing))
+        XCTAssertNil(EditRepo.previousDefault(from: web, to: web, existing: existing))
+    }
+
+    func testTheDefaultReposOwnCheckboxStaysOn() {
+        XCTAssertTrue(EditRepo.draft(for: symphony).isDefault)
+        XCTAssertEqual(
+            EditRepo.defaultOption(editing: symphony, existing: entries, isOn: true),
+            EditRepo.DefaultOption(
+                isEnabled: false,
+                caption: "symphony is the default repo. To move the default, turn this on in another repo's Linear routing."
+            )
+        )
+    }
+
+    func testMakeDefaultIsRefusedWhileTheOldDefaultHasNoRoute() throws {
+        let yaml = config.replacingOccurrences(of: "    route:\n      # team: ENG\n      projects: [\"Harness\"]\n", with: "")
+        let existing = try RepositoriesConfig.entries(in: yaml)
+        let unrouted = try XCTUnwrap(existing.first)
+        XCTAssertEqual(unrouted.route, RepositoryRoute())
+        XCTAssertEqual(unrouted.isDefault, true)
+        let problem = "symphony has no Linear route of its own, so it stays the default. Give it a project or labels first."
+
+        XCTAssertEqual(
+            EditRepo.defaultOption(editing: web, existing: existing, isOn: false),
+            EditRepo.DefaultOption(isEnabled: false, caption: problem)
+        )
+        var draft = EditRepo.draft(for: web)
+        draft.isDefault = true
+        XCTAssertEqual(EditRepo.entry(for: draft, editing: web, existing: existing), .failure(AddRepoProblem(problem)))
+
+        // The write refuses it too, and leaves the file as it is.
+        var forced = web
+        forced.isDefault = true
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edit-default-\(UUID().uuidString).yml")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try yaml.write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try SymphonyConfigFile(path: url.path).editRepository(web, to: forced)) { error in
+            XCTAssertEqual(error as? RepositoriesConfigError, .invalidEntry(problem))
+        }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), yaml)
+    }
+
+    func testTheRoutePreviewReadsAsTheDetailWill() {
+        var draft = EditRepo.draft(for: web)
+        XCTAssertEqual(EditRepo.routePreview(for: draft, editing: web), ["Issues in Web or Site of team ENG with label web go to web."])
+        draft.project = "Mobile"
+        draft.labels = []
+        draft.isDefault = true
+        XCTAssertEqual(EditRepo.routePreview(for: draft, editing: web), [
+            "Issues in Mobile of team ENG go to web.", "It also takes the issues no other repo's route matches.",
+        ])
+    }
+
+    // MARK: Source
+
+    func testTheSourceCaptionSaysWhatSwitchingDoesOnDisk() {
+        // A managed repo.
+        var draft = EditRepo.draft(for: web)
+        XCTAssertTrue(EditRepo.isSourceUnchanged(draft, editing: web))
+        XCTAssertEqual(EditRepo.sourceCaption(for: draft, editing: web), "Symphony keeps its own clone. Your checkouts aren't touched.")
+        draft.gitHubInput = "acme/site"
+        XCTAssertFalse(EditRepo.isSourceUnchanged(draft, editing: web))
+        XCTAssertEqual(
+            EditRepo.sourceCaption(for: draft, editing: web),
+            "Symphony makes its own clone of the new repo on the next start. Its clone of acme/web stays on disk."
+        )
+        draft.mode = .localFolder
+        XCTAssertFalse(EditRepo.isSourceUnchanged(draft, editing: web))
+        let choose = "Agents work in worktrees of this checkout. It needs a GitHub origin and a WORKFLOW.md."
+        XCTAssertEqual(EditRepo.sourceCaption(for: draft, editing: web), choose)
+        draft.folder = .failure(AddRepoProblem("~/x isn't a git checkout."))
+        XCTAssertEqual(EditRepo.sourceCaption(for: draft, editing: web), choose)
+        draft.folder = .success(checkout)
+        XCTAssertEqual(
+            EditRepo.sourceCaption(for: draft, editing: web),
+            "Agents work in worktrees of this folder from the next start. The folder stays as it is, and Symphony's clone "
+                + "of acme/web stays on disk."
+        )
+
+        // A local folder repo.
+        var local = EditRepo.draft(for: symphony)
+        XCTAssertTrue(EditRepo.isSourceUnchanged(local, editing: symphony))
+        XCTAssertEqual(EditRepo.sourceCaption(for: local, editing: symphony), choose)
+        local.folder = .success(LocalCheckout(path: "~/Projects/symphony", gitHub: "tonypine/symphony"))
+        XCTAssertTrue(EditRepo.isSourceUnchanged(local, editing: symphony))
+        local.folder = .success(checkout)
+        XCTAssertFalse(EditRepo.isSourceUnchanged(local, editing: symphony))
+        XCTAssertEqual(
+            EditRepo.sourceCaption(for: local, editing: symphony),
+            "Agents work in worktrees of this folder from the next start. Both folders stay as they are."
+        )
+        local.mode = .gitHub
+        XCTAssertFalse(EditRepo.isSourceUnchanged(local, editing: symphony))
+        local.gitHubInput = "tonypine/symphony"
+        XCTAssertEqual(
+            EditRepo.sourceCaption(for: local, editing: symphony),
+            "Symphony makes its own clone on the next start. Your folder stays as it is."
+        )
+    }
+
+    // MARK: Review
+
+    func testTheReviewSheetSavesManualReviewOnlyOnceSymphonyCheckPasses() async throws {
+        var draft = EditRepo.draft(for: web)
+        draft.manualReview = .on
+        let entry = try EditRepo.entry(for: draft, editing: web, existing: entries).get()
+        XCTAssertEqual(ManualReview.checkboxTitle, "Ask me before merging (a merge-confirmation hold after QA)")
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("edit-review-\(UUID().uuidString).yml")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try config.write(to: url, atomically: true, encoding: .utf8)
+        let file = SymphonyConfigFile(path: url.path)
+
+        let rejected = try await file.rewrite({ try EditRepo.updating(web, to: entry, in: $0) }) { _ in
+            .failed("Config error in /x/.symphony.yml.123: repositories[web].manual_review is invalid")
+        }
+        XCTAssertEqual(rejected, .failed("Config error in /x/.symphony.yml.123: repositories[web].manual_review is invalid"))
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), config)
+
+        let passed = try await file.rewrite({ try EditRepo.updating(web, to: entry, in: $0) }) { _ in .passed }
+        XCTAssertEqual(passed, .passed)
+        XCTAssertEqual(
+            try String(contentsOf: url, encoding: .utf8),
+            config.replacingOccurrences(of: "    base_branch: develop\n", with: "    base_branch: develop\n    manual_review: \"on\"\n")
+        )
     }
 
     // MARK: Disconnect
