@@ -1779,8 +1779,10 @@ defmodule SymphonyElixir.QaDriverTest do
 
     test "resizes the main window or a given one and remembers the size it reached", %{worktree: worktree} do
       reply = resized(%{x: 0, y: 25, w: 1400, h: 900}, @wide_screen, @wide_visible)
+      assert QaDriver.launched_app?(start_driver(worktree)) == false
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => reply}}))
       assert QaDriver.wide_pass(driver) == nil
+      assert QaDriver.launched_app?(driver)
 
       assert {:ok, %{"window" => %{"w" => 1400, "h" => 900}, "screen" => %{"w" => 1920}, "limited" => false, "note" => note}} =
                QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
@@ -1804,9 +1806,12 @@ defmodule SymphonyElixir.QaDriverTest do
       # The wide pass outlives the app it resized.
       assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       assert %{limited: false} = QaDriver.wide_pass(driver)
+      assert QaDriver.launched_app?(driver)
       QaDriver.stop(driver)
       assert QaDriver.wide_pass(driver) == nil
       assert QaDriver.wide_pass(nil) == nil
+      assert QaDriver.launched_app?(driver) == false
+      assert QaDriver.launched_app?(nil) == false
     end
 
     test "says the wide pass is limited on a screen under 1400×900 pt", %{worktree: worktree} do

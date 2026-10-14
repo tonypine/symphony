@@ -1484,7 +1484,9 @@ The QA agent:
   window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
   reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
-  its `pass` becomes `blocked` with that reason. Every tool that
+  its `pass` becomes `blocked` with that reason. An epic review gets every enabled playbook whatever
+  the epic shipped, so this applies to it only when the pass launched an app: an epic review that
+  launched none (a backend-only epic) keeps its `pass`. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
