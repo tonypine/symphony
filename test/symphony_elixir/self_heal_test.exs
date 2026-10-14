@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SelfHealTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{SelfHeal, TicketState}
 
@@ -235,6 +237,48 @@ defmodule SymphonyElixir.SelfHealTest do
       assert Process.get(:fixer_create) == nil
       assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
       assert evidence =~ ":environment_unreachable"
+    end
+
+    test "a blocked QA outcome naming an open covering ticket holds the ticket on it and files nothing" do
+      # TP-716 already tracks the QA tools the run lacks: the acceptance gate filed it, so no
+      # self-heal record names it.
+      Process.put({:fix_ticket_state, "TP-716"}, {:ok, %Issue{id: "covering-id", identifier: "TP-716", state: "Merging"}})
+      outcome = outcome("a fake gh and a git checkout are missing on the QA host", %{covered_by: "TP-716"})
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, terminal_states: ["Done", "Canceled"]))
+
+      assert Process.get(:fixer_create) == nil
+      assert Process.get(:fixer_block) == {@issue_id, "TP-716"}
+      assert {"TP-716", evidence} = Process.get(:fixer_attach)
+      assert evidence =~ "a fake gh and a git checkout are missing"
+
+      assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}, reason: reason}} = Process.get(:hold_attrs)
+      assert reason =~ "waiting on fix ticket TP-716 for the qa_environment block"
+      assert %{fix_ticket: "TP-716", component: "qa_environment"} = Process.get(:recorded_self_heal)
+
+      # A covering ticket without a known state counts as open, as a blocker does.
+      Process.put({:fix_ticket_state, "TP-716"}, {:ok, %Issue{id: "covering-id", identifier: "TP-716", state: nil}})
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, terminal_states: ["Done", "Canceled"]))
+      assert Process.get(:fixer_create) == nil
+    end
+
+    test "a covering ticket that is terminal, unreadable or the ticket itself covers nothing" do
+      Process.put({:fix_ticket_state, "TP-716"}, {:ok, %Issue{id: "covering-id", identifier: "TP-716", state: "Done"}})
+      Process.put({:fix_ticket_state, "TP-816"}, {:ok, issue(%{state: "QA"})})
+
+      for covered_by <- ["TP-716", "TP-404", "TP-816"] do
+        Process.delete(:fixer_create)
+        outcome = outcome(:environment_unreachable, %{covered_by: covered_by})
+
+        log =
+          capture_log(fn ->
+            assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, terminal_states: ["Done", "Canceled"]))
+          end)
+
+        assert %{component: "qa_environment"} = Process.get(:fixer_create)
+        assert {:blocked, %{waits_on: %{keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
+        if covered_by != "TP-716", do: assert(log =~ "cannot wait on #{covered_by}")
+      end
     end
 
     test "reports a fix ticket that could not be filed, or a hold that could not be set" do

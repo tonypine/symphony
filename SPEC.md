@@ -2527,8 +2527,14 @@ Rules:
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
   waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
-  reused one keeps its priority. Only the same failure recurring with no new information escalates
-  to a `Needs Decision` hold.
+  reused one keeps its priority. A QA answer may name an open ticket that already tracks the
+  missing QA tool (`covered_by`); the hold then waits on that ticket, linked as blocked-by, and
+  nothing is filed. A missing QA tool or QA host capability is never `needs_person`: only a secret,
+  an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
+  for a fix merged into the repository the running build comes from: like the app-update hold on a
+  `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge
+  commit. Only the same failure recurring with no new information escalates to a
+  `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
