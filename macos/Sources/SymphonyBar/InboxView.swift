@@ -13,6 +13,7 @@ struct InboxContent: View {
                 selection: $model.inboxSelection,
                 picks: model.picks(for:),
                 pick: model.pick,
+                writeIn: model.writeIn,
                 perform: { model.perform($0, on: $1) },
                 openOverview: { model.show(.overview) },
                 openTicket: model.openTicket
@@ -50,6 +51,8 @@ struct InboxView: View {
     let picks: (String) -> DecisionPicks
     /// Picks an option: (option, decision, issue id).
     let pick: (Int, Int, String) -> Void
+    /// Keeps the write-in's text: (text, issue id).
+    var writeIn: (String, String) -> Void = { _, _ in }
     let perform: (InboxCommand, InboxItem) -> Void
     let openOverview: () -> Void
     /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
@@ -72,6 +75,7 @@ struct InboxView: View {
                             item: item,
                             picks: picks(item.id),
                             pick: { option, decision in pick(option, decision, item.id) },
+                            writeIn: { writeIn($0, item.id) },
                             perform: { perform($0, item) },
                             openTicket: { openTicket(item.identifier) },
                             narrow: narrow
@@ -86,9 +90,11 @@ struct InboxView: View {
                     .onGeometryChange(for: Bool.self) { $0.size.width < DesignTokens.Layout.narrowReviewWidth } action: { narrow = $0 }
                 }
             }
-            // A number key picks the request's option with that number, while the list or the review has the keyboard.
+            // A number key picks the request's option with that number, while the list or the review has the keyboard;
+            // in the write-in's field it types.
             .onKeyPress(characters: .decimalDigits, phases: .down) { press in
-                guard press.modifiers.isEmpty, let item = list.selection(selection), let key = press.characters.first,
+                guard press.modifiers.isEmpty, !(NSApp.keyWindow?.firstResponder is NSText),
+                    let item = list.selection(selection), let key = press.characters.first,
                     let option = item.optionIndex(forKey: key)
                 else { return .ignored }
                 pick(option, 0, item.id)
@@ -242,6 +248,7 @@ struct InboxReviewBody: View {
     let item: InboxItem
     var picks = DecisionPicks()
     var pick: (Int, Int) -> Void = { _, _ in }
+    var writeIn: (String) -> Void = { _ in }
     let perform: (InboxCommand) -> Void
     var openTicket: () -> Void = {}
     /// True in a narrow pane: an option card's Recommended badge goes under its label, and the key hints hide.
@@ -259,7 +266,7 @@ struct InboxReviewBody: View {
                 BriefSections(brief: item.review.brief)
             case .action:
                 if let action = item.review.action {
-                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, answerable: item.answerable, narrow: narrow)
+                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, writeIn: writeIn, answerable: item.answerable, narrow: narrow)
                 }
             case .clarify:
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
@@ -594,15 +601,18 @@ private struct CheckRow: View {
     }
 }
 
-/// D2c: the question first (N5), what happened and what waits (N6), then the options as cards (N7); an older
-/// request lists its numbered steps instead. The picked option is the answer the toolbar's Send Decision sends.
+/// D2c: the question first (N5), what happened and what waits (N6), then the options as cards (N7) and, on a request
+/// the Inbox answers, the write-in (N11); an older request lists its numbered steps instead. The picked option, or
+/// the write-in's words, is the answer the toolbar's Send Decision sends.
 private struct ActionCards: View {
     let action: InboxReview.Action
     var picks = DecisionPicks()
     var pick: (Int) -> Void = { _ in }
+    var writeIn: (String) -> Void = { _ in }
     /// True when the item carries an answerable request.
     var answerable = false
     var narrow = false
+    @FocusState private var writeInFocused: Bool
 
     var body: some View {
         if let question = action.question {
@@ -617,14 +627,19 @@ private struct ActionCards: View {
             Card(title: "Options", hint: answerable && !narrow ? action.keyHint : nil) {
                 OptionCardList(
                     title: "Options",
-                    cards: OptionCard.cards(for: action),
+                    cards: OptionCard.cards(for: action, writeIn: answerable),
                     selected: answerable ? action.pickedIndex(picks) : nil,
                     selectable: answerable,
                     narrow: narrow,
                     showsKeys: answerable,
                     choose: pick
                 )
+                if answerable && action.isWriteIn(picks) {
+                    WriteInField(text: Binding(get: { picks.writeIn }, set: writeIn), focused: $writeInFocused)
+                }
             }
+            // Picking the write-in, by a click or its number key, puts the keyboard in its field.
+            .onChange(of: answerable && action.isWriteIn(picks)) { _, picked in writeInFocused = picked }
         }
         if !action.steps.isEmpty {
             Card(title: "Steps") {
@@ -824,6 +839,49 @@ private struct OptionCardView: View {
                 .strokeBorder(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(DesignTokens.Surface.separator.color), lineWidth: selected ? 2 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+    }
+}
+
+/// N11's field, under the write-in card once it is picked: a `TextEditor` three lines tall that grows with the
+/// text to eight, then scrolls, over the hint that says how the agent reads it.
+private struct WriteInField: View {
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding
+
+    /// The height of one line of `type.body`.
+    private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
+    /// The text view's own inset on each side of a line.
+    private static let inset: CGFloat = 5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            // A hidden copy of the text sizes the editor: at least three lines, at most eight.
+            Text(text.isEmpty || text.hasSuffix("\n") ? text + " " : text)
+                .font(DesignTokens.TypeStyle.body.font)
+                .lineLimit(8)
+                .padding(.horizontal, Self.inset)
+                .frame(maxWidth: .infinity, minHeight: Self.lineHeight * 3, alignment: .topLeading)
+                .hidden()
+                .overlay {
+                    TextEditor(text: $text)
+                        .font(DesignTokens.TypeStyle.body.font)
+                        .scrollContentBackground(.hidden)
+                        .focused(focused)
+                        .accessibilityLabel(OptionCard.writeInLabel)
+                        .accessibilityHint(OptionCard.writeInHint)
+                }
+                .padding(DesignTokens.Space.s2)
+                .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
+                        .strokeBorder(Color.accentColor, lineWidth: 1)
+                )
+            Text(OptionCard.writeInHint)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
+        }
     }
 }
 

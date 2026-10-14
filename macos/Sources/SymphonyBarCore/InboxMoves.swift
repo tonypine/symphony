@@ -111,10 +111,12 @@ public struct InboxToolbar: Equatable {
                 if case .link(.copySteps) = button.command, action?.options.isEmpty == false { return false }
                 return true
             }
-            guard action?.commentID != nil, action?.decision != nil else {
+            guard let action, action.commentID != nil, action.decision != nil else {
                 return InboxToolbar(buttons: actionLinks, overflow: [])
             }
-            return InboxToolbar(buttons: [move(.decide)] + actionLinks, overflow: [.move(.sendToRework)])
+            // The write-in picked with nothing in it has no answer to send.
+            let blankWriteIn = action.isWriteIn(picks) && action.answer(picks) == nil
+            return InboxToolbar(buttons: [move(.decide, enabled: !blankWriteIn)] + actionLinks, overflow: [.move(.sendToRework)])
         case .clarify:
             return InboxToolbar(buttons: links, overflow: [])
         }
@@ -129,16 +131,31 @@ extension InboxReview.Action {
         return options.first { $0.effect?.localizedCaseInsensitiveContains("moves to \(confirm)") == true }
     }
 
-    /// The index of the option Send Decision sends: the Director's pick, else the recommended one; nil when none is
-    /// picked.
+    /// The index of the option Send Decision sends: the Director's pick, else the recommended one; `writeInIndex`
+    /// for the write-in; nil when none is picked.
     public func pickedIndex(_ picks: DecisionPicks) -> Int? {
-        guard let decision, let index = picks.pick(0, in: decision), options.indices.contains(index) else { return nil }
+        guard let decision, let index = picks.pick(0, in: decision), options.indices.contains(index) || index == writeInIndex else {
+            return nil
+        }
         return index
     }
 
-    /// The option Send Decision sends, nil when none is picked.
+    /// The option Send Decision sends, nil when none is picked or the write-in is.
     public func pickedOption(_ picks: DecisionPicks) -> Option? {
-        pickedIndex(picks).map { options[$0] }
+        pickedIndex(picks).flatMap { options.indices.contains($0) ? options[$0] : nil }
+    }
+
+    /// True when the write-in (N11) is picked: Send Decision sends the Director's own words.
+    public func isWriteIn(_ picks: DecisionPicks) -> Bool {
+        pickedIndex(picks) == writeInIndex
+    }
+
+    /// What Send Decision posts: the question with the picked option's label, or with the Director's own words when
+    /// the write-in is picked; nil when nothing is picked, or the write-in is blank.
+    public func answer(_ picks: DecisionPicks) -> ControlAction.DecisionPick? {
+        guard let index = pickedIndex(picks) else { return nil }
+        let text = index == writeInIndex ? picks.writeIn.trimmingWhitespace() : options[index].label
+        return text.isEmpty ? nil : ControlAction.DecisionPick(question: question ?? "", answer: text)
     }
 }
 
@@ -166,9 +183,12 @@ extension InboxReview {
 /// option.
 public struct DecisionPicks: Equatable {
     public var picks: [Int: Int]
+    /// What the Director wrote in a request's write-in (N11), kept with the picks while they look at other items.
+    public var writeIn: String
 
-    public init(picks: [Int: Int] = [:]) {
+    public init(picks: [Int: Int] = [:], writeIn: String = "") {
         self.picks = picks
+        self.writeIn = writeIn
     }
 
     /// The option shown picked in decision `index`: the Director's pick, else the recommended one.
@@ -191,6 +211,32 @@ public struct DecisionPicks: Equatable {
     }
 }
 
+/// The Director's picks and write-ins across the Inbox, by issue id: each item keeps its own while the Director looks
+/// at other items, until its answer is sent.
+public struct InboxPicks: Equatable {
+    private var byItem: [String: DecisionPicks] = [:]
+
+    public init() {}
+
+    /// The picks of the item with issue id `itemID`; an item not touched yet has none.
+    public subscript(itemID: String) -> DecisionPicks { byItem[itemID] ?? DecisionPicks() }
+
+    /// Picks option `option` in decision `decision` of the item.
+    public mutating func pick(_ option: Int, decision: Int, itemID: String) {
+        byItem[itemID, default: DecisionPicks()].picks[decision] = option
+    }
+
+    /// Keeps the words written in the item's write-in (N11).
+    public mutating func writeIn(_ text: String, itemID: String) {
+        byItem[itemID, default: DecisionPicks()].writeIn = text
+    }
+
+    /// Forgets the item's picks once they were sent.
+    public mutating func clear(_ itemID: String) {
+        byItem[itemID] = nil
+    }
+}
+
 /// The consequence sheet of a move (C17, P5, D12d): the question as its title, what happens in Linear, what stays
 /// the same, the options (Rework's required reason), and Cancel with the verb.
 public struct ConsequenceSheet: Equatable, Identifiable {
@@ -205,6 +251,10 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var stays: String
     /// The picks a decisions sheet posts, listed in it.
     public var picks: [ControlAction.DecisionPick]
+    /// True when Send Decision sends the Director's own words (N11) instead of an option.
+    public var isWriteIn: Bool
+    /// Those words, quoted in the sheet; nil while the write-in is blank, and for every other sheet.
+    public var quote: String?
     /// True when the move answers a decision request instead of moving the ticket on its own.
     public var isDecision: Bool
     /// The request a decision answers, as one decision; nil for the moves that don't answer one.
@@ -241,6 +291,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         request = isDecision ? item.review.action?.decision : nil
         requestCommentID = isDecision ? item.review.action?.commentID : nil
         self.picks = []
+        isWriteIn = false
+        quote = nil
         switch move {
         case .approvePlan:
             title = "Approve the plan of \(id)?"
@@ -287,11 +339,22 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             stays = "The issue and its comments stay, and the previous attempt stays in the workpad under a Superseded heading."
         case .decide:
             // The sheet names the pick and what it does (D12d): `Send "Leave it to TP-891"?` and the option's effect.
-            let picked = item.review.action?.pickedOption(picks)
-            title = picked.map { "Send \"\($0.label)\"?" } ?? "Send your decision on \(id)?"
-            self.picks = picks.answers([item.review.action?.decision].compactMap { $0 })
-            // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
-            if let confirm = item.review.action?.confirm {
+            // A write-in (N11) asks "Send your answer?" and quotes the Director's words.
+            let action = item.review.action
+            let picked = action?.pickedOption(picks)
+            let writeIn = action?.isWriteIn(picks) == true
+            isWriteIn = writeIn
+            title = writeIn ? "Send your answer?" : picked.map { "Send \"\($0.label)\"?" } ?? "Send your decision on \(id)?"
+            self.picks = [action?.answer(picks)].compactMap { $0 }
+            quote = writeIn ? self.picks.first?.answer : nil
+            if action?.confirm != nil, writeIn {
+                // Words that pick none of a confirmation's options ask for a change: Symphony moves the ticket to
+                // In Progress, where its next run takes them up on the same pull request.
+                targetState = "In Progress"
+                happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to In Progress, where its next run takes up your answer."
+                stays = "Nothing merges, and the pull request stays open."
+            } else if let confirm = action?.confirm {
+                // A merge confirmation continues into the state its hold names. An ordinary decision moves nothing.
                 targetState = confirm
                 happens = "Records your answer on \(id) as a reply to its request, clears the `Needs Decision` label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
@@ -319,9 +382,9 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         return " and promotes \(count) to Todo; \(first.identifier) starts first"
     }
 
-    /// Whether the sheet's button is on for `reason`.
+    /// Whether the sheet's button is on for `reason`; a blank write-in has nothing to send.
     public func canSend(reason: String) -> Bool {
-        !needsReason || !reason.trimmingWhitespace().isEmpty
+        (!isWriteIn || quote != nil) && (!needsReason || !reason.trimmingWhitespace().isEmpty)
     }
 
     /// The control request the sheet's button sends, nil while a required reason is missing.

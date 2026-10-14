@@ -199,6 +199,145 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(plain.stays, "TP-892 stays in its phase until its next run picks up your answer.")
     }
 
+    // MARK: - The write-in (N11)
+
+    private let ownWords = "Leave them to TP-891, and add a note on TP-891 so its run removes the mention too."
+
+    func testTheWriteInIsTheLastCardOfARequestTheInboxAnswersAndPlansHaveNone() throws {
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: decisionFixture)))
+        let action = try XCTUnwrap(inbox.items[1].review.action)
+
+        let cards = OptionCard.cards(for: action, writeIn: true)
+        XCTAssertEqual(cards.map(\.label), ["Leave them to TP-891", "Update them in TP-892 now", "Wait for TP-891 to land first", "Answer in my own words…"])
+        XCTAssertEqual(cards.map(\.isWriteIn), [false, false, false, true])
+        XCTAssertEqual(cards.map(\.count), [4, 4, 4, 4])
+        let writeIn = try XCTUnwrap(cards.last)
+        XCTAssertEqual(writeIn.number, 4)
+        XCTAssertEqual(writeIn.index, action.writeInIndex)
+        XCTAssertEqual(writeIn.effect, "Tell the agent what to do instead.")
+        XCTAssertEqual(writeIn.accessibilityLabel(selected: true), "Option 4 of 4, Answer in my own words…, selected. Tell the agent what to do instead.")
+
+        // A request the Inbox can't answer, and one with no options, has none.
+        XCTAssertEqual(OptionCard.cards(for: action).map(\.isWriteIn), [false, false, false])
+        XCTAssertEqual(OptionCard.cards(for: InboxReview.Action(steps: ["Add the key."], options: []), writeIn: true), [])
+
+        // A plan's decisions (C16) take no write-in: the plan's Change move already takes free text.
+        let decision = InboxReview.Decision(question: "Where?", options: ["A", "B"], recommendation: "A is closer.", recommended: 0)
+        XCTAssertEqual(OptionCard.cards(for: decision).map(\.isWriteIn), [false, false])
+    }
+
+    func testPickingTheWriteInTurnsSendDecisionOffUntilItHoldsWords() throws {
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: decisionFixture)))
+        let item = inbox.items[1]
+        let action = try XCTUnwrap(item.review.action)
+        XCTAssertTrue(InboxToolbar.toolbar(for: item).buttons[0].enabled)
+
+        // Pressing 4 picks the write-in: no option is picked, and there is nothing to send yet.
+        var picks = DecisionPicks()
+        picks.picks[0] = try XCTUnwrap(item.optionIndex(forKey: "4"))
+        XCTAssertTrue(action.isWriteIn(picks))
+        XCTAssertEqual(action.pickedIndex(picks), 3)
+        XCTAssertNil(action.pickedOption(picks))
+        XCTAssertNil(action.answer(picks))
+        let blank = InboxToolbar.toolbar(for: item, picks: picks)
+        XCTAssertEqual(blank.buttons.map(\.command.title), ["Send Decision…", "Open in Linear"])
+        XCTAssertEqual(blank.buttons.map(\.enabled), [false, true])
+        XCTAssertNil(blank.defaultCommand)
+
+        let blankSheet = ConsequenceSheet(move: .decide, item: item, picks: picks)
+        XCTAssertEqual(blankSheet.title, "Send your answer?")
+        XCTAssertTrue(blankSheet.isWriteIn)
+        XCTAssertNil(blankSheet.quote)
+        XCTAssertFalse(blankSheet.canSend(reason: ""))
+        XCTAssertNil(blankSheet.action())
+
+        // Spaces and new lines alone are still blank.
+        picks.writeIn = "  \n "
+        XCTAssertFalse(InboxToolbar.toolbar(for: item, picks: picks).buttons[0].enabled)
+
+        // Words turn it on; the sheet quotes them and sends them as the answer.
+        picks.writeIn = "\n\(ownWords)  "
+        XCTAssertTrue(InboxToolbar.toolbar(for: item, picks: picks).buttons[0].enabled)
+        XCTAssertEqual(InboxToolbar.toolbar(for: item, picks: picks).defaultCommand, .move(.decide))
+        let sheet = ConsequenceSheet(move: .decide, item: item, picks: picks)
+        XCTAssertEqual(sheet.title, "Send your answer?")
+        XCTAssertEqual(sheet.quote, ownWords)
+        XCTAssertEqual(sheet.happens, "Records your answer on TP-892 as a reply to its request and clears the `Needs Decision` label.")
+        XCTAssertEqual(sheet.stays, "TP-892 stays in Rework until its next run picks up your answer.")
+        XCTAssertFalse(sheet.listsPicks)
+        XCTAssertNil(sheet.targetState)
+        XCTAssertTrue(sheet.canSend(reason: ""))
+        XCTAssertEqual(
+            sheet.action(),
+            .decide("TP-892", requestCommentID: "c-892-request", picks: [.init(question: try XCTUnwrap(action.question), answer: ownWords)], move: nil)
+        )
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Sent your decision")
+
+        // Picking an option again leaves the words aside: the option goes, and the sheet names it.
+        picks.picks[0] = 1
+        XCTAssertFalse(action.isWriteIn(picks))
+        XCTAssertEqual(ConsequenceSheet(move: .decide, item: item, picks: picks).title, "Send \"Update them in TP-892 now\"?")
+        XCTAssertNil(ConsequenceSheet(move: .decide, item: item, picks: picks).quote)
+
+        // On a confirmation, words that pick none of its options ask for a change: the ticket goes to In Progress.
+        var confirmation = item
+        confirmation.review.action?.confirm = "Merging"
+        picks.picks[0] = action.writeInIndex
+        let change = ConsequenceSheet(move: .decide, item: confirmation, picks: picks)
+        XCTAssertEqual(change.targetState, "In Progress")
+        XCTAssertEqual(
+            change.happens,
+            "Records your answer on TP-892 as a reply to its request, clears the `Needs Decision` label and moves TP-892 to In Progress, where its next run takes up your answer."
+        )
+        XCTAssertEqual(change.stays, "Nothing merges, and the pull request stays open.")
+        XCTAssertEqual(change.action(), sheet.action())
+    }
+
+    func testTheWriteInKeepsItsWordsWhileTheDirectorLooksAtAnotherItem() throws {
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: decisionFixture)))
+        let plan = inbox.items[0]
+        let request = inbox.items[1]
+        let action = try XCTUnwrap(request.review.action)
+
+        var store = InboxPicks()
+        XCTAssertEqual(store[request.id], DecisionPicks())
+        store.pick(action.writeInIndex, decision: 0, itemID: request.id)
+        store.writeIn(ownWords, itemID: request.id)
+
+        // Selecting the plan and picking there leaves the request's words and pick as they were.
+        store.pick(1, decision: 0, itemID: plan.id)
+        XCTAssertEqual(store[plan.id], DecisionPicks(picks: [0: 1]))
+        XCTAssertEqual(store[request.id], DecisionPicks(picks: [0: 3], writeIn: ownWords))
+        XCTAssertEqual(ConsequenceSheet(move: .decide, item: request, picks: store[request.id]).quote, ownWords)
+
+        // Writing before picking keeps the words too; sending forgets them.
+        store.writeIn("Draft", itemID: "other")
+        XCTAssertEqual(store["other"].writeIn, "Draft")
+        store.clear(request.id)
+        XCTAssertEqual(store[request.id], DecisionPicks())
+        XCTAssertEqual(store[plan.id], DecisionPicks(picks: [0: 1]))
+    }
+
+    func testSendingTheWriteInPostsItsWordsAsTheAnswer() throws {
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: decisionFixture)))
+        let item = inbox.items[1]
+        let picks = DecisionPicks(picks: [0: 3], writeIn: ownWords)
+        let action = try XCTUnwrap(ConsequenceSheet(move: .decide, item: item, picks: picks).action())
+
+        let request = ControlAPI.request(action, base: URL(string: "http://127.0.0.1:4000")!, token: "t")
+        XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/control/decide")
+        XCTAssertEqual(request.httpMethod, "POST")
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? NSDictionary)
+        XCTAssertEqual(
+            sent,
+            [
+                "issue_identifier": "TP-892",
+                "request_comment_id": "c-892-request",
+                "picks": [["question": try XCTUnwrap(item.review.action?.question), "answer": ownWords]],
+            ] as NSDictionary
+        )
+    }
+
     private var decisionFixture: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
