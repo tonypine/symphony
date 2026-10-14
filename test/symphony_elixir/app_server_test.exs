@@ -1362,6 +1362,14 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ "\"github.com\"=\"allow\""
       assert trace =~ "\"api.openai.com\"=\"allow\""
       refute trace =~ "evil.example.com"
+      assert trace =~ ~s("#{Path.join(canonical_workspace, "config/settings_ui_exempt.yml")}"="read")
+
+      # A person's decision unlocked one protected path for this run.
+      File.rm!(trace_file)
+      assert {:ok, _result} = AppServer.run(workspace, "Validate runtime marker", issue, unlocked_paths: ["config/settings_ui_exempt.yml"])
+      trace = File.read!(trace_file)
+      refute trace =~ ~s("#{Path.join(canonical_workspace, "config/settings_ui_exempt.yml")}"="read")
+      assert trace =~ ~s("#{Path.join(canonical_workspace, "WORKFLOW.md")}"="read")
 
       # Local Codex keeps the implicit symphony MCP server on a Unix socket when
       # the runner permits AF_UNIX bind; restrictive sandboxes fall back to TCP.
@@ -1614,7 +1622,7 @@ defmodule SymphonyElixir.AppServerTest do
         labels: ["backend"]
       }
 
-      assert {:ok, _result} = AppServer.run(workspace, "Validate srt wrapper", issue)
+      assert {:ok, _result} = AppServer.run(workspace, "Validate srt wrapper", issue, unlocked_paths: ["config/settings_ui_exempt.yml"])
 
       trace = File.read!(trace_file)
       assert trace =~ "SRT_ARGV:--settings "
@@ -1678,6 +1686,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert [cache_root] = SymphonyElixir.AgentCaches.write_paths()
       assert cache_root in settings["filesystem"]["allowWrite"]
       assert "./WORKFLOW.md" in settings["filesystem"]["denyWrite"]
+      refute "./config/settings_ui_exempt.yml" in settings["filesystem"]["denyWrite"]
 
       for root <- [git_dir, git_common_dir] do
         assert Path.join(root, "config") in settings["filesystem"]["denyWrite"]

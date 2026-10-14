@@ -4,12 +4,12 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{AgentLabels, AuditLog, Config, IssueSummary, Linear.Issue, Secret, StateMachine}
+  alias SymphonyElixir.{AgentLabels, AuditLog, Config, Decisions, IssueSummary, Linear.Issue, Secret, StateMachine}
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
 
   @issue_page_size 50
-  @attachment_page_size 20
+  @attachment_page_size 100
   @attachment_follow_up_page_size 50
   @attachment_follow_up_max_pages 10
   # Kept small: every polled issue pays for this nested connection in Linear query complexity.
@@ -71,8 +71,12 @@ defmodule SymphonyElixir.Linear.Client do
         }
         comments(last: $commentLast, orderBy: createdAt) {
           nodes {
+            id
             body
             createdAt
+            parent {
+              id
+            }
             user {
               name
             }
@@ -155,8 +159,12 @@ defmodule SymphonyElixir.Linear.Client do
         }
         comments(last: $commentLast, orderBy: createdAt) {
           nodes {
+            id
             body
             createdAt
+            parent {
+              id
+            }
             user {
               name
             }
@@ -234,8 +242,12 @@ defmodule SymphonyElixir.Linear.Client do
       }
       comments(last: $commentLast, orderBy: createdAt) {
         nodes {
+          id
           body
           createdAt
+          parent {
+            id
+          }
           user {
             name
           }
@@ -1299,6 +1311,8 @@ defmodule SymphonyElixir.Linear.Client do
       sub_issues: extract_sub_issues(issue),
       labels: extract_labels(issue),
       comments: extract_comments(issue),
+      # A person's rulings in plain comments, which the poll records in the description.
+      rulings: Decisions.rulings(issue),
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
       created_at: parse_datetime(issue["createdAt"]),
       updated_at: parse_datetime(issue["updatedAt"])

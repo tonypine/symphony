@@ -367,6 +367,54 @@ A running run's record MAY be written on a bounded cadence rather than on every 
 Elixir implementation writes it when the run's session, PR, workspace, worker host or turn changes,
 and otherwise at most every 5 s; the run's completion writes the final record.
 
+#### 4.1.10 Ticket Pull Request Record
+
+Symphony's own record of each ticket's pull request is the source of a ticket's PR. It lives in the
+durable run store, one record per `repo_key` and issue ID, and survives a restart. Symphony writes
+nothing to the tracker for it.
+
+Fields:
+
+- `pr_url` (string), `branch` (string or null)
+- `state`: `open`, `closed` or `merged`
+- `source`: `created` (Symphony opened the PR), `backfill` or `github_lookup`
+- `recorded_at`, `updated_at` (timestamps)
+
+Who writes it, and when it changes:
+
+- The `github_create_pull_request` agent tool writes it `open` when it opens the PR, before it
+  returns, beside the handoff signal. A new PR for a ticket replaces whatever PR the record held
+  before (closed, merged or another URL).
+- Wherever Symphony already sees a PR finish, it marks the record holding that PR `closed` or
+  `merged`: the GitHub `pull_request` webhook's `closed` delivery, the CI poller's PR read, and the
+  PR review poller's PR read (the auto-merge lane). A record holding another PR is left alone.
+- At startup, the backfill seeds a record, source `backfill`, for each ticket of each configured repo
+  that has none, from the PR URLs Symphony already stores, first found wins: the CI poller's
+  record, the PR review poller's record (unless the auto-merge lane saw that PR merge), then the
+  newest `handoff` signal in the ticket's signals ledger that carries a `pr_url`. It makes no
+  GitHub or tracker request and never overwrites a record, whatever its PR or state.
+- The branch lookup finds a PR Symphony did not open (a person opened it by hand, or the backfill
+  missed it). Once per repo per poll cycle, on the active tickets the poll just read, and off the
+  poll so a slow GitHub read never holds it up:
+  - When every one of those tickets has an `open` record, it does nothing: the steady state costs no
+    GitHub request.
+  - Otherwise it lists the repo's open PRs, each with its head branch, in one GitHub query (the 100
+    most recently updated).
+  - An `open` record whose PR is not in that list is re-checked with one PR read and marked
+    `closed` or `merged`; one GitHub still reports open is left as it is.
+  - Each ticket then left with no `open` record gets the open PR whose head branch is its Symphony
+    branch (`auto/<identifier>`, the workspace branch) or the tracker's branch name for it
+    (Linear's `branchName`), written `open` with source `github_lookup`.
+  - A PR on a branch with any other name is not found. A GitHub failure is logged once and leaves
+    every record as it is.
+- A store failure while writing is logged and never fails the tool call or the poll.
+
+Reading it: consumers ask `SymphonyElixir.TicketPullRequest.current_url/1` (or `current_urls/1`
+for the readers that walk every PR). It answers the `open` record's URL, and none once that PR
+closed or merged: a closed or merged PR is not the ticket's in-flight PR. A PR run's issue answers
+its own PR. While ticket reads still carry tracker attachments, a ticket with no record falls back
+to the issue's attachment-derived `pull_request_url` / `pr_urls`.
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
@@ -1389,7 +1437,12 @@ The QA agent:
   total size, and MUST hold no symlinks), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
-  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  directory there), and `qa_put_checkout`, which clones a git bundle the agent wrote into a
+  checkout there, without hooks, with `origin` set to the GitHub URL the agent names.
+  `qa_launch_app` MAY point the app, in QA mode only, at stand-ins on the pass's host ports: a
+  fake `gh` that Symphony itself provides (never a script the agent wrote) forwarding each call to
+  the agent's stub, a Linear GraphQL stub, and a folder picker that opens in a checkout
+  `qa_put_checkout` made. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.
@@ -1481,6 +1534,10 @@ The QA agent:
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and
   the epic review judges a criterion that only asks for tests or CI to pass by CI's runs on the
   base branch head. QA exercises the change the way a user would.
+- The epic review MUST NOT start its agent while a workflow run on the base branch head it reviews
+  is still unfinished: it records no verdict, leaves the parent in `Epic Review`, and starts again
+  after a fixed wait without counting a retry attempt or reaching the self-heal lane. A run still
+  unfinished two hours after it was created, or runs that cannot be read, are not waited on.
 - The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
@@ -2303,6 +2360,9 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   another to land first (the landing order below) is not updated: its state is `waiting_to_land`
   ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
   PR lands or leaves its way, and the first poll after that updates it once.
+- Only a `Merging` PR is updated. A `BEHIND` PR in the Code Review state, the QA state or `Rework`
+  MUST NOT get an update-branch: an agent run syncs its own branch with the base, and a Code Review
+  or QA run starts only on a green head, which an update on every base merge would keep restarting.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
   conflict context, and the fix returns through review. The approval covered the diff before the
@@ -2487,7 +2547,21 @@ Rules:
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
   approval. The implementation prompt reads the section in the description. A ruling a person
-  gives in a plain comment, not under a decision request, is not recorded.
+  gives in a plain comment that opens with `Decision:` or `Ruling:` (any case, bold or not), not as
+  a reply under a decision request, MUST be recorded on the same read, keyed by its comment
+  (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
+  answer the section already records MUST NOT be written again. The agents' comment tools MUST
+  refuse a body that opens that way, so only a person writes a ruling.
+- **Unlocking a protected path for one run.** A recorded decision (or a ruling the poll read) that
+  says `Unlock <path> for <ticket>` MUST unlock that path only when the path is one of the
+  workspace's agent-protected paths and the ticket is the one the decision is on. The ticket's next
+  implementation run MUST claim the grant in the ticket's store record before its session starts,
+  and only an unclaimed grant unlocks: the run's sandbox write-deny lists (Claude `denyWrite` and
+  `Edit` rules, Codex filesystem permissions, SRT `denyWrite`) MUST leave the path out, its prompt
+  MUST name the path and the decision, and its `github_sync_base` and `github_push_branch` MUST
+  accept the branch's change to it. Every later run and every other ticket MUST keep the
+  protection. A store that cannot record the claim MUST unlock nothing. The agents' comment and
+  sub-issue tools MUST refuse text that reads as such a grant.
 - **Escalation rules.** Code Review applies the repo's escalation rules (`EscalationRules`, the
   retired acceptance gate's deterministic rules, read from `auto_review.acceptance_gate.escalate`
   during its deprecation window) to an approval. A person rule — an `escalate.labels` label other
@@ -2514,15 +2588,26 @@ Rules:
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
   waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
-  reused one keeps its priority. Only the same failure recurring with no new information escalates
-  to a `Needs Decision` hold.
+  reused one keeps its priority. A fix ticket is reused only while it is open and was filed for the
+  same failure (the same normalized cause); a terminal one, or one for another failure of the same
+  component, gets a new fix ticket instead. A QA answer may name an open ticket that already tracks the
+  missing QA tool (`covered_by`); the hold then waits on that ticket, linked as blocked-by, and
+  nothing is filed. A missing QA tool or QA host capability is never `needs_person`: only a secret,
+  an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
+  for a fix merged into the repository the running build comes from: like the app-update hold on a
+  `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge
+  commit. Only the same failure recurring with no new information escalates to a
+  `Needs Decision` hold.
 - **Epic path.** A plan parent hands its plan to `Plan Review`; a person approves it (Symphony
   promotes the `Backlog` sub-tickets to `Todo`) or sends it to `Rework`. A comment on a plan in
   `Plan Review` moves it to `Rework` for a revision in place. Once every sub-ticket is terminal the
   machine enters `Epic Review` and runs the QA agent against the default branch; it files follow-ups
   in `Todo` under the epic, never in `Backlog`, each with the epic's priority so
-  `tickets.priorities` dispatches them like the epic. No `Final verification:` ticket or close-out run is
-  created.
+  `tickets.priorities` dispatches them like the epic. Each follow-up must be checkable on its own
+  PR before it merges: a gap whose check needs another unmerged ticket, or the change running in
+  Symphony, is filed as two follow-ups, the second blocked by the first (a gap names its blocker,
+  another gap of the same answer or a sub-ticket of the epic; any other blocker is logged and left
+  out). No `Final verification:` ticket or close-out run is created.
 - **Prompt.** The rendered prompt MUST NOT name Auto Review, `In Review`, the Human Review state,
   supervisor checks or `Final verification:` tickets. Prompt assembly still passes `state_machine`,
   always `designed`, so an instruction file that branches on it keeps rendering.

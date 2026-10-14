@@ -93,7 +93,14 @@ struct SettingsView: View {
                 } header: {
                     Text("Updates")
                 } footer: {
-                    SectionFooter(model.settings.updateMode.explanation)
+                    VStack(alignment: .leading, spacing: 6) {
+                        SectionFooter(model.settings.updateMode.explanation)
+                        if let line = model.settings.updateMode.blockerLine(
+                            model.updateBlocker(model.settings.developmentMode)
+                        ) {
+                            SectionFooter(line)
+                        }
+                    }
                 }
 
                 Section {
@@ -216,7 +223,7 @@ struct SettingsView: View {
                         "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
                             + "match a title or description asking for a human or manual review, saying it must not be "
                             + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
-                            + "a repo can override this in its Edit sheet. Save checks symphony.yml with symphony check "
+                            + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
                             + "first; Symphony reads it on its next poll, no restart needed."
                     )
                 }

@@ -35,7 +35,7 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all app bundle qa-app install run test e2e clean
+.PHONY: all app bundle qa-app install run test e2e snapshots clean
 
 all: app
 
@@ -134,6 +134,19 @@ test:
 # rollback end to end in an isolated instance. See Tests/e2e/README.md.
 e2e:
 	python3 Tests/e2e/update_restart_e2e.py
+
+# Renders the snapshots in Tests/Snapshots offscreen with ImageRenderer (no NSApplication, no window) and
+# writes their PNGs there: the app's views, minus main.swift, compiled with the snapshot program.
+# `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
+snapshots:
+	swift build $(SWIFT_FLAGS) --product SymphonyBarUI
+	mkdir -p $(BUILD_DIR)
+	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/snapshot-module-cache \
+		-I "$$(swift build $(SWIFT_FLAGS) --show-bin-path)/Modules" -o $(BUILD_DIR)/render-snapshots \
+		Tests/Snapshots/main.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
+		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o \
+		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarUI.build/*.o
+	$(BUILD_DIR)/render-snapshots
 
 clean:
 	rm -rf $(BUILD_DIR) .build

@@ -4,6 +4,7 @@ defmodule SymphonyElixir.PromptBuilder do
   """
 
   alias SymphonyElixir.{AgentLabels, CiPoller, Config, LandingOrder, PromptSafety, ReviewAgent, TicketState, Workflow}
+  alias SymphonyElixir.PathUnlock
 
   @render_opts [
     strict_variables: true,
@@ -109,6 +110,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
+    |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -172,6 +174,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
+    |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -611,6 +614,14 @@ defmodule SymphonyElixir.PromptBuilder do
     do: "This PR #{LandingOrder.reason(wait)}: Symphony sends it no conflict fix and doesn't update its branch until then. "
 
   defp open_pr_wait_line(_wait), do: ""
+
+  # The protected paths a person's decision unlocked for this run (`SymphonyElixir.PathUnlock`).
+  defp append_path_unlocks(prompt, unlocks) do
+    case PathUnlock.prompt_section(unlocks) do
+      nil -> prompt
+      section -> prompt <> "\n\n" <> section
+    end
+  end
 
   # The per-ticket machine record is injected as continuation context (D9), never read through a
   # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.

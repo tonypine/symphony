@@ -179,6 +179,17 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
 
+  # Opens an HTTP/2 connection with prior knowledge (RFC 9113 §3.4) to a loopback port and returns
+  # the server's first reply: a server that speaks HTTP/2 answers the preface with its SETTINGS
+  # frame, one that doesn't closes the connection.
+  def send_http2_preface(port) do
+    {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false, packet: :raw], 2_000)
+    :ok = :gen_tcp.send(socket, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+    reply = :gen_tcp.recv(socket, 0, 2_000)
+    :gen_tcp.close(socket)
+    reply
+  end
+
   def unix_socket_bind_supported?(root \\ System.tmp_dir!()) do
     unix_socket_bind_probe(root) == :ok
   end

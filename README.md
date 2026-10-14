@@ -49,6 +49,10 @@ Issue runs end with a pull request and validation evidence. PR runs push back to
 branch instead of opening a second one. If a claimed issue moves to a terminal state (`Done`,
 `Closed`, `Cancelled`, `Duplicate`), Symphony stops its agent and cleans up the workspace.
 
+Symphony keeps its own record of each ticket's pull request. A PR you open by hand on a ticket is
+found within one poll when its branch is the ticket's Symphony branch (`auto/<identifier>`) or the
+branch name Linear suggests for the ticket; a PR on a branch with any other name is not found.
+
 <details>
 <summary>Glossary</summary>
 
@@ -159,8 +163,11 @@ Symphony, so you need no checkout, `mise` or Elixir.
 2. **Scaffold operator config.** From your operator repo, run
    `~/Applications/Symphony.app/Contents/Resources/symphony init` to create `symphony.yml`, then edit the
    issue scope, agent command, workspace root, and `repositories:`.
-3. **Write a workflow per repo.** Invoke the `symphony-init-workflow` skill from Codex or Claude in
-   each target repo; the agent inspects the repo and writes a tailored `WORKFLOW.md`.
+3. **Write a workflow per repo.** Connect each repo with **Add Repo…** in the app's Repos window: for a
+   repo without a `WORKFLOW.md`, it drafts one from the repo's files for you to edit, then opens a pull
+   request that adds it (or writes it into a local checkout). For a more tailored file, invoke the
+   `symphony-init-workflow` skill from Codex or Claude in the target repo; the agent inspects the repo and
+   writes one.
 4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
    personal API key (Settings → Security & access → Personal API keys); the app keeps it in a file
    only you can read. Click Save, then choose **Start Symphony** from the menu.

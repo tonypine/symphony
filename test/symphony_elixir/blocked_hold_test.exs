@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.BlockedHoldTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{BlockedHold, Hold, RunStore, Workflow}
+  alias SymphonyElixir.{BlockedHold, Hold, RunStore, UpdateHold, Workflow}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
 
@@ -335,24 +335,112 @@ defmodule SymphonyElixir.BlockedHoldTest do
     end
   end
 
+  describe "the fix-ticket hold on a fix to Symphony itself" do
+    @build_sha "bbbbbbb0123456789abcdef0123456789abcdef0"
+    @next_build_sha "ccccccc0123456789abcdef0123456789abcdef0"
+    @merge_sha "aaaaaaa0123456789abcdef0123456789abcdef0"
+    @symphony_pr "https://github.com/acme/symphony/pull/12"
+
+    defp build(sha \\ @build_sha), do: %{version: "0.0.1.200", sha: sha, repo: "https://github.com/acme/symphony"}
+
+    defp merged_fix(attrs \\ %{}) do
+      fix = struct!(%Issue{id: "fix-id", identifier: "TP-900", state: "Done", pr_urls: [@symphony_pr]}, attrs)
+      Process.put({:fix_ticket, "TP-900"}, {:ok, fix})
+    end
+
+    # The GitHub lookups `UpdateHold` makes: each call is reported, and the running build includes
+    # the merge commit only from `@next_build_sha` on.
+    defp lookups do
+      test_pid = self()
+
+      [
+        merge_commit_sha: fn @symphony_pr ->
+          send(test_pid, :merge_commit_sha)
+          {:ok, @merge_sha}
+        end,
+        commit_included?: fn @symphony_pr, @merge_sha, build_sha ->
+          send(test_pid, {:commit_included?, build_sha})
+          {:ok, build_sha == @next_build_sha}
+        end
+      ]
+    end
+
+    defp sweep_fix_hold(build, cache) do
+      opts = [settings: designed_settings(), tracker: FixTicketTracker, build: build, update_hold_cache: cache]
+      BlockedHold.sweep([issue(%{state: "QA"})], @terminal, opts ++ lookups())
+    end
+
+    test "stays until the running build includes the fix's merge commit, then lifts on its own" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
+      merged_fix()
+
+      # The fix ticket is Done, but the running app was built before its merge: the hold stays and
+      # says it waits for the app update.
+      assert {1, cache} = sweep_fix_hold(build(), UpdateHold.empty_cache())
+      assert_received :merge_commit_sha
+      assert_received {:commit_included?, @build_sha}
+
+      assert %{reason: reason, clearing_condition: condition, waits_on: %{type: "fix_ticket", keys: ["TP-900"]}} = stored_hold()
+      assert reason == "waiting for an app update: fix ticket TP-900 merged in `aaaaaaa`, running `bbbbbbb`"
+      assert condition == "when the running app includes the fix ticket TP-900's merge"
+
+      # The next poll on the same build changes nothing and looks nothing up again.
+      assert {0, ^cache} = sweep_fix_hold(build(), cache)
+      refute_received :merge_commit_sha
+      refute_received {:commit_included?, _sha}
+      assert stored_hold().reason == reason
+
+      # The app updates to a build that includes the merge: the hold lifts with no one involved.
+      assert {1, _cache} = sweep_fix_hold(build(@next_build_sha), cache)
+      assert_received {:commit_included?, @next_build_sha}
+      assert stored_hold() == nil
+    end
+
+    test "lifts at once when the build has no sha, a lookup fails, or a skip label opts out" do
+      merged_fix()
+
+      for {build, extra, held_labels} <- [
+            {build(nil), [], []},
+            {build(), [merge_commit_sha: fn _url -> {:error, :rate_limited} end], []},
+            {build(), [], [UpdateHold.skip_label()]}
+          ] do
+        :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
+        opts = extra ++ [settings: designed_settings(), tracker: FixTicketTracker, build: build] ++ lookups()
+
+        assert BlockedHold.sync(issue(%{state: "QA", labels: held_labels}), @terminal, opts) == :clear
+        assert stored_hold() == nil
+      end
+    end
+
+    test "a fix merged in another repository lifts the hold when it is terminal, as before" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, fix_hold_attrs())
+      merged_fix(%{pr_urls: ["https://github.com/acme/web-app/pull/5"]})
+
+      assert {1, _cache} = sweep_fix_hold(build(), UpdateHold.empty_cache())
+      refute_received :merge_commit_sha
+      assert stored_hold() == nil
+    end
+  end
+
   describe "sweep/3" do
     test "counts the holds it set and cleared over a repo's issues" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
       other = %{open_issue | id: "issue-2", blocked_by: []}
 
-      assert BlockedHold.sweep([open_issue, other], @terminal, settings: designed_settings()) == 1
+      assert {1, _cache} = BlockedHold.sweep([open_issue, other], @terminal, settings: designed_settings())
 
       unblocked = %{open_issue | blocked_by: [blocker("TP-1", "Done")]}
-      assert BlockedHold.sweep([unblocked, other], @terminal, settings: designed_settings()) == 1
+      assert {1, _cache} = BlockedHold.sweep([unblocked, other], @terminal, settings: designed_settings())
     end
 
     test "counts nothing for a repo it can't resolve or without a list" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
 
-      assert BlockedHold.sweep([open_issue], @terminal, settings: nil) == 0
-      assert BlockedHold.sweep(:not_a_list, @terminal, settings: designed_settings()) == 0
+      cache = UpdateHold.empty_cache()
+      assert BlockedHold.sweep([open_issue], @terminal, settings: nil) == {0, cache}
+      assert BlockedHold.sweep(:not_a_list, @terminal, settings: designed_settings()) == {0, cache}
       # Without the caller's settings the repo is resolved from the issue's key.
-      assert BlockedHold.sweep([open_issue], @terminal) == 0
+      assert BlockedHold.sweep([open_issue], @terminal) == {0, cache}
     end
   end
 

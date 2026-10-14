@@ -30,7 +30,7 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
       assert %{identifier: "MOT-40", pull_request_url: @pr_url, pr_urls: [@pr_url]} = issue
       assert URLUtils.pull_request_url(issue) == @pr_url
 
-      assert_received {:linear_query, "SymphonyLinearPoll", query, %{attachmentFirst: 20}}
+      assert_received {:linear_query, "SymphonyLinearPoll", query, %{attachmentFirst: 100}}
       assert query =~ ~r/attachments\(first: \$attachmentFirst\) \{.*?pageInfo \{\s*hasNextPage\s*endCursor/s
       assert_received {:linear_query, "SymphonyLinearIssueAttachments", query, %{id: "issue-a", first: 50, after: "a-1"}}
       assert query =~ "attachments(first: $first, after: $after)"

@@ -27,14 +27,24 @@ defmodule SymphonyElixir.EpicReview do
        when the parent is already there.
     3. The **agent pass**: `SymphonyElixir.QaAgent` in its epic-review mode, journey-driven, in a
        throwaway worktree at the head of the base branch — the epic's intent against what actually
-       shipped on the default branch, with every checklist row reported.
+       shipped on the default branch, with every checklist row reported. It waits for CI: while a
+       workflow run on that commit is still going, the agent does not start and the run ends with
+       `{:error, {:ci_pending, info}}`, which the orchestrator retries after a short wait without
+       counting an attempt. The parent stays in `Epic Review`, nothing is recorded, and no block
+       reaches the self-heal lane: a review started the moment the last sub-ticket merged would
+       otherwise judge a commit CI has not finished with. A run still unfinished after two hours
+       is not waited on: the review runs and reports it, so stuck CI blocks and self-heals as any
+       other block does.
     4. The **verdict**, through the one writer `SymphonyElixir.TransitionGuard`:
          * `pass` -> `Done` (`:epic_review_pass`);
          * `fail` (gaps) -> each failing step, or without failing steps each finding, is filed as a
            sub-issue in `Todo` inside the epic, and the parent returns to the waiting state
            (`:epic_review_gaps`), where the follow-up holds it until it lands. The review runs
            again when it does, so the epic closes itself once it is whole; the loop ends at the
-           first pass.
+           first pass. A gap that can only be checked once another change has merged is two
+           follow-ups: the step that checks it names the one it waits on (another gap of the same
+           answer, or a sub-ticket of the epic) in `blocked_by`, and is filed after it with that
+           blocked-by relation; a blocker that is neither is logged and left out.
          * `blocked` (tooling, environment, an answer that did not resolve the checklist, gaps none
            of which could be filed, or a run dispatched to a remote worker, where the flow does
            not run the QA agent) -> retried boundedly on the same commit, then handed to the
@@ -48,8 +58,8 @@ defmodule SymphonyElixir.EpicReview do
   `run/3` returns `:skip` for anything but an epic parent.
 
   Every effect is injectable: `opts[:qa_agent]`, `opts[:tracker]`, `opts[:git]`,
-  `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]` default to the real ones and are fakes
-  in tests.
+  `opts[:gh_runner]` (how CI is read), `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]`
+  default to the real ones and are fakes in tests, and `opts[:now]` is the clock the CI wait reads.
   """
 
   require Logger
@@ -68,6 +78,7 @@ defmodule SymphonyElixir.EpicReview do
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -90,6 +101,9 @@ defmodule SymphonyElixir.EpicReview do
   # Longer than the review a lost verdict would redo, so a rate limit that outlasts the default
   # five-minute wait does not throw the verdict away.
   @verdict_move_max_wait_ms 30 * 60_000
+  # How long the review waits for a workflow run on the commit under review to finish. Longer than
+  # any healthy run of CI; a run still going after it is stuck, and the review reports it.
+  @ci_wait_limit_seconds 2 * 3600
 
   @typedoc "One deterministic pre-check: what it found and whether the review must account for it."
   @type check :: %{name: atom(), status: :ok | :attention, detail: String.t()}
@@ -100,11 +114,13 @@ defmodule SymphonyElixir.EpicReview do
   another state's own), and `{:error, reason}` when the parent or the commit under review could not
   be read or the ticket could not be moved. A run that hit the provider's usage limit comes back as
   `{:error, {:usage_limited, info}}`, so the orchestrator holds it and starts it again once the
-  limit resets.
+  limit resets, and one that found CI still running on the commit under review as
+  `{:error, {:ci_pending, info}}`, so the orchestrator starts it again once CI had time to finish.
 
   Options: `:settings` (required), `:repo_key`, `:run_id`, `:run_profile` (the dispatch's profile
   for this run kind), `:worker_host`, `:on_message`, `:linear_retry_opts`, and `:tracker`,
-  `:qa_agent`, `:git`, `:linear_client`, `:store`, `:fixer`, `:symphony_repo_key` for tests.
+  `:qa_agent`, `:git`, `:gh_runner`, `:now`, `:linear_client`, `:store`, `:fixer`, `:symphony_repo_key`
+  for tests.
   """
   @spec run(Issue.t(), Path.t(), keyword()) :: :skip | :ok | {:error, term()}
   def run(%Issue{} = issue, workspace, opts) when is_binary(workspace) do
@@ -213,6 +229,14 @@ defmodule SymphonyElixir.EpicReview do
 
         {:error, {:usage_limited, info}}
 
+      %{ci_pending: info} ->
+        Logger.info(
+          "Epic review for #{issue_label(issue)} waits for CI on #{short_sha(info.sha)}: " <>
+            "#{Enum.map_join(info.runs, ", ", &run_label/1)} still running; the epic keeps its state and runs again after CI"
+        )
+
+        {:error, {:ci_pending, info}}
+
       outcome ->
         apply_outcome(issue, outcome, settings, opts)
     end
@@ -260,28 +284,59 @@ defmodule SymphonyElixir.EpicReview do
         Map.merge(outcome, %{ref: context.base_ref, checks: checks, runtime_seconds: System.monotonic_time(:second) - started_at})
 
       nil ->
-        playbooks = playbooks(issue, settings)
-        job = agent_job(issue, workspace, context, settings, opts, playbooks)
-        runtime = fn -> System.monotonic_time(:second) - started_at end
-
-        case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, agent_opts(opts)) do
-          {:ok, %{result: result, tokens: tokens}} ->
-            result
-            |> run_outcome(tokens, playbooks, checks)
-            |> Map.merge(%{sha: context.sha, ref: context.base_ref, runtime_seconds: runtime.()})
-
-          {:error, reason, tokens} ->
-            reason
-            |> error_outcome(tokens, checks)
-            |> Map.merge(%{
-              sha: context.sha,
-              ref: context.base_ref,
-              playbooks: playbook_kinds(playbooks),
-              runtime_seconds: runtime.()
-            })
+        case pending_ci_runs(workspace, context.sha, opts) do
+          [] -> run_qa_agent(issue, workspace, context, settings, opts, checks, started_at)
+          runs -> %{ci_pending: %{sha: context.sha, runs: runs}}
         end
     end
   end
+
+  defp run_qa_agent(issue, workspace, context, settings, opts, checks, started_at) do
+    playbooks = playbooks(issue, settings)
+    job = agent_job(issue, workspace, context, settings, opts, playbooks)
+    runtime = fn -> System.monotonic_time(:second) - started_at end
+
+    case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, agent_opts(opts)) do
+      {:ok, %{result: result, tokens: tokens}} ->
+        result
+        |> run_outcome(tokens, playbooks, checks)
+        |> Map.merge(%{sha: context.sha, ref: context.base_ref, runtime_seconds: runtime.()})
+
+      {:error, reason, tokens} ->
+        reason
+        |> error_outcome(tokens, checks)
+        |> Map.merge(%{
+          sha: context.sha,
+          ref: context.base_ref,
+          playbooks: playbook_kinds(playbooks),
+          runtime_seconds: runtime.()
+        })
+    end
+  end
+
+  # The workflow runs on the commit under review that are still going and worth waiting for. The
+  # review judges CI by the commit's runs, and a run without a conclusion cannot be judged, so the
+  # review waits for it (`review_epic/5`). Anything that keeps the wait from being sure is not
+  # waited on, and the review runs as it would without the wait: runs that cannot be read, and a
+  # run still unfinished after `@ci_wait_limit_seconds`, which the agent then reports.
+  defp pending_ci_runs(workspace, sha, opts) do
+    case PullRequest.list_commit_runs(sha, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
+      {:ok, runs} ->
+        now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+        Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
+
+      {:error, reason} ->
+        Logger.warning("Epic review could not read CI on #{short_sha(sha)}; reviewing without waiting for it: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp unfinished_run?(%{status: status}), do: is_binary(status) and status != "COMPLETED"
+
+  defp stuck_run?(%{created_at: %DateTime{} = created_at}, now), do: DateTime.diff(now, created_at) > @ci_wait_limit_seconds
+  defp stuck_run?(_run, _now), do: false
+
+  defp run_label(run), do: "#{run.workflow_name || "a workflow"} (#{run.url || run.id})"
 
   defp agent_job(issue, workspace, %{sha: sha, base_ref: base_ref}, settings, opts, playbooks) do
     %{
@@ -455,30 +510,129 @@ defmodule SymphonyElixir.EpicReview do
   # sub-ticket of the epic — same team, project, assignee, parent and priority, so
   # `tickets.priorities` dispatches it like the epic — and never lands in `Backlog`, where it would
   # not hold the epic.
+  #
+  # A failing step may name what it waits on (`blocked_by`): the `gap` label of another failing step
+  # in the same answer, or a sub-ticket of the epic. A follow-up that can only be checked after
+  # another one merges (TP-994) is filed after its blockers with the blocked-by relation, so the
+  # dependency gate — and on Symphony's own repository `SymphonyElixir.UpdateHold` — keeps it in
+  # `Todo` until they land, rather than both running at once and holding each other in QA.
   defp create_gaps(issue, outcome, opts) do
     {:ok, registry} = CommentRegistry.start_link()
-    context = %{issue: issue, comment_registry: registry}
+    gaps = gap_tickets(outcome, issue)
+    labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
+    context = %{issue: issue, comment_registry: registry, epic_tickets: epic_tickets(issue), labels: labels}
 
     try do
-      outcome
-      |> gap_tickets(issue)
-      |> Enum.flat_map(fn {title, description} ->
-        attrs = %{"title" => title, "description" => description}
-        create = fn -> AgentTools.Linear.create_subissue_in_state(context, @gap_state, attrs, linear_opts(opts)) end
-
-        case with_linear_retry(create, "filing an epic review follow-up for #{issue.identifier}", opts) do
-          {:ok, response} ->
-            [%{identifier: get_in(response, ["data", "issueCreate", "issue", "identifier"]), title: title}]
-
-          {:error, reason} ->
-            Logger.warning("Failed to file an epic review follow-up for #{issue.identifier}: #{inspect(reason)}")
-            []
-        end
-      end)
+      file_in_order(gaps, context, opts, %{}, [])
     after
       Agent.stop(registry)
     end
   end
+
+  # Files the gaps whose same-answer blockers are all settled (filed or failed), then the gaps that
+  # waited on them, until none is left. Gaps that only wait on each other (a cycle) are filed in
+  # their order, without the relations among them.
+  defp file_in_order([], _context, _opts, _settled, filed), do: Enum.reverse(filed)
+
+  defp file_in_order(gaps, context, opts, settled, filed) do
+    labels = gaps |> Enum.flat_map(&List.wrap(&1.gap)) |> MapSet.new(&gap_label/1)
+
+    {ready, waiting} =
+      case Enum.split_with(gaps, fn gap -> not Enum.any?(gap.blocked_by, &MapSet.member?(labels, gap_label(&1))) end) do
+        {[], [first | rest]} -> {[first], rest}
+        split -> split
+      end
+
+    {settled, filed} =
+      Enum.reduce(ready, {settled, filed}, fn gap, {settled, filed} ->
+        case file_gap(gap, context, opts, settled) do
+          {:ok, ticket} -> {settle(settled, gap, ticket.identifier), [ticket | filed]}
+          :error -> {settle(settled, gap, nil), filed}
+        end
+      end)
+
+    file_in_order(waiting, context, opts, settled, filed)
+  end
+
+  defp settle(settled, %{gap: nil}, _identifier), do: settled
+  defp settle(settled, %{gap: gap}, identifier), do: Map.put(settled, gap_label(gap), identifier)
+
+  defp file_gap(gap, %{issue: issue} = context, opts, settled) do
+    blocked_by = gap.blocked_by |> Enum.flat_map(&resolve_blocker(&1, gap, context, settled)) |> Enum.uniq()
+
+    case create_follow_up(gap, blocked_by, context, opts) do
+      {:ok, ticket} ->
+        {:ok, ticket}
+
+      {:error, reason} ->
+        Logger.warning("Failed to file an epic review follow-up for #{issue.identifier}: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  # A blocker the follow-up can be linked to: a gap of this answer that was filed, or a sub-ticket of
+  # the epic. Anything else is logged and dropped, so the follow-up is still filed.
+  defp resolve_blocker(name, gap, %{issue: issue} = context, settled) do
+    identifier = String.upcase(name)
+
+    cond do
+      is_binary(Map.get(settled, gap_label(name))) ->
+        [Map.fetch!(settled, gap_label(name))]
+
+      Map.has_key?(settled, gap_label(name)) ->
+        unlinked(issue, gap, name, "its gap could not be filed")
+
+      MapSet.member?(context.labels, gap_label(name)) ->
+        unlinked(issue, gap, name, "the gaps wait on each other")
+
+      MapSet.member?(context.epic_tickets, identifier) ->
+        [identifier]
+
+      true ->
+        unlinked(issue, gap, name, "it is neither a gap of this review nor a ticket of #{issue.identifier}")
+    end
+  end
+
+  defp unlinked(issue, gap, name, why) do
+    Logger.warning("Epic review follow-up \"#{gap.title}\" for #{issue.identifier} names #{inspect(name)} as its blocker, but #{why}; filing it without that relation")
+
+    []
+  end
+
+  defp create_follow_up(gap, blocked_by, %{issue: issue} = context, opts) do
+    attrs = %{"title" => gap.title, "description" => gap.description, "blocked_by" => blocked_by}
+    linear_context = %{issue: issue, comment_registry: context.comment_registry}
+    create = fn -> AgentTools.Linear.create_subissue_in_state(linear_context, @gap_state, attrs, linear_opts(opts)) end
+
+    case with_linear_retry(create, "filing an epic review follow-up for #{issue.identifier}", opts) do
+      {:ok, response} ->
+        {:ok, %{identifier: get_in(response, ["data", "issueCreate", "issue", "identifier"]), title: gap.title, blocked_by: blocked_by}}
+
+      # Linear no longer lists the blocker under the epic: the follow-up is still filed, without it.
+      {:error, {:blocked_by_not_sibling, unknown, _siblings}} ->
+        unlinked(issue, gap, Enum.join(unknown, ", "), "Linear does not list it under #{issue.identifier}")
+        create_follow_up(gap, blocked_by -- unknown, context, opts)
+
+      # The follow-up was filed; only its relation is missing, which a second filing would not mend.
+      {:error, {:blocked_by_relation_failed, identifier, blocker, reason}} ->
+        Logger.warning("Filed epic review follow-up #{identifier} for #{issue.identifier} without its blocker #{blocker}: #{inspect(reason)}")
+
+        {:ok, %{identifier: identifier, title: gap.title, blocked_by: Enum.take_while(blocked_by, &(&1 != blocker))}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp epic_tickets(%Issue{sub_issues: sub_issues}) do
+    sub_issues
+    |> List.wrap()
+    |> Enum.map(&sub_issue_label/1)
+    |> Enum.filter(&is_binary/1)
+    |> MapSet.new(&String.upcase/1)
+  end
+
+  defp gap_label(name), do: name |> String.trim() |> String.downcase()
 
   defp gap_tickets(outcome, issue) do
     case Enum.filter(Map.get(outcome, :steps, []), &(&1.status == "fail")) do
@@ -509,7 +663,12 @@ defmodule SymphonyElixir.EpicReview do
     - [ ] The epic's review passes this step when it runs #{issue.identifier} again.
     """
 
-    {title("Epic review fails: " <> step.name), body}
+    %{
+      title: title("Epic review fails: " <> step.name),
+      description: body,
+      gap: Map.get(step, :gap),
+      blocked_by: Map.get(step, :blocked_by, [])
+    }
   end
 
   defp finding_ticket(finding, outcome, issue) do
@@ -530,7 +689,7 @@ defmodule SymphonyElixir.EpicReview do
     - [ ] The epic's review passes when it runs #{issue.identifier} again.
     """
 
-    {title("Epic review finding: " <> first_line(finding)), body}
+    %{title: title("Epic review finding: " <> first_line(finding)), description: body, gap: nil, blocked_by: []}
   end
 
   defp ticket_intro(outcome, issue) do
@@ -652,6 +811,7 @@ defmodule SymphonyElixir.EpicReview do
       findings: Map.get(result, :findings, []),
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
+      covered_by: Map.get(result, :covered_by),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks),
       checks: checks

@@ -149,8 +149,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: a sidebar of the connected repos and the detail of the selected one
   (its health, source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
-  manual review, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
-  managed clone, **Remove Clone…**. See [Repos](#repos).
+  manual review, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo an **Edit…** on its Source, Linear routing and Review,
+  **Disconnect…** and, for a managed clone, **Remove Clone…**. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -170,14 +170,17 @@ set (or, in Development mode, no checkout folder).
   before it also offers Restart Now Anyway, and how long Automatically at a set time waits for them before it
   tries again the next day.
 - **Update mode** (in **Updates**) is how the app installs a newer release:
-  - **Manual** (the default, and what an install from before this setting gets): the menu shows the
-    release and you install it with Update to vX. See [Update](#update).
+  - **Manual**: the menu shows the release and you install it with Update to vX. See [Update](#update).
   - **Automatically when idle** installs a new release by itself as soon as no agent runs are active.
   - **Automatically at a set time** installs a new release by itself each day at the **Time** shown under
     it (03:00 by default, in the Mac's time zone), waiting for agent runs like Update to vX. The time shows
     only for this mode, and is kept when you choose another.
+  - **Automatically when released** (the default for every install that never saved an update mode)
+    installs a new release by itself as soon as a check finds it, waiting for agent runs like Update to vX.
 
-  See [Automatic updates](#automatic-updates).
+  In an automatic mode, when this copy can't install updates (a development build, Development mode, no
+  update signing key, or an app folder you can't write to), a line under the picker says "▲ This copy can't
+  update itself:" and why. The picker stays editable. See [Automatic updates](#automatic-updates).
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
   it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`) and
   update time (`updateTime`, minutes after midnight) are stored in UserDefaults
@@ -432,18 +435,21 @@ the repo that takes the issues no other repo's route matches, and the number of 
 glyph differs in shape as well as colour: a green circle for healthy, an orange triangle for needs
 attention, a red diamond for not working, and a hollow grey circle for not checked (Symphony isn't
 answering with the repos). VoiceOver reads a row as, for example, "symphony, needs attention, default, 2
-agents running". A row's context menu has **Edit…**, **Reveal in
-Finder**, **Open on GitHub** and **Disconnect…**; **+** and **−** under the list add and disconnect.
+agents running". A row's context menu has **Edit Linear Routing…**, **Edit
+Source…**, **Edit Review…**, **Reveal in Finder**, **Open on GitHub** and **Disconnect…**; **+** and **−** under the list add and disconnect.
 
 While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/repos` reports it:
 
-- The key, its `owner/repo` as a link to GitHub, the **Default** capsule and **Edit…**, then a health line:
+- The key, its `owner/repo` as a link to GitHub and the **Default** capsule, then a health line:
   **Healthy**, **1 problem**, **2 problems**, or **Not checked: Symphony is stopped**.
 - **Needs attention**, above the sections while the repo has a problem, red when one is an error and orange
   otherwise, one line per problem with its fixes:
   - `WORKFLOW.md` invalid (error): Symphony's error and **Open WORKFLOW.md** (the file in a local folder,
     the file on GitHub at the base branch for a managed clone).
-  - `WORKFLOW.md` missing (warning).
+  - `WORKFLOW.md` missing (warning): **Set Up WORKFLOW.md…** opens the Add Repo sheet's WORKFLOW.md page on
+    its own (see [Setting up a WORKFLOW.md for a connected repo](#setting-up-a-workflowmd-for-a-connected-repo)).
+  - `WORKFLOW.md` pending (warning), for a file the app added that Symphony can't read yet: **View Pull
+    Request**, or the file's path and **Reveal in Finder**.
   - The last fetch failed (error): git's error, selectable, **Copy Error** and **Open on GitHub**. Symphony
     tries again before the next dispatch.
   - An agent run with no activity for 10 minutes or more (warning): Symphony's stall timeout should have
@@ -464,16 +470,22 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
 - **WORKFLOW.md**: **Valid**, **Invalid** or **Missing**, in red when it doesn't load, with Symphony's
   error under it. Symphony keeps using the last good workflow until the file is fixed. With the default
   `workflow_source: ref`, this is the file committed on the base branch, so a broken `WORKFLOW.md` pushed
-  there shows as invalid even though the last good one still runs.
+  there shows as invalid even though the last good one still runs. For a repo whose `WORKFLOW.md` Add Repo
+  or **Set Up WORKFLOW.md…** added, it shows **Pending: pull request open** with the pull request's URL, or **Pending: written, not
+  pushed** with the file's path, until Symphony reports the file valid.
 - **Activity**: how long ago Symphony last ran `git fetch origin` before a dispatch, or **Failed** (in
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
   it runs on, how long it has run and its last activity, and **Reveal Worktree** for a worktree on this
   Mac. **No agents running** otherwise.
+- **Review**: the repo's manual review, **On** or **Off** with what it does (**Off**, the default, when
+  `symphony.yml` sets none).
+- **Source**, **Linear routing** and **Review** each have an **Edit…** in their header, which opens that
+  section's sheet (see [Edit, disconnect or remove a clone](#edit-disconnect-or-remove-a-clone)).
 - **Disconnect…** at the foot, in red.
 
 While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
-few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete disconnects the selected one (after
-the same confirmation), and ⌘W closes the window.
+few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete opens the same Disconnect sheet as
+**Disconnect…** and **−**, and ⌘W closes the window.
 
 When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
 set in Settings instead. Their source, Linear routing and manual review come from the file, and
@@ -490,38 +502,110 @@ In place of the repos, the detail shows:
 ### Add a repo
 
 **Add Repo…** (the toolbar's **+**, the **+** under the sidebar, ⌘N, or the button of an empty window) opens
-a sheet that adds an entry to `repositories:` in the
-`symphony.yml` set in Settings. Pick where the code comes from:
+a sheet that adds an entry to `repositories:` in the `symphony.yml` set in Settings. The sheet asks one thing
+per page: **Source**, **Linear**, **WORKFLOW.md** (only for a repo that has none) and **Review**. A step
+indicator at the top names the pages, and a fixed footer holds **Cancel**, **Back** and **Continue**
+(**Connect** on Review). The sheet is 520×520pt, so its footer stays on a 1024×768 screen on every page.
+Continue stays off until the page checks out, and its help says why.
+
+**Source.** Pick where the code comes from:
 
 - **GitHub URL:** paste `https://github.com/owner/repo` (a browser URL with more path after it works
   too), `git@github.com:owner/repo.git` or `owner/repo`. The entry gets `workspace.source: owner/repo`:
   Symphony keeps its own clone under `workspaces.clones_root` (`~/.local/share/symphony/repos` by
   default), made when Symphony starts, and never touches a checkout of yours. Its `WORKFLOW.md` comes
   from the repo.
-- **Local folder:** choose a folder in a git checkout. The checkout must have a GitHub `origin` remote
-  and a `WORKFLOW.md` at its top. The entry gets `workspace.strategy: worktree`, `workspace.repo` and
-  `workflow` set to the checkout's top folder and its `WORKFLOW.md`, and agents work in worktrees of it.
+- **Local folder:** **Choose…** a folder in a git checkout. The checkout must have a GitHub `origin` remote.
+  The entry gets `workspace.strategy: worktree`, `workspace.repo` and `workflow` set to the checkout's
+  top folder and its `WORKFLOW.md`, and agents work in worktrees of it.
 
-Then:
+Once typing pauses, or a folder is chosen, a line under the source shows what the sheet found: the folder,
+`owner/repo`, the default branch, and **has WORKFLOW.md** or **No WORKFLOW.md on main: you can set one up
+in a later step**. A folder that isn't a git checkout, or has no GitHub origin, shows the reason in red
+instead, and Continue stays off.
 
-- **Repo key** is filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
-  type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key.
-- **Base branch** is `main` until you change it.
-- **Linear routing:** the sheet lists the projects of the Linear workspace of the `LINEAR_API_KEY` in
-  Settings. Pick the project whose issues go to the repo, and optionally labels an issue must all carry.
-  The labels load once a project is picked: the workspace's and those of the project's teams. A missing
-  key or a failed request shows the reason in plain words with **Retry**. Each request reads one list in
-  pages of 50, so it stays well under Linear's query complexity limit.
+**Linear.** The **Project** pop-up lists the projects of the Linear workspace of the `LINEAR_API_KEY` in
+Settings; while they load it says so inside the pop-up. **Labels** is a token field that completes from the
+labels an issue in the picked project can carry (the workspace's and those of the project's teams), and
+takes only those; an issue must carry all of them. A sentence previews the route as it changes: "Issues in
+Billing with label backend go to billing-api." A project and labels another repo already takes show that
+repo under the labels, and Continue stays off. A failed request (a rejected key, no projects, the network,
+a query Linear finds too complex) shows in a warning box under the pickers, which keep their place, with
+**Retry** and **Open Settings…**. Each request reads one list in pages of 50, so it stays well under
+Linear's query complexity limit.
 
-Save stays disabled, with the reason under the form, while the input can't be saved: no folder chosen,
-a folder that isn't a GitHub checkout with a `WORKFLOW.md`, a URL that isn't a GitHub repo, a key that is
-empty, malformed or taken, an empty base branch, no project, or the same project and labels as another
-repo. It also waits while the picked project's labels load. Save changes only `repositories:`: comments and the other entries stay as they are. When the file
-has a single repo with no route, Save also marks it `default: true`, so it keeps the issues no route
-matches (Symphony refuses a second repo next to a repo with no route that isn't the default).
+**Review** sums up the source, the route and what happens to `WORKFLOW.md`, and holds:
+
+- **Repo key**, filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
+  type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key; a key that is
+  empty, malformed or taken says so under the field and turns Connect off.
+- **Base branch**, the repo's default branch (GitHub's, or the checkout's `origin/HEAD`), else `main`,
+  until you change it. For a GitHub URL, a changed branch is checked again for a `WORKFLOW.md`.
+- When the file has a single repo with no route, the line that it becomes the default repo.
+- What happens next: Symphony restarts now, after the active agent runs, when it starts, or by hand.
+
+#### WORKFLOW.md
+
+Symphony runs no agent on a repo without a `WORKFLOW.md`, so the sheet checks for one: a local folder at
+the checkout's top, a GitHub URL on the base branch through the GitHub CLI (`gh`, logged in with
+`gh auth login`). A repo that has one skips the step. For a repo that has none, the **WORKFLOW.md** page
+says so and offers a draft in the shape
+Symphony's own repos use: the setup hook, QA playbooks and `playbook` settings in the front matter, then
+the repo's commands and steps above the `{% render "playbook" %}` line, which expands to Symphony's
+standard playbook ([playbook partials](../docs/playbook.md)). The draft is filled in from the files at the
+repo's top:
+
+| Files | Stack | Setup hook | Tests |
+| --- | --- | --- | --- |
+| `mix.exs` | Elixir, Mix | `mix deps.get` (through `mise` with a `mise.toml` or `.tool-versions`) | `mix test` |
+| `build.gradle(.kts)` or `settings.gradle(.kts)` | Kotlin or Java, Gradle | none | `./gradlew test`; an Android app (`com.android.application` in `app/build.gradle(.kts)`) gets `testDebugUnitTest` and the `android_app` QA playbook with its `applicationId` |
+| `package.json` | TypeScript or JavaScript; npm, pnpm, yarn or bun from the lock file | the manager's install | the `test` script; `lint` and `typecheck` scripts as pre-push checks, and a commented `verification` block for a `dev` script |
+| `Cargo.toml`, `go.mod`, `Package.swift` | Rust, Go, Swift | `cargo fetch`, `go mod download`, `swift package resolve` | `cargo test`, `go test ./...`, `swift test` |
+
+A `test:` target in the `Makefile` makes the tests `make test`. The line **Found** sums up what was found.
+Edit the draft in the sheet, then pick how it lands under **Add it by**:
+
+- **Open a pull request** (the default): Connect makes a `symphony/add-workflow` branch (`-2`, `-3`… when
+  taken) from the base branch through GitHub's API, commits the file there and opens a pull request
+  against the base branch with `gh pr create`, so the file goes through review like any change. No
+  checkout of yours is touched. Agents start on the repo once it merges. When the commit or the pull
+  request fails, Connect deletes the branch again, so trying again doesn't leave branches behind.
+- **Write it into the checkout** (local folder only): Connect writes `WORKFLOW.md` at the checkout's top and
+  leaves it uncommitted. Commit and push it: Symphony reads the file from the base branch.
+- **Don't create one now**: Connect adds the repo as before.
+
+Connect adds the file first, then writes `symphony.yml`, and the banner on the new repo names the pull
+request or the file. When `gh` is missing or can't read the repo, the Source page says why and the sheet
+connects the repo without the step. Symphony never writes `WORKFLOW.md` without this pick, and
+agents still can't change the file afterwards: it stays a write-protected path in their workspaces.
+`SYMPHONY_BAR_GH` names the `gh` to run instead of the one on `PATH` or in the Homebrew folders, as QA
+passes do with a fake.
+
+A write that fails stays on the Review page in a warning box, and a `WORKFLOW.md` already added isn't added
+again when Connect is pressed once more. Connect changes only `repositories:`: comments and the other entries
+stay as they are. When the file has a single repo with no route, Connect also marks it `default: true`, so it
+keeps the issues no route matches (Symphony refuses a second repo next to a repo with no route that isn't the
+default).
+
+#### Setting up a WORKFLOW.md for a connected repo
+
+A repo connected without a `WORKFLOW.md` (Add Repo's **Don't create one now**, or a file deleted since) shows
+`WORKFLOW.md is missing` in **Needs attention** once Symphony reports it, with **Set Up WORKFLOW.md…**. It
+opens a sheet, **Set Up WORKFLOW.md for billing-api**, with the same WORKFLOW.md page as Add Repo's step:
+what was found and the editable draft, read from the checkout's working tree for a local folder, or from the
+base branch on GitHub through `gh` for a managed clone, then **Add it by**: **Open a pull request** (the
+default) or, for a local folder, **Write it into the checkout**. Not creating one is **Cancel**.
+
+**Create** adds the file as Add Repo's Connect does: the same `symphony/add-workflow` branch and pull request,
+deleted again when the pull request fails, or the file uncommitted at the checkout's top. The sheet then
+closes, a banner names the pull request or the file, and the repo shows **Pending: pull request open** or
+**Pending: written, not pushed** until Symphony reports the file valid. `symphony.yml` isn't written, so
+nothing restarts. A failure (no `gh`, a repo `gh` can't read, a pull request that couldn't be opened, a
+`WORKFLOW.md` already in the checkout) stays in the sheet in a warning box, and **Create** tries again.
+The button needs the repo's `owner/repo`, so a local folder without a GitHub `origin` has none.
 
 Symphony reads a new route from `symphony.yml` while it runs, but sets up a repo's workflow and its own
-clone only when it starts. So after Save:
+clone only when it starts. So after Connect:
 
 - a Symphony the app started restarts as with **Restart Symphony** when no agent runs; while agents
   run, the app asks first, and **Restart When Runs Finish** pauses dispatch and waits for them;
@@ -539,25 +623,53 @@ from `symphony.yml`.
 
 ### Edit, disconnect or remove a clone
 
-Edit… sits in the detail's header, Disconnect… at its foot, and both in the sidebar row's context menu.
-They are disabled, with the reason on hover (and next to Disconnect…), while `symphony.yml` can't be read
-or no longer has the repo.
+Each of the detail's Source, Linear routing and Review sections has its own **Edit…**, also in the sidebar
+row's context menu (**Edit Source…**, **Edit Linear Routing…**, **Edit Review…**); Disconnect… sits at the
+detail's foot and in the context menu. They are disabled, with the reason on hover (and next to Disconnect…),
+while `symphony.yml` can't be read or no longer has the repo.
 
-- **Edit…** opens the Add Repo sheet on the repo. Switch between **GitHub URL** and **Local folder**
-  (in either direction), change the base branch (empty uses `origin`'s default branch), and pick
-  another Linear project or labels; **No project** is allowed while labels, a team or an assignee still
-  route issues, or for the default repo. The key can't change. A local repo keeps its folder until you
-  choose another. Save rewrites only that entry: comments, the other entries, the route's team and
-  assignee, `default` and `fetch_before_dispatch` stay. Switching to a GitHub URL drops `repo`,
-  `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
-  them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
-  workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
-- **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
-  lines right above it (with no blank line between), and leaves one blank line between its neighbours.
-  It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
-  stays until you remove it. It is disabled for the only repo. For the `default: true` repo, the alert
-  asks which repo becomes the default. Symphony then restarts as after Add Repo.
-- **Remove Clone…** (managed repos only) deletes Symphony's clone under `workspaces.clones_root`
+Each Edit… opens a small sheet titled for its section and the repo, such as "Review of billing-api"; the key
+can't change. Every sheet is at most 520pt tall with **Cancel** and **Save** in a fixed footer, so they stay
+on a 1024×768 screen. Save rewrites only that repo's entry (and, for Make Default, the old default's
+`default` line): comments, the other entries, the route's team and assignee, and `fetch_before_dispatch`
+stay. A new route, default or review setting applies without a restart; a new source, workflow or base branch
+restarts Symphony as Add Repo does, asking first while agents run. The banner at the top of the detail says
+which.
+
+- **Source** (480×380): **GitHub URL** or **Local folder**, in either direction, with the same check as Add
+  Repo's Source step once you pick another repo or folder, and the base branch (empty uses `origin`'s default
+  branch). A caption says what switching does on disk: Symphony makes its own clone on the next start and
+  your folder stays as it is, or agents work in worktrees of the new folder and Symphony's old clone stays on
+  disk until you remove it. A local repo keeps its folder until you choose another. Switching to a GitHub URL
+  drops `repo`, `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder
+  sets them as Add Repo does, and refuses a checkout without a `WORKFLOW.md` at its top (only Add Repo drafts
+  one).
+- **Linear routing** (480×420): the project, the labels (the token field of Add Repo, completing from the
+  project's labels), the route preview, and **Default repo** ("Take the issues no other repo's route
+  matches."). A project or label Linear doesn't list stays selectable; **No project** is allowed while
+  labels, a team or an assignee still route issues, or for the default repo. A route another repo already has
+  shows under the labels and keeps Save off. Turning **Default repo** on names the current default that loses
+  it, and Save moves `default: true` from that repo to this one in the same write. On the default repo the
+  checkbox stays on (turn it on in another repo to move it). While the current default has no route of its
+  own the checkbox stays off and says so: Symphony refuses a repo with no route that isn't the default.
+- **Review** (440×360): **Ask me before merging (a merge-confirmation hold after QA)**, the repo's
+  `manual_review`, with what it does under it, and the repo's **Built-in ticket patterns** (Same as Settings,
+  On, Off). Save runs `symphony check` on the result first, with a spinner in the footer; when it rejects the
+  change, the reason shows in the sheet and nothing is written. **Change Review…** in the Symphony window's
+  Quality view opens this sheet.
+- **Disconnect…** (the detail's foot, the sidebar **−**, the context menu or Delete) opens a sheet,
+  "Disconnect <key>?", saying what happens and what stays on disk, with **Cancel** and **Disconnect**.
+  Disconnect removes the entry from `repositories:` together with the comment lines right above it
+  (with no blank line between), and leaves one blank line between its neighbours. It never deletes a
+  local folder: a local checkout and its branches stay as they are. It is disabled for the only repo,
+  with "Symphony needs at least one repo." on hover and next to it, and the sheet doesn't open. For
+  the `default: true` repo, the sheet's **New default** pop-up picks the repo that becomes the default.
+  For a managed repo whose clone exists, **Also delete Symphony's clone (<path>)** deletes the clone
+  in the same step. It can be checked only when Remove Clone… could run (below), and otherwise shows
+  why under it, following each poll. After removing the entry the app checks again as Remove Clone
+  does, so a clone that became busy is kept and the banner says why. Symphony then restarts as after
+  Add Repo.
+- **Remove Clone…** (managed repos only), for a repo that stays connected, deletes Symphony's clone under `workspaces.clones_root`
   after you confirm; the repo stays connected and Symphony clones it again when it starts or on its
   next dispatch. It is disabled, with the reason next to it, while an agent runs in a worktree of
   the clone (any repo with the same source), and while Symphony is starting or doesn't list its running
@@ -743,9 +855,12 @@ allowed in System Settings > Notifications; when they aren't, the app shows an a
 
 **Update mode** in Settings chooses how a newer release is installed:
 
-- **Manual** (the default): the menu shows the release and you install it with Update to vX. Nothing
-  installs by itself.
-- **Automatically when idle** and **Automatically at a set time**, below.
+- **Manual**: the menu shows the release and you install it with Update to vX. Nothing installs by itself.
+- **Automatically when idle**, **Automatically at a set time** and **Automatically when released**, below.
+
+**Automatically when released** is the default for every install that has no update mode stored: a new one,
+and one that ran before but never saved Settings. Saving Settings stores the mode, and a stored mode,
+Manual included, is never changed.
 
 With one of the automatic modes, the app installs a newer release by itself through the same steps as
 [Install an update](#install-an-update), without the confirmation:
@@ -764,8 +879,28 @@ With one of the automatic modes, the app installs a newer release by itself thro
   "Update postponed"; the next attempt is the next day's time. A time missed while the Mac slept or the app
   was closed (more than 10 minutes late) waits for the next day's time too, so dispatch isn't paused in the
   middle of the day. A release found by another check waits for the set time.
+- **Automatically when released**: as soon as a check finds a release (at launch, every 6 hours, or Check
+  for Updates…), or a status poll sees one already found, the app installs it, whatever agent runs are
+  active. It downloads and verifies it ("Updating: downloading and verifying vX…"), pauses dispatch, waits for
+  the active runs to finish ("Updating to vX: waiting for N agent runs…") and installs, as Update to vX does
+  but without asking. It never gives up on the runs: after the **Restart timeout** the line adds how long it
+  has waited ("(35 min)") and **Update Now Anyway** stops Symphony without waiting more. Release Notes…
+  shows the release under way.
+  - Once it has paused dispatch, it posts a notification, "Updating Symphony to vX", saying how many agent
+    runs it waits for, with **Cancel Update**. It makes no sound, and nothing shows in its place when
+    notifications aren't allowed. Clicking it opens the Symphony window. It is removed once the update
+    ends, fails or is cancelled, and the other modes post none.
+  - **Cancel Update**, in the menu while the release downloads or the update waits for runs, or on the
+    notification, stops the update and resumes the dispatch it paused. It holds that release: no check
+    installs it again, and the menu shows it as available with "You cancelled this update. It waits for
+    you; a newer release installs by itself.", **Update to vX** and **Skip This Version**. Installing it by
+    hand, skipping it or a newer release ends the hold; the app forgets it when it relaunches. Once
+    Symphony is stopping for the swap, Cancel Update does nothing.
+  - A failure before the swap, such as a failed download or verification, shows "Symphony wasn't updated:
+    <reason>. Trying again at the next check." under the update items, with no alert; the next check tries
+    again, not every status poll.
 
-In both modes:
+In all automatic modes:
 
 - A release you [skip](#skip-a-release), or one an update [rolled back](#health-check-and-automatic-rollback),
   is never installed by itself. A newer release is.
@@ -773,12 +908,12 @@ In both modes:
   or an app folder you can't write to).
 - A pause you made before the update stays after it, as with Update to vX. Cancel Update stops waiting.
 - A failure shows on the line under the update items, with no alert: a failed download or verification,
-  for example. When idle, the app tries again after the next check (every 6 hours, or Check for Updates); at
-  a set time, the next day.
+  for example. When idle or when released, the app tries again after the next check (every 6 hours, or Check
+  for Updates); at a set time, the next day.
 - The relaunched app runs the [health check](#health-check-and-automatic-rollback), as after Update to vX:
   `symphony check` must pass, Symphony must answer within 120 seconds of starting, and it must not exit
   unexpectedly 3 times within 10 minutes of the update. If any of these fails, the app rolls back to
-  `Symphony (previous).app` by itself and pins the failed version, so neither mode installs it again; a
+  `Symphony (previous).app` by itself and pins the failed version, so no automatic mode installs it again; a
   notification and the menu say which version was rolled back and why. **Retry vX** installs the pinned
   version again by hand, health check included. A newer release is installed as usual.
 - Once the update is healthy, a notification says "Symphony updated to vX" and the menu shows
@@ -792,9 +927,9 @@ kept. When an update fails its [health check](#health-check-and-automatic-rollba
 itself, moving the failed version aside as `Symphony (rolled back).app`. To go back to it by hand:
 
 1. **With an [automatic update mode](#automatic-updates) on, set Update mode to Manual in Settings… first.**
-   Otherwise the version you go back to finds the newer release with its check at launch and, when idle,
-   installs it again right away. The running version can't skip itself: its menu offers no release. The
-   mode is kept in UserDefaults, so the version you go back to reads it.
+   Otherwise the version you go back to finds the newer release with its check at launch and, when idle or
+   when released, installs it again right away. The running version can't skip itself: its menu offers no
+   release. The mode is kept in UserDefaults, so the version you go back to reads it.
 2. Choose **Quit** from the menu (this stops Symphony).
 3. Swap the two apps, in Finder or a terminal:
 
@@ -968,6 +1103,7 @@ make          # builds an ad-hoc-signed build/Symphony.app
 make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
+make snapshots  # renders the views in Tests/Snapshots offscreen (no window) and rewrites their PNGs
 make clean    # removes build/ and .build/
 make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
@@ -1040,7 +1176,7 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Four more variables, read only in QA mode:
+Six more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -1066,7 +1202,8 @@ Four more variables, read only in QA mode:
   `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
   `inbox-empty` and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
   and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
-  earlier decision; and the plan TP-923, whose brief mentions TP-947), of the pull request page: `pull-request`
+  earlier decision; the plan TP-923, whose brief mentions TP-947; TP-895's pull request, TP-896's clarify and TP-897's
+block, whose texts mention tickets and pull requests for their chips), of the pull request page: `pull-request`
   (`inbox-decision`'s content plus PR #448's page: two Code Review verdicts, four areas and TP-891's PR #446
   overlapping it), of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
   conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
@@ -1080,6 +1217,11 @@ Four more variables, read only in QA mode:
   SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \
     ./build/Symphony.app/Contents/MacOS/SymphonyBar
   ```
+- `SYMPHONY_QA_LINEAR_URL` points the Add Repo sheet's Linear queries (projects and labels) at a stub GraphQL
+  endpoint instead of `https://api.linear.app/graphql`, such as `http://localhost:4101/graphql`. Only an `http`
+  or `https` URL on a loopback host counts, since the sheet sends `LINEAR_API_KEY` with each query.
+- `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` makes the Add Repo sheet's folder picker open in that absolute folder, so a
+  QA pass, which can't type a path into the panel, picks a prepared checkout with the panel's Choose button.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
@@ -1087,8 +1229,10 @@ Four more variables, read only in QA mode:
   It keeps `status.json` current: its pid, version, build and bundle path, the pid of the Symphony it runs,
   every visible menu item (submenu items right after the item they open from) with whether it is enabled,
   the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
-  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt is answered with
-  the rest of the command file and cancelled when there is none. Pause Dispatch… and Force a Ticket…, which
+  no alerts: it records them there, and answers confirmations (Update, Quit) yes. Notifications and the
+  release notes window are recorded the same way, the window as its heading ("Symphony 0.0.1.43") and the
+  text above the notes, then the notes. A prompt is answered with the rest of the command file and cancelled
+  when there is none. Pause Dispatch… and Force a Ticket…, which
   open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the first line
   and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that reason, and
   without one pauses with the menu's.
@@ -1150,4 +1294,5 @@ touching the installed app.
 - **Pause or Resume shows an error under the status.** The app could not reach Symphony's control API or
   its token was rejected; the message says which. See [Pause and Resume](#pause-and-resume).
 
-`SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBar` is the AppKit app.
+`SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBarUI` holds the AppKit views the
+app wraps for SwiftUI (the chip text view), unit tested without a window; `SymphonyBar` is the AppKit app.

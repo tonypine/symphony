@@ -2370,6 +2370,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "orchestrator startup logs and deletes orphan workspaces" do
+    # An earlier test's startup lifecycle task outlives its orchestrator and reads the workflow
+    # when it gets to the sweep, so it could delete this test's orphan and report to a dead
+    # orchestrator, leaving this orchestrator's sweep nothing to log.
+    terminate_task_supervisor_children()
+
     workspace_root =
       Path.join(
         System.tmp_dir!(),
@@ -2395,15 +2400,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
         try do
-          assert %{running: []} =
-                   wait_for_snapshot(
-                     pid,
-                     fn _snapshot ->
-                       not File.exists?(orphan_workspace)
-                     end,
-                     500
-                   )
-
+          # The orchestrator logs the sweep's summary as it clears the task ref.
           wait_for_orchestrator_state(pid, &is_nil(&1.startup_workspace_lifecycle_task_ref), 500)
         after
           if Process.alive?(pid), do: GenServer.stop(pid)

@@ -26,6 +26,7 @@ defmodule SymphonyElixir.AgentRunner do
     Linear.TransientRetry,
     Linear.Usage,
     Notifications,
+    PathUnlock,
     PromptBuilder,
     PrReviewPoller,
     QaVerification,
@@ -110,10 +111,7 @@ defmodule SymphonyElixir.AgentRunner do
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
 
-          terminal_review_agent_block?(reason) ->
-            exit(reason)
-
-          terminal_tool_failure_circuit_breaker?(reason) ->
+          exits_as_is?(reason) ->
             exit(reason)
 
           linear_unavailable?(reason) ->
@@ -134,6 +132,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
   defp provider_hold_reason(_reason), do: nil
+
+  # The reasons the orchestrator reads as they are: a reviewer block, the tool-failure circuit
+  # breaker, and an epic review waiting for CI.
+  defp exits_as_is?(reason), do: terminal_review_agent_block?(reason) or terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
+
+  # An epic review that found CI still running on the commit it reviews: the orchestrator starts it
+  # again after a short wait instead of failing the run (`SymphonyElixir.EpicReview`).
+  defp ci_pending?({:ci_pending, %{}}), do: true
+  defp ci_pending?(_reason), do: false
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false
@@ -615,7 +622,11 @@ defmodule SymphonyElixir.AgentRunner do
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
     seed_ids = AgentTools.Linear.recover_comment_registry_seeds(issue, settings.tracker.kind, Keyword.take(opts, [:linear_retry_opts]))
-    opts = Keyword.put_new_lazy(opts, :run_profile, fn -> run_profile(issue, settings, opts) end)
+
+    opts =
+      opts
+      |> Keyword.put_new_lazy(:run_profile, fn -> run_profile(issue, settings, opts) end)
+      |> put_path_unlocks(issue)
 
     with {:ok, agent_module} <- agent_module(opts),
          {:ok, linear_comment_registry} <- ensure_comment_registry(opts, seed_ids),
@@ -702,6 +713,16 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  # A person's decision may unlock a protected path for this run only (`SymphonyElixir.PathUnlock`):
+  # the run claims the grant before its session starts, and its sandbox, tools and prompt get it.
+  defp put_path_unlocks(opts, issue) do
+    unlocks = PathUnlock.claim(issue, run_repo_key(issue, opts), Keyword.take(opts, [:run_id, :run_store]))
+
+    opts
+    |> Keyword.put(:path_unlocks, unlocks)
+    |> Keyword.put(:unlocked_paths, PathUnlock.paths(unlocks))
+  end
+
   defp start_agent_session(agent_module, workspace, worker_host, issue, opts) do
     settings = Keyword.fetch!(opts, :settings)
 
@@ -717,7 +738,8 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
       extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir)),
-      on_tool_call: Keyword.get(opts, :on_tool_call)
+      on_tool_call: Keyword.get(opts, :on_tool_call),
+      unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
     )
   end
 
@@ -735,7 +757,8 @@ defmodule SymphonyElixir.AgentRunner do
       linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
       dependency_audit_module: dependency_audit_module(opts),
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
-      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner)
+      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
+      unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
     )
   end
 

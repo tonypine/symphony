@@ -575,6 +575,18 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(blocked, :needs_person)
     end
 
+    test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
+      assert {:ok, %{verdict: :blocked, covered_by: "TP-716"} = blocked} =
+               QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":" tp-716 "}))
+
+      refute Map.has_key?(blocked, :needs_person)
+
+      for covered_by <- [~s("TP-716 and TP-694"), ~s(""), "716", "null"] do
+        assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":#{covered_by}}))
+        refute Map.has_key?(blocked, :covered_by)
+      end
+    end
+
     test "marks the steps a parent walkthrough reports for its verification checklist" do
       text =
         ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":"yes"},{"name":"Quit","status":"pass"}]})
@@ -583,6 +595,27 @@ defmodule SymphonyElixir.QaAgentTest do
       assert row == %{name: "UC1", status: "pass", details: "", evidence: [], checklist: true}
       refute Map.has_key?(walkthrough, :checklist)
       refute Map.has_key?(plain, :checklist)
+    end
+
+    test "keeps the gap label and the blockers a failing step names" do
+      text =
+        Jason.encode!(%{
+          "verdict" => "fail",
+          "steps" => [
+            %{"name" => "Make the tool", "status" => "fail", "gap" => " G1 "},
+            %{"name" => "Check with it", "status" => "fail", "gap" => "G2", "blocked_by" => [" G1 ", "TP-824", "", 7]},
+            %{"name" => "One blocker", "status" => "fail", "blocked_by" => "TP-824"},
+            %{"name" => "Nothing named", "status" => "fail", "gap" => " ", "blocked_by" => []}
+          ]
+        })
+
+      assert {:ok, %{steps: [tool, check, single, plain]}} = QaAgent.parse_response(text)
+      assert tool.gap == "G1"
+      refute Map.has_key?(tool, :blocked_by)
+      assert %{gap: "G2", blocked_by: ["G1", "TP-824"]} = check
+      assert single.blocked_by == ["TP-824"]
+      refute Map.has_key?(plain, :gap)
+      refute Map.has_key?(plain, :blocked_by)
     end
 
     test "rejects answers that do not follow the contract" do
@@ -604,6 +637,17 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   describe "prompt/2 and settings" do
+    test "a missing QA tool is never needs_person, and an open ticket covering it is named in covered_by" do
+      prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
+
+      assert prompt =~
+               "A missing QA tool or QA host capability is never `needs_person`, even when a person could check the step by hand"
+
+      assert prompt =~ "a missing secret or API key, an account, or a real device this QA host lacks"
+      refute prompt =~ "check a step by hand or on a real device"
+      assert prompt =~ "put that ticket's identifier in `covered_by`, so Symphony waits on that ticket instead of filing another"
+    end
+
     test "includes the ticket, the parent's criteria and the playbooks" do
       prompt = QaAgent.prompt(job(), %{"identifier" => "TP-243", "title" => "Parent", "description" => "- [ ] parent criterion"})
 
@@ -617,9 +661,13 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
       assert prompt =~ ~s("needs_person": true | false)
-      assert prompt =~ "Set `needs_person` to true when only a person can do what is left"
+      assert prompt =~ "Set `needs_person` to true only when the block is something only a person can hand over"
+      assert prompt =~ ~s("covered_by": )
       assert prompt =~ "Ending your turn ends the session"
       assert prompt =~ ~r/Do not leave\s+work running in the background/
+      # The gap rule and its fields are the epic review's alone.
+      refute prompt =~ "Each gap must be checkable"
+      refute prompt =~ ~s("blocked_by")
 
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
     end
@@ -673,6 +721,19 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert flat =~ "Symphony does not accept `pass` when no checklist row is reported or most of them are skipped"
       assert flat =~ "a follow-up sub-ticket"
+
+      # A follow-up must be checkable on its own PR; one that needs another merge first is two.
+      assert flat =~ "Each gap must be checkable on its own PR, before that PR merges"
+      assert flat =~ "the QA tools are served by the running Symphony app, not by that head"
+
+      assert flat =~
+               "A gap whose check needs another ticket that has not merged, or needs the change running in Symphony " <>
+                 "(a new QA tool, or orchestrator behaviour on Symphony's own repository), is two gaps: " <>
+                 "the first makes the change, the second checks it and is blocked by the first."
+
+      assert flat =~ "name what a gap waits on in its `\"blocked_by\"`: the `gap` labels of failing steps in this answer, or the identifiers of this epic's sub-tickets"
+      assert prompt =~ ~s("gap": "<optional: a short label for a failing step>")
+      assert prompt =~ ~s("blocked_by": [)
 
       # The epic is its own parent: no parent section and no verification ticket.
       refute prompt =~ "Parent issue (this is a sub-ticket"

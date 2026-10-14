@@ -46,8 +46,17 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxResult: EndpointResult?
     /// The Inbox item shown, by issue id; nil shows the first.
     @Published var inboxSelection: String?
-    /// The Director's picks in each plan's decisions, by issue id (C16).
-    @Published private(set) var inboxPicks: [String: DecisionPicks] = [:]
+    /// The Director's picks in each item's decisions, and its write-in, by issue id (C16, N11). Not `@Published`: a
+    /// keystroke in the write-in redraws the window only when the text turns blank or stops being blank.
+    private(set) var inboxPicks = InboxPicks() {
+        willSet { if publishesPicks { objectWillChange.send() } }
+    }
+    private var publishesPicks = true
+    /// The peek (N4): the tickets and pull requests the Director opened from the review, beside it.
+    @Published var peek = PeekNavigation()
+    /// Each peeked ticket's `/api/v1/:issue_identifier`, by identifier; absent while it answers 404.
+    @Published var peekIssues: [String: Data] = [:]
+    var peekReads = PeekReads()
     /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.
     @Published var inboxSheet: ConsequenceSheet?
     /// True while the sheet's move is on its way to Symphony.
@@ -158,7 +167,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     var onSelect: (SymphonyView) -> Void = { _ in }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var onOpenRepos: (String?) -> Void = { _ in }
     var onOpenWebDashboard: () -> Void = {}
     var onScopeChange: (OverviewScope) -> Void = { _ in }
@@ -213,6 +222,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readShippedIfDue()
                 readAuditIfDue()
                 readTicket()
+                readPeek()
             }
             .store(in: &cancellables)
     }
@@ -285,13 +295,20 @@ final class SymphonyWindowModel: ObservableObject {
         open(pending.move, on: item)
     }
 
-    func picks(for itemID: String) -> DecisionPicks { inboxPicks[itemID] ?? DecisionPicks() }
+    func picks(for itemID: String) -> DecisionPicks { inboxPicks[itemID] }
 
-    /// Picks option `option` in decision `decision` of the plan with issue id `itemID`.
+    /// Picks option `option` in decision `decision` of the item with issue id `itemID`.
     func pick(_ option: Int, decision: Int, itemID: String) {
-        var picks = picks(for: itemID)
-        picks.picks[decision] = option
-        inboxPicks[itemID] = picks
+        inboxPicks.pick(option, decision: decision, itemID: itemID)
+    }
+
+    /// Keeps what the Director writes in the write-in (N11) of the request with issue id `itemID`, with its picks.
+    func writeIn(_ text: String, itemID: String) {
+        var picks = inboxPicks
+        let blankChanged = picks.writeIn(text, itemID: itemID)
+        publishesPicks = blankChanged
+        inboxPicks = picks
+        publishesPicks = true
     }
 
     /// Acts on a review's toolbar entry: a move opens its sheet, a link opens.
@@ -330,7 +347,7 @@ final class SymphonyWindowModel: ObservableObject {
             case .done, .moved:
                 inboxSheet = nil
                 // The picks were sent: Send Decisions turns off again.
-                inboxPicks[sheet.itemID] = nil
+                inboxPicks.clear(sheet.itemID)
                 let outcome = result.moveOutcome ?? sheet.expectedOutcome
                 if outcome.moved { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
                 showBanner(sheet.banner(after: outcome))
@@ -487,7 +504,7 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Change Review…: the Repos window on `repoKey`'s Edit sheet, where its manual review is.
+    /// Change Review…: the Repos window on `repoKey`'s Review sheet, where its manual review is.
     func changeReview(_ repoKey: String) {
         onOpenRepos(repoKey)
     }
@@ -569,7 +586,7 @@ struct SymphonyWindowView: View {
                         // P10: ⌘[ and ⌘] between the views and the ticket pages shown.
                         ControlGroup {
                             Button(action: model.goBack) { Label(NavigationHistory.backTitle, systemImage: "chevron.left") }
-                                .disabled(!model.history.canGoBack)
+                                .disabled(!model.canGoBack)
                                 .help("Back (⌘[)")
                             Button(action: model.goForward) { Label(NavigationHistory.forwardTitle, systemImage: "chevron.right") }
                                 .disabled(!model.history.canGoForward)
@@ -616,6 +633,16 @@ struct SymphonyWindowView: View {
                             }
                             .help("Force a ticket (⇧⌘F)")
                             .disabled(!model.dispatchControl.canForce)
+                        }
+                    }
+                    if model.selection == .inbox, model.shownTicket == nil {
+                        ToolbarItem(placement: .primaryAction) {
+                            // N4: closes the peek, or shows it again.
+                            Button { model.togglePeek() } label: {
+                                Label(model.inspectorTitle, systemImage: "sidebar.trailing")
+                            }
+                            .help("\(model.inspectorTitle) (⌥⌘I)")
+                            .disabled(!model.peek.canToggle)
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {

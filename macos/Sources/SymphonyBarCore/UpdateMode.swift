@@ -6,6 +6,8 @@ public enum UpdateMode: String, CaseIterable, Identifiable {
     case manual
     case whenIdle
     case atTime
+    /// Installs a release as soon as a check finds it, waiting for agent runs as Update to vX does.
+    case onRelease
 
     public var id: String { rawValue }
 
@@ -15,6 +17,7 @@ public enum UpdateMode: String, CaseIterable, Identifiable {
         case .manual: return "Manual"
         case .whenIdle: return "Automatically when idle"
         case .atTime: return "Automatically at a set time"
+        case .onRelease: return "Automatically when released"
         }
     }
 
@@ -31,7 +34,21 @@ public enum UpdateMode: String, CaseIterable, Identifiable {
             return "Each day at this time Symphony checks for a new release and installs it: it pauses dispatch, "
                 + "waits for agent runs to finish, updates, and resumes dispatch. If the runs outlast the restart "
                 + "timeout it resumes dispatch and tries again the next day. " + UpdateMode.skipNote
+        case .onRelease:
+            return "When Symphony finds a new release it installs it straight away: it pauses dispatch, waits for "
+                + "agent runs to finish, updates, and resumes dispatch. " + UpdateMode.skipNote
         }
+    }
+
+    /// True for the modes that install by themselves.
+    public var isAutomatic: Bool { self != .manual }
+
+    /// The line under the picker when this copy can't install updates (S1f), nil in Manual or when it can.
+    /// `blocker` is `UpdateEligibility.blocker`.
+    public func blockerLine(_ blocker: String?) -> String? {
+        guard isAutomatic, let blocker else { return nil }
+        let reason = blocker.prefix(1).lowercased() + blocker.dropFirst()
+        return "▲ This copy can't update itself: \(reason)."
     }
 
     private static let skipNote = "A release you skip is never installed by itself."

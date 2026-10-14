@@ -1,13 +1,5 @@
 import Foundation
 
-/// A `WORKFLOW.md` the app wrote for a repo that hasn't reached its base branch yet (TP-694's pending store).
-public enum PendingWorkflow: Equatable {
-    /// A pull request adds the file.
-    case pullRequest(URL)
-    /// The file is written in the local folder at `path` but not pushed.
-    case written(path: String)
-}
-
 /// A repo's health in the Repos window: the sidebar glyph, the header line and the Needs attention box.
 public struct RepoHealth: Equatable {
     public enum Status: Equatable {
@@ -47,6 +39,8 @@ public struct RepoHealth: Equatable {
         case stopRun(issueIdentifier: String)
         case openInLinear(URL)
         case revealWorktree(path: String)
+        /// Opens the WORKFLOW.md page on its own, to draft the missing file and add it.
+        case setUpWorkflow(ConnectedWorkflowSetup)
 
         public var title: String {
             switch self {
@@ -58,6 +52,7 @@ public struct RepoHealth: Equatable {
             case .stopRun: return RepoHealth.stopRunTitle
             case .openInLinear: return "Open in Linear"
             case .revealWorktree: return ReposList.revealWorktreeTitle
+            case .setUpWorkflow: return ConnectedWorkflowSetup.buttonTitle
             }
         }
     }
@@ -230,7 +225,8 @@ public struct RepoHealth: Equatable {
                 id: "workflow",
                 severity: .warning,
                 title: "WORKFLOW.md is missing",
-                detail: "Symphony found no WORKFLOW.md on \(branchName(repo.baseBranch))."
+                detail: "Symphony found no WORKFLOW.md on \(branchName(repo.baseBranch)).",
+                fixes: ConnectedWorkflowSetup.of(repo).map { [.setUpWorkflow($0)] } ?? []
             )
         case .invalid:
             return Problem(
@@ -253,9 +249,9 @@ public struct RepoHealth: Equatable {
                 severity: .warning,
                 title: "WORKFLOW.md is waiting on its pull request",
                 note: "Symphony uses it once the pull request merges into \(branchName(branch)).",
-                fixes: [.viewPullRequest(url)]
+                fixes: URL(string: url).map { [.viewPullRequest($0)] } ?? []
             )
-        case let .written(path):
+        case let .localFile(path):
             return Problem(
                 id: "workflow",
                 severity: .warning,

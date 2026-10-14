@@ -19,6 +19,10 @@ final class ReposViewModel: ObservableObject {
     var pendingSelection: String?
     /// The open Add Repo sheet, nil while none is.
     @Published var addRepo: AddRepoViewModel?
+    /// The open Disconnect sheet, nil while none is.
+    @Published var disconnect: DisconnectSheetModel?
+    /// The open Set Up WORKFLOW.md sheet of a connected repo, nil while none is.
+    @Published var workflowSetup: WorkflowSetupSheetModel?
     /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown at the top of its repo's detail.
     @Published var banner: ReposBanner? {
         didSet {
@@ -35,8 +39,9 @@ final class ReposViewModel: ObservableObject {
     @Published var stopFailures: [String: String] = [:]
     var onSelect: (_ key: String) -> Void = { _ in }
     var onAddRepo: () -> Void = {}
-    var onEdit: (_ key: String) -> Void = { _ in }
+    var onEdit: (_ key: String, _ section: EditRepo.Section) -> Void = { _, _ in }
     var onDisconnect: (_ key: String) -> Void = { _ in }
+    var onConfirmDisconnect: (_ sheet: DisconnectSheetModel) -> Void = { _ in }
     var onRemoveClone: (_ key: String) -> Void = { _ in }
     var onStart: () -> Void = {}
     var onOpenSettings: () -> Void = {}
@@ -81,6 +86,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var cancelRestart: () -> Void = {}
 
     private let secrets: SecretsReader
+    /// The `WORKFLOW.md` files Add Repo added that Symphony can't read yet.
+    private let pendingWorkflows = PendingWorkflowStore(defaults: AppStores.current.defaults)
 
     /// `secrets` is shared with Start, so the Add Repo sheet and Start can't each put up a Keychain prompt.
     init(secrets: SecretsReader) {
@@ -94,14 +101,15 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private var poll: ReposPoll?
     private var inFlight = false
 
-    /// Shows the window; with `editing`, on that repo's Edit sheet, where its manual review is.
+    /// Shows the window; with `editing`, on that repo's Review sheet, where its manual review is.
     func show(status: SymphonyStatus, editing key: String? = nil) {
         if window == nil {
             let model = ReposViewModel()
             model.onSelect = { key in AppStores.current.defaults.set(key, forKey: Self.selectionKey) }
             model.onAddRepo = { [weak self] in self?.showSheet(editing: nil) }
-            model.onEdit = { [weak self] key in self?.showSheet(editing: key) }
+            model.onEdit = { [weak self] key, section in self?.showSheet(editing: key, section: section) }
             model.onDisconnect = { [weak self] key in self?.disconnect(key) }
+            model.onConfirmDisconnect = { [weak self] sheet in self?.confirmDisconnect(sheet) }
             model.onRemoveClone = { [weak self] key in self?.removeClone(key) }
             model.onStart = { [weak self] in self?.start() }
             model.onOpenSettings = { [weak self] in self?.openSettings() }
@@ -135,7 +143,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         window?.orderFrontRegardless()
         if let key {
             model?.selection = key
-            showSheet(editing: key)
+            showSheet(editing: key, section: .review)
         }
     }
 
@@ -170,7 +178,9 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     private func showDisplay() {
         guard let model else { return }
         let config = ReposConfig.read(path: configPath)
-        let shown = ReposList.window(status: status, poll: poll, config: config) { [status, poll] gitHub in
+        let shown = ReposList.window(
+            status: status, poll: poll, config: config, pendingWorkflows: pendingWorkflows
+        ) { [status, poll] gitHub in
             ManagedClones.removal(gitHub: gitHub, root: config.clonesRoot, status: status, poll: poll)
         }
         model.window = shown
@@ -234,14 +244,17 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         showSheet(editing: nil)
     }
 
-    /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
-    private func showSheet(editing key: String?) {
-        guard let model, model.addRepo == nil else { return }
-        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key) { [weak self] saved in
+    /// Opens the Add Repo sheet, or with `editing` the Edit sheet of that repo's `section`.
+    private func showSheet(editing key: String?, section: EditRepo.Section = .routing) {
+        guard let model, model.addRepo == nil, model.disconnect == nil, model.workflowSetup == nil else { return }
+        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, section: section) { [weak self] saved in
             self?.saved(saved)
         }
+        sheet.configCheck = { [secrets] path in await Self.configCheck(path, secrets: secrets) }
         // Also on the repo, so the error is still there once the sheet is closed.
         sheet.onSaveError = { [weak self] message in self?.show(ReposChange.failed(key: key, message: message).banner) }
+        sheet.openSettings = { [weak self] in self?.openSettings() }
+        sheet.apply = { [weak self] in self.map { AddRepo.apply(status: $0.status) } ?? .onNextStart }
         model.addRepo = sheet
     }
 
@@ -249,28 +262,40 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     /// runs, but makes a repo's workflow store and its own clone only when it starts.
     private func saved(_ saved: AddRepoViewModel.Saved) {
         switch saved {
-        case let .added(key, madeDefault):
+        case let .added(key, madeDefault, workflow):
+            if let workflow { pendingWorkflows.record(workflow, for: key) }
             let apply = AddRepo.apply(status: status)
             finish(
-                .added(key: key, apply: apply, madeDefault: madeDefault),
+                .added(key: key, apply: apply, madeDefault: madeDefault, workflow: workflow),
                 apply: apply,
                 question: { AddRepo.restartQuestion(key: key, runs: $0) }
             )
-        case let .edited(original, entry):
+        case let .edited(original, entry, previousDefault):
             let apply = EditRepo.apply(status: status, from: original, to: entry)
+            let madeDefault = entry.isDefault == true && original.isDefault != true
             finish(
-                .edited(key: entry.key, apply: apply),
+                .edited(key: entry.key, apply: apply, madeDefault: madeDefault, previousDefault: previousDefault),
                 apply: apply,
                 question: { EditRepo.restartQuestion(key: entry.key, runs: $0) }
             )
         }
     }
 
-    /// Asks before disconnecting `key`, with a pick of the new default when it is the default, then removes its
-    /// entry from `symphony.yml`. Never deletes a folder.
+    /// `symphony check` on the copy of `symphony.yml` at `path`, run as Start would run Symphony now.
+    private static func configCheck(_ path: String, secrets: SecretsReader) async -> ConfigCheckResult {
+        let settings = AppStores.current.settingsStore().loadSettings()
+        let read = await withCheckedContinuation { continuation in
+            secrets.read { continuation.resume(returning: $0) }
+        }
+        guard case let .success(values) = read else {
+            return .failed("Couldn't read the app's secrets to run symphony check.")
+        }
+        return await SettingsViewModel.runConfigCheck(configPath: path, settings: settings, secrets: values)
+    }
+
+    /// Opens the Disconnect sheet on `key`, unless `symphony.yml` can't be read or the repo can't be disconnected.
     private func disconnect(_ key: String) {
-        guard let model, model.addRepo == nil else { return }
-        let file = SymphonyConfigFile(path: configPath)
+        guard let model, model.addRepo == nil, model.disconnect == nil, model.workflowSetup == nil else { return }
         let entries: [RepositoryEntry]
         switch ReposConfig.read(path: configPath).entries {
         case let .success(read):
@@ -284,37 +309,42 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             return
         }
         guard let entry = entries.first(where: { $0.key == key }) else { return }
-        let candidates = DisconnectRepo.defaultCandidates(key: key, entries: entries)
-        let question = DisconnectRepo.question(for: entry, newDefaultNeeded: candidates != nil)
+        model.disconnect = DisconnectSheetModel(DisconnectRepo.Sheet(entry: entry, entries: entries))
+    }
 
-        let alert = NSAlert()
-        alert.messageText = question.title
-        alert.informativeText = question.message
-        alert.addButton(withTitle: DisconnectRepo.confirmTitle).hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
-        var picker: NSPopUpButton?
-        if let candidates {
-            let popUp = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26), pullsDown: false)
-            popUp.addItems(withTitles: candidates)
-            alert.accessoryView = popUp
-            picker = popUp
-        }
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let newDefault = picker?.titleOfSelectedItem
+    /// Removes the sheet's repo from `symphony.yml`, making the picked repo the default first. When the sheet asks to,
+    /// then asks Symphony again whether an agent uses the clone and deletes it only if not. Never deletes a local
+    /// folder.
+    private func confirmDisconnect(_ sheet: DisconnectSheetModel) {
+        guard let model else { return }
+        let key = sheet.content.key
+        let newDefault = sheet.content.candidates == nil ? nil : sheet.newDefault
+        // Checked again after the write: a clone that became busy while the sheet was open stays, and the banner
+        // says why.
+        let gitHub = sheet.deleteClone ? sheet.content.gitHub : nil
         let next = DisconnectRepo.nextSelection(after: key, in: model.window.repos.map(\.key))
+        model.disconnect = nil
         do {
-            try file.disconnectRepository(key, newDefault: newDefault)
+            try SymphonyConfigFile(path: configPath).disconnectRepository(key, newDefault: newDefault)
         } catch {
             show(ReposChange.failed(key: key, message: "Couldn't disconnect \(key): \(error.localizedDescription)").banner)
             return
         }
+        pendingWorkflows.clear(key)
         let apply = AddRepo.apply(status: status)
-        finish(
-            .disconnected(key: key, apply: apply, newDefault: newDefault, next: next),
-            apply: apply,
-            question: { DisconnectRepo.restartQuestion(key: key, runs: $0) }
-        )
+        let question = { (runs: Int) in DisconnectRepo.restartQuestion(key: key, runs: runs) }
+        guard let gitHub else {
+            finish(.disconnected(key: key, apply: apply, newDefault: newDefault, next: next), apply: apply, question: question)
+            return
+        }
+        Task {
+            let outcome = await removeCheckedClone(of: gitHub)
+            finish(
+                .disconnected(key: key, apply: apply, newDefault: newDefault, next: next, clone: outcome),
+                apply: apply,
+                question: question
+            )
+        }
     }
 
     /// Asks before deleting Symphony's clone of a managed repo, asks Symphony again whether an agent uses it, then
@@ -332,26 +362,29 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         Task {
-            // An agent may have started on the clone while the alert was open.
-            if ReposList.isAnswering(status) {
-                poll = await AppStores.current.fetchRepos(stateRoot: stateRoot())
-            }
-            let root = ReposConfig.read(path: configPath).clonesRoot
-            let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
-            var change: ReposChange?
-            if let path = removal.path {
-                do {
-                    try await Task.detached { try ManagedClones.remove(path, root: root) }.value
-                    change = .cloneRemoved(key: key, path: path)
-                } catch {
-                    change = .failed(key: key, message: "Couldn't remove the clone: \(error.localizedDescription)")
-                }
-            } else if case let .blocked(reason) = removal {
+            let change: ReposChange
+            switch await removeCheckedClone(of: gitHub) {
+            case let .removed(path):
+                change = .cloneRemoved(key: key, path: path)
+            case let .kept(reason):
                 change = .cloneKept(key: key, reason: reason)
+            case let .failed(message):
+                change = .failed(key: key, message: message)
             }
             update(status: status)
-            if let change { show(change.banner) }
+            show(change.banner)
         }
+    }
+
+    /// Checks again whether Symphony's clone of `gitHub` can go, since an agent may have started on it while the
+    /// question was open, and deletes it only then.
+    private func removeCheckedClone(of gitHub: String) async -> ManagedClones.Outcome {
+        if ReposList.isAnswering(status) {
+            poll = await AppStores.current.fetchRepos(stateRoot: stateRoot())
+        }
+        let root = ReposConfig.read(path: configPath).clonesRoot
+        let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
+        return await Task.detached { ManagedClones.remove(removal, root: root) }.value
     }
 
     /// Shows `banner` in place of the last one, and selects its repo now or once the window lists it.
@@ -374,6 +407,22 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             NSPasteboard.general.setString(error, forType: .string)
         case let .stopRun(identifier):
             stopRun(identifier)
+        case let .setUpWorkflow(setup):
+            setUpWorkflow(setup)
+        }
+    }
+
+    /// Opens the WORKFLOW.md page on its own for a connected repo that has none. Create keeps the file in the pending
+    /// store, so the repo shows it pending until Symphony reads it; `symphony.yml` is left as it is.
+    private func setUpWorkflow(_ setup: ConnectedWorkflowSetup) {
+        guard let model, model.addRepo == nil, model.disconnect == nil, model.workflowSetup == nil else { return }
+        model.workflowSetup = WorkflowSetupSheetModel(setup: setup) { [weak self] pending in
+            guard let self else { return }
+            pendingWorkflows.record(pending, for: setup.key)
+            // A Create that finishes after Cancel still added the file, but leaves a sheet opened since alone.
+            if self.model?.workflowSetup?.setup == setup { self.model?.workflowSetup = nil }
+            update(status: status)
+            show(ReposBanner(key: setup.key, text: setup.createdMessage(pending)))
         }
     }
 

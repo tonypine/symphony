@@ -5,6 +5,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Notifications.Event
   alias SymphonyElixir.PrReviewPoller
+  alias SymphonyElixir.TicketPullRequest
 
   @repo_key "default"
 
@@ -3581,6 +3582,23 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert_receive {:remove_workspace, "/tmp/workspaces/ACME-1780", nil}
     assert [] = RunStore.list_pr_reviews()
+  end
+
+  test "a merged or closed PR marks its ticket's PR record" do
+    now = ~U[2026-05-01 09:00:00Z]
+    pr_url = review_record(now, %{}).pr_url
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+
+    for {gh_state, pr_state} <- [{"MERGED", "merged"}, {"CLOSED", "closed"}] do
+      :ok = TicketPullRequest.record_created(@repo_key, "issue-1780", pr_url, "auto/ACME-1780")
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: gh_state))
+      :ok = put_review(now)
+
+      assert {:ok, %{actions: [{:cleanup, "issue-1780", ^pr_state}]}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, workspace: FakeWorkspace, now: now)
+
+      assert %{state: ^pr_state} = TicketPullRequest.get(@repo_key, "issue-1780")
+    end
   end
 
   test "defers merged-PR workspace cleanup until the issue's agent run ends" do

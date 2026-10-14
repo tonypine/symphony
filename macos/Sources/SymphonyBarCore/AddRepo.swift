@@ -56,10 +56,16 @@ public struct LocalCheckout: Equatable {
     public var path: String
     /// `owner/repo` of its `origin` remote.
     public var gitHub: String
+    /// Whether it has a `WORKFLOW.md` at its top.
+    public var hasWorkflow: Bool
+    /// The branch `origin/HEAD` points at, nil when the checkout doesn't record it.
+    public var defaultBranch: String?
 
-    public init(path: String, gitHub: String) {
+    public init(path: String, gitHub: String, hasWorkflow: Bool = true, defaultBranch: String? = nil) {
         self.path = path
         self.gitHub = gitHub
+        self.hasWorkflow = hasWorkflow
+        self.defaultBranch = defaultBranch
     }
 
     /// The `WORKFLOW.md` Symphony reads for the repo. Symphony resolves a relative `workflow` against the
@@ -71,7 +77,7 @@ public struct LocalCheckout: Equatable {
     /// Runs git with arguments in a folder; returns its exit status and standard output.
     public typealias Git = (_ arguments: [String], _ folder: String) -> (status: Int32, output: String)
 
-    /// Checks that `folder` is in a git checkout whose `origin` is on GitHub and which has a `WORKFLOW.md`.
+    /// Checks that `folder` is in a git checkout whose `origin` is on GitHub, and whether it has a `WORKFLOW.md`.
     public static func inspect(
         _ folder: String,
         git: Git = runGit,
@@ -91,11 +97,19 @@ public struct LocalCheckout: Equatable {
         guard let gitHub = GitHubRepoInput.normalize(url) else {
             return .failure(AddRepoProblem("The origin of \(shownTop) isn't a GitHub repo: \(url)"))
         }
-        let checkout = LocalCheckout(path: path, gitHub: gitHub)
-        guard fileExists(checkout.workflowPath) else {
-            return .failure(AddRepoProblem("\(shownTop) has no WORKFLOW.md. Add one before connecting the repo."))
+        var checkout = LocalCheckout(path: path, gitHub: gitHub)
+        checkout.hasWorkflow = fileExists(checkout.workflowPath)
+        let head = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], path)
+        let branch = head.output.trimmingWhitespace()
+        if head.status == 0, branch.hasPrefix("origin/"), branch.count > "origin/".count {
+            checkout.defaultBranch = String(branch.dropFirst("origin/".count))
         }
         return .success(checkout)
+    }
+
+    /// Why the Source sheet can't move a repo to this checkout: it has no `WORKFLOW.md`.
+    public var missingWorkflowProblem: AddRepoProblem {
+        AddRepoProblem("\((path as NSString).abbreviatingWithTildeInPath) has no WORKFLOW.md. Add one before connecting the repo.")
     }
 
     /// Runs `/usr/bin/git -C folder arguments…`, waiting for it to exit.
@@ -144,9 +158,12 @@ public struct AddRepoDraft: Equatable {
     /// The name of the Linear project picked.
     public var project: String?
     public var labels: [String]
-    /// The repo's manual review setting, which only the Edit sheet shows.
+    /// Whether the repo is the default one, which only the Edit sheet's Linear routing shows. Turning it on moves
+    /// `default: true` from the current default.
+    public var isDefault: Bool
+    /// The repo's manual review setting, which only the Review sheet shows.
     public var manualReview: ManualReviewChoice
-    /// Whether Code Review's built-in ticket patterns apply to the repo, which only the Edit sheet shows.
+    /// Whether Code Review's built-in ticket patterns apply to the repo, which only the Review sheet shows.
     public var ticketPatternsBuiltIn: BuiltInTicketPatternsChoice
 
     public init(
@@ -157,6 +174,7 @@ public struct AddRepoDraft: Equatable {
         baseBranch: String = AddRepo.defaultBaseBranch,
         project: String? = nil,
         labels: [String] = [],
+        isDefault: Bool = false,
         manualReview: ManualReviewChoice = .off,
         ticketPatternsBuiltIn: BuiltInTicketPatternsChoice = .inherit
     ) {
@@ -167,6 +185,7 @@ public struct AddRepoDraft: Equatable {
         self.baseBranch = baseBranch
         self.project = project
         self.labels = labels
+        self.isDefault = isDefault
         self.manualReview = manualReview
         self.ticketPatternsBuiltIn = ticketPatternsBuiltIn
     }
@@ -234,8 +253,31 @@ public enum AddRepo {
 
     /// The entry the draft adds, or the first thing that stops it. `existing` is the `repositories:` list now.
     public static func entry(for draft: AddRepoDraft, existing: [RepositoryEntry]) -> Result<RepositoryEntry, AddRepoProblem> {
-        var workflow: String?
-        var workspace = RepositoryWorkspace()
+        let source: (workflow: String?, workspace: RepositoryWorkspace)
+        switch self.source(of: draft) {
+        case let .success(found):
+            source = found
+        case let .failure(problem):
+            return .failure(problem)
+        }
+        let key = draft.key.trimmingWhitespace()
+        if let problem = keyProblem(key, existing: existing.map(\.key)) { return .failure(problem) }
+        if let problem = baseBranchProblem(draft.baseBranch) { return .failure(problem) }
+        guard let route = route(of: draft) else {
+            return .failure(AddRepoProblem("Pick the Linear project whose issues go to this repo."))
+        }
+        if let problem = twinProblem(route, existing: existing) { return .failure(problem) }
+        return .success(RepositoryEntry(
+            key: key,
+            baseBranch: draft.baseBranch.trimmingWhitespace(),
+            workflow: source.workflow,
+            route: route,
+            workspace: source.workspace
+        ))
+    }
+
+    /// The `workflow` and `workspace` of the source the draft names, or why it names none yet.
+    static func source(of draft: AddRepoDraft) -> Result<(workflow: String?, workspace: RepositoryWorkspace), AddRepoProblem> {
         switch draft.mode {
         case .gitHub:
             let input = draft.gitHubInput.trimmingWhitespace()
@@ -245,7 +287,7 @@ public enum AddRepo {
                     "Use a GitHub repo as https://github.com/owner/repo, git@github.com:owner/repo.git or owner/repo."
                 ))
             }
-            workspace.source = gitHub
+            return .success((nil, RepositoryWorkspace(source: gitHub)))
         case .localFolder:
             switch draft.folder {
             case nil:
@@ -253,27 +295,34 @@ public enum AddRepo {
             case let .failure(problem)?:
                 return .failure(problem)
             case let .success(checkout)?:
-                workflow = checkout.workflowPath
-                workspace.strategy = "worktree"
-                workspace.repo = checkout.path
+                return .success((checkout.workflowPath, RepositoryWorkspace(strategy: "worktree", repo: checkout.path)))
             }
         }
+    }
 
-        let key = draft.key.trimmingWhitespace()
-        if let problem = keyProblem(key, existing: existing.map(\.key)) { return .failure(problem) }
-        let baseBranch = draft.baseBranch.trimmingWhitespace()
-        guard !baseBranch.isEmpty else { return .failure(AddRepoProblem("Enter a base branch, such as main.")) }
-        guard let project = draft.project?.trimmingWhitespace(), !project.isEmpty else {
-            return .failure(AddRepoProblem("Pick the Linear project whose issues go to this repo."))
-        }
+    /// Why `branch` can't be the base branch, nil when it can.
+    public static func baseBranchProblem(_ branch: String) -> AddRepoProblem? {
+        branch.trimmingWhitespace().isEmpty ? AddRepoProblem("Enter a base branch, such as main.") : nil
+    }
+
+    /// The route of the draft's project and labels, nil while no project is picked.
+    static func route(of draft: AddRepoDraft) -> RepositoryRoute? {
+        guard let project = draft.project?.trimmingWhitespace(), !project.isEmpty else { return nil }
         let labels = draft.labels.map { $0.trimmingWhitespace() }.filter { !$0.isEmpty }
-        let route = RepositoryRoute(projects: [project], labels: labels.isEmpty ? nil : labels)
-        if let twin = existing.first(where: { sameRoute($0.route, route) }) {
-            return .failure(AddRepoProblem(
-                "`\(twin.key)` already takes the issues of this project and labels. Pick other labels or another project."
-            ))
-        }
-        return .success(RepositoryEntry(key: key, baseBranch: baseBranch, workflow: workflow, route: route, workspace: workspace))
+        return RepositoryRoute(projects: [project], labels: labels.isEmpty ? nil : labels)
+    }
+
+    /// Why `route` can't be added: another repo in `existing` already takes the same issues.
+    static func twinProblem(_ route: RepositoryRoute, existing: [RepositoryEntry]) -> AddRepoProblem? {
+        guard let twin = existing.first(where: { sameRoute($0.route, route) }) else { return nil }
+        return AddRepoProblem("`\(twin.key)` already takes the issues of this project and labels. Pick other labels or another project.")
+    }
+
+    /// The repo made the default when one is added to `existing`: the only repo, when it has no route and isn't the
+    /// default yet. Symphony refuses two repos where one has no route.
+    public static func madeDefault(existing: [RepositoryEntry]) -> String? {
+        guard existing.count == 1, let only = existing.first, isUnscoped(only.route), only.isDefault != true else { return nil }
+        return only.key
     }
 
     /// `yaml` with `entry` added. When the file has one repo and it has no route and isn't the default, it becomes
@@ -282,11 +331,10 @@ public enum AddRepo {
     public static func adding(_ entry: RepositoryEntry, to yaml: String) throws -> (text: String, madeDefault: String?) {
         let existing = try RepositoriesConfig.entries(in: yaml)
         var text = yaml
-        var madeDefault: String?
-        if existing.count == 1, var only = existing.first, isUnscoped(only.route), only.isDefault != true {
+        let madeDefault = madeDefault(existing: existing)
+        if madeDefault != nil, var only = existing.first {
             only.isDefault = true
             text = try RepositoriesConfig.updating(only.key, to: only, in: text)
-            madeDefault = only.key
         }
         return (try RepositoriesConfig.adding(entry, to: text), madeDefault)
     }
@@ -319,7 +367,7 @@ public enum AddRepo {
     }
 
     /// What the sheet says after saving, for how the repo reaches Symphony.
-    public static func savedMessage(key: String, apply: AddRepoApply, madeDefault: String?) -> String {
+    public static func savedMessage(key: String, apply: AddRepoApply, madeDefault: String?, workflow: PendingWorkflow? = nil) -> String {
         var message: String
         switch apply {
         case .restart, .askToRestart:
@@ -330,6 +378,7 @@ public enum AddRepo {
             message = "Added \(key). Restart Symphony to connect it."
         }
         if let madeDefault { message += " \(madeDefault) is now the default repo, so it keeps the issues no route matches." }
+        if let workflow { message += " " + workflow.savedSentence }
         return message
     }
 

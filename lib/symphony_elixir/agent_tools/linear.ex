@@ -25,6 +25,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.PathUnlock
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.Tracker
@@ -729,6 +730,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec add_comment(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def add_comment(context, body, opts) when is_binary(body) do
     with {:ok, issue_id} <- current_issue_id(context),
+         :ok <- reject_ruling(body),
          {:ok, mutation, variables} <- comment_create(issue_id, body, Keyword.get(opts, :parent_id)),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_add_comment", opts),
          {:ok, response} <- graphql(mutation, variables, opts),
@@ -759,6 +761,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   def update_comment(context, comment_id, body, opts) when is_binary(comment_id) and is_binary(body) do
     with :ok <- verify_comment_owner(context, comment_id),
          :ok <- reject_truncated_body(body),
+         :ok <- reject_ruling(body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_update_comment", opts),
          {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts) do
       check_mutation_success(response, "commentUpdate")
@@ -913,6 +916,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, title, description, priority, blocked_by} <- validate_subissue_fields(attrs),
+         :ok <- reject_unlock_grant(description),
          :ok <-
            SecretScanner.reject_fields_if_secret_pattern(
              [title: title, description: description],
@@ -937,6 +941,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   def update_subissue(context, attrs, opts \\ []) when is_map(attrs) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, identifier, change} <- validate_subissue_update(attrs),
+         :ok <- reject_unlock_grant(Map.get(change, :description)),
          :ok <-
            SecretScanner.reject_fields_if_secret_pattern(
              change |> Map.take([:title, :description, :cancel_reason]) |> Enum.to_list(),
@@ -2192,6 +2197,24 @@ defmodule SymphonyElixir.AgentTools.Linear do
     if Enum.any?(AgentLabels.known_workpad_markers(), &String.contains?(body, &1)),
       do: PromptSafety.linear_workpad_comment_body(body),
       else: PromptSafety.linear_issue_comment_body(body)
+  end
+
+  # A comment opening with `Decision:` or `Ruling:` is a person's ruling, which Symphony records in
+  # the ticket's scope (`Decisions.rulings/1`). Agents post as the operator's Linear user, so the
+  # opener is all that tells a ruling apart: an agent may not write one. Nor may it write a grant
+  # that unlocks a protected path (`PathUnlock`), which a reply under a decision request would
+  # record as the person's answer.
+  defp reject_ruling(body) do
+    cond do
+      Decisions.ruling?(body) -> {:error, :ruling_comment_body}
+      PathUnlock.grant_text?(body) -> {:error, :path_unlock_grant_text}
+      true -> :ok
+    end
+  end
+
+  # A sub-issue's description is where its Decisions section lives, so it may not hold a grant.
+  defp reject_unlock_grant(text) do
+    if PathUnlock.grant_text?(text), do: {:error, :path_unlock_grant_text}, else: :ok
   end
 
   # A body copied from a cut read would replace the stored comment with its truncated text.

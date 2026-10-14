@@ -26,6 +26,12 @@ extension DesignTokens.SystemColor {
     }
 }
 
+extension EnvironmentValues {
+    /// True while a view renders offscreen with `ImageRenderer` (the snapshots in `Tests/Snapshots`), which can't
+    /// draw an AppKit-backed control: the few that are draw a SwiftUI stand-in of the same size instead.
+    @Entry var offscreenSnapshot = false
+}
+
 // The one exception to system colors: the chart palette's validated light and dark pair (§3.3).
 extension DesignTokens.ChartSeries {
     /// The series color, its light or dark value following the appearance.
@@ -57,6 +63,24 @@ extension DesignTokens.TypeStyle {
         case .label: .subheadline.weight(.medium)
         case .caption: .caption
         case .mono: .system(.callout, design: .monospaced)
+        }
+    }
+}
+
+extension DesignTokens.TypeStyle {
+    /// The same style as an AppKit font, for text an AppKit view draws (`ChipText`).
+    var nsFont: NSFont {
+        func preferred(_ style: NSFont.TextStyle) -> CGFloat { NSFont.preferredFont(forTextStyle: style).pointSize }
+        return switch self {
+        case .sentence: .systemFont(ofSize: preferred(.title2), weight: .semibold)
+        case .figure: .systemFont(ofSize: 28, weight: .semibold)
+        case .section: .systemFont(ofSize: preferred(.title3), weight: .semibold)
+        case .rowTitle: .preferredFont(forTextStyle: .headline)
+        case .body: .preferredFont(forTextStyle: .body)
+        case .callout: .preferredFont(forTextStyle: .callout)
+        case .label: .systemFont(ofSize: preferred(.subheadline), weight: .medium)
+        case .caption: .preferredFont(forTextStyle: .caption1)
+        case .mono: .monospacedSystemFont(ofSize: preferred(.callout), weight: .regular)
         }
     }
 }

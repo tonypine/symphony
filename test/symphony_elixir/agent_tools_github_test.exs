@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.Workspace
 
@@ -526,6 +527,28 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       git!(fixture.workspace, ["push", "origin", "auto/ACME-483"])
 
       assert {:ok, %{"status" => "merge_staged"}} = GitHub.sync_base(fixture.context)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base and push_branch accept the branch's change to a path a person unlocked for the run, and only that path" do
+    fixture = sync_fixture!("github-agent-sync-base-unlocked")
+
+    try do
+      commit_files!(fixture.workspace, %{"config/settings_ui_exempt.yml" => "exempt: []\n"}, "drop the exemption")
+      commit_files!(fixture.upstream, %{"lib/app.ex" => "app v2\n"}, "main work")
+      git!(fixture.upstream, ["push", "origin", "main"])
+
+      assert {:error, {:protected_paths_changed, ["config/settings_ui_exempt.yml"]}} = GitHub.sync_base(fixture.context)
+
+      unlocked = [unlocked_paths: ["config/settings_ui_exempt.yml"]]
+      assert {:ok, %{"status" => "merge_staged"}} = GitHub.sync_base(fixture.context, unlocked)
+      git!(fixture.workspace, ["commit", "--no-edit"])
+
+      commit_files!(fixture.workspace, %{"WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
+      assert {:error, {:protected_paths_changed, ["WORKFLOW.md"]}} = GitHub.sync_base(fixture.context, unlocked)
+      assert {:error, {:protected_paths_changed, ["WORKFLOW.md"]}} = GitHub.push_branch(fixture.context, unlocked)
     after
       File.rm_rf(fixture.root)
     end
@@ -2093,6 +2116,65 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     after
       File.rm_rf(fixture.root)
       RunStore.delete_ticket_state(repo_key, issue_id)
+    end
+  end
+
+  test "opening a PR records it as the ticket's open PR, replacing a closed one" do
+    repo_key = "github-agent-ticket-pr-repo"
+    issue_id = "issue-github-agent-ticket-pr"
+    workspace = tmp_workspace!("github-agent-ticket-pr")
+    context = workspace |> scoped_context() |> Map.put(:issue, %{id: issue_id, repo_key: repo_key})
+    git_runner = fn ["branch", "--show-current"], _opts -> {"auto/ACME-1008\n", 0} end
+    first = "https://github.com/acme/symphony/pull/10"
+    second = "https://github.com/acme/symphony/pull/11"
+
+    try do
+      assert {:ok, %{"url" => ^first}} =
+               GitHub.create_pull_request(context, "Title", "Body", false,
+                 settings: %Schema{},
+                 git_runner: git_runner,
+                 gh_runner: fn _args, _opts -> {first <> "\n", 0} end
+               )
+
+      assert %{pr_url: ^first, branch: "auto/ACME-1008", state: "open", source: "created"} =
+               TicketPullRequest.get(repo_key, issue_id)
+
+      # The first PR closed; the agent opens another one for the same ticket.
+      :ok = TicketPullRequest.mark_finished(repo_key, first, "closed")
+
+      assert {:ok, %{"url" => ^second}} =
+               GitHub.create_pull_request(context, "Title", "Body", false,
+                 settings: %Schema{},
+                 git_runner: git_runner,
+                 gh_runner: fn _args, _opts -> {second <> "\n", 0} end
+               )
+
+      assert %{pr_url: ^second, state: "open"} = TicketPullRequest.get(repo_key, issue_id)
+    after
+      File.rm_rf(workspace)
+      RunStore.delete_ticket_state(repo_key, issue_id)
+    end
+  end
+
+  test "a store failure recording the PR is logged and the PR is still opened" do
+    workspace = tmp_workspace!("github-agent-ticket-pr-failure")
+    context = workspace |> scoped_context() |> Map.put(:issue, %{id: "issue-github-agent-ticket-pr-failure", repo_key: "  "})
+    pr_url = "https://github.com/acme/symphony/pull/12"
+
+    try do
+      log =
+        capture_log(fn ->
+          assert {:ok, %{"url" => ^pr_url}} =
+                   GitHub.create_pull_request(context, "Title", "Body", false,
+                     settings: %Schema{},
+                     git_runner: fn ["branch", "--show-current"], _opts -> {"auto/ACME-1008\n", 0} end,
+                     gh_runner: fn _args, _opts -> {pr_url <> "\n", 0} end
+                   )
+        end)
+
+      assert log =~ "Failed to record the pull request"
+    after
+      File.rm_rf(workspace)
     end
   end
 

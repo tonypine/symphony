@@ -92,7 +92,9 @@ change it until a person other than the author adds the `protected-paths-approve
 
 To add a setting: add its control to the app, list its key in the manifest, and extend the line
 editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
-same PR, and labels the PR. `WORKFLOW.md` front matter (repo-owned settings) is not covered.
+same PR, and labels the PR. A person can also let the ticket's next agent run edit the file with a
+decision on the ticket, such as `Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop
+the stale exemption.` (see [Unlocking a protected path for one run](security.md#unlocking-a-protected-path-for-one-run)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
 
 ## Top-Level Sections
 
@@ -1247,7 +1249,11 @@ only what it needs to use the change. The epic review judges a criterion that as
 coverage or CI to pass by CI's runs on the base branch head it tests, read with `gh run list` where
 the sandbox allows `gh`, else through GitHub's public API: green runs make the step `pass` with the
 run URLs, a failed run makes it `fail` naming the failing job and the run (so it is filed as a gap),
-and it is `skipped` only when no run can be read or a run is still in progress. The public API is
+and it is `skipped` only when no run can be read or a run is still in progress. Symphony waits for
+CI before it starts the epic review's agent: while a run on that commit is unfinished, the review
+starts again a minute later, without a verdict or a retry attempt, so a review that starts the
+moment the last sub-ticket merges does not judge a commit CI is still testing. A run still
+unfinished after two hours is not waited on. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
@@ -1507,7 +1513,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
@@ -1518,6 +1524,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
 | `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
+| `qa_put_checkout` | puts a git checkout where the app can open it: clones a `git bundle` the agent made into `checkouts/<remote_name>` in the driver's directory (the run directory on a `worker_host`) with no hooks, sets its `origin` to `remote_url`, and returns its path. Nothing is fetched from GitHub | the bundle files `qa_put_file` refuses, a `remote_url` that is not `https://github.com/<owner>/<repo>`, a `remote_name` that is not a plain file name, a checkout name already taken in the pass |
 | `qa_api_requests` | returns the requests an app launched with `api_fixtures` logged to `api-requests.jsonl` in its QA root since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; on a `worker_host` it reads the log there | a log that cannot be read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
@@ -1631,7 +1638,8 @@ host and the worktree checks still apply there. Then:
   the bundle into the run directory;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
   set, plus `SYMPHONY_BAR_QA_API_FIXTURES` when the agent passes `api_fixtures` (the checked files
-  go over SSH as a tar into a fresh `api-fixtures-<n>/` in the run directory), over an SSH session that forwards the URL's loopback port on the QA host back to the
+  go over SSH as a tar into a fresh `api-fixtures-<n>/` in the run directory) and the stand-ins the
+  agent asks for, over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
 - at the start of the pass Symphony picks three free loopback ports on the Symphony host and
   hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment) and to `build`

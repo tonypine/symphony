@@ -22,12 +22,28 @@ final class ReposChangeTests: XCTestCase {
                 )
             ),
             (
+                .added(key: "web", apply: .onNextStart, madeDefault: nil, workflow: .pullRequest(url: "https://github.com/acme/web/pull/7")),
+                ReposBanner(
+                    key: "web",
+                    text: "Added web. Symphony connects it when it starts. Opened https://github.com/acme/web/pull/7 to add its "
+                        + "WORKFLOW.md."
+                )
+            ),
+            (
                 .edited(key: "api", apply: nil),
                 ReposBanner(key: "api", text: "Saved api. Symphony reads the change from symphony.yml, so its next poll uses it.")
             ),
             (
                 .edited(key: "api", apply: .onNextStart),
                 ReposBanner(key: "api", text: EditRepo.savedMessage(key: "api", apply: .onNextStart))
+            ),
+            (
+                .edited(key: "api", apply: nil, madeDefault: true, previousDefault: "billing"),
+                ReposBanner(
+                    key: "api",
+                    text: "Saved api. Symphony reads the change from symphony.yml, so its next poll uses it. "
+                        + "api is now the default repo in place of billing."
+                )
             ),
             (
                 .disconnected(key: "billing", apply: .onNextStart, newDefault: nil, next: "api"),
@@ -67,6 +83,39 @@ final class ReposChangeTests: XCTestCase {
         XCTAssertEqual(removed.laterBanner, removed.banner)
         let kept = ReposChange.cloneKept(key: "api", reason: "busy")
         XCTAssertEqual(kept.laterBanner, kept.banner)
+    }
+
+    func testDisconnectBannersSayWhatHappenedToTheClone() {
+        XCTAssertEqual(
+            ReposChange.disconnected(
+                key: "billing", apply: .onNextStart, newDefault: nil, next: "api",
+                clone: .removed(path: "/var/clones/acme/billing")
+            ).banner,
+            ReposBanner(key: "api", text: "Disconnected billing. Removed Symphony's clone of billing at /var/clones/acme/billing.")
+        )
+        XCTAssertEqual(
+            ReposChange.disconnected(
+                key: "billing", apply: .restart, newDefault: "api", next: "api",
+                clone: .kept(reason: "TP-7 runs in a worktree of this clone. Remove it once that run finishes.")
+            ).banner,
+            ReposBanner(
+                key: "api",
+                text: "Disconnected billing. Symphony restarts to drop it. api is now the default repo. Kept Symphony's "
+                    + "clone: TP-7 runs in a worktree of this clone. Remove it once that run finishes.",
+                style: .error
+            )
+        )
+        XCTAssertEqual(
+            ReposChange.disconnected(
+                key: "billing", apply: .askToRestart(runs: 1), newDefault: nil, next: "api",
+                clone: .failed(message: "Couldn't remove the clone: permission denied")
+            ).laterBanner,
+            ReposBanner(
+                key: "api",
+                text: "Disconnected billing. Restart Symphony from the menu to drop it. Couldn't remove the clone: permission denied",
+                style: .error
+            )
+        )
     }
 
     func testLaterBannersSayToRestartFromTheMenu() {

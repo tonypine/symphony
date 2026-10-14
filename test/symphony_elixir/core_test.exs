@@ -2251,6 +2251,56 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 4_000, 5_500)
   end
 
+  test "an epic review that exits waiting for CI keeps its retry attempt and starts again after a minute" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    issue_id = "issue-ci-wait-exit"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :CiWaitExitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      repo_key: "api",
+      identifier: "MT-CI-WAIT",
+      retry_attempt: 3,
+      issue: %Issue{id: issue_id, identifier: "MT-CI-WAIT", state: "Epic Review", repo_key: "api"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    runs = [%{workflow_name: "macos", url: "https://github.com/acme/app/actions/runs/1"}, %{workflow_name: nil, url: nil}]
+    reason = {:ci_pending, %{sha: "8f89fc0411dcf1f81aa82c0e1dc4cb07032a4793", runs: runs}}
+
+    log =
+      capture_log(fn ->
+        send(pid, {:DOWN, ref, :process, self(), reason})
+        Process.sleep(50)
+      end)
+
+    state = :sys.get_state(pid)
+
+    assert %{attempt: 3, due_at_ms: due_at_ms, delay_type: :ci_wait, error: error} = state.retry_attempts[issue_id]
+    assert error == "waiting for CI on 8f89fc0411dc: macos, a workflow still running"
+    assert_due_in_range(due_at_ms, 59_000, 60_500)
+    assert log =~ "is waiting for CI on 8f89fc0411dc: macos, a workflow still running; retrying after CI"
+  end
+
   test "worker exception exits store concise retry errors" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
@@ -2666,7 +2716,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert {:ok, issue} = Client.fetch_issue_by_identifier_for_test("ACME-1", graphql_fun)
 
-    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, attachmentFirst: 20, commentLast: 20}}
+    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, attachmentFirst: 100, commentLast: 20}}
 
     assert query =~ "SymphonyLinearIssueByIdentifier"
     assert %Issue{id: "issue-1", identifier: "ACME-1", state: "Todo", labels: ["backend"]} = issue

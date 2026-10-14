@@ -66,7 +66,7 @@ defmodule SymphonyElixir.Tracker do
   @callback create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   @callback workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
-  @callback create_workflow_state(String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  @callback create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
   @callback labels() :: {:ok, [label()]} | {:error, term()}
   @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
 
@@ -211,12 +211,12 @@ defmodule SymphonyElixir.Tracker do
   def workflow_states, do: adapter().workflow_states()
 
   @doc """
-  Creates a workflow state named `state_name` in `team` (a team key or id), and returns it. Used
-  only by `SymphonyElixir.StateProvisioning` to create a state that is missing.
+  Creates a workflow state named `state_name` with the hex `color` in `team` (a team key or id), and
+  returns it. Used only by `SymphonyElixir.StateProvisioning` to create a state that is missing.
   """
-  @spec create_workflow_state(String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
-  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
-    adapter().create_workflow_state(state_name, team)
+  @spec create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team, color) when is_binary(state_name) and is_binary(team) and is_binary(color) do
+    adapter().create_workflow_state(state_name, team, color)
   end
 
   @doc "Every label the tracker defines, workspace-wide and per team."

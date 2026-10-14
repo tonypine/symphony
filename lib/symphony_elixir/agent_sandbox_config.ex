@@ -50,6 +50,10 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       files that change what git runs: `config`, `config.worktree`, `hooks`, `info`,
       `packed-refs`, every worktree's `config(.worktree)` and every submodule's `config`
       (`git_metadata_deny_write_paths/1`)
+
+  A person can lift one of the workspace paths for one run of one ticket
+  (`SymphonyElixir.PathUnlock`): each builder takes the run's `unlocked_paths` and leaves just
+  those out. A path outside `workspace_protected_paths/0` is never lifted.
   """
 
   @codex_profile "workspace_write"
@@ -187,16 +191,38 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   @spec codex_runtime_deny_read_paths() :: [String.t()]
   def codex_runtime_deny_read_paths, do: @codex_runtime_deny_read_paths
 
-  @doc false
-  @spec deny_write_paths() :: [String.t()]
-  def deny_write_paths, do: @deny_write_paths
+  @doc """
+  The write-deny list, without the workspace paths in `unlocked_paths` (`unlocked_entries/1`).
+  """
+  @spec deny_write_paths([String.t()]) :: [String.t()]
+  def deny_write_paths(unlocked_paths \\ []) do
+    unlocked = unlocked_entries(unlocked_paths)
+    Enum.reject(@deny_write_paths, &(&1 in unlocked))
+  end
 
   @doc """
-  The write-protected paths inside a workspace, relative to its root, without `.git`.
+  The write-protected paths inside a workspace, relative to its root, without `.git` and without
+  the paths in `unlocked_paths`.
   """
-  @spec workspace_protected_paths() :: [String.t()]
-  def workspace_protected_paths do
-    for "./" <> path <- @deny_write_paths, path != ".git", do: path
+  @spec workspace_protected_paths([String.t()]) :: [String.t()]
+  def workspace_protected_paths(unlocked_paths \\ []) do
+    for "./" <> path <- deny_write_paths(unlocked_paths), path != ".git", do: path
+  end
+
+  @doc """
+  The entries of `unlocked_paths` that name a workspace-protected path, as the deny list writes
+  them (`./config/settings_ui_exempt.yml`). Anything else, `.git` and home paths included, is
+  dropped, so it stays denied.
+  """
+  @spec unlocked_entries([String.t()] | term()) :: [String.t()]
+  def unlocked_entries(unlocked_paths) do
+    protected = for "./" <> path = entry <- @deny_write_paths, path != ".git", into: %{}, do: {path, entry}
+
+    unlocked_paths
+    |> normalize_sandbox_paths()
+    |> Enum.map(&String.trim_leading(&1, "./"))
+    |> Enum.flat_map(&List.wrap(Map.get(protected, &1)))
+    |> Enum.uniq()
   end
 
   @doc """
@@ -204,12 +230,13 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   workspace root: `priv/skills/pull` for `.agents/skills/pull -> ../../priv/skills/pull`.
 
   Sandboxes match real paths, so denying `.agents/skills` leaves a linked skill's own files writable.
-  Reads the links on disk; returns `[]` when the workspace has none.
+  Reads the links on disk; returns `[]` when the workspace has none. A path in `unlocked_paths` is
+  not followed.
   """
-  @spec workspace_link_targets(Path.t()) :: [String.t()]
-  def workspace_link_targets(workspace) do
+  @spec workspace_link_targets(Path.t(), [String.t()]) :: [String.t()]
+  def workspace_link_targets(workspace, unlocked_paths \\ []) do
     list_links = fn paths -> {:ok, Enum.flat_map(paths, &disk_links(workspace, &1))} end
-    {:ok, targets} = link_targets(workspace_protected_paths(), list_links)
+    {:ok, targets} = link_targets(workspace_protected_paths(unlocked_paths), list_links)
     targets
   end
 
@@ -300,14 +327,14 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   end
 
   @doc false
-  @spec claude_filesystem_settings([String.t()], [String.t()], [String.t()]) :: map()
-  def claude_filesystem_settings(allow_read_paths \\ [], allow_write_paths \\ [], extra_deny_write_paths \\ []) do
+  @spec claude_filesystem_settings([String.t()], [String.t()], [String.t()], [String.t()]) :: map()
+  def claude_filesystem_settings(allow_read_paths \\ [], allow_write_paths \\ [], extra_deny_write_paths \\ [], unlocked_paths \\ []) do
     allow_read_paths = normalize_allow_read_paths(allow_read_paths)
     allow_write_paths = allow_write_paths |> normalize_allow_read_paths() |> expand_home_paths()
 
     base = %{
       "denyRead" => @deny_read_paths |> Enum.reject(&(&1 in allow_read_paths)) |> expand_home_paths(),
-      "denyWrite" => expand_home_paths(@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
+      "denyWrite" => expand_home_paths(deny_write_paths(unlocked_paths) ++ normalize_sandbox_paths(extra_deny_write_paths))
     }
 
     case allow_write_paths do
@@ -324,11 +351,12 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   ignores a `Write(<path>)` or `NotebookEdit(<path>)` rule (checked with Claude Code 2.1.289).
   A directory rule covers the files under it. Claude matches a symlink's real path, so the
   link targets in `extra_deny_write_paths` need their own rules. `./` is relative to the
-  session's working directory and `~/` to the home directory; an absolute path needs `//`.
+  session's working directory and `~/` to the home directory; an absolute path needs `//`. The
+  paths in `unlocked_paths` get no rule.
   """
-  @spec claude_edit_deny_rules([String.t()]) :: [String.t()]
-  def claude_edit_deny_rules(extra_deny_write_paths \\ []) do
-    (@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
+  @spec claude_edit_deny_rules([String.t()], [String.t()]) :: [String.t()]
+  def claude_edit_deny_rules(extra_deny_write_paths \\ [], unlocked_paths \\ []) do
+    (deny_write_paths(unlocked_paths) ++ normalize_sandbox_paths(extra_deny_write_paths))
     |> Enum.uniq()
     |> Enum.map(&"Edit(#{claude_rule_path(&1)})")
   end
@@ -398,7 +426,7 @@ defmodule SymphonyElixir.AgentSandboxConfig do
          "denyRead" => @deny_read_paths |> Enum.reject(&(&1 in allow_read_paths)) |> expand_home_paths(),
          "allowRead" => allow_read_paths,
          "allowWrite" => srt_allow_write_paths(Keyword.get(opts, :allow_write_paths, [])),
-         "denyWrite" => srt_deny_write_paths(Keyword.get(opts, :deny_write_paths, []))
+         "denyWrite" => srt_deny_write_paths(Keyword.get(opts, :deny_write_paths, []), Keyword.get(opts, :unlocked_paths, []))
        },
        "enableWeakerNestedSandbox" => true,
        "enableWeakerNetworkIsolation" => Keyword.get(opts, :enable_weaker_network_isolation, false)
@@ -422,8 +450,10 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     # Paths that are read-denied already imply no write; emitting them again as
     # "read" here would create a duplicate TOML key whose later value silently
     # downgrades the protection to read-allowed.
+    deny_write_paths = deny_write_paths(Keyword.get(opts, :unlocked_paths, []))
+
     external_write_protect_entries =
-      (@deny_write_paths ++ normalize_sandbox_paths(Keyword.get(opts, :deny_write_paths, [])))
+      (deny_write_paths ++ normalize_sandbox_paths(Keyword.get(opts, :deny_write_paths, [])))
       |> Enum.reject(&project_relative_sandbox_path?/1)
       |> expand_home_paths()
       |> Enum.reject(&MapSet.member?(deny_read_set, &1))
@@ -432,42 +462,42 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
     deny_read_paths
     |> Enum.map(&{&1, "none"})
-    |> Kernel.++(codex_project_entries(Keyword.get(opts, :workspace), Keyword.get(opts, :deny_write_paths, [])))
+    |> Kernel.++(codex_project_entries(Keyword.get(opts, :workspace), deny_write_paths, Keyword.get(opts, :deny_write_paths, [])))
     |> Kernel.++(external_write_protect_entries)
     |> Kernel.++(Enum.map(operator_allow_read_paths, &{&1, "read"}))
     |> toml_inline_table()
   end
 
-  defp codex_project_entries(workspace, extra_deny_write_paths) when is_binary(workspace) do
+  defp codex_project_entries(workspace, deny_write_paths, extra_deny_write_paths) when is_binary(workspace) do
     workspace = String.trim(workspace)
 
     if codex_workspace_path?(workspace) do
       [{workspace, "write"}] ++
-        ((@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
+        ((deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
          |> Enum.filter(&project_relative_sandbox_path?/1)
          |> Enum.map(fn path ->
            {Path.join(workspace, String.trim_leading(path, "./")), "read"}
          end)
          |> Enum.uniq())
     else
-      legacy_codex_project_entries()
+      legacy_codex_project_entries(deny_write_paths)
     end
   end
 
   # Fallback for direct unit-level callers that do not have a resolved runtime
   # workspace. AppServer launch paths pass the validated workspace so current
   # Codex versions do not have to rely on this legacy special path.
-  defp codex_project_entries(_workspace, _extra_deny_write_paths), do: legacy_codex_project_entries()
+  defp codex_project_entries(_workspace, deny_write_paths, _extra_deny_write_paths), do: legacy_codex_project_entries(deny_write_paths)
 
   defp codex_workspace_path?("/" <> _rest), do: true
   defp codex_workspace_path?("~/" <> _rest), do: true
   defp codex_workspace_path?(_workspace), do: false
 
-  defp legacy_codex_project_entries do
+  defp legacy_codex_project_entries(deny_write_paths) do
     [
       {":project_roots",
        [{".", "write"}] ++
-         (@deny_write_paths
+         (deny_write_paths
           |> Enum.filter(&project_relative_sandbox_path?/1)
           |> Enum.map(fn path ->
             {String.trim_leading(path, "./"), "read"}
@@ -567,9 +597,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     end
   end
 
-  defp srt_deny_write_paths(extra_paths),
+  defp srt_deny_write_paths(extra_paths, unlocked_paths),
     do:
-      (@deny_write_paths ++ @srt_codex_runtime_deny_write_paths ++ normalize_sandbox_paths(extra_paths))
+      (deny_write_paths(unlocked_paths) ++ @srt_codex_runtime_deny_write_paths ++ normalize_sandbox_paths(extra_paths))
       |> expand_home_paths()
 
   defp normalize_sandbox_paths(paths) when is_list(paths) do

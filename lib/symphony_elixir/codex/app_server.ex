@@ -403,7 +403,15 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  @dynamic_tool_forwarded_opts [:gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver]
+  @dynamic_tool_forwarded_opts [
+    :gh_runner,
+    :git_runner,
+    :settings,
+    :tool_scope,
+    :qa_driver,
+    :qa_android_driver,
+    :unlocked_paths
+  ]
 
   defp dynamic_tool_executor(issue, workspace, command_security, dependency_gate, on_message, metadata, opts) do
     registry = Keyword.get(opts, :linear_comment_registry) || temporary_comment_registry()
@@ -502,7 +510,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     with {:ok, executable} <- bash_executable(),
          {:ok, codex_home} <- McpConfig.write_home(settings, mcp_session),
          {:ok, command, launch_cleanup_paths} <-
-           local_command_with_codex_home(settings, workspace, codex_home, mcp_session) do
+           local_command_with_codex_home(settings, workspace, codex_home, mcp_session, Keyword.get(opts, :unlocked_paths, [])) do
       stderr_log_path = Path.join(codex_home.home_path, "codex.stderr.log")
       :ok = File.touch!(stderr_log_path)
       wrapped_command = wrap_command_with_stderr_redirect(command, stderr_log_path)
@@ -546,10 +554,12 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, _opts)
+  defp start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, opts)
        when is_binary(worker_host) do
+    remote_paths = {remote_socket_path, remote_shim_path}
+
     with {:ok, remote_command, remote_codex_home, remote_stderr_path} <-
-           remote_launch_command(workspace, settings, mcp_session, remote_socket_path, remote_shim_path),
+           remote_launch_command(workspace, settings, mcp_session, remote_paths, Keyword.get(opts, :unlocked_paths, [])),
          {:ok, port} <-
            SSH.start_port(
              worker_host,
@@ -599,10 +609,11 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp local_command_with_codex_home(settings, workspace, codex_home, mcp_session) do
+  defp local_command_with_codex_home(settings, workspace, codex_home, mcp_session, unlocked_paths) do
     opts = [
       extra_deny_read_paths: codex_home_deny_read_paths(codex_home.home_path),
-      srt_allow_unix_socket_paths: srt_mcp_unix_socket_paths(mcp_session)
+      srt_allow_unix_socket_paths: srt_mcp_unix_socket_paths(mcp_session),
+      unlocked_paths: unlocked_paths
     ]
 
     case command_with_sandbox_config(settings.agent.command, settings, workspace, opts) do
@@ -614,14 +625,15 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp remote_launch_command(workspace, settings, mcp_session, remote_socket_path, remote_shim_path) when is_binary(workspace) do
+  defp remote_launch_command(workspace, settings, mcp_session, {remote_socket_path, remote_shim_path}, unlocked_paths) when is_binary(workspace) do
     codex_home = Path.join("/tmp", "symphony-codex-home-#{mcp_session.id}")
     stderr_log_path = Path.join(codex_home, "codex.stderr.log")
 
     with {:ok, command, []} <-
            command_with_sandbox_config(settings.agent.command, settings, workspace,
              remote: true,
-             extra_deny_read_paths: codex_home_deny_read_paths(codex_home)
+             extra_deny_read_paths: codex_home_deny_read_paths(codex_home),
+             unlocked_paths: unlocked_paths
            ),
          {:ok, setup_command} <-
            remote_codex_home_setup_command(settings, mcp_session, remote_socket_path, remote_shim_path, codex_home) do
@@ -734,7 +746,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp tool_opts(opts) do
     opts
-    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver])
+    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver, :unlocked_paths])
   end
 
   defp install_remote_shim(_mcp_session, nil), do: {:ok, nil}
@@ -837,7 +849,8 @@ defmodule SymphonyElixir.Codex.AppServer do
         workspace_sandbox_allow_read_paths(settings),
         extra_deny_read_paths,
         workspace: workspace,
-        deny_write_paths: deny_write_paths
+        deny_write_paths: deny_write_paths,
+        unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
       )
 
     with {:ok, command} <- inject_config_overrides(command, overrides) do
@@ -935,7 +948,8 @@ defmodule SymphonyElixir.Codex.AppServer do
              network_access.denied_domains,
              workspace_sandbox_allow_read_paths(settings),
              allow_write_paths: srt_workspace_write_paths(settings, workspace) ++ AgentCaches.write_paths(),
-             deny_write_paths: srt_workspace_deny_write_paths(settings, workspace),
+             deny_write_paths: srt_workspace_deny_write_paths(settings, workspace, Keyword.get(opts, :unlocked_paths, [])),
+             unlocked_paths: Keyword.get(opts, :unlocked_paths, []),
              allow_unix_socket_paths: Keyword.get(opts, :srt_allow_unix_socket_paths, []),
              enable_weaker_network_isolation: runtime.enable_weaker_network_isolation
            ),
@@ -972,17 +986,19 @@ defmodule SymphonyElixir.Codex.AppServer do
     Schema.runtime_workspace_write_roots(settings, workspace)
   end
 
-  defp srt_workspace_deny_write_paths(settings, workspace) do
+  defp srt_workspace_deny_write_paths(settings, workspace, unlocked_paths) do
     settings
     |> srt_workspace_write_paths(workspace)
     |> Enum.flat_map(&git_metadata_deny_write_paths(&1, workspace))
-    |> Kernel.++(Enum.map(workspace_link_targets(workspace, []), &Path.join(workspace, &1)))
+    |> Kernel.++(Enum.map(workspace_link_targets(workspace, unlocked_paths: unlocked_paths), &Path.join(workspace, &1)))
   end
 
   # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`). A remote
   # workspace isn't on this host, so it keeps the plain deny list.
   defp workspace_link_targets(workspace, opts) do
-    if Keyword.get(opts, :remote, false), do: [], else: AgentSandboxConfig.workspace_link_targets(workspace)
+    if Keyword.get(opts, :remote, false),
+      do: [],
+      else: AgentSandboxConfig.workspace_link_targets(workspace, Keyword.get(opts, :unlocked_paths, []))
   end
 
   # Git stages blob objects under `<git_dir>/objects` before updating the index, so denying

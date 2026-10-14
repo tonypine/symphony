@@ -8,11 +8,12 @@ defmodule SymphonyElixir.AutoMerge do
   no checks is squash-merged right away, without auto-merge. Otherwise it turns
   on auto-merge once per head, and asks GitHub to merge the base branch in once per head when
   the PR is `BEHIND`, unless it waits for another PR that shares its files to land first
-  (`SymphonyElixir.LandingOrder`). GitHub merges the PR when the required checks pass; the poller then
-  moves the issue to `Done`. When GitHub refuses auto-merge (the PR can already merge, the
-  branch has no protection, or the repository doesn't allow it) but the PR is `CLEAN` with
-  green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a finished
-  workflow run), it is squash-merged right away. Merge conflicts take the PR poller's
+  (`SymphonyElixir.LandingOrder`). Only `Merging` PRs are updated: before it, a `BEHIND` PR is
+  left to its phase (see `SymphonyElixir.PrReviewPoller`). GitHub merges the PR when the required
+  checks pass; the poller then moves the issue to `Done`. When GitHub refuses auto-merge (the PR
+  can already merge, the branch has no protection, or the repository doesn't allow it) but the PR
+  is `CLEAN` with green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a
+  finished workflow run), it is squash-merged right away. Merge conflicts take the PR poller's
   conflict path, with auto-merge turned off first (see `disable_for_conflict/5`) and kept off
   for that head (see `conflict?/1`). Red CI takes
   the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see

@@ -11,6 +11,9 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   identical to the branch's remote copy: a person may have pushed them. So may an agent's shell
   `git push`, which this check never sees; `mix protected_paths.check`, run in CI on the pull
   request, covers that.
+
+  A path a person's decision unlocked for the current run (`SymphonyElixir.PathUnlock`) is left
+  out, so that run can sync and push its change to it.
   """
 
   alias SymphonyElixir.AgentSandboxConfig
@@ -19,12 +22,13 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
 
   @doc """
   Returns `:ok` when `head` changes no protected path since it forked from `base_sha`. Files
-  identical to `remote_sha`, the branch's remote copy (`nil` when it has none), don't count.
+  identical to `remote_sha`, the branch's remote copy (`nil` when it has none), don't count, nor do
+  the paths in `unlocked_paths`.
   """
-  @spec verify(String.t(), String.t(), String.t() | nil, git_runner()) ::
+  @spec verify(String.t(), String.t(), String.t() | nil, git_runner(), [String.t()]) ::
           :ok | {:error, {:protected_paths_changed, [String.t()]}} | {:error, term()}
-  def verify(base_sha, head, remote_sha, run_git) do
-    with {:ok, paths} <- protected_paths([base_sha, head], run_git),
+  def verify(base_sha, head, remote_sha, run_git, unlocked_paths \\ []) do
+    with {:ok, paths} <- protected_paths([base_sha, head], run_git, unlocked_paths),
          {:ok, changed} <- changed_files(run_git, paths, ["#{base_sha}...#{head}"]),
          {:ok, changed} <- drop_pushed(changed, paths, head, remote_sha, run_git) do
       case changed do
@@ -35,8 +39,8 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   end
 
   # The protected paths plus the targets of the symlinks in them, read from each revision's tree.
-  defp protected_paths(revisions, run_git) do
-    paths = AgentSandboxConfig.workspace_protected_paths()
+  defp protected_paths(revisions, run_git, unlocked_paths) do
+    paths = AgentSandboxConfig.workspace_protected_paths(unlocked_paths)
 
     list_links = fn paths ->
       with {:ok, links} <- revisions |> Enum.map(&tree_links(run_git, &1, paths)) |> all_ok() do

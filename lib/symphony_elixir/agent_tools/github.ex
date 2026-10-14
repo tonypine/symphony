@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Repo.Fetcher
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.Workspace
 
   @merging_state "Merging"
@@ -62,7 +63,8 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   The sandbox write-protects paths such as `.agents/skills`, so the agent's own `git merge` fails when
   the base branch changed one. Symphony first fast-forwards to the branch's remote copy when that
   is ahead, then merges with `--no-commit` and repo hooks off: the agent commits the merge (or
-  resolves the conflicts) in its sandbox. It refuses a branch that changes a protected path itself.
+  resolves the conflicts) in its sandbox. It refuses a branch that changes a protected path itself,
+  but for a path a person's decision unlocked for this run (`opts[:unlocked_paths]`).
   """
   @spec sync_base(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def sync_base(context, opts \\ []) do
@@ -75,7 +77,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
            {:ok, _output} <- run_fetch_origin(workspace, opts),
            {:ok, heads} <- remote_heads(context, workspace, branch, opts),
            :ok <- refuse_merge_in_progress(workspace, opts),
-           :ok <- ProtectedPaths.verify(heads.base_sha, "HEAD", heads.branch_sha, &run_git(&1, workspace, opts)),
+           :ok <- ProtectedPaths.verify(heads.base_sha, "HEAD", heads.branch_sha, &run_git(&1, workspace, opts), unlocked_paths(opts)),
            :ok <- fast_forward_to_remote_branch(workspace, heads.branch_sha, opts) do
         merge_base_ref(workspace, branch, heads, opts)
       end
@@ -103,9 +105,11 @@ defmodule SymphonyElixir.AgentTools.GitHub do
                draft_args(draft?),
              github_opts(context, opts)
            ) do
+      pr_url = String.trim(output)
       CommentRegistry.record_pull_request(Map.get(context, :comment_registry))
-      record_handoff(context, opts, %{branch: branch, pr_url: String.trim(output)})
-      {:ok, %{"url" => String.trim(output), "repo" => origin_repo, "head" => branch, "draft" => draft?}}
+      TicketPullRequest.record_created(issue_repo_key(context), handoff_issue_id(context), pr_url, branch)
+      record_handoff(context, opts, %{branch: branch, pr_url: pr_url})
+      {:ok, %{"url" => pr_url, "repo" => origin_repo, "head" => branch, "draft" => draft?}}
     end
   end
 
@@ -438,13 +442,16 @@ defmodule SymphonyElixir.AgentTools.GitHub do
     end
   end
 
+  # The protected paths a person's decision unlocked for this run (`SymphonyElixir.PathUnlock`).
+  defp unlocked_paths(opts), do: Keyword.get(opts, :unlocked_paths, [])
+
   # A repository whose remote has no base branch can't tell the branch's own changes apart, so the
   # push goes ahead as it did before the check existed.
   defp verify_push_protected_paths(context, workspace, branch, opts) do
     case remote_heads(context, workspace, branch, opts) do
       {:ok, heads} ->
         with {:ok, _output} <- run_fetch_origin(workspace, opts) do
-          ProtectedPaths.verify(heads.base_sha, "refs/heads/#{branch}", heads.branch_sha, &run_git(&1, workspace, opts))
+          ProtectedPaths.verify(heads.base_sha, "refs/heads/#{branch}", heads.branch_sha, &run_git(&1, workspace, opts), unlocked_paths(opts))
         end
 
       {:error, {:base_branch_not_found, _base_ref}} ->

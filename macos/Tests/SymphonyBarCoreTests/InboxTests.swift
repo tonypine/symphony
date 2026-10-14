@@ -48,7 +48,7 @@ final class InboxTests: XCTestCase {
 
     func testTheDecisionFixtureResolvesEveryMentionAndWhereTheTicketSits() throws {
         let inbox = try payload("inbox-decision")
-        XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892"])
+        XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892", "TP-895", "TP-896", "TP-897"])
 
         let decision = inbox.items[1]
         XCTAssertEqual(Set(decision.references.keys), ["TP-891", "TP-892", "TP-880", "TP-893", "#448"])
@@ -59,9 +59,9 @@ final class InboxTests: XCTestCase {
         }
 
         guard case let .ticket(ticket)? = decision.references["TP-891"] else { return XCTFail("TP-891 isn't a ticket") }
-        XCTAssertEqual(ticket.title, "Remove the retired review states")
-        XCTAssertEqual(ticket.state, "In Progress")
-        XCTAssertEqual(ticket.parent?.identifier, "TP-870")
+        XCTAssertEqual(ticket.title, "Remove the retired review states and the version switch from the code")
+        XCTAssertEqual(ticket.state, "Code Review")
+        XCTAssertEqual(ticket.parent?.identifier, "TP-880")
         XCTAssertEqual(ticket.pullRequest, .init(number: 446, url: URL(string: "https://github.com/tonypine/symphony/pull/446"), checks: .pending))
         XCTAssertNil(ticket.waitingOn)
         guard case let .ticket(blocked)? = decision.references["TP-893"] else { return XCTFail("TP-893 isn't a ticket") }
@@ -71,7 +71,7 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(pr.number, 448)
         XCTAssertEqual(pr.reviewState, .changesRequested)
         XCTAssertEqual(pr.reviewRounds, 2)
-        XCTAssertEqual([pr.files, pr.additions, pr.deletions], [14, 120, 610])
+        XCTAssertEqual([pr.files, pr.additions, pr.deletions], [14, 120, 486])
         XCTAssertEqual(pr.checks, .passed)
         XCTAssertEqual(pr.ticket, "TP-892")
         XCTAssertEqual(decision.references["#448"]?.url?.absoluteString, "https://github.com/tonypine/symphony/pull/448")
@@ -86,11 +86,11 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(context.pullRequest?.checks, .passed)
         XCTAssertEqual(context.blocks.map(\.identifier), ["TP-893"])
         XCTAssertEqual(context.related.map(\.identifier), ["TP-891"])
-        XCTAssertEqual(context.related.first?.state, "In Progress")
+        XCTAssertEqual(context.related.first?.state, "Code Review")
         XCTAssertTrue(context.blockedBy.isEmpty)
         XCTAssertEqual(context.earlierDecisions.count, 1)
         XCTAssertEqual(context.earlierDecisions.first?.at, ISO8601DateFormatter().date(from: "2026-10-07T05:48:00Z"))
-        XCTAssertEqual(context.earlierDecisions.first?.answer, "Remove it with the rest")
+        XCTAssertEqual(context.earlierDecisions.first?.answer, "Remove it with the rest, in TP-880")
 
         let plan = inbox.items[0]
         guard case let .parsed(brief)? = plan.review.brief else { return XCTFail("the plan's brief didn't parse") }
@@ -211,8 +211,8 @@ final class InboxTests: XCTestCase {
     func testTheDecisionFixtureReadsQuestionFirstWithItsStoryAndThreeOptionCards() throws {
         let inbox = try payload("inbox-decision")
         let list = InboxList(items: inbox.items)
-        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Decisions"])
-        XCTAssertEqual(list.groups.map(\.id), ["plan", "decision"])
+        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Pull requests", "Decisions", "Clarify", "Blocked"])
+        XCTAssertEqual(list.groups.map(\.id), ["plan", "pr", "decision", "clarify", "blocked"])
 
         let decision = inbox.items[1]
         XCTAssertTrue(decision.isDecision)
@@ -226,7 +226,8 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(action.whyParagraphs[0].hasPrefix("Code Review sent #448 back twice."))
         XCTAssertTrue(action.whyParagraphs[1].hasPrefix("TP-880 already removed the Supervisor check."))
         XCTAssertNotNil(action.ifUnanswered)
-        XCTAssertEqual(action.keyHint, "Press 1–3 to pick · ⌘↩ to send")
+        // The write-in after the three options takes the fourth key.
+        XCTAssertEqual(action.keyHint, "Press 1–4 to pick · ⌘↩ to send")
 
         let cards = OptionCard.cards(for: action)
         XCTAssertEqual(cards.map(\.label), ["Leave them to TP-891", "Update them in TP-892 now", "Wait for TP-891 to land first"])
@@ -267,16 +268,19 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(paragraphs("\n \n"), [])
     }
 
-    func testNumberKeysPickTheOptionWithThatNumber() {
+    func testNumberKeysPickTheOptionWithThatNumberAndTheWriteInAfterThem() {
         func action(_ count: Int) -> InboxReview.Action {
             InboxReview.Action(steps: [], options: (1...max(count, 1)).prefix(count).map { .init(label: "O\($0)", effect: nil, recommended: false) }, commentID: "c-1")
         }
         XCTAssertNil(action(0).keyHint)
-        XCTAssertEqual(action(1).keyHint, "Press 1 to pick · ⌘↩ to send")
+        XCTAssertEqual(action(1).keyHint, "Press 1–2 to pick · ⌘↩ to send")
+        XCTAssertEqual(action(8).keyHint, "Press 1–9 to pick · ⌘↩ to send")
         XCTAssertEqual(action(12).keyHint, "Press 1–9 to pick · ⌘↩ to send")
         XCTAssertEqual(action(3).optionIndex(forKey: "2"), 1)
         XCTAssertEqual(action(3).optionIndex(forKey: "3"), 2)
-        XCTAssertNil(action(3).optionIndex(forKey: "4"))
+        // The number after the last option picks the write-in.
+        XCTAssertEqual(action(3).optionIndex(forKey: "4"), action(3).writeInIndex)
+        XCTAssertNil(action(3).optionIndex(forKey: "5"))
         XCTAssertNil(action(3).optionIndex(forKey: "0"))
         XCTAssertNil(action(3).optionIndex(forKey: "a"))
         XCTAssertNil(action(0).optionIndex(forKey: "1"))

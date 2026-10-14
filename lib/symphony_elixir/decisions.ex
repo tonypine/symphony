@@ -23,8 +23,14 @@ defmodule SymphonyElixir.Decisions do
 
   A decision is recorded when a person answers it: `sync/2` writes the answered requests of a ticket
   the Inbox read (a reply under the request), and the Director's Decide writes its picks
-  (`SymphonyElixir.DirectorMoves`). `prompt_section/1` renders the section for the reviewer and QA
-  prompts; the implementation prompt reads it in the description.
+  (`SymphonyElixir.DirectorMoves`). A person can also rule in a plain comment that opens with
+  `Decision:` or `Ruling:` (`ruling?/1`): the orchestrator's poll writes it (`sweep/2`) for every
+  ticket it polls, and `sync/2` for the ones the Inbox reads, keyed `ruling-<comment id>`. A ruling
+  whose answer the section already records is skipped, so the same ruling commented again adds
+  nothing. Symphony never writes such a comment itself: its own comments open with their headings,
+  and the agents' comment tools refuse a body that reads as a ruling
+  (`SymphonyElixir.AgentTools.Linear`). `prompt_section/1` renders the section for the reviewer and
+  QA prompts; the implementation prompt reads it in the description.
   """
 
   require Logger
@@ -47,6 +53,11 @@ defmodule SymphonyElixir.Decisions do
   # A negation up to two words before a phrase: `do not defer`, `no need to defer`.
   @negation_pattern ~r/\b(not|never|no|cannot|\w+n['’]t)\s+(\w+\s+){0,2}$/iu
   @answer_max_length 600
+  @title_max_length 80
+  # A plain comment a person opens with `Decision:` or `Ruling:`, bold or not.
+  @ruling_pattern ~r/\A\s*(?:\*\*|__)?(?:decision|ruling)\s*(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(\S.*)\z/isu
+  @ruling_prefix "ruling-"
+  @ruling_question "Ruling given in a comment."
   @prompt_limit 10_000
 
   @typedoc "One recorded decision. `key` is the id of the request comment it answers."
@@ -163,7 +174,7 @@ defmodule SymphonyElixir.Decisions do
 
   defp extend(block, entries) do
     keys = keys(block)
-    new = missing(entries, keys)
+    new = missing(entries, keys, parse_entries(block))
 
     cond do
       repeated?(keys) ->
@@ -185,11 +196,20 @@ defmodule SymphonyElixir.Decisions do
 
   defp repeated?(keys), do: length(keys) != length(Enum.uniq(keys))
 
-  # The entries whose request has no entry yet, each once.
-  defp missing(entries, keys) do
+  # The entries whose request has no entry yet, each once. A ruling is also left out when the
+  # section, or a ruling before it, already records its answer.
+  defp missing(entries, keys, recorded \\ []) do
     keys = MapSet.new(keys)
-    entries |> Enum.reject(&MapSet.member?(keys, &1.key)) |> Enum.uniq_by(& &1.key)
+    answers = MapSet.new(recorded, &normalize(&1.answer))
+
+    entries
+    |> Enum.reject(&MapSet.member?(keys, &1.key))
+    |> Enum.uniq_by(& &1.key)
+    |> Enum.reject(&(ruling_key?(&1.key) and MapSet.member?(answers, normalize(&1.answer))))
+    |> Enum.uniq_by(&if(ruling_key?(&1.key), do: {:ruling, normalize(&1.answer)}, else: {:request, &1.key}))
   end
+
+  defp ruling_key?(key), do: String.starts_with?(key, @ruling_prefix)
 
   # Before the summary block, which stays the description's last part, or at the end. The empty
   # heading Linear may have made of the summary's marker line goes.
@@ -267,7 +287,8 @@ defmodule SymphonyElixir.Decisions do
     Enum.find(decisions, fn decision -> Enum.any?([decision.title, decision.question], &(normalize(&1) in asked)) end)
   end
 
-  defp normalize(text), do: text |> one_line() |> String.downcase()
+  # Linear escapes markdown in the text it stores, so a backslash counts for nothing.
+  defp normalize(text), do: text |> String.replace("\\", "") |> one_line() |> String.downcase()
 
   @doc "The description without the Decisions section, nil staying nil."
   @spec strip(String.t() | nil) :: String.t() | nil
@@ -297,7 +318,7 @@ defmodule SymphonyElixir.Decisions do
         text = Enum.map_join(decisions, "\n", &"#{&1.id}: #{&1.question} Answer: #{&1.answer} Scope: #{&1.scope}.")
 
         """
-        Recorded decisions (a person's answers to this ticket's decision requests; they are part of its scope):
+        Recorded decisions (a person's answers to this ticket's decision requests and the rulings they gave in comments; they are part of its scope):
         #{PromptSafety.linear_block(text, "linear_issue_decisions", @prompt_limit)}
         """
     end
@@ -324,6 +345,44 @@ defmodule SymphonyElixir.Decisions do
   end
 
   def answered(_node), do: []
+
+  @doc """
+  Whether `body` is a person's ruling: a comment that opens with `Decision:` or `Ruling:` (any
+  case, bold or not) and says something after it.
+  """
+  @spec ruling?(String.t() | term()) :: boolean()
+  def ruling?(body) when is_binary(body), do: Regex.match?(@ruling_pattern, body)
+  def ruling?(_body), do: false
+
+  @doc """
+  The rulings a ticket node's comments give (`ruling?/1`), each an entry keyed by its comment's id
+  (`ruling-<id>`), dated by the comment, titled by its first sentence and scoped by its text
+  (`scope/1`). A reply under a `## Decision needed:` request is that request's answer
+  (`answered/1`), never a ruling of its own.
+  """
+  @spec rulings(map()) :: [entry()]
+  def rulings(node) when is_map(node) do
+    comments = node |> get_in(["comments", "nodes"]) |> List.wrap() |> Enum.filter(&is_map/1)
+    requests = for %{"id" => id, "body" => body} <- comments, Request.parse(body, nil) != nil, into: MapSet.new(), do: id
+
+    for %{"id" => id, "body" => body} = comment <- comments,
+        is_binary(id),
+        not MapSet.member?(requests, get_in(comment, ["parent", "id"])),
+        [_body, text] <- [Regex.run(@ruling_pattern, body || "")] do
+      entry(@ruling_prefix <> id, reply_date(comment, comment), ruling_title(text), @ruling_question, text)
+    end
+  end
+
+  def rulings(_node), do: []
+
+  # The ruling's first sentence, cut on a word to fit on the entry's line.
+  defp ruling_title(text) do
+    sentence = text |> one_line() |> String.split(~r/(?<=[.!?])\s/u, parts: 2) |> hd()
+
+    if String.length(sentence) <= @title_max_length,
+      do: sentence,
+      else: (sentence |> String.slice(0, @title_max_length + 1) |> String.replace(~r/\s+\S*$/u, "")) <> "…"
+  end
 
   # The reply, plus the option it picks when it names one but not what it does.
   defp answer_text(reply, request) do
@@ -355,17 +414,17 @@ defmodule SymphonyElixir.Decisions do
   end
 
   @doc """
-  Records the decisions answered on a ticket node (`answered/1`) in its description. The node's own
-  description is checked first, so a ticket whose decisions are all recorded costs no Linear call;
-  otherwise `record/3` reads the description again and writes what is missing, or rewrites a
-  section that holds a decision more than once. A failure is logged and returned, never raised: the
+  Records the decisions answered on a ticket node (`answered/1`) and the rulings its comments give
+  (`rulings/1`) in its description. The node's own description is checked first, so a ticket whose
+  decisions are all recorded costs no Linear call; otherwise `record/3` reads the description again
+  and writes what is missing, or rewrites a section that holds a decision more than once. A failure is logged and returned, never raised: the
   next poll tries again.
   """
   @spec sync(map(), keyword()) :: :ok | {:error, term()}
   def sync(%{"id" => issue_id} = node, opts) when is_binary(issue_id) do
-    keys = section_keys(node["description"])
+    {keys, recorded} = section_state(node["description"])
 
-    case {missing(answered(node), keys), repeated?(keys)} do
+    case {missing(answered(node) ++ rulings(node), keys, recorded), repeated?(keys)} do
       {[], false} -> :ok
       {entries, _repeated} -> record(issue_id, entries, opts)
     end
@@ -373,14 +432,34 @@ defmodule SymphonyElixir.Decisions do
 
   def sync(_node, _opts), do: :ok
 
-  defp section_keys(description) when is_binary(description) do
+  @doc """
+  Records the rulings the poll read on each issue (`SymphonyElixir.Linear.Issue`'s `rulings`, from
+  `rulings/1`) that its description does not record yet, so a ruling on any ticket Symphony polls is
+  written on the poll that sees it, held or not. An issue whose rulings are all recorded costs no
+  Linear call. Returns how many issues were written; a failure is logged, and the next poll tries
+  again.
+  """
+  @spec sweep([map()] | term(), keyword()) :: non_neg_integer()
+  def sweep(issues, opts \\ []) do
+    if is_list(issues), do: Enum.count(issues, &record_rulings(&1, opts)), else: 0
+  end
+
+  defp record_rulings(%{id: issue_id, rulings: [_ | _] = rulings} = issue, opts) when is_binary(issue_id) do
+    {keys, recorded} = section_state(Map.get(issue, :description))
+    missing(rulings, keys, recorded) != [] and record(issue_id, rulings, opts) == :ok
+  end
+
+  defp record_rulings(_issue, _opts), do: false
+
+  # The ids the description's section records, and its entries.
+  defp section_state(description) when is_binary(description) do
     case split(description) do
-      {:block, _before, block, _rest} -> keys(block)
-      _none -> []
+      {:block, _before, block, _rest} -> {keys(block), parse_entries(block)}
+      _none -> {[], []}
     end
   end
 
-  defp section_keys(_description), do: []
+  defp section_state(_description), do: {[], []}
 
   @doc """
   Writes `entries` into the issue's description, read through the tracker right before the write

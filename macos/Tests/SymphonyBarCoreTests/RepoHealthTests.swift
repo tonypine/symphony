@@ -95,11 +95,19 @@ final class RepoHealthTests: XCTestCase {
 
     // MARK: - WORKFLOW.md
 
-    func testAMissingWorkflowIsAWarningWithoutAFixYet() {
+    func testAMissingWorkflowIsAWarningThatOffersSetUp() {
         XCTAssertEqual(
             health(repo(workflow: .init(state: .missing, error: "missing_workflow_file"))).problems,
-            [.init(id: "workflow", severity: .warning, title: "WORKFLOW.md is missing", detail: "Symphony found no WORKFLOW.md on main.")]
+            [.init(
+                id: "workflow",
+                severity: .warning,
+                title: "WORKFLOW.md is missing",
+                detail: "Symphony found no WORKFLOW.md on main.",
+                fixes: [.setUpWorkflow(ConnectedWorkflowSetup(key: "app", gitHub: "acme/app", baseBranch: "main", checkout: "/Projects/app"))]
+            )]
         )
+        // Without owner/repo there is nothing to set up.
+        XCTAssertEqual(health(repo(github: nil, workflow: .init(state: .missing))).problems.first?.fixes, [])
         XCTAssertEqual(
             health(repo(baseBranch: " ", workflow: .init(state: .missing))).problems.first?.detail,
             "Symphony found no WORKFLOW.md on the default branch."
@@ -149,7 +157,7 @@ final class RepoHealthTests: XCTestCase {
     func testAPendingWorkflowTakesThePlaceOfMissing() {
         let pr = URL(string: "https://github.com/acme/app/pull/12")!
         XCTAssertEqual(
-            health(repo(workflow: .init(state: .missing)), pending: .pullRequest(pr)).problems,
+            health(repo(workflow: .init(state: .missing)), pending: .pullRequest(url: pr.absoluteString)).problems,
             [
                 .init(
                     id: "workflow",
@@ -161,7 +169,7 @@ final class RepoHealthTests: XCTestCase {
             ]
         )
         XCTAssertEqual(
-            health(repo(workflow: .init(state: .missing)), pending: .written(path: "/Projects/app/WORKFLOW.md")).problems,
+            health(repo(workflow: .init(state: .missing)), pending: .localFile(path: "/Projects/app/WORKFLOW.md")).problems,
             [
                 .init(
                     id: "workflow",
@@ -306,7 +314,7 @@ final class RepoHealthTests: XCTestCase {
 
     func testAPendingWorkflowShowsWhileNothingIsChecked() {
         let pr = URL(string: "https://github.com/acme/app/pull/12")!
-        let health = RepoHealth.notChecked(status: .starting, poll: nil, pending: .pullRequest(pr), baseBranch: "trunk")
+        let health = RepoHealth.notChecked(status: .starting, poll: nil, pending: .pullRequest(url: pr.absoluteString), baseBranch: "trunk")
 
         XCTAssertEqual(health.status, .notChecked)
         XCTAssertEqual(health.summary, "Not checked: Symphony is starting")

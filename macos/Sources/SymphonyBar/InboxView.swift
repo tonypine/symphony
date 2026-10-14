@@ -13,10 +13,15 @@ struct InboxContent: View {
                 selection: $model.inboxSelection,
                 picks: model.picks(for:),
                 pick: model.pick,
+                writeIn: model.writeIn,
                 perform: { model.perform($0, on: $1) },
                 openOverview: { model.show(.overview) },
-                openTicket: model.openTicket
+                openTicket: model.openTicket,
+                openMention: model.openPeek,
+                openMentionDirectly: model.openMentionDirectly
             )
+            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
+            .modifier(PeekPresenter(model: model))
             .safeAreaInset(edge: .bottom) {
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
@@ -50,10 +55,16 @@ struct InboxView: View {
     let picks: (String) -> DecisionPicks
     /// Picks an option: (option, decision, issue id).
     let pick: (Int, Int, String) -> Void
+    /// Keeps the write-in's text: (text, issue id).
+    var writeIn: (String, String) -> Void = { _, _ in }
     let perform: (InboxCommand, InboxItem) -> Void
     let openOverview: () -> Void
     /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
     var openTicket: (String) -> Void = { _ in }
+    /// A click on a chip in the review: its peek (N4).
+    var openMention: (Mention) -> Void = { _ in }
+    /// ⌘-click on a chip: the ticket's page, or the pull request on GitHub.
+    var openMentionDirectly: (Mention) -> Void = { _ in }
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
 
@@ -68,14 +79,24 @@ struct InboxView: View {
                 Divider()
                 if let item = list.selection(selection) {
                     ScrollView {
-                        InboxReviewBody(
-                            item: item,
-                            picks: picks(item.id),
-                            pick: { option, decision in pick(option, decision, item.id) },
-                            perform: { perform($0, item) },
-                            openTicket: { openTicket(item.identifier) },
-                            narrow: narrow
-                        )
+                        ScrollViewReader { proxy in
+                            InboxReviewBody(
+                                item: item,
+                                picks: picks(item.id),
+                                pick: { option, decision in pick(option, decision, item.id) },
+                                writeIn: { writeIn($0, item.id) },
+                                perform: { perform($0, item) },
+                                openTicket: { openTicket(item.identifier) },
+                                openMention: openMention,
+                                openMentionDirectly: openMentionDirectly,
+                                narrow: narrow
+                            )
+                            // Picking the write-in scrolls its field into view, once it is laid out.
+                            .onChange(of: item.review.action?.isWriteIn(picks(item.id)) == true) { _, picked in
+                                guard picked else { return }
+                                DispatchQueue.main.async { withAnimation { proxy.scrollTo(WriteInField.scrollID, anchor: .bottom) } }
+                            }
+                        }
                     }
                     // A new item starts with its own picks (the recommended options).
                     .id(item.id)
@@ -86,9 +107,11 @@ struct InboxView: View {
                     .onGeometryChange(for: Bool.self) { $0.size.width < DesignTokens.Layout.narrowReviewWidth } action: { narrow = $0 }
                 }
             }
-            // A number key picks the request's option with that number, while the list or the review has the keyboard.
+            // A number key picks the request's option with that number, while the list or the review has the keyboard;
+            // in the write-in's field it types.
             .onKeyPress(characters: .decimalDigits, phases: .down) { press in
-                guard press.modifiers.isEmpty, let item = list.selection(selection), let key = press.characters.first,
+                guard press.modifiers.isEmpty, !(NSApp.keyWindow?.firstResponder is NSText),
+                    let item = list.selection(selection), let key = press.characters.first,
                     let option = item.optionIndex(forKey: key)
                 else { return .ignored }
                 pick(option, 0, item.id)
@@ -242,8 +265,12 @@ struct InboxReviewBody: View {
     let item: InboxItem
     var picks = DecisionPicks()
     var pick: (Int, Int) -> Void = { _, _ in }
+    var writeIn: (String) -> Void = { _ in }
     let perform: (InboxCommand) -> Void
     var openTicket: () -> Void = {}
+    /// A click on a ticket or pull request chip in the review's text, and a ⌘-click.
+    var openMention: (Mention) -> Void = { _ in }
+    var openMentionDirectly: (Mention) -> Void = { _ in }
     /// True in a narrow pane: an option card's Recommended badge goes under its label, and the key hints hide.
     var narrow = false
 
@@ -259,7 +286,7 @@ struct InboxReviewBody: View {
                 BriefSections(brief: item.review.brief)
             case .action:
                 if let action = item.review.action {
-                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, answerable: item.answerable, narrow: narrow)
+                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, writeIn: writeIn, answerable: item.answerable, narrow: narrow)
                 }
             case .clarify:
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
@@ -269,6 +296,10 @@ struct InboxReviewBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The mentions in the review's text are chips (N1) with popovers (N2, N3).
+        .environment(\.mentionReferences, item.references)
+        .environment(\.openMention, OpenMentionAction(handler: openMention))
+        .environment(\.openMentionDirectly, OpenMentionAction(handler: openMentionDirectly))
     }
 }
 
@@ -306,10 +337,7 @@ private struct ReviewHeader: View {
             .accessibilityHint("Opens the ticket page")
             // A decision's question, in the callout under the title, says what the ask would.
             if !item.isDecision {
-                Text(item.ask)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                ChipText(text: item.ask, color: .secondaryLabelColor)
             }
         }
     }
@@ -348,6 +376,7 @@ private struct ReviewHeader: View {
 private struct ActionButtons: View {
     let toolbar: InboxToolbar
     let perform: (InboxCommand) -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
@@ -363,7 +392,9 @@ private struct ActionButtons: View {
                         .disabled(!button.enabled)
                 }
             }
-            if !toolbar.overflow.isEmpty {
+            if !toolbar.overflow.isEmpty && offscreenSnapshot {
+                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+            } else if !toolbar.overflow.isEmpty {
                 Menu {
                     ForEach(Array(toolbar.overflow.enumerated()), id: \.offset) { _, command in
                         Button(command.title) { perform(command) }
@@ -420,18 +451,14 @@ private struct BriefSections: View {
                 Card(title: "How to approve, change or reject") {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                         ForEach(Array(parsed.moves.enumerated()), id: \.offset) { _, move in
-                            Text("\(Text(move.move.capitalized + ": ").bold())\(move.text)")
-                                .font(DesignTokens.TypeStyle.body.font)
+                            ChipText(text: move.text, lead: move.move.capitalized + ":")
                         }
                     }
                 }
             }
         case let .raw(markdown):
             Card(title: "Review brief") {
-                Text(markdown)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                ChipText(text: markdown)
             }
         case nil:
             EmptyView()
@@ -469,7 +496,7 @@ private struct ReviewLineView: View {
                 LinkText(label: link.label, url: link.url)
             } else {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                    Text(line.text).textSelection(.enabled)
+                    ChipText(text: line.text)
                     ForEach(line.links, id: \.self) { link in
                         LinkText(label: link.label, url: link.url).font(DesignTokens.TypeStyle.callout.font)
                     }
@@ -491,10 +518,7 @@ private struct DecisionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            Text("\(number). \(decision.question)")
-                .font(DesignTokens.TypeStyle.rowTitle.font)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityHidden(true)
+            ChipText(text: decision.question, lead: "\(number).", font: DesignTokens.TypeStyle.rowTitle.nsFont)
             OptionCardList(
                 title: "Decision \(number), \(decision.question)",
                 cards: OptionCard.cards(for: decision),
@@ -505,9 +529,7 @@ private struct DecisionCard: View {
             )
             // A brief that names no recommended option still says what it recommends.
             if decision.initialPick == nil, let recommendation = decision.recommendation {
-                Text("Recommendation: \(recommendation)")
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
+                ChipText(text: recommendation, lead: "Recommendation:", font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -594,20 +616,23 @@ private struct CheckRow: View {
     }
 }
 
-/// D2c: the question first (N5), what happened and what waits (N6), then the options as cards (N7); an older
-/// request lists its numbered steps instead. The picked option is the answer the toolbar's Send Decision sends.
+/// D2c: the question first (N5), what happened and what waits (N6), then the options as cards (N7) and, on a request
+/// the Inbox answers, the write-in (N11); an older request lists its numbered steps instead. The picked option, or
+/// the write-in's words, is the answer the toolbar's Send Decision sends.
 private struct ActionCards: View {
     let action: InboxReview.Action
     var picks = DecisionPicks()
     var pick: (Int) -> Void = { _ in }
+    var writeIn: (String) -> Void = { _ in }
     /// True when the item carries an answerable request.
     var answerable = false
     var narrow = false
+    @FocusState private var writeInFocused: Bool
 
     var body: some View {
         if let question = action.question {
             if action.options.isEmpty {
-                Card(title: "Question") { Text(question).textSelection(.enabled) }
+                Card(title: "Question") { ChipText(text: question) }
             } else {
                 QuestionCallout(question: question)
             }
@@ -617,14 +642,20 @@ private struct ActionCards: View {
             Card(title: "Options", hint: answerable && !narrow ? action.keyHint : nil) {
                 OptionCardList(
                     title: "Options",
-                    cards: OptionCard.cards(for: action),
+                    cards: OptionCard.cards(for: action, writeIn: answerable),
                     selected: answerable ? action.pickedIndex(picks) : nil,
                     selectable: answerable,
                     narrow: narrow,
                     showsKeys: answerable,
                     choose: pick
                 )
+                if answerable && action.isWriteIn(picks) {
+                    WriteInField(initialText: picks.writeIn, commit: writeIn, focused: $writeInFocused)
+                        .id(WriteInField.scrollID)
+                }
             }
+            // Picking the write-in, by a click or its number key, puts the keyboard in its field.
+            .onChange(of: answerable && action.isWriteIn(picks)) { _, picked in writeInFocused = picked }
         }
         if !action.steps.isEmpty {
             Card(title: "Steps") {
@@ -632,7 +663,7 @@ private struct ActionCards: View {
                     ForEach(Array(action.steps.enumerated()), id: \.offset) { index, step in
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
-                            Text(step).textSelection(.enabled)
+                            ChipText(text: step)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -653,10 +684,7 @@ private struct QuestionCallout: View {
                 .textCase(.uppercase)
                 .font(DesignTokens.TypeStyle.label.font)
                 .foregroundStyle(DesignTokens.Status.you.tint)
-            Text(question)
-                .font(DecisionType.question)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            ChipText(text: question, font: DecisionType.questionFont)
         }
         .padding(.vertical, DesignTokens.Space.s3)
         .padding(.horizontal, DesignTokens.Space.s4)
@@ -669,7 +697,8 @@ private struct QuestionCallout: View {
             DesignTokens.Status.you.tint.frame(width: 3)
         }
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
-        .accessibilityElement(children: .combine)
+        // Its chips are links inside the question, so the callout contains them rather than reading as one.
+        .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -684,20 +713,15 @@ private struct StoryCard: View {
             Card(title: "What happened") {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                        Text(paragraph)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ChipText(text: paragraph)
                     }
                     if let ifUnanswered {
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Image(systemName: "exclamationmark.triangle")
                                 .foregroundStyle(DesignTokens.Status.you.tint)
                                 .accessibilityHidden(true)
-                            Text("\(Text("If you don't answer:").bold()) \(ifUnanswered)")
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
+                            ChipText(text: ifUnanswered, lead: "If you don't answer:")
                         }
-                        .accessibilityElement(children: .combine)
                     }
                 }
                 .font(DesignTokens.TypeStyle.body.font)
@@ -709,11 +733,12 @@ private struct StoryCard: View {
 /// The type sizes of the decision review's new parts.
 private enum DecisionType {
     /// N5's question.
-    static let question = Font.system(size: 16, weight: .semibold)
+    static let questionFont = NSFont.systemFont(ofSize: 16, weight: .semibold)
     /// N7's label.
-    static let optionLabel = Font.system(size: 13.5, weight: .semibold)
+    static let optionLabel = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
     /// N8's text.
     static let tag = Font.system(size: 12)
+    static let tagFont = NSFont.systemFont(ofSize: 12)
 }
 
 /// A decision's N7 cards stacked, one radio group for VoiceOver: each option reads "Option 1 of 3, its label,
@@ -776,21 +801,14 @@ private struct OptionCardView: View {
             // The effect, tags and reason stack under the label, at its leading edge.
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                    Text(card.label)
-                        .font(DecisionType.optionLabel)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ChipText(text: card.label, font: DecisionType.optionLabel, selectable: false)
                     if card.recommended && !narrow { RecommendedBadge() }
                     Spacer(minLength: DesignTokens.Space.s2)
                     if showsKey { KeyHint(number: card.number) }
                 }
                 if card.recommended && narrow { RecommendedBadge() }
                 if let effect = card.effect {
-                    Text(effect)
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ChipText(text: effect, color: .secondaryLabelColor, selectable: false)
                 }
                 if !card.tradeoffs.isEmpty {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -801,10 +819,7 @@ private struct OptionCardView: View {
                     .padding(.top, DesignTokens.Space.s1 / 2)
                 }
                 if let reason = card.reason {
-                    Text("\(Text(OptionCard.reasonLead).bold()) \(reason)")
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ChipText(text: reason, lead: OptionCard.reasonLead, font: DesignTokens.TypeStyle.callout.nsFont, selectable: false)
                         .padding(.horizontal, DesignTokens.Space.s2)
                         .padding(.vertical, DesignTokens.Space.s1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -824,6 +839,70 @@ private struct OptionCardView: View {
                 .strokeBorder(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(DesignTokens.Surface.separator.color), lineWidth: selected ? 2 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+    }
+}
+
+/// N11's field, under the write-in card once it is picked: a `TextEditor` three lines tall that grows with the
+/// text to eight, then scrolls, over the hint that says how the agent reads it. The editor types into the field's own
+/// draft, handed to `commit` on each change: bound straight to the window model, a redraw between fast keystrokes put
+/// an older text back and lost what was typed.
+private struct WriteInField: View {
+    @State private var text: String
+    var commit: (String) -> Void
+    var focused: FocusState<Bool>.Binding
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    /// The height of one line of `type.body`.
+    private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
+    /// The text view's own inset on each side of a line.
+    private static let inset: CGFloat = 5
+    /// The field's id in the review's scroll view, which scrolls to it once it is picked.
+    static let scrollID = "write-in"
+
+    init(initialText: String, commit: @escaping (String) -> Void, focused: FocusState<Bool>.Binding) {
+        _text = State(initialValue: initialText)
+        self.commit = commit
+        self.focused = focused
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            // A hidden copy of the text sizes the editor: at least three lines, at most eight.
+            Text(text.isEmpty || text.hasSuffix("\n") ? text + " " : text)
+                .font(DesignTokens.TypeStyle.body.font)
+                .lineLimit(8)
+                .padding(.horizontal, Self.inset)
+                .frame(maxWidth: .infinity, minHeight: Self.lineHeight * 3, alignment: .topLeading)
+                .hidden()
+                .overlay(alignment: .topLeading) {
+                    if offscreenSnapshot {
+                        Text(text).font(DesignTokens.TypeStyle.body.font).padding(.horizontal, Self.inset)
+                    } else {
+                        editor
+                    }
+                }
+                .padding(DesignTokens.Space.s2)
+                .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
+                        .strokeBorder(Color.accentColor, lineWidth: 1)
+                )
+            Text(OptionCard.writeInHint)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var editor: some View {
+        TextEditor(text: $text)
+            .font(DesignTokens.TypeStyle.body.font)
+            .scrollContentBackground(.hidden)
+            .onChange(of: text) { _, text in commit(text) }
+            .focused(focused)
+            .accessibilityLabel(OptionCard.writeInLabel)
+            .accessibilityHint(OptionCard.writeInHint)
     }
 }
 
@@ -861,9 +940,7 @@ private struct TradeoffTag: View {
 
     var body: some View {
         Label {
-            Text(tradeoff.text)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            ChipText(text: tradeoff.text, font: DecisionType.tagFont, selectable: false)
         } icon: {
             Image(systemName: tradeoff.kind.symbol).foregroundStyle(tradeoff.kind.status.tint)
         }
@@ -881,7 +958,7 @@ private struct ClarifyCards: View {
     var body: some View {
         Card(title: "What the quality gate found") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let found = clarify.found { Text(found).textSelection(.enabled) }
+                if let found = clarify.found { ChipText(text: found) }
                 HStack(spacing: DesignTokens.Space.s4) {
                     if let score = clarify.scoreLine { Label("Score \(score)", systemImage: "gauge.with.needle") }
                     if let round = clarify.roundLine { Label(round, systemImage: "arrow.trianglehead.2.clockwise") }
@@ -904,8 +981,8 @@ private struct BlockedCards: View {
     var body: some View {
         Card(title: "Why it is blocked") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let reason = blocked.reason { Text(reason).textSelection(.enabled) }
-                Text(blocked.nextLine).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                if let reason = blocked.reason { ChipText(text: reason) }
+                ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
     }
@@ -919,7 +996,7 @@ private struct BulletList: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text("•").foregroundStyle(.secondary).accessibilityHidden(true)
-                    Text(line).textSelection(.enabled)
+                    ChipText(text: line)
                 }
             }
         }
