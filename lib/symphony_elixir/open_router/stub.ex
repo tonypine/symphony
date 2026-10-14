@@ -85,6 +85,7 @@ defmodule SymphonyElixir.OpenRouter.Stub do
       ip: {127, 0, 0, 1},
       port: Keyword.get(opts, :port, 0),
       startup_log: false,
+      http_2_options: [enabled: false],
       thousand_island_options: [num_acceptors: 2]
     ]
 

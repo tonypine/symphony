@@ -16,8 +16,12 @@ struct InboxContent: View {
                 writeIn: model.writeIn,
                 perform: { model.perform($0, on: $1) },
                 openOverview: { model.show(.overview) },
-                openTicket: model.openTicket
+                openTicket: model.openTicket,
+                openMention: model.openPeek,
+                openMentionDirectly: model.openMentionDirectly
             )
+            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
+            .modifier(PeekPresenter(model: model))
             .safeAreaInset(edge: .bottom) {
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
@@ -57,9 +61,12 @@ struct InboxView: View {
     let openOverview: () -> Void
     /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
     var openTicket: (String) -> Void = { _ in }
+    /// A click on a chip in the review: its peek (N4).
+    var openMention: (Mention) -> Void = { _ in }
+    /// ⌘-click on a chip: the ticket's page, or the pull request on GitHub.
+    var openMentionDirectly: (Mention) -> Void = { _ in }
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
-    @Environment(\.openURL) private var openURL
 
     var body: some View {
         if list.isEmpty {
@@ -80,7 +87,8 @@ struct InboxView: View {
                                 writeIn: { writeIn($0, item.id) },
                                 perform: { perform($0, item) },
                                 openTicket: { openTicket(item.identifier) },
-                                openMention: { ChipText.open($0, openTicket: openTicket, openURL: { openURL($0) }) },
+                                openMention: openMention,
+                                openMentionDirectly: openMentionDirectly,
                                 narrow: narrow
                             )
                             // Picking the write-in scrolls its field into view, once it is laid out.
@@ -260,8 +268,9 @@ struct InboxReviewBody: View {
     var writeIn: (String) -> Void = { _ in }
     let perform: (InboxCommand) -> Void
     var openTicket: () -> Void = {}
-    /// A click on a ticket or pull request chip in the review's text.
+    /// A click on a ticket or pull request chip in the review's text, and a ⌘-click.
     var openMention: (Mention) -> Void = { _ in }
+    var openMentionDirectly: (Mention) -> Void = { _ in }
     /// True in a narrow pane: an option card's Recommended badge goes under its label, and the key hints hide.
     var narrow = false
 
@@ -290,6 +299,7 @@ struct InboxReviewBody: View {
         // The mentions in the review's text are chips (N1) with popovers (N2, N3).
         .environment(\.mentionReferences, item.references)
         .environment(\.openMention, OpenMentionAction(handler: openMention))
+        .environment(\.openMentionDirectly, OpenMentionAction(handler: openMentionDirectly))
     }
 }
 

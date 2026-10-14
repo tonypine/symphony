@@ -116,8 +116,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   request the question, What happened and the options mention is a chip (N1) inside the sentence, its short name
   joined when the text gives one ("TP-891 · Remove the retired review states"); resting the pointer on it for half a
   second opens its popover (N2 for a ticket, N3 for a PR, "Symphony can't see TP-999." for one Symphony couldn't
-  read), and a click opens the ticket page or the PR on GitHub. The text wraps, selects and copies like any Mac text
-  (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
+  read), and a click opens its peek (N4, below); ⌘-click or ⌘Return opens the ticket page or the PR on GitHub. The
+  text wraps, selects and copies like any Mac text (DD-5). The chips' offscreen snapshots, the review at 1200 pt and in the narrow pane and the three popovers, light
   and dark, are in `macos/Tests/Snapshots`. The banner at the bottom is the Undo after D12d.
 - **Actions:** **Send Decision…** (prominent, ⌘↩), **Open in Linear**, ⋯ **Send to Rework…**. A number key picks the
   option with that number while the list or the review has the keyboard; a click on a card picks it.
@@ -133,6 +133,21 @@ later journeys point back to it. The mock draws every screen under its ID.
   (C16) have no write-in: the plan's Change move already takes free text. The picked write-in's offscreen snapshots, light and
   dark, are in `macos/Tests/Snapshots` (`make snapshots` renders them again).
 - **Data:** the open human-action requests (section 2), with each item's `references` for the chips.
+- **N4 · Peek:** a click on a chip (or Return on a focused one) opens what it names in the window's inspector column,
+  320–400 pt wide, beside the review; the decision, its pick, the write-in's words and the review's scroll position
+  stay as they were, and stay when the peek closes. The peek is a stack of pages inside the inspector: a chip inside
+  it pushes that ticket or PR, its back arrow and ⌘[ pop, Esc, its close button or the toolbar's inspector toggle (⌥⌘I) close it, and
+  the toggle shows the same pages again. A **ticket** shows N2's head (identifier · repo, stage, title, summary); when
+  Symphony tracks it (it waits on you, the state lists it, or `/api/v1/:issue_identifier` answers) **Now** (its stage
+  and for how long, what it waits on, its PR as a chip), **Connected** (its parent with the sub-tickets' progress
+  strip, N10; sub-tickets, blocked by, blocks, related) and its latest review brief's headline; one Symphony doesn't
+  track shows only the reference's facts (Part of, Work, Waiting on). Then **Open Ticket Page** (D3, pushed in the
+  window, ⌘[ returns to the decision) and **Open in Linear**. A **pull request** shows N3's head and figures and
+  **Open on GitHub**; a mention Symphony can't see says so, with its link. Connected comes from the Inbox's
+  `context` of a ticket that waits on you, `/api/v1/initiatives` (a plan's sub-tickets, a sub-ticket's parent and
+  blockers) and the reference's parent. When the review would be under 560 pt beside the inspector (a 1200 pt
+  window's Inbox leaves it about 260 pt), the peek is a sheet over the window instead. The ticket peek, the PR peek and the peek beside the review are offscreen snapshots,
+  light and dark, in `macos/Tests/Snapshots` (`peek-ticket`, `peek-pr`, `peek-beside-review`).
 
 #### D2d · Inbox: a ticket to clarify
 
