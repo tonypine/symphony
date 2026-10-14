@@ -30,10 +30,10 @@ and checks what TP-272 used to leave to a person on the live app:
    opens N+1's notes with the rollback steps; and its next check shows N+1 rolled back with Retry vN+1,
    without installing it again.
 
-Scripted QA mode records the notifications and the release notes window in `status.json`, so the test reads
-them like alerts. For each scenario the test checks the menu lines, the Symphony pid, the stub agent's log (a run that is
+For each scenario the test checks the menu lines, the Symphony pid, the stub agent's log (a run that is
 stopped instead of finishing fails the drain checks) and a `before_run` hook's log, which records the release
-root and version each run came from and the stored secret Symphony was given.
+root and version each run came from and the stored secret Symphony was given. Scripted QA mode records the
+notifications and the release notes window in `status.json` with the alerts, so the test reads them there.
 
 The stub ticket is dispatched again and again without a state move, so the test's `symphony.yml` sets the
 dispatch-loop guard's `watchdog.dispatch_loop_*` limits to 50 runs within one second, out of reach of one test
