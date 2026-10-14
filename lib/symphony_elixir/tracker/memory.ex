@@ -218,7 +218,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @doc """
   The workflow states a test seeds in `:memory_tracker_workflow_states_list`, and the ones
-  `create_workflow_state/2` has added.
+  `create_workflow_state/3` has added.
   """
   @spec workflow_states() :: {:ok, [Tracker.workflow_state()]} | {:error, term()}
   def workflow_states do
@@ -229,8 +229,8 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
-  @spec create_workflow_state(String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
-  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
+  @spec create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team, _color) when is_binary(state_name) and is_binary(team) do
     case next_result(:memory_tracker_create_workflow_state_result) do
       :ok ->
         state = %{id: "state:#{team}:#{state_name}", name: state_name, team_id: team, team_key: team}
