@@ -59,6 +59,7 @@ struct InboxView: View {
     var openTicket: (String) -> Void = { _ in }
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         if list.isEmpty {
@@ -79,6 +80,7 @@ struct InboxView: View {
                                 writeIn: { writeIn($0, item.id) },
                                 perform: { perform($0, item) },
                                 openTicket: { openTicket(item.identifier) },
+                                openMention: { ChipText.open($0, openTicket: openTicket, openURL: { openURL($0) }) },
                                 narrow: narrow
                             )
                             // Picking the write-in scrolls its field into view, once it is laid out.
@@ -258,6 +260,8 @@ struct InboxReviewBody: View {
     var writeIn: (String) -> Void = { _ in }
     let perform: (InboxCommand) -> Void
     var openTicket: () -> Void = {}
+    /// A click on a ticket or pull request chip in the review's text.
+    var openMention: (Mention) -> Void = { _ in }
     /// True in a narrow pane: an option card's Recommended badge goes under its label, and the key hints hide.
     var narrow = false
 
@@ -283,6 +287,9 @@ struct InboxReviewBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The mentions in the review's text are chips (N1) with popovers (N2, N3).
+        .environment(\.mentionReferences, item.references)
+        .environment(\.openMention, OpenMentionAction(handler: openMention))
     }
 }
 
@@ -627,7 +634,7 @@ private struct ActionCards: View {
     var body: some View {
         if let question = action.question {
             if action.options.isEmpty {
-                Card(title: "Question") { Text(question).textSelection(.enabled) }
+                Card(title: "Question") { ChipText(text: question) }
             } else {
                 QuestionCallout(question: question)
             }
@@ -679,10 +686,7 @@ private struct QuestionCallout: View {
                 .textCase(.uppercase)
                 .font(DesignTokens.TypeStyle.label.font)
                 .foregroundStyle(DesignTokens.Status.you.tint)
-            Text(question)
-                .font(DecisionType.question)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            ChipText(text: question, font: DecisionType.questionFont)
         }
         .padding(.vertical, DesignTokens.Space.s3)
         .padding(.horizontal, DesignTokens.Space.s4)
@@ -695,7 +699,8 @@ private struct QuestionCallout: View {
             DesignTokens.Status.you.tint.frame(width: 3)
         }
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
-        .accessibilityElement(children: .combine)
+        // Its chips are links inside the question, so the callout contains them rather than reading as one.
+        .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -710,20 +715,15 @@ private struct StoryCard: View {
             Card(title: "What happened") {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                        Text(paragraph)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ChipText(text: paragraph)
                     }
                     if let ifUnanswered {
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Image(systemName: "exclamationmark.triangle")
                                 .foregroundStyle(DesignTokens.Status.you.tint)
                                 .accessibilityHidden(true)
-                            Text("\(Text("If you don't answer:").bold()) \(ifUnanswered)")
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
+                            ChipText(text: ifUnanswered, lead: "If you don't answer:")
                         }
-                        .accessibilityElement(children: .combine)
                     }
                 }
                 .font(DesignTokens.TypeStyle.body.font)
@@ -735,11 +735,12 @@ private struct StoryCard: View {
 /// The type sizes of the decision review's new parts.
 private enum DecisionType {
     /// N5's question.
-    static let question = Font.system(size: 16, weight: .semibold)
+    static let questionFont = NSFont.systemFont(ofSize: 16, weight: .semibold)
     /// N7's label.
-    static let optionLabel = Font.system(size: 13.5, weight: .semibold)
+    static let optionLabel = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
     /// N8's text.
     static let tag = Font.system(size: 12)
+    static let tagFont = NSFont.systemFont(ofSize: 12)
 }
 
 /// A decision's N7 cards stacked, one radio group for VoiceOver: each option reads "Option 1 of 3, its label,
@@ -802,21 +803,14 @@ private struct OptionCardView: View {
             // The effect, tags and reason stack under the label, at its leading edge.
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                    Text(card.label)
-                        .font(DecisionType.optionLabel)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ChipText(text: card.label, font: DecisionType.optionLabel, selectable: false)
                     if card.recommended && !narrow { RecommendedBadge() }
                     Spacer(minLength: DesignTokens.Space.s2)
                     if showsKey { KeyHint(number: card.number) }
                 }
                 if card.recommended && narrow { RecommendedBadge() }
                 if let effect = card.effect {
-                    Text(effect)
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ChipText(text: effect, color: .secondaryLabelColor, selectable: false)
                 }
                 if !card.tradeoffs.isEmpty {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -827,10 +821,7 @@ private struct OptionCardView: View {
                     .padding(.top, DesignTokens.Space.s1 / 2)
                 }
                 if let reason = card.reason {
-                    Text("\(Text(OptionCard.reasonLead).bold()) \(reason)")
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ChipText(text: reason, lead: OptionCard.reasonLead, font: DesignTokens.TypeStyle.callout.nsFont, selectable: false)
                         .padding(.horizontal, DesignTokens.Space.s2)
                         .padding(.vertical, DesignTokens.Space.s1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -951,9 +942,7 @@ private struct TradeoffTag: View {
 
     var body: some View {
         Label {
-            Text(tradeoff.text)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            ChipText(text: tradeoff.text, font: DecisionType.tagFont, selectable: false)
         } icon: {
             Image(systemName: tradeoff.kind.symbol).foregroundStyle(tradeoff.kind.status.tint)
         }

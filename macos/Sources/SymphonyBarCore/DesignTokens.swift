@@ -116,6 +116,17 @@ public enum DesignTokens {
         public static let mark: Double = 4
     }
 
+    /// N1, a ticket or pull request chip inside text: `accent` behind the mention's characters.
+    public enum Chip {
+        public static let tint: Double = 0.14
+        public static let hoverTint: Double = 0.26
+        public static let radius: Double = 6
+        /// The tint's room on each side of the characters.
+        public static let padding: Double = 4
+        /// How long the pointer rests on a chip before its popover opens.
+        public static let hoverDelay: Double = 0.5
+    }
+
     /// Motion (§3.8): `motion.standard` lasts this long; values change with a numeric content transition.
     public enum Motion {
         public static let standardDuration: Double = 0.25

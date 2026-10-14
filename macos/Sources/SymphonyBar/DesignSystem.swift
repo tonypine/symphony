@@ -67,6 +67,24 @@ extension DesignTokens.TypeStyle {
     }
 }
 
+extension DesignTokens.TypeStyle {
+    /// The same style as an AppKit font, for text an AppKit view draws (`ChipText`).
+    var nsFont: NSFont {
+        func preferred(_ style: NSFont.TextStyle) -> CGFloat { NSFont.preferredFont(forTextStyle: style).pointSize }
+        return switch self {
+        case .sentence: .systemFont(ofSize: preferred(.title2), weight: .semibold)
+        case .figure: .systemFont(ofSize: 28, weight: .semibold)
+        case .section: .systemFont(ofSize: preferred(.title3), weight: .semibold)
+        case .rowTitle: .preferredFont(forTextStyle: .headline)
+        case .body: .preferredFont(forTextStyle: .body)
+        case .callout: .preferredFont(forTextStyle: .callout)
+        case .label: .systemFont(ofSize: preferred(.subheadline), weight: .medium)
+        case .caption: .preferredFont(forTextStyle: .caption1)
+        case .mono: .monospacedSystemFont(ofSize: preferred(.callout), weight: .regular)
+        }
+    }
+}
+
 extension Animation {
     /// `motion.standard`: sections appearing or leaving, selection.
     static var standard: Animation { .smooth(duration: DesignTokens.Motion.standardDuration) }
