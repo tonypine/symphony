@@ -15,12 +15,13 @@ defmodule SymphonyElixir.UpdateHold do
   The self-heal lane's fix-ticket hold waits the same way for a fix ticket merged in that repository
   (`awaiting_update/4`, called by `SymphonyElixir.BlockedHold` for a ticket in any phase).
 
-  `resolve/5` does the lookups (Linear for the blocker's pull requests, GitHub for the merge commit
-  and whether the build includes it) and keeps their answers in a cache; `hold/4` only reads the
-  cache. A lookup that fails is left out of the cache, so the ticket is not held, as before.
+  `resolve/5` does the lookups (Linear for the blockers, Symphony's record of each blocker's pull
+  request, GitHub for the merge commit and whether the build includes it) and keeps their answers
+  in a cache; `hold/4` only reads the cache. A lookup that fails is left out of the cache, so the
+  ticket is not held, as before.
   """
 
-  alias SymphonyElixir.{BuildInfo, Tracker}
+  alias SymphonyElixir.{BuildInfo, TicketPullRequest, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
 
@@ -54,7 +55,8 @@ defmodule SymphonyElixir.UpdateHold do
   Looks up what `hold/4` needs for the held candidates among `issues` and returns the cache with
   the answers added. Blockers and merge commits already in the cache are not looked up again.
 
-  Options: `:fetch_issues` (`[id] -> {:ok, [Issue.t()]}`), `:merge_commit_sha`
+  Options: `:repo_key` (the repo whose record of a blocker's pull request is read, for a blocker
+  read without one), `:fetch_issues` (`[id] -> {:ok, [Issue.t()]}`), `:merge_commit_sha`
   (`pr_url -> {:ok, sha | nil}`) and `:commit_included?` (`pr_url, sha, build_sha -> {:ok, boolean}`).
   """
   @spec resolve([Issue.t()], BuildInfo.t(), cache(), Enumerable.t(String.t()), keyword()) :: cache()
@@ -172,11 +174,15 @@ defmodule SymphonyElixir.UpdateHold do
   end
 
   # The first merged pull request in the build's repository; `:none` when there is none, or the last
-  # error when one failed to load and none merged.
-  defp merged_pull_request(%Issue{pr_urls: pr_urls}, build, opts) do
+  # error when one failed to load and none merged. The blocker's pull request is the one Symphony
+  # recorded for it, whatever its state (`SymphonyElixir.TicketPullRequest.recorded_urls/2`): a
+  # finished blocker's PR is closed or merged by now. A blocker read by id carries no repo, so the
+  # record is looked up under `opts[:repo_key]`.
+  defp merged_pull_request(%Issue{} = issue, build, opts) do
     merge_commit_sha = Keyword.get(opts, :merge_commit_sha, &PullRequest.merge_commit_sha/1)
 
-    pr_urls
+    issue
+    |> TicketPullRequest.recorded_urls(Keyword.get(opts, :repo_key))
     |> Enum.filter(&same_repo?(&1, build.repo))
     |> Enum.reduce_while({:ok, :none}, fn pr_url, acc ->
       case merge_commit_sha.(pr_url) do

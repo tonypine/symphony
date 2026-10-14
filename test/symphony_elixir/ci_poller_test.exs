@@ -730,20 +730,22 @@ defmodule SymphonyElixir.CiPollerTest do
     assert {:failure, [%{name: "deploy/preview"}]} = CiPoller.landing_action(fallback.([make_all, red_preview], []))
   end
 
-  test "an issue whose PR URL went missing from its attachments is named in a warning; one that never had a PR is not" do
+  test "an issue whose record no longer holds an open PR is named in a warning; one that never had a PR is not" do
     now = ~U[2026-05-06 09:00:00Z]
-    issue = in_review_issue()
+    pr_url = "https://github.com/example/repo/pull/2401"
+    issue = %{in_review_issue() | pr_urls: []}
     verification = %Issue{id: "issue-2402", identifier: "ACME-2402", title: "Final verification", state: "Code Review", pr_urls: []}
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue, verification])
     Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+    :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
     put_run(issue, now)
 
     poll = &CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, &1, :minute))
 
     assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(0)
 
-    # QA screenshots pushed the PR attachment out of the page Linear returned.
-    Application.put_env(:symphony_elixir, :ci_test_issues, [%{issue | pr_urls: []}, verification])
+    # The record lost its open PR while the poller still watches CI on it.
+    :ok = TicketPullRequest.mark_finished(@repo_key, pr_url, "closed")
 
     log =
       capture_log([level: :warning], fn ->
@@ -751,10 +753,46 @@ defmodule SymphonyElixir.CiPollerTest do
       end)
 
     assert log =~
-             "issue_id=issue-2401 issue_identifier=ACME-2401 is in Code Review with no PR URL on its Linear attachments; " <>
-               "Symphony still watches CI on https://github.com/example/repo/pull/2401 for it"
+             "issue_id=issue-2401 issue_identifier=ACME-2401 is in Code Review with no open PR in Symphony's record of its pull request; " <>
+               "Symphony still watches CI on #{pr_url} for it"
 
     refute log =~ "ACME-2402"
+  end
+
+  test "polls the PR Symphony recorded for a ticket whose attachments show none, also after a run store restart" do
+    now = ~U[2026-05-06 09:00:00Z]
+    pr_url = "https://github.com/example/repo/pull/2401"
+    issue = %{in_review_issue() | pr_urls: []}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+    :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "auto/ACME-2401")
+    put_run(issue, now)
+
+    restart_run_store()
+
+    assert {:ok, %{discovered: 1, actions: [{:watching, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert [%{issue_id: "issue-2401", pr_url: ^pr_url}] = RunStore.list_ci_checks(@repo_key)
+  end
+
+  test "a ticket whose recorded PR closed or merged has no PR to poll, whatever its attachments show" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = in_review_issue()
+    [pr_url] = issue.pr_urls
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+    put_run(issue, now)
+
+    for state <- ["closed", "merged"] do
+      :ok = TicketPullRequest.record_created(@repo_key, "issue-2401", pr_url, "feature/fix-ci")
+      :ok = TicketPullRequest.mark_finished(@repo_key, pr_url, state)
+
+      assert {:ok, %{discovered: 0, actions: []}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert [] = RunStore.list_ci_checks(@repo_key)
+    end
   end
 
   test "green CI leaves an In Review issue where it is" do
@@ -2832,6 +2870,20 @@ defmodule SymphonyElixir.CiPollerTest do
                pending_reviewer_comments: [%{id: "comment-1", body: "Please adjust."}],
                updated_at: now
              })
+  end
+
+  # Stops the run store and starts it again, as a Symphony restart does; its records are on disk.
+  defp restart_run_store do
+    case Supervisor.terminate_child(SymphonyElixir.Supervisor, RunStore) do
+      :ok ->
+        {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore)
+        :ok
+
+      {:error, :not_found} ->
+        if pid = Process.whereis(RunStore), do: GenServer.stop(pid)
+        {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
+        :ok
+    end
   end
 
   defp put_run(issue, now, status \\ "success") do

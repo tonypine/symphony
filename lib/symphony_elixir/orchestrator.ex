@@ -1328,7 +1328,7 @@ defmodule SymphonyElixir.Orchestrator do
     terminal_states = Config.settings!().tracker.terminal_states
     {_changed, cache} = sweep_blocked_holds(repo_name, issues, terminal_states, cache)
     _ = Decisions.sweep(issues)
-    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, [])
+    UpdateHold.resolve(issues, BuildInfo.current(), cache, terminal_states, repo_key: repo_name)
   end
 
   defp resolve_update_holds(_repo_result, cache), do: cache

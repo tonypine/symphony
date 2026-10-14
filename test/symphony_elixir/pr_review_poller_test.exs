@@ -459,6 +459,40 @@ defmodule SymphonyElixir.PrReviewPollerTest do
            ] = RunStore.list_pr_reviews()
   end
 
+  test "discovers the PR Symphony recorded for a ticket whose attachments show none" do
+    now = ~U[2026-05-01 09:00:00Z]
+    pr_url = "https://github.com/example/repo/pull/1780"
+    issue = %{in_review_issue(updated_at: now, state: "Code Review") | pr_urls: []}
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
+    :ok = TicketPullRequest.record_created(@repo_key, issue.id, pr_url, "auto/ACME-1780")
+    :ok = put_finished_run(issue, now)
+
+    assert {:ok, %{discovered: 1, processed: 1}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert [%{issue_id: "issue-1780", pr_url: ^pr_url, status: "watching"}] = RunStore.list_pr_reviews()
+  end
+
+  test "a ticket whose recorded PR closed or merged has no PR to review, whatever its attachments show" do
+    now = ~U[2026-05-01 09:00:00Z]
+    issue = in_review_issue(updated_at: now, state: "Code Review")
+    [pr_url] = issue.pr_urls
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
+    :ok = put_finished_run(issue, now)
+
+    for state <- ["closed", "merged"] do
+      :ok = TicketPullRequest.record_created(@repo_key, issue.id, pr_url, "auto/ACME-1780")
+      :ok = TicketPullRequest.mark_finished(@repo_key, pr_url, state)
+
+      assert {:ok, %{discovered: 0, processed: 0}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert [] = RunStore.list_pr_reviews()
+    end
+  end
+
   test "a poll's run-store cost doesn't grow with the store" do
     now = ~U[2026-05-01 09:00:00Z]
     issue = in_review_issue(updated_at: now, state: "Code Review")
@@ -4513,6 +4547,20 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   end
 
   defp poll_conflict(now), do: PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+  defp put_finished_run(issue, now) do
+    RunStore.put_run(%{
+      repo_key: @repo_key,
+      run_id: "run-1",
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      status: "success",
+      workspace_path: "/tmp/workspaces/ACME-1780",
+      worker_host: nil,
+      started_at: DateTime.add(now, -120, :second),
+      ended_at: DateTime.add(now, -60, :second)
+    })
+  end
 
   defp put_review(now, attrs \\ %{}) do
     now
