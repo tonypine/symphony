@@ -4,6 +4,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.OpenRouter.Stub
+  alias SymphonyElixir.TestSupport
 
   setup do
     test = self()
@@ -99,6 +100,10 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     refute_received {:EXIT, _pid, _reason}
 
     :gen_tcp.close(socket)
+  end
+
+  test "closes an HTTP/2 connection instead of serving it", %{url: url} do
+    assert TestSupport.send_http2_preface(URI.parse(url).port) == {:error, :closed}
   end
 
   test "logs through Logger by default and stops", %{pid: pid} do
