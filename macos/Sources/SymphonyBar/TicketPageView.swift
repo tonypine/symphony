@@ -186,6 +186,8 @@ struct TicketPageActions {
     /// The ⋯ menu's Force… (the Force a Ticket sheet) and Stop Forcing.
     var force: () -> Void = {}
     var stopForcing: () -> Void = {}
+    /// A click on a ticket or pull request chip in the page's text.
+    var openMention: (Mention) -> Void = { _ in }
 }
 
 /// D3 for the window: the page with its Stop Run sheet, or a placeholder while it reads.
@@ -197,6 +199,7 @@ struct TicketPageContent: View {
         if let page = model.ticketPage {
             TicketPageView(
                 page: page,
+                brief: model.inbox.flatMap { TicketPage.Brief(identifier: page.identifier, items: $0.items) },
                 actions: TicketPageActions(
                     viewTranscript: { newWindow in model.onOpenTranscript(page.identifier, page.repoKey, newWindow) },
                     openURL: model.onOpenURL,
@@ -205,7 +208,8 @@ struct TicketPageContent: View {
                     showAuditRecords: { model.showAuditRecords(page) },
                     revealWorktree: model.revealWorktree,
                     force: { model.openForceSheet(page.identifier) },
-                    stopForcing: { model.stopForcing(page.identifier) }
+                    stopForcing: { model.stopForcing(page.identifier) },
+                    openMention: { ChipText.open($0, openTicket: model.openTicket, openURL: model.onOpenURL) }
                 )
             )
         } else {
@@ -217,12 +221,13 @@ struct TicketPageContent: View {
 /// The ticket page in a scroll view, laid out for the width it gets.
 struct TicketPageView: View {
     let page: TicketPage
+    var brief: TicketPage.Brief?
     let actions: TicketPageActions
     @State private var width: CGFloat = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
 
     var body: some View {
         ScrollView {
-            TicketPageBody(page: page, actions: actions, width: width)
+            TicketPageBody(page: page, brief: brief, actions: actions, width: width)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
@@ -231,6 +236,8 @@ struct TicketPageView: View {
 /// The page's sections, outside the scroll view so they also render offscreen.
 struct TicketPageBody: View {
     let page: TicketPage
+    /// What the Inbox says about the ticket, when it holds it.
+    var brief: TicketPage.Brief?
     let actions: TicketPageActions
     let width: CGFloat
 
@@ -243,12 +250,13 @@ struct TicketPageBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
-            TicketHeader(page: page, actions: actions)
+            TicketHeader(page: page, summary: brief?.summary, actions: actions)
             let layout = sideBySide
                 ? AnyLayout(HStackLayout(alignment: .top, spacing: DesignTokens.Space.s4))
                 : AnyLayout(VStackLayout(alignment: .leading, spacing: DesignTokens.Space.s4))
             layout {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+                    if let brief { BriefCards(brief: brief) }
                     if let now = page.now {
                         Card(title: "Now") { NowGrid(now: now, reveal: actions.revealWorktree) }
                     }
@@ -264,12 +272,7 @@ struct TicketPageBody: View {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
                     Card(title: "Ticket") { FactsGrid(facts: page.facts, openURL: actions.openURL) }
                     if let message = page.lastMessage {
-                        Card(title: "Last message") {
-                            Text(message)
-                                .font(DesignTokens.TypeStyle.body.font)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        Card(title: "Last message") { ChipText(text: message) }
                     }
                 }
                 .frame(maxWidth: sideBySide ? Self.sideColumnWidth : .infinity, alignment: .topLeading)
@@ -277,12 +280,63 @@ struct TicketPageBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        // The mentions in the page's text are chips (N1) with popovers (N2, N3), read from its Inbox item.
+        .environment(\.mentionReferences, brief?.references ?? [:])
+        .environment(\.openMention, OpenMentionAction(handler: actions.openMention))
+    }
+}
+
+/// The ticket's latest review brief and the decisions answered on it, from its Inbox item.
+private struct BriefCards: View {
+    let brief: TicketPage.Brief
+
+    var body: some View {
+        Card(title: brief.title) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                ForEach(Array(brief.paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                    ChipText(text: paragraph)
+                }
+            }
+        }
+        if !brief.decisions.isEmpty {
+            Card(title: "Earlier decisions") {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                    ForEach(Array(brief.decisions.enumerated()), id: \.offset) { _, decision in
+                        EarlierDecisionRow(decision: decision)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An answered request: when, what it asked, and the answer.
+private struct EarlierDecisionRow: View {
+    let decision: TicketContext.EarlierDecision
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                if let title = decision.title { ChipText(text: title, font: DesignTokens.TypeStyle.rowTitle.nsFont) }
+                Spacer(minLength: DesignTokens.Space.s2)
+                if let at = decision.at {
+                    Text(at, format: .dateTime.month(.abbreviated).day())
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let answer = decision.answer {
+                ChipText(text: answer, lead: "Your answer:", color: .secondaryLabelColor)
+            }
+        }
     }
 }
 
 /// The identifier and title, repo, initiative and badges (C7), what it is doing, and the page's actions.
 private struct TicketHeader: View {
     let page: TicketPage
+    /// The ticket's Symphony status line, from the Inbox.
+    let summary: String?
     let actions: TicketPageActions
 
     var body: some View {
@@ -305,6 +359,7 @@ private struct TicketHeader: View {
             Text(page.phaseSentence)
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
+            if let summary { ChipText(text: summary, color: .secondaryLabelColor) }
             if case let .done(pullRequest, _) = page.phase, pullRequest != nil || page.mergedText != nil {
                 DoneLine(pullRequest: pullRequest, merged: page.mergedText, openURL: actions.openURL)
             }
@@ -357,6 +412,7 @@ private struct DoneLine: View {
 private struct TicketActions: View {
     let page: TicketPage
     let actions: TicketPageActions
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
@@ -372,26 +428,35 @@ private struct TicketActions: View {
             }
             Button(StopRunSheet.buttonTitle, action: actions.stopRun)
                 .disabled(!page.isRunning)
-            Menu {
-                Button(TicketPage.copyAPIURLTitle, action: actions.copyAPIURL)
-                Button(TicketPage.showAuditRecordsTitle, action: actions.showAuditRecords)
-                Button(TicketPage.revealWorktreeTitle) { page.workspacePath.map(actions.revealWorktree) }
-                    .disabled(page.workspacePath == nil)
-                Divider()
-                if page.isForced {
-                    Button(TicketList.stopForcingTitle, action: actions.stopForcing)
-                } else {
-                    Button(TicketList.forceTitle, action: actions.force)
-                }
-            } label: {
-                Label("More", systemImage: "ellipsis.circle")
+            if offscreenSnapshot {
+                // `ImageRenderer` can't draw a menu.
+                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+            } else {
+                menu
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More actions")
         }
         .fixedSize()
+    }
+
+    private var menu: some View {
+        Menu {
+            Button(TicketPage.copyAPIURLTitle, action: actions.copyAPIURL)
+            Button(TicketPage.showAuditRecordsTitle, action: actions.showAuditRecords)
+            Button(TicketPage.revealWorktreeTitle) { page.workspacePath.map(actions.revealWorktree) }
+                .disabled(page.workspacePath == nil)
+            Divider()
+            if page.isForced {
+                Button(TicketList.stopForcingTitle, action: actions.stopForcing)
+            } else {
+                Button(TicketList.forceTitle, action: actions.force)
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("More actions")
     }
 }
 
