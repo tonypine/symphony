@@ -523,7 +523,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear) and open its folder picker in a qa_put_checkout checkout.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -532,7 +532,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "string",
             "description" =>
               "A directory relative to the PR checkout, e.g. macos/Tests/Fixtures/director-app/running. Symphony copies it to the QA host and launches the app with SYMPHONY_BAR_QA_API_FIXTURES pointing at the copy. Regular files only, at most 5 MB; no symlinks."
-          }
+          },
+          "gh_stub_port" => %{
+            "type" => "integer",
+            "description" =>
+              "A QA_HOST_PORTS port where your gh stub listens. The app runs Symphony's fake gh (SYMPHONY_BAR_GH), which POSTs each call's arguments there (form fields argc, arg, arg…) and prints your answer: 200 → stdout, exit 0; other → stderr, exit 1."
+          },
+          "linear_stub_port" => %{
+            "type" => "integer",
+            "description" => "A QA_HOST_PORTS port where your Linear GraphQL stub listens; the app sends Linear queries to http://localhost:<port>/graphql."
+          },
+          "open_panel_dir" => %{"type" => "string", "description" => "A path qa_put_checkout returned; the app's folder picker opens in it."}
         }
       }
     },
@@ -699,6 +709,21 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "properties" => %{
           "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/qa-config/symphony.yml."},
           "remote_name" => %{"type" => "string", "description" => "File name on the QA host: letters, digits, `.`, `_`, `-`. Defaults to the local file name."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_put_checkout",
+      "description" =>
+        "Put a git checkout where the app can open it: clones a bundle you made (`git bundle create <file> --all`, at most 1 MB, under the worktree or $TMPDIR) and sets its origin to remote_url. Returns its path; nothing is fetched from GitHub.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["local_path", "remote_url"],
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The bundle file, absolute or relative to the worktree."},
+          "remote_url" => %{"type" => "string", "description" => "The GitHub repo the checkout's origin names, e.g. https://github.com/acme/widgets."},
+          "remote_name" => %{"type" => "string", "description" => "Folder name: letters, digits, `.`, `_`, `-`. Defaults to the repo name."}
         }
       }
     },
@@ -908,7 +933,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => ["api_fixtures"],
+    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
@@ -920,6 +945,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],
+    "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
     "qa_api_requests" => [],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
