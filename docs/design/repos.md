@@ -214,6 +214,9 @@ the detail on the right, with a unified toolbar. Default size 880×600, minimum 
 - Sidebar dots are grey (unknown), with the label "Not checked".
 - In the detail, Source, Linear routing and Acceptance gate show from `symphony.yml` as usual. **WORKFLOW.md** and
   **Activity** collapse into one line: "Live status shows while Symphony runs." with **Start Symphony**.
+- A `WORKFLOW.md` the app wrote that isn't on the base branch yet still shows, as only the app knows it: the
+  **Needs attention** box keeps its pending line (**View Pull Request** / **Reveal in Finder**) under the "Not
+  checked" summary.
 - Starting, and not answering, read the same way with "Symphony is starting…" and "Symphony isn't answering".
 
 ### S3. Add Repo, step 1: Source
