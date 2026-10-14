@@ -171,9 +171,37 @@ defmodule SymphonyElixir.Inbox.References do
   defp live_reference(%{facts: facts} = reference, live), do: reference |> Map.delete(:facts) |> Map.put(:waiting_on, waiting_on(facts, live))
   defp live_reference(reference, _live), do: reference
 
-  defp waiting_on(%{state_type: type}, _live) when type in @terminal_types, do: nil
+  @typedoc "What `waiting_on/2` reads of a ticket (`facts/1`)."
+  @type facts :: %{
+          issue_id: String.t() | nil,
+          state: String.t() | nil,
+          state_type: String.t() | nil,
+          open_blockers: [String.t()]
+        }
 
-  defp waiting_on(facts, live) do
+  @doc """
+  What `waiting_on/2` needs of a ticket's Linear node (`id`, `state { name type }` and its
+  `inverseRelations` with each issue's `identifier` and `state { type }`).
+  """
+  @spec facts(map()) :: facts()
+  def facts(node) when is_map(node) do
+    %{
+      issue_id: node["id"],
+      state: get_in(node, ["state", "name"]),
+      state_type: get_in(node, ["state", "type"]),
+      open_blockers: open_blockers(node)
+    }
+  end
+
+  @doc """
+  What a ticket waits on, in the ticket page's words (`you`, `a blocker: TP-1`, `CI`, `a review`,
+  `its sub-tickets`, `a slot`), from its `facts/1` and what runs and waits on the Director now;
+  nil while it runs or once it is done.
+  """
+  @spec waiting_on(facts(), live()) :: String.t() | nil
+  def waiting_on(%{state_type: type}, _live) when type in @terminal_types, do: nil
+
+  def waiting_on(facts, live) do
     cond do
       MapSet.member?(live.running, facts.issue_id) -> nil
       waits_on_you?(facts, live) -> "you"
@@ -235,12 +263,7 @@ defmodule SymphonyElixir.Inbox.References do
       parent: parent_reference(node["parent"]),
       pull_request: attached_pull_request_reference(node, ctx),
       waiting_on: nil,
-      facts: %{
-        issue_id: node["id"],
-        state: get_in(node, ["state", "name"]),
-        state_type: get_in(node, ["state", "type"]),
-        open_blockers: open_blockers(node)
-      }
+      facts: facts(node)
     }
   end
 
@@ -329,14 +352,18 @@ defmodule SymphonyElixir.Inbox.References do
 
   defp ticket_verdicts(_repo_key, _issue_id, _ctx), do: []
 
-  # GitHub's review decision when a person reviewed on GitHub, else Symphony's newest Code Review
-  # verdict.
-  defp review_state(%{state: "MERGED"}, _verdicts), do: "merged"
-  defp review_state(%{state: "CLOSED"}, _verdicts), do: "closed"
-  defp review_state(%{review_decision: "CHANGES_REQUESTED"}, _verdicts), do: "changes_requested"
-  defp review_state(%{review_decision: "APPROVED"}, _verdicts), do: "approved"
+  @doc """
+  A pull request's review state: `merged` or `closed`, else GitHub's review decision when a person
+  reviewed on GitHub, else Symphony's newest Code Review verdict (`verdicts` newest first), else
+  `open`.
+  """
+  @spec review_state(map(), [map()]) :: String.t()
+  def review_state(%{state: "MERGED"}, _verdicts), do: "merged"
+  def review_state(%{state: "CLOSED"}, _verdicts), do: "closed"
+  def review_state(%{review_decision: "CHANGES_REQUESTED"}, _verdicts), do: "changes_requested"
+  def review_state(%{review_decision: "APPROVED"}, _verdicts), do: "approved"
 
-  defp review_state(_pr, verdicts) do
+  def review_state(_pr, verdicts) do
     case Enum.find(verdicts, &(&1.outcome in ["approve", "request_changes"])) do
       %{outcome: "approve"} -> "approved"
       %{outcome: "request_changes"} -> "changes_requested"
@@ -344,8 +371,9 @@ defmodule SymphonyElixir.Inbox.References do
     end
   end
 
-  # A review round is a head the reviewer judged; a second pass on the same head is the same round.
-  defp rounds(verdicts, outcomes), do: verdicts |> Enum.filter(&(&1.outcome in outcomes)) |> Enum.uniq_by(& &1.head_sha) |> length()
+  @doc "How many heads `verdicts` judged with one of `outcomes`: a second pass on the same head is the same round."
+  @spec rounds([map()], [String.t()]) :: non_neg_integer()
+  def rounds(verdicts, outcomes), do: verdicts |> Enum.filter(&(&1.outcome in outcomes)) |> Enum.uniq_by(& &1.head_sha) |> length()
 
   @doc """
   The one-line summary of a pull request: the first sentence of its body's `## This PR` section
@@ -361,7 +389,9 @@ defmodule SymphonyElixir.Inbox.References do
 
   def pull_request_summary(_body), do: nil
 
-  defp pull_request_ticket(%{title: title, head_ref_name: branch}) do
+  @doc "The ticket a pull request belongs to: the identifier its title, else its branch, starts with."
+  @spec pull_request_ticket(map()) :: String.t() | nil
+  def pull_request_ticket(%{title: title, head_ref_name: branch}) do
     Enum.find_value([title, branch], fn
       text when is_binary(text) ->
         case Regex.run(@leading_identifier, text) do

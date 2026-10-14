@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, History, Quality, Shipped, StatusDashboard}
+  alias SymphonyElixir.{Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
   alias SymphonyElixir.Learnings.Feed
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
@@ -59,6 +59,29 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
       {:error, :issue_not_found} ->
         error_response(conn, 404, "issue_not_found", "Issue not found")
+    end
+  end
+
+  @spec pull_request(Conn.t(), map()) :: Conn.t()
+  def pull_request(conn, %{"repo_key" => repo_key, "number" => number}) do
+    opts = Keyword.merge([live: &live/0], Endpoint.config(:pull_request_page) || [])
+
+    case PullRequestPage.fetch(repo_key, number, opts) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :unknown_repo} -> error_response(conn, 404, "unknown_repo", "Unknown repo")
+      {:error, :not_found} -> error_response(conn, 404, "not_found", "Pull request not found")
+    end
+  end
+
+  # What runs and what waits on the Director now, for the page's `waiting_on`; nothing when the
+  # snapshot can't be read.
+  defp live do
+    case Orchestrator.snapshot(orchestrator(), snapshot_timeout_ms()) do
+      %{} = snapshot ->
+        %{running: snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id), you: snapshot |> Inbox.items(inbox()) |> MapSet.new(& &1.issue_id)}
+
+      _unavailable ->
+        %{running: MapSet.new(), you: MapSet.new()}
     end
   end
 
