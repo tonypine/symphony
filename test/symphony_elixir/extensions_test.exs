@@ -1513,6 +1513,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert_received {:linear, _list_query}
     assert_received {:linear, _detail_query}
+    assert_received {:linear, _references_query}
 
     held = %{
       kind: :clarification,
@@ -1773,6 +1774,308 @@ defmodule SymphonyElixir.ExtensionsTest do
            } = review
 
     refute Map.has_key?(review, "est_minutes")
+  end
+
+  # TP-892 waits on a decision that mentions TP-891 and #448; TP-923 is its parent, a plan in review
+  # whose brief mentions TP-947; TP-894 waits on its merge confirmation (#450); TP-900 is blocked
+  # and TP-901 held by the quality gate, both mentioning TP-891.
+  defp inbox_mentions_fixture(opts) do
+    {inbox, orchestrator_name} = inbox_mentions_poll(opts)
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+    json_response(get(build_conn(), "/api/v1/inbox"), 200)
+  end
+
+  defp inbox_mentions_poll(opts) do
+    request =
+      Request.render_hold(
+        %{
+          title: "Leave the old review text to TP-891",
+          question: "Should TP-892 leave the old review text to TP-891?",
+          why: "Code Review sent PR #448 back a second time over text TP-891 removes anyway.",
+          if_unanswered: "TP-892 stays in Rework.",
+          options: [
+            %{label: "Leave it to TP-891", effect: "TP-892 goes back to Code Review.", recommended: true},
+            %{label: "Remove it now", effect: "The next run deletes the old text."}
+          ],
+          recommendation_reason: "TP-891 removes it within the week."
+        },
+        "Rework"
+      )
+
+    node = fn identifier, attrs ->
+      Map.merge(
+        %{
+          "id" => "issue-" <> identifier,
+          "identifier" => identifier,
+          "title" => "Title of " <> identifier,
+          "url" => "https://linear.app/example/issue/" <> identifier,
+          "state" => %{"name" => "In Progress"},
+          "labels" => %{"nodes" => []},
+          "children" => %{"nodes" => []},
+          "comments" => %{"nodes" => []},
+          "history" => %{"nodes" => []}
+        },
+        attrs
+      )
+    end
+
+    action =
+      node.("TP-892", %{
+        "state" => %{"name" => "Rework"},
+        "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+        "comments" => %{
+          "nodes" => [
+            %{"id" => "earlier", "body" => String.replace(request, "Leave the old review text to TP-891", "Keep the old step"), "createdAt" => "2026-10-13T05:00:00Z"},
+            %{"id" => "answer", "body" => "Keep it", "createdAt" => "2026-10-13T05:48:00Z", "parent" => %{"id" => "earlier"}},
+            %{"id" => "request", "body" => request, "createdAt" => "2026-10-13T09:00:00Z"}
+          ]
+        }
+      })
+
+    merge =
+      node.("TP-894", %{
+        "state" => %{"name" => "QA"},
+        "labels" => %{"nodes" => [%{"name" => "Needs Decision"}]},
+        "comments" => %{"nodes" => [%{"id" => "merge", "body" => String.replace(request, "PR #448", "PR #450"), "createdAt" => "2026-10-13T08:00:00Z"}]}
+      })
+
+    plan =
+      node.("TP-923", %{
+        "state" => %{"name" => "Plan Review"},
+        "labels" => %{"nodes" => [%{"name" => "plan"}]},
+        "comments" => %{
+          "nodes" => [%{"id" => "brief", "body" => "## Review brief\n\n**What to review:** the plan.\n\n- TP-947: decisions in your words.\n", "createdAt" => "2026-10-13T07:00:00Z"}]
+        }
+      })
+
+    blocked = node.("TP-900", %{"labels" => %{"nodes" => [%{"name" => "Blocked"}]}})
+    nodes = [action, merge, plan, blocked]
+
+    children = for type <- ~w(completed completed completed completed started unstarted backlog), do: %{"createdAt" => "2026-10-12T00:00:00Z", "state" => %{"type" => type}}
+
+    own_892 = %{
+      "id" => "issue-TP-892",
+      "identifier" => "TP-892",
+      "parent" => %{"identifier" => "TP-923", "title" => "Improve decision handling", "children" => %{"nodes" => children}},
+      "attachments" => %{"nodes" => [%{"url" => "https://github.com/example/app/pull/448"}]},
+      "relations" => %{"nodes" => [%{"type" => "related", "relatedIssue" => %{"identifier" => "TP-891", "title" => "Remove the retired review states", "state" => %{"name" => "In Progress"}}}]},
+      "inverseRelations" => %{"nodes" => []}
+    }
+
+    ticket = fn identifier, title, state, type ->
+      %{
+        "id" => "issue-" <> identifier,
+        "identifier" => identifier,
+        "title" => title,
+        "description" => "Remove the review states nobody uses. The [old flows](https://example.com) go too.",
+        "url" => "https://linear.app/example/issue/" <> identifier,
+        "state" => %{"name" => state, "type" => type},
+        "parent" => %{"identifier" => "TP-923", "title" => "Improve decision handling"},
+        "attachments" => %{"nodes" => []},
+        "inverseRelations" => %{"nodes" => []}
+      }
+    end
+
+    mentioned =
+      [
+        ticket.("TP-891", "Remove the retired review states", "In Progress", "started"),
+        ticket.("TP-892", "Retire two old review steps", "Rework", "started"),
+        ticket.("TP-947", "Write decisions in your words", "Done", "completed")
+      ]
+      |> Enum.reject(&(&1["identifier"] in Keyword.get(opts, :unreadable, [])))
+
+    test_pid = self()
+
+    linear_client = fn query, variables, _opts ->
+      cond do
+        query =~ "SymphonyInboxList" ->
+          {:ok, %{"data" => %{"issues" => %{"nodes" => Enum.map(nodes, &%{"id" => &1["id"], "updatedAt" => "2026-10-13T09:00:00Z"})}}}}
+
+        query =~ "SymphonyInboxIssues" ->
+          {:ok, %{"data" => %{"issues" => %{"nodes" => Enum.filter(nodes, &(&1["id"] in variables.filter["id"]["in"]))}}}}
+
+        query =~ "SymphonyInboxReferences" ->
+          send(test_pid, :references_query)
+          {:ok, %{"data" => %{"own" => %{"nodes" => [own_892]}, "mentioned" => %{"nodes" => mentioned}}}}
+      end
+    end
+
+    pull_request = fn url ->
+      if url in Keyword.get(opts, :unreadable, []) do
+        {:error, {:gh_failed, ["pr", "view"], 1, "HTTP 502"}}
+      else
+        number = url |> String.split("/") |> List.last() |> String.to_integer()
+
+        {:ok,
+         %{
+           number: number,
+           url: url,
+           title: "TP-892 Remove the Final verification and Supervisor check flows",
+           body: "## This PR\n\nThe two retired review steps are gone. Nothing else changes.",
+           state: "OPEN",
+           review_decision: nil,
+           changed_files: 14,
+           additions: 120,
+           deletions: 610,
+           head_ref_name: "auto/TP-892",
+           checks: "passed"
+         }}
+      end
+    end
+
+    merge_hold =
+      SymphonyElixir.MergeConfirmation.attrs(SymphonyElixir.MergeConfirmation.request(%SymphonyElixir.Linear.Issue{identifier: "TP-894"}, %{recommendation: "merge", review: nil, qa: "pass", pr: nil}))
+
+    blocked_hold = %{
+      kind: :blocked,
+      reason: "Waits on TP-891's fix to the review states",
+      clearing_condition: "when a person unblocks it",
+      waits_on: %{type: "access", keys: []},
+      decision: nil,
+      set_at: ~U[2026-10-13 06:00:00Z]
+    }
+
+    held = %{
+      kind: :clarification,
+      issue_id: "issue-TP-901",
+      repo_key: "default",
+      identifier: "TP-901",
+      title: "Vague",
+      state: "Todo",
+      url: "https://linear.app/example/issue/TP-901",
+      score: 3,
+      reason: "Like TP-891, it has no acceptance criteria.",
+      questions: [],
+      scored_at: ~U[2026-10-13 04:00:00Z]
+    }
+
+    inbox = {:test, make_ref()}
+
+    SymphonyElixir.Inbox.run_once(%{
+      opts: [
+        name: inbox,
+        repos: fn -> {:ok, [%{name: "default"}]} end,
+        settings_fun: fn _repo -> Config.settings!() end,
+        scope_filter: fn _repo -> {:ok, %{}} end,
+        linear_client: linear_client,
+        snapshot: fn -> %{awaiting_clarification: [held]} end,
+        github_repos: %{"default" => "example/app"},
+        pull_request: pull_request,
+        verdicts: fn
+          "default", "issue-TP-892" -> [%{head_sha: "b", outcome: "request_changes"}, %{head_sha: "a", outcome: "request_changes"}]
+          _repo_key, _issue_id -> []
+        end,
+        hold: fn
+          _repo_key, "issue-TP-894" -> merge_hold
+          _repo_key, "issue-TP-900" -> blocked_hold
+          _repo_key, _issue_id -> nil
+        end
+      ],
+      nodes: %{},
+      timer: nil
+    })
+
+    assert_received :references_query
+    refute_received :references_query
+
+    orchestrator_name = Module.concat(__MODULE__, "InboxMentions#{System.unique_integer([:positive])}")
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :awaiting_clarification, [held]))
+    {inbox, orchestrator_name}
+  end
+
+  defp inbox_item(payload, identifier), do: Enum.find(payload["items"], &(&1["identifier"] == identifier))
+
+  test "the inbox api returns what each item mentions and where its ticket sits, for every kind" do
+    payload = inbox_mentions_fixture([])
+
+    assert Enum.map(payload["items"], &{&1["identifier"], &1["kind"]}) |> Enum.sort() ==
+             [{"TP-892", "action"}, {"TP-894", "action"}, {"TP-900", "blocked"}, {"TP-901", "clarify"}, {"TP-923", "plan"}]
+
+    for item <- payload["items"] do
+      assert is_map(item["references"]), item["identifier"]
+      assert %{"parent" => _, "pull_request" => _, "blocked_by" => _, "blocks" => _, "related" => _, "earlier_decisions" => _} = item["context"]
+    end
+
+    # 1. The decision's mentions: a ticket with its title, state and summary, and a pull request with
+    # its review state, size and checks.
+    action = inbox_item(payload, "TP-892")
+
+    assert %{
+             "kind" => "ticket",
+             "identifier" => "TP-891",
+             "title" => "Remove the retired review states",
+             "repo_key" => "default",
+             "state" => "In Progress",
+             "summary" => "Remove the review states nobody uses.",
+             "url" => "https://linear.app/example/issue/TP-891",
+             "parent" => %{"identifier" => "TP-923", "title" => "Improve decision handling"},
+             "pull_request" => nil,
+             "waiting_on" => "a slot"
+           } = action["references"]["TP-891"]
+
+    refute Map.has_key?(action["references"]["TP-891"], "facts")
+
+    assert %{
+             "kind" => "pull_request",
+             "number" => 448,
+             "repo_key" => "default",
+             "url" => "https://github.com/example/app/pull/448",
+             "title" => "TP-892 Remove the Final verification and Supervisor check flows",
+             "summary" => "The two retired review steps are gone.",
+             "review_state" => "changes_requested",
+             "review_rounds" => 2,
+             "files" => 14,
+             "additions" => 120,
+             "deletions" => 610,
+             "checks" => "passed",
+             "ticket" => "TP-892"
+           } = action["references"]["PR #448"]
+
+    assert action["references"]["TP-892"]["waiting_on"] == "you"
+
+    # 3. Where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request sent back twice,
+    # TP-891 connected, and the decision answered at 05:48.
+    assert action["context"] == %{
+             "parent" => %{
+               "identifier" => "TP-923",
+               "title" => "Improve decision handling",
+               "done" => 4,
+               "total" => 7,
+               "children" => ~w(completed completed completed completed started unstarted backlog)
+             },
+             "pull_request" => %{"number" => 448, "url" => "https://github.com/example/app/pull/448", "checks" => "passed", "sent_back" => 2},
+             "blocked_by" => [],
+             "blocks" => [],
+             "related" => [%{"identifier" => "TP-891", "title" => "Remove the retired review states", "state" => "In Progress"}],
+             "earlier_decisions" => [%{"at" => "2026-10-13T05:48:00Z", "title" => "Keep the old step", "answer" => "Keep it"}]
+           }
+
+    # A pull request waiting on its merge confirmation, a plan, a blocked ticket and a held one.
+    merge = inbox_item(payload, "TP-894")
+    assert merge["review"]["confirm"] == "Merging"
+    assert %{"kind" => "pull_request", "number" => 450} = merge["references"]["PR #450"]
+
+    assert %{"TP-947" => %{"kind" => "ticket", "state" => "Done", "waiting_on" => nil}} = inbox_item(payload, "TP-923")["references"]
+    assert %{"TP-891" => %{"kind" => "ticket"}} = inbox_item(payload, "TP-900")["references"]
+    assert %{"TP-891" => %{"kind" => "ticket"}} = inbox_item(payload, "TP-901")["references"]
+  end
+
+  test "the inbox api returns a mention it can't read as missing and leaves the rest of the item as it was" do
+    {inbox, orchestrator_name} = inbox_mentions_poll([])
+    readable = orchestrator_name |> SymphonyElixirWeb.Presenter.inbox_payload(50, inbox) |> Jason.encode!() |> Jason.decode!()
+    # 2. Linear can't read TP-891, and GitHub can't read #448.
+    payload = inbox_mentions_fixture(unreadable: ["TP-891", "https://github.com/example/app/pull/448"])
+
+    action = inbox_item(payload, "TP-892")
+    assert action["references"]["TP-891"] == %{"kind" => "missing", "url" => "https://linear.app/example/issue/TP-891"}
+    assert action["references"]["PR #448"] == %{"kind" => "missing", "url" => "https://github.com/example/app/pull/448"}
+
+    # The context's pull request is #448 too: its checks are unknown, the rest of it stays.
+    before = inbox_item(readable, "TP-892")
+    assert action["context"]["pull_request"] == %{before["context"]["pull_request"] | "checks" => nil}
+    before = put_in(before, ["context", "pull_request", "checks"], nil)
+    assert Map.drop(action, ["references", "waiting_seconds"]) == Map.drop(before, ["references", "waiting_seconds"])
+    assert Map.drop(action["references"], ["TP-891", "PR #448"]) == Map.drop(before["references"], ["TP-891", "PR #448"])
   end
 
   test "the inbox api says when the snapshot is unavailable or late, and lists an action's request time" do

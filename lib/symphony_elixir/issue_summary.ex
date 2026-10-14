@@ -111,6 +111,19 @@ defmodule SymphonyElixir.IssueSummary do
 
   def strip(description), do: description
 
+  @doc "The block's one-line status (`**Status:** …`), or nil when the description has no block or no status."
+  @spec status(String.t() | nil) :: String.t() | nil
+  def status(description) when is_binary(description) do
+    with {:block, _before, block, _rest} <- split(description),
+         [_, status] <- Regex.run(~r/^\s*\*\*Status:\*\*[ \t]*(.+)$/m, block) do
+      one_line(status)
+    else
+      _none -> nil
+    end
+  end
+
+  def status(_description), do: nil
+
   # The blank lines around the block fold into one paragraph break.
   defp join_stripped(before, rest) do
     [String.trim_trailing(before), String.trim_leading(rest)]

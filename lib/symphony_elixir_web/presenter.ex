@@ -251,7 +251,9 @@ defmodule SymphonyElixirWeb.Presenter do
       waiting_since: iso8601(item.waiting_since),
       waiting_seconds: waiting_seconds(item.waiting_since, now),
       url: URLUtils.present_url(item.url),
-      review: inbox_review_payload(item.review)
+      review: inbox_review_payload(item.review),
+      references: Map.get(item, :references, %{}),
+      context: Map.get(item, :context)
     }
   end
 

@@ -1063,8 +1063,10 @@ Four more variables, read only in QA mode:
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
-  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done) and
-  `inbox-empty`, of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
+  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
+  `inbox-empty` and `inbox-decision` (TP-892's decision with every ticket and pull request it mentions resolved
+  and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
+  earlier decision; and the plan TP-923, whose brief mentions TP-947), of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
   conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
   shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your

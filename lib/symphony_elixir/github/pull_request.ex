@@ -103,6 +103,20 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           files: [String.t()]
         }
 
+  @type summary :: %{
+          number: pos_integer() | nil,
+          url: String.t(),
+          title: String.t() | nil,
+          body: String.t() | nil,
+          state: String.t() | nil,
+          review_decision: String.t() | nil,
+          changed_files: non_neg_integer() | nil,
+          additions: non_neg_integer() | nil,
+          deletions: non_neg_integer() | nil,
+          head_ref_name: String.t() | nil,
+          checks: String.t() | nil
+        }
+
   @run_fields "databaseId,workflowName,status,conclusion,url,createdAt"
 
   @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
@@ -145,6 +159,57 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       do_fetch_ci_status(pr_url, opts)
     else
       {:error, :invalid_pr_url}
+    end
+  end
+
+  @doc """
+  What the Director app's popover shows of a pull request, in one `gh pr view`: its title, body,
+  state, review decision, size and the outcome of its checks (`checks_outcome/1`).
+  """
+  @spec fetch_summary(String.t(), keyword()) :: {:ok, summary()} | {:error, term()}
+  def fetch_summary(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    args = ["pr", "view", pr_url, "--json", "number,url,title,body,state,reviewDecision,changedFiles,additions,deletions,headRefName,headRefOid,statusCheckRollup"]
+
+    with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(args, opts),
+         {:ok, %{} = pr} <- Jason.decode(output) do
+      %{checks: checks} =
+        drop_superseded_checks(%{pr_url: pr_url, commit_sha: pr["headRefOid"], checks: normalize_status_check_rollup(pr["statusCheckRollup"])})
+
+      {:ok,
+       %{
+         number: pr["number"],
+         url: pr["url"] || pr_url,
+         title: pr["title"],
+         body: pr["body"],
+         state: pr["state"],
+         review_decision: if(blank?(pr["reviewDecision"]), do: nil, else: upcase(pr["reviewDecision"])),
+         changed_files: pr["changedFiles"],
+         additions: pr["additions"],
+         deletions: pr["deletions"],
+         head_ref_name: pr["headRefName"],
+         checks: checks_outcome(checks)
+       }}
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:ok, _decoded} -> {:error, :invalid_pr_payload}
+      {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  The outcome of a head's checks: `failed` when one finished without passing, else `pending` while
+  one runs, else `passed`; nil when it has none.
+  """
+  @spec checks_outcome([ci_check()]) :: String.t() | nil
+  def checks_outcome([]), do: nil
+
+  def checks_outcome(checks) when is_list(checks) do
+    cond do
+      Enum.any?(checks, &(not unfinished_check?(&1) and not passing_check?(&1))) -> "failed"
+      Enum.any?(checks, &unfinished_check?/1) -> "pending"
+      true -> "passed"
     end
   end
 
