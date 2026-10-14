@@ -211,10 +211,11 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
-  # A new phase state is a started state: it sits beside In Progress on the board.
+  # A new phase state is a started state: it sits beside In Progress on the board. Linear requires
+  # the color.
   @create_workflow_state_mutation """
-  mutation SymphonyCreateWorkflowState($name: String!, $teamId: String!) {
-    workflowStateCreate(input: {name: $name, teamId: $teamId, type: "started"}) {
+  mutation SymphonyCreateWorkflowState($name: String!, $teamId: String!, $color: String!) {
+    workflowStateCreate(input: {name: $name, teamId: $teamId, type: "started", color: $color}) {
       success
       workflowState {
         id
@@ -614,11 +615,14 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
-  @doc "Creates the started state `state_name` in the team `team` (a key or an id), and returns it."
-  @spec create_workflow_state(String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
-  def create_workflow_state(state_name, team) when is_binary(state_name) and is_binary(team) do
+  @doc """
+  Creates the started state `state_name` with the hex `color` in the team `team` (a key or an id),
+  and returns it.
+  """
+  @spec create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, Tracker.workflow_state()} | {:error, term()}
+  def create_workflow_state(state_name, team, color) when is_binary(state_name) and is_binary(team) and is_binary(color) do
     with {:ok, team_id} <- resolve_team_id(team),
-         {:ok, response} <- create_state(state_name, team_id),
+         {:ok, response} <- create_state(state_name, team_id, color),
          true <- get_in(response, ["data", "workflowStateCreate", "success"]) == true,
          %{} = created <- get_in(response, ["data", "workflowStateCreate", "workflowState"]) do
       {:ok, workflow_state(created)}
@@ -629,8 +633,8 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
-  defp create_state(state_name, team_id) do
-    client_module().graphql(@create_workflow_state_mutation, %{name: state_name, teamId: team_id})
+  defp create_state(state_name, team_id, color) do
+    client_module().graphql(@create_workflow_state_mutation, %{name: state_name, teamId: team_id, color: color})
   end
 
   @doc "Every label in the workspace, workspace-wide and per team."

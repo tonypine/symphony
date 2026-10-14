@@ -14,8 +14,11 @@ final class UpdateController {
     private(set) var prepared: PreparedUpdate?
     /// Why the last update failed, shown in the menu until the next one.
     private(set) var error: String?
-    /// True while the update under way was started by the app itself: its failures show in the menu only.
-    private var automatic = false
+    /// Who started the update under way: an automatic one's failures show in the menu only.
+    private(set) var kind = UpdateKind.manual
+    /// The download under way, and while one that Cancel Update called off still finishes; no update starts until it
+    /// has.
+    private var download: Task<Void, Never>?
     /// What the last update's health check did, such as a rollback that failed, shown in the menu until the next
     /// update.
     var notice: String? {
@@ -57,6 +60,9 @@ final class UpdateController {
 
     var isUpdating: Bool { preparing != nil || prepared != nil }
 
+    /// The release the update under way installs.
+    var release: Release? { preparing ?? prepared?.release }
+
     /// The line under the update items: progress while downloading, why the last update failed, or what its health
     /// check did.
     var menuLine: String? {
@@ -87,33 +93,51 @@ final class UpdateController {
     }
 
     /// Downloads and verifies `release`, then calls `ready` with it. A failure is shown in the menu, and in an alert
-    /// unless the update is `automatic`.
-    func prepare(_ release: Release, automatic: Bool = false, ready: @escaping (PreparedUpdate) -> Void) {
-        guard !isUpdating else { return }
+    /// unless `kind` is automatic.
+    func prepare(_ release: Release, kind: UpdateKind = .manual, ready: @escaping (PreparedUpdate) -> Void) {
+        guard !isUpdating, download == nil else { return }
         error = nil
         notice = nil
         rolledBack = nil
-        self.automatic = automatic
+        self.kind = kind
         preparing = release
         onChange?()
-        Task {
+        download = Task {
+            defer { download = nil }
             do {
                 let update = try await installer.prepare(release)
+                guard preparing != nil else {
+                    installer.removeStaging()
+                    return
+                }
                 preparing = nil
                 prepared = update
                 onChange?()
                 ready(update)
             } catch {
+                guard preparing != nil else {
+                    installer.removeStaging()
+                    return
+                }
                 preparing = nil
                 fail(error.localizedDescription)
             }
         }
     }
 
+    /// Cancel Update while the release downloads and is verified: the download stops, and what it got is removed.
+    func cancelPreparing() {
+        guard preparing != nil else { return }
+        preparing = nil
+        download?.cancel()
+        kind = .manual
+        onChange?()
+    }
+
     /// The drain didn't stop Symphony, so the update is called off; the restart machine said why.
     func cancel() {
         prepared = nil
-        automatic = false
+        kind = .manual
         installer.removeStaging()
         onChange?()
     }
@@ -122,10 +146,10 @@ final class UpdateController {
     func fail(_ reason: String) {
         prepared = nil
         installer.removeStaging()
-        error = "\(UpdateMenu.failedTitle): \(reason)"
+        error = kind.failureLine(reason)
         onChange?()
-        guard !automatic else {
-            automatic = false
+        guard !kind.isAutomatic else {
+            kind = .manual
             return
         }
         let body = reason.prefix(1).uppercased() + reason.dropFirst()
@@ -152,14 +176,11 @@ final class UpdateController {
         }
 
         pending.save(
-            PendingUpdate(
+            kind.pendingUpdate(
+                update.release,
                 fromBuild: current.build,
-                toBuild: update.release.build,
-                version: update.release.version,
                 startSymphony: symphonyStopped,
-                resumeDispatch: resumeDispatch,
-                details: ReleaseDetails(update.release),
-                automatic: automatic
+                resumeDispatch: resumeDispatch
             )
         )
         let launch = ChildLaunch(

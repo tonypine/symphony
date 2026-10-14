@@ -482,6 +482,21 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch_outcome(nil, "issue-1", "run-1", %{})
   end
 
+  test "claims a path-unlock grant for one run only, across a restart" do
+    assert {:ok, ["grant-1"]} = RunStore.claim_path_unlocks(@repo_key, "issue-1", ["grant-1"], "run-1")
+    assert %{path_unlocks: [%{id: "grant-1", run_id: "run-1"}]} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    restart_run_store()
+    assert {:ok, []} = RunStore.claim_path_unlocks(@repo_key, "issue-1", ["grant-1"], "run-2")
+    assert {:ok, ["grant-2"]} = RunStore.claim_path_unlocks(@repo_key, "issue-1", ["grant-1", "grant-2"], "run-2")
+
+    # Another ticket's record is its own.
+    assert {:ok, ["grant-1"]} = RunStore.claim_path_unlocks(@repo_key, "issue-2", ["grant-1"], "run-3")
+
+    assert {:error, :invalid_issue_id} = RunStore.claim_path_unlocks(@repo_key, nil, ["grant-1"], "run-1")
+    assert {:error, :invalid_repo_key} = RunStore.claim_path_unlocks(nil, "issue-1", ["grant-1"], "run-1")
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 

@@ -810,6 +810,24 @@ defmodule SymphonyElixir.RunStore do
   def record_ticket_dispatch_outcome(_repo_key, _issue_id, _run_id, _attrs), do: {:error, :invalid_issue_id}
 
   @doc """
+  Marks the path-unlock grants in `ids` as used by `run_id` in the ticket's record
+  (`TicketState.claim_path_unlocks/4`), creating the record when none exists, and returns the ones
+  no run had used. The read-modify-write runs in one durable transaction, so two runs never both
+  claim a grant.
+  """
+  @spec claim_path_unlocks(String.t(), String.t(), [String.t()], String.t() | nil) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def claim_path_unlocks(repo_key, issue_id, ids, run_id) when is_binary(issue_id) and is_list(ids) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_path_unlock_claim(repo_key, issue_id, ids, run_id) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def claim_path_unlocks(_repo_key, _issue_id, _ids, _run_id), do: {:error, :invalid_issue_id}
+
+  @doc """
   Drops the stale fix-ticket pointer from the ticket's self-heal bookkeeping, keeping the broken
   component, the failure signature and the retry count, so a block that recurs after the fix landed
   is compared against the last failure instead of judged as a first one. A record the store does not
@@ -1561,6 +1579,25 @@ defmodule SymphonyElixir.RunStore do
     updated = TicketState.record_signal(record, name, details)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
+  end
+
+  defp write_path_unlock_claim(repo_key, issue_id, ids, run_id) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> record
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    case TicketState.claim_path_unlocks(record, ids, run_id) do
+      {_record, []} ->
+        {:ok, []}
+
+      {updated, claimed} ->
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        {:ok, claimed}
+    end
   end
 
   defp write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome) do

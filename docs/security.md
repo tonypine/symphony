@@ -112,6 +112,40 @@ check; the issue waits for the waiver. The workflow tells Symphony's pull reques
 the `auto/` branch prefix. So it skips the case where a person's own open pull request on another
 branch is attached to the issue, and Symphony keeps working on that branch.
 
+#### Unlocking a protected path for one run
+
+A person can let the agent edit one of the workspace's protected paths, such as removing a line
+from `config/settings_ui_exempt.yml`, by recording a decision on the ticket that names the path and
+the ticket: a comment that opens with `Decision:` (or `Ruling:`), or the answer to the ticket's
+decision request, saying `Unlock <path> for <ticket>`:
+
+```text
+Decision: Unlock config/settings_ui_exempt.yml for TP-760 to drop the human_actions.label exemption.
+```
+
+Symphony records it in the ticket's Decisions section, and the ticket's next implementation run
+(In Progress, Rework, CI Fix) claims it before its session starts:
+
+- The run's sandbox leaves the path out of its write-deny list: Claude's `denyWrite` and `Edit`
+  rules, Codex's filesystem permissions and SRT's `denyWrite`. For a skill directory, the files its
+  symlinks point at are left out too.
+- Its prompt names the path, the decision and its words, so the agent knows it may edit the path.
+- Its `github_sync_base` and `github_push_branch` accept the branch's change to the path.
+
+Only that run gets it. The claim is kept in the ticket's record in Symphony's store, so a restart
+doesn't hand it out again; every later run of the ticket, and every other ticket, keeps the
+protection. Once the run has pushed, the tools let later runs keep the pushed file as it is, as
+they do for a person's push, but refuse a further change to it. To unlock the path for another
+run, record a new decision with different words (Symphony skips a ruling whose words it already
+recorded).
+
+Only the paths in the list above count: `.git`, the home-folder files and any other path stay
+protected whatever a decision says. A decision copied onto another ticket unlocks nothing there,
+since the ticket it names must be the one it is recorded on. Agents post as the operator's Linear
+user, so their comment and sub-issue tools refuse text that reads as such a grant: only a person
+grants one. The pull request still fails the `protected-paths` CI job until a person waives it, as
+above.
+
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see
 `permissions.filesystem.allow_write_paths` in [configuration](configuration.md)). Runs share it,
