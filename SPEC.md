@@ -1484,7 +1484,9 @@ The QA agent:
   window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
   reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
-  its `pass` becomes `blocked` with that reason. Every tool that
+  its `pass` becomes `blocked` with that reason. An epic review gets every enabled playbook whatever
+  the epic shipped, so this applies to it only when the pass launched an app: an epic review that
+  launched none (a backend-only epic) keeps its `pass`. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
@@ -2615,11 +2617,14 @@ Rules:
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
   waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
-  reused one keeps its priority. A fix ticket is reused only while it is open and was filed for the
-  same failure (the same normalized cause); a terminal one, or one for another failure of the same
-  component, gets a new fix ticket instead. A QA answer may name an open ticket that already tracks the
-  missing QA tool (`covered_by`); the hold then waits on that ticket, linked as blocked-by, and
-  nothing is filed. A missing QA tool or QA host capability is never `needs_person`: only a secret,
+  reused one keeps its priority. A new fix ticket is assigned to the user the fix's repo polls for
+  (its route's `assignee`, else `issues.linear.assignee`), so Symphony dispatches it; with none
+  configured, or one that cannot be resolved, it takes the affected ticket's assignee. A fix ticket
+  is reused only while it is open and was filed for the same failure (the same normalized cause); a
+  terminal one, or one for another failure of the same component, gets a new fix ticket instead. A
+  QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
+  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A missing QA tool or
+  QA host capability is never `needs_person`: only a secret,
   an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a
   `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge

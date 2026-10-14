@@ -19,7 +19,8 @@ defmodule SymphonyElixir.QaAgent do
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
-  `blocked` when no `qa_resize_window` call ran the playbook's wide pass. It also gets its host ports
+  `blocked` when no `qa_resize_window` call ran the playbook's wide pass (in an epic review, only
+  when the pass launched an app). It also gets its host ports
   (`QA_HOST_PORTS` in the prompt and the session's environment) for the stubs and
   proxies it serves the app; a pass whose host-port tunnel to the QA host cannot
   open is `blocked` with the reason before the agent starts. A pass that runs the
@@ -686,7 +687,7 @@ defmodule SymphonyElixir.QaAgent do
 
               agent_module
               |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
-              |> limit_wide_pass(driver, QaDriver.wide_pass(driver))
+              |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
 
             {:error, reason} ->
               {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
@@ -703,24 +704,33 @@ defmodule SymphonyElixir.QaAgent do
 
   # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
   # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so
-  # it is `blocked` (TP-715). On a QA screen too small for it the pass proves nothing about
-  # them either, so a `pass` there is `blocked`, and that or the `blocked` the playbook asks for
-  # goes to a person, since only one can enlarge the screen.
-  defp limit_wide_pass(run, nil = _driver, _wide_pass), do: run
+  # it is `blocked` (TP-715). An epic review gets every enabled playbook whatever the epic
+  # shipped, so one that launched no app (a backend-only epic) owes no wide pass (TP-1014). On a
+  # QA screen too small for it the pass proves nothing about them either, so a `pass` there is
+  # `blocked`, and that or the `blocked` the playbook asks for goes to a person, since only one
+  # can enlarge the screen.
+  defp limit_wide_pass(run, nil = _driver, _wide_pass, _job), do: run
 
-  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, nil) do
-    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: @wide_pass_missing_reason})}}
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run} = outcome, driver, nil, job) do
+    if wide_pass_owed?(job, driver) do
+      {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: @wide_pass_missing_reason})}}
+    else
+      outcome
+    end
   end
 
-  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, %{limited: true} = wide_pass) do
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, %{limited: true} = wide_pass, _job) do
     {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
   end
 
-  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = wide_pass) do
+  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = wide_pass, _job) do
     {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(wide_pass), needs_person: true})}}
   end
 
-  defp limit_wide_pass(run, _driver, _wide_pass), do: run
+  defp limit_wide_pass(run, _driver, _wide_pass, _job), do: run
+
+  defp wide_pass_owed?(%{epic_review: true}, driver), do: QaDriver.launched_app?(driver)
+  defp wide_pass_owed?(_job, _driver), do: true
 
   defp limited_reason(wide_pass) do
     {sw, sh} = wide_pass.screen
