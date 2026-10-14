@@ -555,8 +555,7 @@ struct AddRepoView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                TextEditor(text: model.workflowDraft)
-                    .font(.system(.caption, design: .monospaced))
+                PlainTextEditor(text: model.workflowDraft)
                     .frame(height: 240)
                 Picker("Add it by", selection: $model.landing) {
                     ForEach(WorkflowLanding.choices(for: model.draft.mode), id: \.self) { Text($0.rawValue).tag($0) }
