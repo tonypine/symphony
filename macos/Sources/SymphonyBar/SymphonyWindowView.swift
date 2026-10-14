@@ -24,6 +24,8 @@ final class SymphonyWindowModel: ObservableObject {
     /// Whether Symphony answers, or which placeholder every view shows instead (D0).
     @Published var state: WindowState = .stopped
     @Published var paused = false
+    /// The app's update under way, which the dispatch control and the Overview show (S3a, S3b).
+    @Published var updateHold: UpdateHold?
     /// The Overview's reading of the last state payload.
     @Published private(set) var overviewState: OverviewState?
     /// The last answer to `/api/v1/repos`, for the Overview's repos line.
@@ -815,7 +817,7 @@ struct OverviewContent: View {
     var body: some View {
         if let state = model.overviewState {
             OverviewView(
-                overview: Overview(state: state, scope: model.scope, repos: model.repos, now: Date()),
+                overview: Overview(state: state, scope: model.scope, repos: model.repos, updating: model.updateHold != nil, now: Date()),
                 actions: OverviewActions(
                     resume: { model.send(.resume) },
                     perform: model.perform,

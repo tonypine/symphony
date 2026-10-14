@@ -39,6 +39,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     }()
     private var state = WindowState.stopped
     private var paused = false
+    private var updateHold: UpdateHold?
 
     init(client: LiveAPIClient) {
         self.client = client
@@ -94,6 +95,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             let model = SymphonyWindowModel(client: client, selection: Sidebar().restoredView(saved: saved))
             model.state = state
             model.paused = paused
+            model.updateHold = updateHold
             model.appVersion = appVersion
             model.apiURL = { [weak self] in self.flatMap { StateRoot.controlURL(in: $0.stateRoot(), fallback: AppStores.current.apiFallback) } }
             model.canOpenLogs = { [weak self] in self?.canOpenLogs() ?? false }
@@ -157,6 +159,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         state = next
         model?.state = next
         model?.paused = paused
+    }
+
+    /// Called after each change to the update under way: nil once none is.
+    func update(updateHold: UpdateHold?) {
+        guard updateHold != self.updateHold else { return }
+        self.updateHold = updateHold
+        model?.updateHold = updateHold
     }
 
     // MARK: View menu
