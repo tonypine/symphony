@@ -2716,7 +2716,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert {:ok, issue} = Client.fetch_issue_by_identifier_for_test("ACME-1", graphql_fun)
 
-    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, attachmentFirst: 20, commentLast: 20}}
+    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, attachmentFirst: 100, commentLast: 20}}
 
     assert query =~ "SymphonyLinearIssueByIdentifier"
     assert %Issue{id: "issue-1", identifier: "ACME-1", state: "Todo", labels: ["backend"]} = issue

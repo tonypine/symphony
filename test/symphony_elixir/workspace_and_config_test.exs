@@ -2492,7 +2492,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              },
              first: 50,
              relationFirst: 50,
-             attachmentFirst: 20,
+             attachmentFirst: 100,
              commentLast: 20,
              after: nil
            }

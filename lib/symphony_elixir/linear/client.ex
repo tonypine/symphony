@@ -9,7 +9,7 @@ defmodule SymphonyElixir.Linear.Client do
   alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
 
   @issue_page_size 50
-  @attachment_page_size 20
+  @attachment_page_size 100
   @attachment_follow_up_page_size 50
   @attachment_follow_up_max_pages 10
   # Kept small: every polled issue pays for this nested connection in Linear query complexity.
