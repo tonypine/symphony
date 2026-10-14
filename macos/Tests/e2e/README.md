@@ -23,6 +23,11 @@ For each scenario the test checks the menu lines, the Symphony pid, the stub age
 stopped instead of finishing fails the drain checks) and a `before_run` hook's log, which records the release
 root and version each run came from and the stored secret Symphony was given.
 
+The stub ticket is dispatched again and again without a state move, so the test's `symphony.yml` sets the
+dispatch-loop guard's `watchdog.dispatch_loop_*` limits to 50 runs within one second, out of reach of one test
+run; the defaults would hold it after 4 runs in 10 minutes. When no new run starts in time, the failure says
+whether Symphony skips the ticket and why, such as a `Blocked` hold.
+
 ## Run it
 
 From `macos/`, on an Apple silicon Mac with Xcode or the Command Line Tools, the repository's `mise`
