@@ -85,7 +85,10 @@ make all
 
 `make all` also runs `make audit` (`mix hex.audit`), which fails when a locked dependency is
 retired or has a security advisory. Update the package with `mix deps.update <package>` rather
-than ignoring the advisory.
+than ignoring the advisory. Only when no fixed release exists yet may `mix.exs` list the
+advisory under `hex: [ignore_advisories: [...]]`, and then only after the vulnerable code path is
+turned off in Symphony, with a comment saying how, and a ticket to drop the entry once the fix is
+released.
 
 To find slow validation work before optimizing tests, use the profiling targets:
 
