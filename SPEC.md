@@ -2541,8 +2541,13 @@ Rules:
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
   blocked-by dependency on a `Todo` ticket, an agent's request to park in `Backlog` from
-  `In Progress` or `Rework`, or a self-heal fix ticket, and clears by itself when what it waits on
-  goes terminal (an access hold clears on a person's `Unblock`). `Needs Decision` is set by an
+  `In Progress` or `Rework` (its block report), or a self-heal fix ticket, and clears by itself when
+  what it waits on goes terminal (an access hold clears on a person's `Unblock`). A block report
+  from a ticket with open blocked-by blockers MUST record a dependency hold on those blockers, which
+  clears by itself once every one is terminal, in whatever phase the ticket is, and the ticket
+  dispatches again in that phase; outside `Todo`, a blocker whose fix merged into Symphony itself
+  also waits until the running app includes its merge commit. A block report with no open blocker
+  records an access hold. `Needs Decision` is set by an
   agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal or a manual
   review confirmation, and clears when the decision is recorded (a reply under the request, the
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
