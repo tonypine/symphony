@@ -524,7 +524,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear) and open its folder picker in a qa_put_checkout checkout.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval and open its folder picker in a qa_put_checkout checkout.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -543,7 +543,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "integer",
             "description" => "A QA_HOST_PORTS port where your Linear GraphQL stub listens; the app sends Linear queries to http://localhost:<port>/graphql."
           },
-          "open_panel_dir" => %{"type" => "string", "description" => "A path qa_put_checkout returned; the app's folder picker opens in it."}
+          "open_panel_dir" => %{"type" => "string", "description" => "A path qa_put_checkout returned; the app's folder picker opens in it."},
+          "update_feed_port" => %{
+            "type" => "integer",
+            "description" =>
+              "A QA_HOST_PORTS port where your release-feed stub listens; the app's update checks read http://localhost:<port>/releases/latest (SYMPHONY_BAR_UPDATE_URL) instead of GitHub's."
+          },
+          "update_check_interval_seconds" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Seconds between the app's background update checks (SYMPHONY_BAR_UPDATE_CHECK_INTERVAL), e.g. 30."
+          }
         }
       }
     },
@@ -934,7 +944,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir"],
+    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir", "update_feed_port", "update_check_interval_seconds"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],

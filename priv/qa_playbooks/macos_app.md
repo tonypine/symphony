@@ -11,8 +11,9 @@ for you on the host. They only act on this worktree's configured app and on apps
   to the checkout (for example `macos/Tests/Fixtures/director-app/running`), and Symphony copies
   it to the machine the app runs on and launches the app with `SYMPHONY_BAR_QA_API_FIXTURES`
   pointing at the copy (returned as `api_fixtures`). The directory may hold only regular files,
-  at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear and
-  the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`.
+  at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear, updates
+  and the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`,
+  `update_feed_port`, `update_check_interval_seconds`.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
@@ -72,8 +73,9 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
 - When the server cannot listen on the port, or the app still cannot reach it, mark the steps
   that need it `blocked` with the error in `details`.
 
-Stand-ins for GitHub, Linear and the folder picker (the Add Repo sheet and anything else that
-runs `gh`, asks Linear or picks a folder). Never let the app reach real GitHub or Linear in QA:
+Stand-ins for GitHub, Linear, updates and the folder picker (the Add Repo sheet, update checks
+and anything else that runs `gh`, asks Linear or picks a folder). Never let the app reach real
+GitHub or Linear in QA:
 
 - **gh:** serve a gh stub on a `QA_HOST_PORTS` port and pass it as `qa_launch_app`'s
   `gh_stub_port`. The app then runs Symphony's fake `gh` (through `SYMPHONY_BAR_GH`), which POSTs
@@ -90,6 +92,19 @@ runs `gh`, asks Linear or picks a folder). Never let the app reach real GitHub o
   `SymphonyBarProjectTeams` → `{"data":{"project":{"teams":{"nodes":[{"id":"t1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
   `SymphonyBarLabels` → `{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"macos","isGroup":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`.
   Any made-up Linear key in Settings works with it.
+- **Update feed:** serve a release feed on another port and pass it as `update_feed_port`; the
+  app's update checks GET `http://localhost:<port>/releases/latest` (through
+  `SYMPHONY_BAR_UPDATE_URL`) instead of GitHub's. Answer 200 with GitHub's `releases/latest`
+  JSON: `{"tag_name":"v9.9.9","html_url":"http://localhost:<port>/release","body":"3 changes since
+  v1.0:","assets":[...]}`, where `assets` lists `{"name","browser_download_url"}` for
+  `version.json`, the zip it names and `<zip>.sha256`, all served by the same stub.
+  `version.json` is `{"version":"9.9.9","build":9999,"zip":"SymphonyBar.zip"}`; a `build` above
+  the app's own is a newer release. Answer 403 to make a check fail (the app reads it as GitHub's
+  rate limit). Log every request.
+- **Update-check interval:** pass `update_check_interval_seconds` (a positive integer, such as
+  `30`) and the app checks for a release that often in the background, in every update mode,
+  through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check still backs off to 6 hours, so use
+  Check Now to check again after one.
 - **Folder picker:** the picker is a system panel with no path field. Put the checkout with
   `qa_put_checkout`, pass its `path` as `open_panel_dir`, and the panel opens inside it: press
   its Choose button without selecting anything to choose that folder. Use one launch per
