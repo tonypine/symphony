@@ -7,6 +7,9 @@ defmodule SymphonyElixir.TicketPullRequest do
   opens the PR, replacing whatever PR the ticket held before. The places that already see a PR
   close or merge (the GitHub `pull_request` webhook, the CI poller's and the PR review poller's PR
   reads) mark it `closed` or `merged`. A closed or merged PR is not the ticket's in-flight PR.
+  `SymphonyElixir.TicketPullRequest.Backfill` seeds a record at startup for the tickets in flight
+  from the PR URLs Symphony already stores, and `SymphonyElixir.TicketPullRequest.Lookup` finds a PR
+  Symphony did not open on GitHub, by the ticket's branch, each poll.
 
   Consumers read the ticket's PR with `current_url/1` (or `current_urls/1`, or `recorded_urls/2` for
   a reader that asks what a finished ticket shipped). Until ticket reads stop
@@ -45,27 +48,41 @@ defmodule SymphonyElixir.TicketPullRequest do
   `github_lookup`.
   """
   @spec put(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def put(repo_key, issue_id, attrs) when is_binary(repo_key) and is_binary(issue_id) and is_map(attrs) do
+  def put(repo_key, issue_id, attrs) do
+    with {:ok, record} <- open_record(repo_key, issue_id, attrs), do: RunStore.put_ticket_pull_request(record)
+  end
+
+  @doc """
+  `put/3` only for a ticket that has no record yet: `{:ok, :exists}` leaves the record it holds,
+  whatever its PR or state, as it is.
+  """
+  @spec put_new(String.t(), String.t(), map()) :: {:ok, :inserted | :exists} | {:error, term()}
+  def put_new(repo_key, issue_id, attrs) do
+    with {:ok, record} <- open_record(repo_key, issue_id, attrs), do: RunStore.insert_ticket_pull_request(record)
+  end
+
+  defp open_record(repo_key, issue_id, attrs) when is_binary(repo_key) and is_binary(issue_id) and is_map(attrs) do
     source = Map.get(attrs, :source, "created")
 
     with {:ok, pr_url} <- require_url(Map.get(attrs, :pr_url)),
          :ok <- require_source(source) do
       now = DateTime.utc_now()
 
-      RunStore.put_ticket_pull_request(%{
-        repo_key: repo_key,
-        issue_id: issue_id,
-        pr_url: pr_url,
-        branch: URLUtils.present_url(Map.get(attrs, :branch)),
-        state: @open,
-        source: source,
-        recorded_at: now,
-        updated_at: now
-      })
+      {:ok,
+       %{
+         repo_key: repo_key,
+         issue_id: issue_id,
+         pr_url: pr_url,
+         branch: URLUtils.present_url(Map.get(attrs, :branch)),
+         state: @open,
+         source: source,
+         recorded_at: now,
+         updated_at: now
+       }}
     end
   end
 
-  def put(_repo_key, _issue_id, _attrs), do: {:error, :invalid_ticket_pull_request_record}
+  defp open_record(_repo_key, _issue_id, _attrs), do: {:error, :invalid_ticket_pull_request_record}
 
   @doc """
   Records the PR Symphony just opened for the ticket (`source: created`). No-ops for a tool call

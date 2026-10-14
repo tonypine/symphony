@@ -343,6 +343,20 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert checklist_detail =~ "1 checklist row(s) for the review to resolve"
     end
 
+    test "the pull-request check lists the epic's PR from Symphony's record, and none once it merged" do
+      pr_url = "https://github.com/acme/app/pull/1012"
+      :ok = SymphonyElixir.TicketPullRequest.record_created(@repo_key, @issue_id, pr_url, "auto/TP-823")
+
+      assert {:ok, checks} = EpicReview.checks(epic(), settings!())
+      assert %{status: :attention, detail: detail} = Enum.find(checks, &(&1.name == :pull_requests))
+      assert detail == "1 pull request(s) recorded on the epic: #{pr_url}"
+
+      :ok = SymphonyElixir.TicketPullRequest.mark_finished(@repo_key, pr_url, "merged")
+
+      assert {:ok, checks} = EpicReview.checks(epic(%{pull_request_url: pr_url, pr_urls: [pr_url]}), settings!())
+      assert %{status: :ok} = Enum.find(checks, &(&1.name == :pull_requests))
+    end
+
     test "an epic with nothing recorded and no checklist rows lists all four as evidence to derive" do
       issue = epic(%{description: "Just context.", comments: [%{id: "c1"}], pr_urls: []})
 

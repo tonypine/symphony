@@ -388,6 +388,25 @@ Who writes it, and when it changes:
 - Wherever Symphony already sees a PR finish, it marks the record holding that PR `closed` or
   `merged`: the GitHub `pull_request` webhook's `closed` delivery, the CI poller's PR read, and the
   PR review poller's PR read (the auto-merge lane). A record holding another PR is left alone.
+- At startup, the backfill seeds a record, source `backfill`, for each ticket of each configured repo
+  that has none, from the PR URLs Symphony already stores, first found wins: the CI poller's
+  record, the PR review poller's record (unless the auto-merge lane saw that PR merge), then the
+  newest `handoff` signal in the ticket's signals ledger that carries a `pr_url`. It makes no
+  GitHub or tracker request and never overwrites a record, whatever its PR or state.
+- The branch lookup finds a PR Symphony did not open (a person opened it by hand, or the backfill
+  missed it). Once per repo per poll cycle, on the active tickets the poll just read, and off the
+  poll so a slow GitHub read never holds it up:
+  - When every one of those tickets has an `open` record, it does nothing: the steady state costs no
+    GitHub request.
+  - Otherwise it lists the repo's open PRs, each with its head branch, in one GitHub query (the 100
+    most recently updated).
+  - An `open` record whose PR is not in that list is re-checked with one PR read and marked
+    `closed` or `merged`; one GitHub still reports open is left as it is.
+  - Each ticket then left with no `open` record gets the open PR whose head branch is its Symphony
+    branch (`auto/<identifier>`, the workspace branch) or the tracker's branch name for it
+    (Linear's `branchName`), written `open` with source `github_lookup`.
+  - A PR on a branch with any other name is not found. A GitHub failure is logged once and leaves
+    every record as it is.
 - A store failure while writing is logged and never fails the tool call or the poll.
 
 Reading it: consumers ask `SymphonyElixir.TicketPullRequest.current_url/1` (or `current_urls/1`
@@ -408,6 +427,21 @@ The CI, review and merge lanes take a ticket's PR from this record and never rea
 - the update hold asks what a finished blocker shipped, so it reads the recorded PR whatever its
   state (`recorded_urls/2`): a merged one is checked against the running build, and a closed one
   merged nothing.
+
+Agent runs, the orchestrator and status reporting take a ticket's PR from this record; where this
+spec says a run's or a ticket's "attached PR", it means the PR the record answers:
+
+- The agent run: the renamed-team-key PR head the workspace syncs to, the PR known at dispatch, the
+  post-turn checks (the quiet hand-off on the PR head, the CI wait on a pushed head, a `Rework` that
+  is done, the landing run's CI wait, the reviewer agent's progress key) and the idle-park note. A
+  run whose ticket had a PR at dispatch logs a warning naming the issue when the record no longer
+  answers one.
+- The orchestrator: running and completed run entries, the run records it persists, watching
+  entries, the PR run's own PR and the "went quiet on its PR" check. A PR URL the run itself
+  reported stays on its entry; only the read off the ticket changes.
+- `/api/v1/state`, the dashboard and the terminal status read those entries. Quality eval records,
+  one-shot run records, issue notifications and the epic review's pull-request check carry the
+  recorded PR.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -2246,7 +2280,8 @@ The poller:
   failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
   as they retry the first page, rather than seeing the issue without its PR). An issue the CI poller
   watches a PR for logs a warning naming the issue when Symphony's record holds no open PR for it,
-  and an agent run whose issue had a PR at dispatch does when its attachments show no PR;
+  and an agent run whose issue had a PR at dispatch logs one when the record no longer shows an open
+  PR;
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
