@@ -1,0 +1,48 @@
+{
+  "areas": [
+    { "additions": 18, "deletions": 240, "files": 5, "name": "Agent instructions" },
+    { "additions": 52, "deletions": 260, "files": 4, "name": "Server" },
+    { "additions": 14, "deletions": 46, "files": 2, "name": "Documentation" },
+    { "additions": 36, "deletions": 64, "files": 3, "name": "Tests" }
+  ],
+  "github": "available",
+  "health": {
+    "checks": { "failed": 0, "passed": 9, "pending": 0, "state": "passed" },
+    "code_review": { "round": 2, "verdict": "request_changes" },
+    "overlaps": [
+      { "number": 446, "ticket": "TP-891" }
+    ],
+    "qa": null
+  },
+  "last_pushed_at": "2026-10-07T09:30:00Z",
+  "merged_at": null,
+  "number": 448,
+  "opened_at": "2026-10-05T16:10:00Z",
+  "repo_key": "symphony",
+  "review_history": [
+    {
+      "at": "2026-10-06T11:40:00Z",
+      "kind": "code_review",
+      "reason": "The review instructions still describe the Final verification step.",
+      "verdict": "request_changes"
+    },
+    {
+      "at": "2026-10-07T10:15:00Z",
+      "kind": "code_review",
+      "reason": "The older set of agent instructions still describes the Supervisor check.",
+      "verdict": "request_changes"
+    }
+  ],
+  "review_state": "changes_requested",
+  "size": { "additions": 120, "commits": 3, "deletions": 610, "files": 14 },
+  "state": "open",
+  "summary": "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging. Tickets already in those steps move on to Merging the next time Symphony reads them.",
+  "ticket": {
+    "identifier": "TP-892",
+    "state": "Rework",
+    "title": "Retire two old review steps",
+    "waiting_on": "you"
+  },
+  "title": "TP-892 Retire two old review steps",
+  "url": "https://github.com/tonypine/symphony/pull/448"
+}
