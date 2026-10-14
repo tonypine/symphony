@@ -367,6 +367,35 @@ A running run's record MAY be written on a bounded cadence rather than on every 
 Elixir implementation writes it when the run's session, PR, workspace, worker host or turn changes,
 and otherwise at most every 5 s; the run's completion writes the final record.
 
+#### 4.1.10 Ticket Pull Request Record
+
+Symphony's own record of each ticket's pull request is the source of a ticket's PR. It lives in the
+durable run store, one record per `repo_key` and issue ID, and survives a restart. Symphony writes
+nothing to the tracker for it.
+
+Fields:
+
+- `pr_url` (string), `branch` (string or null)
+- `state`: `open`, `closed` or `merged`
+- `source`: `created` (Symphony opened the PR), `backfill` or `github_lookup`
+- `recorded_at`, `updated_at` (timestamps)
+
+Who writes it, and when it changes:
+
+- The `github_create_pull_request` agent tool writes it `open` when it opens the PR, before it
+  returns, beside the handoff signal. A new PR for a ticket replaces whatever PR the record held
+  before (closed, merged or another URL).
+- Wherever Symphony already sees a PR finish, it marks the record holding that PR `closed` or
+  `merged`: the GitHub `pull_request` webhook's `closed` delivery, the CI poller's PR read, and the
+  PR review poller's PR read (the auto-merge lane). A record holding another PR is left alone.
+- A store failure while writing is logged and never fails the tool call or the poll.
+
+Reading it: consumers ask `SymphonyElixir.TicketPullRequest.current_url/1` (or `current_urls/1`
+for the readers that walk every PR). It answers the `open` record's URL, and none once that PR
+closed or merged: a closed or merged PR is not the ticket's in-flight PR. A PR run's issue answers
+its own PR. While ticket reads still carry tracker attachments, a ticket with no record falls back
+to the issue's attachment-derived `pull_request_url` / `pr_urls`.
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`

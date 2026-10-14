@@ -11,7 +11,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{NeedsDecisionHold, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
+  alias SymphonyElixir.{NeedsDecisionHold, SubIssueWait, TicketPullRequest, TicketSignals, Tracker, TransitionGuard}
+  alias SymphonyElixir.Workspace
 
   @merging_state "Merging"
   @rework_state "Rework"
@@ -877,6 +878,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp do_act_on_review(action, record, attrs, activity, settings, opts, now) do
     case action do
       :merged ->
+        finish_pull_request(record, "merged", opts)
+
         with {:ok, record} <- finish_merged(record, settings, opts, now) do
           record
           |> maybe_capture_learnings(activity, settings, opts, now)
@@ -884,6 +887,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         end
 
       :closed ->
+        finish_pull_request(record, "closed", opts)
         cleanup_review(record, opts, now, "closed")
 
       :changes_requested ->
@@ -1287,6 +1291,11 @@ defmodule SymphonyElixir.PrReviewPoller do
         Logger.warning("Failed to comment the auto-merge fallback issue_id=#{issue_id}: #{inspect(reason)}")
         :ok
     end
+  end
+
+  # A closed or merged PR is no longer its ticket's in-flight PR (`SymphonyElixir.TicketPullRequest`).
+  defp finish_pull_request(record, pr_state, opts) do
+    TicketPullRequest.mark_finished(Map.get(record, :repo_key) || Keyword.get(opts, :repo_key), Map.get(record, :pr_url), pr_state)
   end
 
   # GitHub merged the PR. Whoever merged it, an issue with sub-issues still open waits on them
