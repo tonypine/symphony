@@ -270,8 +270,8 @@ public struct InboxReview: Equatable {
         public var why: String?
         /// What waits or repeats until someone answers; nil on an older request.
         public var ifUnanswered: String? = nil
+        /// What answering unblocks, for the context card's Your answer (N9).
         public var unblocks: String?
-        public var estMinutes: Int?
         public var steps: [String]
         public var options: [Option]
         /// Why the recommended option is the one to pick; nil on an older request.
@@ -371,9 +371,6 @@ public struct InboxReview: Equatable {
                 recommended: options.firstIndex(where: \.recommended)
             )
         }
-
-        /// "About 5 min", nil when unknown.
-        public var timeLine: String? { estMinutes.map { "About \($0) min" } }
 
         /// What Copy Steps puts on the clipboard: the numbered steps, else the numbered options.
         public var copyText: String? {
@@ -499,7 +496,6 @@ public struct InboxReview: Equatable {
         let why: String?
         let ifUnanswered: String?
         let unblocks: String?
-        let estMinutes: Int?
         let steps: [String]?
         let options: [OptionPayload]?
         let recommendationReason: String?
@@ -542,7 +538,6 @@ public struct InboxReview: Equatable {
                 why: payload.why,
                 ifUnanswered: payload.ifUnanswered,
                 unblocks: payload.unblocks,
-                estMinutes: payload.estMinutes,
                 steps: payload.steps ?? [],
                 options: (payload.options ?? []).compactMap { option in
                     option.label.map {

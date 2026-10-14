@@ -262,8 +262,11 @@ struct InboxReviewBody: View {
     var openTicket: () -> Void = {}
     /// A click on a ticket or pull request chip in the review's text.
     var openMention: (Mention) -> Void = { _ in }
-    /// True in a narrow pane: an option card's Recommended badge goes under its label, and the key hints hide.
+    /// True in a narrow pane: an option card's Recommended badge goes under its label, the key hints hide, and the
+    /// context card puts its labels above their values.
     var narrow = false
+    /// The context card's clock: an earlier call today shows its time only.
+    var now = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -283,6 +286,9 @@ struct InboxReviewBody: View {
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
             case .blocked:
                 if let blocked = item.review.blocked { BlockedCards(blocked: blocked) }
+            }
+            if let context = ContextCard(item: item, now: now) {
+                ContextCardView(card: context, narrow: narrow)
             }
         }
         .padding(DesignTokens.Space.s5)
@@ -950,6 +956,119 @@ private struct TradeoffTag: View {
         .labelStyle(.titleAndIcon)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(tradeoff.kind.word): \(tradeoff.text)")
+    }
+}
+
+/// N9: where the item's ticket sits, last in its review: its parent and progress (N10), its pull request, the tickets
+/// connected to it, what answering unblocks and the calls already made. Two columns, labels above values in a narrow
+/// pane. Its chips find the context's tickets too.
+private struct ContextCardView: View {
+    let card: ContextCard
+    let narrow: Bool
+
+    var body: some View {
+        Card(title: ContextCard.title) {
+            if narrow {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                    ForEach(rows, id: \.label) { row in
+                        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                            ContextLabel(text: row.label)
+                            row.value
+                        }
+                    }
+                }
+            } else {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s3) {
+                    ForEach(rows, id: \.label) { row in
+                        GridRow {
+                            ContextLabel(text: row.label)
+                            row.value
+                        }
+                    }
+                }
+            }
+        }
+        .font(DesignTokens.TypeStyle.body.font)
+        .environment(\.mentionReferences, card.references)
+    }
+
+    private var rows: [(label: String, value: AnyView)] {
+        var rows: [(label: String, value: AnyView)] = []
+        if let partOf = card.partOf {
+            rows.append(("Part of", AnyView(VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                ChipText(text: partOf.text)
+                if let progress = partOf.progress { ProgressStripView(strip: progress) }
+            })))
+        }
+        if let work = card.work {
+            rows.append(("Its work", AnyView(ChipText(text: work))))
+        }
+        if !card.connected.isEmpty {
+            rows.append(("Connected", AnyView(VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                ForEach(Array(card.connected.enumerated()), id: \.offset) { _, connection in
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                        ChipText(text: connection.identifier).fixedSize()
+                        if let stage = connection.stage { StatusBadge(status: stage.status, word: stage.word).fixedSize() }
+                        ChipText(text: connection.relation, color: .secondaryLabelColor)
+                    }
+                }
+            })))
+        }
+        if let answer = card.answer {
+            rows.append(("Your answer", AnyView(ChipText(text: answer))))
+        }
+        if !card.earlierCalls.isEmpty {
+            rows.append(("Earlier calls", AnyView(VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                ForEach(Array(card.earlierCalls.enumerated()), id: \.offset) { _, call in
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                        if let time = call.time {
+                            Text(time).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+                        }
+                        ChipText(text: call.text)
+                    }
+                }
+            })))
+        }
+        return rows
+    }
+}
+
+/// A row's label in the context card (N9).
+private struct ContextLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .foregroundStyle(.secondary)
+            .gridColumnAlignment(.leading)
+            .fixedSize()
+    }
+}
+
+/// N10: one 14 × 5 pt segment per sub-ticket in landing order, coloured by its state, and "4 of 7 done" beside it;
+/// one element for VoiceOver, "4 of 7 sub-tickets done".
+private struct ProgressStripView: View {
+    let strip: ProgressStrip
+
+    var body: some View {
+        HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+            HStack(spacing: ProgressStrip.gap) {
+                ForEach(Array(strip.segments.enumerated()), id: \.offset) { _, segment in
+                    RoundedRectangle(cornerRadius: ProgressStrip.segmentHeight / 2, style: .continuous)
+                        .fill(segment.color.color)
+                        .frame(minWidth: 3, maxWidth: ProgressStrip.segmentWidth)
+                        .frame(height: ProgressStrip.segmentHeight)
+                }
+            }
+            .frame(maxWidth: ProgressStrip.segmentWidth * Double(strip.segments.count) + ProgressStrip.gap * Double(max(strip.segments.count - 1, 0)))
+            Text(strip.line)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(strip.accessibilityLabel)
     }
 }
 
