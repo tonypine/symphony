@@ -135,8 +135,8 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **Data:** the open human-action requests (section 2), with each item's `references` for the chips.
 - **N4 · Peek:** a click on a chip (or Return on a focused one) opens what it names in the window's inspector column,
   320–400 pt wide, beside the review; the decision, its pick, the write-in's words and the review's scroll position
-  stay as they were, and stay when the peek closes. The peek is a `NavigationStack`: a chip inside it pushes that
-  ticket or PR, its back arrow and ⌘[ pop, Esc, its close button or the toolbar's inspector toggle (⌥⌘I) close it, and
+  stay as they were, and stay when the peek closes. The peek is a stack of pages inside the inspector: a chip inside
+  it pushes that ticket or PR, its back arrow and ⌘[ pop, Esc, its close button or the toolbar's inspector toggle (⌥⌘I) close it, and
   the toggle shows the same pages again. A **ticket** shows N2's head (identifier · repo, stage, title, summary); when
   Symphony tracks it (it waits on you, the state lists it, or `/api/v1/:issue_identifier` answers) **Now** (its stage
   and for how long, what it waits on, its PR as a chip), **Connected** (its parent with the sub-tickets' progress
@@ -145,8 +145,8 @@ later journeys point back to it. The mock draws every screen under its ID.
   window, ⌘[ returns to the decision) and **Open in Linear**. A **pull request** shows N3's head and figures and
   **Open on GitHub**; a mention Symphony can't see says so, with its link. Connected comes from the Inbox's
   `context` of a ticket that waits on you, `/api/v1/initiatives` (a plan's sub-tickets, a sub-ticket's parent and
-  blockers) and the reference's parent. When the detail would be under 560 pt with the inspector open, the peek is a
-  sheet over the window instead. The ticket peek, the PR peek and the peek beside the review are offscreen snapshots,
+  blockers) and the reference's parent. When the review would be under 560 pt beside the inspector (a 1200 pt
+  window's Inbox leaves it about 260 pt), the peek is a sheet over the window instead. The ticket peek, the PR peek and the peek beside the review are offscreen snapshots,
   light and dark, in `macos/Tests/Snapshots` (`peek-ticket`, `peek-pr`, `peek-beside-review`).
 
 #### D2d · Inbox: a ticket to clarify

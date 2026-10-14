@@ -51,12 +51,6 @@ public struct PeekNavigation: Equatable {
     public var root: PeekEntry? { pages.first }
     public var canGoBack: Bool { isShown && pages.count > 1 }
 
-    /// The pages after the first, as `NavigationStack`'s path: the stack's own back gesture sets it.
-    public var path: [PeekEntry] {
-        get { Array(pages.dropFirst()) }
-        set { pages = Array(pages.prefix(1)) + newValue }
-    }
-
     /// A chip in the review: the peek shows `entry` alone.
     public mutating func open(_ entry: PeekEntry) {
         pages = [entry]
@@ -124,14 +118,16 @@ public enum PeekPresentation: Equatable {
     public static let minInspectorWidth: Double = 320
     public static let idealInspectorWidth: Double = 340
     public static let maxInspectorWidth: Double = 400
-    /// Under this, the detail beside the inspector is too narrow to read.
+    /// Under this, the decision's review beside the inspector is too narrow to read.
     public static let minDetailWidth: Double = DesignTokens.Layout.narrowReviewWidth
 
-    /// The presentation for a detail `detailWidth` wide, measured with the inspector open when `inspectorShown`.
-    /// While the inspector is closed its widest column is assumed, so a peek that turned into a sheet stays one until
-    /// the window is wide enough for the inspector at any width, and never flips back and forth.
-    public static func choose(detailWidth: Double, inspectorShown: Bool) -> PeekPresentation {
-        let besideInspector = inspectorShown ? detailWidth : detailWidth - maxInspectorWidth
+    /// The presentation for an Inbox `inboxWidth` wide (its list column, a divider and the review), measured with the
+    /// inspector open when `inspectorShown`. The review left beside the inspector decides. While the inspector is
+    /// closed its widest column is assumed, so a peek that turned into a sheet stays one until the window is wide
+    /// enough for the inspector at any width, and never flips back and forth.
+    public static func choose(inboxWidth: Double, inspectorShown: Bool) -> PeekPresentation {
+        let review = inboxWidth - DesignTokens.Layout.listColumnWidth - 1
+        let besideInspector = inspectorShown ? review : review - maxInspectorWidth
         return besideInspector < minDetailWidth ? .sheet : .inspector
     }
 }

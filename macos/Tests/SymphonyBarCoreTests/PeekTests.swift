@@ -22,14 +22,12 @@ final class PeekTests: XCTestCase {
         peek.push(tp880)
         XCTAssertEqual(peek.current, tp880)
         XCTAssertEqual(peek.root?.title, "TP-891")
-        XCTAssertEqual(peek.path, [tp880])
         XCTAssertTrue(peek.canGoBack)
         peek.push(tp880)
         XCTAssertEqual(peek.pages.count, 2, "following the page shown changes nothing")
 
         XCTAssertTrue(peek.goBack())
         XCTAssertEqual(peek.current?.title, "TP-891")
-        XCTAssertEqual(peek.path, [])
 
         peek.close()
         XCTAssertFalse(peek.isShown, "Esc closes")
@@ -42,7 +40,7 @@ final class PeekTests: XCTestCase {
         XCTAssertFalse(peek.isShown)
     }
 
-    func testAChipInTheReviewStartsAFreshPeekAndTheStacksBackGestureSetsThePath() throws {
+    func testAChipInTheReviewStartsAFreshPeek() throws {
         let item = try decision()
         var peek = PeekNavigation()
         peek.push(try entry("TP-891", in: item))
@@ -51,7 +49,7 @@ final class PeekTests: XCTestCase {
         peek.push(try entry("#448", in: item))
         XCTAssertEqual(peek.pages.map(\.title), ["TP-891", "TP-880", "#448"])
 
-        peek.path = [try entry("TP-880", in: item)]
+        XCTAssertTrue(peek.goBack())
         XCTAssertEqual(peek.pages.map(\.title), ["TP-891", "TP-880"])
 
         peek.close()
@@ -129,18 +127,19 @@ final class PeekTests: XCTestCase {
     // MARK: - Presentation
 
     func testANarrowWindowPresentsThePeekAsASheet() {
-        // A 1200 pt window: the detail beside the sidebar is 1000 pt, room for the inspector at its widest.
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 1000, inspectorShown: false), .inspector)
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 960, inspectorShown: false), .inspector)
-        // The narrowest window: 760 pt of detail would leave the review under 560 pt beside the inspector.
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 760, inspectorShown: false), .sheet)
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 959, inspectorShown: false), .sheet)
+        // The Inbox is its 340 pt list column, a divider and the review; the review beside the inspector decides.
+        // A 1200 pt window: 1000 pt of Inbox leaves the review 259 pt beside a 400 pt inspector, so a sheet.
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 1000, inspectorShown: false), .sheet)
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 760, inspectorShown: false), .sheet)
+        // A window wide enough for the review at 560 pt beside the inspector at its widest.
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 560 + 400, inspectorShown: false), .inspector)
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 559 + 400, inspectorShown: false), .sheet)
         // Measured with the inspector open.
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 560, inspectorShown: true), .inspector)
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 559, inspectorShown: true), .sheet)
-        // Narrowed under 560 beside a 340 pt inspector, it turns into a sheet, and the wider detail the closed
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 560, inspectorShown: true), .inspector)
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 559, inspectorShown: true), .sheet)
+        // Narrowed under 560 beside a 340 pt inspector, it turns into a sheet, and the wider Inbox the closed
         // inspector leaves keeps it one.
-        XCTAssertEqual(PeekPresentation.choose(detailWidth: 559 + 340, inspectorShown: false), .sheet)
+        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 559 + 340, inspectorShown: false), .sheet)
         XCTAssertEqual(PeekPresentation.minDetailWidth, DesignTokens.Layout.narrowReviewWidth)
         XCTAssertLessThanOrEqual(PeekPresentation.minInspectorWidth, PeekPresentation.idealInspectorWidth)
         XCTAssertLessThanOrEqual(PeekPresentation.idealInspectorWidth, PeekPresentation.maxInspectorWidth)

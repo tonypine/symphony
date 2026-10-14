@@ -104,7 +104,7 @@ struct PeekActions {
 
 // MARK: - Where it shows
 
-/// N4 beside the review in the window's inspector column, or as a sheet over the window when the detail would be under
+/// N4 beside the review in the window's inspector column, or as a sheet over the window when the review would be under
 /// 560 pt with the inspector open. The review under it is left alone: the same item, picks and scroll position.
 struct PeekPresenter: ViewModifier {
     @ObservedObject var model: SymphonyWindowModel
@@ -114,7 +114,7 @@ struct PeekPresenter: ViewModifier {
         content
             // While the peek is closed this is the choice it opens with.
             .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
-                presentation = PeekPresentation.choose(detailWidth: width, inspectorShown: shows(.inspector))
+                presentation = PeekPresentation.choose(inboxWidth: width, inspectorShown: shows(.inspector))
             }
             .inspector(isPresented: binding(.inspector)) {
                 PeekView(model: model)
@@ -143,22 +143,27 @@ struct PeekPresenter: ViewModifier {
     }
 }
 
-/// N4: a `NavigationStack` of peek pages, the first opened from the review, the others pushed by its chips.
+/// N4: the page on top of the peek's stack, the first opened from the review, the others pushed by its chips; Back and
+/// ⌘[ pop it. The model keeps the stack: a `NavigationStack` here would push into the window's split view instead.
+/// Its width is bounded, so a long line's unwrapped width never widens the inspector column past the window.
 struct PeekView: View {
     @ObservedObject var model: SymphonyWindowModel
 
     var body: some View {
-        NavigationStack(path: $model.peek.path) {
-            Group {
-                if let root = model.peek.root { page(root, pushed: false) }
+        Group {
+            if let entry = model.peek.current {
+                PeekPage(entry: entry, content: model.peekContent(entry), canGoBack: model.peek.canGoBack, actions: model.peekActions)
+                    // Each page starts at its top.
+                    .id(entry)
             }
-            .navigationDestination(for: PeekEntry.self) { page($0, pushed: true) }
         }
-    }
-
-    private func page(_ entry: PeekEntry, pushed: Bool) -> some View {
-        PeekPage(entry: entry, content: model.peekContent(entry), canGoBack: pushed, actions: model.peekActions)
-            .navigationBarBackButtonHidden()
+        .frame(
+            minWidth: PeekPresentation.minInspectorWidth,
+            idealWidth: PeekPresentation.idealInspectorWidth,
+            maxWidth: PeekPresentation.maxInspectorWidth,
+            maxHeight: .infinity,
+            alignment: .top
+        )
     }
 }
 
