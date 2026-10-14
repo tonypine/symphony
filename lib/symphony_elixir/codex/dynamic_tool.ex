@@ -83,7 +83,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_add_comment",
-      "description" => "Add a comment to the current Linear issue. Pass `parent_id` to reply under one of its comments.",
+      "description" =>
+        "Add a comment to the current Linear issue. Pass `parent_id` to reply under one of its comments. A body opening with `Decision:` or `Ruling:` is refused: that opener marks a person's ruling.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -2211,6 +2212,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "invalid_failed_run_log_max_bytes",
         "message" => "github.failed_run_log_max_bytes must be a positive integer."
+      }
+    }
+  end
+
+  defp tool_error_payload(:ruling_comment_body) do
+    %{
+      "error" => %{
+        "code" => "ruling_comment_body",
+        "message" =>
+          "A comment opening with `Decision:` or `Ruling:` is a person's ruling, which Symphony writes into the ticket's Decisions section, so an agent may not post one. Reword the opening, or ask the person with `linear_request_human_action`."
       }
     }
   end
