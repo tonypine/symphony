@@ -29,7 +29,10 @@ public final class ChipPopover: NSObject, ChipPopoverPresenting, NSPopoverDelega
             if !hover { setOpenedByHover(false) }
             return
         }
-        popover?.close()
+        // Let go of the last popover first, so its close doesn't count as this one's.
+        let previous = popover
+        popover = nil
+        previous?.close()
         let controller = content(mention)
         let popover = NSPopover()
         popover.contentViewController = controller
@@ -82,6 +85,8 @@ public final class ChipPopover: NSObject, ChipPopoverPresenting, NSPopoverDelega
     }
 
     public func popoverDidClose(_ notification: Notification) {
+        // A popover that was replaced finishes closing after the next one opens; only the open one's close counts.
+        guard notification.object as? NSPopover === popover else { return }
         owner?.popoverClosed()
         shown = nil
         popover = nil

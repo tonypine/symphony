@@ -219,6 +219,45 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertTrue(popover.shown.isEmpty)
     }
 
+    func testMovingFromOneChipToTheNextKeepsTheNextPopoverOpen() throws {
+        let view = try storyView()
+        view.hoverDelay = 0.05
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        window.orderFrontRegardless()
+        defer { window.close() }
+        let popover = ChipPopover { _ in
+            let controller = NSViewController()
+            controller.view = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 80))
+            return controller
+        }
+        view.popover = popover
+        let first = try XCTUnwrap(view.chipRects(0).first)
+        let second = try XCTUnwrap(view.chipRects(1).first)
+
+        view.pointerMoved(to: CGPoint(x: first.midX, y: first.midY))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(popover.isShown)
+        XCTAssertEqual(view.popoverChip, 0)
+
+        view.pointerMoved(to: CGPoint(x: second.midX, y: second.midY))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertTrue(popover.isShown, "the first popover's late close leaves the second open")
+        XCTAssertEqual(view.popoverChip, 1)
+
+        // A close from a popover that is no longer the open one changes nothing.
+        popover.popoverDidClose(Notification(name: NSPopover.didCloseNotification, object: NSPopover()))
+        XCTAssertTrue(popover.isShown)
+        XCTAssertEqual(view.popoverChip, 1)
+
+        popover.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertFalse(popover.isShown)
+        XCTAssertNil(view.popoverChip)
+    }
+
     func testTabMovesBetweenChipsSpaceShowsAndReturnOpens() throws {
         let view = try storyView()
         let popover = PopoverSpy()
