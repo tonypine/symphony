@@ -117,6 +117,37 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           checks: String.t() | nil
         }
 
+  @typedoc "A changed file and its line counts."
+  @type changed_file :: %{path: String.t(), additions: non_neg_integer(), deletions: non_neg_integer()}
+
+  @typedoc """
+  What the Director app's pull request page shows of a pull request: `t:summary/0` plus when it
+  opened, last moved and merged, its changed files, its commits (their SHAs, oldest first) and how
+  many of its head's checks passed, failed and still run.
+  """
+  @type page :: %{
+          number: pos_integer() | nil,
+          url: String.t(),
+          title: String.t() | nil,
+          body: String.t() | nil,
+          state: String.t() | nil,
+          review_decision: String.t() | nil,
+          changed_files: non_neg_integer() | nil,
+          additions: non_neg_integer() | nil,
+          deletions: non_neg_integer() | nil,
+          head_ref_name: String.t() | nil,
+          checks: String.t() | nil,
+          created_at: DateTime.t() | nil,
+          merged_at: DateTime.t() | nil,
+          last_pushed_at: DateTime.t() | nil,
+          files: [changed_file()],
+          commits: [String.t()],
+          check_counts: %{passed: non_neg_integer(), failed: non_neg_integer(), pending: non_neg_integer()}
+        }
+
+  @summary_fields "number,url,title,body,state,reviewDecision,changedFiles,additions,deletions,headRefName,headRefOid,statusCheckRollup"
+  @page_fields @summary_fields <> ",createdAt,mergedAt,files,commits"
+
   @run_fields "databaseId,workflowName,status,conclusion,url,createdAt"
 
   @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
@@ -168,34 +199,77 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   """
   @spec fetch_summary(String.t(), keyword()) :: {:ok, summary()} | {:error, term()}
   def fetch_summary(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
-    args = ["pr", "view", pr_url, "--json", "number,url,title,body,state,reviewDecision,changedFiles,additions,deletions,headRefName,headRefOid,statusCheckRollup"]
+    with {:ok, summary, _pr, _checks} <- view_pull_request(pr_url, @summary_fields, opts), do: {:ok, summary}
+  end
 
+  @doc """
+  What the Director app's pull request page shows of a pull request (`t:page/0`), in one
+  `gh pr view`. A pull request GitHub doesn't have is `{:error, :not_found}`.
+  """
+  @spec fetch_page(String.t(), keyword()) :: {:ok, page()} | {:error, term()}
+  def fetch_page(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, summary, pr, checks} <- view_pull_request(pr_url, @page_fields, opts) do
+      commits = for %{"oid" => oid} = commit when is_binary(oid) <- List.wrap(pr["commits"]), do: {oid, parse_datetime(commit["committedDate"])}
+
+      {:ok,
+       Map.merge(summary, %{
+         created_at: parse_datetime(pr["createdAt"]),
+         merged_at: parse_datetime(pr["mergedAt"]),
+         last_pushed_at: commits |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1) |> Enum.max(DateTime, fn -> nil end),
+         files: for(%{"path" => path} = file when is_binary(path) <- List.wrap(pr["files"]), do: %{path: path, additions: count(file["additions"]), deletions: count(file["deletions"])}),
+         commits: Enum.map(commits, &elem(&1, 0)),
+         check_counts: check_counts(checks)
+       })}
+    end
+  end
+
+  defp view_pull_request(pr_url, fields, opts) do
     with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
-         {:ok, output} <- run_gh(args, opts),
+         {:ok, output} <- run_gh(["pr", "view", pr_url, "--json", fields], opts),
          {:ok, %{} = pr} <- Jason.decode(output) do
       %{checks: checks} =
         drop_superseded_checks(%{pr_url: pr_url, commit_sha: pr["headRefOid"], checks: normalize_status_check_rollup(pr["statusCheckRollup"])})
 
-      {:ok,
-       %{
-         number: pr["number"],
-         url: pr["url"] || pr_url,
-         title: pr["title"],
-         body: pr["body"],
-         state: pr["state"],
-         review_decision: if(blank?(pr["reviewDecision"]), do: nil, else: upcase(pr["reviewDecision"])),
-         changed_files: pr["changedFiles"],
-         additions: pr["additions"],
-         deletions: pr["deletions"],
-         head_ref_name: pr["headRefName"],
-         checks: checks_outcome(checks)
-       }}
+      summary = %{
+        number: pr["number"],
+        url: pr["url"] || pr_url,
+        title: pr["title"],
+        body: pr["body"],
+        state: pr["state"],
+        review_decision: if(blank?(pr["reviewDecision"]), do: nil, else: upcase(pr["reviewDecision"])),
+        changed_files: pr["changedFiles"],
+        additions: pr["additions"],
+        deletions: pr["deletions"],
+        head_ref_name: pr["headRefName"],
+        checks: checks_outcome(checks)
+      }
+
+      {:ok, summary, pr, checks}
     else
       :error -> {:error, :invalid_pr_url}
       {:ok, _decoded} -> {:error, :invalid_pr_payload}
       {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, if(missing_pull_request?(reason), do: :not_found, else: reason)}
     end
+  end
+
+  defp missing_pull_request?({:gh_failed, _args, _status, output}) when is_binary(output), do: output =~ "Could not resolve to a PullRequest"
+  defp missing_pull_request?(_reason), do: false
+
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_value), do: 0
+
+  defp check_counts(checks) do
+    Enum.reduce(checks, %{passed: 0, failed: 0, pending: 0}, fn check, counts ->
+      key =
+        cond do
+          unfinished_check?(check) -> :pending
+          passing_check?(check) -> :passed
+          true -> :failed
+        end
+
+      Map.update!(counts, key, &(&1 + 1))
+    end)
   end
 
   @doc """

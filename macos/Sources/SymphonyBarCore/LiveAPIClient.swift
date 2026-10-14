@@ -142,6 +142,12 @@ public final class LiveAPIClient: ObservableObject {
         EndpointResult(await fetch(path))
     }
 
+    /// A pull request's page (D15), with a 404 of the page's own (an unknown repo or pull request) told apart from a
+    /// Symphony that predates it.
+    public func pullRequestPage(repoKey: String, number: Int) async -> PullRequestPageResult {
+        PullRequestPageResult(await fetch(PullRequestPage.path(repoKey: repoKey, number: number)))
+    }
+
     /// A GET for a long body, through the download fetch.
     public func download(_ path: String) async -> EndpointResult {
         EndpointResult(await downloadFetch(path))
