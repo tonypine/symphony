@@ -563,8 +563,8 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert %{state: "enabled", enabled_head_sha: "head-2", disabled_at: nil} = PrReviewPoller.auto_merge(@issue_id)
   end
 
-  test "a designed repo's conflicting Merging PR enters CI Fix, stays off on its head and lands after the fix" do
-    repo = [key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test", state_machine: "designed"]
+  test "a conflicting Merging PR enters CI Fix, stays off on its head and lands after the fix" do
+    repo = [key: @repo_key, workflow: Workflow.workflow_file_path(), team: "Test"]
     write_auto_merge_workflow!(repos: [repo])
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
