@@ -71,15 +71,22 @@ struct InboxView: View {
                 Divider()
                 if let item = list.selection(selection) {
                     ScrollView {
-                        InboxReviewBody(
-                            item: item,
-                            picks: picks(item.id),
-                            pick: { option, decision in pick(option, decision, item.id) },
-                            writeIn: { writeIn($0, item.id) },
-                            perform: { perform($0, item) },
-                            openTicket: { openTicket(item.identifier) },
-                            narrow: narrow
-                        )
+                        ScrollViewReader { proxy in
+                            InboxReviewBody(
+                                item: item,
+                                picks: picks(item.id),
+                                pick: { option, decision in pick(option, decision, item.id) },
+                                writeIn: { writeIn($0, item.id) },
+                                perform: { perform($0, item) },
+                                openTicket: { openTicket(item.identifier) },
+                                narrow: narrow
+                            )
+                            // Picking the write-in scrolls its field into view, once it is laid out.
+                            .onChange(of: item.review.action?.isWriteIn(picks(item.id)) == true) { _, picked in
+                                guard picked else { return }
+                                DispatchQueue.main.async { withAnimation { proxy.scrollTo(WriteInField.scrollID, anchor: .bottom) } }
+                            }
+                        }
                     }
                     // A new item starts with its own picks (the recommended options).
                     .id(item.id)
@@ -639,6 +646,7 @@ private struct ActionCards: View {
                 )
                 if answerable && action.isWriteIn(picks) {
                     WriteInField(initialText: picks.writeIn, commit: writeIn, focused: $writeInFocused)
+                        .id(WriteInField.scrollID)
                 }
             }
             // Picking the write-in, by a click or its number key, puts the keyboard in its field.
@@ -859,6 +867,8 @@ private struct WriteInField: View {
     private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
     /// The text view's own inset on each side of a line.
     private static let inset: CGFloat = 5
+    /// The field's id in the review's scroll view, which scrolls to it once it is picked.
+    static let scrollID = "write-in"
 
     init(initialText: String, commit: @escaping (String) -> Void, focused: FocusState<Bool>.Binding) {
         _text = State(initialValue: initialText)
