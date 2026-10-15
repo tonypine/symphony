@@ -3,6 +3,7 @@ defmodule SymphonyElixir.InboxTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.BlockedHold
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Inbox
@@ -337,6 +338,14 @@ defmodule SymphonyElixir.InboxTest do
     end
   end
 
+  # Records the label the poll's drift check puts back.
+  defmodule LabelTracker do
+    def set_machine_label(issue_id, name) do
+      send(self(), {:machine_label_set, issue_id, name})
+      :ok
+    end
+  end
+
   describe "the poller" do
     test "the read is also the one that sets and clears the Needs Decision hold" do
       test_pid = self()
@@ -378,6 +387,50 @@ defmodule SymphonyElixir.InboxTest do
       assert_received {:description_written, "id-SHOP-92", description}
       assert String.starts_with?(description, "Sign the release builds.\n\n")
       assert [%{id: "D1", key: "request", title: "Add the signing secret", question: "Add the secret?"}] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "a hold whose label went missing is read again once the poll puts the label back, and its answer clears it" do
+      test_pid = self()
+      :ok = RunStore.set_ticket_hold("shop", "id-SHOP-92", :needs_decision, %{reason: "Add the secret?", decision: %{title: "Add the signing secret", question: "Add the secret?"}})
+
+      # The person answered under the request while the label was gone: the list filters on the
+      # label, so the Inbox does not read the ticket and the hold stays.
+      answered =
+        issue_node("SHOP-92", %{
+          "state" => %{"name" => "QA"},
+          "labels" => %{"nodes" => []},
+          "history" => %{"nodes" => []},
+          "comments" => %{
+            "nodes" => [
+              comment("request", request_body(), "2026-10-01T08:00:01Z"),
+              %{"id" => "reply", "body" => "Add it", "parent" => %{"id" => "request"}}
+            ]
+          }
+        })
+
+      test_pid
+      |> linear(fn _variables -> page([]) end, %{})
+      |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
+      |> Inbox.run_once()
+
+      assert TicketState.hold?(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision)
+
+      # The poll's drift check puts the label back from the store.
+      polled = %Issue{id: "id-SHOP-92", identifier: "SHOP-92", state: "QA", labels: [], repo_key: "shop"}
+      capture_log(fn -> BlockedHold.sync(polled, ["Done"], settings: designed_settings(), tracker: LabelTracker) end)
+      assert_received {:machine_label_set, "id-SHOP-92", "Needs Decision"}
+
+      # The next Inbox read lists it by the label, sees the answer, records it and clears the hold.
+      labeled = put_in(answered, ["labels", "nodes"], [%{"name" => "Needs Decision"}])
+
+      test_pid
+      |> linear(fn _variables -> page([light(labeled)]) end, %{labeled["id"] => labeled})
+      |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
+      |> Inbox.run_once()
+
+      assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
+      assert_received {:description_written, "id-SHOP-92", description}
+      assert [%{id: "D1", key: "request", title: "Add the signing secret"}] = SymphonyElixir.Decisions.recorded(description)
     end
 
     test "reads an issue in full once, and again only when it or a comment changed" do
