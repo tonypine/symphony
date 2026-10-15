@@ -1283,9 +1283,17 @@ defmodule SymphonyElixir.QaDriverTest do
 
       assert message =~ "already exists; pass another remote_name"
 
-      {:ok, [gh_port, linear_port | _rest]} = QaDriver.host_ports(driver)
+      {:ok, [gh_port, linear_port, feed_port | _rest]} = QaDriver.host_ports(driver)
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      args = %{"gh_stub_port" => gh_port, "linear_stub_port" => linear_port, "open_panel_dir" => path}
+
+      args = %{
+        "gh_stub_port" => gh_port,
+        "linear_stub_port" => linear_port,
+        "open_panel_dir" => path,
+        "update_feed_port" => feed_port,
+        "update_check_interval_seconds" => 30
+      }
+
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
       assert {:ok, %{"pid" => _pid}} = result
       assert_received {:launched, _executable, launch_opts, _port, _pid}
@@ -1294,12 +1302,23 @@ defmodule SymphonyElixir.QaDriverTest do
       assert env[~c"SYMPHONY_QA_GH_URL"] == ~c"http://localhost:#{gh_port}"
       assert env[~c"SYMPHONY_QA_LINEAR_URL"] == ~c"http://localhost:#{linear_port}/graphql"
       assert env[~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR"] == String.to_charlist(path)
+      assert env[~c"SYMPHONY_BAR_UPDATE_URL"] == ~c"http://localhost:#{feed_port}/releases/latest"
+      assert env[~c"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"] == ~c"30"
 
       # Without stand-in arguments the app gets none of them.
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert {:ok, %{"pid" => _pid}} = result
       assert_received {:launched, _executable, launch_opts, _port, _pid}
-      refute Enum.any?(launch_opts[:env], fn {name, _value} -> name in [~c"SYMPHONY_BAR_GH", ~c"SYMPHONY_QA_LINEAR_URL", ~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR"] end)
+
+      stand_in_names = [
+        ~c"SYMPHONY_BAR_GH",
+        ~c"SYMPHONY_QA_LINEAR_URL",
+        ~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR",
+        ~c"SYMPHONY_BAR_UPDATE_URL",
+        ~c"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"
+      ]
+
+      refute Enum.any?(launch_opts[:env], fn {name, _value} -> name in stand_in_names end)
     end
 
     test "refuses stand-in arguments it can't honour", %{worktree: worktree} do
@@ -1312,6 +1331,12 @@ defmodule SymphonyElixir.QaDriverTest do
             {%{"gh_stub_port" => unused}, "`gh_stub_port` must be one of QA_HOST_PORTS (#{Enum.join(ports, ", ")})"},
             {%{"gh_stub_port" => "#{port}"}, "`gh_stub_port` must be one of QA_HOST_PORTS"},
             {%{"linear_stub_port" => unused}, "`linear_stub_port` must be one of QA_HOST_PORTS"},
+            {%{"update_feed_port" => unused}, "`update_feed_port` must be one of QA_HOST_PORTS"},
+            {%{"update_feed_port" => "#{port}"}, "`update_feed_port` must be one of QA_HOST_PORTS"},
+            {%{"update_check_interval_seconds" => 0}, "`update_check_interval_seconds` must be a positive whole number of seconds"},
+            {%{"update_check_interval_seconds" => -30}, "`update_check_interval_seconds` must be a positive whole number"},
+            {%{"update_check_interval_seconds" => 1.5}, "`update_check_interval_seconds` must be a positive whole number"},
+            {%{"update_check_interval_seconds" => "30"}, "`update_check_interval_seconds` must be a positive whole number"},
             {%{"open_panel_dir" => "/Users/qa/repo"}, "`open_panel_dir` must be a path qa_put_checkout returned"}
           ] do
         assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_launch_app", args)
@@ -1717,8 +1742,16 @@ defmodule SymphonyElixir.QaDriverTest do
       assert remote_bundle == @run_dir <> "/files/widgets.bundle"
 
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      {:ok, [gh_port, linear_port | _rest]} = QaDriver.host_ports(driver)
-      args = %{"gh_stub_port" => gh_port, "linear_stub_port" => linear_port, "open_panel_dir" => path}
+      {:ok, [gh_port, linear_port, feed_port | _rest]} = QaDriver.host_ports(driver)
+
+      args = %{
+        "gh_stub_port" => gh_port,
+        "linear_stub_port" => linear_port,
+        "open_panel_dir" => path,
+        "update_feed_port" => feed_port,
+        "update_check_interval_seconds" => 30
+      }
+
       {{:ok, %{"pid" => _pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
       assert_received {:launched, _executable, launch_opts, _port, _pid}
 
@@ -1728,11 +1761,14 @@ defmodule SymphonyElixir.QaDriverTest do
                {"SYMPHONY_BAR_GH", @run_dir <> "/bin/gh"},
                {"SYMPHONY_QA_GH_URL", gh_url},
                {"SYMPHONY_QA_LINEAR_URL", linear_url},
-               {"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", ^path}
+               {"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", ^path},
+               {"SYMPHONY_BAR_UPDATE_URL", feed_url},
+               {"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL", "30"}
              ] = launch_opts[:env]
 
       assert gh_url == "http://localhost:#{gh_port}"
       assert linear_url == "http://localhost:#{linear_port}/graphql"
+      assert feed_url == "http://localhost:#{feed_port}/releases/latest"
 
       driver = remote_driver(worktree, remote_host(%{put: {:error, "exit 1: disk full"}}))
 
