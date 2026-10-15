@@ -3,7 +3,18 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, CiPoller, Config, LandingOrder, PromptSafety, ReviewAgent, TicketState, Workflow}
+  alias SymphonyElixir.{
+    AgentLabels,
+    CiPoller,
+    Config,
+    Decisions,
+    LandingOrder,
+    PromptSafety,
+    ReviewAgent,
+    TicketState,
+    Workflow
+  }
+
   alias SymphonyElixir.PathUnlock
 
   @render_opts [
@@ -97,7 +108,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "agent" => to_solid_value(agent_context),
       "repo_key" => repo_key,
       "state_machine" => @state_machine,
-      "issue" => issue |> prompt_issue_map(repo_key) |> to_solid_map(),
+      "issue" => issue |> strip_decisions(opts) |> prompt_issue_map(repo_key) |> to_solid_map(),
       "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
       "reviewer_comments" => to_solid_value(reviewer_comments),
       "ci_failure" => to_solid_value(ci_failure),
@@ -110,6 +121,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
+    |> append_decisions(Keyword.get(opts, :decisions))
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -174,6 +186,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
+    |> append_decisions(Keyword.get(opts, :decisions))
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -627,6 +640,23 @@ defmodule SymphonyElixir.PromptBuilder do
       section -> prompt <> "\n\n" <> section
     end
   end
+
+  # The ticket's recorded decisions, read from its store record (`Decisions.stored/2`), replace the
+  # Decisions section of the description the template renders, so the prompt holds them once.
+  defp strip_decisions(issue, opts) do
+    if Keyword.has_key?(opts, :decisions) and is_map_key(issue, :description),
+      do: Map.update!(issue, :description, &Decisions.strip/1),
+      else: issue
+  end
+
+  defp append_decisions(prompt, decisions) when is_list(decisions) do
+    case Decisions.prompt_section(decisions) do
+      "" -> prompt
+      section -> prompt <> "\n\n" <> String.trim_trailing(section)
+    end
+  end
+
+  defp append_decisions(prompt, _decisions), do: prompt
 
   # The per-ticket machine record is injected as continuation context (D9), never read through a
   # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.

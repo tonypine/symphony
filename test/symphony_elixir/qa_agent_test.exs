@@ -691,12 +691,21 @@ defmodule SymphonyElixir.QaAgentTest do
       decision = SymphonyElixir.Decisions.entry("comment-1", ~D[2026-10-13], "Keep the old flag", "Drop the old flag here?", "Defer to TP-891")
       {:ok, description} = SymphonyElixir.Decisions.put("Adds `symphony check`.", [decision])
 
-      prompt = QaAgent.prompt(job(%{issue: issue(%{description: description})}), nil)
+      prompt = QaAgent.prompt(job(%{issue: issue(%{id: "issue-qa-decided", description: description})}), nil)
 
       assert prompt =~ ~r/<linear_issue_body>\s*Adds `symphony check`.\s*<\/linear_issue_body>/
       assert prompt =~ "D1: Drop the old flag here? Answer: Defer to TP-891 Scope: Deferred to TP-891."
       assert prompt =~ "Do not fail the change for work a recorded decision put out of scope or deferred"
       refute QaAgent.prompt(job(), nil) =~ "Recorded decisions"
+    end
+
+    test "reads the recorded decisions from the store, not from the description" do
+      decision = SymphonyElixir.Decisions.entry("comment-1", ~D[2026-10-13], "Keep the old flag", "Drop the old flag here?", "Defer to TP-891")
+      assert {:ok, [_decision]} = SymphonyElixir.RunStore.record_ticket_decisions("default", "issue-qa-stored", [decision], [])
+
+      prompt = QaAgent.prompt(job(%{issue: issue(%{id: "issue-qa-stored"})}), nil)
+
+      assert prompt =~ "D1: Drop the old flag here? Answer: Defer to TP-891 Scope: Deferred to TP-891."
     end
 
     test "an epic review judges the epic itself at the base branch head against its own checklist" do

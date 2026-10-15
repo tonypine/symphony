@@ -16,6 +16,7 @@ defmodule SymphonyElixir.AgentRunner do
     CodeReview,
     Config,
     Connected,
+    Decisions,
     DependencyAudit,
     DependencyGate,
     EpicReview,
@@ -662,6 +663,7 @@ defmodule SymphonyElixir.AgentRunner do
         |> put_ci_failure(issue)
         |> put_pr_conflict(issue)
         |> put_ticket_state(issue)
+        |> put_decisions(issue)
 
       run_context = %{
         workspace: workspace,
@@ -1294,6 +1296,7 @@ defmodule SymphonyElixir.AgentRunner do
       |> put_pr_conflict(issue)
       |> put_open_pr_overlap(issue)
       |> put_ticket_state(issue)
+      |> put_decisions(issue)
 
     prompt = PromptBuilder.build_prompt(issue, prompt_opts)
     maybe_compact_codex_initial_prompt(prompt, issue, prompt_opts)
@@ -1486,6 +1489,15 @@ defmodule SymphonyElixir.AgentRunner do
       opts
     else
       Keyword.put(opts, :ticket_state, pending_ticket_state(issue, opts))
+    end
+  end
+
+  # The decisions the prompt renders come from the ticket's store record, not from its description.
+  defp put_decisions(opts, issue) do
+    if Keyword.has_key?(opts, :decisions) do
+      opts
+    else
+      Keyword.put(opts, :decisions, Decisions.stored(issue, repo_key: Keyword.get(opts, :repo_key) || issue_repo_key(issue)))
     end
   end
 

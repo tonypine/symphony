@@ -754,7 +754,8 @@ defmodule SymphonyElixir.ReviewAgentTest do
         )
 
       {:ok, description} = SymphonyElixir.Decisions.put("Reviewer findings need quoted evidence.", [decision])
-      %{issue() | description: description}
+      # Its own ticket: the store keeps a ticket's decisions once they are recorded.
+      %{issue() | id: "issue-review-decided", description: description}
     end
 
     defp decided_finding(summary, decision) do
@@ -813,14 +814,15 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
         assert :ok = SymphonyElixir.Decisions.sync(node, tracker: RulingTracker)
         assert_received {:description_written, _issue_id, description}
+        assert [%{id: "D1"}] = SymphonyElixir.Decisions.recorded(description)
 
         repo = git_repo_with_change!(test_root)
         put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
         write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
 
         opts = [review_agent_module: SequenceReviewer, review_scope: :code_review]
-        ruled = %{issue() | description: description}
-        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(ruled, repo, Config.settings!(), opts)
+        # The issue the reviewer gets has no section: the prompt reads the store, not Linear.
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue(), repo, Config.settings!(), opts)
 
         assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
 
