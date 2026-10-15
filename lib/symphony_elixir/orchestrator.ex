@@ -4327,8 +4327,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_routable_to_worker?(_issue), do: true
 
+  # A retry or continuation starts new work, so like a fresh dispatch it needs the issue still
+  # assigned to this Symphony's worker: unassigning a ticket takes it away from Symphony.
   defp active_retry_issue?(%Issue{state: state_name} = issue, terminal_states) do
-    active_issue_state?(state_name, active_state_set()) and
+    issue_routable_to_worker?(issue) and
+      active_issue_state?(state_name, active_state_set()) and
       !terminal_issue_state?(state_name, terminal_states) and
       !issue_held?(issue, terminal_states)
   end
@@ -4413,7 +4416,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info(
-          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)}"
+          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} assigned_to_worker=#{refreshed_issue.assigned_to_worker} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)}"
         )
 
         release_undispatched_claim(state, issue.id)
@@ -5065,6 +5068,10 @@ defmodule SymphonyElixir.Orchestrator do
         |> cleanup_issue_workspace(metadata[:worker_host])
 
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
+
+      not issue_routable_to_worker?(issue) ->
+        Logger.info("Dropping retry of #{issue_context(issue)}: not assigned to this Symphony's worker; releasing its claim")
+        {:noreply, %{state | watching: Map.delete(state.watching, issue_id)} |> release_issue_claim(issue_id)}
 
       quiet_continuation?(issue, state, metadata) ->
         on_pushed = &handle_quiet_handoff(&1, issue, attempt, metadata)
