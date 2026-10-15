@@ -136,6 +136,56 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert %{blocked_by: [%{identifier: "MT-B", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
   end
 
+  # TP-1019: dispatch reads the issue again by id, and that read carries no repo key. The dispatch's
+  # own goes on the refreshed copy, so its holds are read where they are kept.
+  test "dispatch reads the issue again under its repo key: a held copy is skipped and nothing is read with no repo key" do
+    polled = issue("held", "MT-HELD", "QA")
+    unkeyed = %{polled | repo_key: nil}
+    fetcher = fn ["held"] -> {:ok, [unkeyed]} end
+
+    :ok = RunStore.set_ticket_hold("default", "held", :needs_decision, %{reason: "Investigate the qa_environment by hand?"})
+    on_exit(fn -> RunStore.clear_ticket_hold("default", "held", :needs_decision) end)
+
+    revalidate = fn -> send(self(), {:result, Orchestrator.revalidate_issue_for_dispatch_for_test(polled, fetcher)}) end
+    log = capture_log(revalidate)
+
+    assert_received {:result, {:skip, %Issue{repo_key: "default"}}}
+    refute log =~ "with no repo key"
+
+    :ok = RunStore.clear_ticket_hold("default", "held", :needs_decision)
+    assert {:ok, %Issue{repo_key: "default"}} = Orchestrator.revalidate_issue_for_dispatch_for_test(polled, fetcher)
+  end
+
+  test "a poll pass that dispatches from the unkeyed by-id read logs no missing repo key" do
+    standalone = issue("standalone", "MT-888", "Todo")
+    unkeyed = %{standalone | repo_key: nil}
+    state = %{orchestrator_state() | dispatch_refresh: %{ids: MapSet.new(["standalone"]), result: {:ok, [unkeyed]}}}
+
+    {state, log} = dispatch_with_log([standalone], state)
+
+    assert Map.has_key?(state.running, "standalone")
+    refute log =~ "with no repo key"
+  end
+
+  test "with several repos, an issue with no repo key is not dispatched and says why", ctx do
+    write_skipped_workflow!(ctx,
+      repos: [
+        [key: "default", workflow: Workflow.workflow_file_path(), team: "Test"],
+        [key: "api", workflow: Workflow.workflow_file_path(), team: "API"]
+      ]
+    )
+
+    unkeyed = issue("unkeyed", "MT-UNKEYED", "Todo", repo_key: nil)
+
+    {state, log} = dispatch_with_log([unkeyed], orchestrator_state())
+
+    refute Map.has_key?(state.running, "unkeyed")
+    assert state.dispatch_skipped["unkeyed"].reason == "it has no repo key and several repos are configured, so its holds can't be read"
+    refute log =~ "with no repo key;"
+    refute Orchestrator.should_dispatch_issue_for_test(unkeyed, orchestrator_state())
+    refute Orchestrator.dispatch_revalidated_issue_for_test(unkeyed, true)
+  end
+
   test "a usage-limit hold and a dispatch that starts nothing are listed too" do
     now = DateTime.utc_now()
 
