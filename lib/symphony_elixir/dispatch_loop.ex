@@ -16,7 +16,9 @@ defmodule SymphonyElixir.DispatchLoop do
   last state move or push, so it is not counted; a verdict recorded and a hold cleared (a person
   unblocked the ticket, answered its decision, or what it waited on landed) empty the record's runs
   (`SymphonyElixir.TicketState`). A run stopped by a usage limit or an unreachable model API is
-  dropped when it ends, since the orchestrator counts no attempt for it. Clearing the loop hold
+  dropped when it ends, since the orchestrator counts no attempt for it, and so is an epic review
+  that found CI still running on its commit: CI takes longer than the window, and that wait has its
+  own bound (`SymphonyElixir.CiWait`). Clearing the loop hold
   itself, with `Unblock` or `Restart`, empties them too, so the ticket starts again from zero.
   """
 

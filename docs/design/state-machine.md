@@ -67,7 +67,7 @@ Holds pause a ticket in its current phase. They are attributes persisted at the 
 
 | Hold | Label | Recorded with it | Set when | Clears when |
 |---|---|---|---|---|
-| **Blocked** | `Blocked` | The reason and what it waits on (a dependency key, an access need, the fix ticket, or a dispatch loop) | A dependency opens on a Todo ticket; an agent reports a block from In Progress or Rework; self-heal files a fix ticket; the dispatch-loop guard sees one run kind dispatched past its limit without progress | The dependency or fix ticket goes terminal, or access is granted — automatically; the ticket continues in place. A dispatch loop waits on a person's Unblock or Restart |
+| **Blocked** | `Blocked` | The reason and what it waits on (a dependency key, an access need, the fix ticket, a dispatch loop, or an epic review's CI wait past its hour) | A dependency opens on a Todo ticket; an agent reports a block from In Progress or Rework; self-heal files a fix ticket; the dispatch-loop guard sees one run kind dispatched past its limit without progress; an epic review waited an hour for CI on one commit | The dependency or fix ticket goes terminal, or access is granted — automatically; the ticket continues in place. A dispatch loop waits on a person's Unblock or Restart, a CI wait past its hour on Unblock |
 | **Needs Decision** | `Needs Decision` | One question, 2–4 options, one recommended (custom answer allowed) | The machine needs a person's decision or confirmation: escalations, product calls, access, a merge gate with manual review on, a repair with no clear next step | The decision is recorded; the phase continues, or the decision directs a move (e.g., → Rework) |
 
 ## Human-only actions
@@ -77,7 +77,7 @@ Holds pause a ticket in its current phase. They are attributes persisted at the 
 | **Triage** | Backlog → Todo (the routine human move). |
 | **Approve Plan** | Resolve Plan Review: approve promotes sub-tickets and moves the parent to Waiting on sub-tickets; changes → Rework (re-plan). |
 | **Deprioritize** | Any active phase → Backlog. Never automatic. |
-| **Unblock** | Clear an access or dispatch-loop hold; the ticket continues. |
+| **Unblock** | Clear an access, dispatch-loop or CI-wait hold; the ticket continues. |
 | **Decide** | Resolve a Needs Decision hold: it clears and the phase continues, or the decision directs a move. |
 | **Restart** | Full reset: close the PR, fresh branch from main, supersede the workpad → In Progress. The old "Rework" meaning, kept rare and deliberate. |
 

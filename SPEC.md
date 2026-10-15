@@ -1563,8 +1563,12 @@ The QA agent:
   base branch head. QA exercises the change the way a user would.
 - The epic review MUST NOT start its agent while a workflow run on the base branch head it reviews
   is still unfinished: it records no verdict, leaves the parent in `Epic Review`, and starts again
-  after a fixed wait without counting a retry attempt or reaching the self-heal lane. A run still
-  unfinished two hours after it was created, or runs that cannot be read, are not waited on.
+  after a fixed wait without counting a retry attempt, a dispatch-loop run or reaching the self-heal
+  lane. A run still unfinished two hours after it was created, or runs that cannot be read, are not
+  waited on. The wait on one commit MUST be bounded: once it has lasted an hour (from the first wait
+  on that commit, recorded in the ticket-state record), the review is not started again and the
+  ticket is held `Blocked` with `waits_on.type` `ci_wait` and a reason naming the commit and the
+  workflows still running, which a person lifts with `Unblock`; the next wait starts from zero.
 - The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.agents/skills`, the project
   `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
   criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
@@ -2524,7 +2528,8 @@ Rules:
   within `watchdog.dispatch_loop_window_ms` and `watchdog.dispatch_loop_long_runs` within
   `watchdog.dispatch_loop_long_window_ms`. Progress is a state move or a new PR head (a run started on
   another state or head is not counted), a recorded verdict, or a hold that lifts; a run a usage
-  limit or an unreachable model API stopped is not counted either. Past either limit the run MUST
+  limit or an unreachable model API stopped is not counted either, nor an epic review that found CI
+  still running on its commit (that wait has its own bound, below). Past either limit the run MUST
   NOT be dispatched: the ticket is held `Blocked` with `waits_on.type` `dispatch_loop` and a reason
   naming the run kind, the count, the window and the last runs' outcomes (exit, whether they left a
   new PR head, the handoff signal or its absence), one error line is logged, and the Inbox (and so
