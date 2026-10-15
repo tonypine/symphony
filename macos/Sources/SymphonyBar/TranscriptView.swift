@@ -111,7 +111,7 @@ struct TranscriptView: View {
             }
             .frame(maxHeight: .infinity)
             Divider()
-            TranscriptDetail(item: turns.flatMap(\.items).first { $0.id == selection } ?? transcript.items.first { $0.id == selection })
+            TranscriptDetail(item: selectedItem(in: turns))
                 .frame(height: 200)
         }
         // ⌘F searches the transcript (P10).
@@ -123,6 +123,12 @@ struct TranscriptView: View {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         )
+    }
+
+    /// The selected event, from the shown turns or else the whole transcript.
+    private func selectedItem(in turns: [Transcript.Turn]) -> Transcript.Item? {
+        let shown: Transcript.Item? = turns.lazy.flatMap(\.items).first { $0.id == selection }
+        return shown ?? transcript.items.first { $0.id == selection }
     }
 }
 
@@ -217,8 +223,8 @@ struct TranscriptRow: View {
                 .font(DesignTokens.TypeStyle.rowTitle.font)
                 .lineLimit(1)
                 .fixedSize()
-            Text(item.kind == .toolCall && item.summary.hasPrefix(item.title + " ") ? String(item.summary.dropFirst(item.title.count + 1)) : item.summary)
-                .font(item.kind == .toolCall ? DesignTokens.TypeStyle.mono.font : DesignTokens.TypeStyle.body.font)
+            Text(summary)
+                .font(summaryFont)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: DesignTokens.Space.s2)
@@ -235,6 +241,17 @@ struct TranscriptRow: View {
         .background(selected ? AnyShapeStyle(DesignTokens.SystemColor.accent.color.opacity(0.18)) : AnyShapeStyle(.clear))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(item.accessibilityLabel)
+    }
+
+    /// The one line, without a tool call's leading tool name, which the title already shows.
+    private var summary: String {
+        let prefix = item.title + " "
+        guard item.kind == .toolCall, item.summary.hasPrefix(prefix) else { return item.summary }
+        return String(item.summary.dropFirst(prefix.count))
+    }
+
+    private var summaryFont: Font {
+        item.kind == .toolCall ? DesignTokens.TypeStyle.mono.font : DesignTokens.TypeStyle.body.font
     }
 
     private var symbol: String {

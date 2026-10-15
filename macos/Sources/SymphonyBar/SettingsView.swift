@@ -287,22 +287,7 @@ struct SettingsView: View {
                     }
                     .disabled(!model.canEditRunProfiles || model.repositoryKeys.isEmpty)
                     ForEach(RunProfilesConfig.scopes, id: \.self) { kind in
-                        RunProfileRow(
-                            kind: kind,
-                            profile: $model.runProfiles[model.runProfilesScope][kind],
-                            inherited: model.inheritedProfile(kind),
-                            inheritedSource: model.runProfilesScope == .global && kind == nil ? "from command" : "inherited",
-                            providerSource: model.runProfilesScope == .global && kind == nil ? "default" : "inherited",
-                            canReset: model.runProfilesScope != .global,
-                            openRouterModels: model.openRouterAPIKey.isEmpty ? nil : model.openRouterModelList,
-                            hasOpenRouterKey: !model.openRouterAPIKey.isEmpty,
-                            retryOpenRouterModels: model.loadOpenRouterModels,
-                            isPickingModel: Binding(
-                                get: { model.openRouterPickerRow == kind?.rawValue ?? "default" },
-                                set: { model.openRouterPickerRow = $0 ? kind?.rawValue ?? "default" : nil }
-                            ),
-                            modelQuery: $model.openRouterQuery
-                        )
+                        runProfileRow(kind)
                     }
                     .disabled(!model.canEditRunProfiles)
                     if model.runProfilesScope == .global && (model.runProfiles.usesOpenRouter || model.runProfiles.smallModel != nil) {
@@ -485,6 +470,31 @@ struct SettingsView: View {
     }
 
     static let width: CGFloat = 840
+
+    /// One kind's run profile row, its arguments worked out in separate statements: as one expression it came near
+    /// the type-checker's budget on CI's Xcode (TP-1017).
+    private func runProfileRow(_ kind: RunKind?) -> RunProfileRow {
+        let isGlobal: Bool = model.runProfilesScope == .global
+        let isCommandDefault: Bool = isGlobal && kind == nil
+        let hasOpenRouterKey: Bool = !model.openRouterAPIKey.isEmpty
+        let pickerRow: String = kind?.rawValue ?? "default"
+        return RunProfileRow(
+            kind: kind,
+            profile: $model.runProfiles[model.runProfilesScope][kind],
+            inherited: model.inheritedProfile(kind),
+            inheritedSource: isCommandDefault ? "from command" : "inherited",
+            providerSource: isCommandDefault ? "default" : "inherited",
+            canReset: !isGlobal,
+            openRouterModels: hasOpenRouterKey ? model.openRouterModelList : nil,
+            hasOpenRouterKey: hasOpenRouterKey,
+            retryOpenRouterModels: model.loadOpenRouterModels,
+            isPickingModel: Binding(
+                get: { model.openRouterPickerRow == pickerRow },
+                set: { model.openRouterPickerRow = $0 ? pickerRow : nil }
+            ),
+            modelQuery: $model.openRouterQuery
+        )
+    }
 }
 
 /// Provider, model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds
