@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.{CiWait, DispatchLoop, Hold, TicketState}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Hold, TicketState}
   alias SymphonyElixir.Inbox.Item
 
   @repo_key "loop-repo"
@@ -135,6 +135,96 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     end
   end
 
+  describe "an epic review waiting for CI" do
+    @sha "26758a2471558f89fc0411dcf1f81aa82c0e1dc4"
+    @runs [%{workflow_name: "release", url: "https://github.com/acme/app/actions/runs/1"}, %{workflow_name: "macos", url: nil, id: 2}]
+
+    test "five waits in ten minutes count no run and set no dispatch-loop hold" do
+      pid = start_orchestrator(:CiWaitUncounted)
+
+      for n <- 1..5 do
+        run = %{kind: :epic_review, run_id: "run-#{n}", state: "Epic Review"}
+        :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, run)
+        send_down(pid, "run-#{n}", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+        assert %{delay_type: :ci_wait} = :sys.get_state(pid).retry_attempts[@issue_id]
+      end
+
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert record.dispatches == []
+      assert [%{name: "ci_wait_started", details: %{sha: @sha}}] = Enum.filter(record.signals, &(&1.name =~ "ci_wait"))
+
+      attempt = %{kind: :epic_review, state: "Epic Review", head: nil}
+      assert DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) == :ok
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+    end
+
+    test "a wait that lasted an hour holds the ticket, naming the commit and the workflows still running" do
+      started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
+      signal = %{name: "ci_wait_started", details: %{sha: @sha}, at: started}
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      pid = start_orchestrator(:CiWaitHeld)
+
+      log = send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+
+      state = :sys.get_state(pid)
+      refute Map.has_key?(state.retry_attempts, @issue_id)
+      refute MapSet.member?(state.claimed, @issue_id)
+
+      hold = Hold.get(@repo_key, @issue_id, :blocked)
+      assert %{waits_on: %{type: "ci_wait", keys: [@sha]}, clearing_condition: "when a person unblocks it"} = hold
+      assert hold.reason =~ "ci_wait: CI on 26758a247155 was still running after 61 minutes"
+      assert hold.reason =~ "Still running: release (https://github.com/acme/app/actions/runs/1), macos (2)"
+      assert Hold.unblockable?(hold)
+      assert_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+      assert log =~ "[error] Holding #{@identifier} instead of waiting longer for CI: #{hold.reason}"
+
+      # The hold's signal ends that wait: once unblocked, the next wait on the commit starts from zero.
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      assert [%{name: "ci_wait", details: %{sha: @sha}} | _rest] = record.signals
+      assert CiWait.since(record.signals, @sha) == nil
+    end
+
+    test "a hold the store fails to write leaves the wait running, so the next exit tries the hold again" do
+      started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
+      signal = %{name: "ci_wait_started", details: %{sha: @sha}, at: started}
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      pid = start_orchestrator(:CiWaitHoldFailed)
+
+      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_only)
+      on_exit(fn -> :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_write) end)
+
+      log = send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+
+      assert log =~ "[error] Failed to hold #{@identifier} after waiting for CI too long; retrying after CI"
+      refute log =~ "Holding #{@identifier}"
+      assert %{delay_type: :ci_wait} = :sys.get_state(pid).retry_attempts[@issue_id]
+      refute_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      refute TicketState.get_hold(record, :blocked)
+      assert CiWait.since(record.signals, @sha) == started
+
+      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_write)
+      send_down(pid, "run-2", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      refute MapSet.member?(:sys.get_state(pid).claimed, @issue_id)
+    end
+
+    test "a wait on a newer commit starts again from zero" do
+      started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
+      signal = %{name: "ci_wait_started", details: %{sha: "older"}, at: started}
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      pid = start_orchestrator(:CiWaitNewCommit)
+
+      send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+
+      assert %{delay_type: :ci_wait} = :sys.get_state(pid).retry_attempts[@issue_id]
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      assert [%{name: "ci_wait_started", details: %{sha: @sha}} | _rest] = RunStore.get_ticket_state(@repo_key, @issue_id).signals
+    end
+  end
+
   defp put_observed_head!(commit_sha) do
     :ok = RunStore.put_ci_check(%{repo_key: @repo_key, issue_id: @issue_id, status: "watching", last_observed_sha: commit_sha})
   end
@@ -159,18 +249,24 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     pid
   end
 
-  defp down(name, reason) do
+  defp down(name, reason), do: name |> start_orchestrator() |> send_down("run-1", "In Progress", reason)
+
+  defp start_orchestrator(name) do
     {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
     on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
+    pid
+  end
+
+  defp send_down(pid, run_id, issue_state, reason) do
     ref = make_ref()
 
     running_entry = %{
       pid: self(),
       ref: ref,
-      run_id: "run-1",
+      run_id: run_id,
       repo_key: @repo_key,
       identifier: @identifier,
-      issue: %Issue{id: @issue_id, identifier: @identifier, state: "In Progress", repo_key: @repo_key},
+      issue: %Issue{id: @issue_id, identifier: @identifier, state: issue_state, repo_key: @repo_key},
       started_at: DateTime.utc_now()
     }
 
