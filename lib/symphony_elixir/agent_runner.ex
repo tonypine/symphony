@@ -1340,8 +1340,8 @@ defmodule SymphonyElixir.AgentRunner do
 
             Review-agent gate reminder:
 
-            - If this thread has not already received a reviewer-agent approval prompt, stop before `git push`, PR creation, or moving the issue to review after validation and committed-diff review.
-            - Ending the turn at that gate is expected even if the issue remains active; Symphony will run the reviewer agent and inject the next prompt.
+            - If this thread has not already received a reviewer-agent approval prompt, stop before `git push` or PR creation after validation and committed-diff review.
+            - Ending the turn at that gate is expected even if the issue remains active; Symphony will run the reviewer agent and inject the next prompt. The handoff push to `Code Review` follows the reviewer's approval.
             """
         end
 

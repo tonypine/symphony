@@ -315,6 +315,9 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert prompt =~ "Do not end the turn while the issue remains in an active state."
     assert prompt =~ "Review-agent gate:"
+    assert prompt =~ "It comes before the handoff push the workflow describes"
+    assert prompt =~ "Ending your turn at this gate does not end the run"
+    refute prompt =~ "move the issue to review"
     assert prompt =~ "This overrides retry or continuation guidance"
     assert prompt =~ "Only continue to push/PR after an explicit reviewer-agent approval prompt"
     assert prompt =~ "Do not treat missing reviewer comments as approval."
