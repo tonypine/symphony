@@ -29,3 +29,4 @@ these sections:
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](0001-director-workflow.md) | The Director workflow: ticket types, plan review and artifacts | Accepted |
+| [0002](0002-store-is-the-source-of-truth.md) | Symphony's store is the source of truth; Linear is its projection | Accepted |
