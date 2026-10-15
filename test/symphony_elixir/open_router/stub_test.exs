@@ -79,6 +79,8 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     assert request(:post, url <> "/v1/messages", json: %{"model" => "x"}).status == 401
     assert request(:post, url <> "/v1/messages", [body: "not json"] ++ valid_key()).status == 400
     assert request(:post, url <> "/v1/messages", [body: "[1]"] ++ valid_key()).status == 400
+    # One byte over the stub's 8 MB body limit.
+    assert request(:post, url <> "/v1/messages", [body: String.duplicate("x", 8_000_001)] ++ valid_key()).status == 400
     assert request(:post, url <> "/v1/messages/batches", [json: %{}] ++ valid_key()).status == 404
     assert request(:get, url <> "/v1/credits", valid_key()).status == 404
     assert request(:get, String.replace(url, "/api", "/")).status == 404
