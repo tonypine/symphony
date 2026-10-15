@@ -27,7 +27,14 @@ defmodule SymphonyElixir.EpicReview do
        when the parent is already there.
     3. The **agent pass**: `SymphonyElixir.QaAgent` in its epic-review mode, journey-driven, in a
        throwaway worktree at the head of the base branch — the epic's intent against what actually
-       shipped on the default branch, with every checklist row reported.
+       shipped on the default branch, with every checklist row reported. It waits for CI: while a
+       workflow run on that commit is still going, the agent does not start and the run ends with
+       `{:error, {:ci_pending, info}}`, which the orchestrator retries after a short wait without
+       counting an attempt. The parent stays in `Epic Review`, nothing is recorded, and no block
+       reaches the self-heal lane: a review started the moment the last sub-ticket merged would
+       otherwise judge a commit CI has not finished with. A run still unfinished after two hours
+       is not waited on: the review runs and reports it, so stuck CI blocks and self-heals as any
+       other block does.
     4. The **verdict**, through the one writer `SymphonyElixir.TransitionGuard`:
          * `pass` -> `Done` (`:epic_review_pass`);
          * `fail` (gaps) -> each failing step, or without failing steps each finding, is filed as a
@@ -51,8 +58,8 @@ defmodule SymphonyElixir.EpicReview do
   `run/3` returns `:skip` for anything but an epic parent.
 
   Every effect is injectable: `opts[:qa_agent]`, `opts[:tracker]`, `opts[:git]`,
-  `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]` default to the real ones and are fakes
-  in tests.
+  `opts[:gh_runner]` (how CI is read), `opts[:linear_client]`, `opts[:store]` and `opts[:fixer]`
+  default to the real ones and are fakes in tests, and `opts[:now]` is the clock the CI wait reads.
   """
 
   require Logger
@@ -64,6 +71,7 @@ defmodule SymphonyElixir.EpicReview do
     QaVerification,
     SelfHeal,
     SubIssueWait,
+    TicketPullRequest,
     TicketSignals,
     TransitionGuard,
     Verification,
@@ -71,6 +79,7 @@ defmodule SymphonyElixir.EpicReview do
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -93,6 +102,9 @@ defmodule SymphonyElixir.EpicReview do
   # Longer than the review a lost verdict would redo, so a rate limit that outlasts the default
   # five-minute wait does not throw the verdict away.
   @verdict_move_max_wait_ms 30 * 60_000
+  # How long the review waits for a workflow run on the commit under review to finish. Longer than
+  # any healthy run of CI; a run still going after it is stuck, and the review reports it.
+  @ci_wait_limit_seconds 2 * 3600
 
   @typedoc "One deterministic pre-check: what it found and whether the review must account for it."
   @type check :: %{name: atom(), status: :ok | :attention, detail: String.t()}
@@ -103,11 +115,13 @@ defmodule SymphonyElixir.EpicReview do
   another state's own), and `{:error, reason}` when the parent or the commit under review could not
   be read or the ticket could not be moved. A run that hit the provider's usage limit comes back as
   `{:error, {:usage_limited, info}}`, so the orchestrator holds it and starts it again once the
-  limit resets.
+  limit resets, and one that found CI still running on the commit under review as
+  `{:error, {:ci_pending, info}}`, so the orchestrator starts it again once CI had time to finish.
 
   Options: `:settings` (required), `:repo_key`, `:run_id`, `:run_profile` (the dispatch's profile
   for this run kind), `:worker_host`, `:on_message`, `:linear_retry_opts`, and `:tracker`,
-  `:qa_agent`, `:git`, `:linear_client`, `:store`, `:fixer`, `:symphony_repo_key` for tests.
+  `:qa_agent`, `:git`, `:gh_runner`, `:now`, `:linear_client`, `:store`, `:fixer`, `:symphony_repo_key`
+  for tests.
   """
   @spec run(Issue.t(), Path.t(), keyword()) :: :skip | :ok | {:error, term()}
   def run(%Issue{} = issue, workspace, opts) when is_binary(workspace) do
@@ -216,6 +230,14 @@ defmodule SymphonyElixir.EpicReview do
 
         {:error, {:usage_limited, info}}
 
+      %{ci_pending: info} ->
+        Logger.info(
+          "Epic review for #{issue_label(issue)} waits for CI on #{short_sha(info.sha)}: " <>
+            "#{Enum.map_join(info.runs, ", ", &run_label/1)} still running; the epic keeps its state and runs again after CI"
+        )
+
+        {:error, {:ci_pending, info}}
+
       outcome ->
         apply_outcome(issue, outcome, settings, opts)
     end
@@ -263,28 +285,59 @@ defmodule SymphonyElixir.EpicReview do
         Map.merge(outcome, %{ref: context.base_ref, checks: checks, runtime_seconds: System.monotonic_time(:second) - started_at})
 
       nil ->
-        playbooks = playbooks(issue, settings)
-        job = agent_job(issue, workspace, context, settings, opts, playbooks)
-        runtime = fn -> System.monotonic_time(:second) - started_at end
-
-        case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, agent_opts(opts)) do
-          {:ok, %{result: result, tokens: tokens}} ->
-            result
-            |> run_outcome(tokens, playbooks, checks)
-            |> Map.merge(%{sha: context.sha, ref: context.base_ref, runtime_seconds: runtime.()})
-
-          {:error, reason, tokens} ->
-            reason
-            |> error_outcome(tokens, checks)
-            |> Map.merge(%{
-              sha: context.sha,
-              ref: context.base_ref,
-              playbooks: playbook_kinds(playbooks),
-              runtime_seconds: runtime.()
-            })
+        case pending_ci_runs(workspace, context.sha, opts) do
+          [] -> run_qa_agent(issue, workspace, context, settings, opts, checks, started_at)
+          runs -> %{ci_pending: %{sha: context.sha, runs: runs}}
         end
     end
   end
+
+  defp run_qa_agent(issue, workspace, context, settings, opts, checks, started_at) do
+    playbooks = playbooks(issue, settings)
+    job = agent_job(issue, workspace, context, settings, opts, playbooks)
+    runtime = fn -> System.monotonic_time(:second) - started_at end
+
+    case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, agent_opts(opts)) do
+      {:ok, %{result: result, tokens: tokens}} ->
+        result
+        |> run_outcome(tokens, playbooks, checks)
+        |> Map.merge(%{sha: context.sha, ref: context.base_ref, runtime_seconds: runtime.()})
+
+      {:error, reason, tokens} ->
+        reason
+        |> error_outcome(tokens, checks)
+        |> Map.merge(%{
+          sha: context.sha,
+          ref: context.base_ref,
+          playbooks: playbook_kinds(playbooks),
+          runtime_seconds: runtime.()
+        })
+    end
+  end
+
+  # The workflow runs on the commit under review that are still going and worth waiting for. The
+  # review judges CI by the commit's runs, and a run without a conclusion cannot be judged, so the
+  # review waits for it (`review_epic/5`). Anything that keeps the wait from being sure is not
+  # waited on, and the review runs as it would without the wait: runs that cannot be read, and a
+  # run still unfinished after `@ci_wait_limit_seconds`, which the agent then reports.
+  defp pending_ci_runs(workspace, sha, opts) do
+    case PullRequest.list_commit_runs(sha, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
+      {:ok, runs} ->
+        now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+        Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
+
+      {:error, reason} ->
+        Logger.warning("Epic review could not read CI on #{short_sha(sha)}; reviewing without waiting for it: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp unfinished_run?(%{status: status}), do: is_binary(status) and status != "COMPLETED"
+
+  defp stuck_run?(%{created_at: %DateTime{} = created_at}, now), do: DateTime.diff(now, created_at) > @ci_wait_limit_seconds
+  defp stuck_run?(_run, _now), do: false
+
+  defp run_label(run), do: "#{run.workflow_name || "a workflow"} (#{run.url || run.id})"
 
   defp agent_job(issue, workspace, %{sha: sha, base_ref: base_ref}, settings, opts, playbooks) do
     %{
@@ -827,11 +880,7 @@ defmodule SymphonyElixir.EpicReview do
   defp comment_author(%{author: author}) when is_binary(author) and author != "", do: author
   defp comment_author(_comment), do: "unknown"
 
-  defp pull_request_urls(issue) do
-    [Map.get(issue, :pull_request_url) | List.wrap(Map.get(issue, :pr_urls))]
-    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-    |> Enum.uniq()
-  end
+  defp pull_request_urls(issue), do: issue |> TicketPullRequest.current_urls() |> Enum.uniq()
 
   defp checklist_rows(%Issue{} = issue), do: count_rows(issue.description)
 

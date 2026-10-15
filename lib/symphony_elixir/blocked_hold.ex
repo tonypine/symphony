@@ -5,8 +5,12 @@ defmodule SymphonyElixir.BlockedHold do
   A Todo ticket with an open blocked-by blocker gains the
   `Blocked` machine label and a recorded reason (the blockers it waits on) instead of being held
   invisibly. When every blocker goes terminal the hold clears on its own and the ticket dispatches
-  — no state move, no person involved. `sync/3` reconciles one issue's store hold against its
-  blockers; the poll loop runs `sweep/3` over each polled repo's issues.
+  — no state move, no person involved. A run that marked its ticket blocked by open tickets and then
+  reported a block gets the same dependency hold in its phase (`SymphonyElixir.TransitionGuard`),
+  and it lifts the same way; outside `Todo`, a blocker that fixed Symphony itself also waits for the
+  running app to include its merge, as the fix-ticket hold below does. `sync/3` reconciles one
+  issue's store hold against its blockers; the poll loop runs `sweep/3` over each polled repo's
+  issues.
 
   The other hold that lifts on its own is the self-heal lane's: a ticket blocked on the fix ticket
   `SymphonyElixir.SelfHeal` filed waits for that ticket, and resumes in place the moment it goes
@@ -147,6 +151,13 @@ defmodule SymphonyElixir.BlockedHold do
     end
   end
 
+  defp action(issue, terminal_states, %{waits_on: %{type: @dependency_type}} = hold, cache, opts) do
+    case desired(issue, terminal_states, hold) do
+      :clear -> after_blockers_landed(issue, hold, cache, opts)
+      other -> {other, cache}
+    end
+  end
+
   defp action(issue, terminal_states, current, cache, _opts), do: {desired(issue, terminal_states, current), cache}
 
   defp fix_ticket(%{waits_on: %{keys: [identifier | _]}}, opts) when is_binary(identifier) do
@@ -172,6 +183,73 @@ defmodule SymphonyElixir.BlockedHold do
         attrs = update_wait_attrs(hold, fix, merge_sha, build.sha)
         {if(attrs.reason == Map.get(hold, :reason), do: :none, else: {:set, attrs}), cache}
     end
+  end
+
+  # Every blocker is terminal. A Todo ticket's hold clears at once: its dispatch gate waits for the
+  # app update itself (`UpdateHold.hold/4`). A ticket in another phase — held by its run's block
+  # report — has no such gate, so its hold waits here, as the fix-ticket hold does, while the running
+  # build lacks the merge commit of a blocker that fixed Symphony itself.
+  defp after_blockers_landed(%Issue{state: state} = issue, hold, cache, opts) do
+    if normalize(state) == @todo_state or skip_labelled?(issue) do
+      {:clear, cache}
+    else
+      build = Keyword.get_lazy(opts, :build, &BuildInfo.current/0)
+
+      case blockers_awaiting_update(issue.blocked_by, build, cache, opts) do
+        {[], cache} ->
+          {:clear, cache}
+
+        {waiting, cache} ->
+          attrs = dependency_update_attrs(hold, waiting, build.sha)
+          {if(attrs.reason == Map.get(hold, :reason), do: :none, else: {:set, attrs}), cache}
+      end
+    end
+  end
+
+  # No build sha (a build from a checkout): nothing can be compared, so nothing is waited on.
+  defp blockers_awaiting_update(_blockers, %{sha: nil}, cache, _opts), do: {[], cache}
+
+  defp blockers_awaiting_update(blockers, build, cache, opts) do
+    {waiting, cache} =
+      Enum.reduce(blockers, {[], cache}, fn blocker, {waiting, cache} ->
+        case UpdateHold.awaiting_update(blocker_issue(blocker, cache, opts), build, cache, opts) do
+          {nil, cache} -> {waiting, cache}
+          {merged, cache} -> {[merged | waiting], cache}
+        end
+      end)
+
+    {Enum.reverse(waiting), cache}
+  end
+
+  # A blocker `UpdateHold` already knows needs no read; any other is read from the tracker for its
+  # pull requests and labels. One that can't be read is not waited on, as `UpdateHold` does.
+  defp blocker_issue(blocker, cache, opts) do
+    id = Map.get(blocker, :id)
+    identifier = Map.get(blocker, :identifier)
+
+    if Map.has_key?(cache.blockers, id),
+      do: %Issue{id: id, identifier: identifier},
+      else: read_blocker(identifier, opts)
+  end
+
+  defp read_blocker(identifier, opts) when is_binary(identifier) do
+    case tracker(opts).fetch_issue_by_identifier(identifier) do
+      {:ok, %Issue{} = blocker} -> blocker
+      _unreadable -> nil
+    end
+  end
+
+  defp read_blocker(_identifier, _opts), do: nil
+
+  defp dependency_update_attrs(hold, waiting, build_sha) do
+    merged = Enum.map_join(waiting, ", ", &"#{&1.identifier} merged in `#{BuildInfo.short_sha(&1.merge_sha)}`")
+    identifiers = Enum.map_join(waiting, ", ", & &1.identifier)
+
+    %{
+      reason: "waiting for an app update: #{merged}, running `#{BuildInfo.short_sha(build_sha)}`",
+      clearing_condition: "when the running app includes the merge of #{identifiers}",
+      waits_on: hold.waits_on
+    }
   end
 
   defp awaiting_update(issue, fix, build, cache, opts) do

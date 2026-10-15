@@ -35,7 +35,7 @@
     "retrying": 0,
     "running": 0,
     "shipped_today": 0,
-    "waiting_on_you": 2,
+    "waiting_on_you": 5,
     "watching": 0
   },
   "dispatch_state": {
@@ -190,6 +190,45 @@
       "url": "https://linear.app/tonypine/issue/TP-892",
       "waiting_seconds": 3600,
       "waiting_since": "2026-10-07T13:20:00Z"
+    },
+    {
+      "checks_green": true,
+      "headline": "Count how many times Code Review sends a pull request back.",
+      "issue_id": "i-895",
+      "issue_identifier": "TP-895",
+      "kind": "pr",
+      "repo_key": "symphony",
+      "state": "QA",
+      "title": "Count review rounds per pull request",
+      "url": "https://linear.app/tonypine/issue/TP-895",
+      "waiting_seconds": 2400,
+      "waiting_since": "2026-10-07T13:40:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "Answer the quality gate's questions",
+      "issue_id": "i-896",
+      "issue_identifier": "TP-896",
+      "kind": "clarify",
+      "repo_key": "symphony",
+      "state": "Todo",
+      "title": "Make the Inbox faster",
+      "url": "https://linear.app/tonypine/issue/TP-896",
+      "waiting_seconds": 900,
+      "waiting_since": "2026-10-07T14:05:00Z"
+    },
+    {
+      "checks_green": false,
+      "headline": "The run reported a block",
+      "issue_id": "i-897",
+      "issue_identifier": "TP-897",
+      "kind": "blocked",
+      "repo_key": "symphony",
+      "state": "In Progress",
+      "title": "Post QA screenshots to the pull request",
+      "url": "https://linear.app/tonypine/issue/TP-897",
+      "waiting_seconds": 420,
+      "waiting_since": "2026-10-07T14:13:00Z"
     }
   ],
   "watching": []

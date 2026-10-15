@@ -1208,6 +1208,52 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
   end
 
+  test "phoenix observability api serves a tracked ticket's connected tickets, an untracked one none" do
+    connected = %{
+      parent: %{identifier: "MT-EPIC", title: "Ship the peek", done: 1, total: 3, children: ["completed", "started", "unstarted"]},
+      sub_tickets: [%{identifier: "MT-SUB", title: nil, state: "Todo"}],
+      blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "In Progress"}],
+      blocks: [%{identifier: "MT-NEXT", title: "Downstream", state: "Todo"}],
+      related: [%{identifier: "MT-REL", title: "Context", state: "Done"}]
+    }
+
+    gone = TicketState.new("default", "issue-gone", %{issue_identifier: "MT-GONE"})
+    assert :ok = RunStore.put_ticket_state(gone)
+    on_exit(fn -> RunStore.delete_ticket_state("default", "issue-gone") end)
+
+    snapshot =
+      static_snapshot()
+      |> Map.update!(:watching, fn entries -> Enum.map(entries, &Map.put(&1, :connected, connected)) end)
+      |> Map.update!(:slot_waiting, fn entries -> Enum.map(entries, &Map.put(&1, :connected, %{connected | parent: nil})) end)
+
+    orchestrator_name = Module.concat(__MODULE__, :ConnectedApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot, refresh: :unavailable)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"status" => "watching", "connected" => watched} = json_response(get(build_conn(), "/api/v1/MT-WATCH"), 200)
+
+    assert watched == %{
+             "parent" => %{
+               "identifier" => "MT-EPIC",
+               "title" => "Ship the peek",
+               "done" => 1,
+               "total" => 3,
+               "children" => ["completed", "started", "unstarted"]
+             },
+             "sub_tickets" => [%{"identifier" => "MT-SUB", "title" => nil, "state" => "Todo"}],
+             "blocked_by" => [%{"identifier" => "MT-BLOCKER", "title" => nil, "state" => "In Progress"}],
+             "blocks" => [%{"identifier" => "MT-NEXT", "title" => "Downstream", "state" => "Todo"}],
+             "related" => [%{"identifier" => "MT-REL", "title" => "Context", "state" => "Done"}]
+           }
+
+    assert %{"status" => "slot_waiting", "connected" => %{"parent" => nil, "blocked_by" => [%{"identifier" => "MT-BLOCKER"}]}} =
+             json_response(get(build_conn(), "/api/v1/MT-WAIT"), 200)
+
+    refute Map.has_key?(json_response(get(build_conn(), "/api/v1/MT-RETRY"), 200), "connected")
+    assert %{"status" => "untracked"} = untracked = json_response(get(build_conn(), "/api/v1/MT-GONE"), 200)
+    refute Map.has_key?(untracked, "connected")
+  end
+
   test "phoenix observability api exposes filtered quality runs and session reports" do
     now = DateTime.utc_now()
     yesterday = DateTime.add(now, -1, :day)

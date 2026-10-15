@@ -47,7 +47,7 @@ final class InboxTests: XCTestCase {
 
     func testTheDecisionFixtureResolvesEveryMentionAndWhereTheTicketSits() throws {
         let inbox = try payload("inbox-decision")
-        XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892"])
+        XCTAssertEqual(inbox.items.map(\.identifier), ["TP-923", "TP-892", "TP-895", "TP-896", "TP-897"])
 
         let decision = inbox.items[1]
         XCTAssertEqual(Set(decision.references.keys), ["TP-891", "TP-892", "TP-880", "TP-893", "#448"])
@@ -89,7 +89,7 @@ final class InboxTests: XCTestCase {
         XCTAssertTrue(context.blockedBy.isEmpty)
         XCTAssertEqual(context.earlierDecisions.count, 1)
         XCTAssertEqual(context.earlierDecisions.first?.at, ISO8601DateFormatter().date(from: "2026-10-07T05:48:00Z"))
-        XCTAssertEqual(context.earlierDecisions.first?.answer, "Remove it with the rest")
+        XCTAssertEqual(context.earlierDecisions.first?.answer, "Remove it with the rest, in TP-880")
 
         let plan = inbox.items[0]
         guard case let .parsed(brief)? = plan.review.brief else { return XCTFail("the plan's brief didn't parse") }
@@ -210,8 +210,8 @@ final class InboxTests: XCTestCase {
     func testTheDecisionFixtureReadsQuestionFirstWithItsStoryAndThreeOptionCards() throws {
         let inbox = try payload("inbox-decision")
         let list = InboxList(items: inbox.items)
-        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Decisions"])
-        XCTAssertEqual(list.groups.map(\.id), ["plan", "decision"])
+        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Pull requests", "Decisions", "Clarify", "Blocked"])
+        XCTAssertEqual(list.groups.map(\.id), ["plan", "pr", "decision", "clarify", "blocked"])
 
         let decision = inbox.items[1]
         XCTAssertTrue(decision.isDecision)

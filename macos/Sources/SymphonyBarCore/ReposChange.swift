@@ -4,8 +4,9 @@ import Foundation
 public enum ReposChange: Equatable {
     /// `workflow` is the `WORKFLOW.md` the sheet added, nil when it added none.
     case added(key: String, apply: AddRepoApply, madeDefault: String?, workflow: PendingWorkflow? = nil)
-    /// `apply` is nil when Symphony reads the change from `symphony.yml` without a restart.
-    case edited(key: String, apply: AddRepoApply?)
+    /// `apply` is nil when Symphony reads the change from `symphony.yml` without a restart. `madeDefault` when the
+    /// repo became the default, in place of `previousDefault` when there was one.
+    case edited(key: String, apply: AddRepoApply?, madeDefault: Bool = false, previousDefault: String? = nil)
     /// `next` is the repo selected in its place. `clone` is what deleting Symphony's clone did, nil when it wasn't
     /// asked for.
     case disconnected(
@@ -29,8 +30,11 @@ public enum ReposChange: Equatable {
                 key: key,
                 text: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault, workflow: workflow)
             )
-        case let .edited(key, apply):
-            return ReposBanner(key: key, text: EditRepo.savedMessage(key: key, apply: apply))
+        case let .edited(key, apply, madeDefault, previousDefault):
+            return ReposBanner(
+                key: key,
+                text: EditRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault, previousDefault: previousDefault)
+            )
         case let .disconnected(key, apply, newDefault, next, clone):
             let text = DisconnectRepo.message(key: key, apply: apply, newDefault: newDefault)
             return Self.withClone(ReposBanner(key: next, text: text), clone, key: key)
@@ -48,7 +52,7 @@ public enum ReposChange: Equatable {
         switch self {
         case let .added(key, _, _, _):
             return ReposBanner(key: key, text: "Added \(key). Restart Symphony from the menu to connect it.")
-        case let .edited(key, _):
+        case let .edited(key, _, _, _):
             return ReposBanner(key: key, text: "Saved \(key). Restart Symphony from the menu to apply it.")
         case let .disconnected(key, _, _, next, clone):
             let text = "Disconnected \(key). Restart Symphony from the menu to drop it."

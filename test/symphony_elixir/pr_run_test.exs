@@ -32,7 +32,7 @@ defmodule SymphonyElixir.PrRunTest do
       assert issue.id == "pr:default:123"
       assert issue.identifier == "PR-123"
       assert issue.run_kind == :pr
-      assert issue.pull_request_url == "https://github.com/example/repo/pull/123"
+      assert SymphonyElixir.TicketPullRequest.current_url(issue) == "https://github.com/example/repo/pull/123"
       assert issue.workspace_branch == "feature/fix-ci"
       assert issue.workspace_base_ref == "origin/feature/fix-ci"
       assert issue.pr_context.intent == "fix failing checks"
@@ -64,7 +64,7 @@ defmodule SymphonyElixir.PrRunTest do
       assert {:ok, %{issue: issue, repo_key: "default"}} =
                PrRun.resolve("123", intent: "fix failing checks", gh_runner: gh_runner)
 
-      assert issue.pull_request_url == "https://github.a8c.com/Automattic/symphony/pull/123"
+      assert SymphonyElixir.TicketPullRequest.current_url(issue) == "https://github.a8c.com/Automattic/symphony/pull/123"
       assert issue.workspace_branch == "feature/fix-ci"
     after
       File.rm_rf(root)

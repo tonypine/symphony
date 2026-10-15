@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentRunner do
     CiPoller,
     CodeReview,
     Config,
+    Connected,
     DependencyAudit,
     DependencyGate,
     EpicReview,
@@ -35,10 +36,10 @@ defmodule SymphonyElixir.AgentRunner do
     RunStore,
     StateMachine,
     SubIssueWait,
+    TicketPullRequest,
     TicketSignals,
     Tracker,
     TransitionGuard,
-    URLUtils,
     UsageLimit,
     Verification,
     Workpad,
@@ -111,10 +112,7 @@ defmodule SymphonyElixir.AgentRunner do
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
 
-          terminal_review_agent_block?(reason) ->
-            exit(reason)
-
-          terminal_tool_failure_circuit_breaker?(reason) ->
+          exits_as_is?(reason) ->
             exit(reason)
 
           linear_unavailable?(reason) ->
@@ -135,6 +133,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
   defp provider_hold_reason(_reason), do: nil
+
+  # The reasons the orchestrator reads as they are: a reviewer block, the tool-failure circuit
+  # breaker, and an epic review waiting for CI.
+  defp exits_as_is?(reason), do: terminal_review_agent_block?(reason) or terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
+
+  # An epic review that found CI still running on the commit it reviews: the orchestrator starts it
+  # again after a short wait instead of failing the run (`SymphonyElixir.EpicReview`).
+  defp ci_pending?({:ci_pending, %{}}), do: true
+  defp ci_pending?(_reason), do: false
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false
@@ -200,6 +207,7 @@ defmodule SymphonyElixir.AgentRunner do
                        Verification.start_dev_server(verification, workspace, settings: settings) do
                   remember_verification_dev_server(dev_server_pid)
                   enriched_issue = enrich_issue_for_dispatch(issue, opts)
+                  send_linked_issues(codex_update_recipient, enriched_issue)
 
                   # Start the comment registry before workpad bootstrap so the
                   # bootstrap comment is recorded as run-owned at creation time
@@ -426,8 +434,16 @@ defmodule SymphonyElixir.AgentRunner do
   # Any other head is ignored: Linear links a PR to every issue its body names after
   # a word such as "Part of", so a parent can carry its sub-ticket's PR, and taking
   # that head would put the parent's run on the sub-ticket's branch.
-  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier, pr_urls: [pr_url | _rest]} = issue, opts)
-       when is_binary(identifier) and is_binary(pr_url) do
+  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier} = issue, opts) when is_binary(identifier) do
+    case ticket_pr_url(issue, opts) do
+      pr_url when is_binary(pr_url) -> open_own_pr_head_ref(issue, pr_url, opts)
+      nil -> nil
+    end
+  end
+
+  defp renamed_issue_pr_head_ref(_issue, _opts), do: nil
+
+  defp open_own_pr_head_ref(issue, pr_url, opts) do
     github = Keyword.get(opts, :github, PullRequest)
 
     case github.fetch_ci_status(pr_url, []) do
@@ -439,8 +455,6 @@ defmodule SymphonyElixir.AgentRunner do
         nil
     end
   end
-
-  defp renamed_issue_pr_head_ref(_issue, _opts), do: nil
 
   defp renamed_own_head_ref(%Issue{identifier: identifier} = issue, pr_url, head_ref) do
     cond do
@@ -537,6 +551,15 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  # The ticket's parent and links the enrichment read, so the ticket page can show them without a
+  # Linear read of its own (see `SymphonyElixir.Connected`).
+  defp send_linked_issues(recipient, %Issue{id: issue_id} = issue) when is_binary(issue_id) and is_pid(recipient) do
+    send(recipient, {:worker_runtime_info, issue_id, %{linked: Connected.linked(issue)}})
+    :ok
+  end
+
+  defp send_linked_issues(_recipient, _issue), do: :ok
 
   # The comments the run posted, so the orchestrator can tell them from people's comments on a
   # breakdown parent's plan (see `SymphonyElixir.PlanComments`).
@@ -651,7 +674,7 @@ defmodule SymphonyElixir.AgentRunner do
         next_prompt: nil,
         session_rebuilt: false,
         progress: initial_progress(workspace, worker_host, issue, run_opts),
-        dispatch_pr_url: URLUtils.pull_request_url(issue)
+        dispatch_pr_url: ticket_pr_url(issue, run_opts)
       }
 
       try do
@@ -1317,8 +1340,8 @@ defmodule SymphonyElixir.AgentRunner do
 
             Review-agent gate reminder:
 
-            - If this thread has not already received a reviewer-agent approval prompt, stop before `git push`, PR creation, or moving the issue to review after validation and committed-diff review.
-            - Ending the turn at that gate is expected even if the issue remains active; Symphony will run the reviewer agent and inject the next prompt.
+            - If this thread has not already received a reviewer-agent approval prompt, stop before `git push` or PR creation after validation and committed-diff review.
+            - Ending the turn at that gate is expected even if the issue remains active; Symphony will run the reviewer agent and inject the next prompt. The handoff push to `Code Review` follows the reviewer's approval.
             """
         end
 
@@ -1527,11 +1550,11 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The checks that hand a run on its PR to CI or review, instead of parking it, read the PR URL
-  # from the refreshed issue's attachments. Say so when one the issue had at dispatch is gone.
-  defp warn_if_pr_url_lost(%Issue{} = refreshed_issue, %{dispatch_pr_url: pr_url}) when is_binary(pr_url) do
-    if is_nil(URLUtils.pull_request_url(refreshed_issue)) do
-      Logger.warning("#{issue_context(refreshed_issue)} had PR #{pr_url} at dispatch, but its refreshed Linear attachments show no PR; checks on its PR will not run")
+  # The checks that hand a run on its PR to CI or review, instead of parking it, read the ticket's
+  # PR from Symphony's record. Say so when one the ticket had at dispatch is gone.
+  defp warn_if_pr_url_lost(%Issue{} = refreshed_issue, %{dispatch_pr_url: pr_url} = run_context) when is_binary(pr_url) do
+    if is_nil(ticket_pr_url(refreshed_issue, run_context.opts)) do
+      Logger.warning("#{issue_context(refreshed_issue)} had PR #{pr_url} at dispatch, but Symphony's record of its PR now shows no open PR; checks on its PR will not run")
     end
   end
 
@@ -1575,7 +1598,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp post_pr_quiet_continuation?(%Issue{} = previous_issue, %Issue{} = refreshed_issue, run_context) do
-    case URLUtils.pull_request_url(refreshed_issue) || URLUtils.pull_request_url(previous_issue) do
+    case ticket_pr_url(refreshed_issue, run_context.opts) || ticket_pr_url(previous_issue, run_context.opts) do
       pr_url when is_binary(pr_url) ->
         active_issue_state?(refreshed_issue.state) and
           !rework_state?(refreshed_issue.state) and
@@ -1595,7 +1618,7 @@ defmodule SymphonyElixir.AgentRunner do
   # the head and the run hands off. A HEAD or PR head that can't be read hands nothing off; the
   # orchestrator caps those quiet runs.
   defp hand_off_quiet_pr_head(%Issue{} = previous_issue, %Issue{} = issue, run_context) do
-    pr_url = URLUtils.pull_request_url(issue) || URLUtils.pull_request_url(previous_issue)
+    pr_url = ticket_pr_url(issue, run_context.opts) || ticket_pr_url(previous_issue, run_context.opts)
 
     with true <- Handoff.origin?(issue.state),
          head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
@@ -1669,7 +1692,7 @@ defmodule SymphonyElixir.AgentRunner do
   # counts as empty.
   defp initial_progress(workspace, worker_host, issue, opts) do
     head = read_workspace_head(workspace, worker_host, opts)
-    fingerprint = progress_fingerprint(head, issue, initial_review_agent_state())
+    fingerprint = progress_fingerprint(head, issue, initial_review_agent_state(), opts)
     rework_base = rework_base(issue, head, opts)
     %{rework_base: rework_base, start_head: head, head: head, fingerprint: fingerprint, empty_turns: 0}
   end
@@ -1680,7 +1703,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp rework_base(%Issue{id: issue_id} = issue, head, opts) when is_binary(issue_id) and is_binary(head) do
     repo_key = run_repo_key(issue, opts)
 
-    if rework_state?(issue.state) and attached_pr?(issue) do
+    if rework_state?(issue.state) and attached_pr?(issue, opts) do
       case RunStore.get_rework_base(repo_key, issue_id) do
         base when is_binary(base) ->
           base
@@ -1714,7 +1737,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp track_turn_progress(%{progress: progress} = run_context, %Issue{} = refreshed_issue) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
-    fingerprint = progress_fingerprint(head, refreshed_issue, run_context.review_agent)
+    fingerprint = progress_fingerprint(head, refreshed_issue, run_context.review_agent, run_context.opts)
     empty_turns = if is_nil(head) or fingerprint != progress.fingerprint, do: 0, else: progress.empty_turns + 1
 
     %{run_context | progress: %{progress | head: head, fingerprint: fingerprint, empty_turns: empty_turns}}
@@ -1725,15 +1748,15 @@ defmodule SymphonyElixir.AgentRunner do
     reader.(workspace, worker_host)
   end
 
-  defp progress_fingerprint(head, issue, review_agent),
-    do: {head, Map.get(issue, :state), URLUtils.pull_request_url(issue), review_agent}
+  defp progress_fingerprint(head, issue, review_agent, opts),
+    do: {head, Map.get(issue, :state), ticket_pr_url(issue, opts), review_agent}
 
   # Nothing moves an issue out of `Rework` once its rework is done: the post-PR move skips `Rework`.
   # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
   # this run or an earlier one), that HEAD is the attached PR's head, and no review, CI, QA or
   # conflict signal is pending.
   defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context) when is_binary(head) do
-    rework_state?(issue.state) and attached_pr?(issue) and
+    rework_state?(issue.state) and attached_pr?(issue, run_context.opts) and
       head != progress.rework_base and
       no_pending_rework_signal?(issue, run_context.opts) and
       pr_head?(issue, head, run_context)
@@ -1744,7 +1767,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp pr_head?(%Issue{} = issue, head, run_context) do
     github = Keyword.get(run_context.opts, :github, PullRequest)
 
-    case github.fetch_ci_status(URLUtils.pull_request_url(issue), cwd: run_context.workspace) do
+    case github.fetch_ci_status(ticket_pr_url(issue, run_context.opts), cwd: run_context.workspace) do
       {:ok, %{commit_sha: ^head}} ->
         true
 
@@ -2056,7 +2079,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # The PR status `pushed_head_ci_action/2` reads its CI action from, or nil.
   defp pushed_head_ci_status(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
-    pr_url = URLUtils.pull_request_url(issue)
+    pr_url = ticket_pr_url(issue, run_context.opts)
     github = Keyword.get(run_context.opts, :github, PullRequest)
 
     with true <- is_binary(pr_url),
@@ -2071,7 +2094,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp park_idle_issue(%Issue{id: issue_id} = issue, opts) do
     Logger.warning(
       "Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change" <>
-        idle_park_pr_note(issue)
+        idle_park_pr_note(issue, opts)
     )
 
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
@@ -2085,10 +2108,10 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The CI checks that keep a run that pushed from being parked read the issue's PR URL. Saying
+  # The CI checks that keep a run that pushed from being parked read the ticket's PR. Saying
   # when there is none shows a lost PR link instead of parking without a trace.
-  defp idle_park_pr_note(%Issue{} = issue) do
-    if attached_pr?(issue), do: "", else: "; it has no attached PR, so CI on its head was not checked"
+  defp idle_park_pr_note(%Issue{} = issue, opts) do
+    if attached_pr?(issue, opts), do: "", else: "; Symphony has no open PR recorded for it, so CI on its head was not checked"
   end
 
   defp idle_park_note do
@@ -2097,7 +2120,13 @@ defmodule SymphonyElixir.AgentRunner do
     """
   end
 
-  defp attached_pr?(%Issue{} = issue), do: is_binary(URLUtils.pull_request_url(issue))
+  defp attached_pr?(%Issue{} = issue, opts), do: is_binary(ticket_pr_url(issue, opts))
+
+  # The ticket's in-flight PR, from Symphony's record. An issue the post-turn refresh returned may
+  # carry no repo key, so the run's own repo key finds its record.
+  defp ticket_pr_url(%Issue{} = issue, opts) do
+    TicketPullRequest.current_url(%{issue | repo_key: issue_repo_key(issue) || Keyword.get(opts, :repo_key) || Config.repo_key_or_nil()})
+  end
 
   defp rework_state?(state_name) when is_binary(state_name) do
     normalize_issue_state(state_name) == "rework"
@@ -2119,7 +2148,7 @@ defmodule SymphonyElixir.AgentRunner do
   # requires count, when it requires any, and none once the poller let the head past them (see
   # `CiPoller.landing_action/1`).
   defp merging_ci_pending?(%Issue{} = issue, run_context) do
-    pr_url = URLUtils.pull_request_url(issue)
+    pr_url = ticket_pr_url(issue, run_context.opts)
 
     if merging_state?(issue.state) and is_binary(pr_url) do
       github = Keyword.get(run_context.opts, :github, PullRequest)

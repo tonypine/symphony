@@ -12,6 +12,7 @@ defmodule SymphonyElixir.OneShot do
     Linear.Issue,
     Routing.Resolver,
     RunStore,
+    TicketPullRequest,
     Tracker,
     URLUtils,
     Verification,
@@ -397,10 +398,14 @@ defmodule SymphonyElixir.OneShot do
       runtime_seconds: runtime_seconds(entry.started_at, now),
       last_event: entry.last_event,
       last_event_at: entry.last_event_at,
-      pull_request_url: URLUtils.pull_request_url(entry) || URLUtils.pull_request_url(issue),
+      pull_request_url: URLUtils.pull_request_url(entry) || ticket_pr_url(entry),
       updated_at: now
     }
   end
+
+  # The ticket's PR from Symphony's record, when the run did not report one itself.
+  defp ticket_pr_url(%{issue: %Issue{} = issue, repo_key: repo_key}),
+    do: TicketPullRequest.current_url(%{issue | repo_key: issue.repo_key || repo_key})
 
   defp run_update(entry) do
     %{
@@ -416,7 +421,7 @@ defmodule SymphonyElixir.OneShot do
       runtime_seconds: runtime_seconds(entry.started_at, DateTime.utc_now()),
       last_event: entry.last_event,
       last_event_at: entry.last_event_at,
-      pull_request_url: URLUtils.pull_request_url(entry) || URLUtils.pull_request_url(entry.issue),
+      pull_request_url: URLUtils.pull_request_url(entry) || ticket_pr_url(entry),
       updated_at: DateTime.utc_now()
     }
   end

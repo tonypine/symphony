@@ -30,7 +30,7 @@ final class ContextCardTests: XCTestCase {
         ])
         XCTAssertEqual(card.answer, "Unblocks TP-893, the app's view of the new review steps.")
         XCTAssertEqual(card.earlierCalls, [
-            .init(time: "05:48", text: "Keep the Supervisor check's log for a week · You chose “Remove it with the rest”"),
+            .init(time: "05:48", text: "Keep the Supervisor check's log for a week · You chose “Remove it with the rest, in TP-880”"),
         ])
 
         // The item's own references win; the parent, which the text never mentions, gets one from the context.

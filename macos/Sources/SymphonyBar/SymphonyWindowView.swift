@@ -52,6 +52,11 @@ final class SymphonyWindowModel: ObservableObject {
         willSet { if publishesPicks { objectWillChange.send() } }
     }
     private var publishesPicks = true
+    /// The peek (N4): the tickets and pull requests the Director opened from the review, beside it.
+    @Published var peek = PeekNavigation()
+    /// Each peeked ticket's `/api/v1/:issue_identifier`, by identifier; absent while it answers 404.
+    @Published var peekIssues: [String: Data] = [:]
+    var peekReads = PeekReads()
     /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.
     @Published var inboxSheet: ConsequenceSheet?
     /// True while the sheet's move is on its way to Symphony.
@@ -162,7 +167,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     var onSelect: (SymphonyView) -> Void = { _ in }
     var onAction: (WindowState.Action) -> Void = { _ in }
-    /// Opens the Repos window; with a repo key, on that repo's Edit sheet.
+    /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var onOpenRepos: (String?) -> Void = { _ in }
     var onOpenWebDashboard: () -> Void = {}
     var onScopeChange: (OverviewScope) -> Void = { _ in }
@@ -217,6 +222,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readShippedIfDue()
                 readAuditIfDue()
                 readTicket()
+                readPeek()
             }
             .store(in: &cancellables)
     }
@@ -498,7 +504,7 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Change Review…: the Repos window on `repoKey`'s Edit sheet, where its manual review is.
+    /// Change Review…: the Repos window on `repoKey`'s Review sheet, where its manual review is.
     func changeReview(_ repoKey: String) {
         onOpenRepos(repoKey)
     }
@@ -580,7 +586,7 @@ struct SymphonyWindowView: View {
                         // P10: ⌘[ and ⌘] between the views and the ticket pages shown.
                         ControlGroup {
                             Button(action: model.goBack) { Label(NavigationHistory.backTitle, systemImage: "chevron.left") }
-                                .disabled(!model.history.canGoBack)
+                                .disabled(!model.canGoBack)
                                 .help("Back (⌘[)")
                             Button(action: model.goForward) { Label(NavigationHistory.forwardTitle, systemImage: "chevron.right") }
                                 .disabled(!model.history.canGoForward)
@@ -627,6 +633,16 @@ struct SymphonyWindowView: View {
                             }
                             .help("Force a ticket (⇧⌘F)")
                             .disabled(!model.dispatchControl.canForce)
+                        }
+                    }
+                    if model.selection == .inbox, model.shownTicket == nil {
+                        ToolbarItem(placement: .primaryAction) {
+                            // N4: closes the peek, or shows it again.
+                            Button { model.togglePeek() } label: {
+                                Label(model.inspectorTitle, systemImage: "sidebar.trailing")
+                            }
+                            .help("\(model.inspectorTitle) (⌥⌘I)")
+                            .disabled(!model.peek.canToggle)
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {

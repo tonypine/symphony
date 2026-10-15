@@ -116,7 +116,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
   test "with GitHub auto-merge on, a Merging ticket with a PR takes no slot and no agent", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2, pr_review_mode: "polling")
-    landing = issue("land-1", "MT-LAND", "Merging", pr_urls: ["https://github.com/acme/repo/pull/1"])
+    landing = issue("land-1", "MT-LAND", "Merging", repo_key: Config.repo_key!())
+    :ok = SymphonyElixir.TicketPullRequest.record_created(landing.repo_key, landing.id, "https://github.com/acme/repo/pull/1", "auto/MT-LAND")
     todo = issue("todo-1", "MT-TODO", "Todo")
     tracked([landing, todo])
 

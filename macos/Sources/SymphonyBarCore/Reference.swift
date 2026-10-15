@@ -3,27 +3,27 @@ import Foundation
 /// A ticket or pull request an Inbox item mentions, as Symphony resolved it on its poll (`references`, keyed by the
 /// mention exactly as the item's text writes it: "TP-891", "PR #448", "#448"). What Symphony couldn't read — another
 /// workspace, a deleted ticket, GitHub down — and a kind this app doesn't know come back as `missing`.
-public enum Reference: Equatable {
+public enum Reference: Hashable {
     case ticket(Ticket)
     case pullRequest(PullRequest)
     /// Unreadable: the link is Symphony's best guess, nil when it has none.
     case missing(url: URL?)
 
     /// The outcome of a pull request's checks.
-    public enum Checks: String, Equatable {
+    public enum Checks: String, Hashable {
         case passed
         case failed
         case pending
     }
 
-    public struct Ticket: Equatable {
-        public struct Parent: Equatable {
+    public struct Ticket: Hashable {
+        public struct Parent: Hashable {
             public var identifier: String
             public var title: String?
         }
 
         /// The ticket's newest pull request.
-        public struct PullRequest: Equatable {
+        public struct PullRequest: Hashable {
             public var number: Int
             public var url: URL?
             public var checks: Checks?
@@ -42,8 +42,8 @@ public enum Reference: Equatable {
         public var waitingOn: String?
     }
 
-    public struct PullRequest: Equatable {
-        public enum ReviewState: String, Equatable {
+    public struct PullRequest: Hashable {
+        public enum ReviewState: String, Hashable {
             case open
             case changesRequested = "changes_requested"
             case approved

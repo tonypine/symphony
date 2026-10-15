@@ -33,6 +33,7 @@ defmodule SymphonyElixir.Restart do
 
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.Workpad
   alias SymphonyElixir.Workspace
 
@@ -48,13 +49,14 @@ defmodule SymphonyElixir.Restart do
     end
   end
 
-  # The ticket's own pull requests, as Linear has them attached. Only the open ones are closed:
-  # a reset with no pull request — a ticket restarted before its first handoff — has nothing here.
-  defp close_pull_requests(%Issue{pr_urls: pr_urls} = issue, opts) do
+  # The ticket's own pull request, from Symphony's record of it (`SymphonyElixir.TicketPullRequest`).
+  # Only an open one is closed: a reset with no pull request — a ticket restarted before its first
+  # handoff, or one whose PR already closed or merged — has nothing here.
+  defp close_pull_requests(%Issue{} = issue, opts) do
     github = Keyword.get(opts, :github, PullRequest)
 
-    pr_urls
-    |> List.wrap()
+    issue
+    |> TicketPullRequest.current_urls()
     |> Enum.reduce_while(:ok, fn pr_url, :ok ->
       case close_pull_request(github, issue, pr_url) do
         :ok -> {:cont, :ok}
@@ -63,7 +65,7 @@ defmodule SymphonyElixir.Restart do
     end)
   end
 
-  defp close_pull_request(github, issue, pr_url) when is_binary(pr_url) do
+  defp close_pull_request(github, issue, pr_url) do
     case github.fetch_activity(pr_url, []) do
       {:ok, activity} ->
         if open?(activity[:state]), do: close_pull_request(github, issue, pr_url, activity), else: :ok
@@ -72,8 +74,6 @@ defmodule SymphonyElixir.Restart do
         failed("couldn't read #{pr_url} (#{inspect(reason)})")
     end
   end
-
-  defp close_pull_request(_github, _issue, pr_url), do: failed("the pull request #{inspect(pr_url)} is not a URL")
 
   defp close_pull_request(github, issue, pr_url, _activity) do
     case github.close(pr_url, []) do

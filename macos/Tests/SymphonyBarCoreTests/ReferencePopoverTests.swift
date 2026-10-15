@@ -15,7 +15,7 @@ final class ReferencePopoverTests: XCTestCase {
             .init(label: "Part of", value: "TP-880 · Remove the Supervisor check"),
             .init(label: "Work", value: "PR #446 · checks running"),
         ])
-        XCTAssertEqual(popover.hint, "Click to open the ticket page")
+        XCTAssertEqual(popover.hint, "Click to peek, ⌘-click for its page")
         XCTAssertEqual(popover.link, .init(title: "Open in Linear", url: try XCTUnwrap(URL(string: "https://linear.app/tonypine/issue/TP-891"))))
     }
 
@@ -36,7 +36,7 @@ final class ReferencePopoverTests: XCTestCase {
         XCTAssertEqual(pullRequest.summary, "The Final verification and Supervisor check steps are gone, so a ticket goes from QA straight to Merging.")
         XCTAssertEqual(pullRequest.stats.map(\.accessibilityLabel), ["2 review rounds", "14 files", "+120 −486 lines", "Checks passed"])
         XCTAssertEqual(pullRequest.stats.last?.status, .done)
-        XCTAssertEqual(popover.hint, "Click to open it on GitHub")
+        XCTAssertEqual(popover.hint, "Click to peek, ⌘-click for GitHub")
         XCTAssertEqual(popover.link?.title, "Open on GitHub")
         XCTAssertEqual(popover.link?.url.absoluteString, "https://github.com/tonypine/symphony/pull/448")
     }

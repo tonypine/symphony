@@ -30,7 +30,7 @@ defmodule SymphonyElixir.AutoMerge do
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, Config, LandingOrder}
+  alias SymphonyElixir.{CiPoller, Config, LandingOrder, TicketPullRequest}
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
@@ -79,7 +79,7 @@ defmodule SymphonyElixir.AutoMerge do
   """
   @spec owns_issue?(Issue.t(), keyword()) :: boolean()
   def owns_issue?(%Issue{} = issue, opts \\ []) do
-    merging?(issue) and match?([url | _] when is_binary(url), issue.pr_urls) and
+    merging?(issue) and is_binary(TicketPullRequest.current_url(issue)) and
       enabled_for_repo?(issue.repo_key) and
       not handed_off?(Keyword.get(opts, :lookup, &SymphonyElixir.PrReviewPoller.auto_merge/2).(issue.id, repo_opts(issue.repo_key)))
   end

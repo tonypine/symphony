@@ -38,6 +38,14 @@ final class ReposChangeTests: XCTestCase {
                 ReposBanner(key: "api", text: EditRepo.savedMessage(key: "api", apply: .onNextStart))
             ),
             (
+                .edited(key: "api", apply: nil, madeDefault: true, previousDefault: "billing"),
+                ReposBanner(
+                    key: "api",
+                    text: "Saved api. Symphony reads the change from symphony.yml, so its next poll uses it. "
+                        + "api is now the default repo in place of billing."
+                )
+            ),
+            (
                 .disconnected(key: "billing", apply: .onNextStart, newDefault: nil, next: "api"),
                 ReposBanner(key: "api", text: "Disconnected billing.")
             ),

@@ -16,8 +16,12 @@ struct InboxContent: View {
                 writeIn: model.writeIn,
                 perform: { model.perform($0, on: $1) },
                 openOverview: { model.show(.overview) },
-                openTicket: model.openTicket
+                openTicket: model.openTicket,
+                openMention: model.openPeek,
+                openMentionDirectly: model.openMentionDirectly
             )
+            // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
+            .modifier(PeekPresenter(model: model))
             .safeAreaInset(edge: .bottom) {
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
@@ -57,9 +61,12 @@ struct InboxView: View {
     let openOverview: () -> Void
     /// A double-click on a row, or the review header's title, opens the ticket's page (D3).
     var openTicket: (String) -> Void = { _ in }
+    /// A click on a chip in the review: its peek (N4).
+    var openMention: (Mention) -> Void = { _ in }
+    /// ⌘-click on a chip: the ticket's page, or the pull request on GitHub.
+    var openMentionDirectly: (Mention) -> Void = { _ in }
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
-    @Environment(\.openURL) private var openURL
 
     var body: some View {
         if list.isEmpty {
@@ -80,7 +87,8 @@ struct InboxView: View {
                                 writeIn: { writeIn($0, item.id) },
                                 perform: { perform($0, item) },
                                 openTicket: { openTicket(item.identifier) },
-                                openMention: { ChipText.open($0, openTicket: openTicket, openURL: { openURL($0) }) },
+                                openMention: openMention,
+                                openMentionDirectly: openMentionDirectly,
                                 narrow: narrow
                             )
                             // Picking the write-in scrolls its field into view, once it is laid out.
@@ -260,8 +268,9 @@ struct InboxReviewBody: View {
     var writeIn: (String) -> Void = { _ in }
     let perform: (InboxCommand) -> Void
     var openTicket: () -> Void = {}
-    /// A click on a ticket or pull request chip in the review's text.
+    /// A click on a ticket or pull request chip in the review's text, and a ⌘-click.
     var openMention: (Mention) -> Void = { _ in }
+    var openMentionDirectly: (Mention) -> Void = { _ in }
     /// True in a narrow pane: an option card's Recommended badge goes under its label, the key hints hide, and the
     /// context card puts its labels above their values.
     var narrow = false
@@ -296,6 +305,7 @@ struct InboxReviewBody: View {
         // The mentions in the review's text are chips (N1) with popovers (N2, N3).
         .environment(\.mentionReferences, item.references)
         .environment(\.openMention, OpenMentionAction(handler: openMention))
+        .environment(\.openMentionDirectly, OpenMentionAction(handler: openMentionDirectly))
     }
 }
 
@@ -333,10 +343,7 @@ private struct ReviewHeader: View {
             .accessibilityHint("Opens the ticket page")
             // A decision's question, in the callout under the title, says what the ask would.
             if !item.isDecision {
-                Text(item.ask)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                ChipText(text: item.ask, color: .secondaryLabelColor)
             }
         }
     }
@@ -450,18 +457,14 @@ private struct BriefSections: View {
                 Card(title: "How to approve, change or reject") {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                         ForEach(Array(parsed.moves.enumerated()), id: \.offset) { _, move in
-                            Text("\(Text(move.move.capitalized + ": ").bold())\(move.text)")
-                                .font(DesignTokens.TypeStyle.body.font)
+                            ChipText(text: move.text, lead: move.move.capitalized + ":")
                         }
                     }
                 }
             }
         case let .raw(markdown):
             Card(title: "Review brief") {
-                Text(markdown)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                ChipText(text: markdown)
             }
         case nil:
             EmptyView()
@@ -499,7 +502,7 @@ private struct ReviewLineView: View {
                 LinkText(label: link.label, url: link.url)
             } else {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                    Text(line.text).textSelection(.enabled)
+                    ChipText(text: line.text)
                     ForEach(line.links, id: \.self) { link in
                         LinkText(label: link.label, url: link.url).font(DesignTokens.TypeStyle.callout.font)
                     }
@@ -521,10 +524,7 @@ private struct DecisionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            Text("\(number). \(decision.question)")
-                .font(DesignTokens.TypeStyle.rowTitle.font)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityHidden(true)
+            ChipText(text: decision.question, lead: "\(number).", font: DesignTokens.TypeStyle.rowTitle.nsFont)
             OptionCardList(
                 title: "Decision \(number), \(decision.question)",
                 cards: OptionCard.cards(for: decision),
@@ -535,9 +535,7 @@ private struct DecisionCard: View {
             )
             // A brief that names no recommended option still says what it recommends.
             if decision.initialPick == nil, let recommendation = decision.recommendation {
-                Text("Recommendation: \(recommendation)")
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
+                ChipText(text: recommendation, lead: "Recommendation:", font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -671,7 +669,7 @@ private struct ActionCards: View {
                     ForEach(Array(action.steps.enumerated()), id: \.offset) { index, step in
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Text("\(index + 1).").monospacedDigit().foregroundStyle(.secondary)
-                            Text(step).textSelection(.enabled)
+                            ChipText(text: step)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -1079,7 +1077,7 @@ private struct ClarifyCards: View {
     var body: some View {
         Card(title: "What the quality gate found") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let found = clarify.found { Text(found).textSelection(.enabled) }
+                if let found = clarify.found { ChipText(text: found) }
                 HStack(spacing: DesignTokens.Space.s4) {
                     if let score = clarify.scoreLine { Label("Score \(score)", systemImage: "gauge.with.needle") }
                     if let round = clarify.roundLine { Label(round, systemImage: "arrow.trianglehead.2.clockwise") }
@@ -1102,8 +1100,8 @@ private struct BlockedCards: View {
     var body: some View {
         Card(title: "Why it is blocked") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let reason = blocked.reason { Text(reason).textSelection(.enabled) }
-                Text(blocked.nextLine).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                if let reason = blocked.reason { ChipText(text: reason) }
+                ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
     }
@@ -1117,7 +1115,7 @@ private struct BulletList: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text("•").foregroundStyle(.secondary).accessibilityHidden(true)
-                    Text(line).textSelection(.enabled)
+                    ChipText(text: line)
                 }
             }
         }

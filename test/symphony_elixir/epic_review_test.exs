@@ -189,8 +189,37 @@ defmodule SymphonyElixir.EpicReviewTest do
       fixer: FakeFixer,
       symphony_repo_key: @symphony_repo_key,
       git: git(),
+      gh_runner: gh_runner([]),
       linear_client: linear_client()
     ]
+  end
+
+  # Answers `gh run list --commit` with `runs` (a list of run payloads, or a `{output, status}`).
+  defp gh_runner(runs) do
+    recipient = self()
+
+    fn ["run", "list", "--commit", _sha | _rest] = args, opts ->
+      send(recipient, {:gh, args, opts[:cd]})
+
+      case runs do
+        {output, status} -> {output, status}
+        runs -> {Jason.encode!(runs), 0}
+      end
+    end
+  end
+
+  defp ci_run(name, status, attrs \\ %{}) do
+    Map.merge(
+      %{
+        "databaseId" => System.unique_integer([:positive]),
+        "workflowName" => name,
+        "status" => status,
+        "conclusion" => if(status == "completed", do: "success", else: ""),
+        "url" => "https://github.com/acme/app/actions/runs/#{name}",
+        "createdAt" => "2026-10-14T18:00:00Z"
+      },
+      attrs
+    )
   end
 
   defp agent_result(verdict, attrs) do
@@ -294,11 +323,8 @@ defmodule SymphonyElixir.EpicReviewTest do
 
   describe "checks/2" do
     test "lists what the review must account for, with attention where there is something to answer" do
-      issue =
-        epic(%{
-          comments: [%{id: "c1", body: "Please check the settings window.", author: "kim"}],
-          pull_request_url: "https://github.com/acme/app/pull/7"
-        })
+      :ok = SymphonyElixir.TicketPullRequest.record_created(@repo_key, @issue_id, "https://github.com/acme/app/pull/7", "auto/TP-823")
+      issue = epic(%{comments: [%{id: "c1", body: "Please check the settings window.", author: "kim"}]})
 
       assert {:ok, checks} = EpicReview.checks(issue, settings!())
 
@@ -314,8 +340,22 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert checklist_detail =~ "1 checklist row(s) for the review to resolve"
     end
 
+    test "the pull-request check lists the epic's PR from Symphony's record, and none once it merged" do
+      pr_url = "https://github.com/acme/app/pull/1012"
+      :ok = SymphonyElixir.TicketPullRequest.record_created(@repo_key, @issue_id, pr_url, "auto/TP-823")
+
+      assert {:ok, checks} = EpicReview.checks(epic(), settings!())
+      assert %{status: :attention, detail: detail} = Enum.find(checks, &(&1.name == :pull_requests))
+      assert detail == "1 pull request(s) recorded on the epic: #{pr_url}"
+
+      :ok = SymphonyElixir.TicketPullRequest.mark_finished(@repo_key, pr_url, "merged")
+
+      assert {:ok, checks} = EpicReview.checks(epic(), settings!())
+      assert %{status: :ok} = Enum.find(checks, &(&1.name == :pull_requests))
+    end
+
     test "an epic with nothing recorded and no checklist rows lists all four as evidence to derive" do
-      issue = epic(%{description: "Just context.", comments: [%{id: "c1"}], pr_urls: []})
+      issue = epic(%{description: "Just context.", comments: [%{id: "c1"}]})
 
       assert {:ok, checks} = EpicReview.checks(issue, settings!())
 
@@ -815,6 +855,77 @@ defmodule SymphonyElixir.EpicReviewTest do
     end
   end
 
+  describe "run/3 while CI runs on the base branch head" do
+    @now ~U[2026-10-14 18:30:00Z]
+
+    test "waits for CI: no agent pass, no verdict, no report, and the epic stays in Epic Review" do
+      runs = [ci_run("make-all", "completed"), ci_run("macos", "in_progress"), ci_run("release", "queued")]
+
+      runner = gh_runner(runs)
+      log = capture_log(fn -> assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner, now: @now) end)
+
+      assert_received {:gh, ["run", "list", "--commit", @sha, "--limit", "100", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], _cwd}
+      refute_received {:qa_agent_run, _job, _settings, _opts}
+
+      assert log =~ "Epic review for TP-823 waits for CI on c0ffee001122"
+      assert log =~ "macos (https://github.com/acme/app/actions/runs/macos), release (https://github.com/acme/app/actions/runs/release) still running"
+
+      assert [{@issue_id, "Epic Review"}] = state_updates()
+      assert verdicts() == []
+      assert comments_posted() == []
+    end
+
+    test "the error carries the commit and the runs still going" do
+      runner = gh_runner([ci_run("macos", "in_progress")])
+
+      assert {:error, {:ci_pending, %{sha: @sha, runs: [run]}}} = run(epic(), gh_runner: runner, now: @now)
+
+      assert %{workflow_name: "macos", status: "IN_PROGRESS"} = run
+    end
+
+    test "a run with no name or url is still named in the log" do
+      unnamed = ci_run("x", "waiting") |> Map.drop(["workflowName", "url"]) |> Map.put("databaseId", 77)
+
+      runner = gh_runner([unnamed])
+      log = capture_log(fn -> assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: runner, now: @now) end)
+
+      assert log =~ "a workflow (77) still running"
+    end
+
+    test "once every run finished the review runs as usual" do
+      runs = [ci_run("make-all", "completed"), ci_run("macos", "completed", %{"conclusion" => "failure"})]
+
+      assert :ok = run(epic(), gh_runner: gh_runner(runs), now: @now)
+
+      assert_received {:qa_agent_run, _job, _settings, _opts}
+      assert [{@issue_id, "Epic Review"}, {@issue_id, "Done"}] = state_updates()
+    end
+
+    test "a run unfinished for over two hours is stuck, not waited on: the review runs and reports it" do
+      stuck = ci_run("macos", "queued", %{"createdAt" => "2026-10-14T16:29:59Z"})
+      fresh_enough = ci_run("release", "completed", %{"createdAt" => nil})
+
+      assert :ok = run(epic(), gh_runner: gh_runner([stuck, fresh_enough]), now: @now)
+
+      assert_received {:qa_agent_run, _job, _settings, _opts}
+    end
+
+    test "a run with no start time is waited on, and the clock defaults to now" do
+      no_start = ci_run("macos", "in_progress", %{"createdAt" => nil})
+
+      assert {:error, {:ci_pending, _info}} = run(epic(), gh_runner: gh_runner([no_start]))
+    end
+
+    test "a commit whose review already passed is carried without reading CI" do
+      :ok = TicketSignals.record_verdict(@repo_key, @issue_id, "epic_review", @sha, "pass")
+
+      assert :ok = run(epic(), gh_runner: gh_runner([ci_run("macos", "in_progress")]), now: @now)
+
+      refute_received {:gh, _args, _cwd}
+      assert [{@issue_id, "Epic Review"}, {@issue_id, "Done"}] = state_updates()
+    end
+  end
+
   describe "run/3 on a blocked review" do
     test "retries boundedly on the same commit, then files the fix ticket and holds the epic" do
       agent_error(:environment_unreachable)
@@ -867,6 +978,14 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert state_updates() == [{@issue_id, "Epic Review"}]
       assert verdicts() == []
       refute_received {:memory_tracker_comment, _issue_id, _body}
+    end
+
+    test "a CI read that fails is not waited on: the review runs and judges CI itself" do
+      log = capture_log(fn -> assert :ok = run(epic(), gh_runner: gh_runner({"HTTP 502", 1})) end)
+
+      assert log =~ "Epic review could not read CI on c0ffee001122; reviewing without waiting for it"
+      assert_received {:qa_agent_run, _job, _settings, _opts}
+      assert [{@issue_id, "Epic Review"}, {@issue_id, "Done"}] = state_updates()
     end
 
     test "a base branch head that cannot be read blocks the run with the reason" do

@@ -131,6 +131,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "claimed" => "claimed by a retry or a Linear update in flight",
              "spent" => "its token budget is spent (agent.max_tokens_per_issue)"
            }
+
+    # The ticket page shows a passed-over ticket's blockers from the entry (`SymphonyElixir.Connected`).
+    assert %{blocked_by: [%{identifier: "MT-B", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
   end
 
   test "a usage-limit hold and a dispatch that starts nothing are listed too" do
