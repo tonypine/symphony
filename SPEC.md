@@ -2952,14 +2952,18 @@ Retry handling behavior:
 1. Fetch active candidate issues (not all issues).
 2. Find the specific issue by `issue_id`.
 3. If not found, release claim.
-4. If found and still candidate-eligible:
+4. If found but no longer assigned to this worker (`assigned_to_worker=false`), drop the retry and
+   release the claim, with a log line saying why. A continuation retry is dropped the same way, and
+   the sticky revalidation right before dispatch refuses it too. The issue is eligible again on the
+   next poll once it is reassigned.
+5. If found and still candidate-eligible:
    - Dispatch if slots are available.
    - Otherwise release the claim and record the issue as waiting for a slot, keeping its
      `attempt`. Waiting for a slot is not a failure: no backoff applies. The poll dispatches the
      issue in the Section 8.2 order as soon as a slot is free, and a run ending triggers an
      immediate poll tick while anything waits. A retry deferred because a dispatch readiness task
      is already in flight waits the same way.
-5. If found but no longer active, release claim.
+6. If found but no longer active, release claim.
 
 Note:
 
