@@ -23,7 +23,8 @@ defmodule SymphonyElixir.Hold do
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
   @kinds [:blocked, :needs_decision]
   @dispatch_loop_type "dispatch_loop"
-  @unblockable_types ["access", @dispatch_loop_type, "ci_wait"]
+  @ci_wait_type "ci_wait"
+  @unblockable_types ["access", @dispatch_loop_type, @ci_wait_type]
 
   @typedoc "The holds the design defines."
   @type kind :: :blocked | :needs_decision

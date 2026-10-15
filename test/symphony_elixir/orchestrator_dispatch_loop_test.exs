@@ -184,6 +184,33 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert CiWait.since(record.signals, @sha) == nil
     end
 
+    test "a hold the store fails to write leaves the wait running, so the next exit tries the hold again" do
+      started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
+      signal = %{name: "ci_wait_started", details: %{sha: @sha}, at: started}
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      pid = start_orchestrator(:CiWaitHoldFailed)
+
+      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_only)
+      on_exit(fn -> :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_write) end)
+
+      log = send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+
+      assert log =~ "[error] Failed to hold #{@identifier} after waiting for CI too long; retrying after CI"
+      refute log =~ "Holding #{@identifier}"
+      assert %{delay_type: :ci_wait} = :sys.get_state(pid).retry_attempts[@issue_id]
+      refute_received {:memory_tracker_label_added, @issue_id, "Blocked"}
+
+      record = RunStore.get_ticket_state(@repo_key, @issue_id)
+      refute TicketState.get_hold(record, :blocked)
+      assert CiWait.since(record.signals, @sha) == started
+
+      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_states, :read_write)
+      send_down(pid, "run-2", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
+
+      assert Hold.held?(@repo_key, @issue_id, :blocked)
+      refute MapSet.member?(:sys.get_state(pid).claimed, @issue_id)
+    end
+
     test "a wait on a newer commit starts again from zero" do
       started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
       signal = %{name: "ci_wait_started", details: %{sha: "older"}, at: started}

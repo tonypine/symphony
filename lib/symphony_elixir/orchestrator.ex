@@ -794,19 +794,10 @@ defmodule SymphonyElixir.Orchestrator do
     case ci_wait(repo_key, issue_id, info) do
       :wait ->
         Logger.info("Agent task for issue_id=#{issue_id} session_id=#{session_id} is #{error}; retrying after CI")
-
-        schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
-          repo_key: repo_key,
-          identifier: running_entry.identifier,
-          title: running_entry_title(running_entry),
-          error: error,
-          worker_host: Map.get(running_entry, :worker_host),
-          workspace_path: Map.get(running_entry, :workspace_path),
-          delay_type: :ci_wait
-        })
+        retry_after_ci(state, issue_id, running_entry, repo_key, error)
 
       {:over, since} ->
-        hold_ci_wait(state, issue_id, running_entry, repo_key, info, since)
+        hold_ci_wait(state, issue_id, running_entry, repo_key, info, since, error)
     end
   end
 
@@ -832,14 +823,34 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Past the limit the review is not started again: a Blocked hold names the commit and the workflows
-  # still running, which a person lifts with Unblock. A store write that fails leaves the
-  # ticket unheld, so the next poll starts the review again and finds the same wait.
-  defp hold_ci_wait(%State{} = state, issue_id, running_entry, repo_key, %{sha: sha} = info, since) do
+  # still running, which a person lifts with Unblock. A hold the store fails to write leaves the
+  # ticket unheld and its wait unended, so the review starts again after CI and the next exit, still
+  # over the limit, tries the hold again.
+  defp hold_ci_wait(%State{} = state, issue_id, running_entry, repo_key, %{sha: sha} = info, since, error) do
     attrs = CiWait.hold_attrs(info, since, DateTime.utc_now())
-    _ = Hold.set(repo_key, issue_id, :blocked, attrs)
-    Logger.error("Holding #{running_entry.identifier} instead of waiting longer for CI: #{attrs.reason}")
-    record_ticket_signal(repo_key, issue_id, CiWait.hold_type(), %{sha: sha})
-    release_issue_claim(state, issue_id)
+
+    case Hold.set(repo_key, issue_id, :blocked, attrs) do
+      :ok ->
+        Logger.error("Holding #{running_entry.identifier} instead of waiting longer for CI: #{attrs.reason}")
+        record_ticket_signal(repo_key, issue_id, CiWait.hold_type(), %{sha: sha})
+        release_issue_claim(state, issue_id)
+
+      {:error, reason} ->
+        Logger.error("Failed to hold #{running_entry.identifier} after waiting for CI too long; retrying after CI: #{inspect(reason)}")
+        retry_after_ci(state, issue_id, running_entry, repo_key, error)
+    end
+  end
+
+  defp retry_after_ci(%State{} = state, issue_id, running_entry, repo_key, error) do
+    schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
+      repo_key: repo_key,
+      identifier: running_entry.identifier,
+      title: running_entry_title(running_entry),
+      error: error,
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path),
+      delay_type: :ci_wait
+    })
   end
 
   defp handle_failed_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
