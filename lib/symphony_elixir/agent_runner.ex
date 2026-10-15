@@ -13,6 +13,7 @@ defmodule SymphonyElixir.AgentRunner do
     AuditLog,
     CiFix,
     CiPoller,
+    ClosedPullRequest,
     CodeReview,
     Config,
     Connected,
@@ -99,7 +100,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
-    case run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
+    case guard_closed_pull_request(issue, codex_update_recipient, opts, worker_host) do
       :ok ->
         :ok
 
@@ -122,6 +123,18 @@ defmodule SymphonyElixir.AgentRunner do
           true ->
             raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
         end
+    end
+  end
+
+  # A ticket in a phase that works on its existing pull request (Code Review, QA, CI Fix, Rework,
+  # Merging) whose pull request is closed — a Backlog move closes it, and moving the ticket back does
+  # not reopen it — pauses on a person's decision before its workspace is built, so no run judges
+  # the base branch in place of its change (`SymphonyElixir.ClosedPullRequest`).
+  defp guard_closed_pull_request(issue, codex_update_recipient, opts, worker_host) do
+    case ClosedPullRequest.guard(issue, Keyword.fetch!(opts, :settings), Keyword.take(opts, [:repo_key, :tracker, :store])) do
+      :run -> run_on_worker_host(issue, codex_update_recipient, opts, worker_host)
+      :held -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 

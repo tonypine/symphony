@@ -2549,7 +2549,14 @@ Rules:
   judged. A mechanical `CI Fix` re-binds the verdict to the repaired head; `Rework` invalidates it,
   so the new head is reviewed again.
 - **QA skip.** Code Review's approve carries a recorded run-or-skip decision: a diff whose paths are
-  all docs, tests or `auto_review.skip_globs` skips QA; any other diff runs it.
+  all docs, tests or `auto_review.skip_globs` skips QA; any other diff runs it. A diff with no
+  changed path is no change at all and MUST NOT skip QA: the Code Review approve and the QA run pause
+  the ticket on a `Needs Decision` hold instead, with no verdict and no move.
+- **No run without the pull request.** A ticket in `Code Review`, `QA`, `CI Fix`, `Rework` or
+  `Merging` whose recorded pull request is closed (a `Backlog` move closes it, and moving the ticket
+  back does not reopen it) MUST NOT start a run: it pauses on a `Needs Decision` hold asking to
+  reopen the pull request, restart or cancel the ticket. The QA run holds the same way for a ticket
+  with no open pull request recorded.
 - **Holds overlay, never relocate.** `Blocked` and `Needs Decision` are holds persisted in the
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
   ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
@@ -2561,8 +2568,8 @@ Rules:
   dispatches again in that phase; outside `Todo`, a blocker whose fix merged into Symphony itself
   also waits until the running app includes its merge commit. A block report with no open blocker
   records an access hold. `Needs Decision` is set by an
-  agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal or a manual
-  review confirmation, and clears when the decision is recorded (a reply under the request, the
+  agent's `linear_request_human_action`, a Code Review escalation, a stuck self-heal, a manual
+  review confirmation, or a ticket whose pull request is closed or whose diff is empty, and clears when the decision is recorded (a reply under the request, the
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
   directs a move.
 - **Decisions are scope.** A person's answer to a decision request (a reply under the request, or
