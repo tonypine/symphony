@@ -14,7 +14,8 @@ public struct DispatchControl: Equatable {
     }
 
     public var mode: Mode
-    /// "Dispatch on", "Paused · Deploy freeze", "Holding · Claude limit", "Symphony stopped".
+    /// "Dispatch on", "Paused · Deploy freeze", "Holding · Claude limit", "Symphony stopped", "Paused · Updating to
+    /// v0.0.1.42".
     public var word: String
     /// The dot's colour: orange while paused.
     public var status: DesignTokens.Status
@@ -31,32 +32,64 @@ public struct DispatchControl: Equatable {
     public var pauseFacts: [TicketList.Fact]
     /// While a limit holds: which one and when it resets, one line each.
     public var limits: [String]
+    /// The update under way (S3a, S3b): it takes the place of Pause and Resume Dispatch with the menu's update
+    /// actions.
+    public var update: UpdateHold?
+    /// The version the word says dispatch is updating to: the update's under way, or the one an update's pause names.
+    public var updatingTo: String?
 
     public static let listLimit = 5
     public static let pauseTitle = "Pause Dispatch…"
     public static let resumeTitle = Overview.resumeTitle
     public static let forceTitle = "Force a Ticket…"
     public static let startTitle = StatusMenu.startTitle
+    public static let cancelUpdateTitle = UpdateMenu.cancelUpdateTitle
+    public static let updateNowTitle = UpdateMenu.updateNowTitle
 
-    public var canPause: Bool { mode == .on || mode == .holding }
-    public var canResume: Bool { mode == .paused }
+    public var canPause: Bool { update == nil && (mode == .on || mode == .holding) }
+    public var canResume: Bool { update == nil && mode == .paused }
     public var canForce: Bool { mode != .stopped }
+    /// Cancel Update, before and after the restart timeout; never while the release downloads or Symphony stops.
+    public var canCancelUpdate: Bool { update?.canCancel == true }
+    /// Update Now Anyway, once the agent runs outlast the restart timeout.
+    public var canUpdateNow: Bool { canCancelUpdate && update?.offersUpdateNow == true }
 
-    /// "Dispatch on, 3 working".
+    /// "Dispatch on, 3 working", or "Dispatch paused, updating to v0.0.1.42" while an update holds dispatch.
     public var accessibilityLabel: String {
+        if let updatingTo {
+            switch mode {
+            case .paused: return "Dispatch paused, updating to v\(updatingTo)"
+            case .on: return "Dispatch on, updating to v\(updatingTo)"
+            case .holding, .stopped: return word
+            }
+        }
         guard mode != .stopped else { return word }
         let count = working.count + moreWorking
         return "\(word), \(count) working"
     }
 
-    /// `paused` is the menu's reading of Symphony's status, for a state payload that hasn't arrived yet.
-    public init(window: WindowState, paused: Bool, state: OverviewState?, now: Date, timeZone: TimeZone = .current) {
+    /// `paused` is the menu's reading of Symphony's status, for a state payload that hasn't arrived yet. `update` is
+    /// the update under way, nil when there is none.
+    public init(
+        window: WindowState,
+        paused: Bool,
+        state: OverviewState?,
+        update: UpdateHold? = nil,
+        now: Date,
+        timeZone: TimeZone = .current
+    ) {
+        self.update = update
         guard window == .connected else {
             mode = .stopped
             word = Self.stoppedWord(window)
             status = .idle
-            canStart = window == .stopped
+            canStart = window == .stopped && update == nil
             (working, queued, moreWorking, moreQueued, pauseFacts, limits) = ([], [], 0, 0, [], [])
+            // Symphony stops for the update's swap.
+            if let update {
+                updatingTo = update.version
+                word = update.title
+            }
             return
         }
         canStart = false
@@ -77,8 +110,15 @@ public struct DispatchControl: Equatable {
             mode = .paused
             status = .you
             let reason = pause.reason?.trimmingWhitespace() ?? ""
-            word = reason.isEmpty ? "Paused" : "Paused · \(reason)"
-            pauseFacts = [TicketList.Fact(label: "By", value: reason == ControlAction.pauseReason ? "You, from the menu bar" : "You")]
+            let pausedBy = ControlAction.updateVersion(pauseReason: reason)
+            updatingTo = update?.version ?? pausedBy
+            if let updatingTo {
+                word = "Paused · Updating to v\(updatingTo)"
+            } else {
+                word = reason.isEmpty ? "Paused" : "Paused · \(reason)"
+            }
+            let by = pausedBy.map { "an update to v\($0)" } ?? (reason == ControlAction.pauseReason ? "You, from the menu bar" : "You")
+            pauseFacts = [TicketList.Fact(label: "By", value: by)]
             if let since = pause.since {
                 pauseFacts.append(TicketList.Fact(label: "Since", value: StatusMenu.clockTime(since, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm")))
             }
@@ -98,6 +138,11 @@ public struct DispatchControl: Equatable {
             status = .done
             word = "Dispatch on"
             pauseFacts = []
+        }
+        // The release downloads, or the update pauses dispatch: it isn't paused yet.
+        if mode != .paused, let update {
+            updatingTo = update.version
+            word = update.title
         }
     }
 

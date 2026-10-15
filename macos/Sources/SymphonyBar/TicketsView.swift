@@ -22,7 +22,7 @@ extension SymphonyWindowModel {
 
     /// C2: the toolbar's dispatch control.
     var dispatchControl: DispatchControl {
-        DispatchControl(window: state, paused: paused, state: overviewState, now: Date())
+        DispatchControl(window: state, paused: paused, state: overviewState, update: updateHold, now: Date())
     }
 
     /// Opens Tickets on `filter`, from an Overview tile.
@@ -113,6 +113,12 @@ extension SymphonyWindowModel {
     /// Resume Dispatch needs no sheet: it changes nothing already running (P5).
     func resumeDispatch() {
         sendDispatch(.resume) { $0.dispatchPopoverShown = false }
+    }
+
+    /// Cancel Update or Update Now Anyway, from the popover: the menu's item does it, so both do the same.
+    func performUpdateAction(_ action: WindowState.Action) {
+        dispatchPopoverShown = false
+        onAction(action)
     }
 
     /// Stop Forcing, from the inspector, a row's menu, the ticket page or Needs attention.
@@ -434,7 +440,9 @@ struct DispatchControlButton: View {
                 actions: DispatchPopover.Actions(
                     pause: model.openPauseSheet,
                     resume: model.resumeDispatch,
-                    force: { model.openForceSheet() }
+                    force: { model.openForceSheet() },
+                    cancelUpdate: { model.performUpdateAction(.cancelUpdate) },
+                    updateNow: { model.performUpdateAction(.updateNow) }
                 )
             )
         }
@@ -487,6 +495,8 @@ struct DispatchPopover: View {
         var pause: () -> Void = {}
         var resume: () -> Void = {}
         var force: () -> Void = {}
+        var cancelUpdate: () -> Void = {}
+        var updateNow: () -> Void = {}
     }
 
     let control: DispatchControl
@@ -511,10 +521,23 @@ struct DispatchPopover: View {
                     }
                 }
                 .font(DesignTokens.TypeStyle.callout.font)
-                Text("No new run starts until you resume, forced tickets included.")
+                Text(control.update == nil ? "No new run starts until you resume, forced tickets included." : "No new run starts until the update ends, forced tickets included.")
                     .font(DesignTokens.TypeStyle.callout.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let line = control.update?.waitingLine {
+                Text(line).font(DesignTokens.TypeStyle.callout.font)
+            }
+            // The menu's update actions, in place of Resume Dispatch (S3a, S3b).
+            if control.canCancelUpdate {
+                HStack(spacing: DesignTokens.Space.s2) {
+                    Spacer(minLength: 0)
+                    if control.canUpdateNow {
+                        Button(DispatchControl.updateNowTitle, action: actions.updateNow)
+                    }
+                    Button(DispatchControl.cancelUpdateTitle, action: actions.cancelUpdate)
+                }
             }
             if !control.limits.isEmpty {
                 section("Held by", lines: control.limits, more: 0, empty: "")
@@ -533,12 +556,13 @@ struct DispatchPopover: View {
                 Spacer(minLength: 0)
                 Button(DispatchControl.forceTitle, action: actions.force)
                     .disabled(!control.canForce || working)
+                // While an update is under way, Pause and Resume Dispatch wait until it ends.
                 if control.canResume {
                     Button(DispatchControl.resumeTitle, action: actions.resume)
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .disabled(working)
-                } else {
+                } else if control.update == nil {
                     Button(DispatchControl.pauseTitle, action: actions.pause)
                         .disabled(!control.canPause || working)
                 }

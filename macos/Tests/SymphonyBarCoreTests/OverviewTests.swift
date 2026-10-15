@@ -402,6 +402,33 @@ final class OverviewTests: XCTestCase {
             timeZone: utc
         )
     }
+
+    // MARK: - S3a, S3b: an update holds dispatch
+
+    func testAnUpdatesPauseSaysTheRunsAreFinishingAndTheUpdateResumes() {
+        let since = Date(timeIntervalSince1970: 1_000_000)
+        func overview(running: Int, updating: Bool = true) -> Overview {
+            let snapshot = StateSnapshot(running: running, pause: .init(reason: "updating to v0.0.1.42", since: since))
+            let runs = (0..<running).map { OverviewState.Run(identifier: "TP-\($0 + 1)") }
+            return Overview(state: OverviewState(snapshot: snapshot, generatedAt: since, running: runs), updating: updating, now: since, timeZone: utc)
+        }
+
+        let one = overview(running: 1)
+        XCTAssertEqual(one.mood, .paused)
+        XCTAssertEqual(one.sentence, "Dispatch is paused since 13:46: updating to v0.0.1.42.")
+        XCTAssertEqual(one.context, "1 run is finishing. Symphony updates and resumes dispatch when they end; no new run starts until then.")
+        XCTAssertFalse(one.showsResume, "Cancel Update resumes it")
+
+        XCTAssertEqual(
+            overview(running: 2).context,
+            "2 runs are finishing. Symphony updates and resumes dispatch when they end; no new run starts until then."
+        )
+        XCTAssertEqual(
+            overview(running: 0).context,
+            "Nothing is running. Symphony updates and resumes dispatch next; no new run starts until then."
+        )
+        XCTAssertTrue(overview(running: 1, updating: false).showsResume, "a pause an update left behind can be resumed")
+    }
 }
 
 final class ReposEndpointResultTests: XCTestCase {

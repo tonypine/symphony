@@ -662,6 +662,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
         case .openSettings:
             settingsWindow.show()
+        case .cancelUpdate:
+            if offersCancel { cancelRestart(nil) }
+        case .updateNow:
+            if restarter.machine.offersRestartNow { restartNow(nil) }
         }
     }
 
@@ -789,7 +793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return
         }
         let alreadyPaused = StatusMenu.canResume(machine.status)
-        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind) {
+        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version) {
             [weak self] stopped, pausedByUpdate in
             guard let self else { return }
             guard stopped else {
@@ -1001,6 +1005,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             button.toolTip = label
         }
         symphonyWindow.dockBadge = StatusMenu.badgeCount(for: status)
+        symphonyWindow.update(
+            updateHold: UpdateHold(release: updater.release, downloading: updater.preparing != nil, drain: restarter.machine)
+        )
 
         statusTitleItem.title = StatusMenu.statusTitle(status)
         sourceItem.title = runner.sourceLine

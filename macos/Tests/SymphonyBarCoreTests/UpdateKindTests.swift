@@ -254,4 +254,62 @@ final class UpdateKindTests: XCTestCase {
         XCTAssertEqual(notifier.drained(.waitingForRuns(running: 2)), .post(.updateStarted(version: "0.0.1.42", activeRuns: 2)))
         XCTAssertEqual(UpdateStartNotifier.requestIdentifier, "symphony.update.started")
     }
+
+    // MARK: The window during an update (S3a, S3b)
+
+    func testTheWindowSeesTheUpdateFromItsDownloadToTheSwap() {
+        let downloading = UpdateHold(release: release, downloading: true, drain: RestartMachine())
+        XCTAssertEqual(downloading, UpdateHold(version: "0.0.1.42", step: .preparing))
+        XCTAssertEqual(downloading?.title, "Updating to v0.0.1.42")
+        XCTAssertEqual(downloading?.canCancel, false)
+        XCTAssertNil(downloading?.waitingLine)
+
+        var machine = RestartMachine()
+        _ = machine.begin(alreadyPaused: false, purpose: .update, updatingTo: release.version, runsTimeout: 1800, logPath: "log")
+        XCTAssertEqual(UpdateHold(release: release, downloading: false, drain: machine)?.step, .preparing, "checking symphony.yml")
+        _ = machine.handle(.configChecked(.passed))
+        XCTAssertEqual(UpdateHold(release: release, downloading: false, drain: machine)?.step, .preparing, "pausing")
+
+        let waiting = UpdateHold(release: release, downloading: false, drain: drain(.onRelease))
+        XCTAssertEqual(waiting, UpdateHold(version: "0.0.1.42", step: .waiting(runs: 1)))
+        XCTAssertEqual(waiting?.canCancel, true)
+        XCTAssertEqual(waiting?.waitingLine, "Waiting for 1 agent run")
+
+        let stopping = UpdateHold(release: release, downloading: false, drain: drain(.onRelease, stopping: true))
+        XCTAssertEqual(stopping?.step, .stopping)
+        XCTAssertEqual(stopping?.canCancel, false)
+        XCTAssertNil(stopping?.waitingLine)
+    }
+
+    func testTheUpdateOffersUpdateNowAnywayOnceTheRunsOutlastTheTimeout() {
+        var machine = drain(.manual)
+        let later = Date(timeIntervalSince1970: 1_000_000 + 1800)
+        _ = machine.handle(.polled(.state(StateSnapshot(running: 2, pause: .init(reason: "updating to v0.0.1.42")))), now: later)
+
+        let hold = UpdateHold(release: release, downloading: false, drain: machine)
+        XCTAssertEqual(hold, UpdateHold(version: "0.0.1.42", step: .waiting(runs: 2), offersUpdateNow: true))
+        XCTAssertEqual(hold?.waitingLine, "Waiting for 2 agent runs")
+        XCTAssertEqual(UpdateHold(version: "1", step: .waiting(runs: nil)).waitingLine, "Waiting for dispatch to pause")
+    }
+
+    func testNoUpdateHoldsDispatchWithoutOneUnderWay() {
+        XCTAssertNil(UpdateHold(release: nil, downloading: false, drain: drain(.manual)), "no release")
+        XCTAssertNil(UpdateHold(release: release, downloading: false, drain: RestartMachine()), "the drain ended")
+
+        var restart = RestartMachine()
+        _ = restart.begin(alreadyPaused: true, runsTimeout: 1800, logPath: "log")
+        XCTAssertNil(UpdateHold(release: release, downloading: false, drain: restart), "a restart")
+
+        var cancelled = drain(.onRelease)
+        XCTAssertEqual(cancelled.handle(.cancel), [.send(.resume)])
+        XCTAssertNil(UpdateHold(release: release, downloading: false, drain: cancelled), "Cancel Update resumes dispatch")
+    }
+
+    func testTheUpdatesPauseReasonNamesItsVersion() {
+        XCTAssertEqual(ControlAction.updatePauseReason(version: "0.0.1.42"), "updating to v0.0.1.42")
+        XCTAssertEqual(ControlAction.updateVersion(pauseReason: " updating to v0.0.1.42 "), "0.0.1.42")
+        XCTAssertNil(ControlAction.updateVersion(pauseReason: "updating to v"))
+        XCTAssertNil(ControlAction.updateVersion(pauseReason: ControlAction.pauseReason))
+        XCTAssertNil(ControlAction.updateVersion(pauseReason: nil))
+    }
 }

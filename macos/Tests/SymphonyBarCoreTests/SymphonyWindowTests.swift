@@ -40,6 +40,8 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(state, .notAnswering)
         XCTAssertEqual(state.placeholder?.title, "Symphony isn't answering.")
         XCTAssertEqual(state.placeholder?.actions, [.openLogs, .restartSymphony])
+        XCTAssertEqual(WindowState.Action.cancelUpdate.title, "Cancel Update")
+        XCTAssertEqual(WindowState.Action.updateNow.title, "Update Now Anyway")
         XCTAssertEqual(state.placeholder?.actions.map(\.title), ["Open Logs", "Restart Symphony"])
         XCTAssertEqual(state.connectionLabel, "Not answering")
         XCTAssertEqual(state.connectionStatus, .problem)

@@ -783,7 +783,13 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
 4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
    dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
    stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
-   version's Symphony yet.
+   version's Symphony yet. The pause's reason is `updating to vX`, not the menu's, in every update mode, so
+   the Symphony window tells it from a pause you made: the toolbar's dispatch control reads "Paused ·
+   Updating to vX", and its popover says how many agent runs the update waits for and offers **Cancel
+   Update** in place of Resume Dispatch, with **Update Now Anyway** after the restart timeout (both do what
+   the menu's items do). While the release downloads or Symphony stops, it says "Updating to vX" with
+   nothing to press. The Overview says "Dispatch is paused since HH:MM: updating to vX." and that Symphony
+   updates and resumes dispatch when the runs end.
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
