@@ -300,18 +300,23 @@ defmodule SymphonyElixir.ReviewAgent do
 
   @doc """
   Keeps a review from requesting changes against a person's recorded decision
-  (`SymphonyElixir.Decisions`): a finding that names a decision recorded in the ticket's description
-  (`"decision": "D1"`) becomes a decision note, and a change request left with no other finding
-  approves. A finding that names no recorded decision stays a finding.
+  (`SymphonyElixir.Decisions`): a finding that names a decision recorded on the ticket
+  (`"decision": "D1"`, read from its store record) becomes a decision note, and a change request
+  left with no other finding approves. A finding that names no recorded decision stays a finding.
+  `opts[:repo_key]` names the ticket's repo.
   """
-  @spec honour_decisions(result(), Issue.t()) :: result()
-  def honour_decisions(%{verdict: :request_changes, findings: [_finding | _rest] = findings} = result, %Issue{description: description}) do
-    decided = description |> Decisions.recorded() |> MapSet.new(& &1.id)
-    {decision_findings, kept} = Enum.split_with(findings, &MapSet.member?(decided, Map.get(&1, :decision)))
-    honoured(result, Enum.map(decision_findings, &decision_note/1), kept)
-  end
+  @spec honour_decisions(result(), Issue.t(), keyword()) :: result()
+  def honour_decisions(result, issue, opts \\ []) do
+    case {result, issue} do
+      {%{verdict: :request_changes, findings: [_finding | _rest] = findings}, %Issue{}} ->
+        decided = issue |> Decisions.stored(opts) |> MapSet.new(& &1.id)
+        {decision_findings, kept} = Enum.split_with(findings, &MapSet.member?(decided, Map.get(&1, :decision)))
+        honoured(result, Enum.map(decision_findings, &decision_note/1), kept)
 
-  def honour_decisions(result, _issue), do: result
+      _other ->
+        result
+    end
+  end
 
   defp honoured(result, [], _kept), do: result
   defp honoured(result, notes, []), do: Map.merge(result, %{verdict: :approve, findings: [], comments: notes, decision_notes: notes})
@@ -500,7 +505,8 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
-      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push))
+      decision_opts = [repo_key: Keyword.get(opts, :repo_key)]
+      prompt = reviewer_prompt(issue, source, Keyword.get(opts, :review_scope, :pre_push), decision_opts)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
 
@@ -522,9 +528,9 @@ defmodule SymphonyElixir.ReviewAgent do
             reviewer_turn_opts(opts, reviewer_settings, on_message, linear_comment_registry: Keyword.get(opts, :linear_comment_registry))
 
           with {:ok, verdict} <- review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts),
-               verdict = honour_decisions(verdict, issue),
+               verdict = honour_decisions(verdict, issue, decision_opts),
                {:ok, checked} <- self_check(agent_module, session, issue, verdict, message_collector, turn_opts) do
-            checked = honour_decisions(checked, issue)
+            checked = honour_decisions(checked, issue, decision_opts)
             ground_findings(agent_module, session, issue, checked, source, message_collector, turn_opts)
           end
         after
@@ -769,7 +775,7 @@ defmodule SymphonyElixir.ReviewAgent do
   # The pre-push reviewer covers code quality and bugs only. Code Review (`review_scope:
   # :code_review`, `SymphonyElixir.CodeReview`) judges the same diff on the pull request, and there
   # the ticket's acceptance criteria, scope and intent are part of the judgment.
-  defp reviewer_prompt(issue, source, scope) do
+  defp reviewer_prompt(issue, source, scope, decision_opts) do
     """
     You are the reviewer agent in an executor + reviewer Symphony run.
 
@@ -779,7 +785,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     Issue (context for what the diff is for):
     #{present_issue(issue)}
-    #{decisions_rule(issue)}
+    #{decisions_rule(issue, decision_opts)}
     Review criteria. Review the code, not the ticket:
     - Correctness: bugs in the changed code, such as wrong conditions, unhandled cases, broken callers, races and resource leaks.
     - Tests: each new branch, error path and edge case the diff adds has a test that exercises it, and changed behaviour has its tests updated.
@@ -838,9 +844,10 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   # A person's answers to the ticket's decision requests are its scope: the reviewer follows them
-  # and Symphony turns a finding that names one into a note (`honour_decisions/2`).
-  defp decisions_rule(%Issue{description: description}) do
-    case Decisions.prompt_section(description) do
+  # and Symphony turns a finding that names one into a note (`honour_decisions/3`). They are read
+  # from the ticket's store record, not from Linear.
+  defp decisions_rule(%Issue{} = issue, decision_opts) do
+    case issue |> Decisions.stored(decision_opts) |> Decisions.prompt_section() do
       "" ->
         ""
 
@@ -1204,7 +1211,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp coerce_finding(_finding), do: {:error, :invalid_finding}
 
-  # The recorded decision a finding is about (`honour_decisions/2`), as `D<n>`.
+  # The recorded decision a finding is about (`honour_decisions/3`), as `D<n>`.
   defp maybe_put_decision(finding, decision) when is_binary(decision) do
     case String.trim(decision) |> String.upcase() do
       "" -> finding

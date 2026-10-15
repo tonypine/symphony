@@ -20,6 +20,7 @@ defmodule SymphonyElixir.TicketStateTest do
                self_heal: nil,
                dispatches: [],
                path_unlocks: [],
+               decisions: [],
                updated_at: nil
              }
     end
@@ -59,6 +60,38 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
+  describe "decisions" do
+    @decision %{key: "comment-1", date: ~D[2026-10-13], title: "Keep it", question: "Keep it?", answer: "Yes", scope: "As answered"}
+
+    test "appends the decisions the record lacks, each once, in order" do
+      entries = [@decision, @decision, %{@decision | key: "comment-2"}]
+      record = TicketState.put_decisions(TicketState.new("repo-a", "issue-1"), entries, [], @at)
+
+      assert [%{key: "comment-1"}, %{key: "comment-2"}] = TicketState.decisions(record)
+      assert record.updated_at == @at
+      assert TicketState.put_decisions(record, [@decision], [], ~U[2026-02-01 00:00:00Z]) == record
+    end
+
+    test "takes the backfill first only while the record holds no decision" do
+      new = %{@decision | key: "new"}
+      backfilled = TicketState.put_decisions(TicketState.new("repo-a", "issue-1"), [new], [@decision], @at)
+      assert [%{key: "comment-1"}, %{key: "new"}] = backfilled.decisions
+
+      again = TicketState.put_decisions(backfilled, [], [%{@decision | key: "old"}], @at)
+      assert [%{key: "comment-1"}, %{key: "new"}] = again.decisions
+    end
+
+    test "drops malformed entries and fills missing text" do
+      decisions = [%{key: "k", date: 3, title: nil}, %{key: "", answer: "x"}, %{answer: "x"}, "junk", %{key: "d", date: "someday"}]
+      record = TicketState.normalize(%{decisions: decisions})
+
+      assert [%{key: "k", date: "", title: "", question: "", answer: "", scope: ""}, %{key: "d", date: "someday"}] =
+               record.decisions
+
+      assert TicketState.normalize(%{decisions: :x}).decisions == []
+    end
+  end
+
   describe "normalize/1" do
     test "fills defaults for a non-map" do
       assert TicketState.normalize(:nonsense) == %{
@@ -74,6 +107,7 @@ defmodule SymphonyElixir.TicketStateTest do
                self_heal: nil,
                dispatches: [],
                path_unlocks: [],
+               decisions: [],
                updated_at: nil
              }
     end

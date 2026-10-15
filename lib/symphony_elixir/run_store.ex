@@ -854,6 +854,26 @@ defmodule SymphonyElixir.RunStore do
   def record_ticket_self_heal(_repo_key, _issue_id, _attrs), do: {:error, :invalid_issue_id}
 
   @doc """
+  Appends the decisions in `entries` the ticket's record does not hold yet
+  (`TicketState.put_decisions/4`), and returns the record's whole list. A record that holds no
+  decision yet takes the `backfill` ones first. A record is created only when a decision is added.
+  The read-modify-write runs in one durable transaction, so two writers never record a decision
+  twice.
+  """
+  @spec record_ticket_decisions(String.t(), String.t(), [map()], [map()]) ::
+          {:ok, [TicketState.decision()]} | {:error, term()}
+  def record_ticket_decisions(repo_key, issue_id, entries, backfill)
+      when is_binary(issue_id) and is_list(entries) and is_list(backfill) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_decisions(repo_key, issue_id, entries, backfill) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def record_ticket_decisions(_repo_key, _issue_id, _entries, _backfill), do: {:error, :invalid_issue_id}
+
+  @doc """
   Records a run Symphony dispatched for the ticket (`TicketState.record_dispatch/3`), creating the
   record when none exists. The read-modify-write runs in one durable transaction.
   """
@@ -1757,6 +1777,25 @@ defmodule SymphonyElixir.RunStore do
     updated = TicketState.put_self_heal(record, attrs)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
     :ok
+  end
+
+  defp write_ticket_decisions(repo_key, issue_id, entries, backfill) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    case TicketState.put_decisions(record, entries, backfill) do
+      ^record ->
+        {:ok, record.decisions}
+
+      updated ->
+        :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+        {:ok, updated.decisions}
+    end
   end
 
   defp write_ticket_dispatch(repo_key, issue_id, attrs) do

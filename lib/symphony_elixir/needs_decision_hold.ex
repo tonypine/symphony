@@ -127,7 +127,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   defp sync_ticket(repo_key, %{"id" => issue_id} = node, settings, opts) when is_binary(issue_id) do
     repair_drift(repo_key, issue_id, labels(node), opts)
     # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
-    _ = Decisions.sync(node, Keyword.take(opts, [:tracker]))
+    _ = Decisions.sync(node, opts |> Keyword.take([:tracker]) |> Keyword.put(:repo_key, repo_key))
     current = Hold.get(repo_key, issue_id, :needs_decision, opts)
 
     case desired(Collector.newest_request(node, settings), current) do
