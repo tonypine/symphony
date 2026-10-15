@@ -105,7 +105,7 @@ public enum UpdateCheckResult: Equatable {
 /// release costs no rate limit.
 public final class UpdateChecker {
     public static let latestReleaseURL = URL(string: "https://api.github.com/repos/tonypine/symphony/releases/latest")!
-    /// How often the app checks in the background.
+    /// How often the app checks in the background outside Automatically when released, and after a failed check.
     public static let interval: TimeInterval = 6 * 60 * 60
     public static let timeout: TimeInterval = 30
     /// Name of the release asset that holds the version and build.
@@ -125,6 +125,21 @@ public final class UpdateChecker {
         self.transport = transport
         self.url = url
         self.userAgent = userAgent
+    }
+
+    /// How often the app checks in the background in `mode`: every `releaseCheckMinutes`, moved into
+    /// `AppSettings.releaseCheckMinutesRange`, in Automatically when released, every `interval` otherwise.
+    public static func interval(for mode: UpdateMode, releaseCheckMinutes: Int) -> TimeInterval {
+        guard mode == .onRelease else { return interval }
+        return TimeInterval(AppSettings.clampedReleaseCheckMinutes(releaseCheckMinutes) * 60)
+    }
+
+    /// What a failed check's message starts with, before the reason.
+    public static let failurePrefix = "Couldn't check for updates: "
+
+    /// The reason in a failed check's message, without `failurePrefix`.
+    public static func failureReason(_ message: String) -> String {
+        message.hasPrefix(failurePrefix) ? String(message.dropFirst(failurePrefix.count)) : message
     }
 
     /// Fetches the latest release and compares its build with `current`.
@@ -224,7 +239,7 @@ public final class UpdateChecker {
         let message: String
 
         init(_ reason: String) {
-            message = "Couldn't check for updates: \(reason)"
+            message = UpdateChecker.failurePrefix + reason
         }
     }
 

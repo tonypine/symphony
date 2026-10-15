@@ -4,10 +4,12 @@ defmodule SymphonyElixir.QaPolicy do
 
   The rule is hybrid, as the design says. A deterministic rule skips QA automatically when the
   changed paths are all docs, tests or `auto_review.skip_globs` paths (or no playbook applies);
-  everything else runs it. The Code Review verdict carries the decision — `SymphonyElixir.CodeReview`
-  asks this module at approve time and records the outcome with its reason — and the QA state's own
-  run re-checks it (`SymphonyElixir.QaVerification`), so a skipped ticket never starts an agent and
-  every skip is auditable in the ticket's ledger.
+  everything else runs it. A head that changes no paths at all is neither: there is nothing to
+  verify, and the ticket is held rather than skipped (`SymphonyElixir.ClosedPullRequest`). The Code
+  Review verdict carries the decision — `SymphonyElixir.CodeReview` asks this module at approve time
+  and records the outcome with its reason — and the QA state's own run re-checks it
+  (`SymphonyElixir.QaVerification`), so a skipped ticket never starts an agent and every skip is
+  auditable in the ticket's ledger.
   """
 
   alias SymphonyElixir.Config
@@ -16,8 +18,13 @@ defmodule SymphonyElixir.QaPolicy do
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Workspace
 
-  @typedoc "Whether the change needs a QA run — and with which playbooks — or skips it, with the recorded reason."
-  @type decision :: {:run, [Selection.playbook()], String.t()} | {:skip, String.t()}
+  @typedoc """
+  Whether the change needs a QA run — and with which playbooks — or skips it, with the recorded
+  reason. `:nothing_to_verify` is a head that changes no files: not a docs-only change but no change
+  at all (a workspace built from the base branch, a branch whose work already landed), so the
+  callers hold the ticket instead of landing it.
+  """
+  @type decision :: {:run, [Selection.playbook()], String.t()} | {:skip, String.t()} | {:nothing_to_verify, String.t()}
 
   @doc """
   The decision for `issue`'s change: the paths `sha` (default `HEAD`) changes against the merge
@@ -39,8 +46,13 @@ defmodule SymphonyElixir.QaPolicy do
     end
   end
 
-  @doc "The decision for an already-listed set of changed paths."
+  @doc """
+  The decision for an already-listed set of changed paths. No changed path is nothing to verify,
+  whatever the labels say: an empty diff never skips QA into `Merging`.
+  """
   @spec decision(Issue.t(), map(), [String.t()]) :: decision()
+  def decision(%Issue{}, _settings, []), do: {:nothing_to_verify, "the head changes no files against its base branch"}
+
   def decision(%Issue{} = issue, settings, paths) when is_list(paths) do
     case Selection.decide(issue, paths, settings.auto_review, dev_server?: dev_server?(settings)) do
       {:skip, reason} -> {:skip, reason}

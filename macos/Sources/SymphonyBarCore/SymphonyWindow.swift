@@ -132,6 +132,8 @@ public enum WindowState: Equatable {
     /// What a button on a placeholder does.
     public enum Action: Equatable {
         case startSymphony, openLogs, restartSymphony, openSettings
+        /// The menu's Cancel Update and Update Now Anyway, from the dispatch control's popover (S3a, S3b).
+        case cancelUpdate, updateNow
 
         public var title: String {
             switch self {
@@ -139,6 +141,8 @@ public enum WindowState: Equatable {
             case .openLogs: StatusMenu.openLogsTitle
             case .restartSymphony: StatusMenu.restartTitle
             case .openSettings: "Open Settings…"
+            case .cancelUpdate: UpdateMenu.cancelUpdateTitle
+            case .updateNow: UpdateMenu.updateNowTitle
             }
         }
     }

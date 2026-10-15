@@ -113,6 +113,11 @@ defmodule SymphonyElixir.QaPolicyTest do
       assert reason =~ "only changes docs, tests or `auto_review.skip_globs`"
     end
 
+    test "a head that changes nothing against the merge base has nothing to verify" do
+      assert {:nothing_to_verify, _reason} =
+               QaPolicy.decide(issue(), settings!(), workspace: @workspace, repo_key: "repo", git: git([], "main", @sha, ""), sha: @sha)
+    end
+
     test "runs QA when the changed paths cannot be read, rather than skipping it" do
       # A broken read must never smuggle a change past verification.
       failing = fn _args, _cwd -> {"fatal: bad revision\n", 128} end
@@ -165,6 +170,16 @@ defmodule SymphonyElixir.QaPolicyTest do
     test "the ticket's own `qa:skip` label skips QA whatever the diff is" do
       assert {:skip, "the issue has the `qa:skip` label"} =
                QaPolicy.decision(issue(%{labels: ["qa:skip"]}), settings!(), ["lib/symphony_elixir/cli.ex"])
+    end
+
+    # An empty diff is no change at all (a workspace built from the base branch), never a docs-only
+    # one: nothing may skip it into Merging, not even a label.
+    test "no changed path is nothing to verify, whatever the labels say" do
+      assert {:nothing_to_verify, "the head changes no files against its base branch"} = QaPolicy.decision(issue(), settings!(), [])
+
+      for label <- ["qa:skip", "qa:cli"] do
+        assert {:nothing_to_verify, _reason} = QaPolicy.decision(issue(%{labels: [label]}), settings!(), [])
+      end
     end
   end
 

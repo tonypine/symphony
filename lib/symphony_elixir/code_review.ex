@@ -50,6 +50,7 @@ defmodule SymphonyElixir.CodeReview do
   require Logger
 
   alias SymphonyElixir.{
+    ClosedPullRequest,
     Config,
     EscalationRules,
     Handoff,
@@ -57,6 +58,7 @@ defmodule SymphonyElixir.CodeReview do
     NeedsDecisionHold,
     QaPolicy,
     ReviewAgent,
+    TicketPullRequest,
     TicketSignals,
     Tracker,
     TransitionGuard,
@@ -581,6 +583,23 @@ defmodule SymphonyElixir.CodeReview do
         Logger.info("Code Review approved #{issue_label(issue)}; QA skipped: #{reason}")
 
         skip_qa(issue, opts, settings, extra, reason)
+
+      {:nothing_to_verify, reason} ->
+        Logger.warning("Code Review approved #{issue_label(issue)}, but #{reason}; holding it instead of skipping QA")
+
+        hold_empty_change(issue, opts)
+    end
+  end
+
+  # An empty diff is no change at all — a workspace built from the base branch, or a branch whose
+  # work already landed — so it neither skips QA into `Merging` nor goes to QA: the ticket pauses
+  # here on a person's decision (`SymphonyElixir.ClosedPullRequest`).
+  defp hold_empty_change(issue, opts) do
+    pr_url = TicketPullRequest.current_url(issue, repo_key(issue, opts))
+
+    case ClosedPullRequest.pause(issue, {:no_change, pr_url}, hold_opts(issue, opts)) do
+      :ok -> :ok
+      {:error, error} -> {:error, {:code_review_hold_failed, error}}
     end
   end
 

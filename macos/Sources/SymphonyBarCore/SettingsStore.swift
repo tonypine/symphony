@@ -22,6 +22,7 @@ public final class SettingsStore {
         public static let updateMode = "updateMode"
         /// Minutes since midnight.
         public static let updateTime = "updateTime"
+        public static let releaseCheckMinutes = "releaseCheckMinutes"
     }
 
     private let defaults: KeyValueStore
@@ -46,7 +47,9 @@ public final class SettingsStore {
             updateMode: (defaults.object(forKey: Key.updateMode) as? String).flatMap(UpdateMode.init(rawValue:))
                 ?? AppSettings.defaultUpdateMode,
             updateTime: (defaults.object(forKey: Key.updateTime) as? Int).flatMap(TimeOfDay.init(minutesSinceMidnight:))
-                ?? .defaultUpdateTime
+                ?? .defaultUpdateTime,
+            releaseCheckMinutes: (defaults.object(forKey: Key.releaseCheckMinutes) as? Int)
+                .map(AppSettings.clampedReleaseCheckMinutes) ?? AppSettings.defaultReleaseCheckMinutes
         )
     }
 
@@ -69,6 +72,7 @@ public final class SettingsStore {
         defaults.set(settings.developmentMode, forKey: Key.developmentMode)
         defaults.set(settings.updateMode.rawValue, forKey: Key.updateMode)
         defaults.set(settings.updateTime.minutesSinceMidnight, forKey: Key.updateTime)
+        defaults.set(settings.releaseCheckMinutes, forKey: Key.releaseCheckMinutes)
     }
 
     /// Reads the Linear and OpenRouter API keys, and every other account in the secret store as an extra

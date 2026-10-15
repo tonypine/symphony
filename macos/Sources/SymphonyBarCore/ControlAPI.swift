@@ -42,6 +42,18 @@ public enum ControlAction: Equatable {
     /// Reason Symphony records for a pause from the menu; the dashboard and the menu show it.
     public static let pauseReason = "paused from menu bar"
 
+    /// Reason an update's drain records for its pause, for example "updating to v0.0.1.42".
+    public static func updatePauseReason(version: String) -> String {
+        "updating to v\(version)"
+    }
+
+    /// The version an update's pause names, nil for any other reason.
+    public static func updateVersion(pauseReason reason: String?) -> String? {
+        let prefix = updatePauseReason(version: "")
+        guard let reason = reason?.trimmingWhitespace(), reason.hasPrefix(prefix), reason.count > prefix.count else { return nil }
+        return String(reason.dropFirst(prefix.count))
+    }
+
     var path: String {
         switch self {
         case .pause, .pauseWithReason:
