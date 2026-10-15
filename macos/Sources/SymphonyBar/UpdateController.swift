@@ -96,11 +96,13 @@ final class UpdateController {
     /// unless `kind` is automatic.
     func prepare(_ release: Release, kind: UpdateKind = .manual, ready: @escaping (PreparedUpdate) -> Void) {
         guard !isUpdating, download == nil else { return }
+        // Updating before the notices clear: their `onChange` must not read as an update that ended, which would
+        // drop the start notification an on-release update has due.
+        self.kind = kind
+        preparing = release
         error = nil
         notice = nil
         rolledBack = nil
-        self.kind = kind
-        preparing = release
         onChange?()
         download = Task {
             defer { download = nil }
