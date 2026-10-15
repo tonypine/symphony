@@ -153,8 +153,9 @@ final class ChildProcessTests: XCTestCase {
 
     func testStopKillsDescendantsThatLeftTheGroup() throws {
         // Like an Erlang port program: the grandchild starts its own session and ignores SIGTERM.
+        // It prints its own pid only after setsid(), so its group is settled once the test reads the pid.
         let (child, exited, result) = try spawn(
-            "/usr/bin/perl -MPOSIX -e '$|=1; my $p = fork(); if (!$p) { setsid(); $SIG{TERM} = q(IGNORE); exec q(/bin/sleep), 30 } print qq($p\\n); sleep 30'"
+            "/usr/bin/perl -MPOSIX -e '$|=1; my $p = fork(); if (!$p) { setsid(); $SIG{TERM} = q(IGNORE); print qq($$\\n); exec q(/bin/sleep), 30 } sleep 30'"
         )
         let grandchild = try XCTUnwrap(pid_t(waitForLogLines(1)[0]))
         let record = try XCTUnwrap(ProcessTree.snapshot().first { $0.pid == grandchild })
@@ -169,7 +170,7 @@ final class ChildProcessTests: XCTestCase {
 
     func testUnexpectedExitAlsoCleansUpDescendants() throws {
         let (_, exited, result) = try spawn(
-            "/usr/bin/perl -MPOSIX -e '$|=1; my $p = fork(); if (!$p) { setsid(); exec q(/bin/sleep), 30 } print qq($p\\n); sleep 1; exit 7'"
+            "/usr/bin/perl -MPOSIX -e '$|=1; my $p = fork(); if (!$p) { setsid(); print qq($$\\n); exec q(/bin/sleep), 30 } sleep 1; exit 7'"
         )
         let grandchild = try XCTUnwrap(pid_t(waitForLogLines(1)[0]))
         wait(for: [exited], timeout: 10)
@@ -183,7 +184,7 @@ final class ChildProcessTests: XCTestCase {
         // The middle process exits first, so the grandchild is reparented to launchd while later tree refreshes
         // run. The same happens when Symphony exits and a refresh lands before the exit is handled.
         let (_, exited, result) = try spawn(
-            "/usr/bin/perl -MPOSIX -e '$|=1; my $m = fork(); if (!$m) { my $p = fork(); if (!$p) { setsid(); exec q(/bin/sleep), 30 } print qq($p\\n); select(undef, undef, undef, 0.5); exit 0 } waitpid($m, 0); select(undef, undef, undef, 0.5); exit 7'"
+            "/usr/bin/perl -MPOSIX -e '$|=1; my $m = fork(); if (!$m) { my $p = fork(); if (!$p) { setsid(); print qq($$\\n); exec q(/bin/sleep), 30 } select(undef, undef, undef, 0.5); exit 0 } waitpid($m, 0); select(undef, undef, undef, 0.5); exit 7'"
         )
         let grandchild = try XCTUnwrap(pid_t(waitForLogLines(1)[0]))
         wait(for: [exited], timeout: 10)
