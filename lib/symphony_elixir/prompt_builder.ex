@@ -714,8 +714,10 @@ defmodule SymphonyElixir.PromptBuilder do
 
       Review-agent gate:
 
+      - This run has a pre-push reviewer. It comes before the handoff push the workflow describes: that push still hands the ticket to `Code Review`, but only after this reviewer approves.
       - After implementation, validation, commit, and committed-diff review are complete, stop before `git push`.
-      - Do not push, open a PR, or move the issue to review until Symphony injects the reviewer-agent verdict.
+      - Do not push or open a PR until Symphony injects the reviewer-agent verdict.
+      - Ending your turn at this gate does not end the run: Symphony runs the reviewer and continues this same run with its verdict. The rule that a run ending without its push never advances is about a run that stops for good, not a turn that stops here.
       - This overrides retry or continuation guidance that says to keep working while the issue remains active; stopping at this gate is expected.
       - Only continue to push/PR after an explicit reviewer-agent approval prompt. Do not treat missing reviewer comments as approval.
       - If the reviewer requests changes, address those comments in the same workspace and stop before push again.
