@@ -16,6 +16,7 @@ final class QAScriptDriver {
     private let symphonyPID: () -> pid_t?
     private var alerts: [QAScript.Alert] = []
     private var presses: [QAScript.Press] = []
+    private var withdrawn: [String] = []
     private var lastStatus: QAScript.Status?
     /// The answer for a text prompt the press under way shows.
     private var promptInput: String?
@@ -49,6 +50,12 @@ final class QAScriptDriver {
     /// Records an alert the app would have shown.
     func record(alertTitle title: String, message: String) {
         alerts.append(QAScript.Alert(title: title, message: message))
+        writeStatus()
+    }
+
+    /// Records that the app withdrew the notification titled `title`, which it recorded earlier.
+    func record(withdrawn title: String) {
+        withdrawn.append(title)
         writeStatus()
     }
 
@@ -113,7 +120,8 @@ final class QAScriptDriver {
                 QAScript.MenuItem(title: $0.title, enabled: $0.isEnabled)
             },
             alerts: alerts,
-            presses: presses
+            presses: presses,
+            withdrawn: withdrawn
         )
         guard status != lastStatus else { return }
         do {

@@ -56,7 +56,8 @@ final class QAScriptTests: XCTestCase {
             symphonyPID: nil,
             menu: [QAScript.MenuItem(title: "Start Symphony", enabled: true)],
             alerts: [QAScript.Alert(title: "Symphony wasn't restarted", message: "symphony.yml is broken")],
-            presses: [QAScript.Press(command: "001", title: "Restart Symphony", result: .pressed)]
+            presses: [QAScript.Press(command: "001", title: "Restart Symphony", result: .pressed)],
+            withdrawn: ["Updating Symphony to v0.0.1.109"]
         )
         let file = root.appendingPathComponent("status.json")
 
@@ -70,10 +71,20 @@ final class QAScriptTests: XCTestCase {
         XCTAssertTrue(object["symphony_pid"] is NSNull)
         XCTAssertEqual((object["menu"] as? [[String: Any]])?.first?["enabled"] as? Bool, true)
         XCTAssertEqual((object["presses"] as? [[String: Any]])?.first?["result"] as? String, "pressed")
+        XCTAssertEqual(object["withdrawn"] as? [String], ["Updating Symphony to v0.0.1.109"])
         XCTAssertEqual(try JSONDecoder().decode(QAScript.Status.self, from: Data(contentsOf: file)), status)
 
         status.symphonyPID = 4321
         try QAScript.write(status, to: file)
         XCTAssertEqual(try JSONDecoder().decode(QAScript.Status.self, from: Data(contentsOf: file)).symphonyPID, 4321)
+    }
+
+    func testStatusWithdrawsNothingByDefault() throws {
+        let status = QAScript.Status(
+            pid: 42, version: "0.0.1.108", build: 108, appPath: "/qa/Applications/Symphony.app", symphonyPID: nil,
+            menu: [], alerts: [], presses: []
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: QAScript.encode(status)) as? [String: Any])
+        XCTAssertEqual(object["withdrawn"] as? [String], [])
     }
 }

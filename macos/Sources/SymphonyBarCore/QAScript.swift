@@ -10,7 +10,8 @@ import Foundation
 /// - the app keeps `<QA root>/status.json` current: its process, build, the Symphony it runs, every visible menu item
 ///   (submenu items after the item they open from) with whether it is enabled, the alerts it would have shown and the
 ///   presses it handled;
-/// - alerts are recorded in `status.json` instead of shown, and confirmations are answered yes.
+/// - alerts are recorded in `status.json` instead of shown, and confirmations are answered yes. A notification the
+///   app withdraws, such as an update's start notification once the update ends, is recorded by its title.
 public enum QAScript {
     public static let commandsFolder = "commands"
     public static let statusFileName = "status.json"
@@ -109,6 +110,8 @@ public enum QAScript {
         public var menu: [MenuItem]
         public var alerts: [Alert]
         public var presses: [Press]
+        /// The titles of the recorded notifications the app withdrew, oldest first.
+        public var withdrawn: [String]
 
         public init(
             pid: Int32,
@@ -118,7 +121,8 @@ public enum QAScript {
             symphonyPID: Int32?,
             menu: [MenuItem],
             alerts: [Alert],
-            presses: [Press]
+            presses: [Press],
+            withdrawn: [String] = []
         ) {
             self.pid = pid
             self.version = version
@@ -128,10 +132,11 @@ public enum QAScript {
             self.menu = menu
             self.alerts = alerts
             self.presses = presses
+            self.withdrawn = withdrawn
         }
 
         enum CodingKeys: String, CodingKey {
-            case pid, version, build, menu, alerts, presses
+            case pid, version, build, menu, alerts, presses, withdrawn
             case appPath = "app_path"
             case symphonyPID = "symphony_pid"
         }
@@ -147,6 +152,7 @@ public enum QAScript {
             try container.encode(menu, forKey: .menu)
             try container.encode(alerts, forKey: .alerts)
             try container.encode(presses, forKey: .presses)
+            try container.encode(withdrawn, forKey: .withdrawn)
         }
     }
 
