@@ -1480,7 +1480,7 @@ defmodule SymphonyElixir.CoreTest do
       state: "In Progress",
       repo_key: nil,
       labels: [],
-      assigned_to_worker: false
+      assigned_to_worker: true
     }
 
     state = %Orchestrator.State{
@@ -1512,7 +1512,7 @@ defmodule SymphonyElixir.CoreTest do
     assert [] = RunStore.list_retries("default")
   end
 
-  test "sticky retry dispatch revalidation ignores mutable route fields but not terminal state" do
+  test "sticky retry dispatch revalidation ignores mutable route fields but not terminal state or assignment" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_active_states: ["Todo", "In Progress"],
       tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
@@ -1526,18 +1526,72 @@ defmodule SymphonyElixir.CoreTest do
       assigned_to_worker: true
     }
 
-    routing_mismatch_issue = %{
-      active_issue
-      | id: "issue-sticky-rerouted",
-        assigned_to_worker: false
-    }
-
+    routing_mismatch_issue = %{active_issue | id: "issue-sticky-rerouted", repo_key: "web", labels: ["frontend"]}
+    unassigned_issue = %{active_issue | id: "issue-sticky-unassigned", assigned_to_worker: false}
     terminal_issue = %{routing_mismatch_issue | id: "issue-sticky-terminal", state: "Done"}
 
     assert Orchestrator.dispatch_revalidated_issue_for_test(active_issue, true)
     assert Orchestrator.dispatch_revalidated_issue_for_test(routing_mismatch_issue, true)
     refute Orchestrator.dispatch_revalidated_issue_for_test(terminal_issue, true)
-    refute Orchestrator.dispatch_revalidated_issue_for_test(routing_mismatch_issue, false)
+    refute Orchestrator.dispatch_revalidated_issue_for_test(unassigned_issue, true)
+    refute Orchestrator.dispatch_revalidated_issue_for_test(unassigned_issue, false)
+  end
+
+  for {label, extra_metadata} <- [{"retry", %{}}, {"continuation", %{continuation: true, delay_type: :continuation}}] do
+    test "a #{label} of an issue no longer assigned to the worker is dropped, and reassigning it makes it eligible again" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        max_concurrent_agents: 2,
+        quality_gate: %{enabled: false},
+        tracker_active_states: ["Todo", "In Progress"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+      )
+
+      issue_id = "issue-unassigned-#{unquote(label)}"
+
+      unassigned_issue = %Issue{
+        id: issue_id,
+        identifier: "MT-566",
+        title: "Unassigned while its retry was queued",
+        state: "In Progress",
+        assigned_to_worker: false
+      }
+
+      metadata = Map.merge(%{repo_key: "default", identifier: "MT-566", worker_host: nil, workspace_path: nil}, unquote(Macro.escape(extra_metadata)))
+
+      state = %Orchestrator.State{
+        repo_key: "default",
+        max_concurrent_agents: 2,
+        running: %{},
+        claimed: MapSet.new([issue_id]),
+        budget_exhausted: MapSet.new(),
+        retry_attempts: %{},
+        watching: %{issue_id => %{identifier: "MT-566"}},
+        codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:noreply, updated_state} =
+                   Orchestrator.handle_retry_issue_for_test(state, issue_id, 1, metadata, fn [^issue_id] ->
+                     {:ok, [unassigned_issue]}
+                   end)
+
+          send(self(), {:updated_state, updated_state})
+        end)
+
+      assert_received {:updated_state, updated_state}
+      assert log =~ "Dropping retry of issue_id=#{issue_id} issue_identifier=MT-566: not assigned to this Symphony's worker"
+
+      refute Map.has_key?(updated_state.running, issue_id)
+      refute MapSet.member?(updated_state.claimed, issue_id)
+      refute Map.has_key?(updated_state.retry_attempts, issue_id)
+      refute Map.has_key?(updated_state.slot_waiting, issue_id)
+      refute Map.has_key?(updated_state.watching, issue_id)
+      assert [] = RunStore.list_retries("default")
+
+      refute Orchestrator.should_dispatch_issue_for_test(unassigned_issue, updated_state)
+      assert Orchestrator.should_dispatch_issue_for_test(%{unassigned_issue | assigned_to_worker: true}, updated_state)
+    end
   end
 
   test "normal worker exit schedules active-state continuation retry" do
