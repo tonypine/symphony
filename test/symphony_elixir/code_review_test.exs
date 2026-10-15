@@ -275,6 +275,34 @@ defmodule SymphonyElixir.CodeReviewTest do
              ] = SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
     end
 
+    # A workspace built from the base branch (the ticket's pull request closed) diffs empty: that is
+    # no change at all, so the approve neither skips QA into Merging nor hands the ticket to QA.
+    test "an approve whose head changes nothing holds the ticket in Code Review" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      refute_received {:moved, @issue_id, _state}
+      assert_received {:commented, @issue_id, request}
+      assert request =~ "## Decision needed: Restart or cancel TP-815"
+      assert request =~ "has a pull request that changes nothing against the main branch"
+      assert request =~ "the ticket stays in Code Review until the decision is recorded"
+      assert %{decision: %{options: [%{label: "Restart", recommended: true}, %{label: "Cancel"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      refute Enum.any?(signals(), &(&1.details[:signal] == "code_review_approve_skip"))
+    end
+
+    test "an empty-change hold that cannot be posted is reported" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:fake_qa_policy_result, {:nothing_to_verify, "the head changes no files against its base branch"})
+      Process.put(:fake_tracker_comment_result, {:error, :linear_down})
+
+      assert {:error, {:code_review_hold_failed, {:decision_request_failed, :linear_down}}} =
+               run(workspace, settings: designed_settings())
+
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+    end
+
     test "manual review on pauses an approve-skip on a merge confirmation instead of moving to Merging" do
       {workspace, _head} = git_workspace!()
       Process.put(:fake_qa_policy_result, {:skip, "the PR only changes docs, tests or `auto_review.skip_globs` paths"})
