@@ -11,6 +11,7 @@ defmodule SymphonyElixir.HoldTest do
     def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :boom}
     def clear_ticket_hold(_repo_key, _issue_id, _kind), do: {:error, :boom}
     def get_ticket_state(_repo_key, _issue_id), do: {:error, :boom}
+    def list_ticket_states(_repo_key), do: {:error, :boom}
   end
 
   defmodule FailingTracker do
@@ -142,6 +143,23 @@ defmodule SymphonyElixir.HoldTest do
     test "a store read error is reported and treated as no hold" do
       log = capture_log(fn -> refute Hold.held?(@repo_key, @issue_id, :blocked, store: FailingStore) end)
       assert log =~ "Failed to read the ticket state"
+    end
+  end
+
+  describe "held_issue_ids/2" do
+    test "lists the repo's tickets the store holds, whatever the kind, and no other" do
+      :ok = RunStore.set_ticket_hold(@repo_key, "decision", :needs_decision, %{reason: "Ship it?"})
+      :ok = RunStore.set_ticket_hold(@repo_key, "blocked", :blocked, %{reason: "waiting on TP-1"})
+      :ok = RunStore.set_ticket_hold("repo-b", "elsewhere", :blocked, %{reason: "waiting on TP-2"})
+      :ok = RunStore.set_ticket_hold(@repo_key, "cleared", :blocked, %{reason: "waiting on TP-3"})
+      :ok = RunStore.clear_ticket_hold(@repo_key, "cleared", :blocked)
+
+      assert {:ok, ids} = Hold.held_issue_ids(@repo_key)
+      assert Enum.sort(ids) == ["blocked", "decision"]
+    end
+
+    test "hands back a store read error" do
+      assert Hold.held_issue_ids(@repo_key, store: FailingStore) == {:error, :boom}
     end
   end
 

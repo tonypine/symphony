@@ -2193,8 +2193,9 @@ human_actions:
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
 its own poll, not on this read: every `polling.interval_ms` it lists the tickets in
-`issues.states.plan_review` in each route's scope plus the ones carrying the `Blocked` or
-`Needs Decision` label (a hold pauses a ticket in its phase, wherever it sits), reads a ticket's
+`issues.states.plan_review` in each route's scope plus the ones Symphony's store holds `Blocked`
+or `Needs Decision` (a hold pauses a ticket in its phase, wherever it sits; the label is only its
+projection, so a ticket whose label went missing is still read), reads a ticket's
 comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request,
 `plan` for a `plan` or `breakdown` parent in `Plan Review`; `clarify` for a quality gate hold or
@@ -2250,8 +2251,12 @@ lists:
   first time one of its workflows fails this way. When GitHub or Linear cannot be read, the
   repository's last actions stay listed.
 
-A supervisor or a person adds an action by hand the same way: add the `Needs Decision` label and
-a comment in the request format:
+Only Symphony opens a decision request: an agent's `linear_request_human_action`, or one of
+Symphony's own checks. Each records the **Needs Decision** hold in the run store first and adds the
+label after it, and the Inbox finds held tickets through the store, never by label. A
+`Needs Decision` label added by hand, with no hold in the store, is cleared on the next poll, and a
+request comment posted by hand on a ticket with no hold is never read. The request comment Symphony
+posts has this format:
 
 ```md
 ## Decision needed: Turn on the pre-push hook
