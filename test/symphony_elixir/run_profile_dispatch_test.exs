@@ -21,6 +21,10 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
     end
   end
 
+  defmodule FailingHoldStore do
+    def set_ticket_hold(_repo_key, _issue_id, _kind, _attrs), do: {:error, :disk_full}
+  end
+
   setup do
     test_root = Path.join(System.tmp_dir!(), "symphony-run-profile-#{System.unique_integer([:positive])}")
     fake_claude = Path.join(test_root, "fake-claude")
@@ -297,6 +301,57 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       assert [first, second] = argv_lines(ctx.argv_trace)
       assert String.ends_with?(first, "--print --model claude-opus-5-5 --effort medium")
       assert String.ends_with?(second, "--print --model claude-opus-5-5 --effort medium")
+    end
+
+    # A Backlog move closed the ticket's pull request; moving it back to QA must not start a run on
+    # a workspace built from the base branch.
+    test "a QA ticket whose pull request is closed is held before any run starts", ctx do
+      write_profile_workflow!(ctx)
+      workspace = Path.join([ctx.test_root, "workspaces", "MT-QA-CLOSED"])
+      run_issue = issue("issue-qa-closed", "MT-QA-CLOSED", %{state: "QA"})
+      repo_key = Config.repo_key!()
+      pr_url = "https://github.com/acme/repo/pull/512"
+      Application.put_env(:symphony_elixir, :qa_verification_recipient, self())
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      :ok = SymphonyElixir.TicketPullRequest.put(repo_key, "issue-qa-closed", %{pr_url: pr_url})
+      :ok = SymphonyElixir.TicketPullRequest.mark_finished(repo_key, pr_url, "closed")
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :qa_verification_recipient)
+        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        SymphonyElixir.RunStore.delete_ticket_state(repo_key, "issue-qa-closed")
+      end)
+
+      assert :ok =
+               AgentRunner.run(run_issue, self(),
+                 workspace_path: workspace,
+                 qa_verification: FakeQaVerification,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+
+      refute_received {:qa_verification, _issue, _workspace, _opts}
+      assert_received {:memory_tracker_comment, "issue-qa-closed", request}
+      assert request =~ "PR #512 closed"
+      assert SymphonyElixir.Hold.held?(repo_key, "issue-qa-closed", :needs_decision)
+      refute File.exists?(workspace)
+      assert argv_lines(ctx.argv_trace) == []
+    end
+
+    test "a closed pull request whose hold cannot be set fails the run", ctx do
+      write_profile_workflow!(ctx)
+      run_issue = issue("issue-qa-closed-fail", "MT-QA-CLOSED-FAIL", %{state: "Code Review"})
+      repo_key = Config.repo_key!()
+      pr_url = "https://github.com/acme/repo/pull/513"
+
+      :ok = SymphonyElixir.TicketPullRequest.put(repo_key, "issue-qa-closed-fail", %{pr_url: pr_url})
+      :ok = SymphonyElixir.TicketPullRequest.mark_finished(repo_key, pr_url, "closed")
+
+      assert_raise RuntimeError, ~r/closed_pull_request_hold_failed/, fn ->
+        AgentRunner.run(run_issue, nil, store: FailingHoldStore, issue_enricher: fn issue -> {:ok, issue} end)
+      end
+
+      assert argv_lines(ctx.argv_trace) == []
     end
 
     test "a QA ticket the QA verification handles starts no agent", ctx do
