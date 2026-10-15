@@ -21,6 +21,8 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       File.rm_rf(root)
       System.delete_env("SYMPHONY_REPO")
       System.delete_env("SYMPHONY_BRANCH")
+      System.delete_env("SYMPHONY_REMOVE_REASON")
+      System.delete_env("SYMPHONY_ISSUE_STATE")
     end)
 
     {:ok, configured_repo: configured_repo}
@@ -178,6 +180,41 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       assert second_output =~ "Closed PR #101 for branch feature/workpad"
       assert second_error_output =~ "Failed to close PR #102 for branch feature/workpad"
     end)
+  end
+
+  test "closes the pull requests of a terminal removal, naming the state in the comment" do
+    System.put_env("SYMPHONY_REMOVE_REASON", "terminal")
+    System.put_env("SYMPHONY_ISSUE_STATE", "Canceled")
+
+    with_fake_gh(fn log_path ->
+      {output, _error_output} =
+        capture_task_output(fn ->
+          BeforeRemove.run(["--repo", "chihsuan/symphony", "--branch", "feature/workpad"])
+        end)
+
+      assert output =~ "Closed PR #101 for branch feature/workpad"
+      assert File.read!(log_path) =~ "pr close 101 --repo chihsuan/symphony --comment Closing because the Linear issue for branch feature/workpad moved to Canceled without merge."
+    end)
+  end
+
+  test "keeps the pull requests open when the workspace goes for another reason than a terminal state" do
+    for reason <- ["stop", "cleanup"] do
+      System.put_env("SYMPHONY_REMOVE_REASON", reason)
+
+      with_fake_gh(fn log_path ->
+        File.write!(log_path, "")
+
+        {output, error_output} =
+          capture_task_output(fn ->
+            Mix.Task.reenable("workspace.before_remove")
+            BeforeRemove.run(["--repo", "chihsuan/symphony", "--branch", "feature/workpad"])
+          end)
+
+        assert output == ""
+        assert error_output == ""
+        assert File.read!(log_path) == ""
+      end)
+    end
   end
 
   test "formats close failures without command stderr output" do

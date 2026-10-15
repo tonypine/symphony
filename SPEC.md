@@ -973,6 +973,10 @@ Fields:
   - Failure is logged but ignored.
 - `before_remove` (multiline shell script string, OPTIONAL)
   - Runs before workspace deletion if the directory exists.
+  - Receives `SYMPHONY_REMOVE_REASON`: `terminal` when the issue reached a terminal state (named in
+    `SYMPHONY_ISSUE_STATE`), `stop` when the operator stopped its run, `cleanup` otherwise
+    (`SYMPHONY_ISSUE_STATE` is then empty). A hook that closes the branch's pull requests closes
+    them only for `terminal`.
   - Failure is logged but ignored; cleanup still proceeds.
 - `timeout_ms` (integer, OPTIONAL)
   - Default: `60000`

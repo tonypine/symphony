@@ -76,13 +76,17 @@ defmodule SymphonyElixir.WorkspaceCleanup do
   end
 
   @impl true
+  # A removal asked for again while it waits in the queue takes the newer request's place, so the
+  # `before_remove` hook gets the latest reason: a stop's removal followed by the ticket's terminal
+  # one runs as the terminal one.
   def handle_call({:remove, %{identifier: identifier} = issue, worker_host}, _from, state) do
-    state =
-      if Enum.any?(state.queue, fn {queued_issue, queued_host} -> queued_issue.identifier == identifier and queued_host == worker_host end) do
-        state
-      else
-        %{state | queue: state.queue ++ [{issue, worker_host}]}
+    queue =
+      case Enum.find_index(state.queue, fn {queued_issue, queued_host} -> queued_issue.identifier == identifier and queued_host == worker_host end) do
+        nil -> state.queue ++ [{issue, worker_host}]
+        index -> List.replace_at(state.queue, index, {issue, worker_host})
       end
+
+    state = %{state | queue: queue}
 
     {:reply, :ok, start_queued(state)}
   end

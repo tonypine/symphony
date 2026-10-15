@@ -2222,7 +2222,16 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp before_remove_hook_env(issue_context), do: workspace_ref_hook_env(issue_context)
+  # The hook learns why the workspace goes: `terminal` (the ticket reached a terminal state, named
+  # in `SYMPHONY_ISSUE_STATE`), `stop` (the operator stopped its run) or `cleanup` (anything else),
+  # so a hook that closes the branch's pull requests closes them only for a ticket that ended.
+  defp before_remove_hook_env(issue_context) do
+    workspace_ref_hook_env(issue_context) ++
+      [
+        {"SYMPHONY_REMOVE_REASON", Map.get(issue_context, :remove_reason, "cleanup")},
+        {"SYMPHONY_ISSUE_STATE", Map.get(issue_context, :issue_state, "")}
+      ]
+  end
 
   defp configured_hook_repo(issue_context, settings) do
     issue_context
@@ -2808,7 +2817,9 @@ defmodule SymphonyElixir.Workspace do
       issue_identifier: identifier || "issue",
       workspace_branch: workspace_branch(issue),
       workspace_base_ref: workspace_base_ref(issue),
-      labels: issue_labels(issue)
+      labels: issue_labels(issue),
+      remove_reason: remove_reason(issue),
+      issue_state: issue_state(issue)
     }
   end
 
@@ -2859,6 +2870,12 @@ defmodule SymphonyElixir.Workspace do
   defp issue_labels(%{labels: labels}) when is_list(labels), do: labels
   defp issue_labels(%{"labels" => labels}) when is_list(labels), do: labels
   defp issue_labels(_issue), do: []
+
+  defp remove_reason(%{remove_reason: reason}) when reason in [:terminal, :stop], do: Atom.to_string(reason)
+  defp remove_reason(_issue), do: "cleanup"
+
+  defp issue_state(%{state: state}) when is_binary(state), do: state
+  defp issue_state(_issue), do: ""
 
   defp issue_log_context(%{issue_id: issue_id, repo_key: repo_key, issue_identifier: issue_identifier}) do
     "repo_key=#{repo_key || "default"} issue_id=#{issue_id || "n/a"} issue_identifier=#{issue_identifier || "issue"}"

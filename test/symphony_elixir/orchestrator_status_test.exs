@@ -3126,7 +3126,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
       workspace_root: workspace_root,
-      hook_before_remove: "printf stopped > #{marker}"
+      hook_before_remove: "printf '%s|%s' \"$SYMPHONY_REMOVE_REASON\" \"$SYMPHONY_ISSUE_STATE\" > #{marker}"
     )
 
     issue = %Issue{
@@ -3229,7 +3229,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert %{running: []} = GenServer.call(pid, :snapshot)
     assert :ok = WorkspaceCleanup.await(issue.identifier)
-    assert File.read!(marker) == "stopped"
+    # The stop removes the workspace but tells the hook the ticket didn't end.
+    assert File.read!(marker) == "stop|"
     refute File.exists?(workspace)
 
     assert [%{run_id: ^run_id, status: "stopped", error: "agent stopped by operator"}] =

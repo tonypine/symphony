@@ -59,6 +59,32 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
     refute_receive {:removing, "MT-2", _worker_host, _removal}, 50
   end
 
+  test "a removal asked for again while queued runs with the newer request's reason" do
+    test_pid = self()
+
+    remove_fun = fn issue, _worker_host ->
+      send(test_pid, {:removing, issue.identifier, Map.get(issue, :remove_reason), self()})
+
+      receive do
+        :release -> :ok
+      end
+    end
+
+    server = start_cleanup!(remove_fun: remove_fun)
+
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :stop}, nil, server)
+    assert_receive {:removing, "MT-7", :stop, first}
+
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :stop}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :terminal}, nil, server)
+
+    send(first, :release)
+    assert_receive {:removing, "MT-7", :terminal, second}
+    send(second, :release)
+    assert :ok = WorkspaceCleanup.await("MT-7", server)
+    refute_receive {:removing, "MT-7", _reason, _removal}, 50
+  end
+
   test "removals past the concurrency cap wait for a free slot" do
     server = start_cleanup!(max_concurrent: 1)
 
