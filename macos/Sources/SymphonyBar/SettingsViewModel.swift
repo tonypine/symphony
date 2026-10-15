@@ -90,6 +90,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var budget: StateSnapshot.Budget?
     /// Why this copy can't install updates with Development mode on or off, nil when it can.
     var updateBlocker: (_ developmentMode: Bool) -> String? = { _ in nil }
+    /// Called after the settings are stored.
+    var onSettingsSaved: (AppSettings) -> Void = { _ in }
+    /// Shown once in place of the last-check line after a typed check interval was moved into range (S1d).
+    @Published var releaseCheckNote: String?
+
     /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
     /// in the configured symphony.yml, in minutes.
     @Published var gitNetworkTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultGitNetworkMs)
@@ -543,6 +548,7 @@ final class SettingsViewModel: ObservableObject {
         let secretsChanged = secrets != loadedSecrets
         loadedSecrets = secrets
         store.saveSettings(settings)
+        onSettingsSaved(settings)
         let saved = saveMaxConcurrentAgents(to: settings.configPath) && saveLaunchAtLogin()
         // After the settings are stored, so the restart starts Symphony with all of them.
         if secretsChanged { onSecretsChanged() }

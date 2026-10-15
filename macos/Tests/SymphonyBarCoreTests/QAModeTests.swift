@@ -85,6 +85,20 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(ignored?.updateURL)
     }
 
+    func testQAModeReadsAPositiveUpdateCheckIntervalInSeconds() {
+        func interval(_ value: String) -> TimeInterval? {
+            QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa", QAMode.updateCheckIntervalKey: value])?
+                .updateCheckInterval
+        }
+
+        XCTAssertNil(QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"])?.updateCheckInterval)
+        XCTAssertEqual(interval(" 30\n"), 30)
+        XCTAssertEqual(interval("1"), 1)
+        for ignored in ["0", "-5", "2.5", "soon", ""] {
+            XCTAssertNil(interval(ignored), ignored)
+        }
+    }
+
     func testQAModeReadsOnlyALoopbackOpenRouterStub() {
         func stub(_ value: String) -> String? {
             QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa", QAMode.openRouterURLKey: value])?
@@ -157,6 +171,7 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(stores.logDirectory, ChildLog.defaultDirectory(home: home))
         XCTAssertNil(stores.updateCacheDirectory)
         XCTAssertEqual(stores.updateURL, UpdateChecker.latestReleaseURL)
+        XCTAssertNil(stores.updateCheckInterval)
         XCTAssertEqual(stores.controlURLFallback, SymphonyState.defaultBaseURL)
         XCTAssertEqual(stores.environment, ["HOME": "/Users/me"])
         XCTAssertEqual(stores.updateHelperEnvironment, ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
@@ -199,6 +214,10 @@ final class QAModeTests: XCTestCase {
             qaStores([QAMode.updateURLKey: "http://127.0.0.1:8123/releases/latest"]).updateURL.absoluteString,
             "http://127.0.0.1:8123/releases/latest"
         )
+        XCTAssertNil(stores.updateCheckInterval)
+        XCTAssertEqual(qaStores([QAMode.updateCheckIntervalKey: "30"]).updateCheckInterval, 30)
+        // A normal launch never reads the override.
+        XCTAssertNil(AppStores(environment: [QAMode.updateCheckIntervalKey: "30"], home: home).updateCheckInterval)
     }
 
     func testQAModeKeepsSymphonysLogsUnderTheRootUnlessSet() {

@@ -4,7 +4,25 @@ import SymphonyBarCore
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsViewModel
+    /// Runs Check Now and gives the last update check.
+    @ObservedObject var updates: UpdatePoller
     let close: () -> Void
+
+    /// The check interval, moved into range as the field commits, with a note saying so (S1d).
+    private var releaseCheckMinutes: Binding<Int> {
+        Binding(
+            get: { model.settings.releaseCheckMinutes },
+            set: { typed in
+                let committed = UpdateCheckSchedule.committed(
+                    typed,
+                    current: model.settings.releaseCheckMinutes,
+                    note: model.releaseCheckNote
+                )
+                model.releaseCheckNote = committed.note
+                model.settings.releaseCheckMinutes = committed.minutes
+            }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -80,6 +98,10 @@ struct SettingsView: View {
                             Text(mode.title).tag(mode)
                         }
                     }
+                    .onChange(of: model.settings.updateMode) { old, new in
+                        // Shows straight away what the mode would find; Save then re-arms the checks.
+                        if new == .onRelease && old != .onRelease { updates.check(manual: false) }
+                    }
                     if model.settings.updateMode == .atTime {
                         DatePicker(
                             "Time",
@@ -90,11 +112,32 @@ struct SettingsView: View {
                             displayedComponents: .hourAndMinute
                         )
                     }
+                    if model.settings.updateMode == .onRelease {
+                        LabeledContent("Check for releases every") {
+                            HStack {
+                                TextField("Minutes", value: releaseCheckMinutes, format: .number)
+                                    .labelsHidden()
+                                    .frame(width: 60)
+                                Stepper("Minutes", value: releaseCheckMinutes, in: AppSettings.releaseCheckMinutesRange)
+                                    .labelsHidden()
+                                Text("minutes")
+                            }
+                        }
+                        ReleaseCheckLine(schedule: updates.schedule, note: model.releaseCheckNote) {
+                            updates.check(manual: true)
+                        }
+                        .onChange(of: updates.isChecking) { _, checking in
+                            if checking { model.releaseCheckNote = nil }
+                        }
+                    }
                 } header: {
                     Text("Updates")
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         SectionFooter(model.settings.updateMode.explanation)
+                        if model.settings.updateMode == .onRelease {
+                            SectionFooter(UpdateCheckSchedule.rateLimitNote)
+                        }
                         if let line = model.settings.updateMode.blockerLine(
                             model.updateBlocker(model.settings.developmentMode)
                         ) {
@@ -741,6 +784,31 @@ private struct SectionFooter: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The last update check under Check for releases every N minutes, with Check Now (S1a–S1d): a spinner while it
+/// checks, and `note` in its place once after the minutes were moved into range.
+struct ReleaseCheckLine: View {
+    let schedule: UpdateCheckSchedule
+    let note: String?
+    let checkNow: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            HStack {
+                if schedule.isChecking {
+                    ProgressView().controlSize(.small)
+                }
+                Text(schedule.isChecking ? UpdateCheckSchedule.checkingLine
+                    : note ?? schedule.settingsLine(now: context.date, calendar: .current))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Check Now", action: checkNow)
+                    .disabled(schedule.isChecking)
+            }
+        }
     }
 }
 
