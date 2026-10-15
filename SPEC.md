@@ -4721,8 +4721,9 @@ Minimum endpoints:
     last), for the Mac app's Inbox. Read-only, served like `/api/v1/state`, and it MUST make no
     tracker request: the implementation reads the tracker on its own poll and serves what it cached.
   - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
-    one query per repository route lists the issues in its scope in `Plan Review` or carrying the
-    `Blocked` or `Needs Decision` label, with their `updatedAt` and the last edit of their newest comment; only an issue whose
+    one query per repository route lists the issues in its scope in `Plan Review` or held
+    (`Blocked` or `Needs Decision`) in the run store, by id and whatever labels the board shows,
+    with their `updatedAt` and the last edit of their newest comment; only an issue whose
     pair changed since the last read is read again in full (comments, state history, labels,
     attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
     `inbox`.
