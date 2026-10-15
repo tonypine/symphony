@@ -17,6 +17,7 @@ defmodule SymphonyElixir.Orchestrator do
     BreakdownReview,
     BuildInfo,
     CiPoller,
+    CiWait,
     Config,
     Connected,
     Decisions,
@@ -782,26 +783,63 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The epic review found CI still running on the commit it reviews (`SymphonyElixir.EpicReview`).
-  # Nothing failed: the attempt stays, no `run_failed` goes out, and the review starts again once CI
-  # had a minute more to finish.
-  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:ci_pending, %{}} = reason) do
+  # Nothing failed: the attempt stays, no `run_failed` goes out, the run counts towards no dispatch
+  # loop, and the review starts again once CI had a minute more to finish. The wait is bounded per
+  # commit (`SymphonyElixir.CiWait`): past the limit the ticket is held instead.
+  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:ci_pending, %{} = info} = reason) do
     error = agent_exit_reason_summary(reason)
     persist_run_completion(running_entry, "waiting_for_ci", error)
-    Logger.info("Agent task for issue_id=#{issue_id} session_id=#{session_id} is #{error}; retrying after CI")
+    repo_key = running_entry_repo_key(running_entry)
 
-    schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
-      repo_key: running_entry_repo_key(running_entry),
-      identifier: running_entry.identifier,
-      title: running_entry_title(running_entry),
-      error: error,
-      worker_host: Map.get(running_entry, :worker_host),
-      workspace_path: Map.get(running_entry, :workspace_path),
-      delay_type: :ci_wait
-    })
+    case ci_wait(repo_key, issue_id, info) do
+      :wait ->
+        Logger.info("Agent task for issue_id=#{issue_id} session_id=#{session_id} is #{error}; retrying after CI")
+
+        schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
+          repo_key: repo_key,
+          identifier: running_entry.identifier,
+          title: running_entry_title(running_entry),
+          error: error,
+          worker_host: Map.get(running_entry, :worker_host),
+          workspace_path: Map.get(running_entry, :workspace_path),
+          delay_type: :ci_wait
+        })
+
+      {:over, since} ->
+        hold_ci_wait(state, issue_id, running_entry, repo_key, info, since)
+    end
   end
 
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
     handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+  end
+
+  # When the wait for CI on the commit started, from the ticket's store record; the first wait on a
+  # commit records its start. A record the store can't read starts no clock, so the review keeps
+  # waiting, bounded by the epic review's own limit on a stuck workflow run.
+  defp ci_wait(repo_key, issue_id, %{sha: sha}) do
+    record = TicketState.normalize(RunStore.get_ticket_state(repo_key, issue_id))
+    now = DateTime.utc_now()
+
+    case CiWait.since(record.signals, sha) do
+      nil ->
+        record_ticket_signal(repo_key, issue_id, CiWait.start_signal(), %{sha: sha})
+        :wait
+
+      since ->
+        if CiWait.over?(since, now), do: {:over, since}, else: :wait
+    end
+  end
+
+  # Past the limit the review is not started again: a Blocked hold names the commit and the workflows
+  # still running, which a person lifts with Unblock. A store write that fails leaves the
+  # ticket unheld, so the next poll starts the review again and finds the same wait.
+  defp hold_ci_wait(%State{} = state, issue_id, running_entry, repo_key, %{sha: sha} = info, since) do
+    attrs = CiWait.hold_attrs(info, since, DateTime.utc_now())
+    _ = Hold.set(repo_key, issue_id, :blocked, attrs)
+    Logger.error("Holding #{running_entry.identifier} instead of waiting longer for CI: #{attrs.reason}")
+    record_ticket_signal(repo_key, issue_id, CiWait.hold_type(), %{sha: sha})
+    release_issue_claim(state, issue_id)
   end
 
   defp handle_failed_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
@@ -4839,7 +4877,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # How the run ended, for the dispatch-loop guard's hold reason: its exit and the PR head it left. A
-  # run stopped by a usage limit or an unreachable model API counts no attempt, so it is dropped.
+  # run stopped by a usage limit or an unreachable model API counts no attempt, and an epic review
+  # waiting for CI is not a loop (`SymphonyElixir.CiWait` bounds that wait), so both are dropped.
   defp record_dispatch_outcome(%{run_id: run_id, issue: %Issue{id: issue_id}} = running_entry, reason) when is_binary(run_id) do
     if pr_run_entry?(running_entry) do
       :ok
@@ -4854,7 +4893,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp record_dispatch_outcome(_running_entry, _reason), do: :ok
 
-  defp dispatch_outcome({uncounted, _info}, _issue_id, _repo_key) when uncounted in [:usage_limited, :model_api_unreachable],
+  defp dispatch_outcome({uncounted, _info}, _issue_id, _repo_key) when uncounted in [:usage_limited, :model_api_unreachable, :ci_pending],
     do: %{counted: false}
 
   defp dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}

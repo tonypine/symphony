@@ -1257,7 +1257,10 @@ and it is `skipped` only when no run can be read or a run is still in progress. 
 CI before it starts the epic review's agent: while a run on that commit is unfinished, the review
 starts again a minute later, without a verdict or a retry attempt, so a review that starts the
 moment the last sub-ticket merges does not judge a commit CI is still testing. A run still
-unfinished after two hours is not waited on. The public API is
+unfinished after two hours is not waited on, and these restarts don't count as a dispatch loop. The
+wait on one commit is bounded: once it has lasted an hour, Symphony starts the review no more and
+puts the epic on a `Blocked` hold whose reason names the commit and the workflows still running; the
+Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
@@ -1986,7 +1989,8 @@ The `dispatch_loop_*` keys (positive integers; the two `runs` at most 50) bound 
 progress, whatever `enabled` says. Symphony records every run it starts in the ticket's store record
 and, before the next one, counts the runs of the same kind since the ticket last made progress: a
 state move, a new PR head, a recorded verdict, or a hold that lifted. A run stopped by a usage limit
-or an unreachable model API isn't counted. When those runs already reach `dispatch_loop_runs` within
+or an unreachable model API isn't counted, nor an epic review that found CI still running on the
+commit it reviews (that wait has its own one-hour bound, see the epic review). When those runs already reach `dispatch_loop_runs` within
 `dispatch_loop_window_ms` (4 in 10 minutes by default) or `dispatch_loop_long_runs` within
 `dispatch_loop_long_window_ms` (8 in an hour), Symphony starts no more. It puts the ticket on a
 `Blocked` hold whose reason names the run kind, the count, the window and how the last runs ended
