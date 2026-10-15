@@ -97,8 +97,8 @@ defmodule SymphonyElixir.BlockedHold do
   @doc """
   Runs `sync/3` over a repo's polled issues and returns how many holds it changed, with the
   `SymphonyElixir.UpdateHold` cache its build lookups extended, so the next poll does not look them
-  up again. A hand-added `Blocked` label with no store record is reported and cleared, and a store
-  hold missing its `Blocked` or `Needs Decision` label gets it back, so the board matches the store.
+  up again. A hand-added `Blocked` or `Needs Decision` label with no store record is reported and
+  cleared, and a store hold missing its label gets it back, so the board matches the store.
   """
   @spec sweep([Issue.t()] | term(), Enumerable.t(String.t()), keyword()) :: {non_neg_integer(), UpdateHold.cache()}
   def sweep(issues, terminal_states, opts \\ []) do
@@ -303,23 +303,22 @@ defmodule SymphonyElixir.BlockedHold do
 
   defp drop_stale_fix_ticket(_repo_key, _issue_id, _current, _opts), do: :ok
 
-  # The store is the truth for a hold, so the board is repaired to match it in both directions. A
-  # `Blocked` label with no store hold is a hand-added label: report it and clear it. A store hold
-  # whose label is missing — its label write failed, or a person removed it by hand — is
-  # re-projected from the store, so a hold that is pausing dispatch is never silently invisible.
-  # That goes for a Needs Decision hold too: the Inbox lists its tickets by that label, so a hold
-  # whose label is gone would never have its answer read and would pause the ticket for good. A
-  # stray `Needs Decision` label is left to the Inbox, which reads every ticket that carries one.
+  # The store is the truth for a hold, so the board is repaired to match it in both directions, for
+  # both kinds of hold. A hold label with no store hold is a hand-added label: report it and clear
+  # it. A store hold whose label is missing — its label write failed, or a person removed it by
+  # hand — is re-projected from the store, so a hold that is pausing dispatch is never silently
+  # invisible. The Inbox reads held tickets from the store, not by their label, so this poll is what
+  # keeps a `Needs Decision` label in line with its hold.
   defp repair_drift(repo_key, issue_id, labels, opts) do
     case Hold.report_drift(repo_key, issue_id, labels, opts) do
-      {:stray_label, :blocked} -> clear_label(repo_key, issue_id, opts)
+      {:stray_label, kind} -> clear_label(repo_key, issue_id, kind, opts)
       {:missing_label, kind} -> reproject_label(repo_key, issue_id, kind, opts)
-      _ok_or_stray_decision -> :ok
+      :ok -> :ok
     end
   end
 
-  defp clear_label(repo_key, issue_id, opts) do
-    _ = Hold.clear(repo_key, issue_id, :blocked, opts)
+  defp clear_label(repo_key, issue_id, kind, opts) do
+    _ = Hold.clear(repo_key, issue_id, kind, opts)
     :ok
   end
 

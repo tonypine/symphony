@@ -2193,8 +2193,9 @@ human_actions:
 **Waiting on you.** The list `/api/v1/state` returns as `waiting_on_you`, which the dashboard and
 the menu bar app show, is the Mac app's Inbox (`GET /api/v1/inbox`) in short. Symphony builds it on
 its own poll, not on this read: every `polling.interval_ms` it lists the tickets in
-`issues.states.plan_review` in each route's scope plus the ones carrying the `Blocked` or
-`Needs Decision` label (a hold pauses a ticket in its phase, wherever it sits), reads a ticket's
+`issues.states.plan_review` in each route's scope plus the ones Symphony's store holds `Blocked`
+or `Needs Decision` (a hold pauses a ticket in its phase, wherever it sits; the label is only its
+projection, so a ticket whose label went missing is still read), reads a ticket's
 comments again only when the ticket changed, and adds the quality gate's holds and skips. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request,
 `plan` for a `plan` or `breakdown` parent in `Plan Review`; `clarify` for a quality gate hold or

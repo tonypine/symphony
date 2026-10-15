@@ -248,12 +248,15 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert labels() == ["Needs Decision"]
     end
 
-    test "leaves a Needs Decision label with no store hold to the Inbox" do
+    test "reports and clears a hand-added Needs Decision label with no store hold" do
+      # The Inbox reads held tickets from the store, so it never reads this one: the poll clears it.
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Needs Decision"]})])
 
-      capture_log(fn -> assert BlockedHold.sync(issue(%{labels: ["Needs Decision"]}), @terminal, settings: designed_settings()) == :none end)
+      log = capture_log(fn -> assert BlockedHold.sync(issue(%{labels: ["Needs Decision"]}), @terminal, settings: designed_settings()) == :none end)
 
-      assert labels() == ["Needs Decision"]
+      assert log =~ "with no store hold"
+      assert labels() == []
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
     end
 
     test "a store failure is logged and reports no change" do

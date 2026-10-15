@@ -72,6 +72,22 @@ defmodule SymphonyElixir.Hold do
   end
 
   @doc """
+  The ids of the repo's tickets that carry a hold of any kind, read from the store in one go. The
+  Inbox reads these tickets whether or not the board shows their label: the label is only the
+  projection, so a missing one must not keep a hold's answer from being read.
+  """
+  @spec held_issue_ids(String.t(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
+  def held_issue_ids(repo_key, opts \\ []) do
+    case Keyword.get(opts, :store, RunStore).list_ticket_states(repo_key) do
+      records when is_list(records) ->
+        {:ok, for(%{issue_id: issue_id, holds: [_ | _]} <- Enum.map(records, &TicketState.normalize/1), is_binary(issue_id), do: issue_id)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Whether a hold waits on a person's `Unblock` (see `SymphonyElixir.DirectorMoves`): one waiting on
   an access grant a person hands over — what an agent's block report records — or one the
   dispatch-loop guard set (`SymphonyElixir.DispatchLoop`). A dependency or fix-ticket hold clears on

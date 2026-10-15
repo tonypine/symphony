@@ -3,7 +3,6 @@ defmodule SymphonyElixir.InboxTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.BlockedHold
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Inbox
@@ -338,14 +337,6 @@ defmodule SymphonyElixir.InboxTest do
     end
   end
 
-  # Records the label the poll's drift check puts back.
-  defmodule LabelTracker do
-    def set_machine_label(issue_id, name) do
-      send(self(), {:machine_label_set, issue_id, name})
-      :ok
-    end
-  end
-
   describe "the poller" do
     test "the read is also the one that sets and clears the Needs Decision hold" do
       test_pid = self()
@@ -389,12 +380,11 @@ defmodule SymphonyElixir.InboxTest do
       assert [%{id: "D1", key: "request", title: "Add the signing secret", question: "Add the secret?"}] = SymphonyElixir.Decisions.recorded(description)
     end
 
-    test "a hold whose label went missing is read again once the poll puts the label back, and its answer clears it" do
+    test "reads a ticket the store holds by its id, label or not, so an answer posted while the label was missing clears it" do
       test_pid = self()
       :ok = RunStore.set_ticket_hold("shop", "id-SHOP-92", :needs_decision, %{reason: "Add the secret?", decision: %{title: "Add the signing secret", question: "Add the secret?"}})
 
-      # The person answered under the request while the label was gone: the list filters on the
-      # label, so the Inbox does not read the ticket and the hold stays.
+      # The label went missing and the person answered under the request.
       answered =
         issue_node("SHOP-92", %{
           "state" => %{"name" => "QA"},
@@ -408,29 +398,38 @@ defmodule SymphonyElixir.InboxTest do
           }
         })
 
+      # Linear lists only what the filter names: the ticket is found by its id, not its label.
+      listed = fn %{filter: %{"and" => [_scope, %{"or" => conditions}]}} ->
+        if %{"id" => %{"in" => ["id-SHOP-92"]}} in conditions, do: page([light(answered)]), else: page([])
+      end
+
       test_pid
-      |> linear(fn _variables -> page([]) end, %{})
+      |> linear(listed, %{answered["id"] => answered})
       |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
       |> Inbox.run_once()
 
-      assert TicketState.hold?(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision)
-
-      # The poll's drift check puts the label back from the store.
-      polled = %Issue{id: "id-SHOP-92", identifier: "SHOP-92", state: "QA", labels: [], repo_key: "shop"}
-      capture_log(fn -> BlockedHold.sync(polled, ["Done"], settings: designed_settings(), tracker: LabelTracker) end)
-      assert_received {:machine_label_set, "id-SHOP-92", "Needs Decision"}
-
-      # The next Inbox read lists it by the label, sees the answer, records it and clears the hold.
-      labeled = put_in(answered, ["labels", "nodes"], [%{"name" => "Needs Decision"}])
-
-      test_pid
-      |> linear(fn _variables -> page([light(labeled)]) end, %{labeled["id"] => labeled})
-      |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
-      |> Inbox.run_once()
+      assert_received {:listed, %{"and" => [_scope, %{"or" => conditions}]}}
+      refute Enum.any?(conditions, &Map.has_key?(&1, "labels"))
+      assert_received {:read, ["id-SHOP-92"]}
 
       assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
       assert_received {:description_written, "id-SHOP-92", description}
       assert [%{id: "D1", key: "request", title: "Add the signing secret"}] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "keeps the last list when the store's holds can't be read" do
+      test_pid = self()
+
+      log =
+        capture_log(fn ->
+          test_pid
+          |> linear(fn _variables -> page([]) end, %{})
+          |> state(held_issue_ids: fn "shop" -> {:error, :boom} end)
+          |> Inbox.run_once()
+        end)
+
+      assert log =~ "{:hold_store_unreadable, :boom}"
+      refute_received {:listed, _filter}
     end
 
     test "reads an issue in full once, and again only when it or a comment changed" do
@@ -442,9 +441,9 @@ defmodule SymphonyElixir.InboxTest do
 
       state = Inbox.run_once(state)
       assert_received {:listed, %{"and" => [%{"team" => _}, %{"or" => [%{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} | conditions]}]}}
-      # A held ticket sits in its phase, so the hold's label lists it.
-      assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Blocked"}}}} in conditions
-      assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}} in conditions
+      # A held ticket sits in its phase, so the store's holds list it by id, never the label.
+      assert [%{"id" => %{"in" => held}}] = conditions
+      assert is_list(held)
       assert_received {:read, ["id-SHOP-7"]}
       assert [%{identifier: "SHOP-7", ask: "The retry fix for the importer."}] = Inbox.cached(state.opts[:name])
 
