@@ -6,7 +6,8 @@ defmodule SymphonyElixir.TicketState do
   a CI Fix stay came from (so a mechanical repair can return it), the holds that pause it
   (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records, its
   signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
-  last made progress, which `SymphonyElixir.DispatchLoop` counts.
+  last made progress, which `SymphonyElixir.DispatchLoop` counts, and the decisions a person recorded
+  on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects.
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -70,6 +71,21 @@ defmodule SymphonyElixir.TicketState do
   """
   @type path_unlock :: %{id: String.t(), run_id: String.t() | nil, at: DateTime.t() | nil}
 
+  @typedoc """
+  One decision a person recorded on the ticket (`SymphonyElixir.Decisions`): the id of the request
+  comment it answers (or `ruling-<comment id>`), the day, the request's title and question, the
+  answer and what it means for scope. The list keeps the order they were recorded in, which numbers
+  them `D1`, `D2`…
+  """
+  @type decision :: %{
+          key: String.t(),
+          date: Date.t() | String.t(),
+          title: String.t(),
+          question: String.t(),
+          answer: String.t(),
+          scope: String.t()
+        }
+
   @typedoc "The CI state of one PR head."
   @type ci_state :: %{head_sha: String.t() | nil, status: String.t(), updated_at: DateTime.t() | nil}
 
@@ -101,6 +117,7 @@ defmodule SymphonyElixir.TicketState do
           self_heal: self_heal() | nil,
           dispatches: [dispatch()],
           path_unlocks: [path_unlock()],
+          decisions: [decision()],
           updated_at: DateTime.t() | nil
         }
 
@@ -136,6 +153,7 @@ defmodule SymphonyElixir.TicketState do
       self_heal: normalize_self_heal(Map.get(record, :self_heal)),
       dispatches: normalize_dispatches(Map.get(record, :dispatches)),
       path_unlocks: normalize_path_unlocks(Map.get(record, :path_unlocks)),
+      decisions: normalize_decisions(Map.get(record, :decisions)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -154,6 +172,7 @@ defmodule SymphonyElixir.TicketState do
       self_heal: nil,
       dispatches: [],
       path_unlocks: [],
+      decisions: [],
       updated_at: nil
     }
   end
@@ -177,6 +196,29 @@ defmodule SymphonyElixir.TicketState do
         {%{record | path_unlocks: record.path_unlocks ++ unlocks, updated_at: at}, claimed}
     end
   end
+
+  @doc """
+  Appends the `entries` whose key the record does not hold yet to its decisions, each once, and
+  returns the record with its whole list. When the record holds no decision yet, the `backfill` ones
+  (the decisions a description recorded before the store kept them) go first, so a ticket is
+  backfilled once and never twice. A record nothing is added to is returned as it was.
+  """
+  @spec put_decisions(t(), [map()], [map()], DateTime.t()) :: t()
+  def put_decisions(record, entries, backfill \\ [], at \\ DateTime.utc_now()) when is_list(entries) and is_list(backfill) do
+    record = normalize(record)
+    base = if record.decisions == [], do: normalize_decisions(backfill), else: record.decisions
+    keys = MapSet.new(base, & &1.key)
+    added = entries |> normalize_decisions() |> Enum.reject(&MapSet.member?(keys, &1.key))
+
+    case base ++ added do
+      same when same == record.decisions -> record
+      decisions -> %{record | decisions: decisions, updated_at: at}
+    end
+  end
+
+  @doc "The decisions recorded on the ticket, in the order they were recorded."
+  @spec decisions(t()) :: [decision()]
+  def decisions(record), do: record |> normalize() |> Map.fetch!(:decisions)
 
   @doc "Sets the record's phase, the state the machine believes the ticket is in."
   @spec put_phase(t(), String.t() | nil, DateTime.t()) :: t()
@@ -523,6 +565,41 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_path_unlocks(_unlocks), do: []
+
+  # Each key once, at its first place.
+  defp normalize_decisions(decisions) when is_list(decisions) do
+    decisions
+    |> Enum.flat_map(&normalize_decision/1)
+    |> Enum.uniq_by(& &1.key)
+  end
+
+  defp normalize_decisions(_decisions), do: []
+
+  defp normalize_decision(%{key: key} = decision) when is_binary(key) and key != "" do
+    [
+      %{
+        key: key,
+        date: normalize_date(Map.get(decision, :date)),
+        title: text(decision, :title),
+        question: text(decision, :question),
+        answer: text(decision, :answer),
+        scope: text(decision, :scope)
+      }
+    ]
+  end
+
+  defp normalize_decision(_decision), do: []
+
+  defp normalize_date(%Date{} = date), do: date
+  defp normalize_date(date) when is_binary(date), do: date
+  defp normalize_date(_date), do: ""
+
+  defp text(map, key) do
+    case Map.get(map, key) do
+      value when is_binary(value) -> value
+      _value -> ""
+    end
+  end
 
   defp normalize_dispatches(dispatches) when is_list(dispatches) do
     dispatches

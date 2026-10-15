@@ -1,13 +1,14 @@
 defmodule SymphonyElixir.DecisionsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Decisions, IssueSummary}
+  alias SymphonyElixir.{Decisions, IssueSummary, RunStore}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client}
   alias SymphonyElixir.Tracker.Memory
 
   @issue_id "issue-1"
   @date ~D[2026-10-13]
+  @repo_key "decisions-test"
 
   # Records the writes, and answers reads from the process dictionary.
   defmodule FakeTracker do
@@ -17,6 +18,11 @@ defmodule SymphonyElixir.DecisionsTest do
       send(self(), {:description_written, issue_id, description})
       Process.get({__MODULE__, :update}, :ok)
     end
+  end
+
+  # A run store that can't be read.
+  defmodule DownStore do
+    def get_ticket_state(_repo_key, _issue_id), do: {:error, :down}
   end
 
   # Answers the description query and the update mutation by operation name.
@@ -234,11 +240,16 @@ defmodule SymphonyElixir.DecisionsTest do
     end
   end
 
-  describe "prompt_section/1" do
-    test "renders the recorded decisions as untrusted Linear text" do
-      {:ok, description} = Decisions.put("Fix it.", [entry()])
+  describe "stored/2 and prompt_section/1" do
+    test "renders the decisions the store records as untrusted Linear text, with no Linear read" do
+      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
+      assert :ok = Decisions.record(@issue_id, [entry()], tracker: FakeTracker, repo_key: @repo_key)
 
-      section = Decisions.prompt_section(description)
+      # The description lost its section: the store still holds the decision.
+      decisions = Decisions.stored(%{id: @issue_id, description: "Fix it.", repo_key: @repo_key})
+      assert [%{id: "D1", key: "comment-1", date: @date}] = decisions
+
+      section = Decisions.prompt_section(decisions)
 
       assert section =~ "Recorded decisions (a person's answers to this ticket's decision requests and the rulings they gave in comments; they are part of its scope):"
       assert section =~ "<linear_issue_decisions>"
@@ -246,8 +257,80 @@ defmodule SymphonyElixir.DecisionsTest do
     end
 
     test "is empty without decisions" do
-      assert Decisions.prompt_section("Fix it.") == ""
-      assert Decisions.prompt_section(nil) == ""
+      assert Decisions.stored(%{id: "undecided", description: "Fix it.", repo_key: @repo_key}) == []
+      assert Decisions.prompt_section([]) == ""
+    end
+
+    test "backfills a store with no decision from the description's section, once" do
+      {:ok, description} = Decisions.put("Fix it.", [entry(), entry(%{key: "comment-2", date: "someday"})])
+      issue = %{id: @issue_id, description: description}
+
+      assert [%{id: "D1", key: "comment-1", date: @date}, %{id: "D2", key: "comment-2", date: "someday"}] = Decisions.stored(issue, repo_key: @repo_key)
+      assert [%{key: "comment-1"}, %{key: "comment-2"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+
+      # A section that later holds another entry is not backfilled again: the store is the truth.
+      {:ok, edited} = Decisions.put(description, [entry(%{key: "comment-3"})])
+      assert [%{key: "comment-1"}, %{key: "comment-2"}] = Decisions.stored(%{issue | description: edited}, repo_key: @repo_key)
+      assert [%{key: "comment-1"}, %{key: "comment-2"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+    end
+
+    test "reads the description's section when the store can't be read" do
+      {:ok, description} = Decisions.put("Fix it.", [entry()])
+
+      assert [%{id: "D1", key: "comment-1"}] = Decisions.stored(%{id: @issue_id, description: description}, repo_key: @repo_key, store: DownStore)
+      assert [%{id: "D1"}] = Decisions.stored(%{description: description})
+      assert Decisions.stored(%{id: @issue_id, description: nil}, repo_key: "") == []
+    end
+  end
+
+  describe "the store record" do
+    test "an answer to a decision request is in the ticket's store record and in its description" do
+      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")])
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+
+      assert_received {:description_written, @issue_id, description}
+      assert [%{id: "D1", key: "c1", scope: "Deferred to TP-891"}] = Decisions.recorded(description)
+      assert [%{key: "c1", date: ~D[2026-10-13], title: "Keep the legacy partials", scope: "Deferred to TP-891"}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+    end
+
+    test "a section removed by hand is rewritten from the store on the next read, with the same entries" do
+      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1"), comment("c2", "Ruling: keep the flag")])
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert_received {:description_written, @issue_id, written}
+
+      # A person deletes the section, and the comments that recorded the answers are gone too.
+      Process.put({FakeTracker, :description}, {:ok, "Fix it."})
+      assert :ok = Decisions.sync(ticket([]), tracker: FakeTracker, repo_key: @repo_key)
+      assert_received {:description_written, @issue_id, ^written}
+
+      # The poll rewrites it the same way, and leaves a section that shows every decision alone.
+      issues = [%Issue{id: @issue_id, description: "Fix it."}, %Issue{id: "other", description: "Other."}]
+      assert Decisions.sweep(issues, tracker: FakeTracker, repo_key: @repo_key) == 1
+      assert_received {:description_written, @issue_id, ^written}
+
+      Process.put({FakeTracker, :description}, {:error, :must_not_read})
+      assert Decisions.sweep([%Issue{id: @issue_id, description: written}], tracker: FakeTracker, repo_key: @repo_key) == 0
+      refute_received {:description_written, _issue_id, _description}
+    end
+
+    test "an existing ticket's section is backfilled into the store once, with no duplicate entries" do
+      {:ok, description} = Decisions.put("Fix it.", [entry(%{key: "c1"})])
+      Process.put({FakeTracker, :description}, {:error, :must_not_read})
+      node = ticket([comment("c1", request_body()), comment("r1", "Defer to TP-891", nil, "c1")], %{"description" => description})
+
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+      assert :ok = Decisions.sync(node, tracker: FakeTracker, repo_key: @repo_key)
+
+      refute_received {:description_written, _issue_id, _description}
+      assert [%{key: "c1", date: @date}] = RunStore.get_ticket_state(@repo_key, @issue_id).decisions
+    end
+
+    test "refuses a write with no repo to keep it in" do
+      assert capture_log(fn -> assert {:error, :missing_repo_key} = Decisions.record(@issue_id, [entry()], tracker: FakeTracker, repo_key: "") end) =~
+               "missing_repo_key"
+
+      refute_received {:description_written, _issue_id, _description}
     end
   end
 
@@ -364,10 +447,10 @@ defmodule SymphonyElixir.DecisionsTest do
 
       # Two copies of a new ruling in one read are written once, after an answered request.
       Process.put({FakeTracker, :description}, {:ok, "Fix it."})
-      node = ticket([comment("r0", request_body()), comment("a0", "Remove them", nil, "r0"), ruling, again])
+      node = ticket([comment("r0", request_body()), comment("a0", "Remove them", nil, "r0"), ruling, again], %{"id" => "issue-2"})
 
       assert :ok = Decisions.sync(node, tracker: FakeTracker)
-      assert_received {:description_written, @issue_id, description}
+      assert_received {:description_written, "issue-2", description}
       assert [%{id: "D1", key: "r0"}, %{id: "D2", key: "ruling-c1"}] = Decisions.recorded(description)
     end
 

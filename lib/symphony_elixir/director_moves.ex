@@ -468,7 +468,7 @@ defmodule SymphonyElixir.DirectorMoves do
     title = get_in(hold, [:decision, :title])
     question = get_in(hold, [:decision, :question]) || Enum.map_join(picks, " / ", & &1.question)
     entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.map_join(picks, " / ", & &1.answer))
-    _ = Decisions.record(issue.id, [entry])
+    _ = Decisions.record(issue.id, [entry], repo_key: issue.repo_key)
     :ok
   end
 

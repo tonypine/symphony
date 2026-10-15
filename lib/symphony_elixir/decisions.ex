@@ -21,6 +21,13 @@ defmodule SymphonyElixir.Decisions do
   text is never rewritten. A section that holds an id more than once is rewritten once, each
   decision kept at its first place and numbered again.
 
+  The ticket's store record (`SymphonyElixir.TicketState`'s `decisions`, kept by
+  `SymphonyElixir.RunStore`) is the source of truth, and the section is its projection: every write
+  goes to the store first, then the section is projected into the description. A section that lost
+  an entry, or the whole section, is drift: the next read that sees it rewrites it from the store.
+  A ticket whose store record holds no decision yet while its description has a section is
+  backfilled from the section, once.
+
   A decision is recorded when a person answers it: `sync/2` writes the answered requests of a ticket
   the Inbox read (a reply under the request), and the Director's Decide writes its picks
   (`SymphonyElixir.DirectorMoves`). A person can also rule in a plain comment that opens with
@@ -29,14 +36,15 @@ defmodule SymphonyElixir.Decisions do
   whose answer the section already records is skipped, so the same ruling commented again adds
   nothing. Symphony never writes such a comment itself: its own comments open with their headings,
   and the agents' comment tools refuse a body that reads as a ruling
-  (`SymphonyElixir.AgentTools.Linear`). `prompt_section/1` renders the section for the reviewer and
-  QA prompts; the implementation prompt reads it in the description.
+  (`SymphonyElixir.AgentTools.Linear`). `stored/2` reads a ticket's decisions from the store, and
+  `prompt_section/1` renders them for the implementation, reviewer and QA prompts, with no Linear
+  read.
   """
 
   require Logger
 
+  alias SymphonyElixir.{Config, IssueSummary, PromptSafety, RunStore, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
-  alias SymphonyElixir.{IssueSummary, PromptSafety, Tracker}
 
   @start_marker "<!-- symphony:decisions:start -->"
   @end_marker "<!-- symphony:decisions:end -->"
@@ -70,11 +78,11 @@ defmodule SymphonyElixir.Decisions do
           scope: String.t()
         }
 
-  @typedoc "A recorded decision read back from the section, with its `D<n>` label."
+  @typedoc "A recorded decision read back from the section or the store, with its `D<n>` label."
   @type recorded :: %{
           id: String.t(),
           key: String.t(),
-          date: String.t(),
+          date: Date.t() | String.t(),
           title: String.t(),
           question: String.t(),
           answer: String.t(),
@@ -305,12 +313,12 @@ defmodule SymphonyElixir.Decisions do
   def strip(description), do: description
 
   @doc """
-  The Decisions section as a prompt reads it: a heading and the recorded decisions wrapped as
-  untrusted Linear text, or an empty string when the description has none.
+  The recorded decisions as a prompt reads them (`stored/2`): a heading and the decisions wrapped as
+  untrusted Linear text, or an empty string when there are none.
   """
-  @spec prompt_section(String.t() | nil) :: String.t()
-  def prompt_section(description) do
-    case recorded(description) do
+  @spec prompt_section([recorded()]) :: String.t()
+  def prompt_section(decisions) when is_list(decisions) do
+    case decisions do
       [] ->
         ""
 
@@ -414,75 +422,175 @@ defmodule SymphonyElixir.Decisions do
   end
 
   @doc """
+  The decisions recorded on `issue` (a map with its `:id`, `:description` and `:repo_key`), read
+  from its store record in the order they were recorded and labelled `D1`, `D2`… A record that holds
+  none while the description has a section is backfilled from it first. When the store can't be
+  read, the description's section is what is returned. `opts[:repo_key]` overrides the issue's repo.
+  """
+  @spec stored(map(), keyword()) :: [recorded()]
+  def stored(issue, opts \\ []) when is_map(issue) do
+    description = Map.get(issue, :description) || ""
+
+    with issue_id when is_binary(issue_id) <- Map.get(issue, :id),
+         {:ok, repo_key} <- repo_key(issue_repo_key(opts, issue)),
+         {:ok, decisions} <- store_decisions(repo_key, issue_id, [], description, opts) do
+      label(decisions)
+    else
+      _unavailable -> label(backfill(description))
+    end
+  end
+
+  defp issue_repo_key(opts, issue), do: Keyword.put(opts, :repo_key, Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key))
+
+  defp label(decisions), do: decisions |> Enum.with_index(1) |> Enum.map(fn {decision, index} -> Map.put(decision, :id, "D#{index}") end)
+
+  @doc """
   Records the decisions answered on a ticket node (`answered/1`) and the rulings its comments give
-  (`rulings/1`) in its description. The node's own description is checked first, so a ticket whose
-  decisions are all recorded costs no Linear call; otherwise `record/3` reads the description again
-  and writes what is missing, or rewrites a section that holds a decision more than once. A failure is logged and returned, never raised: the
-  next poll tries again.
+  (`rulings/1`): the ones its store record lacks go into it, and the section is projected from the
+  record. The node's own description is checked first, so a ticket whose section already shows
+  every recorded decision costs no Linear call; a section that misses one, or holds one more than
+  once, is rewritten from the store. `opts[:repo_key]` names the ticket's repo. A failure is logged
+  and returned, never raised: the next poll tries again.
   """
   @spec sync(map(), keyword()) :: :ok | {:error, term()}
   def sync(%{"id" => issue_id} = node, opts) when is_binary(issue_id) do
-    {keys, recorded} = section_state(node["description"])
-
-    case {missing(answered(node) ++ rulings(node), keys, recorded), repeated?(keys)} do
-      {[], false} -> :ok
-      {entries, _repeated} -> record(issue_id, entries, opts)
-    end
+    record(issue_id, answered(node) ++ rulings(node), Keyword.put(opts, :description, node["description"]))
   end
 
   def sync(_node, _opts), do: :ok
 
   @doc """
   Records the rulings the poll read on each issue (`SymphonyElixir.Linear.Issue`'s `rulings`, from
-  `rulings/1`) that its description does not record yet, so a ruling on any ticket Symphony polls is
-  written on the poll that sees it, held or not. An issue whose rulings are all recorded costs no
-  Linear call. Returns how many issues were written; a failure is logged, and the next poll tries
-  again.
+  `rulings/1`) in its store record, and projects the record into each description whose section
+  misses a decision, so a ruling on any ticket Symphony polls is written on the poll that sees it,
+  held or not, and a section a person removed comes back. An issue whose section shows every
+  recorded decision costs no Linear call. `opts[:repo_key]` names the polled repo. Returns how many
+  descriptions were written; a failure is logged, and the next poll tries again.
   """
   @spec sweep([map()] | term(), keyword()) :: non_neg_integer()
   def sweep(issues, opts \\ []) do
-    if is_list(issues), do: Enum.count(issues, &record_rulings(&1, opts)), else: 0
+    if is_list(issues), do: Enum.count(issues, &sweep_issue(&1, opts)), else: 0
   end
 
-  defp record_rulings(%{id: issue_id, rulings: [_ | _] = rulings} = issue, opts) when is_binary(issue_id) do
-    {keys, recorded} = section_state(Map.get(issue, :description))
-    missing(rulings, keys, recorded) != [] and record(issue_id, rulings, opts) == :ok
+  defp sweep_issue(%{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    opts =
+      opts
+      |> issue_repo_key(issue)
+      |> Keyword.put(:description, Map.get(issue, :description))
+
+    logged(issue_id, project_decisions(issue_id, Map.get(issue, :rulings) || [], opts)) == {:ok, :written}
   end
 
-  defp record_rulings(_issue, _opts), do: false
+  defp sweep_issue(_issue, _opts), do: false
 
-  # The ids the description's section records, and its entries.
-  defp section_state(description) when is_binary(description) do
-    case split(description) do
-      {:block, _before, block, _rest} -> {keys(block), parse_entries(block)}
-      _none -> {[], []}
+  @doc """
+  Records `entries` on the issue: the ones its store record lacks go into it, then the record is
+  projected into the description's section, read through the tracker right before the write so a
+  person's edit since the last read survives. Nothing is written to the description when its section
+  already shows every recorded decision, each once. `opts[:repo_key]` names the ticket's repo (else
+  the configured one), `opts[:tracker]` overrides the tracker and `opts[:description]` is a
+  description already read, checked before any Linear read.
+  """
+  @spec record(String.t(), [entry()], keyword()) :: :ok | {:error, term()}
+  def record(issue_id, entries, opts) when is_binary(issue_id) and is_list(entries) do
+    case logged(issue_id, project_decisions(issue_id, entries, opts)) do
+      {:ok, _written} -> :ok
+      error -> error
     end
   end
 
-  defp section_state(_description), do: {[], []}
+  defp logged(issue_id, {:error, reason} = error) do
+    Logger.warning("Failed to record decisions on issue_id=#{issue_id}: #{inspect(reason)}")
+    error
+  end
 
-  @doc """
-  Writes `entries` into the issue's description, read through the tracker right before the write
-  so a person's edit since the last read survives. Nothing is written when every entry is already
-  recorded and the section holds each once. `opts[:tracker]` overrides the tracker.
-  """
-  @spec record(String.t(), [entry()], keyword()) :: :ok | {:error, term()}
-  def record(issue_id, entries, opts \\ []) when is_binary(issue_id) and is_list(entries) do
+  defp logged(_issue_id, result), do: result
+
+  # The store first, then the description.
+  defp project_decisions(issue_id, entries, opts) do
     tracker = Keyword.get(opts, :tracker, Tracker)
+    read? = Keyword.has_key?(opts, :description)
 
-    with {:ok, description} <- tracker.fetch_issue_description(issue_id),
-         {:ok, updated} <- put(description, entries),
-         :ok <- write(tracker, issue_id, description, updated) do
-      :ok
-    else
-      {:error, reason} = error ->
-        Logger.warning("Failed to record decisions on issue_id=#{issue_id}: #{inspect(reason)}")
+    with {:ok, repo_key} <- repo_key(opts),
+         {:ok, description} <- description(tracker, issue_id, opts),
+         {:ok, decisions} <- store_decisions(repo_key, issue_id, entries, description, opts) do
+      project(tracker, issue_id, description, decisions, not read?)
+    end
+  end
+
+  defp repo_key(opts) do
+    case Keyword.get(opts, :repo_key) || Config.repo_key_or_nil() do
+      repo_key when is_binary(repo_key) and repo_key != "" -> {:ok, repo_key}
+      _none -> {:error, :missing_repo_key}
+    end
+  end
+
+  defp description(tracker, issue_id, opts) do
+    case Keyword.fetch(opts, :description) do
+      {:ok, description} -> {:ok, description || ""}
+      :error -> fresh_description(tracker, issue_id)
+    end
+  end
+
+  defp fresh_description(tracker, issue_id) do
+    with {:ok, description} <- tracker.fetch_issue_description(issue_id), do: {:ok, description || ""}
+  end
+
+  # The record's decisions once `entries` are in it. A record that holds none takes the ones
+  # `description` records first; the store is written only when that adds a decision.
+  defp store_decisions(repo_key, issue_id, entries, description, opts) do
+    store = Keyword.get(opts, :store, RunStore)
+    backfill = backfill(description)
+
+    with {:ok, stored} <- read_decisions(store, repo_key, issue_id) do
+      known = if stored == [], do: backfill, else: stored
+
+      case missing(entries, Enum.map(known, & &1.key), known) do
+        [] when known == stored -> {:ok, stored}
+        new -> store.record_ticket_decisions(repo_key, issue_id, new, backfill)
+      end
+    end
+  end
+
+  defp read_decisions(store, repo_key, issue_id) do
+    case store.get_ticket_state(repo_key, issue_id) do
+      {:error, _reason} = error -> error
+      record -> {:ok, TicketState.decisions(record)}
+    end
+  end
+
+  # The decisions a description's section records, as entries the store keeps.
+  defp backfill(description) do
+    for decision <- recorded(description) do
+      decision |> Map.delete(:id) |> Map.update!(:date, &parse_date/1)
+    end
+  end
+
+  defp parse_date(text) do
+    case Date.from_iso8601(text) do
+      {:ok, date} -> date
+      {:error, _invalid} -> text
+    end
+  end
+
+  # Projects the record's decisions into `description`. A description read earlier is checked
+  # first and read again before any write, so a person's edit since that read survives.
+  defp project(tracker, issue_id, description, decisions, fresh?) do
+    case put(description, decisions) do
+      {:ok, ^description} ->
+        {:ok, :unchanged}
+
+      {:ok, updated} when fresh? ->
+        with :ok <- tracker.update_issue_description(issue_id, updated), do: {:ok, :written}
+
+      {:ok, _stale} ->
+        with {:ok, fresh} <- fresh_description(tracker, issue_id),
+             do: project(tracker, issue_id, fresh, decisions, true)
+
+      {:error, _reason} = error ->
         error
     end
   end
-
-  defp write(_tracker, _issue_id, same, same), do: :ok
-  defp write(tracker, issue_id, _description, updated), do: tracker.update_issue_description(issue_id, updated)
 
   # `block` runs from the start marker through the end marker; `before` and `rest` are the bytes
   # around it, untouched.

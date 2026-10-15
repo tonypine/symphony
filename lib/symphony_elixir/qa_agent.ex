@@ -210,7 +210,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
-    #{decisions_rule(issue)}#{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{decisions_rule(issue, job)}#{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -477,9 +477,10 @@ defmodule SymphonyElixir.QaAgent do
   defp fixer(_job), do: "the executor"
 
   # A person's answers to the ticket's decision requests are its scope: QA tests the change against
-  # them, never for what a decision put out of scope.
-  defp decisions_rule(issue) do
-    case Decisions.prompt_section(Map.get(issue, :description)) do
+  # them, never for what a decision put out of scope. They are read from the ticket's store record,
+  # not from Linear.
+  defp decisions_rule(issue, job) do
+    case issue |> Decisions.stored(repo_key: Map.get(job, :repo_key)) |> Decisions.prompt_section() do
       "" ->
         ""
 
