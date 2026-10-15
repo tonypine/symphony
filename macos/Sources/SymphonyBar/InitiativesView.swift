@@ -18,7 +18,7 @@ struct InitiativesContent: View {
                     openURL: model.onOpenURL
                 )
             )
-        } else if model.initiativesResult == .unsupported {
+        } else if case .unsupported? = model.initiativesResult {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
         } else {
             EmptyState(title: "Reading the initiatives…", symbol: SymphonyView.initiatives.symbol, showsSpinner: true)
