@@ -7,8 +7,9 @@ defmodule SymphonyElixir.Inbox do
   GET makes no Linear request:
 
   1. one light query per repository route lists the issues in its scope that sit in `Plan Review`
-     (`SymphonyElixir.PlanReview`) or carry the `Blocked` or `Needs Decision` label, each with its
-     `updatedAt` and the time its newest comment was last edited;
+     (`SymphonyElixir.PlanReview`) or that the run store holds (`SymphonyElixir.Hold`, `Blocked`
+     or `Needs Decision`, whether or not the board shows the label), each with its `updatedAt` and
+     the time its newest comment was last edited;
   2. only the issues whose pair changed since the last read (or that are new) are read in full:
      their description, comments, state history, labels, attachments and sub-tickets
      (`SymphonyElixir.HumanActions.Collector.read_more_pages/2` reads past the first page);
@@ -29,7 +30,8 @@ defmodule SymphonyElixir.Inbox do
   (`SymphonyElixir.NeedsDecisionHold`): a decision request pauses its ticket in place, and the
   person's answer — or the run's withdrawal — clears the hold so the ticket
   continues, and the answer is written into the description's Decisions section
-  (`SymphonyElixir.Decisions`). Those tickets are listed by the hold's label wherever in the workflow they sit.
+  (`SymphonyElixir.Decisions`). Those tickets are listed by their store hold wherever in the workflow
+  they sit, never by the label, which is only the hold's projection.
 
   The server tags itself `inbox` in `SymphonyElixir.Linear.Usage`.
   """
@@ -303,23 +305,29 @@ defmodule SymphonyElixir.Inbox do
 
   defp list_repo(repo, state) do
     scope_filter = Keyword.get(state.opts, :scope_filter, &Client.repo_scope_filter/1)
+    held_issue_ids = Keyword.get(state.opts, :held_issue_ids, &Hold.held_issue_ids/1)
 
-    with {:ok, scope} <- scope_filter.(repo) do
-      list_pages(%{"and" => [scope, %{"or" => list_conditions(settings(state, repo))}]}, nil, [], state)
+    with {:ok, scope} <- scope_filter.(repo),
+         {:ok, held} <- held(held_issue_ids, repo) do
+      list_pages(%{"and" => [scope, %{"or" => list_conditions(settings(state, repo), held)}]}, nil, [], state)
     end
   end
 
-  # The plans under review, plus the issues carrying a `Blocked` or `Needs Decision` label: a hold
-  # pauses a ticket in its phase, so it is listed by the hold's label wherever in the workflow it
-  # sits. `Item.from_node/4` reads each one's store record and keeps only the holds a person lifts.
-  defp list_conditions(settings) do
-    reviews = for plan_review when is_binary(plan_review) <- [PlanReview.state(settings)], do: %{"state" => %{"name" => %{"eqIgnoreCase" => plan_review}}}
+  defp held(held_issue_ids, repo) do
+    case held_issue_ids.(repo.name) do
+      {:ok, ids} -> {:ok, ids}
+      {:error, reason} -> {:error, {:hold_store_unreadable, reason}}
+    end
+  end
 
-    reviews ++
-      Enum.map(
-        [Hold.label(:blocked), Hold.label(:needs_decision)],
-        &%{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => &1}}}}
-      )
+  # The plans under review, plus the issues the store holds: a hold pauses a ticket in its phase, so
+  # it is listed by its id wherever in the workflow it sits. The store is the truth for a hold and
+  # the label only its projection, so a hold whose label went missing is still read, and its answer
+  # still clears it. `Item.from_node/4` reads each one's store record and keeps only the holds a
+  # person lifts.
+  defp list_conditions(settings, held) do
+    reviews = for plan_review when is_binary(plan_review) <- [PlanReview.state(settings)], do: %{"state" => %{"name" => %{"eqIgnoreCase" => plan_review}}}
+    reviews ++ [%{"id" => %{"in" => held}}]
   end
 
   defp list_pages(filter, after_cursor, acc, state) do

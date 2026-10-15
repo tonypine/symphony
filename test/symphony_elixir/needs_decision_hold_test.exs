@@ -421,6 +421,23 @@ defmodule SymphonyElixir.NeedsDecisionHoldTest do
       assert stored_hold() != nil
     end
 
+    test "an answer posted while the label was missing is recorded and clears the hold" do
+      node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
+      assert NeedsDecisionHold.sync(@repo_key, node, settings: designed_settings()) == :set
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: []})])
+
+      # The read that sees the answer finds the ticket without its label.
+      answered = ticket_node(%{"comments" => %{"nodes" => [request_comment(), reply(@comment_id, "Ship unsigned")]}})
+
+      capture_log(fn -> assert NeedsDecisionHold.sync(@repo_key, answered, settings: designed_settings()) == :clear end)
+
+      assert stored_hold() == nil
+      assert labels() == []
+      assert {:ok, description} = SymphonyElixir.Tracker.fetch_issue_description(@issue_id)
+      assert [%{id: "D1", key: @comment_id} = decision] = SymphonyElixir.Decisions.recorded(description)
+      assert decision.answer =~ "Ship unsigned"
+    end
+
     test "a store failure on set is logged and reports no change" do
       node = ticket_node(%{"comments" => %{"nodes" => [request_comment()]}})
 

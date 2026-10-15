@@ -380,6 +380,58 @@ defmodule SymphonyElixir.InboxTest do
       assert [%{id: "D1", key: "request", title: "Add the signing secret", question: "Add the secret?"}] = SymphonyElixir.Decisions.recorded(description)
     end
 
+    test "reads a ticket the store holds by its id, label or not, so an answer posted while the label was missing clears it" do
+      test_pid = self()
+      :ok = RunStore.set_ticket_hold("shop", "id-SHOP-92", :needs_decision, %{reason: "Add the secret?", decision: %{title: "Add the signing secret", question: "Add the secret?"}})
+
+      # The label went missing and the person answered under the request.
+      answered =
+        issue_node("SHOP-92", %{
+          "state" => %{"name" => "QA"},
+          "labels" => %{"nodes" => []},
+          "history" => %{"nodes" => []},
+          "comments" => %{
+            "nodes" => [
+              comment("request", request_body(), "2026-10-01T08:00:01Z"),
+              %{"id" => "reply", "body" => "Add it", "parent" => %{"id" => "request"}}
+            ]
+          }
+        })
+
+      # Linear lists only what the filter names: the ticket is found by its id, not its label.
+      listed = fn %{filter: %{"and" => [_scope, %{"or" => conditions}]}} ->
+        if %{"id" => %{"in" => ["id-SHOP-92"]}} in conditions, do: page([light(answered)]), else: page([])
+      end
+
+      test_pid
+      |> linear(listed, %{answered["id"] => answered})
+      |> state(settings_fun: fn _repo -> designed_settings() end, tracker: DescriptionTracker)
+      |> Inbox.run_once()
+
+      assert_received {:listed, %{"and" => [_scope, %{"or" => conditions}]}}
+      refute Enum.any?(conditions, &Map.has_key?(&1, "labels"))
+      assert_received {:read, ["id-SHOP-92"]}
+
+      assert TicketState.get_hold(RunStore.get_ticket_state("shop", "id-SHOP-92"), :needs_decision) == nil
+      assert_received {:description_written, "id-SHOP-92", description}
+      assert [%{id: "D1", key: "request", title: "Add the signing secret"}] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "keeps the last list when the store's holds can't be read" do
+      test_pid = self()
+
+      log =
+        capture_log(fn ->
+          test_pid
+          |> linear(fn _variables -> page([]) end, %{})
+          |> state(held_issue_ids: fn "shop" -> {:error, :boom} end)
+          |> Inbox.run_once()
+        end)
+
+      assert log =~ "{:hold_store_unreadable, :boom}"
+      refute_received {:listed, _filter}
+    end
+
     test "reads an issue in full once, and again only when it or a comment changed" do
       test_pid = self()
       pr = issue_node("SHOP-7", %{"comments" => %{"nodes" => [comment("brief", @brief)]}})
@@ -389,9 +441,9 @@ defmodule SymphonyElixir.InboxTest do
 
       state = Inbox.run_once(state)
       assert_received {:listed, %{"and" => [%{"team" => _}, %{"or" => [%{"state" => %{"name" => %{"eqIgnoreCase" => "Plan Review"}}} | conditions]}]}}
-      # A held ticket sits in its phase, so the hold's label lists it.
-      assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Blocked"}}}} in conditions
-      assert %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "Needs Decision"}}}} in conditions
+      # A held ticket sits in its phase, so the store's holds list it by id, never the label.
+      assert [%{"id" => %{"in" => held}}] = conditions
+      assert is_list(held)
       assert_received {:read, ["id-SHOP-7"]}
       assert [%{identifier: "SHOP-7", ask: "The retry fix for the importer."}] = Inbox.cached(state.opts[:name])
 

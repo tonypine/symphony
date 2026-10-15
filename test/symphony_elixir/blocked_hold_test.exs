@@ -224,6 +224,41 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert stored_hold() != nil
     end
 
+    test "puts back a missing Needs Decision label within one poll, and the warning stops once it is back" do
+      # The label went missing while the store kept the hold: the Inbox lists its tickets by that
+      # label, so without it the answer is never read and the hold never clears.
+      :ok =
+        RunStore.set_ticket_hold(@repo_key, @issue_id, :needs_decision, %{
+          reason: "Add the signing secrets?",
+          clearing_condition: "when the decision is recorded",
+          decision: %{title: "Add the release signing secrets", question: "Add the signing secrets?"}
+        })
+
+      log = capture_log(fn -> assert BlockedHold.sync(issue(%{state: "QA"}), @terminal, settings: designed_settings()) == :none end)
+
+      assert log =~ "Store hold :needs_decision on issue_id=#{@issue_id} is missing its machine label"
+      assert labels() == ["Needs Decision"]
+      assert Hold.held?(@repo_key, @issue_id, :needs_decision)
+      assert Hold.get(@repo_key, @issue_id, :blocked) == nil
+
+      # The next poll reads the label back and has nothing to warn about.
+      log = capture_log(fn -> assert BlockedHold.sync(issue(%{state: "QA", labels: labels()}), @terminal, settings: designed_settings()) == :none end)
+
+      refute log =~ "missing its machine label"
+      assert labels() == ["Needs Decision"]
+    end
+
+    test "reports and clears a hand-added Needs Decision label with no store hold" do
+      # The Inbox reads held tickets from the store, so it never reads this one: the poll clears it.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Needs Decision"]})])
+
+      log = capture_log(fn -> assert BlockedHold.sync(issue(%{labels: ["Needs Decision"]}), @terminal, settings: designed_settings()) == :none end)
+
+      assert log =~ "with no store hold"
+      assert labels() == []
+      assert Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+    end
+
     test "a store failure is logged and reports no change" do
       open_issue = issue(%{blocked_by: [blocker("TP-1", "In Progress")]})
 
