@@ -26,9 +26,10 @@ defmodule SymphonyElixir.SelfHeal do
       person;
     * when a repair has landed and the block recurs, compares the new failure against the last one
       (`compare/2`): a narrowed or otherwise changed failure is progress and earns another attempt,
-      and the same failure with no new information escalates to a `Needs Decision` hold. The
-      retries are bounded: a head with #{@max_head_attempts} blocked runs escalates however the
-      failure changed, so a run that words the same block differently each time cannot loop.
+      and the same failure with no new information escalates to a `Needs Decision` hold, with its
+      decision request posted on the ticket. The retries are bounded: a head with
+      #{@max_head_attempts} blocked runs escalates however the failure changed, so a run that words
+      the same block differently each time cannot loop.
 
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
@@ -41,6 +42,7 @@ defmodule SymphonyElixir.SelfHeal do
   require Logger
 
   alias SymphonyElixir.{Config, Hold, RunStore, TicketState}
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
 
   @default_component "qa_environment"
@@ -232,21 +234,31 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   # The same failure with no new information, or a head that used up its attempts: there is no next
-  # step to try, so only here does the machine ask a person, with the decision structured.
+  # step to try, so only here does the machine ask a person, with the decision structured. The
+  # decision is posted as a `## Decision needed:` comment next to the hold: the Inbox clears a Needs
+  # Decision hold whose request it no longer reads as open (`SymphonyElixir.NeedsDecisionHold`), so
+  # a hold with no request would lift on its next read and the ticket would dispatch again. A
+  # comment that can't be posted takes the hold back.
   defp escalate(ctx, stuck) do
+    decision = decision(ctx, stuck)
+
     attrs = %{
       reason: "self-heal is stuck on the #{ctx.component} block: #{ctx.signature}",
       clearing_condition: "when the decision is recorded",
-      decision: decision(ctx, stuck)
+      decision: decision
     }
 
-    case Hold.set(ctx.repo_key, ctx.issue.id, @needs_decision_hold, attrs, hold_opts(ctx.opts)) do
-      :ok ->
-        Logger.warning("Self-heal for #{label(ctx.issue)} is stuck on the #{ctx.component} block; Needs Decision set")
-        :escalated
-
-      {:error, reason} ->
+    with {:hold, :ok} <- {:hold, Hold.set(ctx.repo_key, ctx.issue.id, @needs_decision_hold, attrs, hold_opts(ctx.opts))},
+         {:post, :ok} <- {:post, tracker(ctx.opts).create_comment(ctx.issue.id, Request.render_hold(decision, ctx.issue.state))} do
+      Logger.warning("Self-heal for #{label(ctx.issue)} is stuck on the #{ctx.component} block; Needs Decision set")
+      :escalated
+    else
+      {:hold, {:error, reason}} ->
         {:error, {:self_heal_escalation_failed, reason}}
+
+      {:post, {:error, reason}} ->
+        _ = Hold.clear(ctx.repo_key, ctx.issue.id, @needs_decision_hold, hold_opts(ctx.opts))
+        {:error, {:self_heal_escalation_request_failed, reason}}
     end
   end
 
