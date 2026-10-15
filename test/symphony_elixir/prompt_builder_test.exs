@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.TicketState
+  alias SymphonyElixir.{Decisions, TicketState}
 
   test "prompt builder uses PR prompt branch for PR runs" do
     write_workflow_file!(
@@ -924,6 +924,30 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert_raise RuntimeError, ~r/template_render_error:.*unknown playbook partial `not_a_real_partial`/s, fn ->
       PromptBuilder.build_prompt(issue)
+    end
+  end
+
+  describe "recorded decisions" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}: {{ issue.description }}")
+      decision = Decisions.entry("comment-1", ~D[2026-10-13], "Keep the old flag", "Drop the old flag here?", "Defer to TP-891")
+      {:ok, description} = Decisions.put("Adds a check.", [decision])
+      %{issue: %Issue{identifier: "MT-D", title: "Decisions", state: "In Progress", description: description}, decision: decision}
+    end
+
+    test "renders the store's decisions in place of the description's section", %{issue: issue, decision: decision} do
+      prompt = PromptBuilder.build_prompt(issue, decisions: [Map.put(decision, :id, "D1")])
+
+      assert prompt =~ "D1: Drop the old flag here? Answer: Defer to TP-891 Scope: Deferred to TP-891."
+      refute prompt =~ Decisions.start_marker()
+      assert PromptBuilder.build_compact_prompt(issue, decisions: [Map.put(decision, :id, "D1")]) =~ "D1: Drop the old flag here?"
+    end
+
+    test "leaves the description as it is without the store's decisions", %{issue: issue} do
+      assert PromptBuilder.build_prompt(issue) =~ Decisions.start_marker()
+      prompt = PromptBuilder.build_prompt(issue, decisions: [])
+      refute prompt =~ Decisions.start_marker()
+      refute prompt =~ "Recorded decisions"
     end
   end
 

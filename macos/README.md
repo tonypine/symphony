@@ -967,9 +967,12 @@ state. The window opens on the Inbox the first time.
   and age; its sidebar item counts them in orange, in every repo. ↑ and ↓ move through the list and Return
   takes the review's first action. Beside the list, the review of the selected item: a plan's **What to
   review** with its links, **Decisions needed** with the recommended option picked, and its sub-tickets in
-  landing order; a PR's checks (CI, and QA with its report), with **Open PR**; an action's why, numbered steps, time and what it
-  unblocks, with **Copy Steps**; what the quality gate found in a ticket it holds, its score and round, with
-  **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
+  landing order; a PR's checks (CI, and QA with its report), with **Open PR**; an action's why and numbered steps, with **Copy Steps**; what the quality gate found in a ticket it holds, its
+  score and round, with **Edit in Linear**; and a blocked ticket's reason for the hold and what clears it. Last,
+  **Where this ticket sits**: its parent with a strip of its sub-tickets and how many are done, its pull request's
+  checks and how often Code Review sent it back, the tickets connected to it with their stage, what your answer
+  unblocks and the decisions already made on it; each row only when known, and no card without one. No review shows
+  a time estimate. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
   the ticket in Linear: in the Linear desktop app when it is installed (its `linear://` link, without starting the
   browser), else in the browser. Every Linear link in the app opens the same way. The review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
   items says how many ("2 more in other repos").

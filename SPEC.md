@@ -2561,8 +2561,8 @@ Rules:
   Inbox's Decide, or a withdrawal); the ticket continues where it stopped unless the decision
   directs a move.
 - **Decisions are scope.** A person's answer to a decision request (a reply under the request, or
-  the Inbox's Decide) MUST be written into the machine-owned Decisions section of the issue
-  description, between `<!-- symphony:decisions:start -->` and `<!-- symphony:decisions:end -->`
+  the Inbox's Decide) MUST be recorded in the ticket's store record first, then projected into the
+  machine-owned Decisions section of the issue description, between `<!-- symphony:decisions:start -->` and `<!-- symphony:decisions:end -->`
   and before the summary block, on the read that sees it: one entry per answered request, keyed by
   the request comment so a repeat writes nothing, numbered `D1`, `D2`… with the date, the question,
   the answer and what it means for scope (deferred to a named ticket, out of scope, in scope, or as
@@ -2571,11 +2571,15 @@ Rules:
   lines). Every byte outside the section, and the entries already in it, MUST stay unchanged, but
   for an empty heading left right before the section or the summary block (Linear's reading of a
   marker written above `---`). A section that holds a request more than once MUST be rewritten once,
-  each entry kept at its first place and numbered again.
-  The reviewer and QA prompts MUST render the section with the rule that a finding contradicting a
+  each entry kept at its first place and numbered again. The store record is the source of truth: a
+  section missing an entry the record holds, or missing altogether, is drift and MUST be rewritten
+  from the record on the next read that sees it. A ticket whose record holds no decision while its
+  description has a section MUST be backfilled from the section once, with no duplicate entries.
+  The implementation, reviewer and QA prompts MUST render the decisions from the store record, with
+  no Linear read, the reviewer and QA prompts with the rule that a finding contradicting a
   recorded decision is not a finding; a reviewer finding that names a recorded decision
   (`"decision": "D1"`) MUST be kept as a note, and a change request left with no other finding is an
-  approval. The implementation prompt reads the section in the description. A ruling a person
+  approval. A ruling a person
   gives in a plain comment that opens with `Decision:` or `Ruling:` (any case, bold or not), not as
   a reply under a decision request, MUST be recorded on the same read, keyed by its comment
   (`ruling-<id>`), titled by its first sentence and scoped by its text the same way; a ruling whose
@@ -2948,14 +2952,18 @@ Retry handling behavior:
 1. Fetch active candidate issues (not all issues).
 2. Find the specific issue by `issue_id`.
 3. If not found, release claim.
-4. If found and still candidate-eligible:
+4. If found but no longer assigned to this worker (`assigned_to_worker=false`), drop the retry and
+   release the claim, with a log line saying why. A continuation retry is dropped the same way, and
+   the sticky revalidation right before dispatch refuses it too. The issue is eligible again on the
+   next poll once it is reassigned.
+5. If found and still candidate-eligible:
    - Dispatch if slots are available.
    - Otherwise release the claim and record the issue as waiting for a slot, keeping its
      `attempt`. Waiting for a slot is not a failure: no backoff applies. The poll dispatches the
      issue in the Section 8.2 order as soon as a slot is free, and a run ending triggers an
      immediate poll tick while anything waits. A retry deferred because a dispatch readiness task
      is already in flight waits the same way.
-5. If found but no longer active, release claim.
+6. If found but no longer active, release claim.
 
 Note:
 

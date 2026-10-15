@@ -537,6 +537,29 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_repo_key} = RunStore.claim_path_unlocks(nil, "issue-1", ["grant-1"], "run-1")
   end
 
+  test "records a ticket's decisions once, across a restart, and creates no record for nothing" do
+    decision = %{key: "comment-1", date: ~D[2026-10-13], title: "Keep it", question: "Keep it?", answer: "Yes", scope: "As answered"}
+
+    assert {:ok, []} = RunStore.record_ticket_decisions(@repo_key, "issue-1", [], [])
+    assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
+
+    old = %{decision | key: "old"}
+    assert {:ok, [%{key: "comment-1"}]} = RunStore.record_ticket_decisions(@repo_key, "issue-1", [decision], [])
+    restart_run_store()
+
+    assert {:ok, [%{key: "comment-1"}, %{key: "comment-2"}]} =
+             RunStore.record_ticket_decisions(@repo_key, "issue-1", [decision, %{decision | key: "comment-2"}], [old])
+
+    assert %{decisions: [%{key: "comment-1", date: ~D[2026-10-13]}, %{key: "comment-2"}]} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # A record that holds no decision takes the backfill first.
+    assert {:ok, [%{key: "old"}, %{key: "comment-1"}]} = RunStore.record_ticket_decisions(@repo_key, "issue-2", [decision], [old])
+
+    assert {:error, :invalid_issue_id} = RunStore.record_ticket_decisions(@repo_key, nil, [decision], [])
+    assert {:error, :invalid_repo_key} = RunStore.record_ticket_decisions(nil, "issue-1", [decision], [])
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 

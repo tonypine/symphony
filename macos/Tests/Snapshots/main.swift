@@ -7,6 +7,9 @@ import SymphonyBarCore
 import UniformTypeIdentifiers
 
 let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+// The fixture's clock, in UTC: its earlier call, at 05:48 that day, reads as today's.
+NSTimeZone.default = TimeZone(identifier: "UTC")!
+let now = ISO8601DateFormatter().date(from: "2026-10-07T14:20:00Z")!
 let fixture = here.appendingPathComponent("../Fixtures/director-app/inbox-decision/api/v1/inbox.json").standardizedFileURL
 
 guard let inbox = InboxPayload.decode(try Data(contentsOf: fixture)),
@@ -44,7 +47,7 @@ func review(_ identifier: String) -> some View {
 
 @MainActor
 func review(_ item: InboxItem, width: CGFloat, picks: DecisionPicks = DecisionPicks()) -> some View {
-    InboxReviewBody(item: item, picks: picks, perform: { _ in })
+    InboxReviewBody(item: item, picks: picks, perform: { _ in }, narrow: width < DesignTokens.Layout.narrowReviewWidth, now: now)
         .frame(width: width)
         .background(DesignTokens.Surface.content.color)
 }
@@ -126,6 +129,9 @@ MainActor.assumeIsolated {
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")
         render(review(width: 420), scheme, to: "decision-chips-narrow-\(suffix).png")
+        // Where this ticket sits (N9, N10), last in the review: two columns, and labels above values when narrow.
+        render(review(width: 1200), scheme, to: "decision-context-\(suffix).png")
+        render(review(width: 420), scheme, to: "decision-context-narrow-\(suffix).png")
         render(popover("TP-891"), scheme, to: "ticket-popover-\(suffix).png")
         render(popover("#448"), scheme, to: "pr-popover-\(suffix).png")
         render(popover("TP-999"), scheme, to: "missing-popover-\(suffix).png")

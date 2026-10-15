@@ -59,7 +59,7 @@ defmodule SymphonyElixir.QaDriver do
     call returns only newer ones. The QA root is outside the agent sandbox, on
     the QA host for a `worker_host`, so the agent cannot read the log itself.
 
-  App stand-ins: besides `api_fixtures`, `qa_launch_app` takes three optional
+  App stand-ins: besides `api_fixtures`, `qa_launch_app` takes five optional
   arguments that point the app at stand-ins instead of real services, all only
   in QA mode:
 
@@ -75,7 +75,13 @@ defmodule SymphonyElixir.QaDriver do
     Linear queries;
   - `open_panel_dir` (a path `qa_put_checkout` returned in this pass) sets
     `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the app's folder picker opens
-    in, so the agent can choose that checkout with the panel's Choose button.
+    in, so the agent can choose that checkout with the panel's Choose button;
+  - `update_feed_port` (one of the pass's host ports) sets `SYMPHONY_BAR_UPDATE_URL`
+    to `http://localhost:<port>/releases/latest`, the release feed the app's
+    update checks read instead of GitHub's;
+  - `update_check_interval_seconds` (a positive integer) sets
+    `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's
+    background update checks.
 
   Screenshots and accessibility calls run in the helper app,
   `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
@@ -978,10 +984,14 @@ defmodule SymphonyElixir.QaDriver do
     with {:ok, gh_port} <- stub_port(args, "gh_stub_port", ports),
          {:ok, linear_port} <- stub_port(args, "linear_stub_port", ports),
          {:ok, panel_dir} <- open_panel_dir(Map.get(args, "open_panel_dir"), checkouts),
+         {:ok, feed_port} <- stub_port(args, "update_feed_port", ports),
+         {:ok, interval} <- update_check_interval(Map.get(args, "update_check_interval_seconds")),
          {:ok, gh_env} <- gh_env(config, gh_port) do
       linear_env = if linear_port, do: [{"SYMPHONY_QA_LINEAR_URL", "http://localhost:#{linear_port}/graphql"}], else: []
       panel_env = if panel_dir, do: [{"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", panel_dir}], else: []
-      {:ok, gh_env ++ linear_env ++ panel_env}
+      feed_env = if feed_port, do: [{"SYMPHONY_BAR_UPDATE_URL", "http://localhost:#{feed_port}/releases/latest"}], else: []
+      interval_env = if interval, do: [{"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL", Integer.to_string(interval)}], else: []
+      {:ok, gh_env ++ linear_env ++ panel_env ++ feed_env ++ interval_env}
     end
   end
 
@@ -1003,6 +1013,12 @@ defmodule SymphonyElixir.QaDriver do
       do: {:ok, path},
       else: tool_error("invalid_arguments", "`open_panel_dir` must be a path qa_put_checkout returned in this QA pass.")
   end
+
+  defp update_check_interval(nil), do: {:ok, nil}
+  defp update_check_interval(seconds) when is_integer(seconds) and seconds > 0, do: {:ok, seconds}
+
+  defp update_check_interval(_other),
+    do: tool_error("invalid_arguments", "`update_check_interval_seconds` must be a positive whole number of seconds.")
 
   defp gh_env(_config, nil), do: {:ok, []}
 
