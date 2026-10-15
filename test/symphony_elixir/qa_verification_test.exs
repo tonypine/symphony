@@ -181,6 +181,17 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   defp verdicts, do: Handoff.verdicts(@repo_key, @issue_id, "qa")
 
+  defp blocked_result(blocked_steps, reason) do
+    steps = for name <- blocked_steps, do: %{name: name, status: "blocked", details: reason, evidence: []}
+    {:ok, %{result: %{verdict: :blocked, summary: "Blocked.", steps: steps, findings: [], reason: reason}, tokens: %{}}}
+  end
+
+  # The fix ticket lands: it goes terminal, so the Blocked hold on it lifts.
+  defp lift_fix_ticket_hold do
+    Process.put(:fix_ticket_issue, {:ok, %Issue{id: "fix-ticket-id", identifier: @fix_ticket, state: "Done"}})
+    assert :clear = BlockedHold.sync(issue(), ["Done", "Canceled"], settings: settings!(), tracker: FixTicketTracker)
+  end
+
   describe "qa_run?/2" do
     test "is true only for the configured QA state" do
       assert QaVerification.qa_run?(issue(), settings!())
@@ -594,6 +605,54 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert_received {:fixer_attach, @fix_ticket, evidence}
       assert evidence =~ ":environment_unreachable"
+    end
+
+    test "a QA agent that rewords the same block on every run is escalated once the fix lands, not retried" do
+      {workspace, _head} = git_workspace!()
+      steps = ["Watch the update banner"]
+
+      # The first two runs retry and then file the fix ticket, worded differently each time.
+      Process.put(:qa_agent_result, blocked_result(steps, "qa_launch_app cannot set the update feed"))
+      assert :ok = run(workspace, [])
+      Process.put(:qa_agent_result, blocked_result(steps, "The app cannot be pointed at a fake update feed"))
+      assert :ok = run(workspace, [])
+      assert_received {:fixer_create, _attrs}
+
+      # The fix lands and the hold lifts.
+      lift_fix_ticket_hold()
+
+      # The same blocked step with a third wording is the same failure: no new information.
+      Process.put(:qa_agent_result, blocked_result(steps, "Blocked: no way to set the update URL for the launched app"))
+      assert :ok = run(workspace, [])
+
+      refute_received {:fixer_create, _attrs}
+      assert %{reason: stuck} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert stuck =~ "blocked steps: Watch the update banner"
+    end
+
+    test "a block whose blocked steps keep changing retries, until the head runs out of attempts" do
+      {workspace, _head} = git_workspace!()
+
+      Process.put(:qa_agent_result, blocked_result(["Open the window"], "the window would not open"))
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+      lift_fix_ticket_hold()
+
+      # Each run blocks on another step: real progress, so each earns a retry while the head has
+      # attempts left.
+      for step <- ["Watch the update banner", "Restart into the new build"] do
+        Process.put(:qa_agent_result, blocked_result([step], "blocked on #{step}"))
+        assert :ok = run(workspace, [])
+        refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      end
+
+      # The fifth blocked run on the same head escalates however the failure changed.
+      Process.put(:qa_agent_result, blocked_result(["Read the release notes"], "blocked on the notes"))
+      assert :ok = run(workspace, [])
+
+      assert %{decision: decision} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert decision.question =~ "over 5 blocked runs of the same change"
+      assert Enum.count(verdicts(), &(&1.outcome == "blocked")) == 5
     end
 
     test "an injected failing dev-server command retries, files one fix ticket, holds the ticket, and resumes when the fix lands" do

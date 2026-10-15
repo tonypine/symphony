@@ -1,4 +1,8 @@
 defmodule SymphonyElixir.SelfHeal do
+  # The blocked runs one head may spend before a changed failure stops earning a retry: the flow's
+  # own bounded retries, the run that files the fix ticket, and a few more once the repair lands.
+  @max_head_attempts 5
+
   @moduledoc """
   The self-heal lane: a flow blocked by tooling or environment repairs itself
   instead of stopping for a person (`docs/design/state-machine.md`, principle 8 and §Guards
@@ -22,8 +26,10 @@ defmodule SymphonyElixir.SelfHeal do
       person;
     * when a repair has landed and the block recurs, compares the new failure against the last one
       (`compare/2`): a narrowed or otherwise changed failure is progress and earns another attempt,
-      and only the same failure with no new information escalates to a `Needs Decision` hold,
-      with its decision request posted on the ticket.
+      and the same failure with no new information escalates to a `Needs Decision` hold, with its
+      decision request posted on the ticket. The retries are bounded: a head with
+      #{@max_head_attempts} blocked runs escalates however the failure changed, so a run that words
+      the same block differently each time cannot loop.
 
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
   lacks) never reaches the filing path: it keeps the access hold it always had, which a person
@@ -79,11 +85,19 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   @doc """
-  The canonical failure string of an outcome: its cause, normalized. Two blocks with the same
-  signature are the same failure and carry no new information.
+  The canonical failure string of an outcome, built from fields that stay put when a run rewords
+  the same block: the machine's own `cause` when there is one; else the sorted names of the steps
+  the run marked `blocked` and the `covered_by` ticket it named; else, when it gave neither, its
+  `reason`. Two blocks with the same signature are the same failure and carry no new information.
   """
   @spec signature(outcome() | term()) :: String.t()
-  def signature(outcome) when is_map(outcome), do: outcome |> cause() |> signature_for()
+  def signature(outcome) when is_map(outcome) do
+    case Map.get(outcome, :cause) do
+      nil -> stable_signature(outcome) || signature_for(Map.get(outcome, :reason))
+      cause -> signature_for(cause)
+    end
+  end
+
   def signature(_outcome), do: ""
 
   @doc """
@@ -111,8 +125,11 @@ defmodule SymphonyElixir.SelfHeal do
   recorded.
 
   An outcome whose `covered_by` names an open ticket (one that already tracks the missing
-  capability) holds the ticket on that ticket instead: it is linked as the blocker and gets the
-  evidence, and no fix ticket is filed.
+  capability) holds the ticket on that ticket instead, even when an earlier failure was recorded:
+  it is linked as the blocker and gets the evidence, and no fix ticket is filed.
+
+  A changed failure retries only while the head has fewer than #{@max_head_attempts} blocked runs
+  (`:attempts`); past that it escalates like an unchanged one.
 
   `opts` carries `:outcome` (required), `:attempts` (the retries already spent), `:repo_key`, and
   the injectable `:store`, `:tracker`, `:fixer`, `:symphony_repo_key` and `:terminal_states`
@@ -155,16 +172,20 @@ defmodule SymphonyElixir.SelfHeal do
         opts: opts
       }
 
-      case compare(previous && previous.signature, signature) do
-        :first -> open(ctx)
-        :same -> escalate(ctx)
-        change -> revisit(ctx, change)
+      ctx = Map.put(ctx, :covering, covering_ticket(ctx))
+
+      case {ctx.covering, compare(previous && previous.signature, signature)} do
+        {%{}, _change} -> open(ctx)
+        {nil, :first} -> open(ctx)
+        {nil, :same} -> escalate(ctx, :unchanged)
+        {nil, change} -> revisit(ctx, change)
       end
     end
   end
 
-  # No fix ticket for this component yet: reuse the open one if another ticket already filed it for
-  # the same failure (one fix ticket per break, however many tickets hit it), else file it.
+  # No fix ticket for this component yet, or the run named an open ticket that covers the gap: wait
+  # on the covering ticket, else reuse the open one another ticket already filed for the same
+  # failure (one fix ticket per break, however many tickets hit it), else file it.
   defp open(ctx) do
     case fix_ticket(ctx) do
       {:ok, %{identifier: identifier} = ticket} ->
@@ -192,6 +213,11 @@ defmodule SymphonyElixir.SelfHeal do
   # another attempt. The new failure is recorded — so the next identical one escalates — and
   # attached to the fix ticket the repair came from when the record still names one (the lift that
   # cleared that repair's hold dropped the pointer, keeping the signature that proves the change).
+  # The attempts are bounded per head: once it has used them up, a changed failure escalates too.
+  defp revisit(%{attempts: attempts} = ctx, _change) when attempts >= @max_head_attempts do
+    escalate(ctx, :out_of_attempts)
+  end
+
   defp revisit(ctx, change) do
     record(ctx, %{
       component: ctx.component,
@@ -207,13 +233,14 @@ defmodule SymphonyElixir.SelfHeal do
     :retry
   end
 
-  # The same failure, with no new information and no next step to try: only here does the machine
-  # ask a person, with the decision structured. The decision is posted as a `## Decision needed:`
-  # comment next to the hold: the Inbox clears a Needs Decision hold whose request it no longer
-  # reads as open (`SymphonyElixir.NeedsDecisionHold`), so a hold with no request would lift on its
-  # next read and the ticket would dispatch again. A comment that can't be posted takes the hold back.
-  defp escalate(ctx) do
-    decision = decision(ctx)
+  # The same failure with no new information, or a head that used up its attempts: there is no next
+  # step to try, so only here does the machine ask a person, with the decision structured. The
+  # decision is posted as a `## Decision needed:` comment next to the hold: the Inbox clears a Needs
+  # Decision hold whose request it no longer reads as open (`SymphonyElixir.NeedsDecisionHold`), so
+  # a hold with no request would lift on its next read and the ticket would dispatch again. A
+  # comment that can't be posted takes the hold back.
+  defp escalate(ctx, stuck) do
+    decision = decision(ctx, stuck)
 
     attrs = %{
       reason: "self-heal is stuck on the #{ctx.component} block: #{ctx.signature}",
@@ -255,7 +282,7 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp fix_ticket(ctx) do
-    case covering_ticket(ctx) || find_open_fix_ticket(ctx) do
+    case ctx.covering || find_open_fix_ticket(ctx) do
       %{identifier: identifier} = ticket ->
         attach(%{fix_ticket: identifier}, ctx.issue, ctx.signature, ctx.outcome, ctx.opts)
         {:ok, ticket}
@@ -430,13 +457,11 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp findings(_outcome), do: ""
 
-  defp decision(ctx) do
+  defp decision(ctx, stuck) do
     %{
       title: "Self-heal is stuck on the #{ctx.component} block",
-      question:
-        "The #{ctx.component} block on #{label(ctx.issue)} came back unchanged after #{ctx.attempts} " <>
-          "attempt(s) and its fix ticket landed: #{ctx.signature}. How should it be handled?",
-      why: "Self-heal retries a changed failure on its own, but this one carries no new information, so there is no next step for the machine to try.",
+      question: question(ctx, stuck),
+      why: why(stuck),
       options: [
         %{
           label: "Investigate the #{ctx.component} by hand",
@@ -451,6 +476,22 @@ defmodule SymphonyElixir.SelfHeal do
       asked_at: DateTime.utc_now()
     }
   end
+
+  defp question(ctx, :unchanged) do
+    "The #{ctx.component} block on #{label(ctx.issue)} came back unchanged after #{ctx.attempts} " <>
+      "attempt(s) and its fix ticket landed: #{ctx.signature}. How should it be handled?"
+  end
+
+  defp question(ctx, :out_of_attempts) do
+    "The #{ctx.component} block on #{label(ctx.issue)} kept coming back over #{ctx.attempts} blocked runs " <>
+      "of the same change: #{ctx.signature}. How should it be handled?"
+  end
+
+  defp why(:unchanged),
+    do: "Self-heal retries a changed failure on its own, but this one carries no new information, so there is no next step for the machine to try."
+
+  defp why(:out_of_attempts),
+    do: "Self-heal retries a changed failure on its own, but only #{@max_head_attempts} times for one change, so the machine stops retrying it."
 
   defp cause(outcome) do
     Map.get(outcome, :cause) || Map.get(outcome, :reason)
@@ -473,6 +514,27 @@ defmodule SymphonyElixir.SelfHeal do
       String.contains?(reason, "remote worker") -> @worker_host
       true -> @default_component
     end
+  end
+
+  # The steps the run could not take and the ticket it named as covering the gap: the parts of a
+  # blocked verdict that stay the same when the run words its reason differently. `nil` when the
+  # outcome has neither.
+  defp stable_signature(outcome) do
+    steps =
+      for %{status: "blocked", name: name} when is_binary(name) <- List.wrap(Map.get(outcome, :steps)),
+          step = normalize(name),
+          step != "",
+          uniq: true,
+          do: step
+
+    parts =
+      [
+        steps != [] && "blocked steps: " <> (steps |> Enum.sort() |> Enum.join(", ")),
+        is_binary(Map.get(outcome, :covered_by)) && "covered by: " <> Map.get(outcome, :covered_by)
+      ]
+      |> Enum.filter(&is_binary/1)
+
+    if parts != [], do: Enum.join(parts, "; ")
   end
 
   defp signature_for(cause) when is_binary(cause), do: normalize(cause)

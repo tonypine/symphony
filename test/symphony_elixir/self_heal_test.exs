@@ -197,6 +197,29 @@ defmodule SymphonyElixir.SelfHealTest do
       assert SelfHeal.signature(%{cause: nil, reason: nil}) == ""
       assert SelfHeal.signature(:not_a_map) == ""
     end
+
+    test "a QA agent's own block is named by its blocked steps and covering ticket, not its wording" do
+      steps = [
+        %{name: " Watch the  update banner", status: "blocked"},
+        %{name: "Open the window", status: "blocked"},
+        %{name: "Open the window", status: "blocked"},
+        %{name: " ", status: "blocked"},
+        %{name: "Read the notes", status: "pass"}
+      ]
+
+      first = %{reason: "qa_launch_app cannot set the update feed", steps: steps, covered_by: "TP-1000"}
+      reworded = %{first | reason: "The app cannot be pointed at a fake update feed", steps: Enum.reverse(steps)}
+
+      assert SelfHeal.signature(first) == "blocked steps: Open the window, Watch the update banner; covered by: TP-1000"
+      assert SelfHeal.signature(reworded) == SelfHeal.signature(first)
+      assert SelfHeal.signature(%{reason: "anything", steps: steps}) == "blocked steps: Open the window, Watch the update banner"
+      assert SelfHeal.signature(%{reason: "anything", steps: [], covered_by: "TP-1000"}) == "covered by: TP-1000"
+
+      # The machine's own cause still wins, and a run with neither falls back to its reason.
+      assert SelfHeal.signature(%{cause: :environment_unreachable, steps: steps}) == ":environment_unreachable"
+      assert SelfHeal.signature(%{reason: " no  steps ", steps: [%{name: "x", status: "pass"}]}) == "no steps"
+      assert SelfHeal.signature(%{reason: "no steps key"}) == "no steps key"
+    end
   end
 
   describe "compare/2" do
@@ -421,6 +444,63 @@ defmodule SymphonyElixir.SelfHealTest do
       assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
       assert evidence =~ "{:dev_server_exit, 3}"
       assert Process.get(:hold_attrs) == nil
+    end
+
+    test "a reworded QA block with the same blocked steps escalates instead of retrying" do
+      steps = [%{name: "Watch the update banner", status: "blocked"}]
+      first = %{verdict: :blocked, reason: "qa_launch_app cannot set the update feed", steps: steps, findings: []}
+
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: SelfHeal.signature(first)}))
+
+      reworded = %{first | reason: "The app cannot be pointed at a fake update feed"}
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(reworded, attempts: 3))
+      assert {:needs_decision, %{decision: decision}} = Process.get(:hold_attrs)
+      assert decision.question =~ "came back unchanged after 3 attempt(s)"
+    end
+
+    test "a changed failure retries only while the head has attempts left" do
+      previous = recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: "blocked steps: Open the window"})
+      outcome = %{verdict: :blocked, reason: "blocked", steps: [%{name: "Watch the update banner", status: "blocked"}], findings: []}
+
+      Process.put(:ticket_state, previous)
+      assert :retry = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 4))
+      assert Process.get(:hold_attrs) == nil
+
+      Process.put(:ticket_state, previous)
+
+      log =
+        capture_log(fn ->
+          assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 5))
+        end)
+
+      assert log =~ "stuck on the qa_environment block"
+      assert {:needs_decision, %{decision: decision, reason: reason}} = Process.get(:hold_attrs)
+      assert reason =~ "blocked steps: Watch the update banner"
+      assert decision.question =~ "kept coming back over 5 blocked runs of the same change"
+      assert decision.why =~ "only 5 times for one change"
+    end
+
+    test "an open covering ticket holds the ticket on it even after an earlier failure was recorded" do
+      Process.put({:fix_ticket_state, "TP-1000"}, {:ok, %Issue{id: "covering-id", identifier: "TP-1000", state: "CI Fix"}})
+      outcome = %{verdict: :blocked, reason: "needs TP-1000", steps: [%{name: "Watch the update banner", status: "blocked"}], findings: [], covered_by: "TP-1000"}
+
+      for signature <- [SelfHeal.signature(outcome), "an older failure"] do
+        Process.delete(:hold_attrs)
+        Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: signature}))
+
+        assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 9, terminal_states: ["Done", "Canceled"]))
+
+        assert Process.get(:fixer_create) == nil
+        assert Process.get(:fixer_block) == {@issue_id, "TP-1000"}
+        assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: ["TP-1000"]}}} = Process.get(:hold_attrs)
+        assert %{fix_ticket: "TP-1000"} = Process.get(:recorded_self_heal)
+      end
+
+      # Once the covering ticket is done, the recorded failure decides again.
+      Process.put({:fix_ticket_state, "TP-1000"}, {:ok, %Issue{id: "covering-id", identifier: "TP-1000", state: "Done"}})
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "qa_environment", scope: @symphony_repo_key, signature: SelfHeal.signature(outcome)}))
+
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 3, terminal_states: ["Done", "Canceled"]))
     end
 
     test "a changed failure also retries, with no fix ticket to attach to" do
