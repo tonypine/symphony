@@ -3709,9 +3709,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp hold_reason(%Issue{} = issue, %State{} = state, terminal_states) do
+    repo_key = hold_repo_key(issue)
+
     cond do
       Issue.blocked?(issue, terminal_states) -> "blocked by #{open_blocker_names(issue, terminal_states)}"
-      (held = Hold.held_kinds(issue.repo_key, issue.id)) != [] -> "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold"
+      is_nil(repo_key) -> "it has no repo key and several repos are configured, so its holds can't be read"
+      (held = Hold.held_kinds(repo_key, issue.id)) != [] -> "on a #{Enum.map_join(held, " and ", &Hold.label/1)} hold"
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
       Map.has_key?(state.update_holds, issue.id) -> "waiting for an app update: #{state.update_holds[issue.id].reason}"
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
@@ -4353,8 +4356,25 @@ defmodule SymphonyElixir.Orchestrator do
   # A hold pauses the ticket in its phase and lifts when its condition does — a `Blocked` one when
   # what it waits on goes terminal or a person grants access, a `Needs Decision` one when the person
   # records the decision — and the ticket then dispatches again from where it stopped. The store is
-  # the truth; the board label is only its projection.
-  defp hold?(%Issue{repo_key: repo_key, id: issue_id}), do: Hold.held_any?(repo_key, issue_id)
+  # the truth; the board label is only its projection. The store is keyed by repo, so an issue whose
+  # repo can't be told (`hold_repo_key/1`) is held rather than read as unheld.
+  defp hold?(%Issue{id: issue_id} = issue) do
+    case hold_repo_key(issue) do
+      nil -> true
+      repo_key -> Hold.held_any?(repo_key, issue_id)
+    end
+  end
+
+  # The repo a ticket's holds are read under: its own, else the only configured repo. With several
+  # repos an issue with no repo key could be any of them.
+  defp hold_repo_key(%Issue{} = issue), do: issue_repo_key(issue) || sole_repo_key()
+
+  defp sole_repo_key do
+    case Config.repos() do
+      {:ok, [%{name: name}]} when is_binary(name) and name != "" -> name
+      _none_or_several -> nil
+    end
+  end
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -4402,9 +4422,10 @@ defmodule SymphonyElixir.Orchestrator do
     terminal_states = terminal_state_set()
     issue_fetcher = dispatch_issue_fetcher(state)
 
-    case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, sticky_route?: sticky_route?) do
+    revalidate_opts = [sticky_route?: sticky_route?, repo_key: repo_key]
+
+    case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, revalidate_opts) do
       {:ok, %Issue{} = refreshed_issue} ->
-        refreshed_issue = freeze_issue_repo_key(refreshed_issue, repo_key)
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host, repo_key)
 
       {:skip, :missing} ->
@@ -4861,10 +4882,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
 
-  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states, opts)
+  # A by-id read carries no repo key, so the dispatch's goes on the refreshed issue before its gates
+  # are read again: without it its holds would read as none, and a held ticket would dispatch.
+  defp revalidate_issue_for_dispatch(%Issue{id: issue_id} = issue, issue_fetcher, terminal_states, opts)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) and is_list(opts) do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
+        refreshed_issue = freeze_issue_repo_key(refreshed_issue, issue_repo_key(refreshed_issue) || Keyword.get(opts, :repo_key) || issue_repo_key(issue))
+
         if dispatch_revalidated_issue?(refreshed_issue, terminal_states, Keyword.get(opts, :sticky_route?, false)) do
           {:ok, refreshed_issue}
         else
