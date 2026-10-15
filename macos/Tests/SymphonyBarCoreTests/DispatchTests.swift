@@ -136,4 +136,95 @@ final class DispatchTests: XCTestCase {
             .appendingPathComponent("Fixtures/director-app/\(name)/api/v1/state.json")
         return try XCTUnwrap(OverviewState.decode(try Data(contentsOf: url)))
     }
+
+    // MARK: - S3a, S3b: an update holds dispatch
+
+    private let since = Date(timeIntervalSince1970: 1_000_000)
+
+    private func updatePaused(reason: String = "updating to v0.0.1.42", running: Int = 1) -> OverviewState {
+        OverviewState(
+            snapshot: StateSnapshot(running: running, pause: .init(reason: reason, since: since)),
+            generatedAt: since,
+            running: (0..<running).map { OverviewState.Run(identifier: "TP-\($0 + 1)", title: "Run \($0 + 1)") }
+        )
+    }
+
+    func testAnUpdateWaitingForRunsOffersCancelUpdateInPlaceOfResume() {
+        let update = UpdateHold(version: "0.0.1.42", step: .waiting(runs: 1))
+        let control = DispatchControl(window: .connected, paused: true, state: updatePaused(), update: update, now: since, timeZone: utc)
+
+        XCTAssertEqual(control.mode, .paused)
+        XCTAssertEqual(control.word, "Paused · Updating to v0.0.1.42")
+        XCTAssertEqual(control.status, .you)
+        XCTAssertEqual(control.accessibilityLabel, "Dispatch paused, updating to v0.0.1.42")
+        XCTAssertEqual(control.pauseFacts, [
+            TicketList.Fact(label: "By", value: "an update to v0.0.1.42"),
+            TicketList.Fact(label: "Since", value: "13:46"),
+            TicketList.Fact(label: "Why", value: "updating to v0.0.1.42"),
+        ])
+        XCTAssertEqual(control.update?.waitingLine, "Waiting for 1 agent run")
+        XCTAssertEqual(control.working, ["TP-1 · Run 1"])
+        XCTAssertTrue(control.canCancelUpdate)
+        XCTAssertFalse(control.canUpdateNow)
+        XCTAssertFalse(control.canResume)
+        XCTAssertFalse(control.canPause)
+        XCTAssertTrue(control.canForce)
+        XCTAssertEqual(DispatchControl.cancelUpdateTitle, "Cancel Update")
+        XCTAssertEqual(DispatchControl.updateNowTitle, "Update Now Anyway")
+    }
+
+    func testAnUpdatePastTheTimeoutAlsoOffersUpdateNowAnyway() {
+        let update = UpdateHold(version: "0.0.1.42", step: .waiting(runs: 2), offersUpdateNow: true)
+        let control = DispatchControl(window: .connected, paused: true, state: updatePaused(running: 2), update: update, now: since, timeZone: utc)
+
+        XCTAssertEqual(control.update?.waitingLine, "Waiting for 2 agent runs")
+        XCTAssertTrue(control.canCancelUpdate)
+        XCTAssertTrue(control.canUpdateNow)
+        XCTAssertFalse(control.canResume)
+    }
+
+    func testAnUpdateOffersNothingWhileItDownloadsOrStopsSymphony() {
+        let downloading = DispatchControl(
+            window: .connected, paused: false, state: OverviewState(), update: UpdateHold(version: "0.0.1.42", step: .preparing), now: since
+        )
+        XCTAssertEqual(downloading.mode, .on)
+        XCTAssertEqual(downloading.word, "Updating to v0.0.1.42")
+        XCTAssertEqual(downloading.accessibilityLabel, "Dispatch on, updating to v0.0.1.42")
+        XCTAssertFalse(downloading.canCancelUpdate || downloading.canUpdateNow || downloading.canPause || downloading.canResume)
+
+        let held = OverviewState(snapshot: StateSnapshot(budget: .init(dailyPaused: true)))
+        let holding = DispatchControl(window: .connected, paused: false, state: held, update: UpdateHold(version: "0.0.1.42", step: .preparing), now: since)
+        XCTAssertEqual(holding.mode, .holding)
+        XCTAssertEqual(holding.accessibilityLabel, "Updating to v0.0.1.42")
+
+        let stopping = UpdateHold(version: "0.0.1.42", step: .stopping, offersUpdateNow: true)
+        let paused = DispatchControl(window: .connected, paused: true, state: updatePaused(running: 0), update: stopping, now: since, timeZone: utc)
+        XCTAssertEqual(paused.word, "Paused · Updating to v0.0.1.42")
+        XCTAssertFalse(paused.canCancelUpdate || paused.canUpdateNow || paused.canResume)
+
+        let stopped = DispatchControl(window: .stopped, paused: false, state: nil, update: stopping, now: since)
+        XCTAssertEqual(stopped.mode, .stopped)
+        XCTAssertEqual(stopped.word, "Updating to v0.0.1.42")
+        XCTAssertEqual(stopped.accessibilityLabel, "Updating to v0.0.1.42")
+        XCTAssertFalse(stopped.canStart, "the update starts the new version's Symphony")
+        XCTAssertFalse(stopped.canCancelUpdate || stopped.canUpdateNow)
+    }
+
+    func testAnUpdatesPauseLeftBehindStillSaysSoAndOffersResume() {
+        let control = DispatchControl(window: .connected, paused: true, state: updatePaused(), now: since, timeZone: utc)
+        XCTAssertEqual(control.word, "Paused · Updating to v0.0.1.42")
+        XCTAssertEqual(control.pauseFacts.first, TicketList.Fact(label: "By", value: "an update to v0.0.1.42"))
+        XCTAssertNil(control.update)
+        XCTAssertTrue(control.canResume)
+        XCTAssertFalse(control.canCancelUpdate)
+    }
+
+    func testAnUpdateKeepsThePauseTheUserMade() {
+        let update = UpdateHold(version: "0.0.1.42", step: .waiting(runs: 1))
+        let control = DispatchControl(window: .connected, paused: true, state: updatePaused(reason: "Deploy freeze"), update: update, now: since, timeZone: utc)
+        XCTAssertEqual(control.word, "Paused · Updating to v0.0.1.42")
+        XCTAssertEqual(control.pauseFacts.first, TicketList.Fact(label: "By", value: "You"))
+        XCTAssertEqual(control.pauseFacts.last, TicketList.Fact(label: "Why", value: "Deploy freeze"))
+        XCTAssertTrue(control.canCancelUpdate)
+    }
 }
