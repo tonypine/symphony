@@ -26,7 +26,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.NeedsDecisionHold
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PathUnlock
-  alias SymphonyElixir.PersonWait
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.Tracker
@@ -215,6 +214,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
       state {
         name
         type
+      }
+      inverseRelations(first: 50) {
+        nodes {
+          type
+          issue {
+            identifier
+            state {
+              name
+            }
+          }
+        }
       }
       team {
         states {
@@ -487,14 +497,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
-  @remove_label_mutation """
-  mutation SymphonyAgentRemoveLabel($issueId: String!, $labelId: String!) {
-    issueRemoveLabel(id: $issueId, labelId: $labelId) {
-      success
-    }
-  }
-  """
-
   @document_scope_query """
   query SymphonyAgentDocumentScope($id: String!, $first: Int!) {
     issue(id: $id) {
@@ -714,9 +716,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp record_fix_verdict(_context, _issue_id, _move), do: :ok
 
   # The Backlog escape hatch is retired: the guard turned the request into a Blocked
-  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A dependency
-  # hold lifts on its own; the access hold this reports is lifted by a person's `Unblock` (or by the
-  # self-heal fix ticket). The agent did not move the issue.
+  # hold, so the ticket keeps its phase and gains the label with the reason recorded. A run that
+  # marked the issue blocked by open tickets gets a dependency hold, which lifts on its own once they
+  # are terminal; otherwise the access hold is lifted by a person's `Unblock` (or by the self-heal fix
+  # ticket). The agent did not move the issue.
   defp apply_hold(context, issue_id, kind, attrs, opts) do
     with :ok <- Hold.set(issue_repo_key(context), issue_id, kind, attrs, opts) do
       {:ok,
@@ -1457,10 +1460,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Withdraws open human-action requests on the current issue that are no longer needed: replies
   `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
-  next human-action update drops them. Once no open request is left, a deprecated request label
-  (`PersonWait.legacy_request_labels/1`) comes off and the `Needs Decision` hold is cleared so the
-  ticket continues in place. An issue with no open request is left as it is. The reason is refused
-  when it holds a secret pattern.
+  next human-action update drops them. Once no open request is left, the `Needs Decision` hold is
+  cleared so the ticket continues in place. An issue with no open request is left as it is. The
+  reason is refused when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1511,7 +1513,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       if withdrawing == [] do
         {:ok, %{"withdrawn" => false, "reason" => "no_open_request"}}
       else
-        withdraw_requests(issue, withdrawing, remaining, reason, settings, opts)
+        withdraw_requests(issue, withdrawing, remaining, reason, opts)
       end
     end
   end
@@ -1519,43 +1521,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp withdrawing?(_request, nil), do: true
   defp withdrawing?({_comment_id, request}, title), do: Request.normalize_title(request.title) == Request.normalize_title(title)
 
-  # Replies first: a withdrawn request stays out of the update even if removing its label fails.
-  defp withdraw_requests(issue, withdrawing, remaining, reason, settings, opts) do
-    with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts),
-         {:ok, state} <- release_issue(issue, remaining, settings, opts) do
+  defp withdraw_requests(issue, withdrawing, remaining, reason, opts) do
+    with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts) do
       {:ok,
        %{
          "withdrawn" => true,
          "requestCommentIds" => Enum.map(withdrawing, fn {comment_id, _request} -> comment_id end),
          "replyCommentIds" => reply_ids,
          "remaining" => length(remaining),
-         "state" => state
+         "state" => get_in(issue, ["state", "name"])
        }}
     end
-  end
-
-  # Another open request still waits on a person: the issue stays where it is.
-  defp release_issue(issue, [_open | _rest], _settings, _opts), do: {:ok, get_in(issue, ["state", "name"])}
-
-  defp release_issue(issue, [], settings, opts) do
-    with :ok <- remove_legacy_request_labels(issue, settings, opts), do: {:ok, get_in(issue, ["state", "name"])}
-  end
-
-  defp remove_legacy_request_labels(issue, settings, opts) do
-    legacy = PersonWait.legacy_request_labels(settings)
-
-    issue
-    |> get_in(["labels", "nodes"])
-    |> List.wrap()
-    |> Enum.filter(&(String.downcase(to_string(&1["name"])) in legacy))
-    |> Enum.reduce_while(:ok, fn %{"id" => label_id}, :ok ->
-      with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
-           {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
-        {:cont, :ok}
-      else
-        error -> {:halt, error}
-      end
-    end)
   end
 
   defp reply_withdrawals(issue_id, withdrawing, reason, opts) do
@@ -1950,7 +1926,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp guard_state(state, settings, issue) do
     from_state = get_in(issue, ["state", "name"])
 
-    ctx = %{settings: settings, from_state: from_state, plan_parent?: plan_parent?(issue)}
+    ctx = %{
+      settings: settings,
+      from_state: from_state,
+      plan_parent?: plan_parent?(issue),
+      open_blockers: open_blockers(issue, settings.tracker.terminal_states)
+    }
 
     case TransitionGuard.resolve_request(state, ctx) do
       {:ok, resolved} -> {:ok, {:state, resolved["id"]}, move_details(from_state, resolved, settings)}
@@ -1987,6 +1968,21 @@ defmodule SymphonyElixir.AgentTools.Linear do
       end
     end
   end
+
+  # The identifiers of the issue's blocked-by blockers still outside a terminal state, the way
+  # `Issue.open_blockers/2` counts them: a blocker without a known state is open.
+  defp open_blockers(issue, terminal_states) do
+    terminal = MapSet.new(terminal_states, &normalize_state_name/1)
+
+    for %{"type" => "blocks", "issue" => %{"identifier" => identifier} = blocker} <-
+          issue |> get_in(["inverseRelations", "nodes"]) |> List.wrap(),
+        is_binary(identifier),
+        not MapSet.member?(terminal, normalize_state_name(get_in(blocker, ["state", "name"]))),
+        uniq: true,
+        do: identifier
+  end
+
+  defp normalize_state_name(name), do: name |> to_string() |> String.trim() |> String.downcase()
 
   # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
   # request, and it is the ticket whose handoff enters `Plan Review`.

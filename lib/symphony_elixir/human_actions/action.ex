@@ -7,7 +7,6 @@ defmodule SymphonyElixir.HumanActions.Action do
 
   - `:request`: a `## Decision needed:` comment (`linear_request_human_action`), with its `question`
     and `options`, or an older `## Action needed:` comment written by hand, with its `steps`;
-  - `:task`: an issue carrying a deprecated request label (`PersonWait.legacy_request_labels/1`) with no request comment;
   - `:ci_secret`: a workflow on a repository's base branch that keeps failing on a missing secret
     (see `SymphonyElixir.HumanActions.CiSecrets`). It belongs to no issue, so its `issue` is nil.
   """
@@ -17,7 +16,7 @@ defmodule SymphonyElixir.HumanActions.Action do
               [:why, :if_unanswered, :unblocks, :done_when, :question, options: [], steps: []]
 
   @type kind ::
-          :request | :task | :ci_secret
+          :request | :ci_secret
   @type t :: %__MODULE__{
           key: String.t(),
           kind: kind(),

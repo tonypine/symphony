@@ -97,6 +97,21 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
+  # Builds and launches the macos_app but never resizes its window, then answers like `FakeSession`.
+  defmodule LaunchOnlySession do
+    alias SymphonyElixir.QaDriver
+
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      driver = opts[:qa_driver]
+      {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {:ok, %{"pid" => _pid}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
   defmodule AndroidPutFileSession do
     defdelegate start_session(workspace, opts), to: FakeSession
     defdelegate stop_session(session), to: FakeSession
@@ -1283,6 +1298,35 @@ defmodule SymphonyElixir.QaAgentTest do
 
       Application.delete_env(:symphony_elixir, :qa_test_turn_result)
       assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+    end
+
+    test "holds an epic review to the wide pass only when it launched an app" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: FakeSession.pass_json()}})
+      epic_job = job(%{playbooks: [macos_app], epic_review: true, base_ref: "origin/main"})
+
+      run = fn session ->
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(epic_job, Config.settings!(),
+              git: fake_git(),
+              qa_agent_module: session,
+              qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+            )
+          end)
+
+        result
+      end
+
+      # A backend-only epic: the review never launched the app, so there was no window to widen.
+      assert {:ok, %{result: %{verdict: :pass}}} = run.(FakeSession)
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = run.(LaunchOnlySession)
+      assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run.(WidePassSession)
     end
 
     test "lets the QA driver read fixtures from the pass's own $TMPDIR" do

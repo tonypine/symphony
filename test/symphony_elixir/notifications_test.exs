@@ -353,8 +353,7 @@ defmodule SymphonyElixir.NotificationsTest do
       identifier: "ACME-7",
       title: "Needs review",
       state: "In Review",
-      url: " https://linear.test/ACME-7 ",
-      pr_urls: ["", "https://github.test/org/repo/pull/7"]
+      url: " https://linear.test/ACME-7 "
     }
 
     assert {:ok,
@@ -364,12 +363,26 @@ defmodule SymphonyElixir.NotificationsTest do
               issue_identifier: "ACME-7",
               issue_title: "Needs review",
               issue_url: "https://linear.test/ACME-7",
-              pr_url: "https://github.test/org/repo/pull/7",
+              pr_url: nil,
               state: "In Review"
             }} = Event.from_issue(:awaiting_review, issue)
 
     assert {:ok, %Event{issue_identifier: "ACME-8"}} =
              Event.from_issue(:budget_exceeded, :not_an_issue, issue_identifier: "ACME-8")
+  end
+
+  test "an issue event carries the ticket's PR from Symphony's record, and none once it merged" do
+    pr_url = "https://github.test/org/repo/pull/1012"
+    issue = %Issue{id: "issue-recorded", identifier: "ACME-12", title: "Recorded", state: "In Review"}
+    :ok = SymphonyElixir.TicketPullRequest.record_created("repo-n", issue.id, pr_url, "auto/ACME-12")
+
+    assert {:ok, %Event{repo_key: "repo-n", pr_url: ^pr_url}} = Event.from_issue(:awaiting_review, issue, repo_key: "repo-n")
+    assert {:ok, %Event{pr_url: ^pr_url}} = Event.from_issue(:awaiting_review, %{issue | repo_key: "repo-n"})
+
+    :ok = SymphonyElixir.TicketPullRequest.mark_finished("repo-n", pr_url, "merged")
+
+    assert {:ok, %Event{pr_url: nil}} =
+             Event.from_issue(:awaiting_review, issue, repo_key: "repo-n")
   end
 
   test "event transcript link falls back cleanly when config cannot load" do

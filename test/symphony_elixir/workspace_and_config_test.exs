@@ -2197,8 +2197,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "linear client normalizes blockers from inverse relations" do
-    write_workflow_file!(Workflow.workflow_file_path(), github: %{enterprise_hosts: ["github.example.com"]})
-
     raw_issue = %{
       "id" => "issue-1",
       "identifier" => "MT-1",
@@ -2208,25 +2206,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       "state" => %{"name" => "Todo"},
       "branchName" => "mt-1",
       "url" => "https://example.org/issues/MT-1",
-      "attachments" => %{
-        "nodes" => [
-          %{
-            "title" => "Pull Request #123",
-            "url" => "https://github.com/example/repo/pull/123",
-            "sourceType" => "github"
-          },
-          %{
-            "title" => "Pull Request #124",
-            "url" => "https://github.example.com/org/repo/pull/124",
-            "sourceType" => "github"
-          },
-          %{
-            "title" => "Design",
-            "url" => "https://example.org/design",
-            "sourceType" => "figma"
-          }
-        ]
-      },
       "assignee" => %{
         "id" => "user-1"
       },
@@ -2280,170 +2259,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert issue.priority == 2
     assert issue.state == "Todo"
 
-    assert issue.pr_urls == [
-             "https://github.com/example/repo/pull/123",
-             "https://github.example.com/org/repo/pull/124"
-           ]
-
     assert issue.assignee_id == "user-1"
     assert issue.assigned_to_worker
   end
 
-  test "linear client extracts GitHub pull request attachment URLs" do
-    raw_issue = %{
-      "id" => "issue-pr",
-      "identifier" => "MT-PR",
-      "title" => "Reviewable issue",
-      "state" => %{"name" => "In Review"},
-      "attachments" => %{
-        "nodes" => [
-          %{
-            "sourceType" => "github",
-            "url" => "https://github.com/example/repo/issues/1"
-          },
-          %{
-            "sourceType" => "github",
-            "url" => "https://github.com/example/repo/pull/42"
-          }
-        ]
-      }
-    }
-
-    issue = Client.normalize_issue_for_test(raw_issue)
-
-    assert issue.pull_request_url == "https://github.com/example/repo/pull/42"
-  end
-
-  test "linear client ignores closed and merged GitHub pull request attachments" do
-    attachment = fn number, metadata ->
-      %{"sourceType" => "github", "url" => "https://github.com/example/repo/pull/#{number}", "metadata" => metadata}
-    end
-
-    closed_only = %{
-      "id" => "issue-closed-pr",
-      "identifier" => "MT-CLOSED",
-      "title" => "Reopened issue",
-      "state" => %{"name" => "Todo"},
-      "attachments" => %{"nodes" => [attachment.(2, %{"status" => "closed"})]}
-    }
-
-    issue = Client.normalize_issue_for_test(closed_only)
-
-    assert issue.pull_request_url == nil
-    assert issue.pr_urls == []
-
-    mixed = %{
-      closed_only
-      | "attachments" => %{
-          "nodes" => [
-            attachment.(2, %{"status" => "Closed"}),
-            attachment.(3, %{"state" => " MERGED "}),
-            attachment.(4, %{"status" => nil}),
-            attachment.(5, %{"status" => "open"}),
-            attachment.(6, nil)
-          ]
-        }
-    }
-
-    issue = Client.normalize_issue_for_test(mixed)
-
-    assert issue.pull_request_url == "https://github.com/example/repo/pull/4"
-
-    assert issue.pr_urls == [
-             "https://github.com/example/repo/pull/4",
-             "https://github.com/example/repo/pull/5",
-             "https://github.com/example/repo/pull/6"
-           ]
-  end
-
-  test "linear client rejects GitHub source attachments on non-allowlisted hosts" do
-    malicious_hosts = [
-      "evil.example",
-      "github.evil.tld",
-      "www.github.com.evil.tld"
-    ]
-
-    attachments =
-      Enum.map(malicious_hosts, fn host ->
-        %{
-          "sourceType" => "github",
-          "url" => "https://#{host}/example/repo/pull/42"
-        }
-      end) ++
-        [
-          %{
-            "sourceType" => "github",
-            "url" => "https://github.com/example/repo/pull/42"
-          }
-        ]
-
-    raw_issue = %{
-      "id" => "issue-pr-hosts",
-      "identifier" => "MT-PR-HOSTS",
-      "title" => "Reviewable issue",
-      "state" => %{"name" => "In Review"},
-      "attachments" => %{"nodes" => attachments}
-    }
-
-    issue = Client.normalize_issue_for_test(raw_issue)
-
-    assert issue.pr_urls == ["https://github.com/example/repo/pull/42"]
-    assert issue.pull_request_url == "https://github.com/example/repo/pull/42"
-  end
-
-  test "linear client warns when GitHub source PR attachments use unconfigured enterprise hosts" do
-    raw_issue = %{
-      "id" => "issue-pr-unconfigured-ghe",
-      "identifier" => "MT-PR-UNCONFIGURED-GHE",
-      "title" => "Reviewable issue",
-      "state" => %{"name" => "In Review"},
-      "attachments" => %{
-        "nodes" => [
-          %{
-            "sourceType" => "github",
-            "url" => "https://ghe.example.com/example/repo/pull/42"
-          }
-        ]
-      }
-    }
-
-    log =
-      capture_log([level: :warning], fn ->
-        issue = Client.normalize_issue_for_test(raw_issue)
-
-        assert issue.pr_urls == []
-        assert issue.pull_request_url == nil
-      end)
-
-    assert log =~ ~s(Ignoring Linear GitHub PR attachment from unconfigured host "ghe.example.com")
-    assert log =~ "github.enterprise_hosts"
-  end
-
-  test "linear client accepts configured GitHub Enterprise pull request attachment URLs" do
+  test "configured GitHub Enterprise hosts are normalized and allowed" do
     write_workflow_file!(Workflow.workflow_file_path(), github: %{enterprise_hosts: ["GITHUB.EXAMPLE.COM", " github.example.com "]})
-
-    raw_issue = %{
-      "id" => "issue-pr-ghe",
-      "identifier" => "MT-PR-GHE",
-      "title" => "Reviewable issue",
-      "state" => %{"name" => "In Review"},
-      "attachments" => %{
-        "nodes" => [
-          %{
-            "sourceType" => "github",
-            "url" => "https://github.example.com/example/repo/pull/42"
-          }
-        ]
-      }
-    }
-
-    issue = Client.normalize_issue_for_test(raw_issue)
 
     assert Config.settings!().github.enterprise_hosts == ["github.example.com"]
     assert Config.settings!().github.failed_run_log_max_bytes == 65_536
     assert Hosts.allowed_github_hosts() == ["github.com", "www.github.com", "github.example.com"]
-    assert issue.pr_urls == ["https://github.example.com/example/repo/pull/42"]
-    assert issue.pull_request_url == "https://github.example.com/example/repo/pull/42"
   end
 
   test "linear client marks explicitly unassigned issues as not routed to worker" do
@@ -2492,7 +2317,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              },
              first: 50,
              relationFirst: 50,
-             attachmentFirst: 20,
              commentLast: 20,
              after: nil
            }

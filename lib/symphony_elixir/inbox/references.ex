@@ -26,7 +26,7 @@ defmodule SymphonyElixir.Inbox.References do
   require Logger
 
   alias SymphonyElixir.Config.SystemSchema
-  alias SymphonyElixir.{Decisions, Handoff, IssueSummary, PlanReview}
+  alias SymphonyElixir.{Connected, Decisions, Handoff, IssueSummary, PlanReview}
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.Collector
   alias SymphonyElixir.Inbox.Mentions
@@ -436,7 +436,7 @@ defmodule SymphonyElixir.Inbox.References do
     own = Map.get(ctx.read.own, item.issue_id)
 
     %{
-      parent: own && parent_context(own["parent"]),
+      parent: own && Connected.parent(own["parent"]),
       pull_request: own && own_pull_request(attached_pull_request(own), item, ctx),
       blocked_by: related(own, "inverseRelations", "issue", ["blocks"]),
       blocks: related(own, "relations", "relatedIssue", ["blocks"]),
@@ -444,21 +444,6 @@ defmodule SymphonyElixir.Inbox.References do
       earlier_decisions: earlier_decisions(node)
     }
   end
-
-  # The parent's sub-tickets in landing order (their creation order), canceled ones left out.
-  defp parent_context(%{"identifier" => identifier} = parent) do
-    children =
-      parent
-      |> get_in(["children", "nodes"])
-      |> List.wrap()
-      |> Enum.reject(&(get_in(&1, ["state", "type"]) == "canceled"))
-      |> Enum.sort_by(&(&1["createdAt"] || ""))
-      |> Enum.map(&get_in(&1, ["state", "type"]))
-
-    %{identifier: identifier, title: parent["title"], done: Enum.count(children, &(&1 == "completed")), total: length(children), children: children}
-  end
-
-  defp parent_context(_parent), do: nil
 
   defp own_pull_request(nil, _item, _ctx), do: nil
 

@@ -261,6 +261,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> update_list_field(:comments, &sanitize_issue_comments/1)
     |> update_list_field(:linked_issues, &sanitize_linked_issues/1)
     |> update_list_field(:sub_issues, &sanitize_sub_issues/1)
+    |> update_field(:parent, &sanitize_parent/1)
     |> put_repo_key(repo_key)
   end
 
@@ -290,6 +291,9 @@ defmodule SymphonyElixir.PromptBuilder do
     Enum.map(sub_issues, &update_string_field(&1, :state, fn state -> PromptSafety.linear_issue_state(state) end))
   end
 
+  defp sanitize_parent(parent) when is_map(parent), do: update_string_field(parent, :title, &PromptSafety.linear_issue_title/1)
+  defp sanitize_parent(parent), do: parent
+
   defp sanitize_reviewer_comments(comments) when is_list(comments) do
     Enum.map(comments, fn comment ->
       update_string_field(comment, :body, &PromptSafety.linear_reviewer_comment_body/1)
@@ -312,7 +316,8 @@ defmodule SymphonyElixir.PromptBuilder do
       {"issue.description", get_field(issue, :description)}
     ] ++
       issue_comment_warning_sources(get_field(issue, :comments)) ++
-      linked_issue_warning_sources(get_field(issue, :linked_issues))
+      linked_issue_warning_sources(get_field(issue, :linked_issues)) ++
+      [{"issue.parent.title", issue |> get_field(:parent) |> get_field(:title)}]
   end
 
   defp issue_comment_warning_sources(comments) when is_list(comments) do
@@ -709,8 +714,10 @@ defmodule SymphonyElixir.PromptBuilder do
 
       Review-agent gate:
 
+      - This run has a pre-push reviewer. It comes before the handoff push the workflow describes: that push still hands the ticket to `Code Review`, but only after this reviewer approves.
       - After implementation, validation, commit, and committed-diff review are complete, stop before `git push`.
-      - Do not push, open a PR, or move the issue to review until Symphony injects the reviewer-agent verdict.
+      - Do not push or open a PR until Symphony injects the reviewer-agent verdict.
+      - Ending your turn at this gate does not end the run: Symphony runs the reviewer and continues this same run with its verdict. The rule that a run ending without its push never advances is about a run that stops for good, not a turn that stops here.
       - This overrides retry or continuation guidance that says to keep working while the issue remains active; stopping at this gate is expected.
       - Only continue to push/PR after an explicit reviewer-agent approval prompt. Do not treat missing reviewer comments as approval.
       - If the reviewer requests changes, address those comments in the same workspace and stop before push again.

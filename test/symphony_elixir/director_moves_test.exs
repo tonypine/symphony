@@ -149,8 +149,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       Keyword.merge(opts, github: FakeGitHub, workspace: FakeWorkspace)
     end
 
+    # A ticket routed to its repo, whose PR Symphony's record holds open.
     defp restart_issue(fields \\ []) do
-      struct(%{pr("Rework") | pr_urls: [@restart_pr_url]}, fields)
+      :ok = SymphonyElixir.TicketPullRequest.record_created("repo-restart", "pr", @restart_pr_url, "auto/MOT-40")
+      struct(%{pr("Rework") | repo_key: "repo-restart"}, fields)
     end
 
     test "closes the pull request, removes the workspace and moves the ticket to In Progress", %{opts: opts} do
@@ -186,7 +188,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     test "records the restart in the ticket's signals ledger", %{opts: opts} do
       github_activity(state: "OPEN")
       RunStore.delete_ticket_state("repo-restart", "pr")
-      put_issues([%{restart_issue() | repo_key: "repo-restart"}])
+      put_issues([restart_issue()])
 
       assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
 
@@ -196,7 +198,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "clears a dispatch-loop hold, so the ticket starts again with its count at zero", %{opts: opts} do
       github_activity(state: "OPEN")
-      put_issues([%{restart_issue() | repo_key: "repo-restart"}])
+      put_issues([restart_issue()])
       :ok = RunStore.record_ticket_dispatch("repo-restart", "pr", %{kind: :rework, run_id: "run-1", state: "Rework"})
       :ok = Hold.set("repo-restart", "pr", :blocked, %{reason: "dispatch_loop: 4 rework runs", waits_on: %{type: "dispatch_loop", keys: ["rework"]}})
 
@@ -207,7 +209,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "leaves any other Blocked hold, and stands when the store refuses to clear the loop's", %{opts: opts} do
-      put_issues([%{pr("In Progress") | pr_urls: [], repo_key: "repo-restart"}])
+      put_issues([%{pr("In Progress") | repo_key: "repo-restart"}])
       :ok = Hold.set("repo-restart", "pr", :blocked, %{waits_on: %{type: "access"}})
 
       assert {:ok, _result} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
@@ -226,7 +228,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     test "a ticket with no pull request restarts just the same", %{opts: opts} do
-      put_issues([%{pr("In Progress") | pr_urls: []}])
+      put_issues([pr("In Progress")])
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
       assert_received {:remove_workspaces, "MOT-40"}

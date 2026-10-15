@@ -168,8 +168,10 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     pr_url = "https://github.com/example/repo/pull/40"
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url], repo_key: "default"}
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", repo_key: "default"}
     ])
+
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", "pr", pr_url, "auto/MOT-40")
 
     conn =
       post(
@@ -187,8 +189,10 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     pr_url = "https://github.com/example/repo/pull/40"
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", pr_urls: [pr_url]}
+      %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "Rework", repo_key: "default"}
     ])
+
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", "pr", pr_url, "auto/MOT-40")
 
     assert error(
              post(

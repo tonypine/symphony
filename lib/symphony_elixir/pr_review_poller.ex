@@ -11,7 +11,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{NeedsDecisionHold, SubIssueWait, TicketSignals, Tracker, TransitionGuard, Workspace}
+  alias SymphonyElixir.{NeedsDecisionHold, SubIssueWait, TicketPullRequest, TicketSignals, Tracker, TransitionGuard}
+  alias SymphonyElixir.Workspace
 
   @merging_state "Merging"
   @rework_state "Rework"
@@ -679,7 +680,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     record =
       discover_review_record(issue, run_store, repo_key, existing, now) ||
-        discover_auto_merge_record(issue, existing, merging_issue_ids, now)
+        discover_auto_merge_record(issue, existing, merging_issue_ids, repo_key, now)
 
     case record do
       nil ->
@@ -702,7 +703,7 @@ defmodule SymphonyElixir.PrReviewPoller do
        when is_binary(workspace_path) and workspace_path != "" do
     attrs =
       existing
-      |> missing_review_detail_attrs(issue)
+      |> missing_review_detail_attrs(issue, repo_key)
       |> missing_run_detail_attrs(existing, latest_run_for_issue(run_store, repo_key, issue.id))
       |> maybe_put_updated_at(now)
 
@@ -712,7 +713,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp discover_review_record(%Issue{} = issue, run_store, repo_key, existing, now) do
-    with pr_url when is_binary(pr_url) <- first_pr_url(issue),
+    with pr_url when is_binary(pr_url) <- first_pr_url(issue, repo_key),
          %{workspace_path: workspace_path} = run when is_binary(workspace_path) <-
            latest_run_for_issue(run_store, repo_key, issue.id) do
       base = %{
@@ -745,9 +746,9 @@ defmodule SymphonyElixir.PrReviewPoller do
   # poller must watch it even without a run to take the workspace from (run history reset,
   # PR opened outside Symphony). GitHub calls run with `cwd: nil` and cleanup skips the
   # workspace removal.
-  defp discover_auto_merge_record(%Issue{} = issue, nil, merging_issue_ids, now) do
+  defp discover_auto_merge_record(%Issue{} = issue, nil, merging_issue_ids, repo_key, now) do
     with true <- Enum.member?(merging_issue_ids, issue.id),
-         pr_url when is_binary(pr_url) <- first_pr_url(issue) do
+         pr_url when is_binary(pr_url) <- first_pr_url(issue, repo_key) do
       %{
         issue_id: issue.id,
         issue_identifier: issue.identifier,
@@ -764,7 +765,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_auto_merge_record(_issue, _existing, _merging_issue_ids, _now), do: nil
+  defp discover_auto_merge_record(_issue, _existing, _merging_issue_ids, _repo_key, _now), do: nil
 
   defp log_poll_action_warnings(%{actions: actions}) when is_list(actions) do
     Enum.each(actions, &log_poll_action_warning/1)
@@ -877,6 +878,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp do_act_on_review(action, record, attrs, activity, settings, opts, now) do
     case action do
       :merged ->
+        finish_pull_request(record, "merged", opts)
+
         with {:ok, record} <- finish_merged(record, settings, opts, now) do
           record
           |> maybe_capture_learnings(activity, settings, opts, now)
@@ -884,6 +887,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         end
 
       :closed ->
+        finish_pull_request(record, "closed", opts)
         cleanup_review(record, opts, now, "closed")
 
       :changes_requested ->
@@ -1287,6 +1291,11 @@ defmodule SymphonyElixir.PrReviewPoller do
         Logger.warning("Failed to comment the auto-merge fallback issue_id=#{issue_id}: #{inspect(reason)}")
         :ok
     end
+  end
+
+  # A closed or merged PR is no longer its ticket's in-flight PR (`SymphonyElixir.TicketPullRequest`).
+  defp finish_pull_request(record, pr_state, opts) do
+    TicketPullRequest.mark_finished(Map.get(record, :repo_key) || Keyword.get(opts, :repo_key), Map.get(record, :pr_url), pr_state)
   end
 
   # GitHub merged the PR. Whoever merged it, an issue with sub-issues still open waits on them
@@ -2212,13 +2221,15 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
+  # The ticket as the review record knows it. Its PR is the ticket's, read from Symphony's record
+  # under the repo key (`SymphonyElixir.TicketPullRequest`), not carried on the issue.
   defp issue_from_review_record(record) do
     %Issue{
       id: Map.get(record, :issue_id),
       identifier: Map.get(record, :issue_identifier),
       title: Map.get(record, :issue_title),
       url: Map.get(record, :issue_url),
-      pr_urls: [Map.get(record, :pr_url)] |> Enum.filter(&present?/1)
+      repo_key: Map.get(record, :repo_key)
     }
   end
 
@@ -2295,8 +2306,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp first_pr_url(%Issue{pr_urls: [url | _rest]}) when is_binary(url), do: url
-  defp first_pr_url(_issue), do: nil
+  # The ticket's in-flight PR, from Symphony's record of it.
+  defp first_pr_url(%Issue{} = issue, repo_key), do: TicketPullRequest.current_url(issue, repo_key)
 
   # The issue's newest finished run, or `{:error, reason}` when its runs can't be read.
   defp latest_run_for_issue(run_store, repo_key, issue_id) do
@@ -2923,10 +2934,10 @@ defmodule SymphonyElixir.PrReviewPoller do
     |> maybe_put_missing(:issue_url, record, issue.url)
   end
 
-  defp missing_review_detail_attrs(record, %Issue{} = issue) do
+  defp missing_review_detail_attrs(record, %Issue{} = issue, repo_key) do
     record
     |> missing_issue_detail_attrs(issue)
-    |> maybe_put_missing(:pr_url, record, first_pr_url(issue))
+    |> maybe_put_missing(:pr_url, record, first_pr_url(issue, repo_key))
   end
 
   # No finished run, or its runs couldn't be read.

@@ -103,7 +103,8 @@ defmodule SymphonyElixir.QaDriver do
   the agent passes and that window size in each problem. A resize on a screen
   whose usable area is under 1400×900 pt marks the pass's wide pass limited
   (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
-  a `pass` with no resize at all (`wide_pass/1` is `nil`).
+  a `pass` with no resize at all (`wide_pass/1` is `nil`), unless it is an epic
+  review that launched no app (`launched_app?/1`).
 
   OpenRouter stub: the first `qa_launch_app` starts a
   `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app
@@ -301,6 +302,19 @@ defmodule SymphonyElixir.QaDriver do
     GenServer.call(driver, :wide_pass)
   catch
     :exit, _reason -> nil
+  end
+
+  @doc """
+  Whether the pass launched an app with `qa_launch_app`, even one that has quit since.
+  `false` when there is no driver.
+  """
+  @spec launched_app?(pid() | nil) :: boolean()
+  def launched_app?(nil), do: false
+
+  def launched_app?(driver) when is_pid(driver) do
+    GenServer.call(driver, :launched_app?)
+  catch
+    :exit, _reason -> false
   end
 
   @doc "Stops the driver, quitting every app it launched."
@@ -1380,7 +1394,7 @@ defmodule SymphonyElixir.QaDriver do
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
-    state = Map.merge(state, %{wide_pass: nil, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
+    state = Map.merge(state, %{wide_pass: nil, launched_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
     {:ok, open_tunnel(state, @tunnel_attempts)}
   end
 
@@ -1464,6 +1478,7 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
   def handle_call(:wide_pass, _from, state), do: {:reply, state.wide_pass, state}
+  def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
   def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
@@ -1567,7 +1582,7 @@ defmodule SymphonyElixir.QaDriver do
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
       payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
       payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
-      {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
+      {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app), launched_app?: true}}
     else
       {:error, {:qa_tool, _code, _message}} = error ->
         {:reply, error, state}

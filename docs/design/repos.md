@@ -79,14 +79,14 @@ Each step names the screen that serves it (section 5).
 6. The new repo is selected in the sidebar. A banner on it says how the change reaches Symphony: restarting now,
    after N runs finish, on next start, or restart by hand. → **S11**
 
-### J3. Edit routing, source or gate (U3)
+### J3. Edit routing, source or review (U3)
 
 1. Select the repo. Each detail section has its own **Edit…** button. → **S1**
 2. **Linear routing…** opens a small sheet with the project, labels, the route preview and **Default repo** (takes
-   the issues no other route matches). → **S7**
+   the issues no other route matches; turning it on moves the default here in the same write). → **S7**
 3. **Source…** opens a sheet with GitHub URL / Local folder, the folder or URL, and the base branch. → **S8**
-4. **Acceptance gate…** opens a sheet with the mode as a pop-up (Inherit, Off, Shadow, Enforce), the line on what
-   it does, and the gate's record for this repo. Save runs `symphony check` first, as today. → **S9**
+4. **Review…** opens a sheet with the repo's manual review as a checkbox ("Ask me before merging") and the line on
+   what it does, and its built-in ticket patterns. Save runs `symphony check` first. → **S9**
 5. Save shows the change banner and, when runs are active, the restart question. → **S11**
 
 ### J4. Disconnect, or remove the clone (U4)
@@ -191,7 +191,7 @@ the detail on the right, with a unified toolbar. Default size 880×600, minimum 
   S11), and **+** (Add Repo…).
 - **Sidebar row:** health dot, repo key in body weight, `owner/repo` (or the folder name) in secondary text, a
   **Default** capsule, and an agent count capsule ("2") while agents run. Context menu: Edit Linear Routing…, Edit
-  Source…, Reveal in Finder, Open on GitHub, Disconnect…. Footer: **+** and **−** buttons, as in System Settings
+  Source…, Edit Review…, Reveal in Finder, Open on GitHub, Disconnect…. Footer: **+** and **−** buttons, as in System Settings
   lists.
 - **Detail header:** repo key (title 2), `owner/repo` as a link to GitHub, the **Default** capsule, and a one-line
   health summary ("Healthy", "1 problem", "Not checked: Symphony is stopped").
@@ -205,14 +205,14 @@ the detail on the right, with a unified toolbar. Default size 880×600, minimum 
   - **Activity:** last fetch ("12 min ago" or "Failed 3 min ago" with the error), then one line per running agent:
     issue identifier (link to Linear), run time, last activity, worker host when remote, and **Reveal Worktree**.
     "No agents running" otherwise.
-  - **Acceptance gate:** the mode ("Inherit: Shadow") and the record line.
+  - **Review:** the repo's manual review ("Manual review: On", with what it does).
 - **Detail footer:** **Disconnect…** on the left in destructive style, off with its reason for the last repo.
 
 ### S2. Repos window, Symphony stopped
 
 - Toolbar chip: "Symphony stopped" with a grey dot.
 - Sidebar dots are grey (unknown), with the label "Not checked".
-- In the detail, Source, Linear routing and Acceptance gate show from `symphony.yml` as usual. **WORKFLOW.md** and
+- In the detail, Source, Linear routing and Review show from `symphony.yml` as usual. **WORKFLOW.md** and
   **Activity** collapse into one line: "Live status shows while Symphony runs." with **Start Symphony**.
 - A `WORKFLOW.md` the app wrote that isn't on the base branch yet still shows, as only the app knows it: the
   **Needs attention** box keeps its pending line (**View Pull Request** / **Reveal in Finder**) under the "Not
@@ -269,7 +269,10 @@ The TP-694 step, given its own page instead of a section in a long form.
 
 Sheet 480×420: project, labels (as S4), the route preview, the **Default repo** checkbox ("Take the issues no other
 repo's route matches"; turning it on moves the default from the current one, named in the caption), and **Cancel** /
-**Save**. A project Linear doesn't list, or a label it doesn't list, stays selectable as today.
+**Save**. Save moves `default: true` in one write. On the default repo the checkbox is on and can't be turned off, with
+"To move the default, turn this on in another repo's Linear routing."; while the current default has no route of its
+own, the checkbox can't be turned on and says why, as Symphony refuses a repo with no route that isn't the default. A project Linear doesn't list, or a label
+it doesn't list, stays selectable as today.
 
 ### S8. Edit source
 
@@ -277,11 +280,13 @@ Sheet 480×380: GitHub URL | Local folder, the URL or **Choose…** with the sam
 caption on what switching does ("Symphony makes its own clone on the next start. Your folder stays as it is.").
 The key shows in the title ("Source of billing-api") and can't change, as today.
 
-### S9. Edit acceptance gate
+### S9. Edit review
 
-Sheet 440×300: **Mode** pop-up (Inherit (Shadow), Off, Shadow, Enforce), the one-line explanation of the choice, and
-the repo's record line ("12 decided, 11 agreed with the reviewer"). Picking Enforce asks first, as today. Save runs
-`symphony check` with a spinner in the footer, and shows its rejection inline.
+Sheet 440×360, titled "Review of billing-api": the repo's `manual_review` as a checkbox, **Ask me before merging (a
+merge-confirmation hold after QA)**, with the one-line explanation of what it does, then the repo's **Built-in ticket
+patterns** (Same as Settings, On, Off). Save runs `symphony check` with a spinner in the footer, and shows its
+rejection inline; nothing is written until it passes. (This sheet replaced the retired acceptance gate's Mode pop-up,
+TP-827.)
 
 ### S10. Disconnect
 
@@ -328,7 +333,7 @@ A box above the detail sections, orange for warnings and red for errors, one row
 | `WORKFLOW.md` found/valid, invalid, missing, with path and error | TP-260 | S1 WORKFLOW.md, S12 |
 | Last fetch: when, ok or failed with error, "none yet" | TP-260 | S1 Activity, S12 |
 | Running agents: issue, worker host, worktree paths | TP-260 | S1 Activity |
-| Acceptance gate field per repo | TP-260 / gate | S1 Acceptance gate |
+| Manual review per repo (replaced the acceptance gate field) | TP-825 | S1 Review |
 | Refresh while open | TP-260 | S1, S2 (unchanged polling) |
 | Stopped, starting, not answering: rows from `symphony.yml` | TP-260 | S2 |
 | No `symphony.yml` set, unreadable, no `repositories:`, older Symphony, unreachable, agents not listed | TP-260 | S0, S2, S12 |
@@ -350,7 +355,8 @@ A box above the detail sections, orange for warnings and red for errors, one row
 | Switch local ↔ managed | TP-262 | S8 |
 | Change routing, keep unlisted project and labels | TP-262 | S7 |
 | Change base branch | TP-262 | S8 |
-| Acceptance gate per repo, Enforce confirmation, `symphony check` before writing, record line | TP-262 / gate | S9 |
+| Manual review and built-in ticket patterns per repo, `symphony check` before writing | TP-825 | S9 |
+| Make a repo the default without disconnecting the old one | TP-711 | S7 |
 | Disconnect…: confirmation, what stays on disk, new default pick, last repo blocked | TP-262 | S10 |
 | Remove Clone…: managed only, blocked while a run uses it or Symphony isn't answering, checked again before deleting, path inside the clones folder | TP-262 | S1 Source, S10 checkbox |
 | Restart question after Edit and Disconnect, and "later" message | TP-262 | S11 |
@@ -367,7 +373,7 @@ A box above the detail sections, orange for warnings and red for errors, one row
 
 ### D2. Editing: one small sheet per section
 
-- **A. A sheet per section (recommended):** Linear routing, Source, Acceptance gate. Each fits a 768pt screen, has
+- **A. A sheet per section (recommended):** Linear routing, Source, Review. Each fits a 768pt screen, has
   one job, and keeps today's "review, then write `symphony.yml`" model.
 - B. Edit in place in the detail with Save and Revert. Fewer windows, but a half-edited detail keeps polling, and
   every change still needs a restart, so in-place editing promises a live effect it doesn't have.

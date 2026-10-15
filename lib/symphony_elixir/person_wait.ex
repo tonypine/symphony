@@ -4,15 +4,10 @@ defmodule SymphonyElixir.PersonWait do
   conflict starts no fix run for such an issue, since a fix run can't do what the person must.
 
   An issue waits on a person when it sits outside `tracker.active_states` with a label that asks for
-  one (`needs-human`, a `legacy_request_labels/1` label, or an `auto_review.acceptance_gate.escalate`
-  label other than `plan` and `breakdown`, which every plan carries), or outside every state the
-  pollers move issues on from (`Backlog`, a terminal state), where it waits for a person to promote
-  it. Labels and states compare case-insensitively.
-
-  The `human-action` label that used to mark an open request is retired: a config that still sets
-  `human_actions.label`, or lists `human-action` in the `escalate.labels`, loads with a deprecation
-  warning, and an issue carrying that label counts as one with an open request
-  (`legacy_request_labels/1`).
+  one (`needs-human`, or an `auto_review.acceptance_gate.escalate` label other than `plan` and
+  `breakdown`, which every plan carries), or outside every state the pollers move issues on from
+  (`Backlog`, a terminal state), where it waits for a person to promote it. Labels and states
+  compare case-insensitively.
   """
 
   alias SymphonyElixir.Config.Schema
@@ -22,8 +17,6 @@ defmodule SymphonyElixir.PersonWait do
   @merging_state "Merging"
   # Asks for a person whatever the `escalate.labels` say (see `parked?/2`).
   @needs_human_label "needs-human"
-  # The retired label that marked an open human-action request (see `legacy_request_labels/1`).
-  @legacy_request_label "human-action"
 
   @doc """
   True when `issue` sits outside `tracker.active_states` with a label that asks for a person. The
@@ -56,34 +49,13 @@ defmodule SymphonyElixir.PersonWait do
 
   defp poller_state?(_issue_state, _settings, _opts), do: false
 
-  @doc """
-  The labels that still mark an open human-action request, from a config that predates the Needs
-  Decision hold: `human_actions.label` when it is set, and `human-action` when the gate's
-  `escalate.labels` list it. Both are deprecated (`SymphonyElixir.Config.SystemSchema` warns when
-  it loads them); an issue carrying one counts as an issue with an open request. Lower case.
-  """
-  @spec legacy_request_labels(Schema.t()) :: [String.t()]
-  def legacy_request_labels(%Schema{} = settings) do
-    configured = settings.human_actions.label
-    escalated? = Enum.any?(settings.auto_review.acceptance_gate.escalate.labels, &(normalize(&1) == @legacy_request_label))
-
-    [configured, if(escalated?, do: @legacy_request_label)]
-    |> Enum.filter(&is_binary/1)
-    |> Enum.map(&normalize/1)
-    |> Enum.uniq()
-  end
-
-  @doc "The retired label that marked an open human-action request."
-  @spec legacy_request_label() :: String.t()
-  def legacy_request_label, do: @legacy_request_label
-
   defp active_state?(issue_state, settings) when is_binary(issue_state),
     do: Enum.any?(settings.tracker.active_states, &(normalize(&1) == normalize(issue_state)))
 
   defp active_state?(_issue_state, _settings), do: false
 
   defp person_labels(settings) do
-    [@needs_human_label | legacy_request_labels(settings) ++ settings.auto_review.acceptance_gate.escalate.labels]
+    [@needs_human_label | settings.auto_review.acceptance_gate.escalate.labels]
     |> Enum.reject(&Issue.breakdown_label?/1)
   end
 

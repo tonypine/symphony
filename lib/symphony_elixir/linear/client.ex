@@ -4,14 +4,22 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{AgentLabels, AuditLog, Config, Decisions, IssueSummary, Linear.Issue, Secret, StateMachine}
-  alias SymphonyElixir.GitHub.Hosts
-  alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
+
+  alias SymphonyElixir.{
+    AgentLabels,
+    AuditLog,
+    Config,
+    Connected,
+    Decisions,
+    IssueSummary,
+    Linear.Issue,
+    Secret,
+    StateMachine
+  }
+
+  alias SymphonyElixir.Linear.{RateLimit, Usage}
 
   @issue_page_size 50
-  @attachment_page_size 20
-  @attachment_follow_up_page_size 50
-  @attachment_follow_up_max_pages 10
   # Kept small: every polled issue pays for this nested connection in Linear query complexity.
   @sub_issue_page_size 20
   @enrichment_comment_last 20
@@ -27,7 +35,7 @@ defmodule SymphonyElixir.Linear.Client do
   @operation_name_pattern ~r/^\s*(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/
 
   @query """
-  query SymphonyLinearPoll($filter: IssueFilter!, $first: Int!, $relationFirst: Int!, $attachmentFirst: Int!, $commentLast: Int!, $after: String) {
+  query SymphonyLinearPoll($filter: IssueFilter!, $first: Int!, $relationFirst: Int!, $commentLast: Int!, $after: String) {
     issues(filter: $filter, first: $first, after: $after) {
       nodes {
         id
@@ -49,18 +57,6 @@ defmodule SymphonyElixir.Linear.Client do
         }
         branchName
         url
-        attachments(first: $attachmentFirst) {
-          nodes {
-            title
-            url
-            sourceType
-            metadata
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
         assignee {
           id
         }
@@ -115,7 +111,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   @query_by_ids """
-  query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!, $attachmentFirst: Int!, $commentLast: Int!) {
+  query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!, $commentLast: Int!) {
     issues(filter: {id: {in: $ids}}, first: $first) {
       nodes {
         id
@@ -137,18 +133,6 @@ defmodule SymphonyElixir.Linear.Client do
         }
         branchName
         url
-        attachments(first: $attachmentFirst) {
-          nodes {
-            title
-            url
-            sourceType
-            metadata
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
         assignee {
           id
         }
@@ -199,7 +183,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   @query_by_identifier """
-  query SymphonyLinearIssueByIdentifier($id: String!, $relationFirst: Int!, $attachmentFirst: Int!, $commentLast: Int!) {
+  query SymphonyLinearIssueByIdentifier($id: String!, $relationFirst: Int!, $commentLast: Int!) {
     issue(id: $id) {
       id
       identifier
@@ -220,18 +204,6 @@ defmodule SymphonyElixir.Linear.Client do
       }
       branchName
       url
-      attachments(first: $attachmentFirst) {
-        nodes {
-          title
-          url
-          sourceType
-          metadata
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
       assignee {
         id
       }
@@ -280,27 +252,6 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
-  # The issue reads above load one page of attachments, so a PR attachment past it (QA uploads
-  # one attachment per screenshot) would be missed. This reads the pages after it.
-  @attachments_query """
-  query SymphonyLinearIssueAttachments($id: String!, $first: Int!, $after: String) {
-    issue(id: $id) {
-      attachments(first: $first, after: $after) {
-        nodes {
-          title
-          url
-          sourceType
-          metadata
-        }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-      }
-    }
-  }
-  """
-
   @viewer_id_cache_key {__MODULE__, :viewer_id}
 
   @viewer_query """
@@ -332,6 +283,18 @@ defmodule SymphonyElixir.Linear.Client do
             title
             state {
               name
+            }
+          }
+        }
+      }
+      parent {
+        identifier
+        title
+        children(first: #{@sub_issue_page_size}) {
+          nodes {
+            createdAt
+            state {
+              type
             }
           }
         }
@@ -718,11 +681,9 @@ defmodule SymphonyElixir.Linear.Client do
              filter: filter,
              first: @issue_page_size,
              relationFirst: @issue_page_size,
-             attachmentFirst: @attachment_page_size,
              commentLast: @enrichment_comment_last,
              after: after_cursor
            }),
-         {:ok, body} <- complete_pull_request_attachments(body, graphql_fun),
          {:ok, issues, page_info} <- decode_linear_page_response(body, nil) do
       updated_acc = prepend_page_issues(issues, acc_issues)
 
@@ -967,10 +928,8 @@ defmodule SymphonyElixir.Linear.Client do
              ids: batch_ids,
              first: length(batch_ids),
              relationFirst: @issue_page_size,
-             attachmentFirst: @attachment_page_size,
              commentLast: @enrichment_comment_last
            }),
-         {:ok, body} <- complete_pull_request_attachments(body, graphql_fun),
          {:ok, issues} <- decode_linear_response(body, assignee_filter) do
       updated_acc = prepend_page_issues(issues, acc_issues)
       do_fetch_issue_states_page(rest_ids, assignee_filter, graphql_fun, updated_acc, issue_order_index)
@@ -996,7 +955,8 @@ defmodule SymphonyElixir.Linear.Client do
              issue
              | description: IssueSummary.strip(Map.get(enrichment, "description", issue.description)),
                comments: extract_comments(enrichment),
-               linked_issues: extract_linked_issues(enrichment)
+               linked_issues: extract_linked_issues(enrichment),
+               parent: Connected.parent(enrichment["parent"])
            }}
         end
     end
@@ -1013,10 +973,8 @@ defmodule SymphonyElixir.Linear.Client do
                graphql_fun.(@query_by_identifier, %{
                  id: id,
                  relationFirst: @issue_page_size,
-                 attachmentFirst: @attachment_page_size,
                  commentLast: @enrichment_comment_last
-               }),
-             {:ok, body} <- complete_pull_request_attachments(body, graphql_fun) do
+               }) do
           decode_linear_issue_response(body, nil)
         end
     end
@@ -1199,84 +1157,6 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp decode_issue_enrichment_response(_unknown), do: {:error, :linear_unknown_payload}
 
-  # The issue reads load one page of attachments (`@attachment_page_size`). For each issue whose page is
-  # full (`hasNextPage`), read the remaining pages, at most `@attachment_follow_up_max_pages` of them,
-  # so every attachment is seen and a PR attachment pushed past the first page (by QA screenshots,
-  # say) still gives the issue its PR URL. An issue with no more pages costs no request.
-  # A transient failure (rate limit, transport, 429/5xx) on a follow-up page fails the whole read, so
-  # callers that retry transient errors wait it out instead of getting an issue without its PR URL.
-  defp complete_pull_request_attachments(%{"data" => %{"issues" => %{"nodes" => nodes}}} = body, graphql_fun)
-       when is_list(nodes) do
-    nodes
-    |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
-      case complete_issue_attachments(node, graphql_fun) do
-        {:ok, node} -> {:cont, {:ok, [node | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, completed} -> {:ok, put_in(body, ["data", "issues", "nodes"], Enum.reverse(completed))}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp complete_pull_request_attachments(%{"data" => %{"issue" => issue}} = body, graphql_fun) when is_map(issue) do
-    with {:ok, issue} <- complete_issue_attachments(issue, graphql_fun) do
-      {:ok, put_in(body, ["data", "issue"], issue)}
-    end
-  end
-
-  defp complete_pull_request_attachments(body, _graphql_fun), do: {:ok, body}
-
-  defp complete_issue_attachments(issue, graphql_fun, pages_left \\ @attachment_follow_up_max_pages) do
-    case issue do
-      %{"id" => id, "attachments" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}}}
-      when is_binary(id) and is_list(nodes) and is_binary(cursor) ->
-        read_next_attachment_page(issue, cursor, graphql_fun, pages_left)
-
-      _complete ->
-        {:ok, issue}
-    end
-  end
-
-  defp read_next_attachment_page(issue, _cursor, _graphql_fun, 0) do
-    Logger.warning(
-      "Stopped reading Linear attachments for #{attachment_issue_context(issue)} after " <>
-        "#{@attachment_follow_up_max_pages} more pages; later attachments were not read"
-    )
-
-    {:ok, issue}
-  end
-
-  defp read_next_attachment_page(%{"id" => id, "attachments" => %{"nodes" => nodes}} = issue, cursor, graphql_fun, pages_left) do
-    case graphql_fun.(@attachments_query, %{id: id, first: @attachment_follow_up_page_size, after: cursor}) do
-      {:ok, %{"data" => %{"issue" => %{"attachments" => %{"nodes" => more} = attachments}}}} when is_list(more) ->
-        issue
-        |> Map.put("attachments", %{attachments | "nodes" => nodes ++ more})
-        |> complete_issue_attachments(graphql_fun, pages_left - 1)
-
-      response ->
-        reason = attachment_page_error(response)
-
-        if TransientRetry.transient?(reason) do
-          {:error, reason}
-        else
-          Logger.warning(
-            "Could not read more Linear attachments for #{attachment_issue_context(issue)}; " <>
-              "its PR URL may be missing reason=#{inspect(reason)}"
-          )
-
-          {:ok, issue}
-        end
-    end
-  end
-
-  defp attachment_page_error({:error, reason}), do: reason
-  defp attachment_page_error({:ok, %{"errors" => errors}}), do: {:linear_graphql_errors, errors}
-  defp attachment_page_error(_response), do: :linear_unknown_payload
-
-  defp attachment_issue_context(issue), do: "issue_id=#{issue["id"]} issue_identifier=#{issue["identifier"]}"
-
   defp next_page_cursor(%{has_next_page: true, end_cursor: end_cursor})
        when is_binary(end_cursor) and byte_size(end_cursor) > 0 do
     {:ok, end_cursor}
@@ -1290,7 +1170,6 @@ defmodule SymphonyElixir.Linear.Client do
   # keep the default true value.
   defp normalize_issue(issue, assignee_filter) when is_map(issue) do
     assignee = issue["assignee"]
-    pr_urls = extract_pr_urls(issue)
 
     %Issue{
       id: issue["id"],
@@ -1304,9 +1183,7 @@ defmodule SymphonyElixir.Linear.Client do
       project: extract_project(issue),
       branch_name: issue["branchName"],
       url: issue["url"],
-      pull_request_url: List.first(pr_urls),
       assignee_id: assignee_field(assignee, "id"),
-      pr_urls: pr_urls,
       blocked_by: extract_blockers(issue),
       sub_issues: extract_sub_issues(issue),
       labels: extract_labels(issue),
@@ -1438,106 +1315,6 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp extract_labels(_), do: []
-
-  defp extract_pr_urls(%{"attachments" => %{"nodes" => attachments}}) when is_list(attachments) do
-    attachments
-    |> Enum.reject(&finished_pull_request_attachment?/1)
-    |> Enum.flat_map(fn attachment ->
-      case pull_request_attachment_url(attachment) do
-        nil -> []
-        url -> [url]
-      end
-    end)
-    |> Enum.uniq()
-  end
-
-  defp extract_pr_urls(_issue), do: []
-
-  # Linear's GitHub integration records the PR lifecycle in attachment metadata.
-  # A closed or merged PR is no longer the issue's in-flight PR, so it must not
-  # make the issue look post-PR. Missing or unknown metadata keeps the attachment.
-  defp finished_pull_request_attachment?(%{"metadata" => metadata}) when is_map(metadata) do
-    [metadata["status"], metadata["state"]]
-    |> Enum.any?(fn
-      status when is_binary(status) -> String.downcase(String.trim(status)) in ["closed", "merged"]
-      _status -> false
-    end)
-  end
-
-  defp finished_pull_request_attachment?(_attachment), do: false
-
-  defp pull_request_attachment_url(%{"url" => url} = attachment) when is_binary(url) do
-    case github_pull_request_url(url) do
-      :ok ->
-        url
-
-      {:unconfigured_github_host, host} ->
-        warn_unconfigured_github_attachment_host(attachment, host)
-        nil
-
-      :error ->
-        nil
-    end
-  end
-
-  defp pull_request_attachment_url(_attachment), do: nil
-
-  defp github_pull_request_url(url) do
-    case URI.parse(url) do
-      %URI{scheme: "https", host: host, path: path} when is_binary(host) and is_binary(path) ->
-        cond do
-          not github_pull_request_path?(path) ->
-            :error
-
-          Hosts.github_host?(host) ->
-            :ok
-
-          true ->
-            {:unconfigured_github_host, normalize_host(host)}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp github_pull_request_path?(path) when is_binary(path) do
-    path
-    |> String.split("/", trim: true)
-    |> case do
-      [_owner, _repo, "pull", pull_number | _rest] -> pull_number =~ ~r/^\d+$/
-      _path_parts -> false
-    end
-  end
-
-  # Linear sourceType is not trusted for acceptance; it only lets us explain
-  # likely legacy GitHub Enterprise attachments that now require explicit config.
-  defp warn_unconfigured_github_attachment_host(%{"sourceType" => source_type}, host)
-       when is_binary(host) do
-    if github_source?(source_type) do
-      Logger.warning(
-        "Ignoring Linear GitHub PR attachment from unconfigured host #{inspect(host)}; " <>
-          "add it to github.enterprise_hosts if this is your GitHub Enterprise host"
-      )
-    end
-  end
-
-  defp warn_unconfigured_github_attachment_host(_attachment, _host), do: :ok
-
-  defp github_source?(source_type) when is_binary(source_type) do
-    source_type
-    |> String.trim()
-    |> String.downcase()
-    |> Kernel.==("github")
-  end
-
-  defp github_source?(_source_type), do: false
-
-  defp normalize_host(host) when is_binary(host) do
-    host
-    |> String.trim()
-    |> String.downcase()
-  end
 
   defp extract_blockers(%{"inverseRelations" => %{"nodes" => inverse_relations}})
        when is_list(inverse_relations) do

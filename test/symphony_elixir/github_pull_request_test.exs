@@ -590,6 +590,22 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: failing)
   end
 
+  test "list_commit_runs reads the workflow runs on one commit, of the repo given or the checkout's" do
+    runner = fn
+      ["run", "list", "--commit", "abc123", "--limit", "100", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
+        assert opts[:stderr_to_stdout]
+        {Jason.encode!([%{"databaseId" => 21, "workflowName" => "macos", "status" => "in_progress", "conclusion" => ""}]), 0}
+
+      ["run", "list", "--commit", "def456", "--limit", "5", "--json", _fields, "-R", "acme/cycle"], _opts ->
+        {"{}", 0}
+    end
+
+    assert {:ok, [%{id: "21", workflow_name: "macos", status: "IN_PROGRESS"}]} = PullRequest.list_commit_runs("abc123", gh_runner: runner)
+
+    assert {:error, :invalid_workflow_runs_payload} =
+             PullRequest.list_commit_runs("def456", gh_runner: runner, limit: 5, repo: "acme/cycle")
+  end
+
   test "fetch_pr_comments reads paginated top-level PR comments" do
     pr_url = "https://github.example.com/org/repo/pull/42"
 
@@ -871,6 +887,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
                     "url" => "https://github.com/org/repo/pull/7",
                     "title" => "Human change",
                     "headRefOid" => "abc123",
+                    "headRefName" => "auto/TP-7",
                     "files" => %{"nodes" => [%{"path" => "lib/app.ex"}, %{"path" => nil}, %{"path" => "README.md"}]}
                   },
                   %{"number" => "8", "url" => nil, "title" => nil, "headRefOid" => nil, "files" => nil},
@@ -887,11 +904,40 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       end
 
       assert {:ok, [first, second]} = PullRequest.list_open_pull_requests(pr_url, gh_runner: runner)
-      assert first == %{number: 7, url: "https://github.com/org/repo/pull/7", title: "Human change", head_sha: "abc123", files: ["lib/app.ex", "README.md"]}
-      assert second == %{number: nil, url: nil, title: nil, head_sha: nil, files: []}
+
+      assert first == %{
+               number: 7,
+               url: "https://github.com/org/repo/pull/7",
+               title: "Human change",
+               head_sha: "abc123",
+               head_branch: "auto/TP-7",
+               files: ["lib/app.ex", "README.md"]
+             }
+
+      assert second == %{number: nil, url: nil, title: nil, head_sha: nil, head_branch: nil, files: []}
       assert_received {:query, query}
       assert query =~ "pullRequests(states: OPEN, first: 100"
+      assert query =~ "headRefName"
       assert query =~ "files(first: 100)"
+    end
+
+    test "list_repo_open_pull_requests reads a repository named by its slug, on github.com or an enterprise host" do
+      payload = ~s({"data":{"repository":{"pullRequests":{"nodes":[{"number":3,"url":"https://github.com/org/repo/pull/3","headRefName":"tony/tp-3"}]}}}})
+
+      github_com = fn ["api", "graphql", "-f", "query=" <> _query, "-f", "owner=org", "-f", "name=repo"], _opts -> {payload, 0} end
+
+      enterprise = fn ["api", "--hostname", "git.example.com", "graphql", "-f", "query=" <> _query, "-f", "owner=org", "-f", "name=repo"], _opts ->
+        {payload, 0}
+      end
+
+      denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Bad credentials", 1} end
+
+      list = &PullRequest.list_repo_open_pull_requests(&1, gh_runner: &2)
+
+      assert {:ok, [%{number: 3, head_branch: "tony/tp-3"}]} = list.("org/repo", github_com)
+      assert {:ok, [%{number: 3}]} = list.("git.example.com/org/repo", enterprise)
+      assert {:error, {:gh_failed, _args, 1, "gh: Bad credentials" <> _}} = list.("org/repo", denied)
+      assert {:error, :invalid_github_repo} = list.("repo", denied)
     end
 
     test "list_open_pull_requests reports a bad URL, a gh failure and an unexpected answer" do

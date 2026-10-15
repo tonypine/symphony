@@ -24,9 +24,15 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     def graphql(query, variables) do
       case Enum.find(@operations, fn {operation, _key} -> String.contains?(query, operation) end) do
         {_operation, :create_workflow_state} -> create_workflow_state(query, variables)
+        {_operation, :create_issue} -> create_issue(variables)
         {_operation, key} -> result(key, default(key))
         nil -> flunk("unexpected query: #{query}")
       end
+    end
+
+    defp create_issue(variables) do
+      send(self(), {:create_issue_variables, variables})
+      result(:create_issue, default(:create_issue))
     end
 
     # Answers like Linear: a state created without a color is refused with the 400 Linear sends.
@@ -341,10 +347,19 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
                Adapter.create_issue(%{title: "Self-heal: repair the qa_environment block", description: "the evidence", priority: 2, team: "TP", project: "Fix Project"})
     end
 
-    test "defaults to Todo, and drops a priority or project that is not given" do
+    test "assigns the issue to the given user" do
       put(:teams, {:ok, @teams_response})
 
-      assert {:ok, %{identifier: "TP-900"}} = Adapter.create_issue(%{title: "A fix ticket", team: "TP"})
+      assert {:ok, %{identifier: "TP-900"}} = Adapter.create_issue(%{title: "A fix ticket", team: "TP", assignee_id: "user-1"})
+      assert_received {:create_issue_variables, %{input: %{"assigneeId" => "user-1"}}}
+    end
+
+    test "defaults to Todo, and drops a priority, project or assignee that is not given" do
+      put(:teams, {:ok, @teams_response})
+
+      assert {:ok, %{identifier: "TP-900"}} = Adapter.create_issue(%{title: "A fix ticket", team: "TP", assignee_id: " "})
+      assert_received {:create_issue_variables, %{input: input}}
+      assert input == %{"teamId" => "t1", "stateId" => "s-todo", "title" => "A fix ticket", "description" => ""}
 
       assert {:error, :invalid_issue_title} = Adapter.create_issue(%{title: "  ", team: "TP"})
       assert {:error, :invalid_issue_description} = Adapter.create_issue(%{title: "A fix ticket", description: nil, team: "TP"})

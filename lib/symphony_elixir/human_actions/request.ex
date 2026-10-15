@@ -236,11 +236,6 @@ defmodule SymphonyElixir.HumanActions.Request do
     end
   end
 
-  @doc "The steps in free text, such as a human task's description, read as in a request."
-  @spec text_steps(String.t() | nil) :: [String.t()]
-  def text_steps(text) when is_binary(text), do: text |> String.split("\n") |> Enum.map(&String.trim_trailing/1) |> steps()
-  def text_steps(_text), do: []
-
   # The list items after `**Steps:**`, or anywhere when there is no marker. A hand-written request
   # without a list keeps its free text as one step.
   defp steps(lines) do
