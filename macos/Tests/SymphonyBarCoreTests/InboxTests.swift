@@ -29,7 +29,6 @@ final class InboxTests: XCTestCase {
 
         let action = try XCTUnwrap(inbox.items[2].review.action)
         XCTAssertEqual(action.steps.count, 4)
-        XCTAssertEqual(action.timeLine, "About 10 min")
         XCTAssertEqual(action.unblocks, "the Release workflow on main")
         XCTAssertEqual(action.copyText?.split(separator: "\n").first, "1. Export the Developer ID certificate from Keychain Access as a .p12 file.")
 
@@ -409,13 +408,12 @@ final class InboxTests: XCTestCase {
             .init(kind: .cost, text: "The old text stays a while."),
         ])
         XCTAssertEqual(action.options[1].tradeoffs, [.init(kind: .risk, text: "It clashes with PR #454.")])
-        XCTAssertNil(action.estMinutes)
 
         let older = try XCTUnwrap(inbox.items[1].review.action)
         XCTAssertNil(older.ifUnanswered)
         XCTAssertNil(older.recommendationReason)
+        // An older request's time estimate is read and dropped (DD-2): the app shows no estimate anywhere.
         XCTAssertEqual(older.options.map(\.tradeoffs), [[], []])
-        XCTAssertEqual(older.estMinutes, 10)
     }
 
     func testReadsAnItemWithMissingFieldsAndSkipsOneWithoutAKind() throws {

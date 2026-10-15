@@ -218,7 +218,6 @@
       "kind": "action",
       "repo_key": "docs",
       "review": {
-        "est_minutes": 10,
         "options": [],
         "question": null,
         "requested_at": "2026-10-07T13:59:00Z",
