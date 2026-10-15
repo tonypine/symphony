@@ -2251,8 +2251,12 @@ lists:
   first time one of its workflows fails this way. When GitHub or Linear cannot be read, the
   repository's last actions stay listed.
 
-A supervisor or a person adds an action by hand the same way: add the `Needs Decision` label and
-a comment in the request format:
+Only Symphony opens a decision request: an agent's `linear_request_human_action`, or one of
+Symphony's own checks. Each records the **Needs Decision** hold in the run store first and adds the
+label after it, and the Inbox finds held tickets through the store, never by label. A
+`Needs Decision` label added by hand, with no hold in the store, is cleared on the next poll, and a
+request comment posted by hand on a ticket with no hold is never read. The request comment Symphony
+posts has this format:
 
 ```md
 ## Decision needed: Turn on the pre-push hook
