@@ -83,6 +83,8 @@ public struct RestartMachine: Equatable {
     public private(set) var postponed = false
     /// Why the last restart failed, shown in the menu until the next restart.
     public private(set) var error: String?
+    /// The version an update installs, which its pause names; nil for a restart.
+    public private(set) var updateVersion: String?
 
     private var alreadyPaused = false
     /// False for an update the app started by itself: its failures show in the menu only.
@@ -107,11 +109,13 @@ public struct RestartMachine: Equatable {
     /// poll can show it resumed since, and then the restart pauses it. After `runsTimeout` seconds of waiting
     /// for agent runs the restart also offers Restart Now Anyway, or an `.automaticUpdate` gives up. An update ends
     /// with `.stopped` instead of starting Symphony. With `alerts` false a failure shows in the menu only, as for an
-    /// `.automaticUpdate`.
+    /// `.automaticUpdate`. An update pauses dispatch with the reason "updating to v`updatingTo`", so the window
+    /// tells its pause from one the user made; a restart pauses with the menu's.
     /// Does nothing while a restart is under way.
     public mutating func begin(
         alreadyPaused: Bool,
         purpose: Purpose = .restart,
+        updatingTo version: String? = nil,
         runsTimeout: TimeInterval,
         logPath: String,
         alerts: Bool = true,
@@ -120,6 +124,7 @@ public struct RestartMachine: Equatable {
         guard phase == .idle else { return [] }
         self = RestartMachine()
         self.purpose = purpose
+        updateVersion = purpose.isUpdate ? version : nil
         self.alreadyPaused = alreadyPaused
         self.alerts = alerts && purpose != .automaticUpdate
         self.runsTimeout = runsTimeout
@@ -133,10 +138,10 @@ public struct RestartMachine: Equatable {
         case let (.checkingConfig, .configChecked(result)):
             return configChecked(result, now: now)
 
-        case let (.pausing, .controlFinished(.pause, .failed(message))):
+        case let (.pausing, .controlFinished(action, .failed(message))) where action == pauseAction:
             return fail(notDoneTitle, "\(message)\n\nSymphony keeps running.", now: now)
 
-        case (.pausing, .controlFinished(.pause, .done)):
+        case let (.pausing, .controlFinished(action, .done)) where action == pauseAction:
             pausedByRestart = true
             pollMayPredatePause = true
             enter(.waitingForRuns(running: nil), now: now)
@@ -245,7 +250,7 @@ public struct RestartMachine: Equatable {
         }
         guard alreadyPaused else {
             enter(.pausing, now: now)
-            return [.send(.pause)]
+            return [.send(pauseAction)]
         }
         enter(.waitingForRuns(running: nil), now: now)
         return [.pollNow]
@@ -270,7 +275,7 @@ public struct RestartMachine: Equatable {
                 // Dispatch was resumed after the poll the restart began with, or while it waits. Pause it, so the
                 // restart resumes it afterwards instead of waiting forever for a pause.
                 enter(.pausing, now: now)
-                return [.send(.pause)]
+                return [.send(pauseAction)]
             }
         }
         if purpose != .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
@@ -304,6 +309,11 @@ public struct RestartMachine: Equatable {
         self.phase = phase
         phaseStart = now
         offersRestartNow = false
+    }
+
+    /// The pause the restart sends: an update's names the version it installs.
+    public var pauseAction: ControlAction {
+        updateVersion.map { .pauseWithReason(ControlAction.updatePauseReason(version: $0)) } ?? .pause
     }
 
     /// Before Symphony is stopped, a failed restart or update leaves it running.

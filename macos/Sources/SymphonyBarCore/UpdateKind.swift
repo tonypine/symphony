@@ -136,3 +136,71 @@ public struct UpdateCancel: Equatable {
         hold = kind == .onRelease ? release : nil
     }
 }
+
+/// An update under way, as the Symphony window shows it (S3a, S3b): the version it installs, what it waits for, and
+/// which of the menu's actions it offers.
+public struct UpdateHold: Equatable {
+    public enum Step: Equatable {
+        /// The release downloads and is verified, symphony.yml is checked or dispatch is paused: nothing to press.
+        case preparing
+        /// Waiting for agent runs; `runs` is nil until a poll shows dispatch paused.
+        case waiting(runs: Int?)
+        /// Symphony stops for the swap: nothing to press.
+        case stopping
+    }
+
+    public var version: String
+    public var step: Step
+    /// Update Now Anyway shows, as in the menu: the runs outlasted the restart timeout.
+    public var offersUpdateNow: Bool
+
+    public init(version: String, step: Step, offersUpdateNow: Bool = false) {
+        self.version = version
+        self.step = step
+        self.offersUpdateNow = offersUpdateNow
+    }
+
+    /// Nil while no update is under way, or once the drain resumes the dispatch it paused because the update was
+    /// called off. `release` is the release the update installs, `downloading` whether it still downloads or is
+    /// verified, and `drain` the update's drain.
+    public init?(release: Release?, downloading: Bool, drain: RestartMachine) {
+        guard let release else { return nil }
+        version = release.version
+        offersUpdateNow = false
+        if downloading {
+            step = .preparing
+            return
+        }
+        guard drain.purpose.isUpdate else { return nil }
+        switch drain.phase {
+        case .checkingConfig, .pausing:
+            step = .preparing
+        case let .waitingForRuns(running):
+            step = .waiting(runs: running)
+            offersUpdateNow = drain.offersRestartNow
+        case .stopping:
+            step = .stopping
+        case .idle, .starting, .waitingForAnswer, .resuming:
+            return nil
+        }
+    }
+
+    /// Cancel Update shows while the update waits for agent runs, as in the menu.
+    public var canCancel: Bool {
+        if case .waiting = step { return true }
+        return false
+    }
+
+    /// "Updating to v0.0.1.42".
+    public var title: String { "Updating to v\(version)" }
+
+    /// What the update waits for: "Waiting for 2 agent runs", nil while it waits for nothing.
+    public var waitingLine: String? {
+        guard case let .waiting(runs) = step else { return nil }
+        switch runs {
+        case nil: return "Waiting for dispatch to pause"
+        case 1?: return "Waiting for 1 agent run"
+        case let count?: return "Waiting for \(count) agent runs"
+        }
+    }
+}
