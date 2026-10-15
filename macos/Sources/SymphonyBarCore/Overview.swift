@@ -291,17 +291,27 @@ public struct Overview: Equatable {
     public var meters: [Meter]
     /// Repos health in one line, nil until Symphony listed its repos.
     public var reposLine: String?
+    /// An update is under way (S3a, S3b): it resumes the dispatch it paused, or Cancel Update does.
+    public var updating: Bool
 
-    /// The sentence offers Resume Dispatch while dispatch is paused.
-    public var showsResume: Bool { mood == .paused }
+    /// The sentence offers Resume Dispatch while dispatch is paused, unless an update holds it.
+    public var showsResume: Bool { mood == .paused && !updating }
     /// The main column says "All caught up." while the factory is idle.
     public var showsAllCaughtUp: Bool { mood == .idle }
 
     // MARK: - Building
 
     /// The Overview of `state` under `scope`. Ages are measured against Symphony's own clock (`generated_at`),
-    /// `now` only when the state has none. Clock times are in `timeZone`.
-    public init(state: OverviewState, scope: OverviewScope = .all, repos: ReposPoll? = nil, now: Date, timeZone: TimeZone = .current) {
+    /// `now` only when the state has none. Clock times are in `timeZone`. `updating` is whether an update is under way.
+    public init(
+        state: OverviewState,
+        scope: OverviewScope = .all,
+        repos: ReposPoll? = nil,
+        updating: Bool = false,
+        now: Date,
+        timeZone: TimeZone = .current
+    ) {
+        self.updating = updating
         let reference = state.generatedAt ?? now
         let index = TicketIndex(state)
         let paused = state.snapshot.pause != nil
@@ -397,8 +407,13 @@ public struct Overview: Equatable {
             mood = .paused
             sentence = Self.pauseSentence(pause, reference: reference, timeZone: timeZone)
             let finishing = scopedRuns.count
-            context = (finishing == 0 ? "Nothing is running." : finishing == 1 ? "1 run is finishing." : "\(finishing) runs are finishing.")
-                + " No new run starts until you resume, forced tickets included."
+            let runs = finishing == 0 ? "Nothing is running." : finishing == 1 ? "1 run is finishing." : "\(finishing) runs are finishing."
+            if ControlAction.updateVersion(pauseReason: pause.reason) != nil {
+                context = runs + (finishing == 0 ? " Symphony updates and resumes dispatch next" : " Symphony updates and resumes dispatch when they end")
+                    + "; no new run starts until then."
+            } else {
+                context = runs + " No new run starts until you resume, forced tickets included."
+            }
         } else if !problems.isEmpty {
             mood = .attention
             sentence = problems.count == 1 ? "1 thing needs attention." : "\(problems.count) things need attention."

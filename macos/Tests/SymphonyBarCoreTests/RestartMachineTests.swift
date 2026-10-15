@@ -645,4 +645,45 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertTrue(RestartMachine.Purpose.update.isUpdate)
         XCTAssertTrue(RestartMachine.Purpose.automaticUpdate.isUpdate)
     }
+
+    // MARK: The update's pause reason (TP-983)
+
+    /// The window tells an update's pause from one the user made by its reason, so every update names its version.
+    func testAnUpdatesPauseNamesTheVersionItInstalls() throws {
+        let pause = ControlAction.pauseWithReason("updating to v0.0.1.42")
+        XCTAssertEqual(pause.body["reason"] as? String, "updating to v0.0.1.42")
+        for purpose in [RestartMachine.Purpose.update, .automaticUpdate] {
+            var machine = RestartMachine()
+            _ = machine.begin(alreadyPaused: false, purpose: purpose, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
+            XCTAssertEqual(machine.updateVersion, "0.0.1.42")
+            XCTAssertEqual(machine.pauseAction, pause)
+            XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.send(pause)], "\(purpose)")
+            XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [], "only the pause it sent answers it")
+            XCTAssertEqual(machine.handle(.controlFinished(pause, .done), now: began), [.pollNow])
+            XCTAssertTrue(machine.pausedByRestart)
+
+            // Dispatch resumed while the update waits: it pauses again with the same reason.
+            _ = machine.handle(.polled(pausedPoll(running: 1)), now: began)
+            XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 1)), now: began), [.send(pause)], "\(purpose)")
+        }
+    }
+
+    func testAnUpdatesFailedPauseStillSaysSymphonyKeepsRunning() {
+        var machine = RestartMachine()
+        _ = machine.begin(alreadyPaused: false, purpose: .update, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
+        _ = machine.handle(.configChecked(.passed), now: began)
+
+        let effects = machine.handle(.controlFinished(machine.pauseAction, .failed("Couldn't pause Symphony: HTTP 500")), now: began)
+
+        XCTAssertEqual(effects, [.alert(title: "Symphony wasn't updated", message: "Couldn't pause Symphony: HTTP 500\n\nSymphony keeps running.")])
+        XCTAssertFalse(machine.isRestarting)
+    }
+
+    func testARestartsPauseKeepsTheMenusReason() {
+        var machine = RestartMachine()
+        _ = machine.begin(alreadyPaused: false, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
+        XCTAssertNil(machine.updateVersion, "a restart installs nothing")
+        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.send(.pause)])
+        XCTAssertEqual(ControlAction.pause.body["reason"] as? String, ControlAction.pauseReason)
+    }
 }
