@@ -24,6 +24,7 @@ defmodule SymphonyElixir.QaPreCheck do
   A walkthrough without a named-test step is `:none`: nothing is read, and QA runs as it always did.
   """
 
+  alias SymphonyElixir.GitConfigCommands
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Walkthrough
 
@@ -189,7 +190,7 @@ defmodule SymphonyElixir.QaPreCheck do
     end
   end
 
-  defp git(args, workspace), do: System.cmd("git", args, cd: workspace, stderr_to_stdout: true)
+  defp git(args, workspace), do: System.cmd("git", GitConfigCommands.subcommand_args(args), cd: workspace, stderr_to_stdout: true)
 
   @doc """
   The pre-check's lines in the QA report (`SymphonyElixir.QaAgent.Report`'s `### Pre-checks`), one
