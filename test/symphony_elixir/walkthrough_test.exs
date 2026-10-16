@@ -79,6 +79,25 @@ defmodule SymphonyElixir.WalkthroughTest do
       end
 
       assert first.text == "Open the window → it looks finished."
+
+      assert [%{proof: %{by: :qa}}, %{proof: %{by: :qa}}] =
+               Walkthrough.steps("1. One. Proved by: `QA`: desktop only.\n2. Two. Proved by: QA - dark mode")
+    end
+
+    test "a check whose name starts with qa is a named test, not QA" do
+      assert [first, second, third, fourth] =
+               Walkthrough.steps("""
+               1. Log in. Proved by: `qa-e2e` › login
+               2. Log out. Proved by: QA suite › logout
+               3. Sign up. Proved by: qa_smoke
+               4. Reset. Proved by: QA (smoke) > reset
+               """)
+
+      assert first.proof == %{by: :test, check: "qa-e2e", test: "login"}
+      assert second.proof == %{by: :test, check: "QA suite", test: "logout"}
+      assert third.proof == %{by: :test, check: "qa_smoke", test: nil}
+      assert fourth.proof == %{by: :test, check: "QA (smoke)", test: "reset"}
+      assert Enum.all?([first, second, third, fourth], &Walkthrough.named_test?/1)
     end
 
     test "a step without the line, or with nothing after it, is a QA step" do

@@ -21,6 +21,8 @@ defmodule SymphonyElixir.Walkthrough do
   @step_start ~r/^ {0,3}(\d+)[.)]\s+(.*)$/
   @proved_by ~r/proved by:/i
   @separator ~r/\s*(?:›|\s>\s)\s*/u
+  # `QA` as the whole spec, or followed only by a note: `QA (light mode only)`, `QA: desktop`.
+  @qa ~r/^qa(?:$|\s*[(:,;]|\s+[-–—]\s)/iu
 
   @type proof :: %{by: :test, check: String.t(), test: String.t() | nil} | %{by: :qa}
   @type step :: %{number: pos_integer(), text: String.t(), proof: proof()}
@@ -106,7 +108,7 @@ defmodule SymphonyElixir.Walkthrough do
   defp proof(spec) do
     spec = spec |> String.replace(~r/\s+/, " ") |> String.trim() |> String.trim_trailing(".") |> String.trim()
 
-    if spec == "" or Regex.match?(~r/^`?qa\b/i, spec) do
+    if qa_spec?(unquote_part(spec), spec) do
       %{by: :qa}
     else
       case Regex.split(@separator, spec, parts: 2) do
@@ -115,6 +117,10 @@ defmodule SymphonyElixir.Walkthrough do
       end
     end
   end
+
+  # A spec with a separator names a test even when its check starts with `qa` (`qa-e2e › login`).
+  defp qa_spec?("", _spec), do: true
+  defp qa_spec?(bare, spec), do: not Regex.match?(@separator, spec) and Regex.match?(@qa, bare)
 
   defp unquote_part(part), do: part |> String.replace("`", "") |> String.trim()
 
