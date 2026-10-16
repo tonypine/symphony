@@ -534,6 +534,7 @@ defmodule SymphonyElixir.PrReviewPoller do
       opts =
         opts
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
+        |> Keyword.put(:merging_issues, Enum.filter(issues, &MapSet.member?(merging_issue_ids, &1.id)))
         |> Keyword.put(:phase_issue_ids, phase_issue_ids)
         |> Keyword.put(:verdict_phase_issue_ids, verdict_phase_issue_ids)
 
@@ -1107,14 +1108,15 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   # A fallback hands one stay in `Merging` to the landing agent, and a CI-fix hold keeps
-  # auto-merge off for the rest of that stay. Once the issue leaves `Merging`, the next approval
-  # tries auto-merge again.
+  # auto-merge off for the rest of that stay, as a wait for a person on a failed protected paths
+  # check keeps its question asked. Once the issue leaves `Merging`, the next approval tries
+  # auto-merge again.
   defp clear_auto_merge_stay(attrs, record, opts) do
     auto_merge = Map.get(record, :auto_merge)
 
     cond do
       auto_merge_issue?(record, opts) -> attrs
-      AutoMerge.fallback?(auto_merge) or AutoMerge.held?(auto_merge) -> Map.put(attrs, :auto_merge, nil)
+      AutoMerge.fallback?(auto_merge) or AutoMerge.held?(auto_merge) or AutoMerge.protected_paths?(auto_merge) -> Map.put(attrs, :auto_merge, nil)
       true -> attrs
     end
   end
@@ -1246,9 +1248,15 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp run_auto_merge(record, attrs, activity, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
+    issue = opts |> Keyword.get(:merging_issues, []) |> Enum.find(&(&1.id == issue_id))
+    step_opts = opts |> Keyword.put(:landing_wait, landing_wait(record, opts)) |> Keyword.put(:issue, issue)
 
-    case AutoMerge.step(record, activity, settings, Keyword.put(opts, :landing_wait, landing_wait(record, opts)), now) do
+    case AutoMerge.step(record, activity, settings, step_opts, now) do
       {:ok, auto_merge} ->
+        complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
+
+      {:protected_paths, auto_merge} ->
+        auto_merge = ask_about_protected_paths(record, issue, auto_merge, opts, now)
         complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
 
       {:conflict, auto_merge} ->
@@ -1271,6 +1279,47 @@ defmodule SymphonyElixir.PrReviewPoller do
           action
         end
     end
+  end
+
+  # A PR whose `protected paths` check failed with no decision covering the paths it changes
+  # (`AutoMerge.protected_paths?/1`) pauses its ticket in `Merging` on a Needs Decision hold, once per
+  # stay. A request that couldn't be posted is asked again on the next poll.
+  defp ask_about_protected_paths(record, issue, auto_merge, opts, now) do
+    if AutoMerge.ask_person?(auto_merge) do
+      issue_id = Map.get(record, :issue_id)
+      held = %{id: issue_id, state: (issue && issue.state) || "Merging", repo_key: Map.get(record, :repo_key)}
+
+      case NeedsDecisionHold.pause(held, protected_paths_request(record), [tracker: Keyword.get(opts, :tracker, Tracker)], @rework_state) do
+        :ok ->
+          TicketSignals.record(Map.get(record, :repo_key), issue_id, "decision requested", %{to: held.state, reason: "protected_paths"})
+          AutoMerge.asked(auto_merge, now)
+
+        {:error, reason} ->
+          Logger.warning("Failed to ask a person about the failed protected paths check issue_id=#{issue_id}: #{inspect(reason)}")
+          auto_merge
+      end
+    else
+      auto_merge
+    end
+  end
+
+  defp protected_paths_request(record) do
+    label = Map.get(record, :issue_identifier) || Map.get(record, :issue_id)
+    pr = Request.pull_request(Map.get(record, :pr_url)) || "its pull request"
+
+    %{
+      title: "Protected files changed on #{label}",
+      question: "The pull request of #{label} changes files that agents may only change with a person's permission, and no decision on #{label} gives it. How should it continue?",
+      why:
+        "Symphony's check for changes to those files failed on #{pr}. Symphony doesn't merge such a change without a person's permission. " <>
+          "A decision on #{label} that unlocks each changed file lets Symphony merge it as it is.",
+      if_unanswered: "#{label} stays in Merging and #{pr} isn't merged.",
+      options: [
+        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run takes the change to those files out of the pull request", recommended: true},
+        %{label: "Leave it", effect: "the ticket stays in Merging until you merge the pull request yourself; Symphony then moves it to Done", recommended: false}
+      ],
+      recommendation_reason: "No one allowed the change, so taking it out is the safe default."
+    }
   end
 
   defp transition_auto_merge_conflict(record, attrs, activity, auto_merge, settings, opts, now) do

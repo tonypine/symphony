@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.AutoMergeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AutoMerge, CiPoller, PrReviewPoller, SubIssueWait, TicketPullRequest}
+  alias SymphonyElixir.{AutoMerge, CiPoller, Decisions, PrReviewPoller, SubIssueWait, TicketPullRequest}
+  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "default"
@@ -1074,6 +1075,130 @@ defmodule SymphonyElixir.AutoMergeTest do
     refute_received {:issue_state_update, _issue_id, _state}
   end
 
+  describe "a PR whose protected paths check failed" do
+    test "without a decision unlocking the paths, auto-merge stays off and the ticket waits for a person" do
+      now = ~U[2026-10-16 05:00:00Z]
+      put_run!(now)
+      merging = issue("Merging")
+      track([merging])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      observe_protected_paths!("head-1", [protected_paths_check()])
+
+      log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(now) end)
+
+      assert [{:issue_comment, @issue_id, body}] = mailbox()
+      assert body =~ "## Decision needed: Protected files changed on ACME-1780"
+      assert body =~ "no decision on ACME-1780 gives it"
+      assert body =~ "**If unanswered:** ACME-1780 stays in Merging and PR #1780 isn't merged."
+      assert PlainWords.tokens(body) == []
+      assert SymphonyElixir.MergeConfirmation.confirm_target(SymphonyElixir.Hold.get(@repo_key, @issue_id, :needs_decision)) == "Rework"
+      assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = RunStore.get_ticket_state(@repo_key, @issue_id).signals
+
+      assert %{state: "protected_paths", asked_at: ^now, enabled_head_sha: nil} = PrReviewPoller.auto_merge(@issue_id)
+      assert [%{status: "auto-merge off: protected paths failed on `head-1`; waiting for a person"}] = PrReviewPoller.auto_merge_statuses()
+      assert log =~ "Auto-merge ACME-1780: auto-merge off: protected paths failed on `head-1`; waiting for a person"
+      # Nothing can merge past the check, so no landing agent takes it over either.
+      assert AutoMerge.owns_issue?(merging)
+
+      # A later poll asks no second time, and a PR that falls behind isn't updated.
+      activity(head: "head-1", merge_state: "BEHIND")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(DateTime.add(now, 30))
+
+      # A new head keeps waiting until the CI poller has read it.
+      activity(head: "head-2", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(DateTime.add(now, 60))
+      assert mailbox() == []
+
+      # The check passes on the new head: it lands as any other PR.
+      observe_protected_paths!("head-2", [])
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 90))
+      assert [{:enable_auto_merge, @pr_url, %{head_sha: "head-2"}}] = mailbox()
+      assert %{state: "enabled", reason: nil} = PrReviewPoller.auto_merge(@issue_id)
+    end
+
+    test "turns auto-merge off when it is already on, retrying a failed call on the next poll" do
+      now = ~U[2026-10-16 05:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+      # The check fails after auto-merge went on, while the required checks still run.
+      observe_protected_paths!("head-1", [protected_paths_check(), %{name: "make-all", conclusion: "SUCCESS"}])
+      activity(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+      replies(%{disable_auto_merge: {:error, :github_down}})
+
+      log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(DateTime.add(now, 30)) end)
+      assert [{:disable_auto_merge, @pr_url, "PR_node"}, {:issue_comment, @issue_id, _body}] = mailbox()
+      assert log =~ "turning GitHub auto-merge off failed while protected paths failed and no decision on the ticket unlocks"
+      assert %{state: "protected_paths", enabled_head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
+
+      replies(%{})
+      log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(DateTime.add(now, 60)) end)
+      assert [{:disable_auto_merge, @pr_url, "PR_node"}] = mailbox()
+      assert log =~ "Auto-merge ACME-1780: turned GitHub auto-merge off because protected paths failed"
+      assert %{state: "protected_paths", enabled_head_sha: nil, disabled_at: %DateTime{}} = PrReviewPoller.auto_merge(@issue_id)
+    end
+
+    test "lands as today once a decision on the ticket unlocks every protected path the PR changes" do
+      now = ~U[2026-10-16 05:00:00Z]
+      %{repo: repo, base: base, head: head} = protected_change_repo!(%{"WORKFLOW.md" => "agent change\n", "app.ex" => "v2\n"})
+      put_run!(now, repo)
+      track([issue("Merging")])
+      activity(head: head, base: base, merge_state: "BLOCKED")
+      observe_protected_paths!(head, [protected_paths_check()])
+
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(now)
+      assert [{:issue_comment, @issue_id, _body}] = mailbox()
+
+      # A person's decision unlocks the path: the next poll turns auto-merge on, as for any PR.
+      ruling = Decisions.entry("ruling-c1", ~D[2026-10-16], nil, nil, "Unlock WORKFLOW.md for ACME-1780")
+      track([%{issue("Merging") | rulings: [ruling]}])
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 30))
+      assert [{:enable_auto_merge, @pr_url, %{head_sha: ^head}}] = mailbox()
+      assert %{state: "enabled", enabled_head_sha: ^head, reason: nil} = PrReviewPoller.auto_merge(@issue_id)
+    end
+
+    test "with a decision covering it from the start, it lands without asking anyone" do
+      now = ~U[2026-10-16 05:00:00Z]
+      %{repo: repo, base: base, head: head} = protected_change_repo!(%{"WORKFLOW.md" => "agent change\n"})
+      put_run!(now, repo)
+      ruling = Decisions.entry("ruling-c1", ~D[2026-10-16], nil, nil, "Decision: Unlock WORKFLOW.md for ACME-1780.")
+      track([%{issue("Merging") | rulings: [ruling]}])
+      activity(head: head, base: base, merge_state: "BLOCKED")
+      observe_protected_paths!(head, [protected_paths_check()])
+
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+      assert [{:enable_auto_merge, @pr_url, %{head_sha: ^head}}] = mailbox()
+      assert SymphonyElixir.Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+    end
+
+    test "a request that couldn't be posted is asked again, and leaving Merging forgets the wait" do
+      now = ~U[2026-10-16 05:00:00Z]
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "BLOCKED")
+      observe_protected_paths!("head-1", [protected_paths_check()])
+      Application.put_env(:symphony_elixir, :auto_merge_test_comment_result, {:error, :linear_down})
+
+      log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(now) end)
+      assert log =~ "Failed to ask a person about the failed protected paths check issue_id=#{@issue_id}"
+      assert %{state: "protected_paths", asked_at: nil} = PrReviewPoller.auto_merge(@issue_id)
+      assert SymphonyElixir.Hold.get(@repo_key, @issue_id, :needs_decision) == nil
+
+      Application.delete_env(:symphony_elixir, :auto_merge_test_comment_result)
+      assert {:ok, %{actions: [{:auto_merge, @issue_id, "protected_paths"}]}} = poll(DateTime.add(now, 30))
+      assert [_request, {:issue_comment, @issue_id, _body}] = mailbox()
+      assert %{asked_at: %DateTime{}} = PrReviewPoller.auto_merge(@issue_id)
+
+      # The answer sends it to Rework: the wait is forgotten with the stay.
+      track([issue("Rework")])
+      assert {:ok, %{actions: [_action]}} = poll(DateTime.add(now, 60))
+      assert PrReviewPoller.auto_merge(@issue_id) == nil
+    end
+  end
+
   describe "an issue that leaves Merging with auto-merge on" do
     test "moved back to Code Review has auto-merge turned off on the next poll, and a fresh approval turns it on again at the same head" do
       now = ~U[2026-10-03 12:00:00Z]
@@ -1575,7 +1700,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     )
   end
 
-  defp put_run!(now) do
+  defp put_run!(now, workspace \\ Path.join(System.tmp_dir!(), "auto-merge-missing-workspace")) do
     :ok =
       RunStore.put_run(%{
         repo_key: @repo_key,
@@ -1583,11 +1708,49 @@ defmodule SymphonyElixir.AutoMergeTest do
         issue_id: @issue_id,
         issue_identifier: "ACME-1780",
         status: "success",
-        workspace_path: Path.join(System.tmp_dir!(), "auto-merge-missing-workspace"),
+        workspace_path: workspace,
         worker_host: nil,
         started_at: DateTime.add(now, -600, :second),
         ended_at: DateTime.add(now, -300, :second)
       })
+  end
+
+  # What the CI poller records when only the `protected paths` check failed on `head` (`await_waiver`).
+  defp observe_protected_paths!(head, failed_checks) do
+    :ok =
+      RunStore.put_ci_check(%{
+        repo_key: @repo_key,
+        issue_id: @issue_id,
+        status: if(failed_checks == [], do: "green", else: "awaiting_waiver"),
+        last_observed_sha: head,
+        last_observed_conclusion: if(failed_checks == [], do: "SUCCESS", else: "FAILURE"),
+        failed_checks: failed_checks
+      })
+  end
+
+  defp protected_paths_check, do: %{name: "protected paths", status: "COMPLETED", conclusion: "FAILURE"}
+
+  # A workspace whose branch changes `files` on top of a base commit.
+  defp protected_change_repo!(files) do
+    repo = Path.join(System.tmp_dir!(), "auto-merge-protected-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(repo)
+    on_exit(fn -> File.rm_rf(repo) end)
+
+    for args <- [["init", "-q", "-b", "main"], ["config", "user.name", "Test User"], ["config", "user.email", "test@example.com"]], do: git!(repo, args)
+    base = commit!(repo, %{"WORKFLOW.md" => "v1\n", "app.ex" => "v1\n"})
+    %{repo: repo, base: base, head: commit!(repo, files)}
+  end
+
+  defp commit!(repo, files) do
+    for {path, content} <- files, do: File.write!(Path.join(repo, path), content)
+    git!(repo, ["add", "-A"])
+    git!(repo, ["commit", "-q", "-m", "change"])
+    repo |> git!(["rev-parse", "HEAD"]) |> String.trim()
+  end
+
+  defp git!(repo, args) do
+    {output, 0} = System.cmd("git", ["-C", repo | args], stderr_to_stdout: true)
+    output
   end
 
   defp put_observed_ci!(conclusion) do

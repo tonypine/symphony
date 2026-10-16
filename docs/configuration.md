@@ -1116,6 +1116,10 @@ pull_requests:
     left on. The CI-fix run after that turns auto-merge off before it starts, like a conflict: the
     fix goes back through review, and moving the ticket to `Merging` again turns auto-merge back
     on. The audit log (`auto_merge_disabled`, `reason: ci_failure`) and a ticket comment record it.
+  - A failed `protected paths` check holds the PR back even though the base branch doesn't require
+    it: auto-merge stays off (or is turned off) and the ticket waits in `Merging` on a Needs
+    Decision hold, unless a decision on the ticket unlocks every protected path the PR changes. See
+    [Security](security.md#what-blocks-the-merge).
   - When auto-merge can't be used (GitHub refuses it and the PR isn't clean and green, a
     permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
