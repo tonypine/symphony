@@ -510,6 +510,25 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  # A QA pass reads the parent's documents too (its Screens document sits on the parent).
+  @readable_document_scope_query """
+  query SymphonyAgentReadableDocumentScope($id: String!, $first: Int!) {
+    issue(id: $id) {
+      id
+      identifier
+      attachments(first: $first) {
+        nodes { metadata }
+      }
+      parent {
+        identifier
+        attachments(first: $first) {
+          nodes { metadata }
+        }
+      }
+    }
+  }
+  """
+
   @create_document_mutation """
   mutation SymphonyAgentCreateDocument($input: DocumentCreateInput!) {
     documentCreate(input: $input) {
@@ -1626,6 +1645,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Without a `document_id`, lists the documents the current issue's runs created (id, title, url).
   With one, reads that document, its content secret-redacted and wrapped as untrusted text. Any
   other document is refused before it is read.
+
+  With `parent_documents: true` (a QA pass, whose design usually sits on the parent), the
+  documents the parent's runs created are readable too: the list returns them as
+  `parentDocuments`, next to the parent's identifier. Writing stays limited to the issue's own
+  documents (`update_document/3`).
   """
   @spec get_document(context(), String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
   def get_document(context, document_id, opts \\ []) do
@@ -1636,25 +1660,43 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp list_issue_documents(context, opts) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, scope} <- document_scope(issue_id, opts),
-         {:ok, documents} <- list_documents(owned_document_ids(scope, context), opts) do
-      {:ok, %{"documents" => Enum.map(documents, fn document -> wrap_string_field(document, "title", &PromptSafety.linear_document_title/1) end)}}
+         {:ok, scope} <- readable_document_scope(issue_id, opts),
+         owned = owned_document_ids(scope, context),
+         parent_ids = parent_document_ids(scope) -- owned,
+         {:ok, documents} <- list_documents(owned ++ parent_ids, opts) do
+      documents = Enum.map(documents, fn document -> wrap_string_field(document, "title", &PromptSafety.linear_document_title/1) end)
+      {parent_documents, own_documents} = Enum.split_with(documents, &(&1["id"] in parent_ids))
+      {:ok, put_parent_documents(%{"documents" => own_documents}, scope, parent_documents, opts)}
     end
+  end
+
+  defp put_parent_documents(listing, scope, parent_documents, opts) do
+    if Keyword.get(opts, :parent_documents, false),
+      do: Map.merge(listing, %{"parent" => get_in(scope, ["parent", "identifier"]), "parentDocuments" => parent_documents}),
+      else: listing
   end
 
   defp read_issue_document(context, document_id, opts) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, document_id} <- document_id_field(document_id),
-         {:ok, scope} <- document_scope(issue_id, opts),
-         :ok <- verify_document_owner(scope, context, document_id),
+         {:ok, scope} <- readable_document_scope(issue_id, opts),
+         :ok <- verify_document_readable(scope, context, document_id),
          {:ok, body} <- signed_graphql(@document_query, %{id: document_id}, opts),
          {:ok, document} <- fetch_path(body, ["data", "document"], :document_not_found) do
       {:ok, wrap_document(document, context, opts)}
     end
   end
 
-  defp document_scope(issue_id, opts) do
-    with {:ok, body} <- graphql(@document_scope_query, %{id: issue_id, first: @document_attachment_first}, opts) do
+  defp readable_document_scope(issue_id, opts) do
+    if Keyword.get(opts, :parent_documents, false),
+      do: issue_scope(@readable_document_scope_query, issue_id, opts),
+      else: document_scope(issue_id, opts)
+  end
+
+  defp document_scope(issue_id, opts), do: issue_scope(@document_scope_query, issue_id, opts)
+
+  defp issue_scope(query, issue_id, opts) do
+    with {:ok, body} <- graphql(query, %{id: issue_id, first: @document_attachment_first}, opts) do
       fetch_path(body, ["data", "issue"], :issue_not_found)
     end
   end
@@ -1722,14 +1764,26 @@ defmodule SymphonyElixir.AgentTools.Linear do
       else: {:error, {:document_not_owned_by_issue, document_id}}
   end
 
+  defp verify_document_readable(scope, context, document_id) do
+    if document_id in parent_document_ids(scope),
+      do: :ok,
+      else: verify_document_owner(scope, context, document_id)
+  end
+
   # The documents this run created, plus the ones the issue's attachments mark as created for it.
   defp owned_document_ids(scope, context) do
-    attached =
-      for %{"metadata" => %{@document_metadata_key => document_id}} <- get_in(scope, ["attachments", "nodes"]) || [],
-          is_binary(document_id),
-          do: document_id
+    Enum.uniq(attached_document_ids(scope) ++ CommentRegistry.document_ids(Map.get(context, :comment_registry)))
+  end
 
-    Enum.uniq(attached ++ CommentRegistry.document_ids(Map.get(context, :comment_registry)))
+  # Only a scope read with `parent_documents: true` carries the parent.
+  defp parent_document_ids(scope), do: scope |> Map.get("parent") |> attached_document_ids() |> Enum.uniq()
+
+  defp attached_document_ids(nil), do: []
+
+  defp attached_document_ids(scope) do
+    for %{"metadata" => %{@document_metadata_key => document_id}} <- get_in(scope, ["attachments", "nodes"]) || [],
+        is_binary(document_id),
+        do: document_id
   end
 
   defp list_documents([], _opts), do: {:ok, []}
