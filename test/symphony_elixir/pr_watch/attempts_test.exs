@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.PrWatch.AttemptsTest do
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.GitHub.FailedLog
   alias SymphonyElixir.PrWatch.Attempts
 
   @now ~U[2026-10-16 12:00:00Z]
@@ -163,6 +164,26 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
       attempts = runs([failure("h1")])
       assert %{same_failure_streak: 0} = Attempts.facts(Attempts.observe(attempts, read(head_sha: "h2"), ticket(), @now), read(head_sha: "h2"), @settings, @now)
       assert %{same_failure_streak: 0} = Attempts.facts(attempts, nil, @settings, @now)
+    end
+
+    test "the same error in real `gh --log-failed` logs builds the streak, though each run's timestamps differ" do
+      # Each line of `gh run view --log-failed` starts with the job, the step and a timestamp.
+      gh_failure = fn head, minute ->
+        stamp = "2026-10-16T21:#{minute}:11.44#{minute}Z"
+
+        log =
+          Enum.map_join(
+            ["##[group]Run mix test", "  1) test sums (MathTest)", "     ** (ExUnit.AssertionError) expected 2, got 3", "##[error]Process completed with exit code 2."],
+            "\n",
+            &"test\tRun mix test\t#{stamp} #{&1}"
+          )
+
+        failure(head, FailedLog.first_error(log))
+      end
+
+      read = read(head_sha: "h4", failure: gh_failure.("h4", 40))
+      attempts = runs([gh_failure.("h1", 10), gh_failure.("h2", 20), gh_failure.("h3", 30)])
+      assert %{same_failure_streak: 3} = attempts |> Attempts.observe(read, ticket(), @now) |> Attempts.facts(read, @settings, @now)
     end
 
     test "a green head, a green and conflict-free PR or a cleared fix ticket resets it; the evidence stays on a conflicting green head" do
