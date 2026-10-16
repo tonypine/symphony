@@ -14,7 +14,8 @@ for you on the host. They only act on this worktree's configured app and on apps
   at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear, updates
   and the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`,
   `update_feed_port`, `update_check_interval_seconds`. Pass `appearance` (`light` or `dark`) to
-  draw the app in that appearance whatever the host's; without it the app follows the host. See
+  draw the app in that appearance whatever the host's, for any macOS app (Symphony launches it with
+  AppKit's appearance arguments); without it the app follows the host. See
   "Light and dark, and the status-bar menu" below.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.

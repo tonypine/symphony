@@ -125,10 +125,12 @@ defmodule SymphonyElixir.QaDriver.Host do
     ArgumentError -> true
   end
 
-  @doc "Starts `executable` as a port owned by the caller. Options: `:cd`, `:env`."
+  @doc "Starts `executable` as a port owned by the caller. Options: `:cd`, `:env`, `:args` (the app's arguments)."
   @spec launch(String.t(), keyword()) :: {:ok, port(), pos_integer()} | {:error, term()}
   def launch(executable, opts) do
-    port = Port.open({:spawn_executable, executable}, [:binary, :exit_status, :stderr_to_stdout, cd: opts[:cd], env: opts[:env]])
+    port =
+      Port.open({:spawn_executable, executable}, [:binary, :exit_status, :stderr_to_stdout, cd: opts[:cd], env: opts[:env], args: Keyword.get(opts, :args, [])])
+
     {:os_pid, pid} = Port.info(port, :os_pid)
     {:ok, port, pid}
   rescue
