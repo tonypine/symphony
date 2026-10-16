@@ -68,9 +68,12 @@ defmodule SymphonyElixir.QaDriver do
     the QA host for a `worker_host`, so the agent cannot read the log itself.
 
   Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, sets
-  `SYMPHONY_BAR_QA_APPEARANCE`, and the app draws in that appearance whatever the
-  host's. The host's own appearance is never switched: a pass that dies would
-  leave it switched for the next one, and switching it needs Apple Events.
+  `SYMPHONY_BAR_QA_APPEARANCE` for Symphony's own app and passes AppKit's
+  appearance default as a launch argument (`-AppleInterfaceStyle Dark`, or
+  `-NSRequiresAquaSystemAppearance YES` for light) for any other app, so the app
+  draws in that appearance whatever the host's. The host's own appearance is
+  never switched: a pass that dies would leave it switched for the next one, and
+  switching it needs Apple Events.
 
   App stand-ins: besides `api_fixtures`, `qa_launch_app` takes five optional
   arguments that point the app at stand-ins instead of real services, all only
@@ -170,6 +173,9 @@ defmodule SymphonyElixir.QaDriver do
   @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
   @appearance_env "SYMPHONY_BAR_QA_APPEARANCE"
   @appearances ~w(light dark)
+  # AppKit reads these defaults from the launch arguments too, so any app draws in
+  # the appearance, not only Symphony's, which reads `@appearance_env`.
+  @appearance_args %{"light" => ["-NSRequiresAquaSystemAppearance", "YES"], "dark" => ["-AppleInterfaceStyle", "Dark"]}
   # The window layer of a pop-up menu (`kCGPopUpMenuWindowLevel`), where the
   # status item's menu opens.
   @menu_layer 101
@@ -405,7 +411,8 @@ defmodule SymphonyElixir.QaDriver do
          name = Path.basename(built.executable),
          {:ok, reports} <- crash_reports(config, name),
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
-      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins}
+      app_args = appearance_args(Map.get(args, "appearance"))
+      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
       GenServer.call(driver, {:launch, built.executable, info})
     end
   end
@@ -1062,6 +1069,8 @@ defmodule SymphonyElixir.QaDriver do
   defp appearance(appearance) when appearance in @appearances, do: {:ok, appearance}
   defp appearance(_other), do: tool_error("invalid_arguments", "`appearance` must be `light` or `dark`.")
 
+  defp appearance_args(appearance), do: Map.get(@appearance_args, appearance, [])
+
   defp gh_env(_config, nil), do: {:ok, []}
 
   defp gh_env(config, port) do
@@ -1681,7 +1690,7 @@ defmodule SymphonyElixir.QaDriver do
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
          {stub_url, forwards} = stub_route(state.config, state.stub.port),
-         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, app_env(info)), reverse_forwards: forwards],
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, app_env(info)), args: info.args, reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})

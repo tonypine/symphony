@@ -153,10 +153,11 @@ defmodule SymphonyElixir.QaDriver.Remote do
   @doc """
   Starts `executable` on the QA host. The returned port belongs to the caller
   and carries the app's output and exit status like a local launch. Options:
-  `:cd`, `:env` (only these variables reach the app), `:reverse_forwards` (`{remote,
-  local}` addresses the app's SSH session forwards back to this host while it runs;
-  the launch fails when one can't be set up) and `:timeout_ms` (for the QA host to
-  answer, default 30 seconds).
+  `:cd`, `:env` (only these variables reach the app), `:args` (the app's
+  arguments), `:reverse_forwards` (`{remote, local}` addresses the app's SSH
+  session forwards back to this host while it runs; the launch fails when one
+  can't be set up) and `:timeout_ms` (for the QA host to answer, default 30
+  seconds).
   """
   @spec launch(String.t(), String.t(), keyword()) :: {:ok, port(), pos_integer()} | {:error, term()}
   def launch(ssh_host, executable, opts) do
@@ -166,7 +167,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
     forwards = Keyword.get(opts, :reverse_forwards, [])
     ssh_opts = if forwards == [], do: [], else: [reverse_forwards: forwards, options: ["-o", "ExitOnForwardFailure=yes"]]
 
-    with {:ok, ssh, args} <- SSH.command(ssh_host, remote_command(script, [Keyword.get(opts, :cd) || "." | env ++ [executable]]), ssh_opts) do
+    with {:ok, ssh, args} <- SSH.command(ssh_host, remote_command(script, [Keyword.get(opts, :cd) || "." | env ++ [executable | Keyword.get(opts, :args, [])]]), ssh_opts) do
       port = Port.open({:spawn_executable, ssh}, [:binary, :exit_status, :stderr_to_stdout, args: args])
       await_pid(port, "", System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout_ms, @timeout_ms))
     end
