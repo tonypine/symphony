@@ -20,6 +20,13 @@ defmodule SymphonyElixir.QaVerification do
     * `blocked` (tooling or environment) -> retried boundedly on the same head, then a Blocked hold
       with the reason recorded
 
+  Before the agent starts, the QA pre-check (`SymphonyElixir.QaPreCheck`) confirms each walkthrough
+  step a named test proves, on the PR head: a passed check whose test is in the checkout reaches the
+  agent as confirmed, linked and not walked; a failed check, one that never ran, or a test not in the
+  checkout fails the pass to `Rework` without an agent run; a check still running is waited for, then
+  reported `blocked` past the wait's limit (`SymphonyElixir.CiWait`). Every result is one line of the
+  report's `### Pre-checks`.
+
   QA is journey-driven: the prompt carries the ticket's user walkthrough and acceptance criteria
   (the epic plan, where one exists, is the parent the QA agent reads with its Linear tools), and the
   agent judges the outcome as a careful engineer testing their own feature, not by executing a
@@ -29,10 +36,12 @@ defmodule SymphonyElixir.QaVerification do
   require Logger
 
   alias SymphonyElixir.{
+    CiWait,
     ClosedPullRequest,
     Handoff,
     MergeConfirmation,
     QaPolicy,
+    QaPreCheck,
     SelfHeal,
     TicketPullRequest,
     TicketSignals,
@@ -189,8 +198,68 @@ defmodule SymphonyElixir.QaVerification do
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
       {:nothing_to_verify, _reason} -> hold(issue, opts, head, {:no_change, pr_url})
-      {:run, playbooks, _reason} -> run_agent(issue, workspace, opts, settings, head, playbooks)
+      {:run, playbooks, _reason} -> pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks)
     end
+  end
+
+  # The steps a named test proves are confirmed before the agent starts (`SymphonyElixir.QaPreCheck`):
+  # a failed or missing proof fails the pass without an agent run, a check still running waits, and
+  # the confirmed steps reach the agent and the report. A walkthrough without one runs as before.
+  defp pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks) do
+    case QaPreCheck.run(journey(issue).steps, pr_url, head, workspace, Keyword.take(opts, [:gh_runner, :git])) do
+      :none -> run_agent(issue, workspace, opts, settings, head, playbooks, [])
+      {:pass, results} -> run_agent(issue, workspace, opts, settings, head, playbooks, results)
+      {:fail, results} -> fail(issue, opts, settings, head, pre_check_failed(results))
+      {:pending, results} -> wait_for_checks(issue, opts, settings, head, results)
+      {:error, reason} -> blocked(issue, opts, settings, head, blocked_outcome("the QA pre-check could not read CI on the PR head: #{inspect(reason)}", %{}))
+    end
+  end
+
+  defp pre_check_failed(results) do
+    %{
+      verdict: :fail,
+      summary: "The QA pre-check found a walkthrough step whose named test did not pass on this head, so no QA agent ran.",
+      steps: [],
+      findings: QaPreCheck.findings(results),
+      checks: QaPreCheck.report_checks(results),
+      reason: nil,
+      needs_person: false,
+      playbooks: []
+    }
+  end
+
+  # A named check still running is waited for like the epic review waits for CI: the run exits with
+  # `{:ci_pending, info}` and the orchestrator starts it again after CI had a minute more, counting
+  # the wait on this head (`SymphonyElixir.CiWait`). Past the wait's limit the pass is `blocked`
+  # with the reason: retried boundedly, then the self-heal lane.
+  defp wait_for_checks(issue, opts, settings, head, results) do
+    pending = Enum.filter(results, &(&1.status == :pending))
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    case CiWait.since(Handoff.signals(repo_key(issue, opts), issue.id), head) do
+      %DateTime{} = since ->
+        if CiWait.over?(since, now),
+          do: blocked(issue, opts, settings, head, checks_still_running(pending, results, since, now)),
+          else: ci_pending(issue, head, pending)
+
+      nil ->
+        ci_pending(issue, head, pending)
+    end
+  end
+
+  defp ci_pending(issue, head, pending) do
+    runs = Enum.map(pending, &%{workflow_name: &1.step.proof.check, url: &1.url})
+    Logger.info("QA for #{issue_label(issue)} waits for the named checks on #{String.slice(head, 0, 12)}: #{Enum.map_join(runs, ", ", & &1.workflow_name)}")
+    {:error, {:ci_pending, %{sha: head, runs: runs, run: "the QA pass"}}}
+  end
+
+  defp checks_still_running(pending, results, since, now) do
+    minutes = div(DateTime.diff(now, since, :second), 60)
+    steps = Enum.map_join(pending, "; ", &"step #{&1.step.number}: #{QaPreCheck.linked(&1)}")
+
+    blocked_outcome("the named checks were still running after #{minutes} minutes of waiting: #{steps}", %{
+      checks: QaPreCheck.report_checks(results)
+    })
   end
 
   # With no open pull request the workspace is built from the base branch, and its head is not the
@@ -252,20 +321,21 @@ defmodule SymphonyElixir.QaVerification do
     })
   end
 
-  defp run_agent(issue, _workspace, opts, settings, head, []) do
-    blocked(issue, opts, settings, head, blocked_outcome("no QA playbook applies to this change", %{}))
+  defp run_agent(issue, _workspace, opts, settings, head, [], proofs) do
+    blocked(issue, opts, settings, head, blocked_outcome("no QA playbook applies to this change", %{checks: QaPreCheck.report_checks(proofs)}))
   end
 
-  defp run_agent(issue, workspace, opts, settings, head, playbooks) do
-    job = agent_job(issue, workspace, opts, settings, head, playbooks)
+  defp run_agent(issue, workspace, opts, settings, head, playbooks, proofs) do
+    job = agent_job(issue, workspace, opts, settings, head, playbooks, proofs)
+    checks = QaPreCheck.report_checks(proofs)
 
     case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, opts) do
       {:ok, %{result: result, tokens: tokens}} ->
-        outcome = run_outcome(result, tokens, playbooks)
+        outcome = result |> run_outcome(tokens, playbooks) |> Map.put(:checks, checks)
         apply_outcome(issue, opts, settings, head, outcome)
 
       {:error, reason, tokens} ->
-        extra = %{tokens: tokens, playbooks: playbook_kinds(playbooks)}
+        extra = %{tokens: tokens, playbooks: playbook_kinds(playbooks), checks: checks}
         blocked(issue, opts, settings, head, blocked_outcome(reason, extra))
     end
   end
@@ -355,7 +425,7 @@ defmodule SymphonyElixir.QaVerification do
   defp needs_person?(%{needs_person: true}), do: true
   defp needs_person?(_outcome), do: false
 
-  defp agent_job(issue, workspace, opts, settings, head, playbooks) do
+  defp agent_job(issue, workspace, opts, settings, head, playbooks, proofs) do
     %{
       issue: issue,
       sha: head,
@@ -367,7 +437,8 @@ defmodule SymphonyElixir.QaVerification do
       playbooks: playbooks,
       token_limit: settings.agent.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
-      journey: journey(issue)
+      journey: journey(issue),
+      proofs: proofs
     }
   end
 

@@ -890,7 +890,10 @@ blocks the ticket.
 Each walkthrough step names the one place that proves it, on a line at its end:
 `Proved by: <check> › <test>` (the GitHub check run, then the suite, scenario or
 test file that proves the step on the PR head) or `Proved by: QA`. A step with no
-`Proved by:` line is read as `Proved by: QA`. Route each step when you write it:
+`Proved by:` line is read as `Proved by: QA`. Name the test as the code has it: its
+file path, or a test or scenario name as it is written. Symphony's QA pre-check
+looks it up in the PR's checkout and fails the step when it is not there. Route
+each step when you write it:
 
 - A step code can drive names its test. QA does not walk it: QA links that test's
   result on the PR head.
