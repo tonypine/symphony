@@ -547,7 +547,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "update_feed_port" => %{
             "type" => "integer",
             "description" =>
-              "A QA_HOST_PORTS port where your release-feed stub listens; the app's update checks read http://localhost:<port>/releases/latest (SYMPHONY_BAR_UPDATE_URL) instead of GitHub's."
+              "A QA_HOST_PORTS port where the shared update feed (python3 -B test/support/stubs/update_feed.py) listens; the app's update checks read http://localhost:<port>/releases/latest (SYMPHONY_BAR_UPDATE_URL) instead of GitHub's."
           },
           "update_check_interval_seconds" => %{
             "type" => "integer",

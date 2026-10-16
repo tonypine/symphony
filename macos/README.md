@@ -1248,8 +1248,11 @@ Eight more variables, read only in QA mode:
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
   shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
   moves among them; Oct 7's chain verifies and Oct 6's breaks at its line 5, SHOP-298's PR opened, and SHOP-305's
-  ticket page has a stop and a Backlog move). Ages in them count from the payload's `generated_at`, so they read the same
-  on any day; clock times show in the Mac's time zone:
+  ticket page has a stop and a Backlog move), and of an update's pause: `update-paused` (dispatch paused "updating to
+  v9.9.9" with two runs finishing) and `update-paused-idle` (the same pause with nothing running), which QA runs with
+  the shared update feed's `--fake-release 9.9.9 9999` ([`test/support/README.md`](../test/support/README.md#the-update-feed)).
+  `APIFixturesTests` decodes every fixture's state and repos, so one that drifts from the API fails CI. Ages in them
+  count from the payload's `generated_at`, so they read the same on any day; clock times show in the Mac's time zone:
 
   ```bash
   SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \
