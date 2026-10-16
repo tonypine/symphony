@@ -111,6 +111,6 @@ today become helpers that QA can call too.
 | Part | Ticket |
 | --- | --- |
 | The routing rule in the plan pipeline, the ticket templates and the QA prompt | TP-1033 (plan) |
-| QA's judgment by sight in the QA playbooks and the verdict rules | TP-1033 (plan) |
+| QA's judgment by sight in the QA playbooks and the verdict rules | TP-1042 |
 | Shared macOS helpers (signed release pair, update feed, committed fixtures), with the e2e harness on top of them | TP-1033 (plan) |
 | TP-983 and TP-972: install steps moved to TP-973's scenarios, a judgment by sight added | Done by hand on 2026-10-15 (TP-1034) |

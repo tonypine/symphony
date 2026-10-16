@@ -218,6 +218,7 @@ defmodule SymphonyElixir.QaAgent do
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{qa_jobs_section()}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -229,6 +230,7 @@ defmodule SymphonyElixir.QaAgent do
     - `pass`: every step you ran behaved as the ticket describes.
     - `fail`: at least one step shows a real defect in the change. List each defect in `findings`
       with the command or action, what you expected, and what happened, so #{fixer(job)} can fix it.
+      A `Design check` whose screenshots visibly differ from the design is such a defect.
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
 
@@ -577,6 +579,29 @@ defmodule SymphonyElixir.QaAgent do
        arguments it lists them; the parent's are under `parentDocuments`), and the files below.
     2. `docs/design/design-system.md` and `docs/design/director-app-screens.md` in this worktree.
     #{design_files_text(Map.get(job, :design_files, []))}
+    """
+  end
+
+  # QA keeps the job no test can do (ADR 0003): the steps no test drives, a judgment by sight of
+  # every UI deliverable against its design, then the playbooks' checks of the running app. The
+  # playbooks say how each one switches between light and dark.
+  defp qa_jobs_section do
+    """
+    QA's three jobs, in this order:
+    1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
+    2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
+       menu the change adds or changes. Screenshot it in the real app in light and in dark, at the
+       sizes the design names (at the size it opens when the design names none), and compare both
+       with its design above: layout, spacing, alignment, truncation, contrast, symbols, wording,
+       and whether it looks finished. Report one step per UI deliverable named
+       `Design check: <deliverable>`, with both screenshots in `evidence`, and in `details` the
+       design it compared with (the Screens document or file and the screen in it). When no Screens
+       cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
+       `details`. When the playbook says an appearance cannot be switched, say so in `details`.
+       `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
+       structural check passes: name in `details` and `findings` what differs from which design,
+       with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
+    3. The wide pass and the other checks of the running app the playbooks ask for.
     """
   end
 
