@@ -32,8 +32,12 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
     %Issue{id: id, identifier: "TP-815", title: "Code Review", state: issue_state, repo_key: repo_key}
   end
 
+  # The head's CI as the PR and CI watcher leaves it: the CI attribute, and the decision the dispatch
+  # gate reads, to run on a green head (R27) and wait otherwise.
   defp record_ci!(repo_key, head, status) do
     assert {:ok, :changed} = RunStore.record_ci_state(repo_key, @issue_id, head, status, DateTime.utc_now())
+    decision = if status == "green", do: :dispatch, else: %{rule: "R24", kind: :wait, reason: "Checks are running"}
+    SymphonyElixir.PrWatchSupport.put_watch!(repo_key, @issue_id, head_sha: head, decision: decision)
   end
 
   defp head_signals(repo_key) do

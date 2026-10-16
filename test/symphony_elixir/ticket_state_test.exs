@@ -509,8 +509,11 @@ defmodule SymphonyElixir.TicketStateTest do
             github: {:rate_limited, @at},
             rate_limit: %{remaining: 12, reset_at: @at},
             landing: landing,
+            stay: :qa,
             decision: %{rule: "R1"},
             applied: [%{rule: "R24"}, :junk],
+            attempts: %{red: 2},
+            fix: %{ci_failure: %{commit_sha: "abc"}, pr_conflict: :junk},
             links: :junk
           },
           @at
@@ -526,9 +529,12 @@ defmodule SymphonyElixir.TicketStateTest do
                read_at: @at,
                github: {:rate_limited, @at},
                rate_limit: %{remaining: 12, reset_at: @at},
-               landing: %{state: "QA", head_sha: "abc", state_since: @at, progress_at: @at},
+               landing: %{state: "QA", head_sha: "abc", state_since: @at, progress_at: @at, files: nil, waits_for: nil, waits_since: nil},
+               stay: :qa,
                decision: %{rule: "R1"},
                applied: [%{rule: "R24"}],
+               attempts: %{SymphonyElixir.PrWatch.Attempts.new() | red: 2},
+               fix: %{ci_failure: %{commit_sha: "abc"}, pr_conflict: nil},
                links: []
              }
 
@@ -541,8 +547,12 @@ defmodule SymphonyElixir.TicketStateTest do
 
       sparse = TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: facts, github: :odd, landing: %{state: "QA"}}})
 
-      assert %{source: :poll, github: :ok, rate_limit: nil, landing: nil, decision: nil, applied: [], links: []} =
+      assert %{source: :poll, github: :ok, rate_limit: nil, landing: nil, stay: nil, decision: nil, applied: [], links: []} =
                TicketState.pr_watch(sparse)
+
+      assert %{attempts: attempts, fix: %{ci_failure: nil, pr_conflict: nil}} = TicketState.pr_watch(sparse)
+      assert attempts == SymphonyElixir.PrWatch.Attempts.new()
+      assert %{stay: nil} = TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: facts, stay: :done}}))
 
       assert %{github: {:rate_limited, nil}, rate_limit: %{remaining: nil, reset_at: nil}} =
                TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: facts, github: {:rate_limited, "soon"}, rate_limit: %{remaining: -1}}}))
