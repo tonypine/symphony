@@ -1,4 +1,4 @@
-.PHONY: help all setup deps audit build smoke release fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
+.PHONY: help all setup deps audit build smoke release fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e support-test
 
 MIX ?= mix
 TEST_MAX_CASES ?= 4
@@ -7,7 +7,7 @@ TEST_ENV := ELIXIR_ERL_OPTIONS="+S $(BEAM_SCHEDULERS):$(BEAM_SCHEDULERS)"
 TEST_ARGS := --max-cases $(TEST_MAX_CASES)
 
 help:
-	@echo "Targets: setup, deps, audit, build, smoke, release, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
+	@echo "Targets: setup, deps, audit, build, smoke, release, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, support-test, ci"
 
 # Turns on .githooks/pre-push (format, compile and credo on the files a push changes)
 # for this clone and all its worktrees.
@@ -70,6 +70,10 @@ dialyzer-profile:
 
 e2e:
 	SYMPHONY_RUN_LIVE_E2E=1 $(MIX) test test/symphony_elixir/live_e2e_test.exs
+
+# The shared test helpers' own tests (test/support/README.md): stdlib Python, no build, no sudo.
+support-test:
+	python3 -m unittest discover -s test/support/tests -v
 
 check:
 	$(MAKE) fmt-check

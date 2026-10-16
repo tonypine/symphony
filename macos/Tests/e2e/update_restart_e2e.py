@@ -44,7 +44,6 @@ See Tests/e2e/README.md for the options.
 """
 
 import argparse
-import http.server
 import json
 import os
 import plistlib
@@ -66,6 +65,13 @@ from pathlib import Path
 
 MACOS = Path(__file__).resolve().parents[2]
 REPO = MACOS.parent
+# The release pair's build, signing and update feed are the shared helpers' (test/support/README.md).
+sys.path.insert(0, str(REPO / "test" / "support"))
+
+from macos_release import minisign_keys, release_pair, signing  # noqa: E402
+from macos_release._run import BuildError  # noqa: E402
+from stubs.update_feed import UpdateFeed  # noqa: E402
+
 BUILD_N = int(os.environ.get("SYMPHONY_E2E_BUILD_N", "90001"))
 BUILD_N1 = BUILD_N + 1
 STUB_SECONDS = int(os.environ.get("SYMPHONY_E2E_STUB_SECONDS", "15"))
@@ -96,8 +102,7 @@ def run(args, cwd=None, env=None, check=True, capture=True):
     return result
 
 
-def version(build):
-    return f"0.0.1.{build}"
+version = release_pair.version
 
 
 def wait_for(description, condition, timeout, interval=0.25):
@@ -191,249 +196,6 @@ def compare_live(before, after):
     ]
     if changes:
         raise Failure("the live app changed during the test:\n  " + "\n  ".join(changes))
-
-
-# ---------------------------------------------------------------------------
-# Build: releases N and N+1, signed with one identity, and the update feed.
-
-
-class Signing:
-    """A code-signing identity: given, or a throwaway self-signed one in a temporary keychain."""
-
-    def __init__(self, work):
-        self.work = work
-        self.keychain = None
-        self.password = None
-        self.certificate = None
-        self.trusted = False
-        self.search_list = None
-        self.identity = os.environ.get("SYMPHONY_E2E_SIGNING_IDENTITY")
-        if self.identity:
-            keychain = os.environ.get("SYMPHONY_E2E_KEYCHAIN")
-            self.flags = ["--keychain", keychain] if keychain else []
-            log(f"signing with the given identity {self.identity}")
-        else:
-            self._create()
-
-    def _create(self):
-        folder = self.work / "signing"
-        folder.mkdir()
-        self.password = secrets.token_hex(16)
-        name = f"Symphony E2E {secrets.token_hex(4)}"
-        config = folder / "cert.cnf"
-        config.write_text(
-            "[req]\ndistinguished_name = dn\nx509_extensions = ext\nprompt = no\n"
-            f"[dn]\nCN = {name}\n"
-            "[ext]\nbasicConstraints = critical,CA:false\nkeyUsage = critical,digitalSignature\n"
-            "extendedKeyUsage = critical,codeSigning\n"
-        )
-        key, cert, p12 = folder / "key.pem", folder / "cert.pem", folder / "identity.p12"
-        openssl = "/usr/bin/openssl"
-        run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert,
-             "-days", "2", "-config", config])
-        run([openssl, "pkcs12", "-export", "-inkey", key, "-in", cert, "-out", p12,
-             "-passout", f"pass:{self.password}", "-name", name])
-        self.keychain = folder / "e2e.keychain-db"
-        run(["security", "create-keychain", "-p", self.password, self.keychain])
-        run(["security", "set-keychain-settings", "-lut", "21600", self.keychain])
-        run(["security", "unlock-keychain", "-p", self.password, self.keychain])
-        run(["security", "import", p12, "-k", self.keychain, "-f", "pkcs12", "-P", self.password,
-             "-T", "/usr/bin/codesign"])
-        run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s",
-             "-k", self.password, self.keychain])
-        # codesign only finds an identity in a keychain on the search list, even with --keychain.
-        output = run(["security", "list-keychains", "-d", "user"]).stdout
-        self.search_list = [line.strip().strip('"') for line in output.splitlines() if line.strip()]
-        run(["security", "list-keychains", "-d", "user", "-s", self.keychain, *self.search_list])
-        self.certificate = cert
-        self.identity = self._identity_hash(name)
-        self.flags = ["--keychain", str(self.keychain)]
-        log(f"created the throwaway signing identity '{name}' ({self.identity}) in {self.keychain}")
-        self._check_trust()
-
-    def _identity_hash(self, name):
-        """The SHA-1 of the imported identity, which codesign matches without a trusted certificate."""
-        output = run(["security", "find-identity", "-p", "codesigning", self.keychain]).stdout
-        for line in output.splitlines():
-            match = re.match(r'\s*\d+\) ([0-9A-F]{40}) "(.*)"', line)
-            if match and match.group(2) == name:
-                return match.group(1)
-        raise Failure(f"the keychain {self.keychain} has no code-signing identity '{name}':\n{output}")
-
-    def _check_trust(self):
-        """`codesign --verify` needs the certificate trusted for code signing, in the build and in the app."""
-        probe = self.work / "signing" / "probe"
-        shutil.copy("/usr/bin/true", probe)
-        run(["codesign", "--force", "--sign", self.identity, *self.flags, probe])
-        if run(["codesign", "--verify", "--strict", probe], check=False).returncode == 0:
-            return
-        if os.environ.get("SYMPHONY_E2E_TRUST_CERT") != "1":
-            raise Failure(
-                "codesign doesn't trust the throwaway certificate, so the app would refuse the update. Either set "
-                "SYMPHONY_E2E_SIGNING_IDENTITY to a trusted code-signing identity (with SYMPHONY_E2E_KEYCHAIN when "
-                "it isn't in the search list), or set SYMPHONY_E2E_TRUST_CERT=1 to trust the throwaway certificate "
-                "for code signing until the test ends (uses sudo)."
-            )
-        log("trusting the throwaway certificate for code signing until the test ends")
-        run(["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign",
-             "-k", "/Library/Keychains/System.keychain", self.certificate])
-        self.trusted = True
-        run(["codesign", "--verify", "--strict", probe])
-
-    def cleanup(self):
-        if self.trusted:
-            run(["sudo", "-n", "security", "remove-trusted-cert", "-d", self.certificate], check=False)
-        if self.search_list is not None:
-            run(["security", "list-keychains", "-d", "user", "-s", *self.search_list], check=False)
-        if self.keychain:
-            run(["security", "delete-keychain", self.keychain], check=False)
-
-
-def build_symphony(build, out):
-    """Copies build `build`'s Symphony release (`make release`, ERTS included) to `out`."""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    prebuilt = os.environ.get(f"SYMPHONY_E2E_SYMPHONY_RELEASE_{'N1' if build == BUILD_N1 else 'N'}")
-    if prebuilt:
-        run(["ditto", prebuilt, out])
-        log(f"using the prebuilt Symphony release {prebuilt} as build {build}")
-        return
-    log(f"building the Symphony release for build {build} (make release)")
-    env = dict(os.environ, SYMPHONY_BUILD_NUMBER=str(build))
-    env.pop("SYMPHONY_AGENT_RUNTIME", None)
-    run(["make", "release"], cwd=REPO, env=env, capture=False)
-    built = REPO / "_build" / "prod" / "rel" / "symphony"
-    if not (built / "releases" / f"0.0.1-{build}").is_dir():
-        raise SystemExit(f"make release didn't produce build {build}'s release in {built}")
-    run(["ditto", built, out])
-
-
-def build_app_executable():
-    prebuilt = os.environ.get("SYMPHONY_E2E_APP_EXECUTABLE")
-    if prebuilt:
-        log(f"using the prebuilt app executable {prebuilt}")
-        return Path(prebuilt)
-    log("building SymphonyBar (swift build -c release)")
-    run(["swift", "build", "-c", "release", "--product", "SymphonyBar"], cwd=MACOS, capture=False)
-    bin_path = run(["swift", "build", "-c", "release", "--show-bin-path"], cwd=MACOS).stdout.strip()
-    return Path(bin_path) / "SymphonyBar"
-
-
-def build(work):
-    """Builds both bundles and the update feed; returns (app N, signing, minisign public key)."""
-    signing = Signing(work)
-    keys = work / "minisign"
-    keys.mkdir()
-    run(["minisign", "-G", "-W", "-f", "-p", keys / "minisign.pub", "-s", keys / "minisign.key"])
-    public_key = (keys / "minisign.pub").read_text().splitlines()[1].strip()
-
-    executable = build_app_executable()
-    apps = {}
-    for number in (BUILD_N, BUILD_N1):
-        release = work / "releases" / f"symphony-{number}"
-        build_symphony(number, release)
-        build_dir = work / f"build-{number}"
-        log(f"bundling Symphony.app {version(number)}")
-        run([
-            "make", "-C", MACOS, "bundle",
-            f"BUILD_DIR={build_dir}",
-            f"PREBUILT_EXECUTABLE={executable}",
-            f"SYMPHONY_RELEASE={release}",
-            f"SHORT_VERSION={version(number)}",
-            f"BUILD_NUMBER={number}",
-            f"MINISIGN_PUBLIC_KEY={public_key}",
-            f"SIGNING_IDENTITY={signing.identity}",
-            f"CODESIGN_FLAGS={' '.join(signing.flags)}",
-        ])
-        apps[number] = build_dir / "Symphony.app"
-
-    log(f"packaging {version(BUILD_N1)} as a release")
-    feed = work / "feed"
-    commit = run(["git", "rev-parse", "HEAD"], cwd=REPO).stdout.strip()
-    env = dict(os.environ, MINISIGN_SECRET_KEY=(keys / "minisign.key").read_text(), MINISIGN_PUBLIC_KEY=public_key)
-    run([
-        REPO / "scripts" / "release" / "package.sh",
-        "--app", apps[BUILD_N1], "--version", version(BUILD_N1), "--build", BUILD_N1,
-        "--commit", commit, "--tag", f"v{version(BUILD_N1)}-e2e", "--signed", "true", "--out", feed,
-    ], cwd=REPO, env=env)
-    return apps[BUILD_N], signing, feed
-
-
-class Feed:
-    """Serves the update feed: `releases/latest` like GitHub's API, and the release assets.
-
-    It publishes N+1 from the start. `serve_n` makes N the latest release, so the app finds itself up to date, until
-    `publish_n1` publishes N+1 again.
-    """
-
-    def __init__(self, folder):
-        self.folder = folder
-        handler = lambda *args, **kwargs: _QuietHandler(*args, directory=str(folder), **kwargs)  # noqa: E731
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        self.server.latest_requests = 0
-        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
-        names = [p.name for p in folder.iterdir() if p.is_file()]
-        self.release_n1 = {
-            "tag_name": f"v{version(BUILD_N1)}-e2e",
-            "html_url": f"{self.base}/release",
-            "body": (folder / "release_notes.md").read_text(),
-            "assets": [{"name": name, "browser_download_url": f"{self.base}/{name}"} for name in names],
-        }
-        self.release_n = self._release_n(json.loads((folder / "version.json").read_text()))
-        (folder / "releases").mkdir()
-        self.publish_n1()
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def _release_n(self, info_n1):
-        """N as the latest release: its version.json names N's build. A check never downloads its app, so the
-        release lists the app's names without the files. A failed check would wait 6 hours for the next one."""
-        n = version(BUILD_N)
-        zip_name = f"Symphony-{n}.zip"
-        info = dict(info_n1, version=n, build=BUILD_N, zip=zip_name,
-                    minisig=f"{zip_name}.minisig" if info_n1.get("minisig") else None)
-        (self.folder / "n").mkdir()
-        (self.folder / "n" / "version.json").write_text(json.dumps(info))
-        names = ["version.json", zip_name, f"{zip_name}.sha256"] + ([info["minisig"]] if info["minisig"] else [])
-        return {
-            "tag_name": f"v{n}-e2e",
-            "html_url": f"{self.base}/release-n",
-            "body": f"Release {n}.\n",
-            "assets": [{"name": name, "browser_download_url": f"{self.base}/n/{name}"} for name in names],
-        }
-
-    def _serve(self, release):
-        latest = self.folder / "releases" / "latest"
-        partial = latest.with_name(".latest")
-        partial.write_text(json.dumps(release))
-        partial.rename(latest)
-
-    def serve_n(self):
-        self._serve(self.release_n)
-        log(f"the feed serves v{version(BUILD_N)} only")
-
-    def publish_n1(self):
-        self._serve(self.release_n1)
-
-    @property
-    def latest_requests(self):
-        """How many update checks asked for the latest release so far."""
-        return self.server.latest_requests
-
-    @property
-    def latest_url(self):
-        return f"{self.base}/releases/latest"
-
-    def stop(self):
-        self.server.shutdown()
-
-
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path.split("?", 1)[0] == "/releases/latest":
-            self.server.latest_requests += 1
-        super().do_GET()
-
-    def log_message(self, *args):
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1116,7 +878,8 @@ def start_on_release(instance):
     put_n_back(instance)
     instance.set_issue_state("Todo")
     instance.set_stub_seconds(ON_RELEASE_STUB_SECONDS)
-    instance.feed.serve_n()
+    instance.feed.set_mode("none")
+    log(f"the feed serves v{version(BUILD_N)} only")
     instance.update_settings(updateMode="onRelease", startOnLaunch=True)
     instance.env[CHECK_INTERVAL_KEY] = str(CHECK_INTERVAL)
     log(f"Automatically when released, a check every {CHECK_INTERVAL}s, Start at launch on")
@@ -1128,7 +891,7 @@ def start_on_release(instance):
 
 
 def publish(instance):
-    instance.feed.publish_n1()
+    instance.feed.set_mode("publish")
     log(f"published v{version(BUILD_N1)} in the feed")
 
 
@@ -1471,8 +1234,7 @@ def main():
     if sys.platform != "darwin" or os.uname().machine != "arm64":
         print("The end-to-end test runs on Apple silicon Macs only.", file=sys.stderr)
         return 2
-    missing = [tool for tool in ("swift", "codesign", "ditto", "plutil", "minisign", "lsof", "git", "make")
-               if not shutil.which(tool)]
+    missing = [tool for tool in (*release_pair.TOOLS, "lsof") if not shutil.which(tool)]
     if missing:
         print(f"Missing tools: {', '.join(missing)}", file=sys.stderr)
         return 2
@@ -1484,18 +1246,23 @@ def main():
     log(f"work folder: {work}")
     before = live_snapshot(work)
     log(f"live app before: {json.dumps(before)}")
-    signing = feed = instance = None
+    identity = feed = instance = None
     failed = True
     try:
-        app_n, signing, feed_folder = build(work)
-        feed = Feed(feed_folder)
-        instance = Instance(work, app_n, feed)
+        identity = signing.select(work / "signing")
+        pair = release_pair.Layout(work / "release-pair")
+        keys = minisign_keys.generate(pair.minisign)
+        release_pair.build(pair.root, identity, keys, BUILD_N, BUILD_N1)
+        (work / "logs").mkdir()
+        feed = UpdateFeed(pair.feed, current=(version(BUILD_N), BUILD_N), log=work / "logs" / "feed.log").start()
+        log(f"the update feed {feed.latest_url} publishes v{version(BUILD_N1)} (requests in logs/feed.log)")
+        instance = Instance(work, pair.app_n, feed)
         log(f"launching build {BUILD_N} from {instance.app} (QA root {instance.qa}, epmd port {instance.epmd_port})")
         instance.launch()
         for scenario in SCENARIOS:
             scenario(instance)
         failed = False
-    except Failure as error:
+    except (Failure, BuildError) as error:
         log(f"FAILED: {error}")
         if instance:
             print(instance.diagnostics(), flush=True)
@@ -1508,8 +1275,8 @@ def main():
                 failed = True
         if feed:
             feed.stop()
-        if signing:
-            signing.cleanup()
+        if identity:
+            identity.cleanup()
         after = live_snapshot(work)
         try:
             compare_live(before, after)

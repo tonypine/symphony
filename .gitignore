@@ -66,3 +66,6 @@ symphony_elixir-*.tar
 # macOS menu bar app build output.
 /macos/build/
 /macos/.build/
+
+# Python bytecode from the shared test helpers (test/support/).
+__pycache__/

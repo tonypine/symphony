@@ -66,18 +66,21 @@ toolchain and `minisign` (`brew install minisign`):
 make e2e
 ```
 
-It takes a while: it builds two Symphony releases (`make release` with build numbers 90001 and 90002), the app,
-and both bundles. It prints each step, then `all 9 scenarios passed`, and exits 1 on the first failure with
+It takes a while: it builds the release pair, two Symphony releases (`make release` with build numbers 90001 and
+90002), the app and both bundles, with the shared helpers in [`test/support/`](../../../test/support/README.md)
+(`release_pair.py`, as `make release-pair` does, into `<work>/release-pair`), and serves N+1 with their update
+feed stand-in (`test/support/stubs/update_feed.py`, its requests logged to `<work>/logs/feed.log`). It prints each step, then `all 9 scenarios passed`, and exits 1 on the first failure with
 the app's status, the update helper's, app's and stub agent's logs, and the processes still running. The
 work folder is removed on success and kept on failure (or with `--keep`).
 
 Both bundles must be signed with the same certificate, as real updates are. Without one given, the test makes
 a throwaway self-signed code-signing identity in a temporary keychain, on your keychain search list until the
-test ends. `codesign --verify` and the app accept it only once it is trusted for code signing, so set one of:
+test ends. `codesign --verify` and the app accept it only once it is trusted for code signing, so set one of
+(see the [helpers' README](../../../test/support/README.md#signing-identity)):
 
 | Variable | Effect |
 | --- | --- |
-| `SYMPHONY_E2E_SIGNING_IDENTITY` | sign with this identity instead, for example the Symphony release certificate in your login keychain |
+| `SYMPHONY_E2E_SIGNING_IDENTITY` | sign with this test identity instead, trusted for code signing (never Symphony's release certificate) |
 | `SYMPHONY_E2E_KEYCHAIN` | the keychain that holds that identity, when it isn't in the search list |
 | `SYMPHONY_E2E_TRUST_CERT=1` | trust the throwaway certificate for code signing until the test ends (`sudo security add-trusted-cert`; CI sets this) |
 
@@ -100,8 +103,8 @@ The test can run while the installed app runs Symphony. The instance gets its ow
   its logs, and a fresh `HOME`;
 - scripted QA mode, so it presses menu items by title through files instead of Accessibility access;
 - `ERL_EPMD_PORT`, since a Symphony release always takes the node name `symphony@127.0.0.1`;
-- dashboard port (`dashboard.port: 0`), and a local update feed (`SYMPHONY_BAR_UPDATE_URL`) serving N+1, or N
-  only until scenarios 5 to 7 publish N+1;
+- dashboard port (`dashboard.port: 0`), and a local update feed (`SYMPHONY_BAR_UPDATE_URL`) serving N+1 (its
+  `publish` mode), or N only (`none`) until scenarios 5 to 7 publish N+1;
 - fake Linear: the memory tracker reading one issue from a file (`issues.memory.issues_file`), and a stub
   `claude` that answers each turn after `SYMPHONY_E2E_STUB_SECONDS`, so runs cost nothing.
 
@@ -112,4 +115,5 @@ on port 4000 and the metadata of the live state files (`control_url`, `control_t
 ## CI
 
 The `macos-e2e` workflow runs it nightly, on demand, and on pull requests that change the app, the release
-packaging or this test. On failure it uploads the work folder's logs.
+packaging, the shared release-pair and update feed helpers or this test. On failure it uploads the work folder's
+logs and the release pair's `manifest.json`, without the apps, the feed or the keys.
