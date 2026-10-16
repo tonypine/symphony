@@ -68,6 +68,18 @@ defmodule SymphonyElixir.QaDriver.Remote do
   printf 'symphony-qa-helper:%s\\n' "$bin"
   """
 
+  @appearance_script """
+  dir="$1/appearance"; lib="$dir/symphony-qa-appearance.dylib"
+  if [ ! -f "$lib" ]; then
+    umask 077
+    mkdir -p "$dir" || exit 1
+    printf %s "$2" | base64 --decode > "$dir/symphony-qa-appearance.m" || exit 1
+    printf %s "$3" | base64 --decode > "$dir/build-appearance.sh" || exit 1
+    sh "$dir/build-appearance.sh" "$dir/symphony-qa-appearance.m" "$lib" || exit 1
+  fi
+  printf 'symphony-qa-appearance-library:%s\\n' "$lib"
+  """
+
   @read_script """
   if [ ! -f "$1" ] || [ -L "$1" ]; then rm -f "$1"; exit 1; fi
   printf 'symphony-qa-file:'; base64 < "$1" | tr -d '\\n'; printf '\\n'; rm -f "$1"
@@ -107,6 +119,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
       helper: &helper(ssh_host, &1),
       call_helper: &call_helper(ssh_host, &1, &2, &3),
       read: &read(ssh_host, &1),
+      appearance_library: &appearance_library(ssh_host, &1),
       prepare: &prepare(ssh_host, &1, &2),
       ship: &ship(ssh_host, &1, &2),
       put: &put(ssh_host, &1, &2, &3),
@@ -273,6 +286,27 @@ defmodule SymphonyElixir.QaDriver.Remote do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @doc """
+  Path of the appearance library in the run directory `dir` on the QA host, built there with
+  `clang` on first use.
+  """
+  @spec appearance_library(String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def appearance_library(ssh_host, dir) do
+    {source, build} = Host.appearance_source()
+    args = [dir, Base.encode64(source), Base.encode64(build)]
+
+    with true <- Regex.match?(@run_dir, dir) || {:error, {:not_a_run_dir, dir}},
+         {:ok, {output, 0}} <- run(ssh_host, @appearance_script, args, timeout_ms: @compile_timeout_ms) do
+      case marker(output, "symphony-qa-appearance-library") do
+        nil -> {:error, {:appearance_build_failed, 0, tail(output, 2_000)}}
+        path -> {:ok, path}
+      end
+    else
+      {:ok, {output, status}} -> {:error, {:appearance_build_failed, status, tail(output, 2_000)}}
+      {:error, reason} -> {:error, reason}
     end
   end
 

@@ -70,12 +70,16 @@ defmodule SymphonyElixir.QaDriver do
     the QA host for a `worker_host`, so the agent cannot read the log itself.
 
   Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, sets
-  `SYMPHONY_BAR_QA_APPEARANCE` for Symphony's own app and passes AppKit's
-  appearance default as a launch argument (`-AppleInterfaceStyle Dark`, or
-  `-NSRequiresAquaSystemAppearance YES` for light) for any other app, so the app
-  draws in that appearance whatever the host's. The host's own appearance is
-  never switched: a pass that dies would leave it switched for the next one, and
-  switching it needs Apple Events.
+  `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects the
+  appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built on the
+  machine the app runs on) with `DYLD_INSERT_LIBRARIES`: it reads the same
+  variable and sets any AppKit app's appearance as the app finishes launching,
+  so the app draws in that appearance whatever the host's. AppKit reads the
+  system appearance from the global defaults only, so a launch argument such as
+  `-AppleInterfaceStyle Dark` cannot do it; a light launch still passes
+  `-NSRequiresAquaSystemAppearance YES`, which AppKit does read from the
+  arguments. The host's own appearance is never switched: a pass that dies would
+  leave it switched for the next one, and switching it needs Apple Events.
 
   App stand-ins: besides `api_fixtures`, `qa_launch_app` takes five optional
   arguments that point the app at stand-ins instead of real services, all only
@@ -175,9 +179,9 @@ defmodule SymphonyElixir.QaDriver do
   @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
   @appearance_env "SYMPHONY_BAR_QA_APPEARANCE"
   @appearances ~w(light dark)
-  # AppKit reads these defaults from the launch arguments too, so any app draws in
-  # the appearance, not only Symphony's, which reads `@appearance_env`.
-  @appearance_args %{"light" => ["-NSRequiresAquaSystemAppearance", "YES"], "dark" => ["-AppleInterfaceStyle", "Dark"]}
+  # AppKit reads this default from the launch arguments too. There is none for dark: the
+  # appearance library does both.
+  @appearance_args %{"light" => ["-NSRequiresAquaSystemAppearance", "YES"]}
   # The window layer of a pop-up menu (`kCGPopUpMenuWindowLevel`), where the
   # status item's menu opens.
   @menu_layer 101
@@ -295,6 +299,8 @@ defmodule SymphonyElixir.QaDriver do
           required(:helper) => (-> helper_result()) | (String.t() -> helper_result()),
           required(:call_helper) => (Path.t(), [String.t()], keyword() -> cmd_result()),
           optional(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
+          # The appearance library `qa_launch_app` injects; a QA host's takes the run directory.
+          optional(:appearance_library) => (-> helper_result()) | (String.t() -> helper_result()),
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
           optional(:put) => (Path.t(), String.t(), String.t() -> {:ok, String.t()} | {:error, String.t()}),
@@ -412,8 +418,10 @@ defmodule SymphonyElixir.QaDriver do
          :ok <- unchanged_build(config, built),
          name = Path.basename(built.executable),
          {:ok, reports} <- crash_reports(config, name),
+         {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
       app_args = appearance_args(Map.get(args, "appearance"))
+      stand_ins = stand_ins ++ library_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
       GenServer.call(driver, {:launch, built.executable, info})
     end
@@ -1072,6 +1080,22 @@ defmodule SymphonyElixir.QaDriver do
   defp appearance(_other), do: tool_error("invalid_arguments", "`appearance` must be `light` or `dark`.")
 
   defp appearance_args(appearance), do: Map.get(@appearance_args, appearance, [])
+
+  # The environment that injects the appearance library, built on the machine the app runs on.
+  defp appearance_library(_config, nil), do: {:ok, []}
+
+  defp appearance_library(config, appearance) do
+    case if(config.remote?, do: config.host.appearance_library.(config.host_dir), else: config.host.appearance_library.()) do
+      {:ok, path} ->
+        {:ok, [{"DYLD_INSERT_LIBRARIES", path}]}
+
+      {:error, reason} ->
+        tool_error(
+          "qa_appearance_unavailable",
+          "Symphony could not build the library that draws the app #{appearance}: #{inspect(reason)}. #{Checks.blocked_hint()}"
+        )
+    end
+  end
 
   defp gh_env(_config, nil), do: {:ok, []}
 
