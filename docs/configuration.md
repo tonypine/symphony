@@ -1603,6 +1603,20 @@ opens, changes focus once, and then checks the sizes of the content and scroll a
 accessibility tree, not just the window frame. A window that opens at full height and collapses
 seconds later fails, with the AX tree quoted and a screenshot attached.
 
+QA does three things, in this order, in every app playbook (`macos_app`, `web`, `android_app`):
+the walkthrough steps marked `Proved by: QA`, a **Design check** of every UI deliverable, then the
+playbook's other checks of the running app (on macOS the wide pass below). The Design check judges
+each window, page, screen or menu the change adds or changes by sight: screenshots of the real app
+in light and in dark, at the sizes the design names, compared with the ticket's or the parent's
+Screens and with `docs/design/design-system.md` (the design system alone when no Screens cover it)
+for layout, spacing, alignment, truncation, contrast, symbols, wording and whether it looks
+finished. The report has one `Design check: <deliverable>` step per UI deliverable, with both
+screenshots and the design it compared with; a visible mismatch fails it, even when every
+structural check passes. On macOS the app is launched once per appearance with `qa_launch_app`'s
+`appearance`, and a status-bar menu is opened on screen with `qa_open_status_menu` and judged from
+its screenshot. Android switches with `qa_android_dark_mode`; the web playbook uses the page's theme
+control or the browser's emulated `prefers-color-scheme`, and says when dark is not applicable.
+
 After the walkthrough at the app's default size, the playbook runs a **wide pass**, because some
 layout crashes only happen in wide windows: `qa_resize_window` makes the main window at least
 1400×900 pt, then on each page the PR changes, and on its inspector or side panel, the agent waits 30

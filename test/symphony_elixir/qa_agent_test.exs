@@ -708,6 +708,56 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "No HTML screens or image files are attached to this ticket or its parent"
     end
 
+    test "lists QA's three jobs in order, with a Design check per UI deliverable in light and dark" do
+      prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
+
+      [_before, jobs] = String.split(prompt, "QA's three jobs, in this order: ", parts: 2)
+      [jobs, _playbooks] = String.split(jobs, "Playbooks to follow:", parts: 2)
+
+      assert jobs =~ ~r/^1\. Walk the walkthrough steps marked `Proved by: QA`.* 2\. Judge every UI deliverable by sight\..* 3\. The wide pass/
+      assert jobs =~ "Screenshot it in the real app in light and in dark, at the sizes the design names"
+      assert jobs =~ "layout, spacing, alignment, truncation, contrast, symbols, wording, and whether it looks finished"
+      assert jobs =~ "Report one step per UI deliverable named `Design check: <deliverable>`, with both screenshots in `evidence`"
+      assert jobs =~ "the design it compared with"
+      assert jobs =~ "When no Screens cover the deliverable, judge it against `docs/design/design-system.md` alone and say so"
+      assert jobs =~ "A visible mismatch is `fail`, even when every structural check passes"
+      assert prompt =~ "A `Design check` whose screenshots visibly differ from the design is such a defect."
+
+      epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil)
+      assert epic =~ "QA's three jobs, in this order:"
+    end
+
+    test "each UI playbook runs the Design check in light and dark between the walkthrough and its other checks" do
+      macos_app = %{build: "make app", app: "build/App.app"}
+      android_app = %{build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
+      config = %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{macos_app: macos_app, android_app: android_app}}
+      playbooks = Map.new(Selection.playbooks(config, dev_server?: true), &{&1.kind, String.replace(&1.prompt, ~r/\s+/, " ")})
+
+      for kind <- ["macos_app", "web", "android_app"] do
+        prompt = Map.fetch!(playbooks, kind)
+
+        assert prompt =~
+                 ~r/QA does three things, in this order: \(a\) the walkthrough steps marked `Proved by: QA`.*\(b\) the `Design check` of every UI deliverable, by sight, in light and dark.*\(c\)/
+
+        assert prompt =~ "named `Design check: <deliverable>`", "#{kind} playbook must name the Design check step"
+        assert prompt =~ "the design it compared with", "#{kind} playbook must name the design compared with"
+        assert prompt =~ "the design system alone", "#{kind} playbook must fall back to the design system"
+        assert prompt =~ ~r/A `Design check` whose light or dark screenshot visibly differs from the design .* is a failing step/
+      end
+
+      macos = Map.fetch!(playbooks, "macos_app")
+      assert macos =~ ~s(`qa_launch_app` with `appearance: "dark"`)
+      assert macos =~ ~s(do the same with `appearance: "light"`)
+      assert macos =~ "Judge the menu from that screenshot, not only from the tree"
+      assert macos =~ "`qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned"
+      assert macos =~ ~r/8\. \*\*Design check\.\*\*.* 9\. \*\*Wide pass\.\*\*/
+
+      assert Map.fetch!(playbooks, "android_app") =~ "Dark: `qa_android_dark_mode` `on`"
+      assert Map.fetch!(playbooks, "web") =~ "await page.emulateMedia({ colorScheme: 'dark' })"
+      assert Map.fetch!(playbooks, "web") =~ "dark is not applicable: judge light alone and say so in the step"
+      refute Map.fetch!(playbooks, "cli") =~ "Design check"
+    end
+
     test "carries the ticket's recorded decisions, which QA never fails the change for" do
       decision = SymphonyElixir.Decisions.entry("comment-1", ~D[2026-10-13], "Keep the old flag", "Drop the old flag here?", "Defer to TP-891")
       {:ok, description} = SymphonyElixir.Decisions.put("Adds `symphony check`.", [decision])
