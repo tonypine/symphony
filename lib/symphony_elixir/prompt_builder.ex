@@ -578,7 +578,7 @@ defmodule SymphonyElixir.PromptBuilder do
     prompt <> "\n\n" <> pr_conflict_section(pr_conflict)
   end
 
-  # The other open PRs that change this ticket's files (`PrReviewPoller.open_pr_overlap/2`), so the
+  # The other open PRs that change this ticket's files (`PrWatch.open_pr_overlap/2`), so the
   # agent can stack on one instead of meeting the conflict after it lands. Paths and URLs come from
   # GitHub: untrusted.
   defp append_open_pr_overlap(prompt, %{shared: [_ | _] = shared} = overlap) do

@@ -4,9 +4,9 @@ defmodule SymphonyElixir.CiState do
 
   A CI result reaches the store through two writers. A GitHub webhook delivery writes the coarse
   state it carries (`red` for a check that failed, `running` for a head that moved) straight into
-  the ticket's state record, so the board moves without waiting for a poll; the timed
-  `SymphonyElixir.CiPoller` reconciles with the authoritative rollup and is the only writer that
-  calls a head `green`. Both go through `record/6`, so the `CI green` / `CI red` / `CI running`
+  the ticket's state record, so the board moves without waiting for a poll; the PR and CI watcher
+  (`SymphonyElixir.PrWatch.Repo`) projects it from the facts it read of the rollup on every tick
+  and is the only writer that calls a head `green`. Both go through `record/6`, so the `CI green` / `CI red` / `CI running`
   labels on the ticket always match the store's current head (`docs/design/state-machine.md`
   §Attributes, §Board states).
 
@@ -60,7 +60,7 @@ defmodule SymphonyElixir.CiState do
 
   def record(_repo_key, _issue_id, _head_sha, _status, _at, _opts), do: :ok
 
-  @doc "The status `SymphonyElixir.CiPoller.ci_action/1` reads as the CI attribute of a head."
+  @doc "The CI attribute of a head whose checks `SymphonyElixir.CiPoller.ci_action/1` read."
   @spec status_for_action(term()) :: String.t() | nil
   def status_for_action(:success), do: @green
   def status_for_action(:pending), do: @running

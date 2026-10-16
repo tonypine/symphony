@@ -93,5 +93,51 @@ The facts are kept on the ticket's state record and listed under each ticket's `
 `/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
 limit marks the tickets it left unread `github: rate_limited` and waits for the reset.
 
-For now the watcher only gathers facts: no rule is applied, and the CI and PR review pollers still
-decide and act.
+Before deciding, the watcher completes the read with what it keeps between reads (`attempts` on the
+ticket's record): the CI Fix runs counted, the heads whose failed checks it reran, whether a rerun's
+checks have reported yet (a head whose rerun hasn't reported reads as running), since when a
+`Merging` head has been blocked by branch protection on green checks (the merge wait), and the last
+head Symphony put on a `Merging` PR (any other one is a person's push). In `Merging`, a failed
+`protected paths` check that the ticket's unlock decisions cover doesn't hold the head back.
+
+## What the watcher does
+
+Every read decides and applies the action (`SymphonyElixir.PrDecision.Apply`): Linear moves go
+through the transition guard, holds through the Needs Decision hold and the self-heal lane, GitHub
+calls through `SymphonyElixir.AutoMerge`. The record keeps the decision (its rule, reason, who a
+wait is on and what ends it) and the actions applied in the ticket's stay in its phase. An action is
+applied once per head and rule in a stay, so a repeated read never repeats a move, a rerun, an
+update-branch or a fix-ticket filing; one that fails is not recorded, and the next read decides
+again. The ticket's CI label (`CI green`, `CI red`, `CI running`) follows the facts.
+
+The CI and PR review pollers decide nothing: the CI poller keeps the head it last read for a landing
+agent's CI wait, and the PR review poller sends a ticket with reviewer comments back to work and
+cleans up after a merged or closed PR. The orchestrator starts a `Code Review` or `QA` run only on
+the decision `dispatch`, and, with auto-merge on, a `Merging` landing agent only on `land_agent`.
+
+Some rows are recorded without an action until a later ticket applies them: a missing PR (R6), a
+changed base (R7), a closed PR (R8), review comments (R13), stepping behind competing PRs (R15), a
+required check that never reports (R17), a check only a person clears outside `Merging` (R18) and a
+check red on the base (R23). So are the CI rows with `pull_requests.checks` off and the landing rows
+(and a conflict in `Merging`) with `pull_requests.auto_merge` off.
+
+### Fix runs and their limits
+
+A CI Fix run sent for a red head spends a **red** attempt, held against
+`pull_requests.checks.max_fix_attempts` (default 10). A run sent for a conflict spends a
+**conflict** attempt, against a fixed 3. A run never spends the other kind, and the run a ticket
+entered CI Fix for spends no second attempt while it works there. Both counts reset only once the
+PR is green **and** conflict-free: a conflicting PR keeps its last green checks, because GitHub runs
+no workflow on it while it conflicts.
+
+At the red backstop (R20) the watcher turns auto-merge off and hands the failing check to the
+self-heal lane, which files one fix ticket per failing check per repo (component `ci:<check>`) or
+reuses the open one, attaches each fix run's failing check and first error line, the PR and its head
+as evidence, links it as a blocker and holds the ticket on it, in place. No question is asked and
+the ticket doesn't move. The hold clears by itself once the fix ticket is terminal, the red count
+restarts, and the head gets CI Fix runs again. The same failure reaching the backstop again after its
+fix landed is the self-heal lane's own escalation to a person.
+
+A conflict back after its 3 fix runs with no open PR ahead of it goes to `Rework` (R15a), where a
+run can change as much as the conflict needs. A conflict while a PR that shares its files is ahead
+in the landing order waits for that one to land (R14a), auto-merge off in `Merging`.

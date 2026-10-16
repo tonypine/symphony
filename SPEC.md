@@ -2009,7 +2009,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.checks.enabled`: boolean, default `false`
 - `pull_requests.checks.log_excerpt_lines`: integer, default `200`
 - `pull_requests.checks.retry_failed_once`: boolean, default `true`
-- `pull_requests.checks.max_fix_attempts`: integer, default `3`
+- `pull_requests.checks.max_fix_attempts`: integer, default `10`
 - `dashboard.port`: non-negative integer or null
 - `dashboard.host`: string, default `127.0.0.1`
 - `issue_gate.enabled`: boolean, default `false`
@@ -2294,34 +2294,18 @@ The poller:
   longer present), falls back to the recorded addressed-at timestamp so already-addressed comments
   are not re-surfaced as fresh rework, and retains a bounded ledger of replied comment ids so an
   already-answered comment is not replied to twice;
-- detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
-  `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
-  and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
-  issue parked for a person (outside `tracker.active_states` with a label that asks for one, as
-  for a red head in the CI poller), or on an issue in none of
-  `tracker.active_states`, the review states and `Merging` (`Backlog`, say,
-  label or not), is
-  recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
-  and no retry used, until a person moves the issue on or removes the label;
-- orders the landing of tracked PRs that change the same files (the landing order below): a
-  conflict on a PR that waits for another to land first is recorded as `conflict_waiting_to_land`
-  with no state move, conflict-fix run, auto-merge change or retry used, and is no pending conflict
-  for an agent's prompt; the first poll after that PR lands or stops sharing files with it takes
-  the conflict path above, so the follower merges the base branch once, with the leader's changes;
-- moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
-  the merge/landing workflow through the normal run path;
-- removes tracked workspaces and durable review records when PRs merge, close, or remain idle
-  beyond `pull_requests.review_comments.stale_after_days`; while the run store still reports a
+- leaves a PR that conflicts with its base branch, a red head, auto-merge and the landing to the PR
+  and CI watcher (Section 7.5.1): it decides and acts on none of them;
+- removes tracked workspaces and durable review records when PRs merge or close, and moves a
+  merged PR's ticket outside `Merging` with started sub-issues open to the waiting state (a
+  `Merging` ticket is the watcher's to close out); while the run store still reports a
   `running` agent run for the issue, it defers that cleanup to a later poll so a live turn (for
   example the agent merging its own PR) keeps its workspace until the run ends.
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
-  repository route, preserving the same retry, dispatch, and escalation behavior used for the
-  primary repository. It also tracks PRs of issues in the `Code Review`, `QA` and `Rework`
-  states, whose runs dispatch only on a green head and whose red heads enter `CI Fix`. Once the
-  CI-fix runs are used up (`ci.max_retries`), the issue stays in its phase on a `Needs Decision`
-  hold whose confirmation sends it to `Rework`. It also tracks PRs of issues in
-  `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
-  CI-failure dispatch.
+  repository route, of issues in the Code Review, QA, `Rework` and `Merging` states, and keeps the
+  head it last observed, its conclusion, its failed checks and whether it may land, for a held
+  landing run (below). It decides nothing: the PR and CI watcher reruns a red head, sends it to
+  `CI Fix` and files the red backstop's fix ticket.
 - reads a PR head as green only once its CI has finished, not merely when every reported check
   passed: a GitHub Actions workflow run that reported a check for the head and has not completed
   (a rerun's new attempt, whose failed checks leave the rollup until it queues them, or a job with
@@ -2355,130 +2339,72 @@ The poller:
   <branch>; waiting on every check`), the landing waits on every check as above. The poller
   records the head it last saw ready to land for each `Merging` issue, and the orchestrator
   releases a held landing run on it as on a green head.
-- times how long a `Merging` head has waited on its checks: consecutive landing reads of the same
-  head that are still waiting keep the wait, and a new head, a failed check, a ready head or a read
-  outside `Merging` ends it. After 15 minutes, a head whose base branch was read as requiring no
-  check, with none failed, no rerun of a failed job starting and at least one check passed, is
-  ready to land without the checks still pending: the landing run's CI wait and the merge tool
-  read that mark for the same head, and a check that failed since still holds it. The first time a
-  wait lets a head past, the poller logs `Landing without the checks still pending after <n> min in
-  Merging; the base branch requires none` with the skipped checks, and comments once on the issue
-  naming them. A base branch whose required checks can't be read never takes this path.
 
-Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
+#### 7.5.1 PR and CI watcher
 
-- The PR review poller also tracks PRs of issues in `Merging`, including ones with no run on record
-  (the record then has no workspace, and cleanup removes none). Each repository's poll tracks only
-  its own `Merging` issues (an issue with no repository belongs to the primary one). The orchestrator MUST NOT dispatch a
-  `Merging` issue with an attached PR while auto-merge owns it; it takes no slot and no agent.
-- A move into `Merging` that Symphony makes MUST ask the poller to poll at once rather than wait
-  for its timer. On a poll of an open `Merging` PR whose `mergeStateStatus` is `CLEAN` and which
-  doesn't show auto-merge on yet, the poller MUST first read its checks: at the observed head with
-  every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or none), it squash-merges it directly with the
-  `mergePullRequest` fields below and turns nothing on; any other reading, or a merge GitHub
-  refuses, turns auto-merge on as below.
-- On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
-  `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,
-  `expectedHeadOid` = the observed head) at most once per head, and not at all when GitHub already
-  shows auto-merge on. When GitHub refuses (the PR can already merge, the branch has no protection,
-  the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
-  takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
-  (or `UNSTABLE` with a stale check read as finished, above)
-  and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
-  with the same `mergePullRequest` fields. The poller logs which path it took. A refusal because
-  the head moved since the poller read it (`expected head oid does not match`) is not a refusal:
-  the poller MUST keep the state and try again with the head the next poll reads, and fall back
-  only after 3 such refusals in a row.
-- When `mergeStateStatus` is `BEHIND`, the poller MUST call
-  `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
-  head. A failed call other than a conflict is retried on the next poll. A PR that waits for
-  another to land first (the landing order below) is not updated: its state is `waiting_to_land`
-  ("`abc1234` is behind the base branch and waits for MT-1 to land (shares 2 files)") until that
-  PR lands or leaves its way, and the first poll after that updates it once.
-- Only a `Merging` PR is updated. A `BEHIND` PR in the Code Review state, the QA state or `Rework`
-  MUST NOT get an update-branch: an agent run syncs its own branch with the base, and a Code Review
-  or QA run starts only on a green head, which an update on every base merge would keep restarting.
-- A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
-  `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
-  conflict context, and the fix returns through review. The approval covered the diff before the
-  conflict, so before that move the poller MUST turn auto-merge off (GraphQL
-  `disablePullRequestAutoMerge`) when GitHub shows it on or the poller turned it on for this head
-  on the same poll. It records `disabled_at` in the PR review record, logs it, writes an
-  `auto_merge_disabled` audit event with `reason: "conflict"`, and comments on the issue why. While
-  GitHub refuses, the poll records an error and the issue stays in `Merging` (a conflicting PR
-  can't merge) until a later poll turns it off. Only a fresh move to `Merging` turns auto-merge on
-  again, even when the head didn't change.
-- A red head takes the CI poller's CI-failure path. A flaky-retry rerun of the same commit pushes
-  no code, so auto-merge stays on and GitHub merges the PR if the rerun is green. A CI-fix
-  dispatch can push code the approval never covered, so it gets the same review gate as a
-  conflict: before the CI poller moves a `Merging` issue (with auto-merge on for its repository)
-  to `In Progress`, it MUST turn auto-merge off when GitHub shows it on (`autoMergeRequest` in the
-  CI read), log it, write an `auto_merge_disabled` audit event with `reason: "ci_failure"`, and
-  comment on the issue why. It also records a `ci_failure` hold in the PR review record
-  (`disabled_at` when it turned auto-merge off, `enabled_head_sha` cleared), even when auto-merge
-  was already off. While held, the PR poller MUST NOT turn auto-merge on, at any head; it drops
-  the hold once it sees the issue out of `Merging`, so only a fresh move to `Merging` turns
-  auto-merge on again, even when the head didn't change. While GitHub refuses to turn it off or
-  the hold can't be stored, the poll records an error and the dispatch waits for the next poll (a
-  red head can't merge). Escalation (`ci.max_retries` reached) starts no fix run and leaves
-  auto-merge as it is.
-- A head on which the CI poller last saw a human-only check (`protected paths`) fail MUST NOT
-  land: the base branch doesn't require that check, so GitHub auto-merge would merge past it. The
-  poller MUST NOT turn auto-merge on, squash-merge or update the branch, and MUST turn auto-merge
-  off when it is on. Exception: the ticket's `PathUnlock` grants (a person's recorded decisions)
-  cover every protected path the PR changes, read with git in the ticket's workspace between the
-  PR's base and head commits as `mix protected_paths.check` reads them; a read that fails counts
-  as uncovered. A head the CI poller hasn't read yet keeps a waiting PR waiting. The state is
-  `protected_paths`. The first time in a `Merging` stay, the poller pauses the ticket in `Merging`
-  on a Needs Decision hold whose confirmation sends it to `Rework`; a request that can't be posted
-  is asked again on the next poll. Every poll checks again, and the PR lands as usual once the
-  check passes on the head or the grants cover the paths. The state is dropped when the ticket
-  leaves `Merging`.
-- When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
-  `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
-  for any merged PR. A failed transition is retried on the next poll.
-- When auto-merge can't be turned on and the PR isn't merged or clean and green (a red or pending
-  check, `UNSTABLE`, `BEHIND`, a permission error, the PR can't be read), or a squash merge fails, or the PR stays `BLOCKED` with
-  auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
-  error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
-  landing agent. The fallback lasts until the issue leaves `Merging`.
-- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `protected_paths`, `fallback`, `merged`) is kept in
-  the PR review record, logged on every change, and listed under `auto_merge` in
-  `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
-- When an issue leaves `Merging` for any state but `Done` (a person's move in Linear, or the
-  Director's `undo`) while its open PR is in the `enabled`, `updating_branch` or `merging` state,
-  the next poll MUST turn auto-merge off (GraphQL `disablePullRequestAutoMerge`) when GitHub shows
-  it on, so the PR doesn't merge without the approval. When it turned it off, the poller logs it,
-  writes an `auto_merge_disabled` audit event with `reason: "left_merging"`, and comments on the
-  issue why. Either way it then drops the `auto_merge` state, so the next move to `Merging` turns
-  auto-merge on again, even at the same head. While GitHub refuses, the poll records an error and
-  the next poll tries again. An issue moved to `Done`, or a PR already merged or closed, keeps it.
+With `pull_requests.enabled`, one `PrWatch.Repo` per repository reads, every poll interval, every
+ticket of the repository in the Code Review, QA, `Rework`, `CI Fix` or `Merging` state, and in
+`In Progress` once it has a PR, with its PR in one GitHub query. For each it decides the one action
+its phase and PR facts call for (`PrDecision.decide/1`, the table in `docs/pr-ci-decisions.md`)
+and applies it (`PrDecision.Apply`, the only writer): Linear moves go through the transition guard,
+holds through the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`.
+
+- An action is applied at most once per head and rule in a stay in the phase (the phase a move of
+  the watcher put the ticket in starts a new stay), so a repeated poll never repeats a move, a
+  rerun, an update-branch or a fix-ticket filing. An action that fails is not recorded, and the
+  next poll decides again from fresh facts.
+- The ticket's state record keeps the facts, the decision (rule, kind, reason, who a wait is on and
+  what ends it), the actions applied in the stay, the attempts and what a `CI Fix` run's prompt
+  reads (the red head's failure, the conflict). `/api/v1/state` lists them under each watched
+  issue's `watch`. The ticket's CI label follows the facts.
+- A CI Fix run sent for a red head spends a red attempt, held against
+  `pull_requests.checks.max_fix_attempts` (default 10); one sent for a conflict spends a conflict
+  attempt, against a fixed 3. Both reset only when the PR is green and conflict-free. At the red
+  backstop the watcher turns auto-merge off and the self-heal lane files or reuses one fix ticket
+  for the failing check in the repo whose CI fails, links it as a blocker and holds the ticket on
+  it in place; the count restarts when that hold clears. A conflict back after 3 fix runs with no
+  PR ahead of it goes to `Rework`.
+- In `Merging`, with `pull_requests.auto_merge` on: a CLEAN, green PR is squash-merged at once; a
+  PR with checks running or branch protection holding it gets GitHub auto-merge (squash, the PR
+  title as `<title> (#<number>)` and its body, `expectedHeadOid` the read head) once per head; a
+  `BEHIND` PR gets one update-branch per head (`PUT .../update-branch` with `expected_head_sha`),
+  and the CI runs left on the head it replaced are cancelled; a PR `BLOCKED` on a green head past
+  `checks.landing_wait_timeout_ms` goes to the landing agent, with a comment; a merged PR moves
+  the ticket to `Done`, or to the waiting state with started sub-issues open. Auto-merge goes off
+  before a `CI Fix` run, a fix-ticket hold, a conflict wait or a person's question, and whenever the
+  ticket is outside `Merging`. A head a person pushed in `Merging` sends the ticket back to the
+  Code Review state. A `protected paths` check that only a person clears asks a person once per
+  stay unless the ticket's `PathUnlock` grants cover every protected path the PR changes. Each
+  turn-off writes an `auto_merge_disabled` audit event and a ticket comment.
+- The orchestrator starts a Code Review or QA run only on the watcher's decision `dispatch`, and,
+  with auto-merge on, a `Merging` landing agent only on `land_agent` (or when the ticket has no
+  PR). `/api/v1/state` lists the `Merging` PRs under `auto_merge`.
 
 Landing order of PRs that change the same files:
 
-- On each poll of a repository with two or more tracked PRs, the PR review poller reads the
-  repository's open PRs and the paths each changes in one GraphQL query (the 100 most recently
-  updated, the first 100 paths of each), so the files follow every head. When the read fails it
-  logs it and keeps the paths each PR review record last had. A record keeps its overlap data under
-  `landing`: the paths, the head they were read at, the state the ticket was last read in and since
-  when, when its state or head last moved, and the PR it waits for and since when. It is written
-  only when it changes, and dropped for a PR that is no longer open.
-- Two tracked PRs overlap when they share a path; the weight of the overlap is the number of paths
-  they share. Tracked PRs land in this order: the ticket furthest along first (`Merging`, then the
-  QA state, then the Code Review state, then `Rework`, then any other state), then the one longest
-  in its state, then the lower PR number. A ticket whose state the poll didn't read (in `CI Fix`, for
-  example) keeps the state it was last read in.
+- On each poll of a repository with two or more watched PRs, the watcher reads the repository's
+  open PRs and the paths each changes in one GraphQL query (the 100 most recently updated, the
+  first 100 paths of each), so the files follow every head. When the read fails it logs it and
+  keeps the paths and wait each record last had. A ticket's record keeps its overlap data under
+  `landing`: the paths, the head they were read at, the state the ticket was read in and since
+  when, when its state or head last moved, and the PR it waits for and since when.
+- Two watched PRs overlap when they share a path; the weight of the overlap is the number of paths
+  they share. Watched PRs land in this order: a PR that conflicts with the base branch after the
+  ones that don't (it can't land before a fix run), then the ticket furthest along first
+  (`Merging`, then the QA state, then the Code Review state, then `Rework`, then any other state; a
+  ticket in `CI Fix` ranks by the state its stay returns to), then the one longest in its state,
+  then the lower PR number.
 - A PR waits for the first PR above it in that order that shares a path with it and leads: a PR
   on a hold (any kind) or whose state and head haven't moved for two hours doesn't lead, and a
   PR that waits counts as moving on every poll it waits. A forced ticket never waits. The order is
   total, so a group of overlapping PRs never deadlocks.
 - A waiting PR keeps working (review, QA, rework); only its sync with the base branch waits: no
-  conflict-fix run (above) and no update-branch (auto-merge, above).
+  conflict-fix run and no update-branch.
 - `/api/v1/state` lists every waiting PR under `landing_waits`: `issue_id`, `issue_identifier`,
   `pull_request_url`, `state`, `waits_for` (`issue_id`, `issue_identifier`, `pull_request_url`,
-  `state`), `shared_files` (the count), `files` (the first 10 shared paths), `reason` (`waits for
-  MT-1 to land (shares 2 files)`) and `since`.
-- The agent's first-turn prompt lists the other open PRs the poller holds, with their state, URL
+  `state`), `shared_files` (the count), `files` (the first 10 shared paths), `reason` (the
+  watcher's, `Lands after MT-1: they change the same files (lib/a.ex)`) and `since`.
+- The agent's first-turn prompt lists the other open PRs the watcher holds, with their state, URL
   and paths: the ones that share paths with the ticket's own PR (and the one it waits for), or,
   for a ticket with no PR in the map yet, every one, so the agent can stack its branch on one
   instead of meeting the conflict after it lands. The paths are GitHub's, so they are sanitized and
@@ -2491,14 +2417,14 @@ without dispatching it. The hold ends, and the landing agent is dispatched again
 poll, when the CI poller has observed that same head SHA with green checks, or when
 `pull_requests.checks.landing_wait_timeout_ms` has passed. The hold is dropped without a landing
 dispatch when the issue leaves `Merging` (for example the CI-failure dispatch moves it to
-`In Progress`). Holds live in orchestrator memory; after a restart the landing agent runs again and
+`CI Fix`). Holds live in orchestrator memory; after a restart the landing agent runs again and
 re-establishes the hold if checks are still pending.
 
 The orchestrator continues to own active-state dispatch, retry, run-store run records, and
-dashboard-visible agent execution. The PR review poller owns only polling-mode GitHub polling,
-state transitions, and tracked PR cleanup. Pending review-comment, merge-conflict, and CI-failure
-prompt context lookups use the issue's repository scope when one is known, and otherwise search the
-configured repositories.
+dashboard-visible agent execution. The PR review poller owns review-comment polling, its rework
+transitions and tracked PR cleanup; the PR and CI watcher owns every CI and merge decision. Pending
+review-comment, merge-conflict, and CI-failure prompt context lookups use the issue's repository
+scope when one is known, and otherwise search the configured repositories.
 
 ### 7.6 Ticket State Machine
 
