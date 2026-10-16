@@ -4,11 +4,10 @@ defmodule SymphonyElixir.ProtectedPathsGate do
 
   The `protected paths` CI job (`mix protected_paths.check`) fails a pull request whose own commits
   change an agent-protected path, but the base branch doesn't require it, so GitHub auto-merge
-  would merge past it. `SymphonyElixir.AutoMerge` asks `check/4` before it turns auto-merge on,
-  squash-merges the PR or updates its branch. A head on which the CI poller saw a human-only check
-  fail (`SymphonyElixir.CiPoller.human_only_check?/1`) lands only when the ticket's
+  would merge past it. The PR and CI watcher asks `check/4` when that check is the only red one on a
+  `Merging` head (`SymphonyElixir.PrWatch.Repo`): the head lands only when the ticket's
   `SymphonyElixir.PathUnlock` grants, a person's decisions, cover every protected path the pull
-  request changes.
+  request changes; until then it waits for a person (rule R18).
 
   The changed paths are read with git in the ticket's workspace as the CI job reads them
   (`SymphonyElixir.AgentTools.ProtectedPaths.verify/5`, with the granted paths left out), between
@@ -17,39 +16,30 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   """
 
   alias SymphonyElixir.AgentTools.ProtectedPaths
-  alias SymphonyElixir.{CiPoller, PathUnlock, Workspace}
+  alias SymphonyElixir.{PathUnlock, Workspace}
   alias SymphonyElixir.Repo.Fetcher
 
-  @typedoc """
-  `:ok` to land, `:unobserved` while the CI poller hasn't read the head yet, `{:blocked, reason}` to
-  hold the landing back.
-  """
-  @type result :: :ok | :unobserved | {:blocked, String.t()}
+  @typedoc "`:ok` to land, `{:blocked, reason}` to hold the landing back."
+  @type result :: :ok | {:blocked, String.t()}
 
   @doc """
-  Whether the PR at `activity`'s head (`head_ref_oid`, `base_ref_oid`) may land. `record` is its PR
-  review record (`issue_id`, `repo_key`, `workspace_path`), `issue` the ticket as this poll read it,
-  or nil when it didn't. `opts[:git]` overrides the git runner (tests): it is called as
-  `git.(args, cwd)` and returns `{output, status}`.
+  Whether the PR may land with `failed`, the names of the human-only checks that failed on its head.
+  `pr` gives the ticket's `workspace_path` and the PR's `base_sha` and `head_sha`; `issue` is the
+  ticket as the watcher read it, or nil. `opts[:git]` overrides the git runner (tests): it is called
+  as `git.(args, cwd)` and returns `{output, status}`.
   """
-  @spec check(map(), map(), map() | nil, keyword()) :: result()
-  def check(record, activity, issue, opts \\ []) do
-    head = Map.get(activity, :head_ref_oid)
+  @spec check([String.t()], map(), map() | nil, keyword()) :: result()
+  def check(failed, pr, issue, opts \\ [])
+  def check([], _pr, _issue, _opts), do: :ok
+  def check(failed, pr, issue, opts), do: covered(pr, issue, Enum.join(failed, ", "), opts)
 
-    case CiPoller.human_only_failures(Map.get(record, :issue_id), head, repo_opts(Map.get(record, :repo_key))) do
-      :unobserved -> :unobserved
-      {:observed, []} -> :ok
-      {:observed, failed} -> covered(record, activity, issue, Enum.map_join(failed, ", ", &Map.get(&1, :name)), opts)
-    end
-  end
-
-  defp covered(record, activity, issue, names, opts) do
+  defp covered(pr, issue, names, opts) do
     case granted_paths(issue) do
       [] ->
         {:blocked, "#{names} failed and no decision on the ticket unlocks the protected paths the PR changes"}
 
       granted ->
-        case uncovered(record, activity, granted, Keyword.get(opts, :git, &default_git/2)) do
+        case uncovered(pr, granted, Keyword.get(opts, :git, &default_git/2)) do
           {:ok, []} -> :ok
           {:ok, paths} -> {:blocked, "#{names} failed and no decision on the ticket unlocks #{Enum.join(paths, ", ")}"}
           {:error, reason} -> {:blocked, "#{names} failed and the protected paths the PR changes couldn't be read: #{reason}"}
@@ -60,10 +50,10 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   defp granted_paths(nil), do: []
   defp granted_paths(issue), do: issue |> PathUnlock.grants() |> PathUnlock.paths()
 
-  defp uncovered(record, activity, granted, git) do
-    workspace = Map.get(record, :workspace_path)
-    base = Map.get(activity, :base_ref_oid)
-    head = Map.get(activity, :head_ref_oid)
+  defp uncovered(pr, granted, git) do
+    workspace = Map.get(pr, :workspace_path)
+    base = Map.get(pr, :base_sha)
+    head = Map.get(pr, :head_sha)
 
     cond do
       not (is_binary(workspace) and File.dir?(workspace)) -> {:error, "the ticket has no workspace"}
@@ -119,7 +109,4 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   end
 
   defp default_git(args, cwd), do: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
-
-  defp repo_opts(repo_key) when is_binary(repo_key) and repo_key != "", do: [repo_key: repo_key]
-  defp repo_opts(_repo_key), do: []
 end

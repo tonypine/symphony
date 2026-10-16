@@ -3,20 +3,20 @@ defmodule SymphonyElixir.LandingOrder do
   The order in which tracked pull requests that change the same files land.
 
   When several open PRs edit the same files, each merge reopens a conflict on the others, and each
-  of them then pays another conflict fix, another CI run and often another review. So the PR
-  review poller keeps an overlap map: on every poll it reads the repository's open PRs and the
-  files each changes (`PullRequest.list_open_pull_requests/2`, one GraphQL query, so the files
-  follow the head), and keeps the last files it read when that read fails. Two tracked PRs overlap
-  when they share a file; the weight of the overlap is the number of files they share.
+  of them then pays another conflict fix, another CI run and often another review. So the PR and
+  CI watcher (`SymphonyElixir.PrWatch.Repo`) keeps an overlap map: on every tick it reads the
+  repository's open PRs and the files each changes (`PullRequest.list_open_pull_requests/2`, one
+  GraphQL query, so the files follow the head), and keeps the last files it read when that read
+  fails. Two tracked PRs overlap when they share a file; the weight of the overlap is the number of
+  files they share.
 
   Tracked PRs land in this order: the one furthest along first (`Merging`, then the QA state, then
   the Code Review state, then `Rework`, then any other state), then the one longest in its state
   (for `Merging` and QA, the oldest approval), then the lower PR number. A PR waits for the first
-  PR in that order, above it, that shares a file with it: the poller sends it no conflict fix and
-  auto-merge doesn't update its branch until that PR lands or stops sharing files with it. The
-  next one then merges the base branch once, with all of the leader's changes. A PR keeps its
-  place while its ticket sits where the poller doesn't read it (`CI Fix`, say): the state it was
-  last read in counts.
+  PR in that order, above it, that shares a file with it (the fact `ahead`): the watcher sends it
+  no conflict fix (rule R14a) and doesn't update its branch (R28) until that PR lands or stops
+  sharing files with it. The next one then merges the base branch once, with all of the leader's
+  changes.
 
   A group never deadlocks:
 
@@ -25,16 +25,10 @@ defmodule SymphonyElixir.LandingOrder do
       for its own leader counts as moving, so it doesn't lose its place the moment that one lands;
     * a forced ticket (the force label, `symphony force`) never waits.
 
-  The poller keeps the result under `:landing` in each PR review record (see `t:landing/0`); the
-  state API lists the waits under `landing_waits`, and the agent's first prompt names the open PRs
-  that share files with its own.
+  The watcher keeps the result under `:landing` on each ticket's record (`TicketState.pr_watch`);
+  the state API lists the waits under `landing_waits`, and the agent's first prompt names the open
+  PRs that share files with its own (`SymphonyElixir.PrWatch.open_pr_overlap/2`).
   """
-
-  require Logger
-
-  alias SymphonyElixir.GitHub.PullRequest
-  alias SymphonyElixir.Hold
-  alias SymphonyElixir.Linear.Issue
 
   @idle_ms 2 * 60 * 60 * 1000
   @listed_files 10
@@ -51,20 +45,6 @@ defmodule SymphonyElixir.LandingOrder do
           files: [String.t()]
         }
 
-  @typedoc """
-  What the poller keeps for a tracked PR: the files it changes at `head_sha`, the state it was last
-  read in and since when, when its state or head last moved, and the PR it waits for.
-  """
-  @type landing :: %{
-          files: [String.t()],
-          head_sha: String.t() | nil,
-          state: String.t() | nil,
-          state_since: DateTime.t(),
-          progress_at: DateTime.t(),
-          waits_for: wait() | nil,
-          waits_since: DateTime.t() | nil
-        }
-
   @typedoc "A tracked PR in the overlap map."
   @type member :: %{
           required(:issue_id) => String.t(),
@@ -79,26 +59,6 @@ defmodule SymphonyElixir.LandingOrder do
           optional(:held) => boolean(),
           optional(:forced) => boolean()
         }
-
-  @doc """
-  The landing of every PR review record in `reviews`, in the same order: `{record, landing}`, with
-  nil for a record whose PR is not in the overlap map (no PR, a PR no longer open, or the map is off
-  because `opts[:github]` can't list open PRs or fewer than two records have a PR). `issues` are the
-  issues this poll read, for the state, the force label and the repo of each record.
-  """
-  @spec refresh([map()], [Issue.t()], map(), keyword(), DateTime.t()) :: [{map(), landing() | nil}]
-  def refresh(reviews, issues, settings, opts, %DateTime{} = now) do
-    issues_by_id = Map.new(issues, &{&1.id, &1})
-    pulls = open_pull_requests(reviews, opts)
-
-    candidates = Enum.map(reviews, &{&1, candidate(&1, pulls, issues_by_id, settings, opts, now)})
-    waits = candidates |> Enum.flat_map(fn {_record, member} -> List.wrap(member) end) |> waits(now)
-
-    Enum.map(candidates, fn
-      {record, nil} -> {record, nil}
-      {record, member} -> {record, landing(record, member, Map.get(waits, member.issue_id), now)}
-    end)
-  end
 
   @doc """
   The PR each member waits for, by issue id; a member that waits for none is left out. Pure: the
@@ -174,111 +134,6 @@ defmodule SymphonyElixir.LandingOrder do
   end
 
   defp wait_name(wait), do: Map.get(wait, :issue_identifier) || Map.get(wait, :pr_url) || wait.issue_id
-
-  # Open PRs by number, `:stale` when the read failed (each record keeps the files it last had), or
-  # `:off` when there is nothing to order.
-  defp open_pull_requests(reviews, opts) do
-    github = Keyword.get(opts, :github, PullRequest)
-
-    case Enum.filter(reviews, &is_integer(pr_number(Map.get(&1, :pr_url)))) do
-      [first, _second | _rest] ->
-        if Code.ensure_loaded?(github) and function_exported?(github, :list_open_pull_requests, 2),
-          do: read_open_pull_requests(github, first),
-          else: :off
-
-      _fewer ->
-        :off
-    end
-  end
-
-  defp read_open_pull_requests(github, record) do
-    case github.list_open_pull_requests(Map.get(record, :pr_url), cwd: Map.get(record, :workspace_path)) do
-      {:ok, pulls} ->
-        {:ok, for(%{number: number} = pull when is_integer(number) <- pulls, into: %{}, do: {number, pull})}
-
-      {:error, reason} ->
-        Logger.warning("Landing order: reading the open pull requests failed; keeping the files last read: #{inspect(reason)}")
-        :stale
-    end
-  end
-
-  defp candidate(_record, :off, _issues_by_id, _settings, _opts, _now), do: nil
-
-  defp candidate(record, pulls, issues_by_id, settings, opts, now) do
-    previous = previous_landing(record)
-
-    with {files, head_sha} <- files_and_head(record, previous, pulls) do
-      issue = Map.get(issues_by_id, Map.get(record, :issue_id))
-      state = issue_state(issue) || Map.get(previous || %{}, :state)
-      same_state? = previous != nil and previous.state == state
-      moved? = not same_state? or previous.head_sha != head_sha
-
-      %{
-        issue_id: Map.get(record, :issue_id),
-        issue_identifier: Map.get(record, :issue_identifier),
-        pr_url: Map.get(record, :pr_url),
-        pr_number: pr_number(Map.get(record, :pr_url)),
-        state: state,
-        head_sha: head_sha,
-        files: files,
-        rank: rank(state, settings),
-        state_since: if(same_state?, do: previous.state_since, else: now),
-        progress_at: if(moved?, do: now, else: previous.progress_at),
-        held: held?(record, issue, opts),
-        forced: issue != nil and Issue.forced?(issue, settings)
-      }
-    end
-  end
-
-  defp files_and_head(record, _previous, {:ok, pulls}) do
-    case Map.get(pulls, pr_number(Map.get(record, :pr_url))) do
-      %{files: files} = pull when is_list(files) -> {files, Map.get(pull, :head_sha)}
-      _not_open -> nil
-    end
-  end
-
-  defp files_and_head(_record, %{files: files} = previous, :stale), do: {files, previous.head_sha}
-  defp files_and_head(_record, _previous, :stale), do: nil
-
-  defp landing(record, member, wait, now) do
-    previous = previous_landing(record)
-    same_wait? = wait != nil and match?(%{waits_for: %{issue_id: id}} when id == wait.issue_id, previous)
-
-    %{
-      files: member.files,
-      head_sha: member.head_sha,
-      state: member.state,
-      state_since: member.state_since,
-      # Waiting for its own leader is not idling: it must not lose its place when that one lands.
-      progress_at: if(wait, do: now, else: member.progress_at),
-      waits_for: wait,
-      waits_since: if(same_wait?, do: previous.waits_since, else: wait && now)
-    }
-  end
-
-  defp previous_landing(record) do
-    case Map.get(record, :landing) do
-      %{files: files, state_since: %DateTime{}, progress_at: %DateTime{}} = landing when is_list(files) -> landing
-      _none -> nil
-    end
-  end
-
-  defp held?(record, issue, opts) do
-    repo_key = Map.get(record, :repo_key) || Keyword.get(opts, :repo_key) || (issue && issue.repo_key)
-    is_binary(repo_key) and Hold.held_any?(repo_key, Map.get(record, :issue_id))
-  end
-
-  defp issue_state(%Issue{state: state}) when is_binary(state), do: state
-  defp issue_state(_issue), do: nil
-
-  defp pr_number(url) when is_binary(url) do
-    case Regex.run(~r{/pull/(\d+)}, url) do
-      [_match, number] -> String.to_integer(number)
-      nil -> nil
-    end
-  end
-
-  defp pr_number(_url), do: nil
 
   defp same_state?(left, right) when is_binary(right), do: normalize(left) == normalize(right)
 

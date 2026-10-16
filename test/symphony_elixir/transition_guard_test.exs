@@ -79,6 +79,8 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
                %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
                %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
+               %{signal: :person_push, from: ["Merging"], to: :code_review_state},
+               %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
                %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
                %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
                %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}

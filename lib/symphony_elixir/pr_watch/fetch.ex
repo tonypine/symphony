@@ -14,13 +14,14 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   `facts/2` turns a read and what Symphony knows of the ticket into
   `SymphonyElixir.PrDecision.Facts`. It is pure. The counts of fix runs, the rerun flag and the
-  merge wait keep their defaults: `PrWatch.Attempts` fills them when the watcher starts deciding.
-  Nothing here writes to GitHub.
+  merge wait come from the ticket, as `SymphonyElixir.PrWatch.Attempts` keeps them. The read also
+  carries what acting on the PR needs (its node id, title and body, the failed checks' runs), for
+  `SymphonyElixir.PrDecision.Apply`. Nothing here writes to GitHub.
   """
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, PrDecision.Facts}
+  alias SymphonyElixir.{CiPoller, PrDecision.Facts, PrWatch}
   alias SymphonyElixir.GitHub.PullRequest
 
   @base_runs_limit 30
@@ -30,7 +31,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     repository(owner: $owner, name: $name) {
       defaultBranchRef { name }
       pullRequest(number: $number) {
-        number url state isDraft merged baseRefName headRefName headRefOid mergeable mergeStateStatus reviewDecision
+        id number url title body state isDraft merged baseRefName baseRefOid headRefName headRefOid mergeable mergeStateStatus reviewDecision
         autoMergeRequest { enabledAt }
         reviewThreads(first: 100) { nodes { isResolved isOutdated } }
         commits(last: 1) {
@@ -74,18 +75,34 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           missing_checks: [String.t()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
           failing_check: String.t() | nil,
+          failed_checks: [check()],
+          check_names: [String.t()],
+          pr_node_id: String.t() | nil,
+          pr_title: String.t() | nil,
+          pr_description: String.t() | nil,
+          head_ref: String.t() | nil,
+          base_sha: String.t() | nil,
           rate_limit: rate_limit(),
           required: {String.t(), [String.t()]} | nil
         }
 
-  @typedoc "What Symphony knows of the ticket, beside its PR."
+  @typedoc "A failed check of the head: its name, the workflow run it belongs to and how it ended."
+  @type check :: %{name: String.t() | nil, run_id: String.t() | nil, workflow_name: String.t() | nil, conclusion: String.t() | nil}
+
+  @typedoc """
+  What Symphony knows of the ticket, beside its PR: its phase, holds and run, the landing order's
+  `ahead`, and the counts `SymphonyElixir.PrWatch.Attempts` keeps (`red_attempts`,
+  `conflict_attempts`, `rerun_done`, `fix_failures`, `landing_timed_out`), which keep their
+  defaults when absent.
+  """
   @type ticket :: %{
-          phase: Facts.phase(),
-          origin: Facts.phase() | nil,
-          hold: :none | :needs_decision | :blocked,
-          run: :none | :active,
-          max_red_attempts: pos_integer(),
-          ahead: [Facts.competitor()]
+          required(:phase) => Facts.phase(),
+          required(:origin) => Facts.phase() | nil,
+          required(:hold) => :none | :needs_decision | :blocked,
+          required(:run) => :none | :active,
+          required(:max_red_attempts) => pos_integer(),
+          required(:ahead) => [Facts.competitor()],
+          optional(atom()) => term()
         }
 
   @doc """
@@ -118,7 +135,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       end
 
     ticket
-    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead])
+    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead | PrWatch.Attempts.fact_keys()])
     |> Map.put(:origin, if(ticket.phase == :ci_fix, do: ticket.origin))
     |> Map.merge(pr_facts)
     |> Facts.new()
@@ -251,6 +268,13 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       missing_checks: [],
       red_kind: :failure,
       failing_check: nil,
+      failed_checks: [],
+      check_names: [],
+      pr_node_id: nil,
+      pr_title: nil,
+      pr_description: nil,
+      head_ref: nil,
+      base_sha: nil,
       rate_limit: rate_limit,
       required: nil
     }
@@ -278,6 +302,13 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       missing_checks: elem(ci, 1),
       red_kind: red_kind(elem(ci, 0), failing, base_ref, repo, opts),
       failing_check: failing |> Enum.map(& &1.name) |> List.first(),
+      failed_checks: Enum.map(failing, &Map.take(&1, [:name, :run_id, :workflow_name, :conclusion])),
+      check_names: checks |> Enum.map(& &1.name) |> Enum.uniq(),
+      pr_node_id: pull["id"],
+      pr_title: pull["title"],
+      pr_description: pull["body"],
+      head_ref: pull["headRefName"],
+      base_sha: pull["baseRefOid"],
       rate_limit: rate_limit,
       required: required
     }
