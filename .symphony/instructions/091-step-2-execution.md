@@ -1,5 +1,7 @@
 In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting either builds its control in the macOS app or names a sibling sub-ticket that does; that sibling has a `## User walkthrough` and is in the parent's plan, which the epic review checks.
 
+In this repository, a walkthrough step that judges the macOS app by sight in dark mode, or judges the look of the status-bar menu, is a `Proved by: QA` step: no test can judge it. It needs TP-1045's QA tools (`qa_launch_app`'s `appearance` argument, `qa_open_status_menu`). Until TP-1045 lands, a walkthrough asks QA for light mode only and has QA read the status-bar menu from the accessibility tree, as TP-972 and TP-983 do. A step that installs one signed build over another needs a signing key the QA build lacks: it is proved by `macos-e2e`'s update scenarios, never by QA.
+
 ## Step 2: Execution phase (Todo -> In Progress -> Code Review)
 
 1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
