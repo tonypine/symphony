@@ -53,6 +53,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Walkthrough
@@ -111,6 +112,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
           optional(:journey) => %{source: String.t(), text: String.t() | nil},
+          optional(:proofs) => [QaPreCheck.result()],
           optional(:design_files) => [Design.file()]
         }
   @type run_result :: %{result: result(), tokens: map()}
@@ -218,6 +220,7 @@ defmodule SymphonyElixir.QaAgent do
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{qa_jobs_section()}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -229,6 +232,7 @@ defmodule SymphonyElixir.QaAgent do
     - `pass`: every step you ran behaved as the ticket describes.
     - `fail`: at least one step shows a real defect in the change. List each defect in `findings`
       with the command or action, what you expected, and what happened, so #{fixer(job)} can fix it.
+      A `Design check` whose screenshots visibly differ from the design is such a defect.
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
 
@@ -403,7 +407,24 @@ defmodule SymphonyElixir.QaAgent do
 
   # Each walkthrough step names the one place that proves it (ADR 0003): a named automated test or
   # QA. QA links a named test's result instead of walking its step, and walks the rest; a step with
-  # no `Proved by:` is a QA step, so tickets written before the rule are walked as before.
+  # no `Proved by:` is a QA step, so tickets written before the rule are walked as before. In the QA
+  # state Symphony's pre-check (`SymphonyElixir.QaPreCheck`) has already confirmed each named test on
+  # the head before the agent starts, so the agent only links the results it is given.
+  defp proof_routing(%{proofs: [_ | _] = proofs} = job, journey) do
+    """
+    Each walkthrough step names the one place that proves it. Symphony confirmed every step a named
+    automated test proves before you started: its check passed on `#{job.sha}` and its test is in the
+    checkout. Do not walk those steps and do not read their checks again. Report each as its own step
+    with the status `pass`, named after the walkthrough step, with the result below in `details` and
+    the check run's URL in `evidence`. Walk every step that says `Proved by: QA` or names no proof.
+
+    Steps a named test proves (confirmed by Symphony, do not walk them):
+    #{Enum.map_join(proofs, "", &confirmed_line/1)}
+    Steps to walk (`Proved by: QA`, or no proof named):
+    #{step_lines(Enum.reject(Map.get(journey, :steps, []), &Walkthrough.named_test?/1), false)}\
+    """
+  end
+
   defp proof_routing(job, journey) do
     """
     Each walkthrough step names the one place that proves it. A step ending in
@@ -440,6 +461,10 @@ defmodule SymphonyElixir.QaAgent do
         #{step_lines(qa_steps, false)}
         """
     end
+  end
+
+  defp confirmed_line(%{step: step} = proof) do
+    "- #{step.number}. #{String.replace(step.text, ~r/\s+/, " ")} #{Walkthrough.proof_line(step)}: pass, #{QaPreCheck.linked(proof)}\n"
   end
 
   defp step_lines([], _proof?), do: "- none\n"
@@ -577,6 +602,29 @@ defmodule SymphonyElixir.QaAgent do
        arguments it lists them; the parent's are under `parentDocuments`), and the files below.
     2. `docs/design/design-system.md` and `docs/design/director-app-screens.md` in this worktree.
     #{design_files_text(Map.get(job, :design_files, []))}
+    """
+  end
+
+  # QA keeps the job no test can do (ADR 0003): the steps no test drives, a judgment by sight of
+  # every UI deliverable against its design, then the playbooks' checks of the running app. The
+  # playbooks say how each one switches between light and dark.
+  defp qa_jobs_section do
+    """
+    QA's three jobs, in this order:
+    1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
+    2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
+       menu the change adds or changes. Screenshot it in the real app in light and in dark, at the
+       sizes the design names (at the size it opens when the design names none), and compare both
+       with its design above: layout, spacing, alignment, truncation, contrast, symbols, wording,
+       and whether it looks finished. Report one step per UI deliverable named
+       `Design check: <deliverable>`, with both screenshots in `evidence`, and in `details` the
+       design it compared with (the Screens document or file and the screen in it). When no Screens
+       cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
+       `details`. When the playbook says an appearance cannot be switched, say so in `details`.
+       `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
+       structural check passes: name in `details` and `findings` what differs from which design,
+       with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
+    3. The wide pass and the other checks of the running app the playbooks ask for.
     """
   end
 

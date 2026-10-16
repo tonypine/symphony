@@ -720,7 +720,9 @@ The app checks the latest release at
 `https://api.github.com/repos/tonypine/symphony/releases/latest` at launch, in the background (see
 [How often the app checks](#how-often-the-app-checks)), and when you choose Check for Updates. The request
 carries no token. It sends the last response's `ETag` in `If-None-Match`, so an unchanged release answers 304
-Not Modified, which doesn't count against GitHub's rate limit of 60 unauthenticated requests an hour.
+Not Modified without the release body. Every request still counts against GitHub's rate limit of 60
+unauthenticated requests an hour from the Mac's address, a 304 included, and every other tool on the Mac that
+calls GitHub's API without a token shares that limit.
 
 A release counts only when it has `version.json` and the zip and `.sha256` that `version.json` names (see
 [docs/releasing.md](../docs/releasing.md)). The app compares `version.json` `build` with its own
@@ -738,19 +740,22 @@ is up to date (vX)" or why the check failed, for example GitHub's rate limit.
 ### How often the app checks
 
 - **Automatically when released** checks every **Check for releases every N minutes** in Settings: 5 by
-  default, 1 to 60. A stored value outside that range is moved into it when the app loads it, and a typed one
-  when the field commits, with the note "Between 1 and 60 minutes. 0 was changed to 1." in place of the
+  default, 2 to 60. Every 2 minutes is 30 checks an hour, half of GitHub's limit, which leaves the rest to Check
+  Now and other tools. A stored value outside that range is moved into it when the app loads it, and a typed one
+  when the field commits, with the note "Between 2 and 60 minutes. 1 was changed to 2." in place of the
   last-check line, once. The other modes check every 6 hours.
 - Saving Settings takes effect without a relaunch. Switching to Automatically when released, or changing its
   minutes, checks straight away and then on the new interval; switching to another mode goes back to every
   6 hours. Choosing Automatically when released in the picker also checks straight away, before Save, so the
   line shows what it finds.
-- A failed check, such as GitHub's rate limit, shows no alert and backs off to every 6 hours until a check
-  succeeds (Check Now or Check for Updates included), so the app doesn't pile up requests against the limit.
+- A failed check shows no alert. After a check that hit GitHub's rate limit (HTTP 403 or 429), the next one waits
+  until GitHub lifts the limit: `Retry-After` seconds, or else the `X-RateLimit-Reset` time, at most an hour, and
+  never sooner than the usual interval. Any other failure, such as a check that couldn't reach GitHub, retries at
+  the usual interval. Check Now and Check for Updates count too.
 - In Automatically when released, Settings shows the last check under the interval, with **Check Now**,
   which runs the same check as Check for Updates…: "● Checked 2 min ago: v0.0.1.42 is the newest release.",
   "Checking for a new release…" with a spinner while it checks, "▲ Couldn't check at 14:05: <reason>. Next
-  check in 6 hours." after a failure, and "Not checked yet." before the first check. After a check that found
+  check at 14:47." after a failure, and "Not checked yet." before the first check. After a check that found
   nothing new, the menu says "Up to date: v0.0.1.42, checked 2 min ago" under Check for Updates….
 - In [QA mode](#qa-mode), `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL` sets the seconds between checks in every mode
   instead.
@@ -1216,8 +1221,8 @@ Eight more variables, read only in QA mode:
   version is in QA mode too, with the same folders.
 - `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL=<seconds>` (a positive whole number) sets how often the app checks for
   a release in the background, in every update mode, in place of the mode's interval and **Check for releases
-  every N minutes**, so a test or the e2e harness sees a release within seconds. A failed check still backs off
-  to 6 hours until a check succeeds.
+  every N minutes**, so a test or the e2e harness sees a release within seconds. A check that hit the rate limit
+  still waits until the limit lifts, an hour when the 403 or 429 names no reset.
 - `SYMPHONY_QA_OPENROUTER_URL` points Settings' OpenRouter section (Test connection, the Models list) at a stub
   OpenRouter instead of `https://openrouter.ai`, so QA never needs a real key: the API base `symphony
   openrouter-stub` prints, such as `http://127.0.0.1:4100/api`. Only an `http` or `https` URL on a loopback host

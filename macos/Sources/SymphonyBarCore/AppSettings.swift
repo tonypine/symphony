@@ -15,8 +15,10 @@ public struct AppSettings: Equatable {
     /// Restart timeout used until the user picks one.
     public static let defaultRestartTimeoutMinutes = 30
 
-    /// Bounds for how often Automatically when released checks for a release, in minutes.
-    public static let releaseCheckMinutesRange = 1...60
+    /// Bounds for how often Automatically when released checks for a release, in minutes. Every 2 minutes is 30
+    /// checks an hour, half of `UpdateChecker.hourlyRateLimit`, which leaves the rest to Check Now and to other
+    /// tools on the same Mac.
+    public static let releaseCheckMinutesRange = 2...60
 
     /// Release check interval used until the user picks one.
     public static let defaultReleaseCheckMinutes = 5

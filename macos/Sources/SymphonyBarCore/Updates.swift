@@ -97,15 +97,21 @@ public enum UpdateCheckResult: Equatable {
     case available(Release)
     /// The running build is the latest release, or newer.
     case upToDate(Release)
-    /// The check failed; the message says why, for a check started by hand.
-    case failed(String)
+    /// The check failed; the message says why, for a check started by hand. `retryAt` is when GitHub lifts the
+    /// rate limit the check hit, nil for any other failure.
+    case failed(String, retryAt: Date? = nil)
 }
 
-/// Checks GitHub for the latest Symphony release. Unauthenticated, with `If-None-Match` so an unchanged
-/// release costs no rate limit.
+/// Checks GitHub for the latest Symphony release. Unauthenticated, so every request counts against GitHub's
+/// `hourlyRateLimit` for this Mac's address, shared with every other unauthenticated tool on it. That includes a
+/// 304 Not Modified to `If-None-Match`, which only saves downloading the unchanged release.
 public final class UpdateChecker {
     public static let latestReleaseURL = URL(string: "https://api.github.com/repos/tonypine/symphony/releases/latest")!
-    /// How often the app checks in the background outside Automatically when released, and after a failed check.
+    /// GitHub's limit on unauthenticated API requests from one address, per hour.
+    public static let hourlyRateLimit = 60
+    /// The longest GitHub's rate limit lasts: the limit resets at most an hour after it is reached.
+    public static let rateLimitWindow: TimeInterval = 60 * 60
+    /// How often the app checks in the background outside Automatically when released.
     public static let interval: TimeInterval = 6 * 60 * 60
     public static let timeout: TimeInterval = 30
     /// Name of the release asset that holds the version and build.
@@ -114,17 +120,20 @@ public final class UpdateChecker {
     private let transport: UpdateTransport
     private let url: URL
     private let userAgent: String
+    private let now: () -> Date
     /// The last release response's `ETag` and the release it described, reused on 304 Not Modified.
     private var cached: (etag: String, release: Release)?
 
     public init(
         transport: UpdateTransport = URLSessionUpdateTransport(),
         url: URL = UpdateChecker.latestReleaseURL,
-        userAgent: String = "Symphony-macOS"
+        userAgent: String = "Symphony-macOS",
+        now: @escaping () -> Date = Date.init
     ) {
         self.transport = transport
         self.url = url
         self.userAgent = userAgent
+        self.now = now
     }
 
     /// How often the app checks in the background in `mode`: every `releaseCheckMinutes`, moved into
@@ -148,7 +157,7 @@ public final class UpdateChecker {
         case let .success(release):
             return release.build > current.build ? .available(release) : .upToDate(release)
         case let .failure(failure):
-            return .failed(failure.message)
+            return .failed(failure.message, retryAt: failure.retryAt)
         }
     }
 
@@ -175,7 +184,7 @@ public final class UpdateChecker {
             if let release = cached?.release { return .success(release) }
             return .failure(.init("GitHub answered 304 Not Modified to a first request"))
         case 403, 429:
-            return .failure(.init("GitHub's rate limit is reached; try again later"))
+            return .failure(.init("GitHub's rate limit is reached; try again later", retryAt: rateLimitReset(response)))
         case 404:
             return .failure(.init("no Symphony release is published yet"))
         default:
@@ -219,6 +228,23 @@ public final class UpdateChecker {
         return .success(release)
     }
 
+    /// When GitHub lifts the rate limit a 403 or 429 reports: `Retry-After` seconds from now, else the
+    /// `X-RateLimit-Reset` time, kept within `rateLimitWindow` from now. Without either, `rateLimitWindow` from now.
+    private func rateLimitReset(_ response: HTTPURLResponse) -> Date {
+        let now = now()
+        let latest = now.addingTimeInterval(Self.rateLimitWindow)
+        func seconds(_ header: String) -> TimeInterval? {
+            response.value(forHTTPHeaderField: header).flatMap { TimeInterval($0.trimmingWhitespace()) }
+        }
+        if let retryAfter = seconds("Retry-After") {
+            return min(now.addingTimeInterval(max(retryAfter, 0)), latest)
+        }
+        if let reset = seconds("X-RateLimit-Reset") {
+            return min(max(Date(timeIntervalSince1970: reset), now), latest)
+        }
+        return latest
+    }
+
     private func assetRequest(_ url: URL) -> URLRequest {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: Self.timeout)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
@@ -237,9 +263,11 @@ public final class UpdateChecker {
 
     private struct CheckFailure: Error {
         let message: String
+        let retryAt: Date?
 
-        init(_ reason: String) {
+        init(_ reason: String, retryAt: Date? = nil) {
             message = UpdateChecker.failurePrefix + reason
+            self.retryAt = retryAt
         }
     }
 
@@ -401,7 +429,7 @@ public enum UpdateMenu {
             return nil
         case let .upToDate(release):
             return "Symphony is up to date (v\(release.version))"
-        case let .failed(message):
+        case let .failed(message, _):
             return message
         }
     }

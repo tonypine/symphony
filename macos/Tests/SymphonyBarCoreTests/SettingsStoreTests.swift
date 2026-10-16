@@ -27,7 +27,7 @@ final class SettingsStoreTests: XCTestCase {
     }
 
     func testAStoredReleaseCheckMinutesOutsideTheRangeIsClampedWhenLoaded() {
-        for (stored, loaded) in [(0, 1), (-3, 1), (1, 1), (60, 60), (61, 60), (1_000, 60)] {
+        for (stored, loaded) in [(0, 2), (-3, 2), (1, 2), (2, 2), (60, 60), (61, 60), (1_000, 60)] {
             let defaults = MemoryKeyValueStore()
             defaults.values[SettingsStore.Key.releaseCheckMinutes] = stored
 

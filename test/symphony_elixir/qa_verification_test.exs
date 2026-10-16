@@ -3,14 +3,17 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   alias SymphonyElixir.BlockedHold
   alias SymphonyElixir.CiFix
+  alias SymphonyElixir.CiWait
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Hold
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
+  alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaVerification
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketPullRequest
+  alias SymphonyElixir.TicketSignals
 
   @repo_key "repo-qa-verification"
   @issue_id "issue-qa-verification"
@@ -887,6 +890,163 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, [])
 
       assert {:error, {:qa_self_heal_failed, {:self_heal_hold_failed, :disk_full}}} = run(workspace, store: UnusedStore)
+    end
+  end
+
+  # The QA pre-check (`SymphonyElixir.QaPreCheck`) on a ticket whose walkthrough steps name tests.
+  describe "the QA pre-check of named tests" do
+    @run_url "https://github.com/acme/repo/actions/runs/555/job/1"
+
+    @named_walkthrough """
+    ## User walkthrough
+
+    1. Run `symphony check` → it passes. Proved by: `make-all`
+    2. Open the dashboard → it looks right. Proved by: QA
+    """
+
+    defp run_named(workspace, description, opts) do
+      QaVerification.run(
+        issue("QA", %{description: description}),
+        workspace,
+        opts ++
+          [
+            settings: settings!(),
+            repo_key: @repo_key,
+            qa_policy: RunPolicy,
+            qa_agent: FakeQaAgent,
+            fixer: FakeFixer,
+            symphony_repo_key: @symphony_repo_key
+          ]
+      )
+    end
+
+    # Answers `gh pr view` with the head `head` and its `checks`, and the head's workflow runs with none.
+    defp gh(head, checks) do
+      fn
+        ["pr", "view", @pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => checks}), 0}
+
+        ["api" | _endpoint], _opts ->
+          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+    end
+
+    defp make_all(status, conclusion) do
+      %{"name" => "make-all", "workflowName" => "make-all", "status" => status, "conclusion" => conclusion, "detailsUrl" => @run_url}
+    end
+
+    test "a passed check is confirmed before the agent: the prompt says not to walk it and the report links it" do
+      {workspace, head} = git_workspace!()
+
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert [%{status: :pass, url: @run_url}] = job.proofs
+
+      prompt = QaAgent.prompt(job, nil)
+      assert prompt =~ "Symphony confirmed every step a named\nautomated test proves before you started"
+      assert prompt =~ "Do not walk those steps and do not read their checks again."
+      assert prompt =~ "- 1. Run `symphony check` → it passes. Proved by: `make-all`: pass, `make-all` passed on `#{String.slice(head, 0, 12)}` (#{@run_url})\n"
+      assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- 2. Open the dashboard → it looks right.\n"
+      refute prompt =~ "gh run list --commit"
+
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "### Pre-checks"
+      assert report =~ "- **pass** step 1 (Proved by: `make-all`): `make-all` passed on `#{String.slice(head, 0, 12)}` (#{@run_url})"
+      assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
+    end
+
+    test "a ticket without Proved by: lines reads no check and gets today's prompt" do
+      {workspace, _head} = git_workspace!()
+      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
+
+      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`.\n", gh_runner: unused)
+
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert job.proofs == []
+      assert QaAgent.prompt(job, nil) =~ "gh run list --commit"
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      refute report =~ "### Pre-checks"
+    end
+
+    test "a failed check, a check that never ran, or a missing test fails to Rework naming the step, with no agent run" do
+      for {checks, description, expected} <- [
+            {[make_all("COMPLETED", "FAILURE")], @named_walkthrough, "`make-all` failed on"},
+            {[], @named_walkthrough, "`make-all` did not run on"},
+            {[make_all("COMPLETED", "SUCCESS")], "## User walkthrough\n\n1. Run it. Proved by: `make-all` › the QA pre-check's test file\n", "`the QA pre-check's test file` is not in the checkout"}
+          ] do
+        RunStore.delete_ticket_state(@repo_key, @issue_id)
+        {workspace, head} = git_workspace!()
+
+        assert :ok = run_named(workspace, description, gh_runner: gh(head, checks))
+
+        refute_received {:qa_agent_run, _, _}
+        assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+        assert_received {:memory_tracker_comment, @issue_id, report}
+        assert report =~ "**Verdict:** fail → Rework"
+        assert report =~ "### Pre-checks\n\n- **fail** step 1 (Proved by: `make-all`"
+        assert report =~ "### Findings\n\n- Step 1 (Proved by: `make-all`"
+        assert report =~ expected
+        assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
+      end
+    end
+
+    test "a check still running waits for CI, then reports blocked past the wait's limit" do
+      {workspace, head} = git_workspace!()
+      runner = gh(head, [make_all("IN_PROGRESS", nil)])
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:ci_pending, _info}} = run_named(workspace, @named_walkthrough, gh_runner: runner)
+        end)
+
+      assert log =~ "waits for the named checks on #{String.slice(head, 0, 12)}: make-all"
+      refute_received {:qa_agent_run, _, _}
+      refute_received {:memory_tracker_comment, _, _}
+      assert verdicts() == []
+
+      # The orchestrator records when the wait on this head started; a minute in, the run still waits.
+      TicketSignals.record(@repo_key, @issue_id, CiWait.start_signal(), %{sha: head})
+      soon = DateTime.add(DateTime.utc_now(), 60, :second)
+
+      assert {:error, {:ci_pending, %{sha: ^head, run: "the QA pass", runs: [%{workflow_name: "make-all", url: @run_url}]}}} =
+               run_named(workspace, @named_walkthrough, gh_runner: runner, now: soon)
+
+      # Past the limit, the pass is blocked with the reason, and retried like any blocked pass.
+      later = DateTime.add(DateTime.utc_now(), div(CiWait.limit_ms(), 1000) + 60, :second)
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner, now: later)
+
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** blocked → QA (blocked, retrying)"
+      assert report =~ "Reason: the named checks were still running after 61 minutes of waiting: step 1: `make-all` is still running on"
+      assert report =~ "- **pending** step 1 (Proved by: `make-all`)"
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+    end
+
+    test "CI the pre-check cannot read blocks the pass" do
+      {workspace, head} = git_workspace!()
+      refused = fn _args, _opts -> {"HTTP 502", 1} end
+
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: refused)
+
+      refute_received {:qa_agent_run, _, _}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "Reason: the QA pre-check could not read CI on the PR head:"
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+    end
+
+    test "a pass with no playbook that applies is blocked and keeps the pre-check lines" do
+      {workspace, head} = git_workspace!()
+
+      runner = gh(head, [make_all("COMPLETED", "SUCCESS")])
+      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner, qa_policy: NoPlaybookPolicy)
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "Reason: no QA playbook applies to this change"
+      assert report =~ "- **pass** step 1"
     end
   end
 

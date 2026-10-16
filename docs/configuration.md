@@ -1285,14 +1285,36 @@ Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 
 | Line | Proof | QA |
 | --- | --- | --- |
-| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: it reports it with that check's result on the PR head and links the run. A passed check is `pass`; a failed check, or one that never ran on the head, is `fail` naming the step; a check still running is waited on for up to 10 minutes, then `blocked` |
+| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
 | `Proved by: QA` | the QA pass | walks the step |
 | no `Proved by:` line | read as `Proved by: QA`, so tickets written before the rule keep working | walks the step |
 
 `SymphonyElixir.Walkthrough` parses the walkthrough into steps with their proof, and the QA prompt
-lists the steps to link and the steps to walk when the walkthrough names at least one test. Until
-Symphony's QA pre-check confirms each named test itself, the QA agent reads the head's check runs
-with `gh` (or the public API, as above) and links the run.
+lists the steps to link and the steps to walk when the walkthrough names at least one test.
+
+**The QA pre-check.** Before the QA agent starts, Symphony confirms each `Proved by: <check> ›
+<test>` step itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the
+agent reading check runs: a green head does not prove it, since a path-filtered workflow such as
+`macos-e2e` may not run on a PR at all. For each step it:
+
+- looks for the test in the PR's checkout: a part with a `/` (or a file name such as
+  `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
+  such as a test or scenario name, must appear in the tracked files, within the file named before it
+  when there is one (`test/foo_test.exs › "does X"`);
+- reads the PR head's status checks with `gh` and finds the ones `<check>` names: a check run, a
+  whole workflow, or `workflow / job`.
+
+| What the pre-check finds | Step | The pass |
+| --- | --- | --- |
+| the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
+| the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
+| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then handed to the self-heal lane |
+| CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
+
+The QA report lists every result under `### Pre-checks`, one line per step with the check run's
+link, and a failed step is also one of the report's findings. A walkthrough with no `Proved by:
+<check>` step reads nothing and runs as it always did. The epic review does not run the pre-check:
+its agent reads CI's runs on the base branch head, as above.
 
 The instructions that write walkthroughs (the plan pipeline, the plan run, the feature ticket type,
 new issues filed during a run, and the ticket templates) route every step when it is written. A step
@@ -1580,6 +1602,20 @@ The playbook judges a window only after it settles: it waits about 10 seconds af
 opens, changes focus once, and then checks the sizes of the content and scroll areas in the
 accessibility tree, not just the window frame. A window that opens at full height and collapses
 seconds later fails, with the AX tree quoted and a screenshot attached.
+
+QA does three things, in this order, in every app playbook (`macos_app`, `web`, `android_app`):
+the walkthrough steps marked `Proved by: QA`, a **Design check** of every UI deliverable, then the
+playbook's other checks of the running app (on macOS the wide pass below). The Design check judges
+each window, page, screen or menu the change adds or changes by sight: screenshots of the real app
+in light and in dark, at the sizes the design names, compared with the ticket's or the parent's
+Screens and with `docs/design/design-system.md` (the design system alone when no Screens cover it)
+for layout, spacing, alignment, truncation, contrast, symbols, wording and whether it looks
+finished. The report has one `Design check: <deliverable>` step per UI deliverable, with both
+screenshots and the design it compared with; a visible mismatch fails it, even when every
+structural check passes. On macOS the app is launched once per appearance with `qa_launch_app`'s
+`appearance`, and a status-bar menu is opened on screen with `qa_open_status_menu` and judged from
+its screenshot. Android switches with `qa_android_dark_mode`; the web playbook uses the page's theme
+control or the browser's emulated `prefers-color-scheme`, and says when dark is not applicable.
 
 After the walkthrough at the app's default size, the playbook runs a **wide pass**, because some
 layout crashes only happen in wide windows: `qa_resize_window` makes the main window at least

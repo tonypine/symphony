@@ -33,8 +33,10 @@ defmodule SymphonyElixir.QaAgent.Report do
   `blocked_by` list of the identifiers each one waits on).
 
   The epic review (`SymphonyElixir.EpicReview`) also passes `:checks`, its deterministic
-  pre-checks as `%{name: atom, status: :ok | :attention, detail: String.t()}`; they render as a
-  `### Pre-checks` section so the epic's history says what the review ran before the agent did.
+  pre-checks as `%{name: atom, status: :ok | :attention, detail: String.t()}`, and so does the QA
+  state's pass, with one `%{name: String.t(), status: :pass | :fail | :pending, detail: String.t()}`
+  per walkthrough step a named test proves (`SymphonyElixir.QaPreCheck`); they render as a
+  `### Pre-checks` section so the issue's history says what ran before the agent did.
   """
   @spec render(map()) :: String.t()
   def render(outcome) when is_map(outcome) do
