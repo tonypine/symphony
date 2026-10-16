@@ -532,7 +532,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   @spec rerun_failed(String.t() | integer(), keyword()) :: :ok | {:error, term()}
   def rerun_failed(run_id, opts) when (is_binary(run_id) or is_integer(run_id)) and is_list(opts) do
-    case run_gh(["run", "rerun", to_string(run_id), "--failed"], opts) do
+    case run_gh(["run", "rerun", to_string(run_id), "--failed"] ++ repo_args(opts), opts) do
       {:ok, _output} -> :ok
       {:error, reason} -> {:error, reason}
     end

@@ -25,6 +25,11 @@ defmodule SymphonyElixir.QaDriver.Host do
   drop `priv/`), is compiled with `swiftc` on first use and signed ad hoc
   into `<state root>/qa-driver/<source hash>/`, so a new helper source builds a
   new helper that needs a new grant.
+
+  The appearance library `qa_launch_app` injects for its `appearance`
+  (`priv/qa_driver/symphony-qa-appearance.m`) is embedded the same way and built
+  with `priv/qa_driver/build-appearance.sh` on first use into
+  `<state root>/qa-appearance/<source hash>/`.
   """
 
   alias SymphonyElixir.{AgentEnv, Paths, ProcessTree}
@@ -44,6 +49,17 @@ defmodule SymphonyElixir.QaDriver.Host do
                |> :crypto.hash([@source, @plist | @codesign_args])
                |> Base.encode16(case: :lower)
                |> binary_part(0, 16)
+  @appearance_source_path Path.join(@source_dir, "symphony-qa-appearance.m")
+  @appearance_build_path Path.join(@source_dir, "build-appearance.sh")
+  @external_resource @appearance_source_path
+  @external_resource @appearance_build_path
+  @appearance_source File.read!(@appearance_source_path)
+  @appearance_build File.read!(@appearance_build_path)
+  @appearance_hash :sha256
+                   |> :crypto.hash([@appearance_source, @appearance_build])
+                   |> Base.encode16(case: :lower)
+                   |> binary_part(0, 16)
+  @appearance_library "symphony-qa-appearance.dylib"
   @app_name "SymphonyQADriver.app"
   @executable "symphony-qa-driver"
   @app_env "SYMPHONY_QA_DRIVER_APP"
@@ -56,12 +72,58 @@ defmodule SymphonyElixir.QaDriver.Host do
   @doc "The host functions `QaDriver` uses unless a test overrides them."
   @spec default() :: SymphonyElixir.QaDriver.host()
   def default do
-    %{cmd: &cmd/3, launch: &launch/2, kill: &kill/1, helper: &helper/0, call_helper: &call_helper/3, read: &read/1}
+    %{
+      cmd: &cmd/3,
+      launch: &launch/2,
+      kill: &kill/1,
+      helper: &helper/0,
+      call_helper: &call_helper/3,
+      read: &read/1,
+      appearance_library: &appearance_library/0
+    }
   end
 
   @doc "The helper's Swift source and the hash that names its compiled binary."
   @spec helper_source() :: {String.t(), String.t()}
   def helper_source, do: {@source_hash, @source}
+
+  @doc "The appearance library's Objective-C source and the shell script that builds it."
+  @spec appearance_source() :: {String.t(), String.t()}
+  def appearance_source, do: {@appearance_source, @appearance_build}
+
+  @doc """
+  Path to the appearance library `qa_launch_app` injects, built with `clang` on
+  first use into `<state root>/qa-appearance/<source hash>/`.
+  """
+  @spec appearance_library() :: {:ok, Path.t()} | {:error, term()}
+  def appearance_library do
+    dir = Path.join([Paths.state_root(), "qa-appearance", @appearance_hash])
+    library = Path.join(dir, @appearance_library)
+
+    if File.regular?(library), do: {:ok, library}, else: build_appearance_library(dir, library)
+  end
+
+  # Each build writes its own copy of the inputs, so two passes building at once never read a
+  # half-written file; the script moves the library into place only once it is whole.
+  defp build_appearance_library(dir, library) do
+    stem = Path.join(dir, "build.#{System.unique_integer([:positive])}")
+    source = stem <> ".m"
+    script = stem <> ".sh"
+
+    result =
+      with :ok <- File.mkdir_p(dir),
+           :ok <- File.write(source, @appearance_source),
+           :ok <- File.write(script, @appearance_build),
+           {:ok, {_output, 0}} <- cmd("/bin/sh", [script, source, library], env: AgentEnv.build(), timeout_ms: @compile_timeout_ms) do
+        {:ok, library}
+      else
+        {:ok, {output, status}} -> {:error, {:appearance_build_failed, status, String.slice(output, -2_000, 2_000)}}
+        {:error, reason} -> {:error, reason}
+      end
+
+    Enum.each([source, script], &File.rm/1)
+    result
+  end
 
   @doc "Reads and removes a regular file (not a symlink) a host command wrote."
   @spec read(Path.t()) :: {:ok, binary()} | {:error, term()}

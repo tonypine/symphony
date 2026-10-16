@@ -1803,7 +1803,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
-  test "merge_pull_request lands past pending checks once the CI poller's landing wait let the head past" do
+  test "merge_pull_request waits on every check when the base branch requires none, and never lands a red one" do
     workspace = tmp_workspace!("github-agent-merge-fallback")
 
     try do
@@ -1843,12 +1843,10 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
       refuse_merge = fn args -> flunk("merge must not run: #{inspect(args)}") end
 
-      # Before the poller lets the head past, a branch that requires no checks waits on every check.
+      # A branch that requires no checks waits on every check, and lands once they all passed.
       assert {:error, {:checks_not_passing, :pending}} = merge_with.([make_all, preview], no_rules, refuse_merge)
-
-      :ok = RunStore.put_ci_check(%{repo_key: "default", issue_id: "issue-3051", landing_fallback_sha: "abc123"})
-
-      assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with.([make_all, preview], no_rules, fn _args -> :ok end)
+      passed = %{preview | "status" => "COMPLETED", "conclusion" => "SUCCESS"}
+      assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with.([make_all, passed], no_rules, fn _args -> :ok end)
 
       # A red check never lands, required or not, and a branch that requires a check still waits on it.
       assert {:error, {:checks_not_passing, {:failure, _checks}}} =
@@ -1860,7 +1858,6 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert {:error, {:checks_not_passing, :pending}} =
                merge_with.([%{make_all | "status" => "IN_PROGRESS", "conclusion" => nil}, preview], make_all_required, refuse_merge)
     after
-      RunStore.delete_ci_check("default", "issue-3051")
       File.rm_rf(workspace)
     end
   end

@@ -18,6 +18,7 @@ defmodule SymphonyElixir.TicketState do
   """
 
   alias SymphonyElixir.PrDecision
+  alias SymphonyElixir.PrWatch.Attempts
 
   @max_signals 50
   @max_verdicts 50
@@ -107,12 +108,18 @@ defmodule SymphonyElixir.TicketState do
           at: DateTime.t() | nil
         }
 
-  @typedoc "What the landing order keeps of a watched ticket: its state and head, and since when."
+  @typedoc """
+  What the landing order keeps of a watched ticket: its state and head, and since when; the files
+  its open PR changes; and the PR it waits for (`SymphonyElixir.LandingOrder.wait/0`), and since when.
+  """
   @type landing :: %{
           state: String.t() | nil,
           head_sha: String.t() | nil,
           state_since: DateTime.t(),
-          progress_at: DateTime.t()
+          progress_at: DateTime.t(),
+          files: [String.t()] | nil,
+          waits_for: map() | nil,
+          waits_since: DateTime.t() | nil
         }
 
   @typedoc """
@@ -120,9 +127,13 @@ defmodule SymphonyElixir.TicketState do
   `SymphonyElixir.PrDecision.decide/1` reads, the PR and head they were read on, how they arrived
   (`:poll` or `:webhook`) and when, whether GitHub's rate limit stopped the read (with when it
   resets), the rate limit the read left, and what the landing order keeps of the ticket (its state
-  and head, and since when). `decision`, `applied` and `links` are the slots the watcher's switch
-  fills (the decision record, the actions applied per head, and the links it added); this record
-  leaves them empty.
+  and head, and since when, its files and the PR it waits for). `decision` is what the watcher
+  decided on the last read (`SymphonyElixir.PrDecision`): the rule, the kind of action, its reason,
+  who a wait is on and what ends it. `stay` is the phase of the current stay (the one a move of the
+  watcher put the ticket in, else the one it was read in), and `applied` lists the actions done in
+  that stay, per head and rule (`SymphonyElixir.PrDecision.Apply`), `attempts` the CI Fix runs counted and what
+  else the watcher keeps between reads (`SymphonyElixir.PrWatch.Attempts`), `fix` what the ticket's
+  CI Fix run reads (the red head's failure, the conflict), and `links` the links it added.
   """
   @type pr_watch :: %{
           facts: PrDecision.Facts.t(),
@@ -133,8 +144,11 @@ defmodule SymphonyElixir.TicketState do
           github: :ok | {:rate_limited, DateTime.t() | nil},
           rate_limit: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil} | nil,
           landing: landing() | nil,
+          stay: PrDecision.Facts.phase() | nil,
           decision: map() | nil,
           applied: [map()],
+          attempts: map(),
+          fix: %{ci_failure: map() | nil, pr_conflict: map() | nil},
           links: [map()]
         }
 
@@ -536,13 +550,25 @@ defmodule SymphonyElixir.TicketState do
       github: normalize_github(Map.get(watch, :github)),
       rate_limit: normalize_rate_limit(Map.get(watch, :rate_limit)),
       landing: normalize_landing(Map.get(watch, :landing)),
+      stay: stay(Map.get(watch, :stay)),
       decision: map_decision(watch),
       applied: maps(Map.get(watch, :applied)),
+      attempts: Attempts.normalize(Map.get(watch, :attempts)),
+      fix: normalize_fix(Map.get(watch, :fix)),
       links: maps(Map.get(watch, :links))
     }
   end
 
   defp normalize_pr_watch(_watch), do: nil
+
+  defp stay(stay) when stay in [:in_progress, :code_review, :qa, :rework, :ci_fix, :merging], do: stay
+  defp stay(_stay), do: nil
+
+  defp normalize_fix(%{} = fix), do: %{ci_failure: map_or_nil(Map.get(fix, :ci_failure)), pr_conflict: map_or_nil(Map.get(fix, :pr_conflict))}
+  defp normalize_fix(_fix), do: %{ci_failure: nil, pr_conflict: nil}
+
+  defp map_or_nil(%{} = map), do: map
+  defp map_or_nil(_value), do: nil
 
   defp normalize_github({:rate_limited, reset_at}), do: {:rate_limited, datetime(reset_at)}
   defp normalize_github(_github), do: :ok
@@ -559,11 +585,17 @@ defmodule SymphonyElixir.TicketState do
       state: map_string(landing, :state),
       head_sha: map_string(landing, :head_sha),
       state_since: since,
-      progress_at: progress_at
+      progress_at: progress_at,
+      files: string_list_or_nil(Map.get(landing, :files)),
+      waits_for: map_or_nil(Map.get(landing, :waits_for)),
+      waits_since: map_datetime(landing, :waits_since)
     }
   end
 
   defp normalize_landing(_landing), do: nil
+
+  defp string_list_or_nil(list) when is_list(list), do: Enum.filter(list, &is_binary/1)
+  defp string_list_or_nil(_list), do: nil
 
   defp maps(list) when is_list(list), do: Enum.filter(list, &is_map/1)
   defp maps(_list), do: []

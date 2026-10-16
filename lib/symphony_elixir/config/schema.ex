@@ -1695,7 +1695,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     @default_log_excerpt_lines 200
-    @default_max_retries 3
+    @default_max_retries 10
     @default_merging_wait_timeout_ms 1_800_000
 
     embedded_schema do

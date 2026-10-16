@@ -46,12 +46,14 @@ defmodule SymphonyElixir.SelfHeal do
   alias SymphonyElixir.Linear.Issue
 
   @default_component "qa_environment"
+  @ci_prefix "ci:"
   @dev_server "dev_server"
   @worker_host "worker_host"
   @playbook "qa_playbook"
 
   # The components whose fix belongs to the repo that hit the block, rather than to Symphony: its
-  # own build/test/run setup. Everything else is structural — orchestration, agent transports, QA
+  # own build/test/run setup, and each of its CI checks (`ci:<check name>`, the red backstop of the
+  # PR and CI watcher). Everything else is structural — orchestration, agent transports, QA
   # coverage — and lands in Symphony (see §Guards "Fix-ticket scope").
   @repo_components [@dev_server]
 
@@ -81,8 +83,10 @@ defmodule SymphonyElixir.SelfHeal do
   """
   @spec scope(String.t(), String.t() | nil, keyword()) :: String.t() | nil
   def scope(component, repo_key, opts \\ []) do
-    if component in @repo_components, do: repo_key, else: symphony_repo_key(opts)
+    if repo_component?(component), do: repo_key, else: symphony_repo_key(opts)
   end
+
+  defp repo_component?(component), do: component in @repo_components or String.starts_with?(component, @ci_prefix)
 
   @doc """
   The canonical failure string of an outcome, built from fields that stay put when a run rewords
@@ -174,7 +178,7 @@ defmodule SymphonyElixir.SelfHeal do
 
       ctx = Map.put(ctx, :covering, covering_ticket(ctx))
 
-      case {ctx.covering, compare(previous && previous.signature, signature)} do
+      case {ctx.covering, compare(previous_signature(previous, component), signature)} do
         {%{}, _change} -> open(ctx)
         {nil, :first} -> open(ctx)
         {nil, :same} -> escalate(ctx, :unchanged)
@@ -435,11 +439,39 @@ defmodule SymphonyElixir.SelfHeal do
 
     - Failure: `#{signature}`
     - Reason: #{reason(outcome)}
-    #{findings(outcome)}
+    #{pull_request_line(outcome)}#{findings(outcome)}
     """
   end
 
+  defp pull_request_line(%{pr_url: pr_url} = outcome) when is_binary(pr_url) do
+    "- Pull request: #{pr_url}" <> head_part(Map.get(outcome, :head_sha)) <> "\n"
+  end
+
+  defp pull_request_line(_outcome), do: ""
+
+  defp head_part(head) when is_binary(head), do: " at `#{String.slice(head, 0, 7)}`"
+  defp head_part(_head), do: ""
+
+  defp pull_request(%{pr_url: pr_url}) when is_binary(pr_url), do: Request.pull_request(pr_url) || pr_url
+  defp pull_request(_outcome), do: "the pull request"
+
+  # A CI check's failure is compared only with the same check's: a backstop on another check is a
+  # new break, filed on its own rather than read as progress on the first.
+  defp previous_signature(%{component: component, signature: signature}, component), do: signature
+  defp previous_signature(%{component: @ci_prefix <> _check}, _component), do: nil
+  defp previous_signature(%{signature: _signature}, @ci_prefix <> _check), do: nil
+  defp previous_signature(%{signature: signature}, _component), do: signature
+  defp previous_signature(nil, _component), do: nil
+
+  defp fix_title(@ci_prefix <> check), do: "Self-heal: CI keeps failing the #{check} check"
   defp fix_title(component), do: "Self-heal: repair the #{component} block"
+
+  defp fix_description(issue, @ci_prefix <> check, signature, outcome) do
+    """
+    #{evidence(issue, signature, outcome)}
+    CI Fix runs could not make the `#{check}` check pass on #{pull_request(outcome)}. The failure may be that pull request's own rather than this repo's CI: compare it with the check on the base branch and on other pull requests before changing the workflow. Fix the check, or the code it tests, in this repo, and every ticket blocked on this one resumes on its own when this ticket goes terminal — no person has to move anything.
+    """
+  end
 
   defp fix_description(issue, component, signature, outcome) do
     """
@@ -497,6 +529,7 @@ defmodule SymphonyElixir.SelfHeal do
     Map.get(outcome, :cause) || Map.get(outcome, :reason)
   end
 
+  defp component_for({:ci_check_failed, check}) when is_binary(check), do: @ci_prefix <> check
   defp component_for({:qa_dev_server_failed, cause}), do: component_for(cause)
   defp component_for({:verification_failed, cause}), do: component_for(cause)
   defp component_for({:dev_server_exit, _status}), do: @dev_server
