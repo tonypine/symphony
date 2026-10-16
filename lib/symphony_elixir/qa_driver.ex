@@ -67,11 +67,10 @@ defmodule SymphonyElixir.QaDriver do
     call returns only newer ones. The QA root is outside the agent sandbox, on
     the QA host for a `worker_host`, so the agent cannot read the log itself.
 
-  Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, starts
-  the app with AppKit's appearance arguments (`-AppleInterfaceStyle Dark`, or
-  `-AppleInterfaceStyle Light -NSRequiresAquaSystemAppearance YES`), which any
-  AppKit or SwiftUI app reads ahead of the host's setting, and sets
-  `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app also reads. The app
+  Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, sets
+  `SYMPHONY_BAR_QA_APPEARANCE` for Symphony's own app and passes AppKit's
+  appearance default as a launch argument (`-AppleInterfaceStyle Dark`, or
+  `-NSRequiresAquaSystemAppearance YES` for light) for any other app, so the app
   draws in that appearance whatever the host's. The host's own appearance is
   never switched: a pass that dies would leave it switched for the next one, and
   switching it needs Apple Events.
@@ -174,13 +173,9 @@ defmodule SymphonyElixir.QaDriver do
   @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
   @appearance_env "SYMPHONY_BAR_QA_APPEARANCE"
   @appearances ~w(light dark)
-  # AppKit reads these from the app's arguments (`NSUserDefaults`' argument
-  # domain) ahead of the Mac's own setting, so any app draws in that appearance,
-  # not only Symphony's, which also reads `@appearance_env`.
-  @appearance_args %{
-    "dark" => ["-AppleInterfaceStyle", "Dark"],
-    "light" => ["-AppleInterfaceStyle", "Light", "-NSRequiresAquaSystemAppearance", "YES"]
-  }
+  # AppKit reads these defaults from the launch arguments too, so any app draws in
+  # the appearance, not only Symphony's, which reads `@appearance_env`.
+  @appearance_args %{"light" => ["-NSRequiresAquaSystemAppearance", "YES"], "dark" => ["-AppleInterfaceStyle", "Dark"]}
   # The window layer of a pop-up menu (`kCGPopUpMenuWindowLevel`), where the
   # status item's menu opens.
   @menu_layer 101
@@ -416,7 +411,7 @@ defmodule SymphonyElixir.QaDriver do
          name = Path.basename(built.executable),
          {:ok, reports} <- crash_reports(config, name),
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
-      app_args = appearance_args(args["appearance"])
+      app_args = appearance_args(Map.get(args, "appearance"))
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
       GenServer.call(driver, {:launch, built.executable, info})
     end

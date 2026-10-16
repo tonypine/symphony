@@ -163,12 +163,11 @@ defmodule SymphonyElixir.QaDriver.Remote do
   def launch(ssh_host, executable, opts) do
     env = for {name, value} <- Keyword.get(opts, :env) || [], value != false, do: "#{name}=#{value}"
     script = ~s(cd "$1" || exit 125; shift; printf 'symphony-qa-pid:%s\\n' "$$"; exec env "$@")
-    command = [Keyword.get(opts, :cd) || "." | env ++ [executable | Keyword.get(opts, :args, [])]]
 
     forwards = Keyword.get(opts, :reverse_forwards, [])
     ssh_opts = if forwards == [], do: [], else: [reverse_forwards: forwards, options: ["-o", "ExitOnForwardFailure=yes"]]
 
-    with {:ok, ssh, args} <- SSH.command(ssh_host, remote_command(script, command), ssh_opts) do
+    with {:ok, ssh, args} <- SSH.command(ssh_host, remote_command(script, [Keyword.get(opts, :cd) || "." | env ++ [executable | Keyword.get(opts, :args, [])]]), ssh_opts) do
       port = Port.open({:spawn_executable, ssh}, [:binary, :exit_status, :stderr_to_stdout, args: args])
       await_pid(port, "", System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout_ms, @timeout_ms))
     end

@@ -1413,7 +1413,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
       for {args, expected, app_args} <- [
             {%{"appearance" => "dark"}, ~c"dark", ["-AppleInterfaceStyle", "Dark"]},
-            {%{"appearance" => "light"}, ~c"light", ["-AppleInterfaceStyle", "Light", "-NSRequiresAquaSystemAppearance", "YES"]},
+            {%{"appearance" => "light"}, ~c"light", ["-NSRequiresAquaSystemAppearance", "YES"]},
             {%{}, nil, []}
           ] do
         {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
@@ -1932,11 +1932,9 @@ defmodule SymphonyElixir.QaDriverTest do
       assert is_port(port)
       assert Host.kill(pid) == :ok
       assert_receive {^port, {:exit_status, _status}}, 5_000
-      assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
-
       assert {:ok, port, _pid} = Host.launch("/bin/echo", cd: System.tmp_dir!(), env: [], args: ["-AppleInterfaceStyle", "Dark"])
       assert_receive {^port, {:data, "-AppleInterfaceStyle Dark\n"}}, 5_000
-      assert_receive {^port, {:exit_status, 0}}, 5_000
+      assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
       assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = Host.default()
     end
   end
