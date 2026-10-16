@@ -153,7 +153,7 @@ defmodule SymphonyElixir.QaDriverTest do
           tmp_dir: Keyword.get(opts, :tmp_dir),
           host: Keyword.get(opts, :host, host()),
           git: Keyword.get(opts, :git, &clean_git/2)
-        ] ++ Keyword.take(opts, [:start_stub])
+        ] ++ Keyword.take(opts, [:start_stub, :status_menu_poll])
       )
 
     on_exit(fn -> QaDriver.stop(driver) end)
@@ -1403,6 +1403,133 @@ defmodule SymphonyElixir.QaDriverTest do
         assert {:error, {:qa_tool, "qa_put_checkout_failed", message}} = put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
         assert message =~ expected
       end
+    end
+  end
+
+  describe "qa_launch_app appearance" do
+    test "launches the app light or dark, and follows the host without it", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      for {args, expected} <- [{%{"appearance" => "dark"}, ~c"dark"}, {%{"appearance" => "light"}, ~c"light"}, {%{}, nil}] do
+        {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+        assert {:ok, %{"pid" => pid}} = result
+        assert_received {:launched, _executable, launch_opts, _port, ^pid}
+        assert Map.new(launch_opts[:env])[~c"SYMPHONY_BAR_QA_APPEARANCE"] == expected
+        assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      end
+    end
+
+    test "refuses any other appearance", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      for appearance <- ["Dark", "sepia", "", 1, ["dark"]] do
+        assert {:error, {:qa_tool, "invalid_arguments", "`appearance` must be `light` or `dark`."}} =
+                 QaDriver.call_tool(driver, "qa_launch_app", %{"appearance" => appearance})
+      end
+
+      refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+  end
+
+  describe "qa_open_status_menu" do
+    @menu %{id: 21, title: "", layer: 101, onscreen: true, frame: %{x: 1200, y: 24, w: 260, h: 480}}
+    @status_item %{id: 12, title: "", layer: 25, onscreen: true, frame: %{x: 1230, y: 0, w: 24, h: 24}}
+
+    defp windows_reply(windows), do: {:ok, {Jason.encode!(%{windows: windows}), 0}}
+
+    # An app that takes the request the driver writes and opens its menu: the
+    # window list shows the menu once the request was taken.
+    defp opening_app_cmd(test) do
+      fn
+        "/bin/sh", ["-c", script, "sh", root, pid], opts when is_binary(pid) ->
+          Process.put(:status_menu_request, Path.join([root, "status-menu", "open-" <> pid]))
+          default_cmd("/bin/sh", ["-c", script, "sh", root, pid], opts, %{})
+
+        @helper, ["windows", _pid], _opts ->
+          request = Process.get(:status_menu_request)
+
+          cond do
+            Process.get(:menu_open) ->
+              windows_reply([@status_item, @menu])
+
+            request && File.exists?(request) ->
+              File.rm!(request)
+              send(test, {:request_taken, request})
+              Process.put(:menu_open, true)
+              windows_reply([@status_item])
+
+            true ->
+              windows_reply([@status_item])
+          end
+
+        executable, args, opts ->
+          default_cmd(executable, args, opts, %{})
+      end
+    end
+
+    test "asks the app through a request file and returns the menu's window", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, host: host(%{cmd: opening_app_cmd(self())}), status_menu_poll: {5, 1})
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+
+      assert {:ok, %{"pid" => ^pid, "window_id" => 21, "frame" => %{"x" => 1200, "y" => 24, "w" => 260, "h" => 480}, "note" => note}} =
+               QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})
+
+      assert note =~ "qa_screenshot"
+      assert note =~ "escape"
+      expected = Path.join([qa_root, "status-menu", "open-#{pid}"])
+      assert_received {:request_taken, ^expected}
+
+      # A menu already open is returned at once.
+      assert {:ok, %{"window_id" => 21}} = QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})
+    end
+
+    test "takes the request back when the menu never opens", %{worktree: worktree} do
+      replies = %{"windows" => {Jason.encode!(%{windows: [@status_item, %{@menu | onscreen: false}]}), 0}}
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: replies}), status_menu_poll: {2, 50})
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      request = Path.join([qa_root, "status-menu", "open-#{pid}"])
+
+      assert {:error, {:qa_tool, "qa_status_menu_not_opened", message}} = QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})
+      assert message =~ "did not open its status-bar menu within 0.1 s of the request"
+      assert message =~ "qa_check_app"
+
+      pid_text = Integer.to_string(pid)
+      assert_received {:cmd, "/bin/sh", ["-c", _script, "sh", ^qa_root, ^pid_text], _opts}
+      for _attempt <- 1..2, do: assert_received({:cmd, @helper, ["windows", ^pid_text], _opts})
+      refute_received {:cmd, @helper, ["windows", _pid], _opts}
+      assert_received {:cmd, "/bin/rm", ["-f", ^request], _opts}
+      refute File.exists?(request)
+    end
+
+    test "fails when the request can't be written or the window list can't be read", %{worktree: worktree} do
+      cmd = fn
+        "/bin/sh", ["-c", _script, "sh", _root, pid], _opts when is_binary(pid) -> {:ok, {"mkdir: denied\n", 1}}
+        executable, args, opts -> default_cmd(executable, args, opts, %{})
+      end
+
+      {driver, pid} = launched_app(worktree, host: host(%{cmd: cmd}))
+      assert {:error, {:qa_tool, "qa_status_menu_failed", message}} = QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})
+      assert message =~ "mkdir: denied"
+      refute_received {:cmd, @helper, ["windows", _pid], _opts}
+
+      for {reply, code} <- [{{:error, :eacces}, "qa_helper_failed"}, {{"{}", 0}, "qa_helper_failed"}, {{"not json", 0}, "qa_helper_failed"}] do
+        {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"windows" => reply}}))
+        assert error_code(QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})) == code
+        assert_received {:cmd, "/bin/rm", ["-f", request], _opts}
+        assert request =~ "status-menu/open-#{pid}"
+      end
+    end
+
+    test "only opens the menu of an app the pass launched and that still runs", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+
+      assert error_code(QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid + 1})) == "qa_pid_not_launched"
+      assert error_code(QaDriver.call_tool(driver, "qa_open_status_menu", %{})) == "invalid_arguments"
+      assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      assert error_code(QaDriver.call_tool(driver, "qa_open_status_menu", %{"pid" => pid})) == "qa_pid_not_launched"
+      refute_received {:cmd, "/bin/sh", ["-c", _script, "sh", _root, _pid], _opts}
     end
   end
 

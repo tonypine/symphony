@@ -267,6 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showUpdate(nil, manual: false)
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
+        QAStatusMenuOpener.startIfQAMode(item: item)
     }
 
     /// Where the window's client reads Symphony's local API.

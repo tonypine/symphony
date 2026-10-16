@@ -1209,7 +1209,7 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Seven more variables, read only in QA mode:
+Eight more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -1260,6 +1260,9 @@ Seven more variables, read only in QA mode:
   or `https` URL on a loopback host counts, since the sheet sends `LINEAR_API_KEY` with each query.
 - `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` makes the Add Repo sheet's folder picker open in that absolute folder, so a
   QA pass, which can't type a path into the panel, picks a prepared checkout with the panel's Choose button.
+- `SYMPHONY_BAR_QA_APPEARANCE=light` or `dark` makes the app draw in that appearance (`NSApp.appearance`
+  set to Aqua or Dark Aqua at launch) whatever the Mac's own setting, so QA judges both on one Mac without
+  switching the Mac's appearance. Any other value, or none, follows the Mac.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
@@ -1275,6 +1278,12 @@ Seven more variables, read only in QA mode:
   which open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the
   first line and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that
   reason, and without one pauses with the menu's.
+
+In QA mode the app also opens its status-bar menu on screen when asked, so QA can screenshot it: an empty
+file `status-menu/open-<pid>` under the QA root, named after the app's own process ID, makes the app delete it
+and open the menu as a click on the menu bar item would (`qa_open_status_menu` writes it). Pressing the item
+through Accessibility can't do this, because the menu holds the press until it closes. A request that comes
+while the menu is open is dropped. Outside QA mode the app watches for no such file.
 
 The [end-to-end test](Tests/e2e/README.md) uses all of this to test Update, Restart and rollback without
 touching the installed app.
