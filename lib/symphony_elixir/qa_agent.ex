@@ -55,6 +55,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Verification
+  alias SymphonyElixir.Walkthrough
   alias SymphonyElixir.Workspace
 
   @evidence_dir "qa-evidence"
@@ -367,20 +368,23 @@ defmodule SymphonyElixir.QaAgent do
     and its comments with your Linear tools (`linear_get_document`, `linear_get_comments`) and
     verify against what they define.
     #{epic_journey_text(journey)}
+    #{proof_routing(job, journey)}
     #{operator_only_steps()}
     """
   end
 
-  defp journey_section(%{journey: %{source: source, text: text}}) do
+  defp journey_section(%{journey: %{source: source, text: text} = journey} = job) do
     """
     You are verifying user journeys, not running a script. The user stories and journeys this change
     delivers or updates are what you exercise end to end from the user's point of view, and you judge
     the outcome with critical thinking — what a careful engineer does when testing their own feature
     before shipping. Automated end-to-end suites (Playwright and friends) belong to CI: use their
-    results as evidence, but walk the journeys yourself. Where the journeys come from the epic plan —
-    this ticket is a sub-ticket — read the parent issue and its plan documents with your Linear tools
-    and verify against the journeys they define.
+    results as evidence, and walk yourself every step that no named test proves. Where the
+    journeys come from the epic plan — this ticket is a sub-ticket —
+    read the parent issue and its plan documents with your Linear tools and verify against the
+    journeys they define.
     #{journey_text(source, text)}
+    #{proof_routing(job, journey)}
     #{operator_only_steps()}
     """
   end
@@ -395,6 +399,56 @@ defmodule SymphonyElixir.QaAgent do
     with their account), and anything under an `After release` heading, is not yours to run: name it
     in your report as outside QA's reach and judge the rest. It never fails or blocks the ticket.
     """
+  end
+
+  # Each walkthrough step names the one place that proves it (ADR 0003): a named automated test or
+  # QA. QA links a named test's result instead of walking its step, and walks the rest; a step with
+  # no `Proved by:` is a QA step, so tickets written before the rule are walked as before.
+  defp proof_routing(job, journey) do
+    """
+    Each walkthrough step names the one place that proves it. A step ending in
+    `Proved by: <check> › <test>` is proved by that named automated test: do not walk it. Report it
+    as its own step, named after the walkthrough step, with that check's result on `#{job.sha}` and
+    the check run's URL in `details` and `evidence`. #{check_runs_hint(job)} The check passed: `pass`.
+    It failed, or never ran on `#{job.sha}`: `fail`, naming the step and the check in `findings`, since
+    the ticket's proof is part of its work. It is still running: poll it for at most 10 minutes, then
+    `blocked` with the reason. Walk every step that says `Proved by: QA` or names no proof.
+    #{routed_steps(Map.get(journey, :steps, []))}\
+    """
+  end
+
+  defp check_runs_hint(%{epic_review: true}), do: "Read the check the way the CI rule above reads CI's runs."
+
+  defp check_runs_hint(job) do
+    "Read the head's runs with `gh run list --commit #{job.sha} --json workflowName,status,conclusion,url` " <>
+      "and its check runs with `gh api repos/<owner>/<repo>/commits/#{job.sha}/check-runs` where `gh` is allowed, " <>
+      "else `curl -fsS \"https://api.github.com/repos/<owner>/<repo>/commits/#{job.sha}/check-runs\"`, " <>
+      "with `<owner>/<repo>` from `git remote get-url origin`."
+  end
+
+  defp routed_steps(steps) do
+    case Enum.split_with(steps, &Walkthrough.named_test?/1) do
+      {[], _qa_steps} ->
+        ""
+
+      {test_steps, qa_steps} ->
+        """
+
+        Steps a named test proves (link the check run, do not walk them):
+        #{step_lines(test_steps, true)}
+        Steps to walk (`Proved by: QA`, or no proof named):
+        #{step_lines(qa_steps, false)}
+        """
+    end
+  end
+
+  defp step_lines([], _proof?), do: "- none\n"
+
+  defp step_lines(steps, proof?) do
+    Enum.map_join(steps, "", fn step ->
+      text = String.replace(step.text, ~r/\s+/, " ")
+      if proof?, do: "- #{step.number}. #{text} #{Walkthrough.proof_line(step)}\n", else: "- #{step.number}. #{text}\n"
+    end)
   end
 
   defp epic_journey_text(%{source: source, text: text}) when is_binary(text) and text != "" do

@@ -255,7 +255,8 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
     - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
-      When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim.
+      When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim, each with its `Proved by:` line.
+    - Each walkthrough step is proved in one place. A step ending in `Proved by: <check> › <test>` is met by that named test passing on the PR head: plan the test in this PR unless the step names another ticket's. A step ending in `Proved by: QA`, or with no `Proved by:` line, is walked by QA; when code could drive it, plan a test anyway. When this run writes a walkthrough (a sub-ticket, a follow-up), route each step as `Splitting work and out-of-scope improvements` says.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
     - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that the parent's epic review checks and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
@@ -533,7 +534,12 @@ Which plan run this is:
    land. Each one must be deliverable as a single PR, with its own acceptance
    criteria and a line naming any earlier sub-ticket it depends on. For every
    sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
-   records the blocked-by link and Symphony's dependency gate holds it back.
+   records the blocked-by link and Symphony's dependency gate holds it back. Each
+   step of a sub-ticket's `## User walkthrough` names the one place that proves it
+   (`Proved by: <check> › <test>` or `Proved by: QA`, as `Splitting work and
+   out-of-scope improvements` says), and one journey never sits both in a
+   sub-ticket's walkthrough and in an end-to-end sub-ticket: the end-to-end
+   sub-ticket owns it, and the other's step names that test.
 3. Keep the parent's own description the definition of done the epic review resolves:
    its requirement rows and, when it has one, its `## User walkthrough`. The review
    reads them off the parent, so a requirement no sub-ticket delivers is a plan gap —
@@ -646,6 +652,8 @@ What that asks of a plan run:
 
 
 In this repository, a plan run's sub-ticket that adds a `symphony.yml` setting either builds its control in the macOS app or names a sibling sub-ticket that does; that sibling has a `## User walkthrough` and is in the parent's plan, which the epic review checks.
+
+In this repository, a walkthrough step that judges the macOS app by sight in dark mode, or judges the look of the status-bar menu, is a `Proved by: QA` step: no test can judge it. It needs TP-1045's QA tools (`qa_launch_app`'s `appearance` argument, `qa_open_status_menu`). Until TP-1045 lands, a walkthrough asks QA for light mode only and has QA read the status-bar menu from the accessibility tree, as TP-972 and TP-983 do. A step that installs one signed build over another needs a signing key the QA build lacks: it is proved by `macos-e2e`'s update scenarios, never by QA.
 
 ## Step 2: Execution phase (Todo -> In Progress -> Code Review)
 
@@ -877,7 +885,24 @@ machine can reproduce it: an end-to-end test in CI, or the QA agent driving the
 app or CLI through a QA playbook. A check only the operator can make once the
 change is live (on their own machine, in production, with their account) is not a
 walkthrough step: put it under `## After release`, which QA skips and which never
-blocks the ticket. Record the new issue
+blocks the ticket.
+
+Each walkthrough step names the one place that proves it, on a line at its end:
+`Proved by: <check> › <test>` (the GitHub check run, then the suite, scenario or
+test file that proves the step on the PR head) or `Proved by: QA`. A step with no
+`Proved by:` line is read as `Proved by: QA`. Route each step when you write it:
+
+- A step code can drive names its test. QA does not walk it: QA links that test's
+  result on the PR head.
+- A step that needs an environment QA lacks (a signed build, a device, real
+  credentials) goes to an automated harness and names it, never to QA.
+- A step that needs a QA tool QA has, or one a sibling ticket adds, stays
+  `Proved by: QA`, and so does a judgment by sight of what the user sees.
+- One journey is proved in one place. When an end-to-end ticket covers it, that
+  ticket owns the journey, and the other tickets' steps name its test instead of
+  repeating the journey for QA.
+
+Record the new issue
 identifiers in the current workpad's `Notes`. If the tool refuses, list the
 remaining issues in the workpad `Notes` for a human to file.
 

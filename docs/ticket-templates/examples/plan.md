@@ -118,7 +118,17 @@ stage is a Linear document in the ticket's project, attached to the ticket and t
 ### 6. Implementation plan
 
 `Backlog` sub-tickets, Must-be first, each naming its feature, journeys, screens and Kano class and
-carrying a `## User walkthrough`:
+carrying a `## User walkthrough` whose every step names the one place that proves it. In
+`Add a plant and see it in the list`, for example:
+
+1. Open the app for the first time → the Welcome screen asks for nothing but a tap. Proved by: QA
+2. Add a plant named Fern → it shows in the list, sorted by name. Proved by: `android` ›
+   `PlantListTest`
+3. Look at the list in light and dark mode → it matches S3 and looks finished. Proved by: QA
+
+Step 2 is code a test can drive, so QA links the test's result instead of walking it; steps 1 and
+3 ask for judgment by sight. Each journey is proved in one place: no other sub-ticket repeats J1's
+steps for QA.
 
 1. `Add a plant and see it in the list`: Add a plant (Must-be), J1, S1 to S3.
 2. `Log a watering, with undo`: Log a watering and Undo (Must-be), J2 and J3, S4.

@@ -37,6 +37,7 @@ defmodule SymphonyElixir.QaVerification do
     TicketPullRequest,
     TicketSignals,
     TransitionGuard,
+    Walkthrough,
     WorkspaceHead
   }
 
@@ -47,7 +48,6 @@ defmodule SymphonyElixir.QaVerification do
   @verdict_kind "qa"
   @max_blocked_attempts 2
   @head_unreadable_signal "qa_head_unreadable"
-  @walkthrough_heading ~r/^\s*\#{1,6}\s+User walkthrough\s*:?\s*$/i
   @acceptance_heading ~r/^\s*\#{1,6}\s+Acceptance criteria\s*:?\s*$/i
   @any_heading ~r/^\s*\#{1,6}\s+\S/
 
@@ -102,31 +102,32 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   @doc """
-  The journey context for `issue`: its `## User walkthrough` when it has one, else its acceptance
-  criteria, else nothing but the instruction to derive them. The QA prompt renders this, so the run
-  knows what to verify from the user's point of view.
+  The journey context for `issue`: its `## User walkthrough` when it has one, with its steps and the
+  proof each names (`SymphonyElixir.Walkthrough`), else its acceptance criteria, else nothing but the
+  instruction to derive them. The QA prompt renders this, so the run knows what to verify from the
+  user's point of view and which steps a named test proves instead.
 
   `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
   state's own run (the default), and the epic for the epic review of a plan parent
   (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
-  @spec journey(Issue.t(), String.t()) :: %{source: String.t(), text: String.t() | nil}
+  @spec journey(Issue.t(), String.t()) :: %{source: String.t(), text: String.t() | nil, steps: [Walkthrough.step()]}
   def journey(issue, label \\ "the ticket"), do: journey_for(issue, label)
 
   defp journey_for(%Issue{description: description}, label) when is_binary(description) do
     cond do
-      text = section(description, @walkthrough_heading) ->
-        %{source: "#{label}'s `## User walkthrough`", text: text}
+      text = Walkthrough.section(description) ->
+        %{source: "#{label}'s `## User walkthrough`", text: text, steps: Walkthrough.steps(text)}
 
       text = section(description, @acceptance_heading) ->
-        %{source: "#{label}'s acceptance criteria", text: text}
+        %{source: "#{label}'s acceptance criteria", text: text, steps: []}
 
       true ->
-        %{source: "#{label}'s walkthrough and acceptance criteria", text: nil}
+        %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
     end
   end
 
-  defp journey_for(_issue, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil}
+  defp journey_for(_issue, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do

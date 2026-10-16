@@ -757,6 +757,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "You are verifying the epic itself, not running a script"
       assert prompt =~ "It never fails or blocks the ticket."
       assert prompt =~ "Journeys to verify, from the epic's acceptance criteria:\n- [ ] The settings window opens"
+      assert String.replace(prompt, ~r/\s+/, " ") =~ "Read the check the way the CI rule above reads CI's runs."
       assert prompt =~ ~s("checklist": true | false)
 
       flat = String.replace(prompt, ~r/\s+/, " ")
@@ -852,6 +853,62 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "1. Run `symphony check`."
       assert prompt =~ "anything under an `After release` heading, is not yours to run"
       assert prompt =~ "It never fails or blocks the ticket."
+    end
+
+    test "a walkthrough that mixes named-test and QA steps lists the steps to link and the steps to walk" do
+      description = """
+      ## User walkthrough
+
+      Nothing changes on screen.
+
+      1. Preview the workflow → it states the rule. Proved by: `make-all` › the workflow preview tests.
+      2. Open the window in light mode
+         → it looks finished. Proved by: QA
+      3. Click Save → saved.
+      """
+
+      ticket = issue(%{description: description})
+      prompt = QaAgent.prompt(job(%{issue: ticket, journey: SymphonyElixir.QaVerification.journey(ticket)}), nil)
+      flat = String.replace(prompt, ~r/\s+/, " ")
+
+      assert flat =~ "A step ending in `Proved by: <check> › <test>` is proved by that named automated test: do not walk it."
+      assert flat =~ "Walk every step that says `Proved by: QA` or names no proof."
+      assert flat =~ "and walk yourself every step that no named test proves"
+      assert flat =~ "gh run list --commit #{job().sha}"
+      assert flat =~ "It failed, or never ran on `#{job().sha}`: `fail`, naming the step and the check in `findings`"
+
+      assert prompt =~
+               "Steps a named test proves (link the check run, do not walk them):\n" <>
+                 "- 1. Preview the workflow → it states the rule. Proved by: `make-all` › the workflow preview tests\n"
+
+      assert prompt =~
+               "Steps to walk (`Proved by: QA`, or no proof named):\n" <>
+                 "- 2. Open the window in light mode → it looks finished.\n" <>
+                 "- 3. Click Save → saved.\n"
+
+      refute flat =~ "but walk the journeys yourself"
+    end
+
+    test "a walkthrough whose steps a named test proves all has no steps to walk" do
+      journey = %{
+        source: "the ticket's `## User walkthrough`",
+        text: "1. Parse it. Proved by: `make-all`",
+        steps: SymphonyElixir.Walkthrough.steps("1. Parse it. Proved by: `make-all`")
+      }
+
+      prompt = QaAgent.prompt(job(%{journey: journey}), nil)
+
+      assert prompt =~ "- 1. Parse it. Proved by: `make-all`\n"
+      assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- none\n"
+    end
+
+    test "a walkthrough without Proved by: lines states the rule but lists no steps, so QA walks them all" do
+      journey = %{source: "the ticket's `## User walkthrough`", text: "1. Run `symphony check`.", steps: SymphonyElixir.Walkthrough.steps("1. Run `symphony check`.")}
+      prompt = QaAgent.prompt(job(%{journey: journey}), nil)
+
+      assert prompt =~ "Walk every step that says `Proved by: QA` or names no proof."
+      refute prompt =~ "Steps a named test proves"
+      refute prompt =~ "Steps to walk"
     end
 
     test "a journey with no text asks the run to derive it from the ticket" do

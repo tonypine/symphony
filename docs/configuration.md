@@ -1280,6 +1280,28 @@ Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
+**Which steps QA walks.** Each step of a `## User walkthrough` names the one place that proves it
+([ADR 0003](adr/0003-automated-tests-first-qa-last-resort.md)), on a line at the end of the step:
+
+| Line | Proof | QA |
+| --- | --- | --- |
+| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: it reports it with that check's result on the PR head and links the run. A passed check is `pass`; a failed check, or one that never ran on the head, is `fail` naming the step; a check still running is waited on for up to 10 minutes, then `blocked` |
+| `Proved by: QA` | the QA pass | walks the step |
+| no `Proved by:` line | read as `Proved by: QA`, so tickets written before the rule keep working | walks the step |
+
+`SymphonyElixir.Walkthrough` parses the walkthrough into steps with their proof, and the QA prompt
+lists the steps to link and the steps to walk when the walkthrough names at least one test. Until
+Symphony's QA pre-check confirms each named test itself, the QA agent reads the head's check runs
+with `gh` (or the public API, as above) and links the run.
+
+The instructions that write walkthroughs (the plan pipeline, the plan run, the feature ticket type,
+new issues filed during a run, and the ticket templates) route every step when it is written. A step
+code can drive names its test. A step that needs an environment QA lacks (a signed build, a device,
+real credentials) goes to an automated harness, never to QA. A step that needs a QA tool QA has, or
+one a sibling ticket adds, stays `Proved by: QA`, as does a judgment by sight. A plan never puts one
+journey both in a sub-ticket's walkthrough and in an end-to-end ticket: the end-to-end ticket owns
+it, and the sub-ticket's step names that test.
+
 **OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
 in the macOS app's Settings, its Models list and Effort note, `symphony check` on an `openrouter`
 profile, an OpenRouter run) are tested against a stub OpenRouter, `SymphonyElixir.OpenRouter.Stub`,
