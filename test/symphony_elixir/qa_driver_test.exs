@@ -153,7 +153,7 @@ defmodule SymphonyElixir.QaDriverTest do
           tmp_dir: Keyword.get(opts, :tmp_dir),
           host: Keyword.get(opts, :host, host()),
           git: Keyword.get(opts, :git, &clean_git/2)
-        ] ++ Keyword.take(opts, [:start_stub, :status_menu_poll])
+        ] ++ Keyword.take(opts, [:start_stub, :status_menu_poll, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll])
       )
 
     on_exit(fn -> QaDriver.stop(driver) end)
@@ -1542,13 +1542,22 @@ defmodule SymphonyElixir.QaDriverTest do
       test = self()
       bundle = Map.get(overrides, :bundle, fn dest -> {:ok, {"symphony-qa-app:#{dest}/Demo.app/Contents/MacOS/Demo\n", 0}} end)
 
-      cmd = fn
+      intercept = Map.get(overrides, :intercept, fn _executable, _args, _opts -> :pass end)
+
+      host_cmd = fn
         "/bin/sh", ["-c", "make app"], _opts -> {:ok, {"Build complete!\n", 0}}
         "/bin/sh", ["-c", _script, "sh", _build_dir, @app, dest], _opts -> bundle.(dest)
         "/bin/sh", ["-c", _script, "sh", @run_dir, _bundle, name, _url], _opts -> {:ok, {"symphony-qa-checkout:#{@run_dir}/checkouts/#{name}\n", 0}}
         "/bin/sh", ["-c", _script, "sh", @run_dir, _fake_gh], _opts -> {:ok, {"symphony-qa-gh:#{@run_dir}/bin/gh\n", 0}}
         @helper, ["screenshot" | _args], _opts -> {:ok, {~s({"ok":true}), 0}}
         executable, args, opts -> default_cmd(executable, args, opts, replies(Map.take(overrides, [:helper_replies])))
+      end
+
+      cmd = fn executable, args, opts ->
+        case intercept.(executable, args, opts) do
+          :pass -> host_cmd.(executable, args, opts)
+          result -> result
+        end
       end
 
       Map.merge(host(%{cmd: cmd}), %{
@@ -1905,11 +1914,609 @@ defmodule SymphonyElixir.QaDriverTest do
       assert message =~ "The bundle could not be copied to the QA host: exit 1: disk full"
     end
 
+    # The release pair's commands on the QA host, which answer without touching the local disk.
+    defp remote_pair(executable, args, _opts) do
+      case {executable, args} do
+        {"/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out]} -> {:ok, {"release pair built\n", 0}}
+        {"/bin/sh", ["-c", script, "sh" | rest]} -> remote_pair_script(script, rest)
+        {"/bin/sh", [_script, "--use"]} -> {:ok, {"symphony-qa-signing-identity:#{String.duplicate("AB", 20)}\nsymphony-qa-signing-keychain:/Users/qa/k.keychain-db\n", 0}}
+        {"/bin/cat", [_manifest]} -> {:ok, {~s({"n":{"build":90001},"n1":{"build":90002}}), 0}}
+        {"/usr/bin/curl", _args} -> {:ok, {"publish\n", 0}}
+        {"/bin/ps", _args} -> {:ok, {"", 0}}
+        _other -> :pass
+      end
+    end
+
+    defp remote_pair_script(script, rest) do
+      cond do
+        script =~ "symphony-qa-pair-src" -> {:ok, {"symphony-qa-pair-src:#{List.last(rest)}\n", 0}}
+        script =~ "symphony-qa-feed-server" -> {:ok, {"symphony-qa-feed-server:#{List.last(rest)}/stubs/update_feed.py\n", 0}}
+        script =~ "symphony-qa-pair-app" -> {:ok, {"symphony-qa-pair-app:#{List.last(rest)}/Symphony.app\n", 0}}
+        script =~ "symphony-qa-relaunch-script" -> {:ok, {"symphony-qa-relaunch-script:#{hd(rest)}/bin/relaunch\n", 0}}
+        true -> :pass
+      end
+    end
+
+    defp bundle_fails(["bundle" | _args], _cwd), do: {"fatal: bad revision HEAD\n", 128}
+    defp bundle_fails(args, cwd), do: clean_git(args, cwd)
+
+    defp bundling_git(test) do
+      fn
+        ["bundle", "create", bundle, "HEAD", "--tags"], _cwd ->
+          File.write!(bundle, "git bundle")
+          send(test, {:bundled, bundle})
+          {"", 0}
+
+        args, cwd ->
+          clean_git(args, cwd)
+      end
+    end
+
+    test "builds the pair from a bundle of HEAD on the QA host and serves its feed there", %{worktree: worktree} do
+      test = self()
+      host = remote_host(%{intercept: &remote_pair/3})
+
+      host =
+        Map.put(host, :ship, fn tar, dest ->
+          {:ok, files} = :erl_tar.extract(String.to_charlist(tar), [:memory])
+          send(test, {:ship, files, dest})
+          :ok
+        end)
+
+      driver = remote_driver(worktree, host, bundling_git(test))
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      src = @run_dir <> "/pair-src"
+
+      assert {:ok, %{"exit_status" => 0, "manifest" => %{"n" => %{"build" => 90_001}}}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert_received {:bundled, bundle}
+      assert bundle == Path.join(scratch_dir, "pair-bundle/head.bundle")
+      refute File.exists?(bundle)
+      assert_received {:ship, [{~c"head.bundle", "git bundle"}], dest}
+      assert dest == @run_dir <> "/pair-bundle"
+      assert_received {:cmd, "/bin/sh", ["-c", _clone, "sh", ^dest, ^src], _opts}
+      script = src <> "/scripts/qa/install-test-signing-identity.sh"
+      assert_received {:cmd, "/bin/sh", [^script, "--use"], identity_opts}
+      assert identity_opts[:cd] == src
+      assert_received {:cmd, "/bin/sh", ["-c", _copy, "sh", ^src, feed_dir], _opts}
+      assert feed_dir == @run_dir <> "/update-feed"
+      assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], build_opts}
+      assert out == @run_dir <> "/release-pair"
+      assert build_opts[:cd] == src
+      assert {"SYMPHONY_E2E_SIGNING_IDENTITY", String.duplicate("AB", 20)} in build_opts[:remote_env]
+      assert {"SYMPHONY_E2E_KEYCHAIN", "/Users/qa/k.keychain-db"} in build_opts[:remote_env]
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"release_pair" => true}) end)
+      assert {:ok, %{"pid" => pid, "bundle" => bundle}} = result
+      assert String.starts_with?(bundle, @run_dir <> "/pair-launches/")
+      assert_received {:launched, "/usr/bin/python3", feed_opts, _port, _feed_pid}
+      assert feed_opts[:env] == []
+      assert [_script, "--dir", @run_dir <> "/release-pair/feed", "--port", port | _rest] = feed_opts[:args]
+      assert String.to_integer(port) in 20_000..59_999
+      assert_received {:launched, executable, launch_opts, _port, ^pid}
+      assert executable == bundle <> "/Contents/MacOS/Demo"
+      assert {"SYMPHONY_BAR_UPDATE_URL", "http://127.0.0.1:#{port}/releases/latest"} in launch_opts[:env]
+      assert {"SYMPHONY_UPDATE_OPEN", @run_dir <> "/bin/relaunch"} in launch_opts[:env]
+      assert {"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/app-root"} in launch_opts[:env]
+
+      QaDriver.stop(driver)
+      assert_received {:cmd, "/bin/ps", _args, _opts}
+      assert_received {:cleanup, @run_dir}
+    end
+
+    test "reports a checkout it can't bundle, copy or clone on the QA host", %{worktree: worktree} do
+      test = self()
+
+      for {git, overrides, text} <- [
+            {&bundle_fails/2, %{}, "git bundle failed (exit 128)"},
+            {&clean_git/2, %{}, "could not be packed for the QA host"},
+            {bundling_git(test), %{ship: {:error, "exit 1: disk full"}}, "could not be copied to the QA host: exit 1: disk full"},
+            {bundling_git(test), %{clone: {:ok, {"fatal: bad bundle\n", 128}}}, "git could not clone the checkout on the QA host: exit 128: fatal: bad bundle"},
+            {bundling_git(test), %{clone: {:ok, {"cloned\n", 0}}}, "checkout on the QA host was not confirmed"}
+          ] do
+        clone = Map.get(overrides, :clone)
+
+        intercept = fn
+          "/bin/sh", ["-c", script, "sh" | _rest] = args, opts ->
+            if clone && script =~ "symphony-qa-pair-src", do: clone, else: remote_pair("/bin/sh", args, opts)
+
+          executable, args, opts ->
+            remote_pair(executable, args, opts)
+        end
+
+        driver = remote_driver(worktree, remote_host(Map.merge(%{intercept: intercept}, Map.take(overrides, [:ship]))), git)
+        assert {:error, {:qa_tool, code, message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+        assert code in ["qa_git_failed", "qa_release_pair_failed"]
+        assert message =~ text
+        refute_received {:cmd, "/bin/sh", [_script, "--use"], _opts}
+        QaDriver.stop(driver)
+      end
+    end
+
     test "reports a capture it cannot copy back", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host(%{read: {:error, :unreadable}}))
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
       {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})) == "qa_screenshot_failed"
+    end
+  end
+
+  describe "release pair" do
+    @sha "0123456789ABCDEF0123456789ABCDEF01234567"
+    @keychain "/Users/qa/Library/Keychains/symphony-qa-signing.keychain-db"
+    @identity_output "symphony-qa-signing-identity:#{@sha}\nsymphony-qa-signing-keychain:#{@keychain}\n"
+    @manifest %{
+      "commit" => "abc",
+      "signing_identity" => @sha,
+      "n" => %{"version" => "0.0.1.90001", "build" => 90_001, "app" => "N/Symphony.app"},
+      "n1" => %{"version" => "0.0.1.90002", "build" => 90_002, "tag" => "v0.0.1.90002-release-pair", "feed" => "feed"}
+    }
+
+    setup %{worktree: worktree} do
+      stubs = Path.join(worktree, "test/support/stubs")
+      File.mkdir_p!(stubs)
+      for file <- ~w(__init__.py _server.py update_feed.py), do: File.write!(Path.join(stubs, file), "# #{file}\n")
+      {:ok, mode} = Agent.start_link(fn -> "publish" end)
+      %{feed_mode: mode}
+    end
+
+    # What `make -C macos release-pair` lays out under its RELEASE_PAIR_OUT.
+    defp write_pair(out, manifest \\ Jason.encode!(@manifest)) do
+      macos = Path.join(out, "N/Symphony.app/Contents/MacOS")
+      File.mkdir_p!(macos)
+      File.write!(Path.join(out, "N/Symphony.app/Contents/Info.plist"), "<plist/>")
+      File.write!(Path.join(macos, "Demo"), "release-n")
+      File.mkdir_p!(Path.join(out, "feed"))
+      File.write!(Path.join(out, "feed/version.json"), ~s({"version":"0.0.1.90002","build":90002}))
+      File.write!(Path.join(out, "manifest.json"), manifest)
+      {:ok, {"release pair in #{out}\n", 0}}
+    end
+
+    # The pair's commands: the identity check, the build, the feed (its mode
+    # lives in the `mode` agent), the bundle's versions and the process list.
+    # The driver's own scripts run for real. `intercept` answers first unless it
+    # returns `:pass`.
+    defp pair_cmd(mode, opts) do
+      pair = %{
+        identity: Keyword.get(opts, :identity, {:ok, {@identity_output, 0}}),
+        build: Keyword.get(opts, :build, &write_pair/1),
+        ps: Keyword.get(opts, :ps, {:ok, {"", 0}}),
+        mode: mode
+      }
+
+      intercept = Keyword.get(opts, :intercept, fn _executable, _args, _opts -> :pass end)
+
+      fn executable, args, cmd_opts ->
+        case intercept.(executable, args, cmd_opts) do
+          :pass -> pair_default(executable, args, cmd_opts, pair)
+          result -> result
+        end
+      end
+    end
+
+    defp pair_default("/bin/sh", [_script, "--use"], _opts, pair), do: pair.identity
+    defp pair_default("/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], _opts, pair), do: pair.build.(out)
+    defp pair_default("/usr/bin/curl", args, _opts, pair), do: feed_reply(pair.mode, args)
+    defp pair_default("/bin/ps", _args, _opts, pair), do: pair.ps
+    defp pair_default("/bin/kill", _args, _opts, _pair), do: {:ok, {"", 0}}
+    defp pair_default(executable, args, opts, _pair) when executable in ["/bin/cat", "/usr/bin/tail"], do: Host.cmd(executable, args, opts)
+    defp pair_default("/usr/bin/plutil", ["-extract", "CFBundleShortVersionString" | _rest], _opts, _pair), do: {:ok, {"0.0.1.90002\n", 0}}
+    defp pair_default("/usr/bin/plutil", ["-extract", "CFBundleVersion" | _rest], _opts, _pair), do: {:ok, {"90002\n", 0}}
+    defp pair_default(executable, args, opts, _pair), do: default_cmd(executable, args, opts, replies(%{}))
+
+    # A POST sets the mode it sends; both answer the current mode.
+    defp feed_reply(mode, args) do
+      case Enum.drop_while(args, &(&1 != "--data")) do
+        ["--data", value | _rest] -> Agent.update(mode, fn _old -> value end)
+        [] -> :ok
+      end
+
+      {:ok, {Agent.get(mode, & &1) <> "\n", 0}}
+    end
+
+    defp pair_driver(worktree, mode, cmd_opts \\ [], driver_opts \\ []) do
+      host = host(Map.merge(%{cmd: pair_cmd(mode, cmd_opts)}, Keyword.get(driver_opts, :host, %{})))
+      start_driver(worktree, [host: host] ++ Keyword.take(driver_opts, [:git, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll]))
+    end
+
+    defp built_pair(worktree, mode, cmd_opts \\ [], driver_opts \\ []) do
+      driver = pair_driver(worktree, mode, cmd_opts, driver_opts)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      driver
+    end
+
+    defp launch_pair(driver, args \\ %{}) do
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", Map.put(args, "release_pair", true)) end)
+      result
+    end
+
+    defp env_value(launch_opts, name) do
+      Enum.find_value(launch_opts[:env], fn
+        {key, value} when is_binary(value) and key == name -> value
+        {key, value} when is_list(value) -> if to_string(key) == name, do: to_string(value)
+        _other -> nil
+      end)
+    end
+
+    # What the app's update helper does once it installed an update: run the
+    # relaunch stand-in it was given with the bundle to start.
+    defp ask_relaunch(launch_opts, bundle) do
+      relaunch = env_value(launch_opts, "SYMPHONY_UPDATE_OPEN")
+      {"", 0} = System.cmd("/bin/sh", [relaunch, bundle], env: [{"SYMPHONY_BAR_QA_ROOT", env_value(launch_opts, "SYMPHONY_BAR_QA_ROOT")}])
+    end
+
+    test "builds the pair with the QA signing identity where the app runs and returns its manifest", %{worktree: worktree, feed_mode: mode} do
+      driver = pair_driver(worktree, mode)
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+
+      assert {:ok, %{"exit_status" => 0, "manifest" => @manifest, "output" => output, "note" => note}} =
+               QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+
+      assert output =~ "release pair in #{scratch_dir}/release-pair"
+      assert note =~ "release_pair: true"
+      script = Path.join(worktree, "scripts/qa/install-test-signing-identity.sh")
+      assert_received {:cmd, "/bin/sh", [^script, "--use"], identity_opts}
+      assert identity_opts[:cd] == worktree
+      assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], build_opts}
+      assert out == Path.join(scratch_dir, "release-pair")
+      assert build_opts[:cd] == worktree
+      assert build_opts[:timeout_ms] == 1_800_000
+      assert env_value(build_opts, "SYMPHONY_E2E_SIGNING_IDENTITY") == @sha
+      assert env_value(build_opts, "SYMPHONY_E2E_KEYCHAIN") == @keychain
+      refute env_value(build_opts, "SYMPHONY_E2E_TRUST_CERT")
+      assert File.read!(Path.join(scratch_dir, "update-feed/stubs/update_feed.py")) == "# update_feed.py\n"
+      assert %{pair: %{manifest: @manifest}} = :sys.get_state(driver)
+
+      # The plain build still builds and launches beside the pair.
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:ok, %{"pid" => _pid}} = result
+    end
+
+    test "refuses to build without a trusted QA signing identity", %{worktree: worktree, feed_mode: mode} do
+      for {reply, code, text} <- [
+            {{:ok, {"install-test-signing-identity: not installed: there is no keychain\n", 3}}, "qa_signing_identity_missing", "no QA signing identity"},
+            {{:ok, {"install-test-signing-identity: not trusted\n", 4}}, "qa_signing_identity_untrusted", "not trusted for code signing"},
+            {{:ok, {"symphony-qa-signing-identity:nope\n", 0}}, "qa_signing_identity_check_failed", "printed no identity"},
+            {{:ok, {"sh: no such file\n", 127}}, "qa_signing_identity_check_failed", "exit 127"},
+            {{:error, :timeout}, "qa_signing_identity_check_failed", ":timeout"}
+          ] do
+        driver = pair_driver(worktree, mode, identity: reply)
+        assert {:error, {:qa_tool, ^code, message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+        assert message =~ text
+        assert message =~ "answer with verdict `blocked`"
+        assert message =~ "scripts/qa/install-test-signing-identity.sh once on the QA host"
+        refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
+        QaDriver.stop(driver)
+      end
+
+      driver = pair_driver(worktree, mode, identity: {:ok, {String.duplicate("x", 600) <> "\n", 3}})
+      assert {:error, {:qa_tool, "qa_signing_identity_missing", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "identity: …" <> String.duplicate("x", 499)
+    end
+
+    test "reports a failing build, a timeout and a missing manifest, and forgets the pair", %{worktree: worktree, feed_mode: mode} do
+      driver = pair_driver(worktree, mode, build: fn _out -> {:ok, {"error: make release failed\n", 2}} end)
+      assert {:ok, %{"exit_status" => 2, "output" => "error: make release failed\n"} = result} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      refute Map.has_key?(result, "manifest")
+      assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
+
+      driver = pair_driver(worktree, mode, [build: fn _out -> {:error, :timeout} end], release_pair_timeout_ms: 5_000)
+      assert {:error, {:qa_tool, "qa_release_pair_timeout", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "within 5000 ms"
+      assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
+
+      driver = pair_driver(worktree, mode, build: fn _out -> {:error, :enoent} end)
+      assert {:error, {:qa_tool, "qa_release_pair_failed", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "could not start: :enoent"
+
+      for manifest <- ["not json", ~s({"n":{}})] do
+        driver = pair_driver(worktree, mode, build: &write_pair(&1, manifest))
+        assert {:error, {:qa_tool, "qa_release_pair_failed", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+        assert message =~ "manifest.json could not be read"
+        assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
+      end
+
+      driver = pair_driver(worktree, mode, build: fn _out -> {:ok, {"built nothing\n", 0}} end)
+      assert {:error, {:qa_tool, "qa_release_pair_failed", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "manifest.json could not be read: exit 1"
+    end
+
+    test "refuses a modified worktree and a checkout without the update feed's code", %{worktree: worktree, feed_mode: mode} do
+      dirty = pair_driver(worktree, mode, [], git: fn _args, _cwd -> {" M macos/Sources/App.swift\0", 0} end)
+      assert {:error, {:qa_tool, "qa_worktree_modified", message}} = QaDriver.call_tool(dirty, "qa_build_release_pair", %{})
+      assert message =~ "macos/Sources/App.swift"
+      refute_received {:cmd, "/bin/sh", [_script, "--use"], _opts}
+
+      unconfirmed = fn
+        "/bin/sh", ["-c", script, "sh" | _rest], _opts -> if script =~ "symphony-qa-feed-server", do: {:ok, {"", 0}}, else: :pass
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = pair_driver(worktree, mode, intercept: unconfirmed)
+      assert {:error, {:qa_tool, "qa_release_pair_failed", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "update feed's code could not be copied"
+
+      File.rm!(Path.join(worktree, "test/support/stubs/_server.py"))
+      driver = pair_driver(worktree, mode)
+      assert {:error, {:qa_tool, "qa_release_pair_failed", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "_server.py is not a regular file"
+      refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+    end
+
+    test "launches N from a fresh copy beside the pair's feed and drives the app its update helper relaunches", %{worktree: worktree, feed_mode: mode} do
+      driver = built_pair(worktree, mode, [], relaunch_poll_ms: 10)
+      %{scratch_dir: scratch_dir, qa_root: qa_root} = GenServer.call(driver, :config)
+
+      assert {:ok, %{"pid" => pid, "qa_mode" => true, "release_pair" => true, "bundle" => bundle, "note" => note}} =
+               launch_pair(driver, %{"update_check_interval_seconds" => 5, "appearance" => "dark"})
+
+      assert note =~ "qa_relaunched_app"
+      assert String.starts_with?(bundle, Path.join(scratch_dir, "pair-launches") <> "/")
+      assert File.read!(Path.join(bundle, "Contents/MacOS/Demo")) == "release-n"
+
+      assert_received {:launched, "/usr/bin/python3", feed_opts, _feed_port, feed_pid}
+      assert feed_opts[:cd] == Path.join(scratch_dir, "update-feed")
+      assert [script, "--dir", feed_dir, "--port", port, "--log", log] = feed_opts[:args]
+      assert script == Path.join(scratch_dir, "update-feed/stubs/update_feed.py")
+      assert feed_dir == Path.join(scratch_dir, "release-pair/feed")
+      assert log == Path.join(scratch_dir, "update-feed/feed.log")
+      assert_received {:cmd, "/usr/bin/curl", ["-sS", "-f", "--max-time", "1", ready_url], _opts}
+      assert ready_url == "http://127.0.0.1:#{port}/_feed/mode"
+
+      assert_received {:launched, executable, launch_opts, _port, ^pid}
+      assert executable == Path.join(bundle, "Contents/MacOS/Demo")
+      assert env_value(launch_opts, "SYMPHONY_BAR_QA_ROOT") == qa_root
+      assert env_value(launch_opts, "SYMPHONY_BAR_UPDATE_URL") == "http://127.0.0.1:#{port}/releases/latest"
+      assert env_value(launch_opts, "SYMPHONY_BAR_UPDATE_CHECK_INTERVAL") == "5"
+      assert env_value(launch_opts, "SYMPHONY_BAR_QA_APPEARANCE") == "dark"
+      assert env_value(launch_opts, "SYMPHONY_UPDATE_OPEN") == Path.join(scratch_dir, "bin/relaunch")
+
+      # A second launch gets its own copy of N and the same feed.
+      assert {:ok, %{"pid" => second, "bundle" => other_bundle}} = launch_pair(driver)
+      assert other_bundle != bundle
+      refute_received {:launched, "/usr/bin/python3", _opts, _port, _pid}
+      assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => second})
+
+      # N installed N+1 in its copy and asks for it to start again.
+      ask_relaunch(launch_opts, bundle)
+
+      assert {:ok, %{"pid" => relaunched, "qa_mode" => true, "bundle" => ^bundle, "version" => "0.0.1.90002", "build" => "90002", "note" => note}} =
+               QaDriver.call_tool(driver, "qa_relaunched_app", %{"wait_seconds" => 5})
+
+      assert note =~ "rolled back to"
+      assert_received {:launched, ^executable, relaunch_opts, _port, ^relaunched}
+      assert env_value(relaunch_opts, "SYMPHONY_BAR_UPDATE_URL") == "http://127.0.0.1:#{port}/releases/latest"
+      assert env_value(relaunch_opts, "SYMPHONY_BAR_QA_APPEARANCE") == "dark"
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/after-update.png"}]}} =
+               QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => relaunched, "name" => "after-update"})
+
+      # Nothing more to start; a request for a bundle no launch made is refused.
+      assert {:error, {:qa_tool, "qa_no_relaunch", message}} = QaDriver.call_tool(driver, "qa_relaunched_app", %{"wait_seconds" => 1})
+      assert message =~ "within 1 s"
+      ask_relaunch(launch_opts, "/Applications/Symphony.app")
+      assert {:error, {:qa_tool, "qa_relaunch_unknown", message}} = QaDriver.call_tool(driver, "qa_relaunched_app", %{})
+      assert message =~ "/Applications/Symphony.app"
+
+      # The feed: its mode, switched, and the app's requests without the driver's own.
+      File.write!(log, [
+        ~s({"method":"GET","path":"/releases/latest","status":200}\n),
+        ~s({"method":"GET","path":"/_feed/mode","status":200}\n),
+        "not json\n",
+        ~s({"method":"GET","path":"/Symphony-0.0.1.90002.zip","status":200}\n)
+      ])
+
+      assert {:ok, %{"mode" => "publish", "url" => url, "requests" => [%{"path" => "/releases/latest"}, %{"path" => "/Symphony-0.0.1.90002.zip"}]}} =
+               QaDriver.call_tool(driver, "qa_update_feed", %{})
+
+      assert url == "http://127.0.0.1:#{port}/releases/latest"
+      assert {:ok, %{"mode" => "none"}} = QaDriver.call_tool(driver, "qa_update_feed", %{"mode" => "none"})
+      assert_received {:cmd, "/usr/bin/curl", ["-sS", "-f", "--max-time", "5", "-X", "POST", "--data", "none", _url], _opts}
+
+      # Stopping the pass stops the feed and anything left under its directory.
+      host_dir = scratch_dir
+      QaDriver.stop(driver)
+      assert_received {:killed, ^feed_pid}
+      assert_received {:killed, ^relaunched}
+      assert_received {:cmd, "/bin/ps", ["-axww", "-o", "pid=,command="], _opts}
+      refute File.exists?(host_dir)
+    end
+
+    test "stops what a pass left under its directory", %{worktree: worktree, feed_mode: mode} do
+      ps = fn host_dir ->
+        {:ok,
+         {"  123 /usr/bin/python3 #{host_dir}/update-feed/stubs/update_feed.py\n 456 /bin/sh #{host_dir}/app-root/updates/update-helper.sh 1 a b c\n 789 /Applications/Symphony.app/Contents/MacOS/SymphonyBar\n",
+          0}}
+      end
+
+      {:ok, holder} = Agent.start_link(fn -> nil end)
+
+      intercept = fn
+        "/bin/ps", _args, _opts -> ps.(Agent.get(holder, & &1))
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = built_pair(worktree, mode, intercept: intercept)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      Agent.update(holder, fn _old -> host_dir end)
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+
+      QaDriver.stop(driver)
+      assert_received {:cmd, "/bin/ps", _args, _opts}
+      assert_received {:cmd, "/bin/kill", ["-TERM", "123", "456"], _opts}
+
+      # A pass that launched no pair leaves the process list alone.
+      driver = built_pair(worktree, mode)
+      QaDriver.stop(driver)
+      refute_received {:cmd, "/bin/ps", _args, _opts}
+
+      # A process list it can't read stops nothing.
+      driver = built_pair(worktree, mode, ps: {:error, :timeout})
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+      QaDriver.stop(driver)
+      assert_received {:cmd, "/bin/ps", _args, _opts}
+      refute_received {:cmd, "/bin/kill", _args, _opts}
+    end
+
+    test "refuses release-pair arguments it can't honour", %{worktree: worktree, feed_mode: mode} do
+      driver = pair_driver(worktree, mode)
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"release_pair" => "yes"})
+      assert message =~ "`release_pair` must be true or false"
+      assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
+      assert error_code(QaDriver.call_tool(driver, "qa_relaunched_app", %{})) == "qa_release_pair_not_launched"
+      assert error_code(QaDriver.call_tool(driver, "qa_update_feed", %{})) == "qa_update_feed_not_running"
+
+      {:ok, [port | _ports]} = QaDriver.host_ports(driver)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = launch_pair(driver, %{"update_feed_port" => port})
+      assert message =~ "serves the pair's own feed"
+      assert error_code(launch_pair(driver, %{"gh_stub_port" => 1})) == "invalid_arguments"
+      refute_received {:launched, _executable, _opts, _port, _pid}
+
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+      assert error_code(QaDriver.call_tool(driver, "qa_relaunched_app", %{"wait_seconds" => 0})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_relaunched_app", %{"wait_seconds" => 301})) == "invalid_arguments"
+
+      for bad <- ["off", 5] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_update_feed", %{"mode" => bad})
+        assert message =~ "publish, none, forbidden"
+      end
+
+      # `release_pair: false` is the plain launch.
+      assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{"release_pair" => false})) == "qa_not_built"
+    end
+
+    test "retries a feed that exits or never answers, and fails the launch when it can't start", %{worktree: worktree, feed_mode: mode} do
+      test = self()
+      {:ok, starts} = Agent.start_link(fn -> [:exits, :cat] end)
+
+      launch = fn
+        "/usr/bin/python3", opts ->
+          send(test, {:feed_start, opts[:args]})
+
+          case Agent.get_and_update(starts, fn [next | rest] -> {next, rest ++ [:cat]} end) do
+            :exits ->
+              port = Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, args: ["-c", "echo 'OSError: [Errno 48] Address already in use'; exit 2"]])
+              # The exit reaches the driver before the readiness check.
+              receive do
+                {^port, {:exit_status, _status}} = exited -> send(self(), exited)
+              end
+
+              {:ok, port, 90_001}
+
+            :cat ->
+              {:ok, Port.open({:spawn, "cat"}, [:binary, :exit_status]), 90_002}
+          end
+
+        executable, opts ->
+          port = Port.open({:spawn, "cat"}, [:binary])
+          pid = System.unique_integer([:positive]) + 100_000
+          send(test, {:launched, executable, opts, port, pid})
+          {:ok, port, pid}
+      end
+
+      driver = built_pair(worktree, mode, [], host: %{launch: launch})
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+      assert_received {:feed_start, [_script, "--dir", _dir, "--port", _first | _rest]}
+      assert_received {:feed_start, [_script, "--dir", _dir, "--port", _second | _rest]}
+      assert_received {:killed, 90_001}
+      assert %{feed: %{os_pid: 90_002}} = :sys.get_state(driver)
+
+      # A feed that exits later is started again by the next launch.
+      %{feed: %{port: feed_port}} = :sys.get_state(driver)
+
+      log =
+        capture_log(fn ->
+          send(driver, {feed_port, {:exit_status, 0}})
+          wait_until(fn -> :sys.get_state(driver).feed == nil end)
+        end)
+
+      assert log =~ "update feed exited status=0"
+      assert error_code(QaDriver.call_tool(driver, "qa_update_feed", %{})) == "qa_update_feed_not_running"
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+      assert_received {:feed_start, _args}
+
+      # A feed that never answers.
+      silent = fn
+        "/usr/bin/curl", _args, _opts -> {:ok, {"curl: (7) Failed to connect", 7}}
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = built_pair(worktree, mode, [intercept: silent], feed_poll: {2, 1})
+      assert {:error, {:qa_tool, "qa_update_feed_failed", message}} = launch_pair(driver)
+      assert message =~ "never answered on port"
+      assert message =~ "Failed to connect"
+
+      for _attempt <- 1..3, do: assert_received({:launched, "/usr/bin/python3", _opts, _port, _pid})
+      refute_received {:launched, "/usr/bin/python3", _opts, _port, _pid}
+
+      unlaunchable = fn
+        "/usr/bin/python3", _opts -> {:error, :enoent}
+        executable, opts -> launch.(executable, opts)
+      end
+
+      driver = built_pair(worktree, mode, [], host: %{launch: unlaunchable})
+      assert {:error, {:qa_tool, "qa_update_feed_failed", message}} = launch_pair(driver)
+      assert message =~ "could not start: :enoent"
+    end
+
+    test "reports a copy, relaunch stand-in, request or feed call that fails", %{worktree: worktree, feed_mode: mode} do
+      driver = built_pair(worktree, mode)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      File.rm_rf!(Path.join(host_dir, "release-pair/N"))
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = launch_pair(driver)
+      assert message =~ "holds no N/Symphony.app"
+
+      driver = built_pair(worktree, mode)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      File.write!(Path.join(host_dir, "bin"), "")
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = launch_pair(driver)
+      assert message =~ "relaunch stand-in could not be installed"
+
+      unconfirmed = fn
+        "/bin/sh", ["-c", script, "sh" | _rest], _opts -> if script =~ "symphony-qa-pair-app", do: {:ok, {"copied\n", 0}}, else: :pass
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = built_pair(worktree, mode, intercept: unconfirmed)
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = launch_pair(driver)
+      assert message =~ "copy of release N was not confirmed"
+
+      unreadable = fn
+        "/bin/sh", ["-c", script, "sh" | _rest], _opts -> if script =~ "symphony-qa-relaunch:", do: {:error, :timeout}, else: :pass
+        "/usr/bin/tail", _args, _opts -> {:ok, {"tail: feed.log: Permission denied\n", 1}}
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = built_pair(worktree, mode, intercept: unreadable)
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+      assert {:error, {:qa_tool, "qa_relaunch_failed", message}} = QaDriver.call_tool(driver, "qa_relaunched_app", %{})
+      assert message =~ ":timeout"
+      assert {:error, {:qa_tool, "qa_update_feed_failed", message}} = QaDriver.call_tool(driver, "qa_update_feed", %{})
+      assert message =~ "request log could not be read: tail: feed.log: Permission denied"
+
+      down = fn
+        "/usr/bin/curl", ["-sS", "-f", "--max-time", "5", "-X" | _rest], _opts -> {:ok, {"curl: (22) The requested URL returned error: 400", 22}}
+        "/usr/bin/tail", _args, _opts -> {:error, :timeout}
+        "/usr/bin/plutil", ["-extract", "CFBundleVersion" | _rest], _opts -> {:error, :timeout}
+        _executable, _args, _opts -> :pass
+      end
+
+      driver = built_pair(worktree, mode, [intercept: down], relaunch_poll_ms: 10)
+      assert {:ok, %{"pid" => pid, "bundle" => bundle}} = launch_pair(driver)
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      assert {:error, {:qa_tool, "qa_update_feed_failed", message}} = QaDriver.call_tool(driver, "qa_update_feed", %{"mode" => "forbidden"})
+      assert message =~ "did not answer: exit 22"
+      assert {:error, {:qa_tool, "qa_update_feed_failed", message}} = QaDriver.call_tool(driver, "qa_update_feed", %{})
+      assert message =~ "request log could not be read: :timeout"
+      ask_relaunch(launch_opts, bundle)
+      assert {:ok, %{"version" => "0.0.1.90002", "build" => nil}} = QaDriver.call_tool(driver, "qa_relaunched_app", %{})
+
+      # A feed that has answered nothing has no log yet.
+      driver = built_pair(worktree, mode)
+      assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
+      assert {:ok, %{"mode" => "publish", "requests" => []}} = QaDriver.call_tool(driver, "qa_update_feed", %{})
     end
   end
 
@@ -1929,6 +2536,10 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_receive {^port, {:exit_status, _status}}, 5_000
       assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
       assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = Host.default()
+
+      assert {:ok, port, _pid} = Host.launch("/bin/echo", cd: System.tmp_dir!(), env: [], args: ["release", "pair"])
+      assert_receive {^port, {:data, "release pair\n"}}, 5_000
+      assert_receive {^port, {:exit_status, 0}}, 5_000
     end
   end
 

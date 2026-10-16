@@ -559,8 +559,41 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "enum" => ~w(light dark),
             "description" =>
               "Launch the app light or dark (SYMPHONY_BAR_QA_APPEARANCE) whatever the host's appearance, which QA never changes. Omit it to follow the host. For both, launch once per appearance."
+          },
+          "release_pair" => %{
+            "type" => "boolean",
+            "description" =>
+              "Launch release N of the pair qa_build_release_pair built, from a fresh copy, instead of the qa_build app. Its update checks read the pair's own feed, which offers N+1, so N can install it; then call qa_relaunched_app. Not with update_feed_port."
           }
         }
+      }
+    },
+    %{
+      "name" => "qa_build_release_pair",
+      "description" =>
+        "Build the signed release pair (make -C macos release-pair): release N of the app and its update N+1, signed with the QA host's test signing identity, where the app runs. Takes several minutes; returns the manifest (versions, builds, tag). Fails with qa_signing_identity_missing or qa_signing_identity_untrusted on a QA host without that identity: answer blocked with its message.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
+      "name" => "qa_relaunched_app",
+      "description" =>
+        "After release N of the pair installed an update (or an update was rolled back), wait for its update helper to ask for the app to start again, start that app in QA mode and return its PID, version and build. Use the new PID for every other qa_* tool.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "wait_seconds" => %{"type" => "integer", "minimum" => 1, "maximum" => 300, "default" => 60, "description" => "How long to wait for the request."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_update_feed",
+      "description" =>
+        "Read the release pair's update feed: its mode, its URL and the requests the app sent it (oldest first, at most 200). Pass mode to switch it first: publish offers N+1, none offers nothing newer, forbidden answers 403 (GitHub's rate limit).",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{"mode" => %{"type" => "string", "enum" => ~w(publish none forbidden)}}
       }
     },
     %{
@@ -961,7 +994,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir", "update_feed_port", "update_check_interval_seconds", "appearance"],
+    "qa_launch_app" => [
+      "api_fixtures",
+      "gh_stub_port",
+      "linear_stub_port",
+      "open_panel_dir",
+      "update_feed_port",
+      "update_check_interval_seconds",
+      "appearance",
+      "release_pair"
+    ],
+    "qa_build_release_pair" => [],
+    "qa_relaunched_app" => ["wait_seconds"],
+    "qa_update_feed" => ["mode"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],

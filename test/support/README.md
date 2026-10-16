@@ -35,7 +35,8 @@ python3 test/support/macos_release/release_pair.py [--out DIR] [--build-n N] [--
 Builds release N and its update N+1 of Symphony.app from the checkout (`make release` and
 `swift build -c release`, then `make -C macos bundle` for each), signs both with one code-signing
 identity, packages N+1 with `scripts/release/package.sh` signed with a throwaway minisign key, and
-writes these fixed paths under `macos/build/release-pair/` (or `--out`):
+writes these fixed paths under `macos/build/release-pair/` (or `--out`, `RELEASE_PAIR_OUT` for
+`make`):
 
 | Path | What |
 | --- | --- |
@@ -63,7 +64,7 @@ Only test identities: never Symphony's release key or signing certificate.
 | Variable | Effect |
 | --- | --- |
 | *(none set)* | A throwaway self-signed code-signing identity in a temporary keychain, on the keychain search list until the build ends. `codesign --verify` accepts it only once it is trusted for code signing. |
-| `SYMPHONY_E2E_SIGNING_IDENTITY` | Sign with this identity instead (a name or its SHA-1), such as a QA host's persistent test identity. |
+| `SYMPHONY_E2E_SIGNING_IDENTITY` | Sign with this identity instead (a name or its SHA-1), such as a QA host's persistent test identity (`scripts/qa/install-test-signing-identity.sh`, which the QA driver's `qa_build_release_pair` signs with). |
 | `SYMPHONY_E2E_KEYCHAIN` | The keychain that holds that identity, when it isn't on the search list. |
 | `SYMPHONY_E2E_TRUST_CERT=1` | Trust the throwaway certificate for code signing until the build ends (`sudo security add-trusted-cert`; CI sets this). |
 
