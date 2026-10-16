@@ -1351,6 +1351,47 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "document_not_owned_by_issue", "document_id" => "doc-other"}} = Jason.decode!(response["output"])
     end
 
+    test "the QA scope reads the parent's documents too and still cannot write; other scopes read their own" do
+      parent = %{"identifier" => "TP-6", "attachments" => %{"nodes" => [%{"metadata" => %{"symphonyDocumentId" => "doc-screens"}}]}}
+      screens = %{"id" => "doc-screens", "title" => "TP-6 · Screens", "url" => "https://linear.app/acme/document/screens"}
+      recipient = self()
+
+      client = fn query, _variables, opts ->
+        send(recipient, {:document_query, Keyword.get(opts, :tag), query})
+
+        cond do
+          query =~ "SymphonyAgentReadableDocumentScope" -> {:ok, %{"data" => %{"issue" => Map.put(@document_scope, "parent", parent)}}}
+          query =~ "SymphonyAgentDocumentScope" -> {:ok, %{"data" => %{"issue" => @document_scope}}}
+          query =~ "SymphonyAgentDocuments" -> {:ok, %{"data" => %{"documents" => %{"nodes" => [screens]}}}}
+          query =~ "SymphonyAgentDocument(" -> {:ok, %{"data" => %{"document" => Map.put(screens, "content", "# Screens")}}}
+        end
+      end
+
+      qa = [issue: %Issue{id: "issue-current"}, tool_scope: :qa, linear_client: client]
+
+      response = DynamicTool.execute("linear_get_document", %{}, qa)
+      assert %{"documents" => [], "parent" => "TP-6", "parentDocuments" => [%{"id" => "doc-screens"}]} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_get_document", %{"document_id" => "doc-screens"}, qa)
+      assert %{"content" => "<linear_document_content>\n# Screens\n</linear_document_content>"} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_update_document", %{"document_id" => "doc-screens", "content" => "x"}, qa)
+      assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
+
+      qa_spec = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "linear_get_document"))
+      assert qa_spec["description"] =~ "parentDocuments"
+      default_spec = Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_get_document"))
+      refute default_spec["description"] =~ "parentDocuments"
+
+      for {scope, tag} <- [{nil, :default}, {:read_only, :read_only}] do
+        opts = Keyword.merge(qa, tool_scope: scope, linear_client: fn query, variables, _opts -> client.(query, variables, tag: tag) end)
+        response = DynamicTool.execute("linear_get_document", %{"document_id" => "doc-screens"}, opts)
+        assert %{"error" => %{"code" => "document_not_owned_by_issue"}} = Jason.decode!(response["output"])
+        assert_received {:document_query, ^tag, "query SymphonyAgentDocumentScope" <> _rest}
+        refute_received {:document_query, ^tag, "query SymphonyAgentReadableDocumentScope" <> _rest}
+      end
+    end
+
     test "reports a created document it could not attach, an unreturned document and a missing one" do
       document = %{"id" => "doc-1", "title" => "TP-7 · Brief", "url" => "https://linear.app/acme/document/tp-7-brief-abc"}
       scope = put_in(@document_scope, ["attachments", "nodes"], [%{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
