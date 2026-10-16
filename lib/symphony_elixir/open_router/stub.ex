@@ -142,7 +142,7 @@ defmodule SymphonyElixir.OpenRouter.Stub do
   defp route(conn, "POST", ["api", "v1", "messages" | rest], true) do
     case read_json(conn) do
       {:ok, conn, request} -> answer_messages(conn, rest, request)
-      :error -> {json(conn, 400, error_body(400, "The request body is not a JSON object.")), 400, nil}
+      {:error, conn} -> {json(conn, 400, error_body(400, "The request body is not a JSON object.")), 400, nil}
     end
   end
 
@@ -198,13 +198,18 @@ defmodule SymphonyElixir.OpenRouter.Stub do
     |> Enum.map_join(fn {event, data} -> "event: #{event}\ndata: #{Jason.encode!(data)}\n\n" end)
   end
 
-  # A body over the limit, or one that can't be read, is a bad request like invalid JSON.
+  # A body over the limit is a bad request like invalid JSON. The conn `read_body/2` returns
+  # answers either way: Bandit refuses the one it replaced. Bandit raises on a body it can't read.
   defp read_json(conn) do
-    with {:ok, body, conn} <- read_body(conn, length: @body_limit),
-         {:ok, %{} = request} <- Jason.decode(body) do
-      {:ok, conn, request}
-    else
-      _unreadable -> :error
+    case read_body(conn, length: @body_limit) do
+      {:ok, body, conn} ->
+        case Jason.decode(body) do
+          {:ok, %{} = request} -> {:ok, conn, request}
+          _not_an_object -> {:error, conn}
+        end
+
+      {:more, _partial, conn} ->
+        {:error, conn}
     end
   end
 

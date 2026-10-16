@@ -18,12 +18,27 @@ and checks what TP-272 used to leave to a person on the live app:
 4. **Rollback**: Quit, swap `Symphony (previous).app` back in as in [Rollback](../../README.md#rollback), open
    it and Start: it runs N's BEAM from its own bundle, and the agent runs it starts get the secret stored in
    Settings.
-5. **Automatic update** ([TP-541](https://linear.app/tonypine/issue/TP-541)'s walkthrough, steps 1 to 3):
+5. **`update_on_release`** ([TP-970](https://linear.app/tonypine/issue/TP-970)'s journey J3,
+   [TP-973](https://linear.app/tonypine/issue/TP-973)): build N runs in **Automatically when released**, checking
+   every 2 seconds (`SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`), with the feed serving N only and an agent run active.
+   The feed then publishes N+1 and, with no menu press, the app pauses dispatch with the reason `updating to vN+1`
+   while the run goes on, records the start notification "Updating Symphony to vN+1" with its Cancel Update action,
+   waits for the run, relaunches on N+1 and resumes dispatch. No BEAM from N is left, and N+1 notifies "Symphony
+   updated to vN+1". It fails in Manual mode (nothing installs) and when no start notification is recorded.
+6. **`update_on_release_hand_pause`**: N is put back and dispatch paused by hand, with a reason, before N+1 is
+   published. N+1 installs by itself, and the relaunched Symphony is still paused with that reason.
+7. **`update_on_release_cancel`** (journey J4): the same start, then Cancel Update once the app paused for N+1 and
+   recorded the start notification. Dispatch resumes, the run goes on, the start notification is withdrawn, and
+   over the next three checks (counted at the feed) no update to N+1 starts and no second start notification is
+   recorded. The menu shows N+1 held: "You cancelled this update. It waits for you; a newer release installs by
+   itself.", **Update to vN+1** and **Skip This Version**. Update to vN+1, confirmed, waits for the run under way
+   and relaunches on N+1 with dispatch resumed.
+8. **Automatic update** ([TP-541](https://linear.app/tonypine/issue/TP-541)'s walkthrough, steps 1 to 3):
    with **Automatically when idle** chosen and Symphony running with no agent runs, N installs N+1 with no
    press. N+1 passes its health check, starts Symphony and resumes dispatch, and notifies "Symphony updated
    to vN+1" with the change count. Its menu shows "Updated to vN+1 (K changes)", and choosing it opens N+1's
    release notes.
-6. **Automatic rollback** (TP-541's walkthrough, step 4): N is put back with a `symphony.yml` whose
+9. **Automatic rollback** (TP-541's walkthrough, step 4): N is put back with a `symphony.yml` whose
    `workspaces.repo` doesn't exist. N installs N+1 by itself, N+1's config check fails, and the helper puts N
    back as `Symphony.app` and N+1 aside as `Symphony (rolled back).app`. N notifies "Symphony rolled back to
    vN", naming vN+1 and the failed check; its menu line "vN+1 was rolled back: symphony check failed: …"
@@ -33,7 +48,9 @@ and checks what TP-272 used to leave to a person on the live app:
 For each scenario the test checks the menu lines, the Symphony pid, the stub agent's log (a run that is
 stopped instead of finishing fails the drain checks) and a `before_run` hook's log, which records the release
 root and version each run came from and the stored secret Symphony was given. Scripted QA mode records the
-notifications and the release notes window in `status.json` with the alerts, so the test reads them there.
+notifications and the release notes window in `status.json` with the alerts, and the notifications the app withdraws
+under `withdrawn`, so the test reads them there. Scripted QA presses the menu's Cancel Update, which does what the
+notification's Cancel Update does.
 
 The stub ticket is dispatched again and again without a state move, so the test's `symphony.yml` sets the
 dispatch-loop guard's `watchdog.dispatch_loop_*` limits to 50 runs within one second, out of reach of one test
@@ -50,7 +67,7 @@ make e2e
 ```
 
 It takes a while: it builds two Symphony releases (`make release` with build numbers 90001 and 90002), the app,
-and both bundles. It prints each step, then `all 6 scenarios passed`, and exits 1 on the first failure with
+and both bundles. It prints each step, then `all 9 scenarios passed`, and exits 1 on the first failure with
 the app's status, the update helper's, app's and stub agent's logs, and the processes still running. The
 work folder is removed on success and kept on failure (or with `--keep`).
 
@@ -71,7 +88,7 @@ Other options:
 | `SYMPHONY_E2E_SYMPHONY_RELEASE_N`, `SYMPHONY_E2E_SYMPHONY_RELEASE_N1` | use these release directories (`_build/prod/rel/symphony`) instead of building them (they must be built with the matching `SYMPHONY_BUILD_NUMBER`) |
 | `SYMPHONY_E2E_APP_EXECUTABLE` | use this `SymphonyBar` executable instead of `swift build -c release` |
 | `SYMPHONY_E2E_BUILD_N` | build number of release N (default 90001); N+1 is the next number |
-| `SYMPHONY_E2E_STUB_SECONDS` | how long each stub agent run takes (default 15) |
+| `SYMPHONY_E2E_STUB_SECONDS` | how long each stub agent run takes (default 15; 45 in scenarios 5 to 7, so the run active when N+1 is published outlasts its download) |
 | `SYMPHONY_E2E_WORK_ROOT` | where the work folder is made (default the temporary folder) |
 
 ## What it never touches
@@ -83,7 +100,8 @@ The test can run while the installed app runs Symphony. The instance gets its ow
   its logs, and a fresh `HOME`;
 - scripted QA mode, so it presses menu items by title through files instead of Accessibility access;
 - `ERL_EPMD_PORT`, since a Symphony release always takes the node name `symphony@127.0.0.1`;
-- dashboard port (`dashboard.port: 0`), and a local update feed (`SYMPHONY_BAR_UPDATE_URL`) serving N+1;
+- dashboard port (`dashboard.port: 0`), and a local update feed (`SYMPHONY_BAR_UPDATE_URL`) serving N+1, or N
+  only until scenarios 5 to 7 publish N+1;
 - fake Linear: the memory tracker reading one issue from a file (`issues.memory.issues_file`), and a stub
   `claude` that answers each turn after `SYMPHONY_E2E_STUB_SECONDS`, so runs cost nothing.
 

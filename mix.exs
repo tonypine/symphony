@@ -103,11 +103,6 @@ defmodule SymphonyElixir.MixProject do
         # core PLTs by default, so an agent keeps them in its cache folder.
         plt_core_path: System.get_env("SYMPHONY_AGENT_CACHE_DIR")
       ],
-      # EEF-CVE-2026-105659: a Bandit HTTP/2 client can pin a stream process by trickling
-      # WINDOW_UPDATE frames, and no Bandit release fixes it yet. Every Bandit server Symphony
-      # starts (HttpServer, OpenRouter.Stub) has HTTP/2 off, so the flaw is unreachable. Drop this
-      # once mix.lock has a fixed Bandit; Hex warns when the entry no longer matches.
-      hex: [ignore_advisories: ["EEF-CVE-2026-105659"]],
       escript: escript(),
       releases: releases(),
       aliases: aliases(),

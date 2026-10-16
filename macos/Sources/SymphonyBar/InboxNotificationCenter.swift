@@ -27,6 +27,8 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
 
     private let defaults: KeyValueStore
     private var notifier: InboxNotifier
+    /// The update's start notification scripted QA mode recorded and the app hasn't withdrawn yet.
+    private var recordedUpdateStarted: String?
 
     init(defaults: KeyValueStore) {
         self.defaults = defaults
@@ -94,6 +96,7 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
     func postUpdateStarted(_ notice: UpdateNotice) {
         if let script = QAScriptDriver.shared {
             script.record(alertTitle: notice.title, message: notice.messageWithCancelUpdate)
+            recordedUpdateStarted = notice.title
             return
         }
         // UNUserNotificationCenter needs an app bundle; `swift run` has none.
@@ -111,9 +114,15 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
         }
     }
 
-    /// Removes the update's start notification from Notification Center, as when the update ends.
+    /// Removes the update's start notification from Notification Center, as when the update ends. Scripted QA mode
+    /// records the withdrawal of the one it recorded.
     func withdrawUpdateStarted() {
-        guard QAScriptDriver.shared == nil, Bundle.main.bundleIdentifier != nil else { return }
+        if let script = QAScriptDriver.shared {
+            if let title = recordedUpdateStarted { script.record(withdrawn: title) }
+            recordedUpdateStarted = nil
+            return
+        }
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [UpdateStartNotifier.requestIdentifier])
         center.removeDeliveredNotifications(withIdentifiers: [UpdateStartNotifier.requestIdentifier])
