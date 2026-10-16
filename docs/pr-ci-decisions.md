@@ -128,7 +128,8 @@ on (`SymphonyElixir.PrWatch.SilentWait`). A watched ticket with an active run or
 silent, nor is one whose decision, made within the last two ticks, leaves it waiting on an owner
 until something happens (`owner` and `clears_when`). Any other ticket is quiet: a decision with no
 owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
-quiet on two ticks in a row is silent. A wait that outlived its bound is silent too: on `ci` past
+quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, not polls, so a
+`poll_now` or Check Now inside an interval adds none. A wait that outlived its bound is silent too: on `ci` past
 `ci.merging_wait_timeout_ms`, or on `github` still rate limited one tick past the reset.
 
 A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last

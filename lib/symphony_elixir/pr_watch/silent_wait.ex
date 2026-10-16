@@ -8,7 +8,9 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   last two ticks, leaves it waiting on someone (`owner`) until something happens (`clears_when`),
   unless the wait outlived its bound: CI still running past `ci.merging_wait_timeout_ms`, or
   GitHub's rate limit still holding one tick past its reset. Any other ticket is quiet, and one
-  quiet on two ticks in a row is silent: it is listed in `silent_waits` and logged once.
+  quiet for two poll cycles in a row is silent: it is listed in `silent_waits` and logged once.
+  Quiet ticks count poll intervals, not polls, so an extra tick (`poll_now`, Check Now) inside an
+  interval adds none.
   """
 
   alias SymphonyElixir.PrDecision.Action
@@ -17,7 +19,8 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
 
   @typedoc """
   A ticket's silence as the record keeps it: since when it is quiet (or since when its wait ran
-  past its bound), how many ticks in a row it was, the bound that passed (`nil` when quiet) and why.
+  past its bound), how many ticks in a row it was (for a quiet ticket, the poll intervals it
+  spans), the bound that passed (`nil` when quiet) and why.
   """
   @type t :: %{since: DateTime.t(), ticks: pos_integer(), bound: String.t() | nil, reason: String.t()}
 
@@ -49,7 +52,7 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
     end
   end
 
-  @doc "Whether `silence` is long enough to list: two quiet ticks in a row, or a wait past its bound."
+  @doc "Whether `silence` is long enough to list: two quiet poll cycles in a row, or a wait past its bound."
   @spec listed?(t() | nil) :: boolean()
   def listed?(%{bound: bound}) when is_binary(bound), do: true
   def listed?(%{ticks: ticks}) when is_integer(ticks), do: ticks >= @silent_ticks
@@ -65,8 +68,12 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   defp quiet_reason(nil), do: "the watcher has no decision on it"
   defp quiet_reason(decision), do: "the watcher's last decision (#{decision.rule}) is older than two ticks"
 
-  # A ticket still quiet keeps counting from the tick it went quiet.
-  defp quiet(reason, %{previous: %{since: since, ticks: ticks}}), do: %{since: since, ticks: ticks + 1, bound: nil, reason: reason}
+  # A ticket still quiet keeps counting from the tick it went quiet, one tick per poll interval
+  # passed, so extra polls inside an interval add none.
+  defp quiet(reason, %{previous: %{since: since}} = ctx) do
+    %{since: since, ticks: 1 + div(DateTime.diff(ctx.now, since, :millisecond), ctx.interval_ms), bound: nil, reason: reason}
+  end
+
   defp quiet(reason, ctx), do: %{since: ctx.now, ticks: 1, bound: nil, reason: reason}
 
   # A wait on CI or on GitHub's rate limit has a bound; past it, the wait is silent too.

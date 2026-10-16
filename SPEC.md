@@ -2361,9 +2361,9 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   reads (the red head's failure, the conflict). `/api/v1/state` lists them under each watched
   issue's `watch`. The ticket's CI label follows the facts.
 - Each poll also flags a silent wait: a watched ticket with no active run, no hold and no decision
-  from the last two polls that names who it waits on and what ends the wait, on two polls in a row,
-  or a wait on CI past `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its
-  reset. `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
+  from the last two polls that names who it waits on and what ends the wait, on two polls at least
+  a poll interval apart (an extra poll inside an interval counts for none), or a wait on CI past
+  `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its reset. `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
   line. `POST /api/v1/issues/<identifier>/watch/check` makes the watcher read and decide on the
   ticket at once and returns its `watch` (`docs/pr-ci-decisions.md#silent-waits`).
 - A CI Fix run sent for a red head spends a red attempt, held against

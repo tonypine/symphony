@@ -60,6 +60,26 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
     refute SilentWait.listed?(nil)
   end
 
+  test "extra polls inside one poll interval add no quiet tick" do
+    first = SilentWait.check(watch(decision(%{})), ctx())
+
+    # A Check Now or a webhook poll seconds after the first stays unlisted.
+    soon = DateTime.add(@now, 5_000, :millisecond)
+    second = SilentWait.check(watch(decision(%{})), ctx(now: soon, previous: first))
+    assert %{since: @now, ticks: 1} = second
+    refute SilentWait.listed?(second)
+
+    almost = DateTime.add(@now, @interval - 1, :millisecond)
+    third = SilentWait.check(watch(decision(%{})), ctx(now: almost, previous: second))
+    assert %{since: @now, ticks: 1} = third
+    refute SilentWait.listed?(third)
+
+    # A full interval after it went quiet, it is the second quiet tick.
+    later = DateTime.add(@now, @interval, :millisecond)
+    assert %{since: @now, ticks: 2} = fourth = SilentWait.check(watch(decision(%{})), ctx(now: later, previous: third))
+    assert SilentWait.listed?(fourth)
+  end
+
   test "a wait on CI is silent once it outlives ci.merging_wait_timeout_ms" do
     assert SilentWait.check(watch(wait(:ci, since: ago(@ci_wait))), ctx()) == nil
 

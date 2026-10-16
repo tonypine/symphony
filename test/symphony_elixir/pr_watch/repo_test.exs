@@ -412,8 +412,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert {:ok, %{next_tick_ms: 240_000}} = Repo.poll(pid)
     assert {:ok, %{next_tick_ms: 300_000}} = Repo.poll(pid)
 
-    # The record stays; only its silence counts on.
-    assert %{silent: %{ticks: 5}} = after_errors = watch(repo_key, "1")
+    # The record stays; only its silence is added. The clock stands still, so it counts no tick.
+    assert %{silent: %{since: @now, ticks: 1}} = after_errors = watch(repo_key, "1")
     assert %{before | silent: nil} == %{after_errors | silent: nil}
 
     Application.delete_env(:symphony_elixir, :pr_watch_test_reads)
@@ -603,18 +603,27 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert PrWatch.silent_waits(repo_key: repo_key) == []
     end
 
-    test "a ticket no rule decides on is silent from its second tick", %{repo_key: repo_key, pid: pid} do
+    test "a ticket no rule decides on is silent from its second tick", %{repo_key: repo_key, clock: clock, pid: pid} do
       issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
       reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{mergeable: :bogus})}})
 
       assert tick_logged!(pid) == []
+
+      # A poll inside the interval (a webhook, Check Now) is no second tick.
+      advance!(clock, 5_000)
+      assert tick_logged!(pid) == []
+      assert PrWatch.silent_waits(repo_key: repo_key) == []
+
+      advance!(clock, 25_000)
       assert [line] = tick_logged!(pid)
       assert line =~ ~s(phase=qa since=2026-10-16T12:00:00Z rule=none bound=none reason="the watcher has no decision on it")
     end
 
-    test "a silent ticket leaves once a wait is recorded on it", %{repo_key: repo_key, pid: pid} do
+    test "a silent ticket leaves once a wait is recorded on it", %{repo_key: repo_key, clock: clock, pid: pid} do
       issues!([repo_key |> with_pr(issue("1", "Rework"), 1)])
-      for _tick <- 1..2, do: assert({:ok, _summary} = Repo.poll(pid))
+      assert {:ok, _summary} = Repo.poll(pid)
+      advance!(clock, 30_000)
+      assert {:ok, _summary} = Repo.poll(pid)
       assert [%{issue_identifier: "TP-1"}] = PrWatch.silent_waits(repo_key: repo_key)
 
       # The same check is red on the base: the ticket waits on CI (R23), a reason anybody can read.
