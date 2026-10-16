@@ -448,6 +448,33 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:failure, [%{name: "smoke"}]} = CiPoller.ci_action(status)
   end
 
+  test "parse_url, required_checks, normalize_checks, drop_superseded and check_result" do
+    assert {:ok, %{host: "github.com", owner: "org", repo: "repo", number: 7}} = PullRequest.parse_url("https://github.com/org/repo/pull/7")
+    assert PullRequest.parse_url("https://example.com/org/repo/pull/7") == :error
+    assert PullRequest.parse_url(nil) == :error
+
+    assert {:error, :invalid_pr_url} = PullRequest.required_checks("https://example.com/org/repo/pull/7", "main")
+
+    runner = fn
+      ["api", "repos/org/repo/rules/branches/main?per_page=100"], _opts -> {"[]", 0}
+      ["api", "repos/org/repo/branches/main"], _opts -> {Jason.encode!(%{"protection" => %{"required_status_checks" => %{"contexts" => ["lint"]}}}), 0}
+    end
+
+    assert {:ok, ["lint"]} = PullRequest.required_checks("https://github.com/org/repo/pull/7", "main", gh_runner: runner)
+
+    checks =
+      PullRequest.normalize_checks([
+        %{"name" => "test", "status" => "COMPLETED", "conclusion" => "FAILURE", "workflowName" => "ci", "detailsUrl" => "https://github.com/org/repo/actions/runs/1/job/1"},
+        %{"name" => "test", "status" => "COMPLETED", "conclusion" => "SUCCESS", "workflowName" => "ci", "detailsUrl" => "https://github.com/org/repo/actions/runs/2/job/1"},
+        %{"context" => "deploy", "state" => "PENDING"}
+      ])
+
+    assert PullRequest.normalize_checks(nil) == []
+    kept = PullRequest.drop_superseded(%{pr_url: "u", commit_sha: "abc", checks: checks})
+    assert %{checks: [%{run_id: "2"}, %{name: "deploy"}]} = kept
+    assert Enum.map(checks, &PullRequest.check_result/1) == [:failed, :passed, :pending]
+  end
+
   test "fetch_ci_status reads the base branch's required checks for a landing still waiting on a check" do
     pr_url = "https://github.com/org/repo/pull/71"
     rules_endpoint = "repos/org/repo/rules/branches/release%2F1.x?per_page=100"

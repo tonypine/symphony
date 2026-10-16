@@ -261,16 +261,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   defp count(_value), do: 0
 
   defp check_counts(checks) do
-    Enum.reduce(checks, %{passed: 0, failed: 0, pending: 0}, fn check, counts ->
-      key =
-        cond do
-          unfinished_check?(check) -> :pending
-          passing_check?(check) -> :passed
-          true -> :failed
-        end
-
-      Map.update!(counts, key, &(&1 + 1))
-    end)
+    Enum.reduce(checks, %{passed: 0, failed: 0, pending: 0}, &Map.update!(&2, check_result(&1), fn count -> count + 1 end))
   end
 
   @doc """
@@ -285,6 +276,56 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       Enum.any?(checks, &(not unfinished_check?(&1) and not passing_check?(&1))) -> "failed"
       Enum.any?(checks, &unfinished_check?/1) -> "pending"
       true -> "passed"
+    end
+  end
+
+  @doc "Whether one check passed, failed or still runs, as `checks_outcome/1` counts it."
+  @spec check_result(ci_check()) :: :passed | :failed | :pending
+  def check_result(check) when is_map(check) do
+    cond do
+      unfinished_check?(check) -> :pending
+      passing_check?(check) -> :passed
+      true -> :failed
+    end
+  end
+
+  @doc """
+  The checks of a GitHub `statusCheckRollup` (check runs and status contexts, as `gh pr view
+  --json statusCheckRollup` returns them), normalised to `t:ci_check/0`.
+  """
+  @spec normalize_checks(term()) :: [ci_check()]
+  def normalize_checks(rollup), do: normalize_status_check_rollup(rollup)
+
+  @doc """
+  Drops the checks of superseded workflow runs from `ci_status` (`:pr_url`, `:commit_sha`,
+  `:checks`): only the newest run of a workflow that reported a check which wasn't cancelled counts,
+  as GitHub's own check list shows it.
+  """
+  @spec drop_superseded(map()) :: map()
+  def drop_superseded(%{checks: checks} = ci_status) when is_list(checks), do: drop_superseded_checks(ci_status)
+
+  @doc """
+  The host, owner, repository and number of a GitHub pull request URL, or `:error` when `pr_url`
+  is not one.
+  """
+  @spec parse_url(term(), keyword()) ::
+          {:ok, %{host: String.t(), owner: String.t(), repo: String.t(), number: pos_integer()}} | :error
+  def parse_url(pr_url, opts \\ []) do
+    case parse_github_pr_url(pr_url, opts) do
+      {:ok, host, owner, repo, number} -> {:ok, %{host: host, owner: owner, repo: repo, number: number}}
+      :error -> :error
+    end
+  end
+
+  @doc """
+  The names of the status checks `base` requires in the repository of `pr_url`: those of its
+  rulesets' `required_status_checks` rules and those of its branch protection (two REST reads).
+  """
+  @spec required_checks(String.t(), String.t(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
+  def required_checks(pr_url, base, opts \\ []) when is_binary(pr_url) and is_binary(base) do
+    case parse_github_pr_url(pr_url, opts) do
+      {:ok, host, owner, repo, _number} -> list_required_checks({host, owner, repo}, base, opts)
+      :error -> {:error, :invalid_pr_url}
     end
   end
 

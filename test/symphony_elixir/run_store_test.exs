@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.RunStoreTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketState
 
@@ -391,6 +392,32 @@ defmodule SymphonyElixir.RunStoreTest do
     assert RunStore.get_ticket_state(@repo_key, "issue-1") == nil
 
     restart_run_store()
+  end
+
+  test "writes the watcher's fact record on a ticket's record, creating it, across a restart" do
+    facts = Facts.new(phase: :code_review, ci: :green)
+    watch = %{facts: facts, pr_url: "https://github.com/acme/app/pull/1", head_sha: "abc"}
+
+    # A ticket moved by hand has no record yet: one is created, with its identifier.
+    assert :ok = RunStore.put_ticket_pr_watch(@repo_key, "issue-1", "ACME-1", watch)
+
+    assert %{issue_identifier: "ACME-1", pr_watch: %{facts: ^facts, head_sha: "abc", source: :poll}} =
+             RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    # An existing record keeps what else it holds and its identifier.
+    assert :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-2", %{issue_identifier: "ACME-2", phase: "QA"}))
+    assert :ok = RunStore.put_ticket_pr_watch(@repo_key, "issue-2", "OTHER", watch)
+    assert %{issue_identifier: "ACME-2", phase: "QA", pr_watch: %{facts: ^facts}} = RunStore.get_ticket_state(@repo_key, "issue-2")
+
+    restart_run_store()
+
+    assert %{pr_watch: %{facts: ^facts, pr_url: "https://github.com/acme/app/pull/1"}} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert :ok = RunStore.put_ticket_pr_watch(@repo_key, "issue-1", "ACME-1", nil)
+    assert %{issue_identifier: "ACME-1", pr_watch: nil} = RunStore.get_ticket_state(@repo_key, "issue-1")
+
+    assert {:error, :invalid_issue_id} = RunStore.put_ticket_pr_watch(@repo_key, nil, nil, watch)
+    assert {:error, :invalid_repo_key} = RunStore.put_ticket_pr_watch(nil, "issue-1", nil, watch)
   end
 
   test "persists ticket pull request records across run store restart" do

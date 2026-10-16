@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.TicketStateTest do
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketState
 
   @at ~U[2026-01-02 03:04:05Z]
@@ -21,6 +22,7 @@ defmodule SymphonyElixir.TicketStateTest do
                dispatches: [],
                path_unlocks: [],
                decisions: [],
+               pr_watch: nil,
                updated_at: nil
              }
     end
@@ -108,6 +110,7 @@ defmodule SymphonyElixir.TicketStateTest do
                dispatches: [],
                path_unlocks: [],
                decisions: [],
+               pr_watch: nil,
                updated_at: nil
              }
     end
@@ -487,5 +490,66 @@ defmodule SymphonyElixir.TicketStateTest do
     assert %DateTime{} = TicketState.set_hold(record, :blocked).updated_at
     assert %DateTime{} = TicketState.record_signal(record, "handoff").updated_at
     assert %DateTime{} = TicketState.record_dispatch(record, %{kind: "qa"}).updated_at
+  end
+
+  describe "put_pr_watch/3" do
+    test "keeps the watcher's fact record, normalised, and clears it with nil" do
+      facts = Facts.new(phase: :qa, ci: :green)
+      landing = %{state: " QA ", head_sha: "abc", state_since: @at, progress_at: @at, extra: 1}
+
+      record =
+        TicketState.new("repo-a", "issue-1")
+        |> TicketState.put_pr_watch(
+          %{
+            facts: facts,
+            pr_url: "https://github.com/acme/app/pull/1",
+            head_sha: "abc",
+            source: :webhook,
+            read_at: @at,
+            github: {:rate_limited, @at},
+            rate_limit: %{remaining: 12, reset_at: @at},
+            landing: landing,
+            decision: %{rule: "R1"},
+            applied: [%{rule: "R24"}, :junk],
+            links: :junk
+          },
+          @at
+        )
+
+      assert record.updated_at == @at
+
+      assert TicketState.pr_watch(record) == %{
+               facts: facts,
+               pr_url: "https://github.com/acme/app/pull/1",
+               head_sha: "abc",
+               source: :webhook,
+               read_at: @at,
+               github: {:rate_limited, @at},
+               rate_limit: %{remaining: 12, reset_at: @at},
+               landing: %{state: "QA", head_sha: "abc", state_since: @at, progress_at: @at},
+               decision: %{rule: "R1"},
+               applied: [%{rule: "R24"}],
+               links: []
+             }
+
+      assert TicketState.normalize(record) == record
+      assert TicketState.pr_watch(TicketState.put_pr_watch(record, nil)) == nil
+    end
+
+    test "fills the defaults of a sparse record and drops one without facts" do
+      facts = Facts.new()
+
+      sparse = TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: facts, github: :odd, landing: %{state: "QA"}}})
+
+      assert %{source: :poll, github: :ok, rate_limit: nil, landing: nil, decision: nil, applied: [], links: []} =
+               TicketState.pr_watch(sparse)
+
+      assert %{github: {:rate_limited, nil}, rate_limit: %{remaining: nil, reset_at: nil}} =
+               TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: facts, github: {:rate_limited, "soon"}, rate_limit: %{remaining: -1}}}))
+
+      assert TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: %{facts: %{phase: :qa}}})) == nil
+      assert TicketState.pr_watch(TicketState.new("repo-a", "issue-1", %{pr_watch: :junk})) == nil
+      assert %DateTime{} = TicketState.put_pr_watch(TicketState.new("repo-a", "issue-1"), nil).updated_at
+    end
   end
 end
