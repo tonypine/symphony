@@ -79,6 +79,7 @@ defmodule SymphonyElixir.PrWatchTest do
     assert PrWatch.rerun_pending?("4", "head-1", ["lint"])
     refute PrWatch.rerun_pending?("4", "head-1", ["lint", "specs"])
 
+    assert %{fix: %{ci_failure: ^failure}} = PrWatch.watch("4")
     assert PrWatch.pending_ci_failure("unknown") == nil
     assert PrWatch.pending_pr_conflict(nil) == nil
     refute PrWatch.rerun_pending?("unknown", "head-1", [])

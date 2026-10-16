@@ -257,11 +257,9 @@ defmodule SymphonyElixir.PrWatch do
       {:ok, repo_key} when is_binary(repo_key) and repo_key != "" ->
         [repo_key]
 
+      # A configuration that can't be read has no repository to search.
       _none ->
-        case Config.repos() do
-          {:ok, repos} -> repos |> Enum.map(& &1.name) |> Enum.reject(&(&1 in [nil, ""]))
-          {:error, _reason} -> List.wrap(Config.repo_key_or_nil())
-        end
+        for {:ok, repos} <- [Config.repos()], %{name: name} <- repos, name not in [nil, ""], do: name
     end
   end
 
@@ -270,6 +268,7 @@ defmodule SymphonyElixir.PrWatch do
 
   defp store(opts), do: Keyword.get(opts, :run_store, RunStore)
 
-  defp same_state?(state, name) when is_binary(name), do: String.downcase(String.trim(state)) == String.downcase(String.trim(name))
-  defp same_state?(_state, _name), do: false
+  defp same_state?(state, name), do: normalize(state) == normalize(name)
+
+  defp normalize(name), do: name |> to_string() |> String.trim() |> String.downcase()
 end

@@ -159,6 +159,38 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
   end
 
+  test "poll_now/1 makes a running watcher tick at once", %{repo_key: repo_key} do
+    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+    pid = start_repo!(repo_key)
+
+    assert Repo.poll_now(pid) == :ok
+    :sys.get_state(pid)
+    refute_received {:read, _url, _opts}
+
+    # A watcher that ticks on its own timer ticks at once.
+    stop_supervised!({Repo, repo_key})
+    pid = start_repo!(repo_key, auto: true, interval_ms: 3_600_000)
+    assert_receive {:read, "https://github.com/acme/app/pull/1", _opts}
+    assert Repo.poll_now(pid) == :ok
+    assert_receive {:read, "https://github.com/acme/app/pull/1", _opts}
+  end
+
+  test "a fact no rule matches is logged and leaves no decision, and a record from before stays counts its phase", %{repo_key: repo_key} do
+    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+    reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{mergeable: :bogus})}})
+    pid = start_repo!(repo_key)
+
+    log = capture_log(fn -> assert {:ok, _summary} = Repo.poll(pid) end)
+    assert log =~ "PR watch has no rule for issue_id=1 issue_identifier=TP-1"
+    assert %{decision: nil, stay: :code_review} = watch(repo_key, "1")
+
+    # A record written before the watcher kept its stay reads its facts' phase.
+    SymphonyElixir.PrWatchSupport.put_watch!(repo_key, "1", phase: :code_review)
+    reads!(%{})
+    assert {:ok, _summary} = Repo.poll(pid)
+    assert %{decision: %{rule: "R27"}, stay: :code_review} = watch(repo_key, "1")
+  end
+
   test "a ticket moved into Code Review by hand, with no run, is watched from the next tick", %{repo_key: repo_key} do
     issues!([
       repo_key |> with_pr(issue("1", "Code Review"), 1),

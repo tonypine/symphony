@@ -271,6 +271,11 @@ defmodule SymphonyElixir.SelfHealTest do
       assert description =~ "CI Fix runs could not make the `specs` check pass on PR #7."
       assert description =~ "The failure may be that pull request's own rather than this repo's CI"
       assert %{component: "ci:specs", scope: @repo_key, signature: ~s({:ci_check_failed, "specs"})} = Process.get(:recorded_self_heal)
+
+      # A pull request read without its head is named without one.
+      assert :filed = SelfHeal.heal(issue(), heal_opts(Map.delete(ci, :head_sha)))
+      assert %{description: description} = Process.get(:fixer_create)
+      assert description =~ "- Pull request: https://github.com/acme/app/pull/7\n"
     end
 
     test "a CI check failing after another component's block, or another check's, files its own fix ticket" do

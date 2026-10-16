@@ -171,6 +171,17 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert attempts.reruns == %{"head-1" => ["specs", "lint", "dialyzer", "x"]}
     end
 
+    test "`gh run rerun` names the PR's repository, on GitHub Enterprise too" do
+      assert %{outcome: :applied} = Apply.apply(action("R22", :rerun_failed), ctx(:qa, read: read(pr_url: "https://ghe.acme.test/acme/app/pull/7")))
+      assert_received {:rerun_failed, "11", [repo: "ghe.acme.test/acme/app"]}
+
+      assert %{outcome: :applied} = Apply.apply(action("R22", :rerun_failed), ctx(:qa, read: read(pr_url: "not a url")))
+      assert_received {:rerun_failed, "11", []}
+
+      assert %{outcome: :applied} = Apply.apply(action("R22", :rerun_failed), ctx(:qa, read: read(pr_url: nil)))
+      assert_received {:rerun_failed, "11", []}
+    end
+
     test "a cancelled run's rerun (R19) spends nothing, and a head with no run id has nothing to rerun" do
       assert %{outcome: :applied, attempts: attempts} = Apply.apply(action("R19", :rerun_failed), ctx(:qa))
       assert attempts == Attempts.new()
@@ -348,6 +359,22 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       capture_log(fn -> assert %{outcome: {:error, {:disable_auto_merge_failed, :forbidden}}} = Apply.apply(action("R3", :disarm), ctx(:qa)) end)
 
       capture_log(fn -> assert %{outcome: {:error, {:disable_auto_merge_failed, :missing_pr_node_id}}} = Apply.apply(action("R3", :disarm), ctx(:qa, read: read(pr_node_id: nil))) end)
+    end
+
+    test "an audit event that can't be written is logged, and auto-merge is still off" do
+      blocker = Path.join(System.tmp_dir!(), "apply-audit-#{System.unique_integer([:positive])}")
+      File.write!(blocker, "")
+      previous = Application.get_env(:symphony_elixir, :audit_log_dir)
+      Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(blocker, "audit"))
+
+      try do
+        log = capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action("R3", :disarm), ctx(:qa)) end)
+        assert log =~ "Failed to record auto_merge_disabled audit event issue_id=#{@issue_id}"
+        assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      after
+        Application.put_env(:symphony_elixir, :audit_log_dir, previous)
+        File.rm(blocker)
+      end
     end
 
     test "land_agent says the landing agent takes the PR over; a comment Linear refuses is only logged" do

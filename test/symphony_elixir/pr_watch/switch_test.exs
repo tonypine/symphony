@@ -18,7 +18,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     use Agent
 
     def start_link(_opts) do
-      Agent.start_link(fn -> %{issues: %{}, prs: %{}, calls: [], fix_tickets: %{}, open_pulls: nil, now: ~U[2026-10-16 12:00:00Z]} end, name: __MODULE__)
+      Agent.start_link(
+        fn -> %{issues: %{}, prs: %{}, calls: [], fix_tickets: %{}, open_pulls: nil, now: ~U[2026-10-16 12:00:00Z], cancel_result: {:ok, [1]}} end,
+        name: __MODULE__
+      )
     end
 
     def get(key), do: Agent.get(__MODULE__, &Map.fetch!(&1, key))
@@ -83,7 +86,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     def cancel_stale_runs(pr_url, head, _opts) do
       World.call(:cancel_stale_runs, {pr_url, head})
-      {:ok, [1]}
+      World.get(:cancel_result)
     end
 
     defp set_pr(pr_url, attrs), do: World.update(:prs, &Map.update!(&1, pr_url, fn pr -> Map.merge(pr, Map.new(attrs)) end))
@@ -856,6 +859,50 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid, 2)
       assert %{red: 2, sent: %{head_sha: "head-1-2", cause: :red}} = attempts(issue_id)
       assert moves(issue_id) == ["CI Fix"]
+    end
+
+    test "a cancel of the replaced head's runs that finds none, or fails, is only logged" do
+      for {result, logged} <- [{{:ok, []}, nil}, {{:error, :forbidden}, "could not cancel the CI runs on head-1-1"}] do
+        World.update(:cancel_result, fn _ -> result end)
+        issue_id = ticket!("1", "Merging", mergeable: :behind, head_sha: "head-1-1")
+        pid = start!()
+        tick!(pid)
+
+        pr!("1", head_sha: "head-1-2")
+        log = capture_log(fn -> tick!(pid) end)
+        if logged, do: assert(log =~ logged), else: refute(log =~ "cancel")
+        assert %{updated_from: "head-1-2"} = attempts(issue_id)
+        stop_supervised!({Repo, @repo_key})
+      end
+    end
+
+    test "AutoMerge's protected paths gate with a decision covering the paths → R29: the head lands as if green" do
+      issue_id = ticket!("1", "Merging", ci: :red, red_kind: :human_only, mergeable: :unstable, failing_check: "protected paths", failed_checks: [%{name: "protected paths", run_id: "5"}])
+      ruling = SymphonyElixir.Decisions.entry("ruling-c1", ~D[2026-10-16], nil, nil, "Unlock WORKFLOW.md for TP-1")
+      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | rulings: [ruling]} end))
+
+      # The ticket's newest run with a workspace is where the changed paths are read.
+      workspace = Path.join(System.tmp_dir!(), "switch-ws-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(workspace)
+      on_exit(fn -> File.rm_rf(workspace) end)
+      :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "run-old", issue_id: issue_id, status: "success", workspace_path: "/tmp/old"})
+      :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "run-new", issue_id: issue_id, status: "success", started_at: now(), workspace_path: workspace})
+
+      test_pid = self()
+
+      # Every commit is there and the PR changes no protected path but the unlocked one.
+      git = fn args, cwd ->
+        send(test_pid, {:git, args, cwd})
+        {"", 0}
+      end
+
+      pid = start!(git: git)
+      tick!(pid)
+
+      assert %{ci: :green} = watch(issue_id).facts
+      assert %{rule: "R29", kind: :merge_now} = decision(issue_id)
+      assert_received {:git, _args, ^workspace}
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
     end
 
     test "Attempts is the watcher's own: a ticket that left the watched phases starts again" do

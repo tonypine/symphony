@@ -37,15 +37,15 @@ defmodule SymphonyElixir.AutoMerge do
   read (`{:error, :head_moved}`).
   """
   @spec arm(map(), keyword()) :: :ok | {:error, term()}
-  def arm(pr, opts \\ []), do: with_request(pr, &github(opts).enable_auto_merge(pr.pr_url, &1, gh_opts(opts)))
+  def arm(pr, opts), do: with_request(pr, &github(opts).enable_auto_merge(pr.pr_url, &1, gh_opts(opts)))
 
   @doc "Squash-merges the PR now, only if its head is still the read's."
   @spec merge(map(), keyword()) :: :ok | {:error, term()}
-  def merge(pr, opts \\ []), do: with_request(pr, &github(opts).squash_merge(pr.pr_url, &1, gh_opts(opts)))
+  def merge(pr, opts), do: with_request(pr, &github(opts).squash_merge(pr.pr_url, &1, gh_opts(opts)))
 
   @doc "Turns GitHub auto-merge off for the PR."
   @spec disarm(map(), keyword()) :: :ok | {:error, term()}
-  def disarm(%{pr_url: pr_url, pr_node_id: node_id}, opts \\ []) when is_binary(pr_url) do
+  def disarm(%{pr_url: pr_url, pr_node_id: node_id}, opts) when is_binary(pr_url) do
     if is_binary(node_id),
       do: github(opts).disable_auto_merge(pr_url, node_id, gh_opts(opts)),
       else: {:error, :missing_pr_node_id}
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.AutoMerge do
   that conflicts comes back as `{:error, :conflict}`: the next read shows the PR conflicting.
   """
   @spec update_branch(map(), keyword()) :: :ok | {:error, term()}
-  def update_branch(%{pr_url: pr_url, head_sha: head}, opts \\ []) when is_binary(pr_url) do
+  def update_branch(%{pr_url: pr_url, head_sha: head}, opts) when is_binary(pr_url) do
     if is_binary(head),
       do: github(opts).update_branch(pr_url, head, gh_opts(opts)),
       else: {:error, :missing_head_sha}
@@ -67,7 +67,7 @@ defmodule SymphonyElixir.AutoMerge do
   head: they can never land and only hold runners. Returns the ids it cancelled.
   """
   @spec cancel_stale_runs(map(), String.t(), keyword()) :: {:ok, [integer()]} | {:error, term()}
-  def cancel_stale_runs(%{pr_url: pr_url}, stale_head, opts \\ []) when is_binary(pr_url) and is_binary(stale_head) do
+  def cancel_stale_runs(%{pr_url: pr_url}, stale_head, opts) when is_binary(pr_url) and is_binary(stale_head) do
     github(opts).cancel_stale_runs(pr_url, stale_head, gh_opts(opts))
   end
 

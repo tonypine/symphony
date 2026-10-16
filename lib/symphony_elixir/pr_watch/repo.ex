@@ -461,23 +461,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
+  # The workspace of the ticket's newest run that had one; a store that can't be read has none.
   defp workspace_path(state, issue_id) do
-    case store(state).list_issue_runs(state.repo_key, issue_id) do
-      runs when is_list(runs) ->
-        runs
-        |> Enum.filter(&is_binary(Map.get(&1, :workspace_path)))
-        |> Enum.max_by(&run_started_at/1, DateTime, fn -> %{} end)
-        |> Map.get(:workspace_path)
+    runs = for %{workspace_path: path} = run <- List.wrap(store(state).list_issue_runs(state.repo_key, issue_id)), is_binary(path), do: run
 
-      {:error, _reason} ->
-        nil
-    end
-  end
-
-  defp run_started_at(run) do
-    case Map.get(run, :started_at) do
-      %DateTime{} = at -> at
-      _other -> ~U[1970-01-01 00:00:00Z]
+    case Enum.sort_by(runs, &(Map.get(&1, :started_at) || ~U[1970-01-01 00:00:00Z]), {:desc, DateTime}) do
+      [%{workspace_path: path} | _older] -> path
+      [] -> nil
     end
   end
 

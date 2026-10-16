@@ -141,8 +141,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp owned?(%Action{rule: rule}, %{facts: %{phase: :merging}} = ctx) when rule in @conflict_rules, do: AutoMerge.enabled?(ctx.settings)
   defp owned?(_action, _ctx), do: true
 
-  defp ci_enabled?(%{ci: %{enabled: enabled}}), do: enabled == true
-  defp ci_enabled?(_settings), do: false
+  defp ci_enabled?(settings), do: settings.ci.enabled == true
 
   defp recorded(action, ctx), do: %{action: action, attempts: ctx.attempts, applied: ctx.applied, fix: ctx.fix, moved_to: nil, outcome: :recorded}
 
@@ -361,13 +360,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   defp spend(:red, %{ci_failure: failure}, ctx) do
-    Attempts.spend(ctx.attempts, :red, %{check: ctx.facts.failing_check || first_check(failure), error: failure.first_error})
+    Attempts.spend(ctx.attempts, :red, %{check: ctx.facts.failing_check || "a check", error: failure.first_error})
   end
 
   defp spend(:conflict, _fix, ctx), do: Attempts.spend(ctx.attempts, :conflict)
-
-  defp first_check(%{failed_checks: [%{name: name} | _]}) when is_binary(name), do: name
-  defp first_check(_failure), do: "a check"
 
   # From a watched phase the ticket enters the lane, its origin recorded first so the repair has
   # somewhere to return; already in CI Fix, it stays and the next run takes the fix.
@@ -500,11 +496,13 @@ defmodule SymphonyElixir.PrDecision.Apply do
       detail: "GitHub auto-merge turned off by the PR watcher (#{why})"
     }
     |> AuditLog.record()
-    |> case do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("Failed to record auto_merge_disabled audit event issue_id=#{ctx.issue.id}: #{inspect(reason)}")
-    end
+    |> log_audit_failure(ctx)
+  end
 
+  defp log_audit_failure(:ok, _ctx), do: :ok
+
+  defp log_audit_failure({:error, reason}, ctx) do
+    Logger.warning("Failed to record auto_merge_disabled audit event issue_id=#{ctx.issue.id}: #{inspect(reason)}")
     :ok
   end
 
@@ -558,20 +556,17 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp state_name(:rework, _settings), do: @rework_state
   defp state_name(:merging, _settings), do: @merging_state
 
-  defp failed_checks(%{read: %{failed_checks: checks}}) when is_list(checks), do: checks
-  defp failed_checks(_ctx), do: []
+  defp failed_checks(ctx), do: read_field(ctx, :failed_checks) || []
 
   defp run_ids(checks), do: checks |> Enum.map(&Map.get(&1, :run_id)) |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq()
 
-  defp read_field(%{read: %{} = read}, field), do: Map.get(read, field)
-  defp read_field(_ctx, _field), do: nil
+  defp read_field(ctx, field), do: Map.get(ctx.read || %{}, field)
 
   defp head(ctx), do: read_field(ctx, :head_sha)
   defp pr_url(ctx), do: read_field(ctx, :pr_url)
   defp pr_name(ctx), do: Request.pull_request(pr_url(ctx)) || "its pull request"
 
-  defp label(%{issue: %Issue{identifier: identifier}}) when is_binary(identifier), do: identifier
-  defp label(%{issue: %Issue{id: id}}), do: id
+  defp label(%{issue: %Issue{} = issue}), do: issue.identifier || issue.id
 
   defp tracker(ctx), do: Keyword.get(ctx.opts, :tracker, Tracker)
   defp store(ctx), do: Keyword.get(ctx.opts, :run_store, RunStore)
