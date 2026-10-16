@@ -67,10 +67,30 @@ defmodule SymphonyElixir.QaAgent.Selection do
                        {kind, File.read!(Path.join(@source_root, kind <> ".md"))}
                      end)
 
+  # A built-in also triggers on its own instructions (`priv/qa_playbooks/<kind>.md`) and on the
+  # host driver behind its tools: only a pass that runs the playbook can check a change to either
+  # (TP-1068).
   @built_in_paths %{
     "cli" => ["bin/**", "lib/symphony_elixir/cli.ex", "lib/mix/tasks/**"],
-    "macos_app" => ["**/*.swift", "**/Info.plist", "**/*.xib", "**/*.storyboard", "**/*.xcassets/**"],
-    "android_app" => ["**/*.kt", "**/*.java", "**/AndroidManifest.xml", "**/src/main/res/**", "**/*.gradle.kts", "**/*.gradle"],
+    "macos_app" => [
+      "**/*.swift",
+      "**/Info.plist",
+      "**/*.xib",
+      "**/*.storyboard",
+      "**/*.xcassets/**",
+      "lib/symphony_elixir/qa_driver.ex",
+      "lib/symphony_elixir/qa_driver/**",
+      "priv/qa_driver/**"
+    ],
+    "android_app" => [
+      "**/*.kt",
+      "**/*.java",
+      "**/AndroidManifest.xml",
+      "**/src/main/res/**",
+      "**/*.gradle.kts",
+      "**/*.gradle",
+      "lib/symphony_elixir/qa_android/**"
+    ],
     "web" => [
       "lib/*_web/**",
       "lib/*_web.ex",
@@ -220,7 +240,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
   end
 
   defp prompt(kind, override), do: string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
-  defp paths(kind, override), do: string_list(Map.get(override, "paths")) || Map.get(@built_in_paths, kind, [])
+  defp paths(kind, override), do: string_list(Map.get(override, "paths")) || built_in_paths(kind)
+
+  defp built_in_paths(kind) when kind in @built_in_kinds, do: ["priv/qa_playbooks/#{kind}.md" | Map.fetch!(@built_in_paths, kind)]
+  defp built_in_paths(_kind), do: []
 
   defp off_reason(kind, override, host) do
     cond do

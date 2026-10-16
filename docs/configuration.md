@@ -1232,9 +1232,13 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | nothing else | skipped (internal changes rely on tests and the pre-push review) |
 
 The built-in `cli` playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and
-`lib/mix/tasks/**`. It builds the CLI, runs the walkthrough commands with throwaway config and
-state under `$TMPDIR`, and attaches a command transcript. A CLI pass typically costs 1–4 minutes
-and 50–150k tokens.
+`lib/mix/tasks/**`. Every built-in playbook also triggers on its own instructions,
+`priv/qa_playbooks/<kind>.md`, and the `macos_app` and `android_app` playbooks on the host driver
+behind their tools (`lib/symphony_elixir/qa_driver.ex`, `lib/symphony_elixir/qa_driver/**` and
+`priv/qa_driver/**`; `lib/symphony_elixir/qa_android/**`), so a change to how QA drives the app
+gets a pass that drives it. The `cli` playbook builds the CLI, runs the walkthrough commands with
+throwaway config and state under `$TMPDIR`, and attaches a command transcript. A CLI pass
+typically costs 1–4 minutes and 50–150k tokens.
 
 The QA agent (`runtime` and `command`, defaulting to `agent.runtime` and `agent.command`) runs in
 a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. Each pass

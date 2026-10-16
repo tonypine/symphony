@@ -1443,7 +1443,10 @@ The QA agent:
   `**/AndroidManifest.xml`, `**/src/main/res/**`, `**/*.gradle.kts` and `**/*.gradle`, with
   `**/src/test/**` and `**/src/androidTest/**` counted as tests; the built-in `web` playbook on
   `lib/*_web/**`, `lib/*_web.ex`, `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`,
-  `.scss`, `.jsx`, `.tsx`, `.vue` and `.svelte` files.
+  `.scss`, `.jsx`, `.tsx`, `.vue` and `.svelte` files. Each built-in also triggers on its own
+  instructions, `priv/qa_playbooks/<kind>.md`, and on the host driver behind its tools: the
+  `macos_app` playbook on `lib/symphony_elixir/qa_driver.ex`, `lib/symphony_elixir/qa_driver/**`
+  and `priv/qa_driver/**`, the `android_app` playbook on `lib/symphony_elixir/qa_android/**`.
 - A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
   verification port pool, from its own worktree at the PR head (never the agent's), before the
   agent starts, give the agent its URL, and stop it, release the port and remove that worktree
