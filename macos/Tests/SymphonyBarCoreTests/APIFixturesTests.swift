@@ -128,4 +128,56 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(entries.map { $0["path"] as? String }, ["/api/v1/control/force", "/api/v1/control/resume"])
         XCTAssertEqual(entries[0]["body"] as? [String: String], ["identifier": "SHOP-305", "clear": "true"])
     }
+
+    /// Every shipped fixture directory, so one added later is decoded too.
+    static var shippedDirectories: [URL] {
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: shippedRunning.deletingLastPathComponent(),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: .skipsHiddenFiles
+        )) ?? []
+        return entries.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    func testEveryShippedFixtureServesAStateAndReposTheAppReads() async {
+        let directories = Self.shippedDirectories
+        XCTAssertTrue(directories.contains { $0.lastPathComponent == "update-paused" })
+        for directory in directories {
+            let name = directory.lastPathComponent
+            let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+            let state = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL)))
+            XCTAssertEqual(state.1.statusCode, 200, name)
+            XCTAssertNotNil(OverviewState.decode(state.0), name)
+            XCTAssertNotNil(DiagnosticsPayload.decode(state.0), name)
+            let repos = await ReposAPI.fetch(stateRoot: root, fallback: APIFixtures.baseURL, transport: shipped.transport)
+            guard case .repos = repos else { return XCTFail("\(name)'s repos fixture doesn't read as repos: \(repos)") }
+        }
+    }
+
+    /// The update fixtures QA launches with the update feed's `--fake-release 9.9.9 9999`: dispatch paused for an
+    /// update to v9.9.9, with two runs finishing (`update-paused`) or none (`update-paused-idle`).
+    func testTheUpdateFixturesReadAsDispatchPausedForAnUpdate() throws {
+        let utc = TimeZone(identifier: "UTC")!
+        let expected = [
+            "update-paused": "2 runs are finishing. Symphony updates and resumes dispatch when they end; no new run starts until then.",
+            "update-paused-idle": "Nothing is running. Symphony updates and resumes dispatch next; no new run starts until then.",
+        ]
+        for (name, context) in expected {
+            let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+            let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+            let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+            let state = try XCTUnwrap(OverviewState.decode(data), name)
+            XCTAssertEqual(ControlAction.updateVersion(pauseReason: state.snapshot.pause?.reason), "9.9.9", name)
+
+            let control = DispatchControl(window: .connected, paused: true, state: state, now: Date(), timeZone: utc)
+            XCTAssertEqual(control.word, "Paused · Updating to v9.9.9", name)
+            XCTAssertEqual(control.accessibilityLabel, "Dispatch paused, updating to v9.9.9", name)
+            XCTAssertEqual(control.pauseFacts.first, TicketList.Fact(label: "By", value: "an update to v9.9.9"), name)
+
+            let overview = Overview(state: state, now: Date(), timeZone: utc)
+            XCTAssertEqual(overview.mood, .paused, name)
+            XCTAssertEqual(overview.context, context, name)
+        }
+    }
 }

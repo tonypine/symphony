@@ -103,15 +103,33 @@ GitHub or Linear in QA:
   `SymphonyBarProjectTeams` → `{"data":{"project":{"teams":{"nodes":[{"id":"t1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
   `SymphonyBarLabels` → `{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"macos","isGroup":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`.
   Any made-up Linear key in Settings works with it.
-- **Update feed:** serve a release feed on another port and pass it as `update_feed_port`; the
-  app's update checks GET `http://localhost:<port>/releases/latest` (through
-  `SYMPHONY_BAR_UPDATE_URL`) instead of GitHub's. Answer 200 with GitHub's `releases/latest`
-  JSON: `{"tag_name":"v9.9.9","html_url":"http://localhost:<port>/release","body":"3 changes since
-  v1.0:","assets":[...]}`, where `assets` lists `{"name","browser_download_url"}` for
-  `version.json`, the zip it names and `<zip>.sha256`, all served by the same stub.
-  `version.json` is `{"version":"9.9.9","build":9999,"zip":"SymphonyBar.zip"}`; a `build` above
-  the app's own is a newer release. Answer 403 to make a check fail (the app reads it as GitHub's
-  rate limit). Log every request.
+- **Update feed:** run Symphony's shared feed server, never one you write. Start it on another
+  `QA_HOST_PORTS` port with your shell tool's background option:
+  `python3 -B test/support/stubs/update_feed.py --fake-release 9.9.9 9999 --port <port> --log "$TMPDIR/update-feed.log"`.
+  Once it prints `update feed on http://127.0.0.1:<port>/releases/latest …`, pass the port as
+  `update_feed_port`; the app's update checks then GET `http://localhost:<port>/releases/latest`
+  (through `SYMPHONY_BAR_UPDATE_URL`) instead of GitHub's. `-B` keeps Python from writing `__pycache__/`
+  into the checkout, and the log stays under `$TMPDIR`: `qa_build` and `qa_launch_app` refuse a
+  checkout with either.
+  - `--fake-release VERSION BUILD` offers a made-up release with no build: the app shows it
+    (a `BUILD` above the app's own is a newer release), but its download is a 404, so it never
+    installs. When a QA tool gives you a release pair's `feed/` folder, pass `--dir <folder>`
+    instead.
+  - Switch what `releases/latest` answers while it runs:
+    `curl -X POST --data <mode> http://127.0.0.1:<port>/_feed/mode`. `publish` (the default)
+    offers the release; `forbidden` answers 403, which the app reads as GitHub's rate limit, to
+    make a check fail; `none` offers nothing newer, so a check finds the app up to date, and needs
+    `--current VERSION BUILD` at start with a build at or below the app's own (such as
+    `--current 0.0.1.0 0`).
+  - The log has one JSON line per request (`method`, `path`, `status`, `time`). Quote the app's
+    requests from it in the step's `details`. `test/support/README.md` lists every option.
+- **Update fixtures:** for an update's state in the Symphony window, pass a committed fixture as
+  `api_fixtures`, never one you build under `qa-evidence/`.
+  `macos/Tests/Fixtures/director-app/update-paused` has dispatch paused for an update to v9.9.9
+  with two agent runs finishing, and `macos/Tests/Fixtures/director-app/update-paused-idle` has
+  the same pause with nothing running. Run the feed with `--fake-release 9.9.9 9999`, so the
+  release it offers is the one the pause names. When a step needs an update state no fixture
+  has, say so in `findings`, so one is committed for the next pass.
 - **Update-check interval:** pass `update_check_interval_seconds` (a positive integer, such as
   `30`) and the app checks for a release that often in the background, in every update mode,
   through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check retries at that interval, except a
