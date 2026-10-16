@@ -1818,8 +1818,9 @@ every update (`UpdateInstaller.checkSigner`), and QA could never see what the ap
 update installed, or once a failed one was rolled back. For those steps QA builds the signed
 release pair of the [shared test helpers](../test/support/README.md#the-release-pair): release N of
 the app and its update N+1, signed with one code-signing identity. That the install works is the
-`macos-e2e` check's to prove (its update, restart and rollback scenarios); QA only judges by sight
-what the app shows afterwards.
+`macos-e2e` check's to prove, in its job
+update, restart and rollback (QA does not re-walk the install);
+QA only judges by sight what the app shows afterwards.
 
 - `qa_build_release_pair` runs, where the app runs (this host or the `worker_host`), the
   checkout's `scripts/qa/install-test-signing-identity.sh --use`, which unlocks the QA host's test

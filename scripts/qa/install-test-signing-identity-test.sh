@@ -1,8 +1,8 @@
 #!/bin/sh
-# Tests scripts/qa/install-test-signing-identity.sh with a temporary keychain and a fake sudo that
-# records the trust step instead of running it: the check on a host without the identity changes
-# nothing, the install creates the keychain and the identity and asks to trust it, and a second
-# install keeps both.
+# Tests scripts/qa/install-test-signing-identity.sh: TP-1038's walkthrough names this file as
+# the script's shell test (a temporary keychain, no sudo). A fake sudo records the trust step
+# instead of running it: the check on a host without the identity changes nothing, the install
+# creates the keychain and the identity and asks to trust it, and a second install keeps both.
 #
 # With SYMPHONY_QA_SIGNING_TEST_TRUST=1 (CI, where sudo needs no password) it also trusts the
 # certificate for real, checks that the identity is then ready and that a third install is a no-op,
