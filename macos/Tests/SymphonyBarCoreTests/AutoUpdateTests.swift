@@ -295,6 +295,12 @@ final class AutoUpdateTests: XCTestCase {
         XCTAssertNil(updater.tick(context(.onRelease), now: at(14, 0), calendar: utc))
         XCTAssertNil(updater.checked(.failed("Couldn't check for updates: couldn't reach GitHub"), context(.onRelease)))
         XCTAssertNil(updater.tick(context(.onRelease), now: at(14, 1), calendar: utc))
+        let rateLimited = UpdateCheckResult.failed(
+            "Couldn't check for updates: GitHub's rate limit is reached; try again later",
+            retryAt: at(14, 40)
+        )
+        XCTAssertNil(updater.checked(rateLimited, context(.onRelease)), "nor does one that hit the rate limit")
+        XCTAssertNil(updater.tick(context(.onRelease), now: at(14, 2), calendar: utc))
 
         XCTAssertEqual(updater.checked(.available(release()), context(.onRelease)), .install(release(), kind: .onRelease))
     }

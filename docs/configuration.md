@@ -1285,14 +1285,36 @@ Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 
 | Line | Proof | QA |
 | --- | --- | --- |
-| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: it reports it with that check's result on the PR head and links the run. A passed check is `pass`; a failed check, or one that never ran on the head, is `fail` naming the step; a check still running is waited on for up to 10 minutes, then `blocked` |
+| `Proved by: <check> › <test>` | the named automated test: the GitHub check run (or workflow), then the suite, scenario or test file; a plain ` > ` works as the separator, backticks are dropped, and `Proved by: <check>` alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
 | `Proved by: QA` | the QA pass | walks the step |
 | no `Proved by:` line | read as `Proved by: QA`, so tickets written before the rule keep working | walks the step |
 
 `SymphonyElixir.Walkthrough` parses the walkthrough into steps with their proof, and the QA prompt
-lists the steps to link and the steps to walk when the walkthrough names at least one test. Until
-Symphony's QA pre-check confirms each named test itself, the QA agent reads the head's check runs
-with `gh` (or the public API, as above) and links the run.
+lists the steps to link and the steps to walk when the walkthrough names at least one test.
+
+**The QA pre-check.** Before the QA agent starts, Symphony confirms each `Proved by: <check> ›
+<test>` step itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the
+agent reading check runs: a green head does not prove it, since a path-filtered workflow such as
+`macos-e2e` may not run on a PR at all. For each step it:
+
+- looks for the test in the PR's checkout: a part with a `/` (or a file name such as
+  `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
+  such as a test or scenario name, must appear in the tracked files, within the file named before it
+  when there is one (`test/foo_test.exs › "does X"`);
+- reads the PR head's status checks with `gh` and finds the ones `<check>` names: a check run, a
+  whole workflow, or `workflow / job`.
+
+| What the pre-check finds | Step | The pass |
+| --- | --- | --- |
+| the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
+| the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
+| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then handed to the self-heal lane |
+| CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
+
+The QA report lists every result under `### Pre-checks`, one line per step with the check run's
+link, and a failed step is also one of the report's findings. A walkthrough with no `Proved by:
+<check>` step reads nothing and runs as it always did. The epic review does not run the pre-check:
+its agent reads CI's runs on the base branch head, as above.
 
 The instructions that write walkthroughs (the plan pipeline, the plan run, the feature ticket type,
 new issues filed during a run, and the ticket templates) route every step when it is written. A step

@@ -114,8 +114,9 @@ GitHub or Linear in QA:
   rate limit). Log every request.
 - **Update-check interval:** pass `update_check_interval_seconds` (a positive integer, such as
   `30`) and the app checks for a release that often in the background, in every update mode,
-  through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check still backs off to 6 hours, so use
-  Check Now to check again after one.
+  through `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`. A failed check retries at that interval, except a
+  403 or 429: it waits for the reset the response names in `Retry-After` or `X-RateLimit-Reset`,
+  an hour when it names none, so use Check Now to check again after one.
 - **Folder picker:** the picker is a system panel with no path field. Put the checkout with
   `qa_put_checkout`, pass its `path` as `open_panel_dir`, and the panel opens inside it: press
   its Choose button without selecting anything to choose that folder. Use one launch per
