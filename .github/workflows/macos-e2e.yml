@@ -2,10 +2,11 @@ name: macos-e2e
 
 # Builds releases N and N+1 of Symphony.app from this commit and tests the menu
 # bar app's Update, Restart and rollback end to end in an isolated instance
-# (`make -C macos e2e`, see macos/Tests/e2e/README.md). It builds two Symphony
+# (`make -C macos e2e`, see macos/Tests/e2e/README.md), on top of the shared
+# release-pair and update feed helpers in test/support/. It builds two Symphony
 # releases, so it runs nightly, on demand, and on pull requests that change the
-# app, the release packaging or this test, rather than in the required `macos`
-# check.
+# app, the release packaging, those helpers or this test, rather than in the
+# required `macos` check.
 on:
   schedule:
     - cron: "17 6 * * *"
@@ -21,6 +22,8 @@ on:
       - "scripts/ci/xcode-developer-dir-test.sh"
       - ".xcode-version"
       - "lib/symphony_elixir/tracker/memory.ex"
+      - "test/support/stubs/**"
+      - "test/support/macos_release/**"
       - ".github/workflows/macos-e2e.yml"
 
 permissions:
@@ -78,9 +81,9 @@ jobs:
           path: |
             ${{ runner.temp }}/symphony-e2e/
             !${{ runner.temp }}/symphony-e2e/*/signing/
-            !${{ runner.temp }}/symphony-e2e/*/minisign/
-            !${{ runner.temp }}/symphony-e2e/*/build-*/
-            !${{ runner.temp }}/symphony-e2e/*/feed/
-            !${{ runner.temp }}/symphony-e2e/*/releases/
+            !${{ runner.temp }}/symphony-e2e/*/release-pair/N/
+            !${{ runner.temp }}/symphony-e2e/*/release-pair/feed/
+            !${{ runner.temp }}/symphony-e2e/*/release-pair/minisign/
+            !${{ runner.temp }}/symphony-e2e/*/release-pair/work/
             !${{ runner.temp }}/symphony-e2e/*/Applications/
           retention-days: 7

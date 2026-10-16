@@ -35,7 +35,7 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all app bundle qa-app install run test e2e snapshots clean
+.PHONY: all app bundle qa-app install run test e2e release-pair snapshots clean
 
 all: app
 
@@ -134,6 +134,15 @@ test:
 # rollback end to end in an isolated instance. See Tests/e2e/README.md.
 e2e:
 	python3 Tests/e2e/update_restart_e2e.py
+
+# Builds a signed release N and its update N+1 from this checkout at fixed paths under
+# build/release-pair (N/Symphony.app, feed/, manifest.json), signed with a throwaway or given
+# test identity and a throwaway minisign key. See ../test/support/README.md.
+RELEASE_PAIR_BUILD_N ?= 90001
+RELEASE_PAIR_BUILD_N1 ?= 90002
+release-pair:
+	python3 ../test/support/macos_release/release_pair.py --out build/release-pair \
+		--build-n $(RELEASE_PAIR_BUILD_N) --build-n1 $(RELEASE_PAIR_BUILD_N1)
 
 # Renders the snapshots in Tests/Snapshots offscreen with ImageRenderer (no NSApplication, no window) and
 # writes their PNGs there: the app's views, minus main.swift, compiled with the snapshot program.
