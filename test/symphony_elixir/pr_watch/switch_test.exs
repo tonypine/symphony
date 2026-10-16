@@ -507,6 +507,53 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R14"} = decision(follower)
     end
 
+    test "a Merging PR that conflicts while a QA PR sharing its files is open waits for it, with no CI Fix, and gets one once it merged" do
+      leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
+      follower = ticket!("2", "Merging", dirty() ++ [auto_merge: :armed])
+
+      World.update(:open_pulls, fn _ ->
+        [%{number: 1, head_sha: "head-1-1", files: ["lib/a.ex"]}, %{number: 2, head_sha: "head-2-1", files: ["lib/a.ex"]}]
+      end)
+
+      pid = start!()
+      tick!(pid)
+
+      # The conflicting PR can't land before a fix run, so the conflict-free QA PR goes first.
+      assert %{rule: "R14a", kind: :wait_for_competitors, reason: "Lands after TP-1: they change the same files (lib/a.ex)"} =
+               decision(follower)
+
+      assert moves(follower) == []
+      assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
+      assert decision(leader).rule != "R14a"
+
+      tick!(pid, 2)
+      assert moves(follower) == []
+
+      pr!("1", pr: :merged)
+      World.update(:open_pulls, fn _ -> [%{number: 2, head_sha: "head-2-1", files: ["lib/a.ex"]}] end)
+      tick!(pid, 2)
+
+      assert moves(follower) == ["CI Fix"]
+      assert %{rule: "R14"} = decision(follower)
+    end
+
+    test "a PR keeps its landing place while its ticket sits in CI Fix: the state the stay returns to counts" do
+      fixing = ticket!("1", "CI Fix", red())
+      :ok = CiFix.record_origin(@repo_key, fixing, "Merging")
+      reviewed = ticket!("2", "QA", dirty())
+
+      World.update(:open_pulls, fn _ ->
+        [%{number: 1, head_sha: "head-1-1", files: ["lib/a.ex"]}, %{number: 2, head_sha: "head-2-1", files: ["lib/a.ex"]}]
+      end)
+
+      pid = start!()
+      tick!(pid)
+
+      assert decision(fixing).rule != "R14a"
+      assert %{rule: "R14a", reason: "Lands after TP-1: they change the same files (lib/a.ex)"} = decision(reviewed)
+      assert moves(reviewed) == []
+    end
+
     test "a third conflict fix run that leaves the PR conflicting, with nobody competing, sends it to Rework (D16), with no question" do
       issue_id = ticket!("1", "Merging", dirty() ++ [auto_merge: :armed])
       pid = start!()

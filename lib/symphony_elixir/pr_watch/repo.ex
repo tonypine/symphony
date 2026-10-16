@@ -289,7 +289,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
           pr_url: entry.pr_url,
           pr_number: pull.number,
           files: pull.files,
-          rank: LandingOrder.rank(entry.issue.state, settings),
+          rank: LandingOrder.rank(landing_state(entry), settings),
+          conflicting: match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)),
           held: entry.ticket.hold != :none,
           forced: Issue.forced?(entry.issue, settings)
         })
@@ -329,11 +330,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp landing_of(entry, head_sha, now) do
     previous = previous_landing(entry)
-    same_state? = previous != nil and previous.state == entry.issue.state
+    state = landing_state(entry)
+    same_state? = previous != nil and previous.state == state
     moved? = not same_state? or previous.head_sha != head_sha
 
     %{
-      state: entry.issue.state,
+      state: state,
       head_sha: head_sha,
       state_since: if(same_state?, do: previous.state_since, else: now),
       progress_at: if(moved?, do: now, else: previous.progress_at)
@@ -357,6 +359,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp landing_after(entry, _unread, _wait, _pulls, _now), do: previous_landing(entry)
+
+  # A PR keeps its place while its ticket sits in CI Fix: the state the stay returns to counts.
+  defp landing_state(%{phase: :ci_fix, record: %{ci_fix_origin: origin}}) when is_binary(origin), do: origin
+  defp landing_state(entry), do: entry.issue.state
 
   defp previous_landing(%{record: %{pr_watch: %{landing: %{} = landing}}}), do: landing
   defp previous_landing(_entry), do: nil

@@ -1111,8 +1111,9 @@ pull_requests:
     when they pass".
   - Landing order: when open PRs change the same files, each merge would reopen a conflict on the
     others. So Symphony reads the files of every open PR on each poll and lands PRs that share a
-    file one after another: the ticket furthest along first (`Merging`, QA, Code Review, `Rework`),
-    then the one longest in its state. The others keep working, but get no conflict fix and no
+    file one after another: PRs that conflict with the base branch after the ones that don't, then
+    the ticket furthest along first (`Merging`, QA, Code Review, `Rework`; a ticket in `CI Fix`
+    keeps the place of the state it returns to), then the one longest in its state. The others keep working, but get no conflict fix and no
     "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
     its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
     one up, and a forced ticket never waits. `/api/v1/state` lists the waits under `landing_waits`

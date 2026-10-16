@@ -10,13 +10,16 @@ defmodule SymphonyElixir.LandingOrder do
   fails. Two tracked PRs overlap when they share a file; the weight of the overlap is the number of
   files they share.
 
-  Tracked PRs land in this order: the one furthest along first (`Merging`, then the QA state, then
+  Tracked PRs land in this order: a PR that conflicts with the base branch after the ones that
+  don't (it can't land before a fix run, and that run would only conflict again once the others
+  land), then the one furthest along first (`Merging`, then the QA state, then
   the Code Review state, then `Rework`, then any other state), then the one longest in its state
   (for `Merging` and QA, the oldest approval), then the lower PR number. A PR waits for the first
   PR in that order, above it, that shares a file with it (the fact `ahead`): the watcher sends it
   no conflict fix (rule R14a) and doesn't update its branch (R28) until that PR lands or stops
   sharing files with it. The next one then merges the base branch once, with all of the leader's
-  changes.
+  changes. A PR keeps its place while its ticket sits in `CI Fix`: the state the stay returns to
+  counts.
 
   A group never deadlocks:
 
@@ -57,6 +60,7 @@ defmodule SymphonyElixir.LandingOrder do
           optional(:pr_number) => non_neg_integer() | nil,
           optional(:state) => String.t() | nil,
           optional(:held) => boolean(),
+          optional(:conflicting) => boolean(),
           optional(:forced) => boolean()
         }
 
@@ -130,7 +134,8 @@ defmodule SymphonyElixir.LandingOrder do
   defp leads?(leader, now), do: Map.get(leader, :held) != true and DateTime.diff(now, leader.progress_at, :millisecond) < @idle_ms
 
   defp order_key(member) do
-    {-member.rank, DateTime.to_unix(member.state_since, :microsecond), Map.get(member, :pr_number) || :infinity, Map.get(member, :issue_identifier) || member.issue_id}
+    {if(Map.get(member, :conflicting) == true, do: 1, else: 0), -member.rank, DateTime.to_unix(member.state_since, :microsecond), Map.get(member, :pr_number) || :infinity,
+     Map.get(member, :issue_identifier) || member.issue_id}
   end
 
   defp wait_name(wait), do: Map.get(wait, :issue_identifier) || Map.get(wait, :pr_url) || wait.issue_id

@@ -31,6 +31,13 @@ defmodule SymphonyElixir.LandingOrderTest do
       assert waits["c"].issue_id == "b"
     end
 
+    test "a PR that conflicts with the base lands after the ones that don't, whatever its state" do
+      waits = LandingOrder.waits([member("merging", 5, ["lib/a.ex"], conflicting: true), member("qa", 4, ["lib/a.ex"])], @now)
+
+      assert waits["merging"].issue_id == "qa"
+      refute Map.has_key?(waits, "qa")
+    end
+
     test "PRs that share no file are unaffected" do
       assert LandingOrder.waits([member("a", 5, ["lib/a.ex"]), member("b", 5, ["lib/b.ex"]), member("c", 1, [])], @now) == %{}
     end

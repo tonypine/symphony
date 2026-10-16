@@ -2389,9 +2389,11 @@ Landing order of PRs that change the same files:
   `landing`: the paths, the head they were read at, the state the ticket was read in and since
   when, when its state or head last moved, and the PR it waits for and since when.
 - Two watched PRs overlap when they share a path; the weight of the overlap is the number of paths
-  they share. Watched PRs land in this order: the ticket furthest along first (`Merging`, then the
-  QA state, then the Code Review state, then `Rework`, then any other state), then the one longest
-  in its state, then the lower PR number.
+  they share. Watched PRs land in this order: a PR that conflicts with the base branch after the
+  ones that don't (it can't land before a fix run), then the ticket furthest along first
+  (`Merging`, then the QA state, then the Code Review state, then `Rework`, then any other state; a
+  ticket in `CI Fix` ranks by the state its stay returns to), then the one longest in its state,
+  then the lower PR number.
 - A PR waits for the first PR above it in that order that shares a path with it and leads: a PR
   on a hold (any kind) or whose state and head haven't moved for two hours doesn't lead, and a
   PR that waits counts as moving on every poll it waits. A forced ticket never waits. The order is
