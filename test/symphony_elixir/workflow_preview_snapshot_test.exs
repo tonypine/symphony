@@ -27,6 +27,21 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     Snapshot.assert_snapshot!(Path.join("workflow_preview", "prompt.md"), prompt)
   end
 
+  test "the preview states the walkthrough routing rule, with dark mode and the status-bar menu as QA steps" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
+    flat = String.replace(prompt, ~r/\s+/, " ")
+
+    assert flat =~ "Each walkthrough step names the one place that proves it, on a line at its end: `Proved by: <check> › <test>`"
+    assert flat =~ "copy its numbered steps and expected results into that criterion verbatim, each with its `Proved by:` line"
+    assert flat =~ "Each step of a sub-ticket's `## User walkthrough` names the one place that proves it"
+
+    assert flat =~
+             "a walkthrough step that judges the macOS app by sight in dark mode, or judges the look of the status-bar menu, is a `Proved by: QA` step"
+
+    assert flat =~ "`qa_launch_app`'s `appearance` argument, `qa_open_status_menu`"
+    assert flat =~ "a walkthrough asks QA for light mode only and has QA read the status-bar menu from the accessibility tree"
+  end
+
   test "the preview names none of the retired states, checks or tickets" do
     assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
 

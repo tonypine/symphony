@@ -219,6 +219,29 @@ defmodule SymphonyElixir.QaVerificationTest do
                QaVerification.journey(issue())
     end
 
+    test "carries the walkthrough's steps with the proof each names" do
+      description = """
+      ## User walkthrough
+
+      1. Run `symphony check` → it passes. Proved by: `make-all` › `test/mix/tasks/check_test.exs`
+      2. Read the output → it reads well.
+
+      ## Acceptance criteria
+
+      - It works.
+      """
+
+      assert %{
+               steps: [
+                 %{number: 1, proof: %{by: :test, check: "make-all", test: "test/mix/tasks/check_test.exs"}},
+                 %{number: 2, proof: %{by: :qa}}
+               ]
+             } = QaVerification.journey(issue("QA", %{description: description}))
+
+      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: "## Acceptance criteria\n\n- It works.\n"}))
+      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: nil}))
+    end
+
     test "falls back to the acceptance criteria" do
       description = "Some context.\n\n## Acceptance criteria\n\n- It works.\n- It is fast.\n"
 

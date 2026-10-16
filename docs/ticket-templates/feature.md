@@ -27,10 +27,14 @@ _What exists today, related tickets, designs or constraints the work should know
 ## User walkthrough
 
 _Steps a machine can reproduce: an end-to-end test in CI, or the QA agent driving the app or CLI
-on its own VM. Never a check only you can make once the change is live._
+on its own VM. Never a check only you can make once the change is live. End each step with the one
+place that proves it: `Proved by: <check> › <test>` (the GitHub check, then the suite, scenario or
+test file) or `Proved by: QA`. QA links a named test's result instead of walking its step, and a
+step without the line is a QA step. A step that needs what QA lacks (a signed build, a device, real
+credentials) names an automated harness; a judgment by sight stays with QA._
 
-1. _A step the user takes._ Expected: _what they see._
-2. _The next step._ Expected: _what they see._
+1. _A step the user takes._ Expected: _what they see._ Proved by: _`make-all` › the test file._
+2. _The next step._ Expected: _what they see._ Proved by: QA
 
 ## After release
 

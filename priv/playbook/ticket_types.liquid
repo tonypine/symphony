@@ -99,9 +99,13 @@ a PR.
   evidence: a test, a command's output or a screenshot.
 - A test for every criterion that code can check.
 - When the ticket has a `User walkthrough`, every step works end to end as
-  written, with the result it names, and is reproduced by an automated test
-  where code can drive it. Anything under `After release` is the operator's own
-  check once the change is live: not a criterion for this run.
+  written, with the result it names, and is proved where its `Proved by:` line
+  says. A step naming a test (`Proved by: <check> › <test>`) is met by that test
+  passing on the PR head: write it in this PR unless the step names another
+  ticket's test. QA walks a `Proved by: QA` step and a step with no `Proved by:`
+  line; when code could drive such a step, add the test anyway. Anything under
+  `After release` is the operator's own check once the change is live: not a
+  criterion for this run.
 - Nothing listed under `Out of scope`. Use `Goal` and `Context` to settle details
   the criteria leave open, and file anything larger with `linear_create_subissue`
   instead of building it.

@@ -98,6 +98,24 @@ defmodule SymphonyElixir.PlaybookTest do
       assert body =~ "State: only `Plan Review`"
     end
 
+    test "the partials that write walkthroughs route each step to the one place that proves it" do
+      assert {:ok, backlog} = Playbook.fetch("out_of_scope_backlog")
+      backlog = String.replace(backlog, ~r/\s+/, " ")
+
+      assert backlog =~ "Each walkthrough step names the one place that proves it, on a line at its end: `Proved by: <check> › <test>`"
+      assert backlog =~ "or `Proved by: QA`. A step with no `Proved by:` line is read as `Proved by: QA`."
+      assert backlog =~ "A step code can drive names its test. QA does not walk it"
+      assert backlog =~ "A step that needs an environment QA lacks (a signed build, a device, real credentials) goes to an automated harness"
+      assert backlog =~ "A step that needs a QA tool QA has, or one a sibling ticket adds, stays `Proved by: QA`"
+      assert backlog =~ "One journey is proved in one place."
+
+      assert {:ok, parent} = Playbook.fetch("parent_tickets")
+      parent = String.replace(parent, ~r/\s+/, " ")
+
+      assert parent =~ "Each step of a sub-ticket's `## User walkthrough` names the one place that proves it"
+      assert parent =~ "one journey never sits both in a sub-ticket's walkthrough and in an end-to-end sub-ticket"
+    end
+
     test "plan_pipeline files no verification sub-ticket: the epic closes itself" do
       assert {:ok, body} = Playbook.fetch("plan_pipeline")
 
@@ -361,6 +379,8 @@ defmodule SymphonyElixir.PlaybookTest do
       assert_sends_back(prompt)
       assert prompt =~ "One PR that meets every item under `Acceptance criteria`."
       assert prompt =~ "every step works end to end as written"
+      assert prompt =~ "is proved where its `Proved by:` line says"
+      assert prompt =~ "QA walks a `Proved by: QA` step and a step with no `Proved by:` line"
       assert prompt =~ "Nothing listed under `Out of scope`."
       refute prompt =~ "## Ticket type: bug"
     end
@@ -470,6 +490,15 @@ defmodule SymphonyElixir.PlaybookTest do
                  "(feature → journey → screen → ticket), and carries a `## User walkthrough`"
 
       assert prompt =~ "File the Must-be tickets first, then Performance, then Attractive"
+    end
+
+    test "each sub-ticket's walkthrough step names its proof, and one journey sits in one place" do
+      prompt = render_plan_pipeline(["plan"])
+
+      assert prompt =~ "and the one place that proves it, `Proved by: <check> › <test>` or `Proved by: QA`"
+      assert prompt =~ "Never put one journey both in a sub-ticket's walkthrough and in an end-to-end ticket"
+      assert prompt =~ "`## User walkthrough` whose every step names its proof"
+      refute prompt =~ "written so an end-to-end test or the QA agent can reproduce it"
     end
 
     test "it loads the house standards, with a project override and the baseline as fallback" do
