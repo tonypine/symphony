@@ -3151,6 +3151,40 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "before_remove hook receives the removal reason and the issue state" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-before-remove-reason-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      marker = Path.join(test_root, "before-remove-reason.log")
+      File.mkdir_p!(workspace_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_before_remove: "printf '%s|%s\\n' \"$SYMPHONY_REMOVE_REASON\" \"$SYMPHONY_ISSUE_STATE\" >> \"#{marker}\""
+      )
+
+      removals = [
+        %{id: "issue-done", identifier: "MT-REASON", remove_reason: :terminal, state: "Done"},
+        %{id: "issue-stop", identifier: "MT-REASON", remove_reason: :stop},
+        "MT-REASON"
+      ]
+
+      for removal <- removals do
+        assert {:ok, _workspace} = Workspace.create_for_issue("MT-REASON")
+        assert :ok = Workspace.remove_issue_workspaces(removal)
+      end
+
+      assert File.read!(marker) == "terminal|Done\nstop|\ncleanup|\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "run hooks use repo_key option for identifier-only context" do
     test_root =
       Path.join(
@@ -5030,6 +5064,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "acme/symphony"
       assert trace =~ "export SYMPHONY_BRANCH="
       assert trace =~ "auto/MT-SSH-WS"
+      assert trace =~ ~r/export SYMPHONY_REMOVE_REASON=\S*cleanup/
+      assert trace =~ "export SYMPHONY_ISSUE_STATE="
       assert trace =~ "rm -rf"
       assert trace =~ workspace_path
     after

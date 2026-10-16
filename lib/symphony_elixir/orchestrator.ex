@@ -2010,7 +2010,7 @@ defmodule SymphonyElixir.Orchestrator do
         running_entry = Map.get(state.running, issue.id)
 
         state
-        |> terminate_running_issue(issue.id, true)
+        |> terminate_running_issue(issue.id, true, remove_reason: :terminal, issue_state: issue.state)
         |> maybe_emit_issue_completed(issue, running_entry)
 
       active_issue_state?(issue.state, active_states) ->
@@ -2249,7 +2249,13 @@ defmodule SymphonyElixir.Orchestrator do
 
         if cleanup_workspace do
           cleanup_issue_workspace(
-            %{id: issue_id, identifier: identifier, repo_key: running_repo_key(state, running_entry)},
+            %{
+              id: issue_id,
+              identifier: identifier,
+              repo_key: running_repo_key(state, running_entry),
+              remove_reason: Keyword.get(opts, :remove_reason),
+              state: Keyword.get(opts, :issue_state)
+            },
             worker_host
           )
         end
@@ -5139,7 +5145,7 @@ defmodule SymphonyElixir.Orchestrator do
         state = maybe_emit_issue_completed(state, issue)
 
         issue
-        |> issue_workspace_context(retry_repo_key(state, metadata, %{}))
+        |> terminal_workspace_context(retry_repo_key(state, metadata, %{}))
         |> cleanup_issue_workspace(metadata[:worker_host])
 
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
@@ -5322,7 +5328,7 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.each(fn
       %Issue{} = issue ->
         issue
-        |> issue_workspace_context(repo_key)
+        |> terminal_workspace_context(repo_key)
         |> cleanup_issue_workspace(nil)
 
       _ ->
@@ -7554,11 +7560,14 @@ defmodule SymphonyElixir.Orchestrator do
         repo_key = running_repo_key(state, running_entry)
         Logger.warning("Operator stopping running agent issue_id=#{issue_id} issue_identifier=#{running_entry.identifier} session_id=#{session_id}")
 
+        # The stop removes the workspace, but the ticket didn't end: the `stop` reason keeps a
+        # `before_remove` hook that closes PRs from closing the ticket's PR.
         state =
           terminate_running_issue(state, issue_id, true,
             status: "stopped",
             error: "agent stopped by operator",
-            track_completed_run: true
+            track_completed_run: true,
+            remove_reason: :stop
           )
 
         notify_dashboard()
@@ -8391,12 +8400,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp forget_completed_issue(state, _issue_id), do: state
 
-  defp issue_workspace_context(%Issue{} = issue, repo_key) do
+  # The removal of a terminal ticket's workspace: the `before_remove` hook gets the `terminal`
+  # reason and the state the ticket reached.
+  defp terminal_workspace_context(%Issue{} = issue, repo_key) do
     %{
       id: issue.id,
       identifier: issue.identifier,
       repo_key: repo_key,
-      labels: issue.labels || []
+      labels: issue.labels || [],
+      remove_reason: :terminal,
+      state: issue.state
     }
   end
 

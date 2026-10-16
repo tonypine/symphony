@@ -14,6 +14,10 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
   Repo and branch precedence: `SYMPHONY_REPO` / `SYMPHONY_BRANCH`, then the
   matching `--repo` / `--branch` flags for manual invocation.
 
+  It closes them only when the ticket ended: Symphony sets `SYMPHONY_REMOVE_REASON` to `terminal`
+  and names the state in `SYMPHONY_ISSUE_STATE`, which the closing comment quotes. Any other reason
+  (`stop`, `cleanup`) keeps them open. A manual run, without the variable, closes them.
+
   Usage:
 
       mix workspace.before_remove
@@ -39,8 +43,16 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
         repo = configured_value("SYMPHONY_REPO", opts[:repo])
         branch = configured_value("SYMPHONY_BRANCH", opts[:branch])
 
-        maybe_close_open_pull_requests(repo, branch)
+        if terminal_removal?() do
+          maybe_close_open_pull_requests(repo, branch, present_string(System.get_env("SYMPHONY_ISSUE_STATE")))
+        end
+
+        :ok
     end
+  end
+
+  defp terminal_removal? do
+    present_string(System.get_env("SYMPHONY_REMOVE_REASON")) in [nil, "terminal"]
   end
 
   defp configured_value(env_key, flag_value) do
@@ -48,14 +60,14 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
     |> Enum.find_value(&present_string/1)
   end
 
-  defp maybe_close_open_pull_requests(_repo, nil), do: :ok
-  defp maybe_close_open_pull_requests(nil, _branch), do: :ok
+  defp maybe_close_open_pull_requests(_repo, nil, _issue_state), do: :ok
+  defp maybe_close_open_pull_requests(nil, _branch, _issue_state), do: :ok
 
-  defp maybe_close_open_pull_requests(repo, branch) do
+  defp maybe_close_open_pull_requests(repo, branch, issue_state) do
     if configured_repo?(repo) and gh_available?() and gh_authenticated?() do
       repo
       |> list_open_pull_request_numbers(branch)
-      |> Enum.each(&close_pull_request(repo, branch, &1))
+      |> Enum.each(&close_pull_request(repo, branch, issue_state, &1))
     end
 
     :ok
@@ -160,7 +172,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
     end
   end
 
-  defp close_pull_request(repo, branch, pr_number) do
+  defp close_pull_request(repo, branch, issue_state, pr_number) do
     case run_command("gh", [
            "pr",
            "close",
@@ -168,7 +180,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
            "--repo",
            repo,
            "--comment",
-           closing_comment(branch)
+           closing_comment(branch, issue_state)
          ]) do
       {:ok, _output} ->
         Mix.shell().info("Closed PR ##{pr_number} for branch #{branch}")
@@ -180,8 +192,12 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
     end
   end
 
-  defp closing_comment(branch) do
+  defp closing_comment(branch, nil) do
     "Closing because the Linear issue for branch #{branch} entered a terminal state without merge."
+  end
+
+  defp closing_comment(branch, issue_state) do
+    "Closing because the Linear issue for branch #{branch} moved to #{issue_state} without merge."
   end
 
   defp format_output(""), do: ""

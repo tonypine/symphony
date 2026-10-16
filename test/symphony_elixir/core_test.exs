@@ -458,7 +458,7 @@ defmodule SymphonyElixir.CoreTest do
     assert Config.workflow_prompt() == prompt
   end
 
-  test "current WORKFLOW.md before_remove closes the branch's open PRs from outside the checkout" do
+  test "current WORKFLOW.md before_remove closes a terminal ticket's open PRs from outside the checkout" do
     original_workflow_path = Workflow.workflow_file_path()
     test_root = Path.join(System.tmp_dir!(), "symphony-elixir-before-remove-hook-#{System.unique_integer([:positive])}")
 
@@ -497,14 +497,22 @@ defmodule SymphonyElixir.CoreTest do
     end
 
     env = [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}, {"CALL_LOG", log_path}]
+    ref_env = [{"SYMPHONY_REPO", "acme/widgets"}, {"SYMPHONY_BRANCH", "auto/TP-1"}]
+
+    # A stopped run, or any other removal than a terminal one, keeps the ticket's PRs open.
+    for reason <- ["stop", "cleanup", ""] do
+      reason_env = [{"SYMPHONY_REMOVE_REASON", reason}, {"SYMPHONY_ISSUE_STATE", ""}]
+      assert {_output, 0} = System.cmd("sh", ["-c", hook], cd: workspace, env: env ++ ref_env ++ reason_env)
+      refute File.exists?(log_path)
+    end
 
     assert {_output, 0} =
              System.cmd("sh", ["-c", hook],
                cd: workspace,
-               env: env ++ [{"SYMPHONY_REPO", "acme/widgets"}, {"SYMPHONY_BRANCH", "auto/TP-1"}]
+               env: env ++ ref_env ++ [{"SYMPHONY_REMOVE_REASON", "terminal"}, {"SYMPHONY_ISSUE_STATE", "Canceled"}]
              )
 
-    comment = "Closing because the Linear issue for branch auto/TP-1 entered a terminal state without merge."
+    comment = "Closing because the Linear issue for branch auto/TP-1 moved to Canceled without merge."
 
     assert File.read!(log_path) ==
              """
@@ -514,7 +522,13 @@ defmodule SymphonyElixir.CoreTest do
              """
 
     File.rm!(log_path)
-    assert {_output, 0} = System.cmd("sh", ["-c", hook], cd: workspace, env: env ++ [{"SYMPHONY_REPO", ""}, {"SYMPHONY_BRANCH", "auto/TP-1"}])
+
+    assert {_output, 0} =
+             System.cmd("sh", ["-c", hook],
+               cd: workspace,
+               env: env ++ [{"SYMPHONY_REPO", ""}, {"SYMPHONY_BRANCH", "auto/TP-1"}, {"SYMPHONY_REMOVE_REASON", "terminal"}]
+             )
+
     refute File.exists?(log_path)
   end
 
@@ -718,12 +732,14 @@ defmodule SymphonyElixir.CoreTest do
     issue_id = "issue-1"
     issue_identifier = "MT-555"
     workspace = Path.join(test_root, issue_identifier)
+    hook_marker = Path.join(test_root, "before_remove.marker")
 
     try do
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: test_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
-        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"]
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"],
+        hook_before_remove: "printf ran > #{hook_marker}"
       )
 
       File.mkdir_p!(test_root)
@@ -765,7 +781,10 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      # A move to Backlog keeps the workspace, so the before_remove hook that closes PRs never runs.
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       assert File.exists?(workspace)
+      refute File.exists?(hook_marker)
     after
       File.rm_rf(test_root)
     end
@@ -956,12 +975,14 @@ defmodule SymphonyElixir.CoreTest do
     issue_id = "issue-2"
     issue_identifier = "MT-556"
     workspace = Path.join([test_root, "api", issue_identifier])
+    hook_marker = Path.join(test_root, "before_remove.marker")
 
     try do
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: test_root,
         tracker_active_states: ["Todo", "In Progress", "In Review"],
-        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"]
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"],
+        hook_before_remove: "printf '%s|%s' \"$SYMPHONY_REMOVE_REASON\" \"$SYMPHONY_ISSUE_STATE\" > #{hook_marker}"
       )
 
       File.mkdir_p!(test_root)
@@ -994,7 +1015,7 @@ defmodule SymphonyElixir.CoreTest do
       issue = %Issue{
         id: issue_id,
         identifier: issue_identifier,
-        state: "Closed",
+        state: "Canceled",
         title: "Done",
         description: "Completed",
         labels: []
@@ -1007,6 +1028,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Process.alive?(agent_pid)
       assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
+      assert File.read!(hook_marker) == "terminal|Canceled"
     after
       File.rm_rf(test_root)
     end

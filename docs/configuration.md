@@ -2430,6 +2430,13 @@ hooks:
   removed before the hook, which installs them again. A worktree with uncommitted changes skips the
   hook with a warning. `before_run`, `after_run` and `before_remove` run in the agent's checkout, so
   they should run nothing from it. See [security](security.md#workspace-hooks-run-outside-the-sandbox).
+- `before_remove` gets the branch in `SYMPHONY_BRANCH`, its GitHub repo in `SYMPHONY_REPO`, and
+  why the workspace goes in `SYMPHONY_REMOVE_REASON`: `terminal` when the ticket reached a
+  terminal state, which `SYMPHONY_ISSUE_STATE` names; `stop` when the operator stopped its run
+  (Stop Run, `mix symphony.stop`); `cleanup` for any other removal, such as a restart or the workspace
+  lifecycle sweep. `SYMPHONY_ISSUE_STATE` is empty for the last two. A hook that closes the
+  branch's pull requests should close them only for `terminal`: a stopped ticket is still worked.
+  A move to a state that isn't terminal, such as Backlog, removes no workspace.
 - A hook on this machine runs Gradle without a daemon: Symphony appends `-Dorg.gradle.daemon=false`
   to the host's `GRADLE_OPTS`. Gradle then never hands the hook's build to a daemon an agent
   started inside its sandbox, and the hook leaves no daemon behind.
