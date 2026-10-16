@@ -121,22 +121,36 @@ GitHub or Linear in QA:
   its Choose button without selecting anything to choose that folder. Use one launch per
   checkout you need to pick.
 
-Light and dark, and the status-bar menu. A UI deliverable is judged by sight in both
-appearances. The host's appearance is never switched; launch the app once per appearance instead:
+QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
+can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
+light and dark (step 8); (c) the wide pass (step 9).
+
+Design check: light and dark, and the status-bar menu. The accessibility tree proves a control is
+there; only a screenshot shows whether it looks like the design. Judge every window, sheet, panel
+and menu the ticket adds or changes by sight in both appearances. The host's appearance is never
+switched; launch the app once per appearance instead:
 
 - **Dark:** `qa_launch_app` with `appearance: "dark"` (plus the walkthrough's `api_fixtures` and
-  stand-ins). Open the windows the ticket changes, let them settle (step 4 below) and
-  `qa_screenshot` each, named with the appearance (for example `overview-dark`).
+  stand-ins). Open the windows the ticket changes. When the design names a size of 1400×900 pt or
+  more for one, set it with `qa_resize_window` (`width`, `height`, and the window's `path` when it
+  is not the main window); the tool makes no window smaller, so judge one whose design names a
+  smaller size at the size it opens, and give both sizes in the step. Let each settle (step 4
+  below) and `qa_screenshot` it, named with the appearance (for example `overview-dark`).
 - **Status-bar menu:** when the ticket changes the status-bar menu, or a step reads it:
-  `qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned (for example `status-menu-dark`), then
-  `qa_key` with `key: "escape"` to close it. Read the menu's items from `qa_ax_tree` as before
-  when a step needs their titles; the screenshot is for judging how it looks.
+  `qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned (for example
+  `status-menu-dark`), then `qa_key` with `key: "escape"` to close it. Judge the menu from that
+  screenshot, not only from the tree: read its items from `qa_ax_tree` when a step needs their
+  titles, but how it looks is in the screenshot.
 - **Light:** `qa_quit_app`, then do the same with `appearance: "light"` (`overview-light`,
   `status-menu-light`). At most three launched apps run at once, so quit each before the next.
-- **Judge** each pair side by side: text and icons stay readable, nothing keeps a light-only or
-  dark-only colour, and the two match the design. When `qa_open_status_menu` fails with
-  `qa_status_menu_not_opened`, call `qa_check_app`; a menu that never opens on a healthy app is a
-  failing step, quoted with the tool's message.
+- **Judge** each pair side by side with the deliverable's design: the ticket's or the parent's
+  Screens (named under "Design" above), then `docs/design/design-system.md`. Compare layout,
+  spacing, alignment, truncation, contrast, symbols (SF Symbols, icons), wording, and whether it
+  looks finished: text and icons stay readable, nothing keeps a light-only or dark-only colour,
+  nothing is clipped or placeholder. When no Screens cover the deliverable, judge it against the
+  design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
+  `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
+  tool's message.
 
 After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
 key, so it never installs an update. When a step judges what the app shows once an update
@@ -193,6 +207,7 @@ step you proved, judge what the app shows.
    - content areas (`AXScrollArea`, `AXGroup`, `AXSplitGroup`) have a real size. A window
      whose content or scroll area is a few points tall, or whose tree has no controls under
      the window, is empty even when the window frame looks normal.
+   The tree shows what is there; how it looks is judged by sight in the Design check (step 8).
 6. Take a `qa_screenshot` of every step you judge, named after the step (for example
    `settings-open`), and after every action that changes the UI.
 7. Exercise the change: fill fields with `qa_ax_set_value`, press the buttons the
@@ -216,7 +231,13 @@ step you proved, judge what the app shows.
      `symphony-qa/no-tools` (no tools, so the Models picker leaves it out).
    Judge the walkthrough's OpenRouter steps with these, `pass` or `fail`. Checks with a real key
    are manual and not part of QA.
-8. **Wide pass.** Layout bugs that only show in wide windows (a layout loop, a constraint
+8. **Design check.** Run the light and dark launches above for every UI deliverable and report
+   one step per deliverable named `Design check: <deliverable>` (for example
+   `Design check: status-bar menu`). Put both screenshots in its `evidence`, and in `details` name
+   the design it compared with (the Screens document or HTML screen, and the screen in it, or
+   "the design system alone: no Screens cover it") and the size it judged. `pass` when both
+   screenshots match the design; `fail` when either visibly differs, naming what differs.
+9. **Wide pass.** Layout bugs that only show in wide windows (a layout loop, a constraint
    crash) never appear at the default size, so after the walkthrough run the app wide:
    - call `qa_resize_window` for the app's main window. When the main window is not the one the
      PR changes (a Settings window, a panel), pass that window's `path`. Use the default
@@ -238,13 +259,17 @@ step you proved, judge what the app shows.
    was limited as `blocked` either way, so a person enlarges the QA screen, and reports a pass
    with no `qa_resize_window` call as `blocked` too, because its wide pass did not run. In an epic
    review that launches no app, because the epic changed none, there is no wide pass to run.
-9. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
+10. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
-10. Attach the screenshots that show each step's result with `linear_attach_file`
+11. Attach the screenshots that show each step's result with `linear_attach_file`
    (`make_public: false`) and list the returned URLs in that step's `evidence`.
 
 Verdicts for this playbook:
 
+- A `Design check` whose light or dark screenshot visibly differs from the design (a misaligned
+  or clipped control, wrong spacing, unreadable contrast, a wrong symbol or wording, an unfinished
+  look) is a failing step, even when the tree shows every control: in `details` and `findings`
+  name what differs from which screen of the design, and attach the screenshot that shows it.
 - An empty or collapsed window, a missing control, or a control that does nothing is a
   failing step. In `details` quote the relevant part of the settled AX tree (the window and
   its direct children, with frames) and attach the screenshot of that window.

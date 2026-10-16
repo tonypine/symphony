@@ -30,6 +30,10 @@ tools. They only act on Symphony's emulator and on the application IDs listed be
 Do not edit tracked files in the worktree: `qa_android_install` refuses a modified checkout. The
 build's own outputs (gitignored files) are fine.
 
+QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test can
+drive them), steps 1 to 6 below; (b) the `Design check` of every UI deliverable, by sight, in light
+and dark (step 7); (c) the device checks: back, the keyboard action and rotation (step 8).
+
 1. Run the build command in your shell, from the worktree root, in the foreground with a time
    limit. A build that fails on a change that should build is a failing step; quote the end of
    the output. A build that cannot start (no JDK, no Android SDK, dependencies that cannot
@@ -56,17 +60,29 @@ build's own outputs (gitignored files) are fine.
      field has focus, the field and the button that submits it stay visible above the keyboard.
 6. Take a `qa_android_screenshot` of every step you judge, named after the step in order (for
    example `01-login-open`), and after every action that changes the UI.
-7. Where the walkthrough or the change touches them, also check:
+7. **Design check.** For every screen, dialog or sheet the change adds or changes, judge it by
+   sight in light and in dark against its design: the ticket's or the parent's Screens (named
+   under "Design" above), then `docs/design/design-system.md` alone when no Screens cover it.
+   - Light: with the screen settled, take a `qa_android_screenshot` named with the appearance (for
+     example `07-login-light`).
+   - Dark: `qa_android_dark_mode` `on`, settle (step 4), take `07-login-dark`, then
+     `qa_android_dark_mode` `off`.
+   - The emulator has one display size; when the design names another, judge at the emulator's
+     and say so in the step.
+   - Compare layout, spacing, alignment, truncation, contrast, icons, wording, and whether it looks
+     finished: text stays readable and nothing disappears in dark.
+   Report one step per deliverable named `Design check: <deliverable>`, with both screenshots in
+   `evidence` and, in `details`, the design it compared with (the Screens document or HTML screen
+   and the screen in it, or "the design system alone: no Screens cover it").
+8. Where the walkthrough or the change touches them, also check:
    - back: `qa_android_key` `back` leaves the screen or closes the dialog as the ticket says, and
      does not exit the app early;
    - the keyboard action: `qa_android_key` `ime_action` in a field submits or moves to the next
      field as the ticket says;
    - rotation: `qa_android_rotate` `landscape`, settle, judge the screen again (typed text and
-     state kept, nothing clipped), then `portrait`;
-   - dark mode: `qa_android_dark_mode` `on`, settle, judge that text stays readable and nothing
-     disappears, take a screenshot, then `off`.
-8. Run `qa_android_stop` when you are done.
-9. Attach the screenshots that show each step's result with `linear_attach_file`
+     state kept, nothing clipped), then `portrait`.
+9. Run `qa_android_stop` when you are done.
+10. Attach the screenshots that show each step's result with `linear_attach_file`
    (`make_public: false`) and list the returned URLs in that step's `evidence`.
 
 Verdicts for this playbook:
@@ -75,6 +91,10 @@ Verdicts for this playbook:
   off the display, or under a system bar or the keyboard) or text that contradicts the ticket is
   a failing step. In `details` quote the relevant part of the settled tree (the nodes with their
   `bounds`) and attach the screenshot of that screen.
+- A `Design check` whose light or dark screenshot visibly differs from the design (a misaligned or
+  clipped element, wrong spacing, unreadable contrast, a wrong icon or wording, an unfinished look)
+  is a failing step, even when the tree shows every node: in `details` and `findings` name what
+  differs from which screen of the design, and attach the screenshot that shows it.
 - The app crashing or leaving the foreground (`qa_app_exited`, or the tree's warning that
   another package is in the foreground) during the walkthrough is a failing step; quote the
   logcat the tool returned.
