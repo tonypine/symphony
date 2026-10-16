@@ -1071,14 +1071,18 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` reruns the failed jobs of a red head once before a `CI Fix` run.
 - `checks.max_fix_attempts` (default 10) is a backstop, not a budget: once that many `CI Fix` runs
-  were sent for red heads, Symphony files a fix ticket for the failing check (or reuses the open one)
-  and holds the ticket on it, in place, until the fix ticket is done; then the count restarts. A
+  were sent for red heads, or 3 in a row met the same failure (the same check and first error line),
+  Symphony files a fix ticket for the failing check (or reuses the open one) and holds the ticket on
+  it, in place, until the fix ticket is done; then the count restarts. A
   conflict gets 3 fix runs whatever this says, then, with no open PR competing for its files, goes
   to `Rework`. The counts reset once the PR is green and conflict-free. `checks.escalate_to_state`
   is deprecated: it loads with a warning and does nothing.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` PR may stay `BLOCKED` by branch
   protection on a green head before a landing agent takes it over, and how long a landing run that
-  ended on pending checks waits for its head to settle.
+  ended on pending checks waits for its head to settle. In any phase it is also how long a head waits
+  for a check its base branch requires before a person is asked whether to go on without it, and
+  how long a head with no check at all waits for its first one when the base branch has workflows
+  (a base without workflow files has no CI, which counts as green).
 - `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
   auto-merge instead of a landing agent, so they take no agent slot:
   - A ticket Symphony moves into `Merging` is looked at right away. A PR that is already `CLEAN`
