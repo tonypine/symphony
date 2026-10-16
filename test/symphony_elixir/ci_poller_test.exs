@@ -5,6 +5,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.CiState
+  alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.TicketPullRequest
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -404,7 +405,8 @@ defmodule SymphonyElixir.CiPollerTest do
     Application.put_env(:symphony_elixir, :ci_test_status, %{green_status() | checks: [make_all, preview]})
 
     # Without required checks, the head waits on every check.
-    assert {:ok, %{actions: [{:observed, "issue-2401", "watching"}]}} = CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    result = CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    assert {:ok, %{actions: [{:observed, "issue-2401", "watching"}]}} = result
     assert CiPoller.landing_ready_head("issue-2401") == nil
 
     Application.put_env(:symphony_elixir, :ci_test_required_checks, ["make all"])
@@ -548,7 +550,7 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_received {:rerun_failed, _run_id}
 
     # The PR watcher reran the failed `specs` check of this head (rule R22).
-    attempts = %{SymphonyElixir.PrWatch.Attempts.new() | reruns: %{"abc123" => ["specs"]}}
+    attempts = %{Attempts.new() | reruns: %{"abc123" => ["specs"]}}
     SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, "issue-2401", attempts: attempts, head_sha: "abc123")
 
     # Every reader of the head's CI sees the same rerun as pending.

@@ -19,7 +19,17 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     def start_link(_opts) do
       Agent.start_link(
-        fn -> %{issues: %{}, prs: %{}, calls: [], fix_tickets: %{}, open_pulls: nil, now: ~U[2026-10-16 12:00:00Z], cancel_result: {:ok, [1]}} end,
+        fn ->
+          %{
+            issues: %{},
+            prs: %{},
+            calls: [],
+            fix_tickets: %{},
+            open_pulls: nil,
+            now: ~U[2026-10-16 12:00:00Z],
+            cancel_result: {:ok, [1]}
+          }
+        end,
         name: __MODULE__
       )
     end
@@ -172,7 +182,18 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   defp move!(issue_id, state), do: World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | state: state} end))
 
   defp start!(opts \\ []) do
-    defaults = [repo_key: @repo_key, name: nil, auto: false, tracker: Tracker, github: GitHub, fetch: Fetch, fixer: Fixer, interval_ms: 30_000, now: fn -> now() end]
+    defaults = [
+      repo_key: @repo_key,
+      name: nil,
+      auto: false,
+      tracker: Tracker,
+      github: GitHub,
+      fetch: Fetch,
+      fixer: Fixer,
+      interval_ms: 30_000,
+      now: fn -> now() end
+    ]
+
     start_supervised!({Repo, Keyword.merge(defaults, opts)})
   end
 
@@ -193,7 +214,15 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   defp comments(issue_id), do: for({^issue_id, body} <- World.calls(:comment), do: body)
 
   defp run!(issue_id, status) do
-    :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "run-#{issue_id}", issue_id: issue_id, status: status, started_at: now(), workspace_path: "/tmp/ws"})
+    :ok =
+      RunStore.put_run(%{
+        repo_key: @repo_key,
+        run_id: "run-#{issue_id}",
+        issue_id: issue_id,
+        status: status,
+        started_at: now(),
+        workspace_path: "/tmp/ws"
+      })
   end
 
   # The CI Fix run pushed `head` and handed the ticket back to `origin`, as `AgentRunner` does.
@@ -660,7 +689,14 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     test "CiPoller.await_waiver → R18: a protected paths check that only a person clears is left alone outside Merging" do
-      issue_id = ticket!("1", "QA", ci: :red, red_kind: :human_only, failing_check: "protected paths", failed_checks: [%{name: "protected paths", run_id: "5"}])
+      issue_id =
+        ticket!("1", "QA",
+          ci: :red,
+          red_kind: :human_only,
+          failing_check: "protected paths",
+          failed_checks: [%{name: "protected paths", run_id: "5"}]
+        )
+
       pid = start!()
       tick!(pid, 2)
       assert %{rule: "R18", kind: :decision, outcome: :recorded} = decision(issue_id)
@@ -669,7 +705,15 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     test "AutoMerge's protected paths gate → R18 in Merging: auto-merge off and a person asked, once" do
-      issue_id = ticket!("1", "Merging", ci: :red, red_kind: :human_only, auto_merge: :armed, failing_check: "protected paths", failed_checks: [%{name: "protected paths", run_id: "5"}])
+      issue_id =
+        ticket!("1", "Merging",
+          ci: :red,
+          red_kind: :human_only,
+          auto_merge: :armed,
+          failing_check: "protected paths",
+          failed_checks: [%{name: "protected paths", run_id: "5"}]
+        )
+
       pid = start!()
       tick!(pid, 3)
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
@@ -877,7 +921,15 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     test "AutoMerge's protected paths gate with a decision covering the paths → R29: the head lands as if green" do
-      issue_id = ticket!("1", "Merging", ci: :red, red_kind: :human_only, mergeable: :unstable, failing_check: "protected paths", failed_checks: [%{name: "protected paths", run_id: "5"}])
+      issue_id =
+        ticket!("1", "Merging",
+          ci: :red,
+          red_kind: :human_only,
+          mergeable: :unstable,
+          failing_check: "protected paths",
+          failed_checks: [%{name: "protected paths", run_id: "5"}]
+        )
+
       ruling = SymphonyElixir.Decisions.entry("ruling-c1", ~D[2026-10-16], nil, nil, "Unlock WORKFLOW.md for TP-1")
       World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | rulings: [ruling]} end))
 
@@ -886,7 +938,16 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       File.mkdir_p!(workspace)
       on_exit(fn -> File.rm_rf(workspace) end)
       :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "run-old", issue_id: issue_id, status: "success", workspace_path: "/tmp/old"})
-      :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "run-new", issue_id: issue_id, status: "success", started_at: now(), workspace_path: workspace})
+
+      :ok =
+        RunStore.put_run(%{
+          repo_key: @repo_key,
+          run_id: "run-new",
+          issue_id: issue_id,
+          status: "success",
+          started_at: now(),
+          workspace_path: workspace
+        })
 
       test_pid = self()
 

@@ -30,8 +30,20 @@ defmodule SymphonyElixir.PrWatch.Repo do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AutoMerge, CiFix, CiState, Config, LandingOrder, PrDecision, ProtectedPathsGate}
-  alias SymphonyElixir.{RunStore, TicketPullRequest, TicketState, Tracker}
+  alias SymphonyElixir.{
+    AutoMerge,
+    CiFix,
+    CiState,
+    Config,
+    LandingOrder,
+    PrDecision,
+    ProtectedPathsGate,
+    RunStore,
+    TicketPullRequest,
+    TicketState,
+    Tracker
+  }
+
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
@@ -388,27 +400,29 @@ defmodule SymphonyElixir.PrWatch.Repo do
         %{facts: Fetch.facts(ticket, nil), stay: entry.phase, pr_url: entry.pr_url, head_sha: nil, read_at: nil, rate_limit: nil, applied: [], attempts: Attempts.new(), fix: @no_fix}
 
     facts = %{base.facts | github: :rate_limited}
-    decision = with {:ok, action} <- decide(facts, entry), do: decision_record(action, :recorded, base.attempts, facts, base.head_sha, now)
-    Map.merge(base, %{facts: facts, github: limited, decision: if(is_map(decision), do: decision)})
+
+    # R1 matches every rate-limited read, so there is always a decision: the wait.
+    decision = decision_record(PrDecision.decide(facts), :recorded, base.attempts, facts, base.head_sha, now)
+    Map.merge(base, %{facts: facts, github: limited, decision: decision})
   end
 
   # The facts, completed with what the watcher keeps, the decision and what applying it did. A stay
   # in a new phase starts a new ledger; only the current head's actions are kept.
   defp decided(entry, ticket, read, previous, now, state, settings) do
-    new_stay? = previous == nil or stay(previous) != entry.phase
-    prior = (previous && previous.attempts) || Attempts.new()
+    new_stay? = new_stay?(previous, entry)
+    prior = carried(previous, :attempts, Attempts.new())
     read = complete(read, prior, entry, state)
     observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record)})
     attempts = prior |> Attempts.observe(read, observed, now) |> cancel_stale_runs(read, state)
     facts = Fetch.facts(Map.merge(ticket, Attempts.facts(attempts, read, settings.ci, now)), read)
-    head = read && read.head_sha
+    head = read[:head_sha]
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
-    fix = settle_fix((previous && previous.fix) || @no_fix, facts)
+    fix = settle_fix(carried(previous, :fix, @no_fix), facts)
 
     case decide(facts, entry) do
       {:ok, action} ->
-        ctx = %{repo_key: state.repo_key, settings: settings, issue: entry.issue, read: read, facts: facts, attempts: attempts, applied: applied, fix: fix, now: now, opts: apply_opts(state)}
-        result = Apply.apply(action, ctx)
+        ctx = %{repo_key: state.repo_key, settings: settings, issue: entry.issue, read: read, facts: facts, now: now, opts: apply_opts(state)}
+        result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied, fix: fix}))
         attempts = result.attempts
         project_ci(entry, facts, head, now, state)
 
@@ -425,6 +439,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
         %{facts: facts, stay: entry.phase, decision: nil, applied: applied, attempts: attempts, fix: fix}
     end
   end
+
+  defp new_stay?(nil, _entry), do: true
+  defp new_stay?(previous, entry), do: stay(previous) != entry.phase
+
+  # What the record from the last tick carries over, or `default` with none.
+  defp carried(nil, _key, default), do: default
+  defp carried(previous, key, default), do: Map.get(previous, key) || default
 
   # The phase of the record's stay: the one a move put the ticket in, else the one it was read in.
   defp stay(%{stay: stay}) when is_atom(stay) and not is_nil(stay), do: stay

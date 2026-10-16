@@ -46,8 +46,23 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, CiFix, NeedsDecisionHold, Notifications, PrDecision}
-  alias SymphonyElixir.{RunStore, SelfHeal, SubIssueWait, TicketPullRequest, TicketSignals, TicketState, Tracker, TransitionGuard}
+  alias SymphonyElixir.{
+    AuditLog,
+    AutoMerge,
+    CiFix,
+    NeedsDecisionHold,
+    Notifications,
+    PrDecision,
+    RunStore,
+    SelfHeal,
+    SubIssueWait,
+    TicketPullRequest,
+    TicketSignals,
+    TicketState,
+    Tracker,
+    TransitionGuard
+  }
+
   alias SymphonyElixir.GitHub.FailedLog
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue

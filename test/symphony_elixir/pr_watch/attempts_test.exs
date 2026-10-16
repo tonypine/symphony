@@ -13,7 +13,14 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
   test "new/0 and normalize/1 read a record's attempts, filling what it lacks" do
     assert Attempts.normalize(nil) == Attempts.new()
 
-    assert %{red: 2, conflict: 0, reruns: %{"head-1" => ["specs"]}, fix_failures: [%{check: "specs", error: ""}], fix_ticket: "TP-1", head_origin: :person} =
+    assert %{
+             red: 2,
+             conflict: 0,
+             reruns: %{"head-1" => ["specs"]},
+             fix_failures: [%{check: "specs", error: ""}],
+             fix_ticket: "TP-1",
+             head_origin: :person
+           } =
              Attempts.normalize(%{
                red: 2,
                conflict: -1,
@@ -46,7 +53,8 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
     assert %{red: 2, conflict: 1} = Attempts.observe(attempts, nil, ticket(), @now)
 
     for ci <- [:green, :none], mergeable <- [:clean, :behind, :unstable, :blocked] do
-      assert %{red: 0, conflict: 0, fix_failures: []} = Attempts.observe(attempts, read(ci: ci, mergeable: mergeable), ticket(), @now)
+      observed = Attempts.observe(attempts, read(ci: ci, mergeable: mergeable), ticket(), @now)
+      assert %{red: 0, conflict: 0, fix_failures: []} = observed
     end
   end
 
@@ -54,7 +62,8 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
     attempts = Attempts.new() |> red(10) |> Attempts.spend(:conflict) |> Attempts.filed("TP-9")
 
     assert %{red: 10, fix_ticket: "TP-9"} = Attempts.observe(attempts, read(), ticket(hold: :blocked), @now)
-    assert %{red: 0, conflict: 1, fix_ticket: nil, fix_failures: []} = Attempts.observe(attempts, read(), ticket(), @now)
+    observed = Attempts.observe(attempts, read(), ticket(), @now)
+    assert %{red: 0, conflict: 1, fix_ticket: nil, fix_failures: []} = observed
     assert %{red: 0, fix_ticket: nil} = Attempts.restart_red(attempts)
     assert %{fix_ticket: nil} = Attempts.filed(attempts, nil)
   end
@@ -93,7 +102,8 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
     # The same head keeps its clock; a new head, a red head or another phase stops it.
     later = DateTime.add(@now, 10, :minute)
     assert %{blocked: %{since: @now}} = Attempts.observe(attempts, blocked, merging, later)
-    assert %{blocked: %{head_sha: "head-2", since: ^later}} = Attempts.observe(attempts, %{blocked | head_sha: "head-2"}, merging, later)
+    observed = Attempts.observe(attempts, %{blocked | head_sha: "head-2"}, merging, later)
+    assert %{blocked: %{head_sha: "head-2", since: ^later}} = observed
     assert %{blocked: nil} = Attempts.observe(attempts, %{blocked | ci: :pending}, merging, later)
     assert %{blocked: nil} = Attempts.observe(attempts, blocked, ticket(), later)
   end
@@ -106,7 +116,8 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
     assert %{head_origin: :symphony} = Attempts.observe(attempts, read(), merging, @now)
 
     # A head pushed while a run worked on the ticket, or one a run left, is Symphony's.
-    assert %{trusted_head: "head-2", head_origin: :symphony} = Attempts.observe(attempts, read(head_sha: "head-2"), %{merging | run: :active}, @now)
+    observed = Attempts.observe(attempts, read(head_sha: "head-2"), %{merging | run: :active}, @now)
+    assert %{trusted_head: "head-2", head_origin: :symphony} = observed
     assert %{trusted_head: "head-2"} = Attempts.observe(attempts, read(head_sha: "head-2"), Map.put(merging, :run_heads, ["head-2"]), @now)
 
     # So is the head an update-branch made from the trusted one.

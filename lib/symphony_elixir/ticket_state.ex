@@ -18,6 +18,7 @@ defmodule SymphonyElixir.TicketState do
   """
 
   alias SymphonyElixir.PrDecision
+  alias SymphonyElixir.PrWatch.Attempts
 
   @max_signals 50
   @max_verdicts 50
@@ -552,7 +553,7 @@ defmodule SymphonyElixir.TicketState do
       stay: stay(Map.get(watch, :stay)),
       decision: map_decision(watch),
       applied: maps(Map.get(watch, :applied)),
-      attempts: SymphonyElixir.PrWatch.Attempts.normalize(Map.get(watch, :attempts)),
+      attempts: Attempts.normalize(Map.get(watch, :attempts)),
       fix: normalize_fix(Map.get(watch, :fix)),
       links: maps(Map.get(watch, :links))
     }

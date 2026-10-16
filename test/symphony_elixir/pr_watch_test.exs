@@ -2,7 +2,7 @@ defmodule SymphonyElixir.PrWatchTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{PrWatch, PrWatchSupport, TicketPullRequest}
-  alias SymphonyElixir.PrWatch.Attempts
+  alias SymphonyElixir.PrWatch.{Attempts, Repo}
 
   @repo_key "default"
   @now ~U[2026-10-16 12:00:00Z]
@@ -49,7 +49,13 @@ defmodule SymphonyElixir.PrWatchTest do
 
       # No PR yet: the landing agent runs, as before the watcher.
       assert PrWatch.dispatch_reason(merging, settings) == nil
-      PrWatchSupport.put_watch!(@repo_key, "2", phase: :merging, facts: %{pr: :missing}, decision: %{rule: "R6", kind: :decision, reason: "no PR"})
+
+      PrWatchSupport.put_watch!(@repo_key, "2",
+        phase: :merging,
+        facts: %{pr: :missing},
+        decision: %{rule: "R6", kind: :decision, reason: "no PR"}
+      )
+
       assert PrWatch.dispatch_reason(merging, settings) == nil
 
       :ok = TicketPullRequest.record_created(@repo_key, "3", "https://github.com/acme/app/pull/3", "auto/TP-3")
@@ -62,7 +68,12 @@ defmodule SymphonyElixir.PrWatchTest do
       assert PrWatch.dispatch_reason(merging, settings) == nil
 
       # With auto-merge off, the landing agent always lands it.
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling", pr_review_auto_merge: false)
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        pr_review_auto_merge: false
+      )
+
       PrWatchSupport.put_watch!(@repo_key, "2", phase: :merging, decision: %{rule: "R32", kind: :wait, reason: "auto-merge lands it"})
       assert PrWatch.dispatch_reason(merging, Config.settings!()) == nil
     end
@@ -88,7 +99,15 @@ defmodule SymphonyElixir.PrWatchTest do
 
   test "open_pr_overlap/2 names the other open PRs that share files, and every open PR before the ticket has one" do
     landing = fn files, state, waits_for ->
-      %{files: files, head_sha: "h", state: state, state_since: @now, progress_at: @now, waits_for: waits_for, waits_since: nil}
+      %{
+        files: files,
+        head_sha: "h",
+        state: state,
+        state_since: @now,
+        progress_at: @now,
+        waits_for: waits_for,
+        waits_since: nil
+      }
     end
 
     wait = %{issue_id: "11", issue_identifier: "TP-11", pr_url: "https://github.com/acme/app/pull/11", state: "QA", shared_files: 1, files: ["lib/b.ex"]}
@@ -97,7 +116,12 @@ defmodule SymphonyElixir.PrWatchTest do
     PrWatchSupport.put_watch!(@repo_key, "12", identifier: "TP-12", pr_url: "https://github.com/acme/app/pull/12", landing: landing.(["lib/c.ex"], "QA", nil))
     PrWatchSupport.put_watch!(@repo_key, "13", identifier: "TP-13", landing: nil)
 
-    assert %{waits_for: ^wait, shared: [%{issue_identifier: "TP-11", state: "QA", files: ["lib/b.ex"]}], open: []} = PrWatch.open_pr_overlap("10")
+    assert %{
+             waits_for: ^wait,
+             shared: [%{issue_identifier: "TP-11", state: "QA", files: ["lib/b.ex"]}],
+             open: []
+           } = PrWatch.open_pr_overlap("10")
+
     # A PR that shares no file has no overlap; a ticket without a PR sees every open one.
     assert PrWatch.open_pr_overlap("12") == nil
     assert %{waits_for: nil, shared: [], open: open} = PrWatch.open_pr_overlap("no-pr-yet")
@@ -111,15 +135,45 @@ defmodule SymphonyElixir.PrWatchTest do
 
   test "landing_waits/1 lists the PRs waiting for another, with the watcher's reason; auto_merge_statuses/1 the Merging PRs" do
     wait = %{issue_id: "21", issue_identifier: "TP-21", pr_url: "https://github.com/acme/app/pull/21", state: "QA", shared_files: 2, files: ["a.ex", "b.ex"]}
-    landing = %{files: ["a.ex", "b.ex"], head_sha: "h", state: "Merging", state_since: @now, progress_at: @now, waits_for: wait, waits_since: @now}
+
+    landing = %{
+      files: ["a.ex", "b.ex"],
+      head_sha: "h",
+      state: "Merging",
+      state_since: @now,
+      progress_at: @now,
+      waits_for: wait,
+      waits_since: @now
+    }
 
     decision = %{rule: "R14a", kind: :wait_for_competitors, reason: "Lands after TP-21: they change the same files (a.ex, b.ex)"}
-    PrWatchSupport.put_watch!(@repo_key, "20", identifier: "TP-20", phase: :merging, landing: landing, decision: decision, facts: %{auto_merge: :armed})
-    PrWatchSupport.put_watch!(@repo_key, "22", identifier: "TP-22", phase: :merging, landing: landing, decision: %{rule: "R29", kind: :merge_now, reason: "green"})
+
+    PrWatchSupport.put_watch!(@repo_key, "20",
+      identifier: "TP-20",
+      phase: :merging,
+      landing: landing,
+      decision: decision,
+      facts: %{auto_merge: :armed}
+    )
+
+    PrWatchSupport.put_watch!(@repo_key, "22",
+      identifier: "TP-22",
+      phase: :merging,
+      landing: landing,
+      decision: %{rule: "R29", kind: :merge_now, reason: "green"}
+    )
+
     PrWatchSupport.put_watch!(@repo_key, "23", identifier: "TP-23", phase: :qa, landing: %{landing | waits_for: nil})
 
     assert [
-             %{issue_identifier: "TP-20", state: "Merging", waits_for: %{issue_identifier: "TP-21", state: "QA"}, shared_files: 2, reason: "Lands after TP-21" <> _, since: @now},
+             %{
+               issue_identifier: "TP-20",
+               state: "Merging",
+               waits_for: %{issue_identifier: "TP-21", state: "QA"},
+               shared_files: 2,
+               reason: "Lands after TP-21" <> _,
+               since: @now
+             },
              %{issue_identifier: "TP-22", reason: "waits for TP-21 to land (shares 2 files)"}
            ] = PrWatch.landing_waits()
 
@@ -138,6 +192,6 @@ defmodule SymphonyElixir.PrWatchTest do
     assert PrWatch.poll_now() == :ok
     assert_receive :tick_now
 
-    assert SymphonyElixir.PrWatch.Repo.poll_now(:no_such_watcher) == :ok
+    assert Repo.poll_now(:no_such_watcher) == :ok
   end
 end

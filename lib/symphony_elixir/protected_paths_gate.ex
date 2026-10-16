@@ -29,9 +29,7 @@ defmodule SymphonyElixir.ProtectedPathsGate do
   as `git.(args, cwd)` and returns `{output, status}`.
   """
   @spec check([String.t()], map(), map() | nil, keyword()) :: result()
-  def check(failed, pr, issue, opts \\ [])
-  def check([], _pr, _issue, _opts), do: :ok
-  def check(failed, pr, issue, opts), do: covered(pr, issue, Enum.join(failed, ", "), opts)
+  def check(failed, pr, issue, opts \\ []), do: if(failed == [], do: :ok, else: covered(pr, issue, Enum.join(failed, ", "), opts))
 
   defp covered(pr, issue, names, opts) do
     case granted_paths(issue) do

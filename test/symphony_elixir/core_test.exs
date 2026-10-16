@@ -4173,7 +4173,15 @@ defmodule SymphonyElixir.CoreTest do
       SymphonyElixir.PrWatchSupport.put_watch!("default", id,
         identifier: String.upcase(id),
         pr_url: "https://github.com/example/repo/pull/#{byte_size(id)}",
-        landing: %{files: files, head_sha: "head", state: "QA", state_since: now, progress_at: now, waits_for: nil, waits_since: nil}
+        landing: %{
+          files: files,
+          head_sha: "head",
+          state: "QA",
+          state_since: now,
+          progress_at: now,
+          waits_for: nil,
+          waits_since: nil
+        }
       )
     end
 

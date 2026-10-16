@@ -211,6 +211,17 @@ defmodule SymphonyElixir.TransitionGuardTest do
         assert TransitionGuard.target(:ci_fix_mechanical, %{target: origin, settings: designed}) == origin
       end
     end
+
+    test "the PR watcher's moves: a person's push in Merging goes back to Code Review (D4), a conflict that came back goes to Rework (D16)" do
+      assert TransitionGuard.legal?(:person_push, "Merging", nil)
+      refute TransitionGuard.legal?(:person_push, "QA", nil)
+      assert TransitionGuard.target(:person_push, %{settings: designed_settings()}) == "Code Review"
+      assert TransitionGuard.target(:person_push, %{settings: settings!(%{"tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"}})}) == "Peer Review"
+
+      for from <- ["Code Review", "QA", "CI Fix", "Merging"], do: assert(TransitionGuard.legal?(:conflict_rework, from, nil))
+      refute TransitionGuard.legal?(:conflict_rework, "Rework", nil)
+      assert TransitionGuard.target(:conflict_rework, %{settings: designed_settings()}) == "Rework"
+    end
   end
 
   describe "confirmation_required?/2" do

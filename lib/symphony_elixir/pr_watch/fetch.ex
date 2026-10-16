@@ -87,7 +87,12 @@ defmodule SymphonyElixir.PrWatch.Fetch do
         }
 
   @typedoc "A failed check of the head: its name, the workflow run it belongs to and how it ended."
-  @type check :: %{name: String.t() | nil, run_id: String.t() | nil, workflow_name: String.t() | nil, conclusion: String.t() | nil}
+  @type check :: %{
+          name: String.t() | nil,
+          run_id: String.t() | nil,
+          workflow_name: String.t() | nil,
+          conclusion: String.t() | nil
+        }
 
   @typedoc """
   What Symphony knows of the ticket, beside its PR: its phase, holds and run, the landing order's

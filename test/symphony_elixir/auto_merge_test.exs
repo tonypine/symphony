@@ -8,7 +8,13 @@ defmodule SymphonyElixir.AutoMergeTest do
 
   # GitHub: every call is reported to the test, and answers what the process dictionary says.
   defmodule GitHub do
-    for {name, arity} <- [enable_auto_merge: 3, squash_merge: 3, disable_auto_merge: 3, update_branch: 3, cancel_stale_runs: 3] do
+    for {name, arity} <- [
+          enable_auto_merge: 3,
+          squash_merge: 3,
+          disable_auto_merge: 3,
+          update_branch: 3,
+          cancel_stale_runs: 3
+        ] do
       args = Macro.generate_arguments(arity, __MODULE__)
 
       def unquote(name)(unquote_splicing(args)) do
@@ -69,7 +75,11 @@ defmodule SymphonyElixir.AutoMergeTest do
   end
 
   test "the comments say why auto-merge went off and that moving to Merging again turns it on" do
-    for comment <- [AutoMerge.conflict_comment(@pr_url), AutoMerge.ci_fix_comment(@pr_url), AutoMerge.person_push_comment(@pr_url)] do
+    for comment <- [
+          AutoMerge.conflict_comment(@pr_url),
+          AutoMerge.ci_fix_comment(@pr_url),
+          AutoMerge.person_push_comment(@pr_url)
+        ] do
       assert comment =~ "Symphony turned off GitHub auto-merge on #{@pr_url}"
       assert comment =~ "moving this ticket to Merging again turns auto-merge back on."
     end

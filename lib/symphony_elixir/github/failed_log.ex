@@ -10,18 +10,17 @@ defmodule SymphonyElixir.GitHub.FailedLog do
   @no_run_id "No GitHub Actions run id was available for the failed check."
   @error_line ~r/(error|failed|failure|exception|stacktrace|traceback|panic)/i
 
+  @typedoc "The excerpt for the prompt and the first error line in it."
+  @type log :: %{excerpt: String.t(), error: String.t()}
+
   @doc """
   The excerpt of the failed logs of `run_ids`, at most `line_limit` lines each, with the first error
   line found. One run gives its excerpt alone; several are each headed by their run id. No run id
   gives a line saying so. `opts[:github]` replaces `SymphonyElixir.GitHub.PullRequest`; the other
   `opts` go to `gh`.
   """
-  @spec read([String.t()], pos_integer(), keyword()) :: {:ok, %{excerpt: String.t(), error: String.t()}} | {:error, term()}
-  def read(run_ids, line_limit, opts \\ [])
-
-  def read([], _line_limit, _opts), do: {:ok, %{excerpt: @no_run_id, error: @no_run_id}}
-
-  def read(run_ids, line_limit, opts) when is_list(run_ids) do
+  @spec read([String.t()], pos_integer(), keyword()) :: {:ok, log()} | {:error, term()}
+  def read(run_ids, line_limit, opts \\ []) when is_list(run_ids) do
     github = Keyword.get(opts, :github, PullRequest)
     gh_opts = Keyword.drop(opts, [:github])
 
@@ -33,6 +32,7 @@ defmodule SymphonyElixir.GitHub.FailedLog do
       end
     end)
     |> case do
+      {:ok, []} -> {:ok, %{excerpt: @no_run_id, error: @no_run_id}}
       {:ok, logs} -> {:ok, joined(Enum.reverse(logs))}
       {:error, reason} -> {:error, reason}
     end

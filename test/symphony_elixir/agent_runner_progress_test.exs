@@ -3,6 +3,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.PrWatchSupport
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketPullRequest
@@ -608,7 +609,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       # The head's workflow run is not finished; then, with that run unread, the PR watcher's record
       # of the rerun it started on this head.
-      rerun = %{SymphonyElixir.PrWatch.Attempts.new() | reruns: %{"sha-fixed" => ["dialyzer"]}}
+      rerun = %{Attempts.new() | reruns: %{"sha-fixed" => ["dialyzer"]}}
 
       for {ci_status, attempts} <- [{run_not_finished, nil}, {%{commit_sha: "sha-fixed", checks: passed}, rerun}] do
         if attempts, do: PrWatchSupport.update_watch!("default", "issue-progress", &%{&1 | attempts: attempts})

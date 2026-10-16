@@ -502,18 +502,18 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered, merging_issue_ids, phase_issue_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now, opts),
+    with {:ok, found, merging_ids, phase_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
       opts =
         opts
-        |> Keyword.put(:merging_issue_ids, merging_issue_ids)
-        |> Keyword.put(:phase_issue_ids, phase_issue_ids)
+        |> Keyword.put(:merging_issue_ids, merging_ids)
+        |> Keyword.put(:phase_issue_ids, phase_ids)
 
       actions =
         reviews
         |> Enum.map(&process_review(&1, settings, current_gh_user, opts, now))
 
-      {:ok, %{mode: :polling, discovered: discovered, processed: length(reviews), actions: actions}}
+      {:ok, %{mode: :polling, discovered: found, processed: length(reviews), actions: actions}}
     end
   end
 

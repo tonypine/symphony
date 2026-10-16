@@ -28,7 +28,13 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
   # GitHub: every call is reported; each answers what the process dictionary says, `:ok` by default.
   defmodule GitHub do
-    for {name, arity} <- [rerun_failed: 2, enable_auto_merge: 3, squash_merge: 3, disable_auto_merge: 3, update_branch: 3] do
+    for {name, arity} <- [
+          rerun_failed: 2,
+          enable_auto_merge: 3,
+          squash_merge: 3,
+          disable_auto_merge: 3,
+          update_branch: 3
+        ] do
       args = Macro.generate_arguments(arity, __MODULE__)
 
       def unquote(name)(unquote_splicing(args)) do
@@ -56,7 +62,12 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   end
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling", ci: %{enabled: true, log_excerpt_lines: 50})
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      ci: %{enabled: true, log_excerpt_lines: 50}
+    )
+
     :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
     :ok
   end
@@ -130,7 +141,12 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
 
     test "CI rows wait for `pull_requests.checks`, and landing rows and a Merging conflict for auto-merge" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", pr_review_mode: "polling", pr_review_auto_merge: false, ci: %{enabled: false})
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        pr_review_auto_merge: false,
+        ci: %{enabled: false}
+      )
 
       for {action, phase} <- [
             {action("R22", :rerun_failed), :code_review},
@@ -409,7 +425,15 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
   describe "file_fix_ticket" do
     test "hands the red backstop to the self-heal lane, which files the fix ticket and holds the ticket on it" do
-      :ok = RunStore.record_ticket_self_heal(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: "s", fix_ticket: "TP-90", attempts: 10})
+      :ok =
+        RunStore.record_ticket_self_heal(@repo_key, @issue_id, %{
+          component: "ci:specs",
+          scope: @repo_key,
+          signature: "s",
+          fix_ticket: "TP-90",
+          attempts: 10
+        })
+
       failures = for n <- 1..10, do: %{check: "specs", error: "ERROR #{n}"}
       action = action("R20", :file_fix_ticket, args: %{check: "specs", evidence: failures}, reason: "CI keeps failing: waiting on a fix ticket for the `specs` check")
       ctx = ctx(:code_review, facts: %{red_attempts: 10, fix_failures: failures})
@@ -483,7 +507,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> _rest}
     assert %{decision: %{question: question}} = Hold.get(@repo_key, @issue_id, :needs_decision)
     assert question =~ "changes files that agents may only change with a person's permission"
-    assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+    signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+    assert [%{name: "decision requested", details: %{reason: "protected_paths"}} | _] = signals
 
     Process.put(:comment_result, {:error, :linear_down})
     capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action, ctx(:merging)) end)

@@ -59,9 +59,9 @@ defmodule SymphonyElixir.PrWatch do
   it. `opts`: `:repo_key` (else every configured repo is searched) and `:run_store`.
   """
   @spec watch(String.t() | nil, keyword()) :: TicketState.pr_watch() | nil
-  def watch(issue_id, opts \\ [])
+  def watch(issue_id, opts \\ []), do: if(is_binary(issue_id), do: find_watch(issue_id, opts))
 
-  def watch(issue_id, opts) when is_binary(issue_id) do
+  defp find_watch(issue_id, opts) do
     store = store(opts)
 
     Enum.find_value(repo_keys(opts), fn repo_key ->
@@ -71,8 +71,6 @@ defmodule SymphonyElixir.PrWatch do
       end
     end)
   end
-
-  def watch(_issue_id, _opts), do: nil
 
   @doc """
   Why the orchestrator must not start a run for `issue` now, from the watcher's decision on it, or
@@ -237,7 +235,13 @@ defmodule SymphonyElixir.PrWatch do
 
   defp landing_records(opts) do
     for %{pr_watch: %{landing: %{} = landing} = watch} = record <- records(opts) do
-      %{issue_id: record.issue_id, issue_identifier: record.issue_identifier, pr_url: watch.pr_url, landing: landing, decision: watch.decision}
+      %{
+        issue_id: record.issue_id,
+        issue_identifier: record.issue_identifier,
+        pr_url: watch.pr_url,
+        landing: landing,
+        decision: watch.decision
+      }
     end
   end
 

@@ -64,6 +64,17 @@ defmodule SymphonyElixir.PrWatchSupport do
   defp decision(%{} = decision, _head), do: decision
 
   defp decision(kind, head) when is_atom(kind) do
-    %{rule: "R0", kind: kind, reason: "test decision #{kind}", owner: nil, clears_when: nil, args: %{}, waits_on: nil, head_sha: head, outcome: :recorded, error: nil}
+    %{
+      rule: "R0",
+      kind: kind,
+      reason: "test decision #{kind}",
+      owner: nil,
+      clears_when: nil,
+      args: %{},
+      waits_on: nil,
+      head_sha: head,
+      outcome: :recorded,
+      error: nil
+    }
   end
 end

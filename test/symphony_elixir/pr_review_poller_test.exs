@@ -1492,7 +1492,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     for state <- ["Code Review", "QA", "Rework"] do
       :ok = put_review(now)
       Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: state)])
-      Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha"))
+      activity = open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, activity)
 
       assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
                PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)

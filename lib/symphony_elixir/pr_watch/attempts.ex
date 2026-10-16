@@ -35,6 +35,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   alias SymphonyElixir.PrDecision.Facts
 
+  @typedoc "The `pull_requests.checks` settings the facts read."
+  @type ci_settings :: %{flaky_retry: boolean(), merging_wait_timeout_ms: pos_integer()}
+
   @typedoc "Since when the head has been blocked by branch protection on green checks."
   @type blocked :: %{head_sha: String.t() | nil, since: DateTime.t()}
 
@@ -155,7 +158,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   The facts for `decide/1`: the counts, whether the head's failed checks were rerun already (always,
   with `flaky_retry` off), the fix runs' failures, and whether the merge wait (`timeout_ms`) passed.
   """
-  @spec facts(t(), map() | nil, %{flaky_retry: boolean(), merging_wait_timeout_ms: pos_integer()}, DateTime.t()) :: map()
+  @spec facts(t(), map() | nil, ci_settings(), DateTime.t()) :: map()
   def facts(attempts, read, settings, %DateTime{} = now) do
     attempts = normalize(attempts)
 
@@ -200,17 +203,10 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   line of its error) as the fix ticket's evidence.
   """
   @spec spend(t(), :red | :conflict, Facts.failure() | nil) :: t()
-  def spend(attempts, kind, failure \\ nil)
+  def spend(attempts, kind, failure \\ nil), do: spent(normalize(attempts), kind, failure)
 
-  def spend(attempts, :red, failure) do
-    attempts = normalize(attempts)
-    %{attempts | red: attempts.red + 1, fix_failures: attempts.fix_failures ++ List.wrap(failure)}
-  end
-
-  def spend(attempts, :conflict, _failure) do
-    attempts = normalize(attempts)
-    %{attempts | conflict: attempts.conflict + 1}
-  end
+  defp spent(attempts, :red, failure), do: %{attempts | red: attempts.red + 1, fix_failures: attempts.fix_failures ++ List.wrap(failure)}
+  defp spent(attempts, :conflict, _failure), do: %{attempts | conflict: attempts.conflict + 1}
 
   @doc """
   Records that a CI Fix run was sent for `cause` on `head`: once the ticket is in CI Fix, the run
