@@ -154,16 +154,17 @@ defmodule SymphonyElixir.QaPreCheck do
     end
   end
 
-  # A part with a `/` is a path and must be tracked. A bare file name (`check_test.exs`) is matched
-  # as a path first, and otherwise searched for like any name, since `Walkthrough.steps` looks like
-  # one too.
+  # A path-like part with a `/` must be tracked. A bare file name (`check_test.exs`) is matched as a
+  # path first, and otherwise searched for like any name, since `Walkthrough.steps` looks like one
+  # too. A name with spaces (`handles a/b input`) is never a path, whatever it holds.
   defp find_part(part, scope, files, git, workspace) do
     path = String.replace(part, @line_suffix, "")
-    matched = if Regex.match?(@path_part, path), do: Enum.filter(files, &path_match?(&1, path)), else: []
+    path? = Regex.match?(@path_part, path)
+    matched = if path?, do: Enum.filter(files, &path_match?(&1, path)), else: []
 
     cond do
       matched != [] -> {:ok, matched}
-      String.contains?(path, "/") -> :missing
+      path? and String.contains?(path, "/") -> :missing
       grep?(git, workspace, part, scope) -> {:ok, scope}
       true -> :missing
     end

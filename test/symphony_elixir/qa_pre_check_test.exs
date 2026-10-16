@@ -12,7 +12,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
     dir = Path.join(System.tmp_dir!(), "qa-pre-check-#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(dir, "test/symphony_elixir"))
     File.mkdir_p!(Path.join(dir, ".github/workflows"))
-    File.write!(Path.join(dir, "test/symphony_elixir/check_test.exs"), ~s(test "reports pass when the check passed" do\nend\n))
+    File.write!(Path.join(dir, "test/symphony_elixir/check_test.exs"), ~s(test "reports pass when the check passed" do\nend\ntest "handles a/b input" do\nend\n))
     File.write!(Path.join(dir, "test/symphony_elixir/other_test.exs"), ~s(test "only in the other file" do\nend\n# Walkthrough.steps\n))
     File.write!(Path.join(dir, ".github/workflows/macos-e2e.yml"), "jobs:\n  e2e:\n    name: update, restart and rollback\n")
     git!(dir, ["init", "-q"])
@@ -77,7 +77,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
       assert QaPreCheck.findings([result]) == []
     end
 
-    test "a test name, a scenario name or a bare file name is found in the checkout", context do
+    test "a test name, a scenario name, a name with a slash or a bare file name is found in the checkout", context do
       checks = [
         check("make-all", "COMPLETED", "SUCCESS"),
         check("update, restart and rollback", "COMPLETED", "SUCCESS", %{"workflowName" => "macos-e2e"})
@@ -91,11 +91,12 @@ defmodule SymphonyElixir.QaPreCheckTest do
       5. Five. Proved by: `make-all` › Walkthrough.steps
       6. Six. Proved by: `macos-e2e / update, restart and rollback` › `.github/workflows`
       7. Seven. Proved by: `make-all`
+      8. Eight. Proved by: `make-all` › `test/symphony_elixir/check_test.exs` › "handles a/b input"
       """
 
       assert {:pass, results} = run(text, context, gh(context.head, checks))
-      assert Enum.map(results, & &1.status) == List.duplicate(:pass, 7)
-      assert List.last(results).detail == "`make-all` passed on `#{String.slice(context.head, 0, 12)}`"
+      assert Enum.map(results, & &1.status) == List.duplicate(:pass, 8)
+      assert Enum.at(results, 6).detail == "`make-all` passed on `#{String.slice(context.head, 0, 12)}`"
     end
 
     test "a named test that is not in the checkout fails without reading CI", context do
