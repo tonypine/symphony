@@ -30,3 +30,4 @@ these sections:
 | --- | --- | --- |
 | [0001](0001-director-workflow.md) | The Director workflow: ticket types, plan review and artifacts | Accepted |
 | [0002](0002-store-is-the-source-of-truth.md) | Symphony's store is the source of truth; Linear is its projection | Accepted |
+| [0003](0003-automated-tests-first-qa-last-resort.md) | Automated tests first; QA is the last-resort check and judges by sight; CI and QA share their test helpers | Accepted |
