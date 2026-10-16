@@ -182,10 +182,9 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   A human approves the merge by moving the Linear issue to `Merging`, so the merge is refused in
   any other state. It is also refused while a check is failing or pending; when the base branch
-  requires checks, only those must have passed, and when it requires none, the CI poller can let
-  the head past the checks still pending after 15 minutes in `Merging` (see
-  `CiPoller.landing_action/1`). A pull request with no checks at all is mergeable. Merging an
-  already merged pull request succeeds without a second merge.
+  requires checks, only those must have passed (see `CiPoller.landing_action/1`). A pull request
+  with no checks at all is mergeable. Merging an already merged pull request succeeds without a
+  second merge.
   """
   @spec merge_pull_request(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def merge_pull_request(context, opts \\ []) do
@@ -303,10 +302,8 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   defp require_passing_checks(%{checks: []}, _context), do: :ok
 
-  defp require_passing_checks(ci_status, context) do
-    lookup_opts = if repo_key = issue_repo_key(context), do: [repo_key: repo_key], else: []
-
-    case ci_status |> CiPoller.put_landing_fallback(Map.get(context, :issue_id), lookup_opts) |> CiPoller.landing_action() do
+  defp require_passing_checks(ci_status, _context) do
+    case CiPoller.landing_action(ci_status) do
       :success -> :ok
       outcome -> {:error, {:checks_not_passing, outcome}}
     end
