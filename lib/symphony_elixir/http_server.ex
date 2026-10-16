@@ -41,7 +41,7 @@ defmodule SymphonyElixir.HttpServer do
   end
 
   # HTTP/2 is off: no client of this server uses it (neither the app nor a browser speaks it over
-  # plain HTTP), and it carries Bandit's EEF-CVE-2026-105659 (see `mix.exs`).
+  # plain HTTP).
   defp start_endpoint(ip, port, host, orchestrator, snapshot_timeout_ms) do
     endpoint_opts = [
       server: true,
