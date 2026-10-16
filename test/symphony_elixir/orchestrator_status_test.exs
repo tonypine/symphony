@@ -6892,6 +6892,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       if Process.alive?(pid), do: stop_process(pid)
     end)
 
+    # The startup poll would stop runs the memory tracker does not list, so let it finish before
+    # injecting the run below.
+    wait_for_poll_cycle_idle(pid)
+
     {worker_pid, worker_ref} = start_blocked_worker()
     started_at = DateTime.utc_now()
     run_id = "run-review-agent-blocked"
@@ -6921,16 +6925,16 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:DOWN, worker_ref, :process, worker_pid, reason})
 
-    # One tracker task posts the comment, then sets the hold; once it is done both messages are here.
-    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
-
-    assert_received {:memory_tracker_comment, "issue-review-agent-blocked", body}
+    # One tracker task posts the comment, then sets the hold.
+    assert_receive {:memory_tracker_comment, "issue-review-agent-blocked", body}, @min_wait_ms
     assert body =~ "reviewer agent returned a verified blocking verdict"
     assert body =~ "Reason: Unsafe to continue."
     assert body =~ "Breaks the retry contract. (lib/example.ex:10-12)"
     assert body =~ "The ticket stays where it is on a Blocked hold until a person unblocks it."
 
-    assert_received {:memory_tracker_label_added, "issue-review-agent-blocked", "Blocked"}
+    assert_receive {:memory_tracker_label_added, "issue-review-agent-blocked", "Blocked"}, @min_wait_ms
+
+    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     refute_received {:memory_tracker_state_update, "issue-review-agent-blocked", _state}
 
     assert [%{name: "blocked", details: %{held: true, reason: "the reviewer agent blocked the run: Unsafe to continue."}}] =
@@ -6964,6 +6968,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       if Process.alive?(pid), do: stop_process(pid)
     end)
 
+    # The startup poll would stop runs the memory tracker does not list, so let it finish before
+    # injecting the run below.
+    wait_for_poll_cycle_idle(pid)
+
     {worker_pid, worker_ref} = start_blocked_worker()
     started_at = DateTime.utc_now()
     run_id = "run-review-agent-blocked-transition-fails"
@@ -6981,11 +6989,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {:DOWN, worker_ref, :process, worker_pid, {:review_agent_blocked, %{reason: "Unsafe to continue.", findings: [%{summary: "Verified block."}]}}}
     )
 
-    # The tracker task posts the comment before its failed label write; once it is done the comment is here.
-    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
-
-    assert_received {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}
+    # The tracker task posts the comment before its failed label write.
+    assert_receive {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}, @min_wait_ms
     assert body =~ "on a Blocked hold"
+
+    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     refute_received {:memory_tracker_state_update, "issue-review-agent-blocked-transition-fails", _state}
 
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
@@ -7013,6 +7021,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       if Process.alive?(pid), do: stop_process(pid)
     end)
 
+    # The startup poll would stop runs the memory tracker does not list, so let it finish before
+    # injecting the run below.
+    wait_for_poll_cycle_idle(pid)
+
     {worker_pid, worker_ref} = start_blocked_worker()
     started_at = DateTime.utc_now()
     run_id = "run-tool-failure-breaker"
@@ -7035,14 +7047,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:DOWN, worker_ref, :process, worker_pid, reason})
 
-    assert_receive {:memory_tracker_comment, "issue-tool-failure-breaker", body}, 1_000
+    assert_receive {:memory_tracker_comment, "issue-tool-failure-breaker", body}, @min_wait_ms
     assert body =~ "same failing tool execution"
     assert body =~ "kind=dynamic_tool name=\"github_get_pull_request\" args_hash=abc123"
     assert body =~ "Consecutive failures: 5"
     assert body =~ "Configured threshold: 5"
     assert body =~ "on a Blocked hold"
 
-    assert_receive {:memory_tracker_label_added, "issue-tool-failure-breaker", "Blocked"}, 1_000
+    assert_receive {:memory_tracker_label_added, "issue-tool-failure-breaker", "Blocked"}, @min_wait_ms
 
     completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     refute_received {:memory_tracker_state_update, "issue-tool-failure-breaker", _state}

@@ -6,7 +6,7 @@ import SymphonyBarCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private let runner = SymphonyRunner()
-    private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
+    private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets, updates: updates)
     private lazy var reposWindow = ReposWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
     /// The one client the Symphony window's views read Symphony's local API through.
@@ -49,8 +49,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var latestRelease: Release?
     private let updateAvailableItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let releaseNotesItem = NSMenuItem(title: UpdateMenu.releaseNotesTitle, action: nil, keyEquivalent: "")
-    /// The result of a Check for Updates chosen by hand, under that item.
+    /// The result of a Check for Updates chosen by hand, under that item, or in Automatically when released the
+    /// last check's "Up to date" line.
     private let updateResultItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// The line the last Check for Updates chosen by hand left, nil when there's none.
+    private var manualResultLine: String?
     private lazy var updater = UpdateController(current: updates.current)
     private lazy var installUpdateItem = menuItem("", action: #selector(installUpdate(_:)))
     private lazy var skipUpdateItem = menuItem(UpdateMenu.skipTitle, action: #selector(skipUpdate(_:)))
@@ -177,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
         settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
         settingsWindow.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
+        settingsWindow.onSettingsSaved = { [weak self] settings in self?.updates.configure(settings) }
         updater.onChange = { [weak self] in
             guard let self else { return }
             showUpdateItems()
@@ -834,7 +838,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             break
         }
         if manual {
-            updateResultItem.title = result.flatMap(UpdateMenu.manualResultLine) ?? ""
+            manualResultLine = result.flatMap(UpdateMenu.manualResultLine)
         }
         showUpdateItems()
         if let result { performAutoUpdate(autoUpdater.checked(result, autoUpdateContext)) }
@@ -914,7 +918,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let outcome = updateOutcome
         updateOutcomeItem.title = outcome?.menuTitle ?? ""
         updateOutcomeItem.isHidden = outcome == nil
-        updateResultItem.isHidden = updateResultItem.title.isEmpty
+        let resultLine = updates.schedule.menuLine(now: Date()) ?? manualResultLine
+        updateResultItem.title = resultLine ?? ""
+        updateResultItem.isHidden = resultLine == nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

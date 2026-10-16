@@ -10,12 +10,14 @@ defmodule SymphonyElixir.QaVerificationTest do
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.QaVerification
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketPullRequest
 
   @repo_key "repo-qa-verification"
   @issue_id "issue-qa-verification"
   @other_issue_id "issue-qa-verification-other"
   @symphony_repo_key "repo-symphony"
   @fix_ticket "TP-900"
+  @pr_url "https://github.com/acme/repo/pull/816"
 
   @playbook %{kind: "cli", paths: ["lib/symphony_elixir/cli.ex"], prompt: "Follow the CLI playbook."}
 
@@ -91,6 +93,10 @@ defmodule SymphonyElixir.QaVerificationTest do
     def decide(_issue, _settings, _opts), do: {:skip, "the PR only changes docs, tests or `auto_review.skip_globs` paths"}
   end
 
+  defmodule NothingToVerifyPolicy do
+    def decide(_issue, _settings, _opts), do: {:nothing_to_verify, "the head changes no files against its base branch"}
+  end
+
   defmodule NoPlaybookPolicy do
     def decide(_issue, _settings, _opts), do: {:run, [], "the change delivers or updates a user journey"}
   end
@@ -108,6 +114,10 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     RunStore.delete_ticket_state(@repo_key, @issue_id)
     RunStore.delete_ticket_state(@repo_key, @other_issue_id)
+
+    # Every QA ticket here has its open pull request; the tests that close it say so.
+    :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
+    :ok = TicketPullRequest.put(@repo_key, @other_issue_id, %{pr_url: "https://github.com/acme/repo/pull/817"})
 
     on_exit(fn ->
       RunStore.delete_ticket_state(@repo_key, @issue_id)
@@ -468,6 +478,71 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert [%{name: "qa", details: %{signal: "qa_skip", reason: reason}}] = Handoff.signals(@repo_key, @issue_id)
       assert reason =~ "only changes docs, tests"
+    end
+
+    # TP-983 and TP-972: moved back to QA after a Backlog move closed their pull requests, they were
+    # skipped on the base branch's head and sent to Merging.
+    test "a ticket whose pull request is closed is held, with no verdict and no move" do
+      {workspace, _head} = git_workspace!()
+      TicketPullRequest.mark_finished(@repo_key, @pr_url, "closed")
+
+      assert :ok = run(workspace, qa_policy: SkipPolicy)
+
+      refute_received {:qa_agent_run, _, _}
+      refute_received {:memory_tracker_state_update, _, _}
+      assert verdicts() == []
+      assert Handoff.signals(@repo_key, @issue_id) == []
+
+      assert_received {:memory_tracker_comment, @issue_id, request}
+      assert request =~ "Reopen the pull request of TP-816"
+      assert request =~ "PR #816 closed"
+      assert request =~ "the ticket stays in QA"
+
+      assert %{decision: %{title: "Reopen the pull request of TP-816", options: options}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Reopen", "Restart", "Cancel"]
+    end
+
+    test "a ticket with no pull request recorded is held the same way" do
+      {workspace, _head} = git_workspace!()
+      on_exit(fn -> RunStore.delete_ticket_state(@repo_key, "issue-qa-no-pr") end)
+
+      assert :ok =
+               QaVerification.run(issue("QA", %{id: "issue-qa-no-pr"}), workspace,
+                 settings: settings!(),
+                 repo_key: @repo_key,
+                 qa_policy: SkipPolicy,
+                 qa_agent: FakeQaAgent
+               )
+
+      refute_received {:memory_tracker_state_update, _, _}
+      assert_received {:memory_tracker_comment, "issue-qa-no-pr", request}
+      assert request =~ "has no open pull request"
+      assert %{reason: reason} = Hold.get(@repo_key, "issue-qa-no-pr", :needs_decision)
+      assert reason =~ "has no open pull request"
+      assert Handoff.verdicts(@repo_key, "issue-qa-no-pr", "qa") == []
+    end
+
+    test "a head with nothing to verify is held instead of skipped into Merging" do
+      {workspace, _head} = git_workspace!()
+
+      assert :ok = run(workspace, qa_policy: NothingToVerifyPolicy)
+
+      refute_received {:qa_agent_run, _, _}
+      refute_received {:memory_tracker_state_update, _, _}
+      assert verdicts() == []
+
+      assert_received {:memory_tracker_comment, @issue_id, request}
+      assert request =~ "Restart or cancel TP-816"
+      assert request =~ "(PR #816) that changes nothing"
+      assert %{decision: %{options: [%{label: "Restart"}, %{label: "Cancel"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+    end
+
+    test "a hold that cannot be set for a closed pull request is reported" do
+      {workspace, _head} = git_workspace!()
+      TicketPullRequest.mark_finished(@repo_key, @pr_url, "closed")
+
+      assert {:error, {:qa_hold_failed, {:decision_hold_failed, :disk_full}}} = run(workspace, store: UnusedStore)
+      refute_received {:memory_tracker_comment, _, _}
     end
 
     test "an unknown verdict is refused without a move" do

@@ -177,13 +177,17 @@ set (or, in Development mode, no checkout folder).
     only for this mode, and is kept when you choose another.
   - **Automatically when released** (the default for every install that never saved an update mode)
     installs a new release by itself as soon as a check finds it, waiting for agent runs like Update to vX.
+    Under it, **Check for releases every N minutes** (1–60, 5 by default) sets how often the app checks, and
+    a line says what the last check found, with **Check Now**. Both show only for this mode. See
+    [How often the app checks](#how-often-the-app-checks).
 
   In an automatic mode, when this copy can't install updates (a development build, Development mode, no
   update signing key, or an app folder you can't write to), a line under the picker says "▲ This copy can't
   update itself:" and why. The picker stays editable. See [Automatic updates](#automatic-updates).
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
-  it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`) and
-  update time (`updateTime`, minutes after midnight) are stored in UserDefaults
+  it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`),
+  update time (`updateTime`, minutes after midnight) and release check interval (`releaseCheckMinutes`) are
+  stored in UserDefaults
   (`defaults read com.tonypine.symphony.bar`).
 - Max concurrent agents (1–10) is `agent.concurrency.max_total` in the `symphony.yml` itself. The window
   reads it from the file each time it opens (10, Symphony's default, when the key is missing). Save changes
@@ -713,10 +717,10 @@ the previous version back by itself when it isn't. The app can also
 update by running the [install script](#with-the-install-script) again after quitting the app.
 
 The app checks the latest release at
-`https://api.github.com/repos/tonypine/symphony/releases/latest` at launch, every 6 hours, and when you
-choose Check for Updates. The request carries no token. It sends the last response's `ETag` in
-`If-None-Match`, so an unchanged release answers 304 Not Modified, which doesn't count against GitHub's
-rate limit of 60 unauthenticated requests an hour.
+`https://api.github.com/repos/tonypine/symphony/releases/latest` at launch, in the background (see
+[How often the app checks](#how-often-the-app-checks)), and when you choose Check for Updates. The request
+carries no token. It sends the last response's `ETag` in `If-None-Match`, so an unchanged release answers 304
+Not Modified, which doesn't count against GitHub's rate limit of 60 unauthenticated requests an hour.
 
 A release counts only when it has `version.json` and the zip and `.sha256` that `version.json` names (see
 [docs/releasing.md](../docs/releasing.md)). The app compares `version.json` `build` with its own
@@ -730,6 +734,26 @@ of `Info.plist`, so it usually sees every release as newer.
 
 Background checks fail silently. When you choose Check for Updates, the result shows under it: "Symphony
 is up to date (vX)" or why the check failed, for example GitHub's rate limit.
+
+### How often the app checks
+
+- **Automatically when released** checks every **Check for releases every N minutes** in Settings: 5 by
+  default, 1 to 60. A stored value outside that range is moved into it when the app loads it, and a typed one
+  when the field commits, with the note "Between 1 and 60 minutes. 0 was changed to 1." in place of the
+  last-check line, once. The other modes check every 6 hours.
+- Saving Settings takes effect without a relaunch. Switching to Automatically when released, or changing its
+  minutes, checks straight away and then on the new interval; switching to another mode goes back to every
+  6 hours. Choosing Automatically when released in the picker also checks straight away, before Save, so the
+  line shows what it finds.
+- A failed check, such as GitHub's rate limit, shows no alert and backs off to every 6 hours until a check
+  succeeds (Check Now or Check for Updates included), so the app doesn't pile up requests against the limit.
+- In Automatically when released, Settings shows the last check under the interval, with **Check Now**,
+  which runs the same check as Check for Updates…: "● Checked 2 min ago: v0.0.1.42 is the newest release.",
+  "Checking for a new release…" with a spinner while it checks, "▲ Couldn't check at 14:05: <reason>. Next
+  check in 6 hours." after a failure, and "Not checked yet." before the first check. After a check that found
+  nothing new, the menu says "Up to date: v0.0.1.42, checked 2 min ago" under Check for Updates….
+- In [QA mode](#qa-mode), `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL` sets the seconds between checks in every mode
+  instead.
 
 ### Skip a release
 
@@ -885,12 +909,12 @@ With one of the automatic modes, the app installs a newer release by itself thro
   "Update postponed"; the next attempt is the next day's time. A time missed while the Mac slept or the app
   was closed (more than 10 minutes late) waits for the next day's time too, so dispatch isn't paused in the
   middle of the day. A release found by another check waits for the set time.
-- **Automatically when released**: as soon as a check finds a release (at launch, every 6 hours, or Check
-  for Updates…), or a status poll sees one already found, the app installs it, whatever agent runs are
-  active. It downloads and verifies it ("Updating: downloading and verifying vX…"), pauses dispatch, waits for
-  the active runs to finish ("Updating to vX: waiting for N agent runs…") and installs, as Update to vX does
-  but without asking. It never gives up on the runs: after the **Restart timeout** the line adds how long it
-  has waited ("(35 min)") and **Update Now Anyway** stops Symphony without waiting more. Release Notes…
+- **Automatically when released**: as soon as a check finds a release (at launch, every 5 minutes by default,
+  or Check for Updates…), or a status poll sees one already found, the app installs it, whatever agent runs
+  are active. It downloads and verifies it ("Updating: downloading and verifying vX…"), pauses dispatch, waits
+  for the active runs to finish ("Updating to vX: waiting for N agent runs…") and installs, as Update to vX
+  does but without asking. It never gives up on the runs: after the **Restart timeout** the line adds how long
+  it has waited ("(35 min)") and **Update Now Anyway** stops Symphony without waiting more. Release Notes…
   shows the release under way.
   - Once it has paused dispatch, it posts a notification, "Updating Symphony to vX", saying how many agent
     runs it waits for, with **Cancel Update**. It makes no sound, and nothing shows in its place when
@@ -914,8 +938,8 @@ In all automatic modes:
   or an app folder you can't write to).
 - A pause you made before the update stays after it, as with Update to vX. Cancel Update stops waiting.
 - A failure shows on the line under the update items, with no alert: a failed download or verification,
-  for example. When idle or when released, the app tries again after the next check (every 6 hours, or Check
-  for Updates); at a set time, the next day.
+  for example. When idle or when released, the app tries again after the next check (every 6 hours when
+  idle, every N minutes when released, or Check for Updates); at a set time, the next day.
 - The relaunched app runs the [health check](#health-check-and-automatic-rollback), as after Update to vX:
   `symphony check` must pass, Symphony must answer within 120 seconds of starting, and it must not exit
   unexpectedly 3 times within 10 minutes of the update. If any of these fails, the app rolls back to
@@ -1185,11 +1209,15 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Six more variables, read only in QA mode:
+Seven more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
   version is in QA mode too, with the same folders.
+- `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL=<seconds>` (a positive whole number) sets how often the app checks for
+  a release in the background, in every update mode, in place of the mode's interval and **Check for releases
+  every N minutes**, so a test or the e2e harness sees a release within seconds. A failed check still backs off
+  to 6 hours until a check succeeds.
 - `SYMPHONY_QA_OPENROUTER_URL` points Settings' OpenRouter section (Test connection, the Models list) at a stub
   OpenRouter instead of `https://openrouter.ai`, so QA never needs a real key: the API base `symphony
   openrouter-stub` prints, such as `http://127.0.0.1:4100/api`. Only an `http` or `https` URL on a loopback host
@@ -1241,11 +1269,12 @@ Six more variables, read only in QA mode:
   the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
   no alerts: it records them there, and answers confirmations (Update, Quit) yes. Notifications and the
   release notes window are recorded the same way, the window as its heading ("Symphony 0.0.1.43") and the
-  text above the notes, then the notes. A prompt is answered with the rest of the command file and cancelled
-  when there is none. Pause Dispatch… and Force a Ticket…, which
-  open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the first line
-  and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that reason, and
-  without one pauses with the menu's.
+  text above the notes, then the notes. A recorded notification the app withdraws, such as "Updating Symphony
+  to vX" once its update ends or is cancelled, is listed by its title under `withdrawn`. A prompt is answered
+  with the rest of the command file and cancelled when there is none. Pause Dispatch… and Force a Ticket…,
+  which open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the
+  first line and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that
+  reason, and without one pauses with the menu's.
 
 The [end-to-end test](Tests/e2e/README.md) uses all of this to test Update, Restart and rollback without
 touching the installed app.

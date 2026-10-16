@@ -14,6 +14,9 @@ defmodule SymphonyElixir.QaVerification do
     * `pass` -> `Merging`
     * `fail` -> `Rework`, with the report on the ticket for the next run
     * skip (the deterministic docs-only/internal-only rule, `SymphonyElixir.QaPolicy`) -> `Merging`
+    * no open pull request, or a head that changes nothing -> a Needs Decision hold in `QA`
+      (`SymphonyElixir.ClosedPullRequest`), with no verdict recorded: an empty diff means there is
+      no change to verify, never a docs-only one
     * `blocked` (tooling or environment) -> retried boundedly on the same head, then a Blocked hold
       with the reason recorded
 
@@ -26,10 +29,12 @@ defmodule SymphonyElixir.QaVerification do
   require Logger
 
   alias SymphonyElixir.{
+    ClosedPullRequest,
     Handoff,
     MergeConfirmation,
     QaPolicy,
     SelfHeal,
+    TicketPullRequest,
     TicketSignals,
     TransitionGuard,
     WorkspaceHead
@@ -163,19 +168,39 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp verify_head(issue, workspace, opts, settings, head) do
-    if carried_pass?(issue, opts, head) do
-      carry(issue, opts, settings, head)
-    else
-      decide(issue, workspace, opts, settings, head)
+    case TicketPullRequest.current_url(issue, repo_key(issue, opts)) do
+      nil -> hold(issue, opts, head, ClosedPullRequest.missing_cause(issue, repo_key(issue, opts)))
+      pr_url -> verify_change(issue, workspace, opts, settings, head, pr_url)
     end
   end
 
-  defp decide(issue, workspace, opts, settings, head) do
+  defp verify_change(issue, workspace, opts, settings, head, pr_url) do
+    if carried_pass?(issue, opts, head) do
+      carry(issue, opts, settings, head)
+    else
+      decide(issue, workspace, opts, settings, head, pr_url)
+    end
+  end
+
+  defp decide(issue, workspace, opts, settings, head, pr_url) do
     policy = Keyword.get(opts, :qa_policy, QaPolicy)
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
+      {:nothing_to_verify, _reason} -> hold(issue, opts, head, {:no_change, pr_url})
       {:run, playbooks, _reason} -> run_agent(issue, workspace, opts, settings, head, playbooks)
+    end
+  end
+
+  # With no open pull request the workspace is built from the base branch, and its head is not the
+  # ticket's change; an empty diff has nothing to verify either. Neither is a verdict on the change,
+  # so none is recorded and the ticket does not move: it pauses in QA on a person's decision.
+  defp hold(issue, opts, head, cause) do
+    Logger.warning("Not verifying #{issue_label(issue)} head=#{head}: #{inspect(cause)}")
+
+    case ClosedPullRequest.pause(issue, cause, Keyword.put(opts, :repo_key, repo_key(issue, opts))) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:qa_hold_failed, reason}}
     end
   end
 

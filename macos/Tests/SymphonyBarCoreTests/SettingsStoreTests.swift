@@ -11,6 +11,34 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(store.loadSettings().startOnLaunch)
         XCTAssertEqual(store.loadSettings().updateMode, .onRelease, "a fresh install updates when released")
         XCTAssertEqual(store.loadSettings().updateTime, TimeOfDay(hour: 3, minute: 0))
+        XCTAssertEqual(store.loadSettings().releaseCheckMinutes, 5)
+    }
+
+    func testReleaseCheckMinutesRoundTripThroughANewStore() {
+        let defaults = MemoryKeyValueStore()
+        var settings = AppSettings()
+        settings.releaseCheckMinutes = 10
+
+        SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
+
+        XCTAssertEqual(defaults.values[SettingsStore.Key.releaseCheckMinutes] as? Int, 10)
+        let reopened = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
+        XCTAssertEqual(reopened.releaseCheckMinutes, 10)
+    }
+
+    func testAStoredReleaseCheckMinutesOutsideTheRangeIsClampedWhenLoaded() {
+        for (stored, loaded) in [(0, 1), (-3, 1), (1, 1), (60, 60), (61, 60), (1_000, 60)] {
+            let defaults = MemoryKeyValueStore()
+            defaults.values[SettingsStore.Key.releaseCheckMinutes] = stored
+
+            let settings = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
+
+            XCTAssertEqual(settings.releaseCheckMinutes, loaded, "\(stored)")
+        }
+        let unreadable = MemoryKeyValueStore()
+        unreadable.values[SettingsStore.Key.releaseCheckMinutes] = "ten"
+        let fallback = SettingsStore(defaults: unreadable, secrets: MemorySecretStore()).loadSettings()
+        XCTAssertEqual(fallback.releaseCheckMinutes, 5)
     }
 
     func testAnExistingInstallWithoutAStoredUpdateModeGetsOnRelease() {
@@ -96,7 +124,8 @@ final class SettingsStoreTests: XCTestCase {
             startOnLaunch: true,
             developmentMode: true,
             updateMode: .whenIdle,
-            updateTime: TimeOfDay(hour: 4, minute: 15)
+            updateTime: TimeOfDay(hour: 4, minute: 15),
+            releaseCheckMinutes: 42
         )
 
         SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
@@ -290,6 +319,7 @@ final class SettingsStoreTests: XCTestCase {
                 SettingsStore.Key.developmentMode,
                 SettingsStore.Key.updateMode,
                 SettingsStore.Key.updateTime,
+                SettingsStore.Key.releaseCheckMinutes,
             ]
         )
         for value in defaults.values.values {
