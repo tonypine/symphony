@@ -14,8 +14,8 @@ for you on the host. They only act on this worktree's configured app and on apps
   at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear, updates
   and the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`,
   `update_feed_port`, `update_check_interval_seconds`. Pass `appearance` (`light` or `dark`) to
-  draw the app in that appearance whatever the host's, for any macOS app (Symphony launches it with
-  AppKit's appearance arguments); without it the app follows the host. See
+  draw the app in that appearance whatever the host's, for any AppKit app (Symphony injects a
+  library that sets the app's appearance); without it the app follows the host. See
   "Light and dark, and the status-bar menu" below.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
@@ -160,6 +160,11 @@ switched; launch the app once per appearance instead:
   titles, but how it looks is in the screenshot.
 - **Light:** `qa_quit_app`, then do the same with `appearance: "light"` (`overview-light`,
   `status-menu-light`). At most three launched apps run at once, so quit each before the next.
+- **When the app ignores it:** the library prints `symphony-qa-appearance: dark` (or `light`) to
+  the app's output once it has set the appearance, and `qa_quit_app` returns that output. When a
+  screenshot is in the wrong appearance and that line is missing, the app's build refuses injected
+  libraries (the hardened runtime): mark the `Design check` `blocked`, quoting the output, and say
+  so in `findings`.
 - **Judge** each pair side by side with the deliverable's design: the ticket's or the parent's
   Screens (named under "Design" above), then `docs/design/design-system.md`. Compare layout,
   spacing, alignment, truncation, contrast, symbols (SF Symbols, icons), wording, and whether it

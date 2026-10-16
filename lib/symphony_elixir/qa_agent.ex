@@ -242,6 +242,14 @@ defmodule SymphonyElixir.QaAgent do
     a fake CLI, a stub service, a checkout, a folder or a driver tool the QA setup lacks is fixed by
     an agent through a fix ticket. Leave it false too when the cause is the build or the code.
 
+    A step whose real path needs a paid AI service, real credentials or a backend the QA host does
+    not run (a database, a toolchain to build a bundled server or CLI) is never `blocked` for want
+    of them, and never gets a real key: run the app against a stand-in you serve where the playbook
+    lets a server listen, such as a stub of the project's API answering with what the real path
+    would store, and judge what the app shows `pass` or `fail`. In `details`, name what the
+    stand-in replaced and the CI check that covers the real path. Mark the step `blocked` only when
+    the app cannot be pointed at a stand-in.
+
     When a QA tool or capability is missing and an open ticket already tracks adding it (one named
     in the issue, its comments or its relations), put that ticket's identifier in `covered_by`, so
     Symphony waits on that ticket instead of filing another. Leave `covered_by` out otherwise.

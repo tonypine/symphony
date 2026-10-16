@@ -558,7 +558,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "string",
             "enum" => ~w(light dark),
             "description" =>
-              "Launch the app light or dark whatever the host's appearance, which QA never changes: any macOS app, through AppKit's appearance default passed as a launch argument, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it to follow the host. For both, launch once per appearance."
+              "Launch the app light or dark whatever the host's appearance, which QA never changes: any AppKit app, through a library Symphony injects that sets the app's appearance and prints `symphony-qa-appearance: <light|dark>` to its output, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it to follow the host. For both, launch once per appearance."
           }
         }
       }
