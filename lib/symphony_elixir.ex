@@ -101,6 +101,7 @@ defmodule SymphonyElixir.Application do
            [
              SymphonyElixir.Orchestrator,
              pr_review_child_spec(system_config),
+             pr_watch_child_spec(system_config),
              SymphonyElixir.QaAndroid.Emulator,
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
@@ -176,6 +177,14 @@ defmodule SymphonyElixir.Application do
   defp pr_review_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &pr_review_enabled_for_repo?/1) do
       SymphonyElixir.PrReviewPoller
+    end
+  end
+
+  # The PR and CI watcher only gathers facts for now; it watches the repos whose PRs are polled.
+  defp pr_watch_child_spec(%SystemSchema{repos: repos}) do
+    case for(repo <- repos, pr_review_enabled_for_repo?(repo), do: repo.name) do
+      [] -> nil
+      repo_keys -> {SymphonyElixir.PrWatch, repo_keys: repo_keys}
     end
   end
 

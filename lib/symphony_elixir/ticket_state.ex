@@ -7,7 +7,8 @@ defmodule SymphonyElixir.TicketState do
   (Blocked / Needs Decision), the CI state of each PR head it has seen, its verdict records, its
   signals ledger (the timeline both the machinery and agents read) and the runs dispatched since it
   last made progress, which `SymphonyElixir.DispatchLoop` counts, and the decisions a person recorded
-  on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects.
+  on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
+  the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`).
 
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
   operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
@@ -15,6 +16,8 @@ defmodule SymphonyElixir.TicketState do
   place, and so the signals ledger can be injected into run prompts (see
   `SymphonyElixir.PromptBuilder`).
   """
+
+  alias SymphonyElixir.PrDecision
 
   @max_signals 50
   @max_verdicts 50
@@ -104,6 +107,37 @@ defmodule SymphonyElixir.TicketState do
           at: DateTime.t() | nil
         }
 
+  @typedoc "What the landing order keeps of a watched ticket: its state and head, and since when."
+  @type landing :: %{
+          state: String.t() | nil,
+          head_sha: String.t() | nil,
+          state_since: DateTime.t(),
+          progress_at: DateTime.t()
+        }
+
+  @typedoc """
+  What the PR and CI watcher last read of the ticket's PR (`SymphonyElixir.PrWatch`): the facts
+  `SymphonyElixir.PrDecision.decide/1` reads, the PR and head they were read on, how they arrived
+  (`:poll` or `:webhook`) and when, whether GitHub's rate limit stopped the read (with when it
+  resets), the rate limit the read left, and what the landing order keeps of the ticket (its state
+  and head, and since when). `decision`, `applied` and `links` are the slots the watcher's switch
+  fills (the decision record, the actions applied per head, and the links it added); this record
+  leaves them empty.
+  """
+  @type pr_watch :: %{
+          facts: PrDecision.Facts.t(),
+          pr_url: String.t() | nil,
+          head_sha: String.t() | nil,
+          source: :poll | :webhook,
+          read_at: DateTime.t() | nil,
+          github: :ok | {:rate_limited, DateTime.t() | nil},
+          rate_limit: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil} | nil,
+          landing: landing() | nil,
+          decision: map() | nil,
+          applied: [map()],
+          links: [map()]
+        }
+
   @type t :: %{
           repo_key: String.t() | nil,
           issue_id: String.t() | nil,
@@ -118,6 +152,7 @@ defmodule SymphonyElixir.TicketState do
           dispatches: [dispatch()],
           path_unlocks: [path_unlock()],
           decisions: [decision()],
+          pr_watch: pr_watch() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -154,6 +189,7 @@ defmodule SymphonyElixir.TicketState do
       dispatches: normalize_dispatches(Map.get(record, :dispatches)),
       path_unlocks: normalize_path_unlocks(Map.get(record, :path_unlocks)),
       decisions: normalize_decisions(Map.get(record, :decisions)),
+      pr_watch: normalize_pr_watch(Map.get(record, :pr_watch)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -173,6 +209,7 @@ defmodule SymphonyElixir.TicketState do
       dispatches: [],
       path_unlocks: [],
       decisions: [],
+      pr_watch: nil,
       updated_at: nil
     }
   end
@@ -219,6 +256,22 @@ defmodule SymphonyElixir.TicketState do
   @doc "The decisions recorded on the ticket, in the order they were recorded."
   @spec decisions(t()) :: [decision()]
   def decisions(record), do: record |> normalize() |> Map.fetch!(:decisions)
+
+  @doc """
+  Sets the watcher's fact record (`t:pr_watch/0`); nil clears it, as when the ticket leaves the
+  watched phases. A record whose `facts` is not a `PrDecision.Facts` struct reads as nil.
+  """
+  @spec put_pr_watch(t(), map() | nil, DateTime.t()) :: t()
+  def put_pr_watch(record, pr_watch, at \\ DateTime.utc_now()) do
+    record
+    |> normalize()
+    |> Map.put(:pr_watch, normalize_pr_watch(pr_watch))
+    |> Map.put(:updated_at, at)
+  end
+
+  @doc "The watcher's fact record, or nil when the ticket is not watched."
+  @spec pr_watch(t()) :: pr_watch() | nil
+  def pr_watch(record), do: record |> normalize() |> Map.fetch!(:pr_watch)
 
   @doc "Sets the record's phase, the state the machine believes the ticket is in."
   @spec put_phase(t(), String.t() | nil, DateTime.t()) :: t()
@@ -472,6 +525,51 @@ defmodule SymphonyElixir.TicketState do
   def recent_signals(record, limit \\ 10) when is_integer(limit) and limit >= 0 do
     record |> normalize() |> Map.fetch!(:signals) |> Enum.take(limit)
   end
+
+  defp normalize_pr_watch(%{facts: %PrDecision.Facts{} = facts} = watch) do
+    %{
+      facts: facts,
+      pr_url: map_string(watch, :pr_url),
+      head_sha: map_string(watch, :head_sha),
+      source: if(Map.get(watch, :source) == :webhook, do: :webhook, else: :poll),
+      read_at: map_datetime(watch, :read_at),
+      github: normalize_github(Map.get(watch, :github)),
+      rate_limit: normalize_rate_limit(Map.get(watch, :rate_limit)),
+      landing: normalize_landing(Map.get(watch, :landing)),
+      decision: map_decision(watch),
+      applied: maps(Map.get(watch, :applied)),
+      links: maps(Map.get(watch, :links))
+    }
+  end
+
+  defp normalize_pr_watch(_watch), do: nil
+
+  defp normalize_github({:rate_limited, reset_at}), do: {:rate_limited, datetime(reset_at)}
+  defp normalize_github(_github), do: :ok
+
+  defp normalize_rate_limit(%{} = limit) do
+    remaining = Map.get(limit, :remaining)
+    %{remaining: if(is_integer(remaining) and remaining >= 0, do: remaining), reset_at: map_datetime(limit, :reset_at)}
+  end
+
+  defp normalize_rate_limit(_limit), do: nil
+
+  defp normalize_landing(%{state_since: %DateTime{} = since, progress_at: %DateTime{} = progress_at} = landing) do
+    %{
+      state: map_string(landing, :state),
+      head_sha: map_string(landing, :head_sha),
+      state_since: since,
+      progress_at: progress_at
+    }
+  end
+
+  defp normalize_landing(_landing), do: nil
+
+  defp maps(list) when is_list(list), do: Enum.filter(list, &is_map/1)
+  defp maps(_list), do: []
+
+  defp datetime(%DateTime{} = datetime), do: datetime
+  defp datetime(_value), do: nil
 
   defp normalize_holds(holds) when is_list(holds) do
     holds

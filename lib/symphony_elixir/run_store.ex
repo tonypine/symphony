@@ -791,6 +791,23 @@ defmodule SymphonyElixir.RunStore do
   def record_ticket_signal(_repo_key, _issue_id, _name, _details), do: {:error, :invalid_issue_id}
 
   @doc """
+  Writes the PR and CI watcher's fact record (`TicketState.put_pr_watch/3`) on the ticket's record,
+  creating the record when none exists (a ticket moved by hand has none) and stamping its identifier
+  when the record has none. Nil clears it. The read-modify-write runs in one durable transaction,
+  so it never drops what another writer put on the record.
+  """
+  @spec put_ticket_pr_watch(String.t(), String.t(), String.t() | nil, map() | nil) :: :ok | {:error, term()}
+  def put_ticket_pr_watch(repo_key, issue_id, issue_identifier, pr_watch) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_ticket_pr_watch(repo_key, issue_id, issue_identifier, pr_watch) end)
+      |> unwrap_nested_error()
+    end
+  end
+
+  def put_ticket_pr_watch(_repo_key, _issue_id, _issue_identifier, _pr_watch), do: {:error, :invalid_issue_id}
+
+  @doc """
   Appends a verdict, bound to the head SHA it judged, to the ticket's record, creating the record
   when none exists. The read-modify-write runs in one durable transaction.
   """
@@ -1701,6 +1718,20 @@ defmodule SymphonyElixir.RunStore do
 
     updated = TicketState.record_signal(record, name, details)
     :mnesia.write({@ticket_state_table, key, repo_key, issue_id, updated})
+    :ok
+  end
+
+  defp write_ticket_pr_watch(repo_key, issue_id, issue_identifier, pr_watch) do
+    key = scoped_key(repo_key, issue_id)
+
+    record =
+      case :mnesia.read(@ticket_state_table, key) do
+        [{@ticket_state_table, ^key, ^repo_key, ^issue_id, record}] -> TicketState.normalize(record)
+        [] -> TicketState.new(repo_key, issue_id)
+      end
+
+    record = if is_nil(record.issue_identifier), do: %{record | issue_identifier: issue_identifier}, else: record
+    :mnesia.write({@ticket_state_table, key, repo_key, issue_id, TicketState.put_pr_watch(record, pr_watch)})
     :ok
   end
 
