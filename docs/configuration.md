@@ -1251,6 +1251,18 @@ or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON
 follow-up turn in the same session asking for it, and the QA report notes "verdict after 1
 follow-up".
 
+**The design QA judges a UI against.** A plan keeps its Screens document and `screens.html` on
+the parent, so a QA pass (and an epic review) reads more than the ticket's own documents:
+`linear_get_document` lists and reads, read-only, the documents the parent's runs created as well
+(listed under `parentDocuments`); any other issue's documents stay refused, and writing stays
+limited to the ticket's own. Every other run reads only its own issue's documents. Before the agent
+starts, Symphony downloads the HTML files and images attached to the ticket and to its parent (only
+files on `uploads.linear.app`, the newest attachment of each title, up to 20 per issue and 20 MB
+per file) into `design/` in the pass's temp folder, and the prompt names each file's path, or says
+none is attached. A file it cannot download is logged and left out. The prompt names where the
+design comes from, in order: the ticket's and the parent's Screens documents and HTML screens, then
+`docs/design/design-system.md` and `docs/design/director-app-screens.md` in the worktree.
+
 QA never runs the test suite, `make all`, coverage or Dialyzer: a pass starts only once CI is green
 on the PR head, so the prompt and every built-in playbook tell the agent to rely on CI and to build
 only what it needs to use the change. The epic review judges a criterion that asks for tests,

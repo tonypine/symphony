@@ -3787,6 +3787,9 @@ Scoped Linear tool extension contract:
   one it returns the document with its content secret-redacted and wrapped in prompt-safety
   boundary tags like comments. `linear_get_document` is read-only and available to the read-only
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
+  In the QA scope alone (a QA pass and an epic review), `linear_get_document` MUST also list and
+  read the documents the parent issue's runs created (marked by the parent's attachments, listed
+  apart from the issue's own); `linear_update_document` still MUST refuse them.
 - `linear_update_issue_summary` is the only tool that writes the current issue's description (the
   Decisions section is Symphony's own write, outside any tool), and
   it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and

@@ -687,6 +687,27 @@ defmodule SymphonyElixir.QaAgentTest do
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
     end
 
+    test "names the downloaded design files and the design docs, or says none are attached" do
+      parent = %{"identifier" => "TP-243", "title" => "Parent", "description" => "plan"}
+      screens = %{issue: "TP-243", title: "screens.html", path: "/tmp/symphony-qa-x/design/TP-243-screens.html"}
+      prompt = QaAgent.prompt(job(%{design_files: [screens]}), parent)
+
+      assert prompt =~ "Design (judge every screen and UI change against it, in this order):"
+      assert prompt =~ "this ticket's and the parent's documents with `linear_get_document`"
+      assert prompt =~ "the parent's are under `parentDocuments`"
+      assert prompt =~ "2. `docs/design/design-system.md` and `docs/design/director-app-screens.md` in this worktree."
+      assert prompt =~ "- `/tmp/symphony-qa-x/design/TP-243-screens.html` (attached to TP-243)"
+      refute prompt =~ "No HTML screens or image files are attached"
+
+      prompt = QaAgent.prompt(job(), nil)
+      assert prompt =~ "1. The Screens documents and HTML screens: this ticket's documents"
+      assert prompt =~ "No HTML screens or image files are attached to this ticket or its parent"
+      assert prompt =~ "`docs/design/design-system.md`"
+
+      epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil)
+      assert epic =~ "No HTML screens or image files are attached to this ticket or its parent"
+    end
+
     test "carries the ticket's recorded decisions, which QA never fails the change for" do
       decision = SymphonyElixir.Decisions.entry("comment-1", ~D[2026-10-13], "Keep the old flag", "Drop the old flag here?", "Defer to TP-891")
       {:ok, description} = SymphonyElixir.Decisions.put("Adds `symphony check`.", [decision])
@@ -1785,6 +1806,34 @@ defmodule SymphonyElixir.QaAgentTest do
 
       no_parent = fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => %{"parent" => nil}}}} end
       assert {:ok, _result} = QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, linear_client: no_parent)
+    end
+
+    test "downloads the parent's screens into the pass's own folder and names them in the prompt" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
+      settings = Config.settings!()
+      screens = %{"title" => "screens.html", "url" => "https://uploads.linear.app/org/asset/screens", "createdAt" => "2026-10-03T00:00:00Z"}
+
+      linear_client = fn query, _variables, _opts ->
+        if query =~ "SymphonyQaDesignAttachments",
+          do: {:ok, %{"data" => %{"issue" => %{"identifier" => "TP-900", "parent" => %{"identifier" => "TP-243", "attachments" => %{"nodes" => [screens]}}}}}},
+          else: {:ok, %{"data" => %{"issue" => %{"parent" => %{"identifier" => "TP-243", "title" => "Parent", "description" => "plan"}}}}}
+      end
+
+      download_client = fn _url, _opts -> {:ok, %{status: 200, body: "<html>screens</html>"}} end
+
+      assert {:ok, _result} =
+               QaAgent.run(job(), settings,
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 linear_client: linear_client,
+                 download_client: download_client
+               )
+
+      assert_receive {:qa_session_started, _worktree, session_opts}
+      assert_receive {:qa_turn, _session, prompt, _issue, _opts}
+      tmp_dir = session_opts[:extra_env] |> Map.values() |> Enum.find(&String.contains?(&1, "symphony-qa-"))
+      assert prompt =~ "- `#{Path.join([tmp_dir, "design", "TP-243-screens.html"])}` (attached to TP-243)"
+      refute File.exists?(tmp_dir)
     end
   end
 

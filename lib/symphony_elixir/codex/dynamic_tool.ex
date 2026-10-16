@@ -1037,6 +1037,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   # moves the issue, comments, or writes to GitHub.
   @qa_tools MapSet.put(@read_only_tools, "linear_attach_file")
 
+  @qa_get_document_description "Without arguments, list the documents this issue's runs created (`documents`) and the ones its parent's runs created " <>
+                                 "(`parentDocuments`, such as the plan's Screens document), with id, title and url. " <>
+                                 "Pass `document_id` to read one of them in full. Any other document is refused."
+
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     context = tool_context(opts)
@@ -1062,8 +1066,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
   def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
-  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools)) ++ @qa_tool_schemas ++ @qa_android_tool_schemas
+
+  def tool_specs(:qa) do
+    @tool_schemas
+    |> Enum.filter(&(Map.get(&1, "name") in @qa_tools))
+    |> Enum.map(&qa_tool_spec/1)
+    |> Kernel.++(@qa_tool_schemas ++ @qa_android_tool_schemas)
+  end
+
   def tool_specs(_scope), do: tool_specs()
+
+  defp qa_tool_spec(%{"name" => "linear_get_document"} = spec), do: Map.put(spec, "description", @qa_get_document_description)
+  defp qa_tool_spec(spec), do: spec
 
   defp tool_context(opts) do
     %{
@@ -1189,7 +1203,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     Linear.update_document(context, args, opts)
   end
 
+  # A QA pass (and an epic review) judges the work against the design, which usually sits in the
+  # parent's documents; every other run reads only its own issue's.
   defp execute_linear_tool("linear_get_document", context, args, opts) do
+    opts = Keyword.put(opts, :parent_documents, Keyword.get(opts, :tool_scope) == :qa)
     Linear.get_document(context, Map.get(args, "document_id"), opts)
   end
 
