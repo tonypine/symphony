@@ -6,8 +6,9 @@ import Foundation
 ///
 /// - Automatically when released checks every `releaseCheckMinutes`; the other modes every 6 hours.
 /// - `override`, from `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL` in QA mode, replaces that in every mode.
-/// - After a failed check, such as GitHub's rate limit, it waits 6 hours until a check succeeds, so the app doesn't
-///   pile up requests against the limit. A check chosen by hand counts too.
+/// - After a check that hit GitHub's rate limit, it waits until GitHub lifts the limit, at most an hour, or the
+///   usual interval when that is longer. Any other failed check, such as one that couldn't reach GitHub, retries at
+///   the usual interval. A check chosen by hand counts too.
 public struct UpdateCheckSchedule: Equatable {
     /// The result of a finished check and when it finished.
     public struct Outcome: Equatable {
@@ -25,8 +26,6 @@ public struct UpdateCheckSchedule: Equatable {
     public private(set) var releaseCheckMinutes: Int
     /// Seconds between checks in every mode, for tests and QA; nil to follow the mode and the setting.
     public let override: TimeInterval?
-    /// True from a failed check until a check succeeds.
-    public private(set) var backingOff = false
     /// True from the start of a check until its result.
     public private(set) var isChecking = false
     /// The last finished check, nil before the first.
@@ -38,10 +37,11 @@ public struct UpdateCheckSchedule: Equatable {
         self.override = override
     }
 
-    /// How long until the next background check.
+    /// How long until the next background check, from the last check.
     public var interval: TimeInterval {
-        if backingOff { return UpdateChecker.interval }
-        return override ?? UpdateChecker.interval(for: mode, releaseCheckMinutes: releaseCheckMinutes)
+        let usual = override ?? UpdateChecker.interval(for: mode, releaseCheckMinutes: releaseCheckMinutes)
+        guard let last, case let .failed(_, retryAt?) = last.result else { return usual }
+        return max(usual, retryAt.timeIntervalSince(last.at))
     }
 
     /// Takes saved settings. True when the app should check now: the mode became Automatically when released, or
@@ -58,15 +58,10 @@ public struct UpdateCheckSchedule: Equatable {
         isChecking = true
     }
 
-    /// Records a check's result: a failure backs off to 6 hours, a success ends the back-off.
+    /// Records a check's result, which `interval` follows.
     public mutating func finished(_ result: UpdateCheckResult, at date: Date) {
         isChecking = false
         last = Outcome(result, at: date)
-        if case .failed = result {
-            backingOff = true
-        } else {
-            backingOff = false
-        }
     }
 
     /// The line under Check for releases every N minutes in Settings (S1a–S1c). The view shows a spinner beside it
@@ -79,10 +74,10 @@ public struct UpdateCheckSchedule: Equatable {
             return "● Checked \(Self.ago(last.at, now: now)): v\(release.version) is the newest release."
         case let .available(release):
             return "● Checked \(Self.ago(last.at, now: now)): v\(release.version) is available."
-        case let .failed(message):
+        case let .failed(message, _):
             let time = TimeOfDay(date: last.at, calendar: calendar).label
-            return "▲ Couldn't check at \(time): \(UpdateChecker.failureReason(message)). "
-                + "Next check in \(Self.hours(UpdateChecker.interval))."
+            let next = TimeOfDay(date: last.at.addingTimeInterval(interval), calendar: calendar).label
+            return "▲ Couldn't check at \(time): \(UpdateChecker.failureReason(message)). Next check at \(next)."
         }
     }
 
@@ -96,10 +91,12 @@ public struct UpdateCheckSchedule: Equatable {
     public static let checkingLine = "Checking for a new release…"
     public static let notCheckedLine = "Not checked yet."
     /// Settings' footer note in Automatically when released.
-    public static let rateLimitNote = "Checks that find nothing new don't count against GitHub's rate limit."
+    public static let rateLimitNote = "Every check counts against GitHub's limit of \(UpdateChecker.hourlyRateLimit) "
+        + "requests an hour from this Mac, which other apps share. After a check hits the limit, the app waits for "
+        + "GitHub to reset it, at most an hour."
 
     /// Shown once in place of the last-check line after a typed value was moved into range (S1d), for example
-    /// "Between 1 and 60 minutes. 0 was changed to 1."
+    /// "Between 2 and 60 minutes. 0 was changed to 2."
     public static func clampedLine(typed: Int, to minutes: Int) -> String {
         let range = AppSettings.releaseCheckMinutesRange
         return "Between \(range.lowerBound) and \(range.upperBound) minutes. \(typed) was changed to \(minutes)."
@@ -118,11 +115,5 @@ public struct UpdateCheckSchedule: Equatable {
     static func ago(_ date: Date, now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(date))
         return seconds < 60 ? "just now" : "\(Overview.duration(seconds)) ago"
-    }
-
-    /// For example "6 hours" or "1 hour".
-    static func hours(_ interval: TimeInterval) -> String {
-        let hours = Int(interval / 3_600)
-        return hours == 1 ? "1 hour" : "\(hours) hours"
     }
 }

@@ -24,9 +24,12 @@ final class UpdateCheckScheduleTests: XCTestCase {
         )
     }
 
-    private let rateLimited = UpdateCheckResult.failed(
-        "Couldn't check for updates: GitHub's rate limit is reached; try again later"
-    )
+    /// GitHub's rate limit, lifted at `retryAt`.
+    private func rateLimited(until retryAt: Date) -> UpdateCheckResult {
+        .failed("Couldn't check for updates: GitHub's rate limit is reached; try again later", retryAt: retryAt)
+    }
+
+    private let unreachable = UpdateCheckResult.failed("Couldn't check for updates: couldn't reach GitHub")
 
     // MARK: - Interval
 
@@ -35,14 +38,33 @@ final class UpdateCheckScheduleTests: XCTestCase {
         XCTAssertEqual(UpdateChecker.interval(for: .onRelease, releaseCheckMinutes: 17), 17 * 60)
         for mode in [UpdateMode.manual, .whenIdle, .atTime] {
             XCTAssertEqual(UpdateChecker.interval(for: mode, releaseCheckMinutes: 5), sixHours, mode.rawValue)
-            XCTAssertEqual(UpdateChecker.interval(for: mode, releaseCheckMinutes: 1), sixHours, mode.rawValue)
+            XCTAssertEqual(UpdateChecker.interval(for: mode, releaseCheckMinutes: 2), sixHours, mode.rawValue)
         }
     }
 
     func testTheIntervalKeepsTheMinutesInRange() {
-        XCTAssertEqual(UpdateChecker.interval(for: .onRelease, releaseCheckMinutes: 0), 60)
+        XCTAssertEqual(UpdateChecker.interval(for: .onRelease, releaseCheckMinutes: 0), 2 * 60)
+        XCTAssertEqual(UpdateChecker.interval(for: .onRelease, releaseCheckMinutes: 1), 2 * 60)
         XCTAssertEqual(UpdateChecker.interval(for: .onRelease, releaseCheckMinutes: 120), 60 * 60)
-        XCTAssertEqual(UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 0).releaseCheckMinutes, 1)
+        XCTAssertEqual(UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 0).releaseCheckMinutes, 2)
+        XCTAssertEqual(UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 1).releaseCheckMinutes, 2)
+    }
+
+    func testTheShortestIntervalUsesAtMostHalfOfGitHubsHourlyLimit() {
+        // Every check counts against GitHub's unauthenticated limit, a 304 included, and other tools on the Mac share
+        // it: the shortest interval leaves half of it to them.
+        let minutes = AppSettings.releaseCheckMinutesRange.lowerBound
+        let shortest = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: minutes)
+        let checksAnHour = Int(UpdateChecker.rateLimitWindow / shortest.interval)
+
+        XCTAssertEqual(UpdateChecker.hourlyRateLimit, 60)
+        XCTAssertLessThanOrEqual(checksAnHour, 30)
+        XCTAssertLessThanOrEqual(checksAnHour, UpdateChecker.hourlyRateLimit / 2)
+        XCTAssertEqual(
+            UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: Int.min).interval,
+            shortest.interval,
+            "nothing below the range"
+        )
     }
 
     func testTheScheduleFollowsTheModeAndTheMinutes() {
@@ -58,33 +80,62 @@ final class UpdateCheckScheduleTests: XCTestCase {
         }
     }
 
-    // MARK: - Back-off
+    // MARK: - After a failed check
 
-    func testAFailedCheckBacksOffToSixHoursUntilACheckSucceeds() {
+    func testARateLimitedCheckWaitsUntilGitHubLiftsTheLimit() {
         var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
 
         schedule.began()
-        schedule.finished(rateLimited, at: at(14, 5))
-        XCTAssertTrue(schedule.backingOff)
-        XCTAssertEqual(schedule.interval, sixHours)
+        schedule.finished(rateLimited(until: at(14, 47)), at: at(14, 5))
+        XCTAssertEqual(schedule.interval, 42 * 60, "at the reset, not 6 hours later")
 
         schedule.began()
-        schedule.finished(rateLimited, at: at(20, 5))
-        XCTAssertEqual(schedule.interval, sixHours, "still failing")
+        schedule.finished(rateLimited(until: at(15, 47)), at: at(14, 47))
+        XCTAssertEqual(schedule.interval, 60 * 60, "still limited: the next reset")
 
         schedule.began()
-        schedule.finished(.upToDate(release()), at: at(20, 6))
-        XCTAssertFalse(schedule.backingOff)
+        schedule.finished(.upToDate(release()), at: at(15, 47))
         XCTAssertEqual(schedule.interval, 5 * 60, "back to the configured interval")
     }
 
-    func testTheBackOffWinsOverTheOverride() {
+    func testARateLimitLiftedBeforeTheNextCheckKeepsTheUsualInterval() {
+        var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+        schedule.finished(rateLimited(until: at(14, 6)), at: at(14, 5))
+        XCTAssertEqual(schedule.interval, 5 * 60, "never sooner than the configured interval")
+
+        schedule.finished(rateLimited(until: at(14, 0)), at: at(14, 5))
+        XCTAssertEqual(schedule.interval, 5 * 60, "a reset already past")
+
+        var manual = UpdateCheckSchedule(mode: .manual, releaseCheckMinutes: 5)
+        manual.finished(rateLimited(until: at(14, 47)), at: at(14, 5))
+        XCTAssertEqual(manual.interval, sixHours, "the other modes keep checking every 6 hours")
+    }
+
+    func testAnUnreachableGitHubRetriesAtTheUsualInterval() {
+        var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+
+        schedule.began()
+        schedule.finished(unreachable, at: at(14, 5))
+        XCTAssertEqual(schedule.interval, 5 * 60, "not 6 hours")
+
+        schedule.finished(.failed("Couldn't check for updates: GitHub answered with HTTP 500"), at: at(14, 10))
+        XCTAssertEqual(schedule.interval, 5 * 60, "any failure other than the rate limit")
+
+        var manual = UpdateCheckSchedule(mode: .manual, releaseCheckMinutes: 5)
+        manual.finished(unreachable, at: at(14, 5))
+        XCTAssertEqual(manual.interval, sixHours)
+    }
+
+    func testTheRateLimitWinsOverTheOverride() {
         var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5, override: 30)
 
-        schedule.finished(rateLimited, at: at(14, 5))
-        XCTAssertEqual(schedule.interval, sixHours)
+        schedule.finished(rateLimited(until: at(14, 47)), at: at(14, 5))
+        XCTAssertEqual(schedule.interval, 42 * 60)
 
-        schedule.finished(.available(release(build: 43)), at: at(14, 6))
+        schedule.finished(unreachable, at: at(14, 6))
+        XCTAssertEqual(schedule.interval, 30)
+
+        schedule.finished(.available(release(build: 43)), at: at(14, 7))
         XCTAssertEqual(schedule.interval, 30)
     }
 
@@ -100,6 +151,10 @@ final class UpdateCheckScheduleTests: XCTestCase {
 
         XCTAssertTrue(schedule.configure(mode: .onRelease, releaseCheckMinutes: 10))
         XCTAssertEqual(schedule.interval, 10 * 60)
+
+        XCTAssertTrue(schedule.configure(mode: .onRelease, releaseCheckMinutes: 1))
+        XCTAssertEqual(schedule.releaseCheckMinutes, 2)
+        XCTAssertFalse(schedule.configure(mode: .onRelease, releaseCheckMinutes: 2), "1 was 2 already")
 
         XCTAssertTrue(schedule.configure(mode: .onRelease, releaseCheckMinutes: 99))
         XCTAssertEqual(schedule.releaseCheckMinutes, 60)
@@ -159,44 +214,58 @@ final class UpdateCheckScheduleTests: XCTestCase {
 
     func testTheLastCheckLineAfterAFailedCheck() {
         var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
-        schedule.finished(rateLimited, at: at(14, 5))
+        schedule.finished(rateLimited(until: at(14, 47, 12)), at: at(14, 5))
 
         XCTAssertEqual(
             schedule.settingsLine(now: at(14, 6), calendar: utc),
-            "▲ Couldn't check at 14:05: GitHub's rate limit is reached; try again later. Next check in 6 hours."
+            "▲ Couldn't check at 14:05: GitHub's rate limit is reached; try again later. Next check at 14:47."
+        )
+
+        schedule.finished(unreachable, at: at(14, 50))
+        XCTAssertEqual(
+            schedule.settingsLine(now: at(14, 51), calendar: utc),
+            "▲ Couldn't check at 14:50: couldn't reach GitHub. Next check at 14:55."
+        )
+    }
+
+    func testTheRateLimitNoteDoesNotCallUnchangedChecksFree() {
+        XCTAssertEqual(
+            UpdateCheckSchedule.rateLimitNote,
+            "Every check counts against GitHub's limit of 60 requests an hour from this Mac, which other apps share. "
+                + "After a check hits the limit, the app waits for GitHub to reset it, at most an hour."
         )
     }
 
     func testTheClampedNote() {
         XCTAssertEqual(
-            UpdateCheckSchedule.clampedLine(typed: 0, to: 1),
-            "Between 1 and 60 minutes. 0 was changed to 1."
+            UpdateCheckSchedule.clampedLine(typed: 0, to: 2),
+            "Between 2 and 60 minutes. 0 was changed to 2."
         )
         XCTAssertEqual(
             UpdateCheckSchedule.clampedLine(typed: 120, to: 60),
-            "Between 1 and 60 minutes. 120 was changed to 60."
+            "Between 2 and 60 minutes. 120 was changed to 60."
         )
     }
 
     func testACommittedValueOutOfRangeIsMovedWithTheNote() {
         let low = UpdateCheckSchedule.committed(0, current: 5, note: nil)
-        XCTAssertEqual(low.minutes, 1)
-        XCTAssertEqual(low.note, "Between 1 and 60 minutes. 0 was changed to 1.")
+        XCTAssertEqual(low.minutes, 2)
+        XCTAssertEqual(low.note, "Between 2 and 60 minutes. 0 was changed to 2.")
         let high = UpdateCheckSchedule.committed(120, current: 5, note: nil)
         XCTAssertEqual(high.minutes, 60)
-        XCTAssertEqual(high.note, "Between 1 and 60 minutes. 120 was changed to 60.")
+        XCTAssertEqual(high.note, "Between 2 and 60 minutes. 120 was changed to 60.")
     }
 
     func testTheFieldWritingBackTheMovedValueKeepsTheNote() {
-        let note = UpdateCheckSchedule.clampedLine(typed: 0, to: 1)
-        let written = UpdateCheckSchedule.committed(1, current: 1, note: note)
-        XCTAssertEqual(written.minutes, 1)
+        let note = UpdateCheckSchedule.clampedLine(typed: 1, to: 2)
+        let written = UpdateCheckSchedule.committed(2, current: 2, note: note)
+        XCTAssertEqual(written.minutes, 2)
         XCTAssertEqual(written.note, note)
     }
 
     func testANewValueInRangeClearsTheNote() {
-        let note = UpdateCheckSchedule.clampedLine(typed: 0, to: 1)
-        let typed = UpdateCheckSchedule.committed(10, current: 1, note: note)
+        let note = UpdateCheckSchedule.clampedLine(typed: 1, to: 2)
+        let typed = UpdateCheckSchedule.committed(10, current: 2, note: note)
         XCTAssertEqual(typed.minutes, 10)
         XCTAssertNil(typed.note)
     }
@@ -227,7 +296,7 @@ final class UpdateCheckScheduleTests: XCTestCase {
     func testTheMenuSaysNothingAfterAFailedCheckOrARelease() {
         var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
 
-        schedule.finished(rateLimited, at: at(14, 3))
+        schedule.finished(rateLimited(until: at(14, 47)), at: at(14, 3))
         XCTAssertNil(schedule.menuLine(now: at(14, 5)))
 
         schedule.finished(.available(release(build: 43)), at: at(14, 4))
