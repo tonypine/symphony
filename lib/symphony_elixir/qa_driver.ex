@@ -35,8 +35,10 @@ defmodule SymphonyElixir.QaDriver do
     running; `qa_check_app` also reports on one that has exited;
   - `qa_ax_select` selects a table or outline row (which answers no AXPress)
     through `AXSelectedRows` or `AXSelected`; `qa_click` clicks an element's
-    frame centre only when the window in front at that point is the app's own,
-    and `qa_key` presses a named key with modifiers in the app's focused window.
+    frame centre only when the app's window is on screen there and the
+    accessibility hit test finds the app under it (the window list decides when
+    the hit test has no answer), so a window that lets clicks through never
+    counts as covering, and `qa_key` presses a named key with modifiers in the app's focused window.
     The helper posts their mouse and key events to the app's PID alone;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
