@@ -192,8 +192,6 @@ final class UpdatesTests: XCTestCase {
 
     func testHTTPErrors() async {
         let cases: [(Int, String)] = [
-            (403, "Couldn't check for updates: GitHub's rate limit is reached; try again later"),
-            (429, "Couldn't check for updates: GitHub's rate limit is reached; try again later"),
             (404, "Couldn't check for updates: no Symphony release is published yet"),
             (500, "Couldn't check for updates: GitHub answered with HTTP 500"),
         ]
@@ -205,6 +203,66 @@ final class UpdatesTests: XCTestCase {
 
             XCTAssertEqual(result, .failed(message), "HTTP \(status)")
         }
+    }
+
+    private let rateLimitMessage = "Couldn't check for updates: GitHub's rate limit is reached; try again later"
+    /// 2026-10-16T12:00:00Z, the clock of the rate-limit checks.
+    private let noon = Date(timeIntervalSince1970: 1_792_152_000)
+
+    /// The result of a check GitHub answered with `status` and `headers`, at `noon`.
+    private func rateLimitedCheck(_ status: Int, _ headers: [String: String]) async -> UpdateCheckResult {
+        let transport = StubUpdateTransport()
+        transport.responses[releaseURL] = (status, #"{"message":"API rate limit exceeded"}"#, headers)
+        return await UpdateChecker(transport: transport, now: { self.noon }).check(current: releaseBuild)
+    }
+
+    func testARateLimitRetriesAtGitHubsReset() async {
+        let reset = noon.addingTimeInterval(37 * 60)
+        for status in [403, 429] {
+            let result = await rateLimitedCheck(status, [
+                "X-RateLimit-Limit": "60",
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": "\(Int(reset.timeIntervalSince1970))",
+            ])
+
+            XCTAssertEqual(result, .failed(rateLimitMessage, retryAt: reset), "HTTP \(status)")
+            XCTAssertEqual(UpdateMenu.manualResultLine(result), rateLimitMessage)
+        }
+    }
+
+    func testRetryAfterWinsOverTheReset() async {
+        let result = await rateLimitedCheck(429, [
+            "Retry-After": " 90 ",
+            "X-RateLimit-Reset": "\(Int(noon.timeIntervalSince1970) + 37 * 60)",
+        ])
+
+        XCTAssertEqual(result, .failed(rateLimitMessage, retryAt: noon.addingTimeInterval(90)))
+    }
+
+    func testTheRateLimitWaitStaysWithinTheHour() async {
+        let hourLater = noon.addingTimeInterval(UpdateChecker.rateLimitWindow)
+        let cases: [([String: String], Date, String)] = [
+            ([:], hourLater, "no header: the longest GitHub's limit lasts"),
+            (["X-RateLimit-Reset": "soon"], hourLater, "an unreadable reset"),
+            (["X-RateLimit-Reset": "\(Int(noon.timeIntervalSince1970) + 5 * 3_600)"], hourLater, "a reset hours away"),
+            (["X-RateLimit-Reset": "\(Int(noon.timeIntervalSince1970) - 60)"], noon, "a reset already past"),
+            (["Retry-After": "86400"], hourLater, "a day's Retry-After"),
+            (["Retry-After": "-5"], noon, "a negative Retry-After"),
+        ]
+        for (headers, retryAt, label) in cases {
+            let result = await rateLimitedCheck(403, headers)
+
+            XCTAssertEqual(result, .failed(rateLimitMessage, retryAt: retryAt), label)
+        }
+    }
+
+    func testOnlyTheRateLimitCarriesARetryTime() async {
+        let transport = StubUpdateTransport()
+        transport.responses[releaseURL] = (500, "{}", ["X-RateLimit-Reset": "\(Int(noon.timeIntervalSince1970) + 600)"])
+
+        let result = await UpdateChecker(transport: transport, now: { self.noon }).check(current: releaseBuild)
+
+        XCTAssertEqual(result, .failed("Couldn't check for updates: GitHub answered with HTTP 500", retryAt: nil))
     }
 
     func testUnreachableGitHub() async {
