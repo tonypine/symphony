@@ -66,6 +66,16 @@ class StubHandler(http.server.BaseHTTPRequestHandler):
             body = (json.dumps(body, sort_keys=True) + "\n").encode()
         elif isinstance(body, str):
             body = body.encode()
+        # Logged before the answer goes out, so a client that has its answer finds the request in the log.
+        entry = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "method": self.command,
+            "path": self.path,
+            "status": status,
+        }
+        if sent is not None:
+            entry["body"] = sent
+        self.server.request_log.write(entry)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length if file is not None else len(body)))
@@ -79,15 +89,6 @@ class StubHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
             else:
                 self.wfile.write(body)
-        entry = {
-            "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "method": self.command,
-            "path": self.path,
-            "status": status,
-        }
-        if sent is not None:
-            entry["body"] = sent
-        self.server.request_log.write(entry)
 
 
 class StubServer(http.server.ThreadingHTTPServer):

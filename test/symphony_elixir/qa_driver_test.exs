@@ -2096,6 +2096,14 @@ defmodule SymphonyElixir.QaDriverTest do
     defp pair_default("/bin/sh", [_script, "--use"], _opts, pair), do: pair.identity
     defp pair_default("/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], _opts, pair), do: pair.build.(out)
     defp pair_default("/usr/bin/curl", args, _opts, pair), do: feed_reply(pair.mode, args)
+
+    # `ditto` is macOS-only; the copy of N runs for real with `cp -R` so the tests run on Linux CI.
+    defp pair_default("/bin/sh", ["-c", script | args], opts, _pair) do
+      if script =~ "ditto ",
+        do: Host.cmd("/bin/sh", ["-c", String.replace(script, "ditto ", "cp -R ") | args], opts),
+        else: default_cmd("/bin/sh", ["-c", script | args], opts, replies(%{}))
+    end
+
     defp pair_default("/bin/ps", _args, _opts, pair), do: pair.ps
     defp pair_default("/bin/kill", _args, _opts, _pair), do: {:ok, {"", 0}}
     defp pair_default(executable, args, opts, _pair) when executable in ["/bin/cat", "/usr/bin/tail"], do: Host.cmd(executable, args, opts)
