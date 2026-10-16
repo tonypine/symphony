@@ -133,16 +133,12 @@ jobs:
         run: time sh Tests/update-helper-test.sh
 
       # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
-      # keychain. The runner's sudo needs no password, so it also trusts the certificate for real
-      # and removes the trust when it ends. Changing admin trust settings otherwise waits for an
-      # authorization dialog no one can answer on a runner, so the step allows it first, and its
-      # timeout turns any wait into a failure of this step.
+      # keychain with a fake sudo. The real trust step stays off here: the macOS 26 runner refuses
+      # to allow admin trust changes in its authorization database (-60005), and without that the
+      # trust waits for a dialog no one can answer. The timeout turns any wait into a failure.
       - name: Test the QA signing identity script
         timeout-minutes: 5
-        env:
-          SYMPHONY_QA_SIGNING_TEST_TRUST: "1"
         run: |
-          sudo -n security authorizationdb write com.apple.trust-settings.admin allow
           time sh scripts/qa/install-test-signing-identity-test.sh
 
   install-script:

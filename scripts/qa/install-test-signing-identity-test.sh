@@ -4,9 +4,10 @@
 # instead of running it: the check on a host without the identity changes nothing, the install
 # creates the keychain and the identity and asks to trust it, and a second install keeps both.
 #
-# With SYMPHONY_QA_SIGNING_TEST_TRUST=1 (CI, where sudo needs no password) it also trusts the
-# certificate for real, checks that the identity is then ready and that a third install is a no-op,
-# and removes the trust again when it ends.
+# With SYMPHONY_QA_SIGNING_TEST_TRUST=1 (a host where sudo needs no password and trust changes need
+# no dialog, which the macOS 26 CI runner is not) it also trusts the certificate for real, checks
+# that the identity is then ready and that a third install is a no-op, and removes the trust again
+# when it ends.
 #
 # The temporary keychain is on the user's keychain search list while the test runs; the list is put
 # back when it ends. Run: sh scripts/qa/install-test-signing-identity-test.sh
