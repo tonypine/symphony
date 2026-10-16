@@ -1862,6 +1862,54 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert {:error, :missing_current_issue} = Linear.get_document(%{}, nil)
     end
 
+    test "get_document/3 with parent_documents lists and reads the parent's documents, and refuses the rest" do
+      parent = %{"identifier" => "TP-6", "attachments" => %{"nodes" => [%{"metadata" => %{"symphonyDocumentId" => "doc-screens"}}, %{"metadata" => nil}]}}
+
+      scope =
+        @document_scope
+        |> put_in(["attachments", "nodes"], [%{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
+        |> Map.put("parent", parent)
+
+      screens = %{"id" => "doc-screens", "title" => "TP-6 · Screens", "url" => "https://linear.app/acme/document/screens"}
+      listed = [@created_document, screens]
+
+      client =
+        document_client(self(), scope, %{
+          "SymphonyAgentDocuments" => {:ok, %{"data" => %{"documents" => %{"nodes" => listed}}}},
+          "SymphonyAgentDocument" => {:ok, %{"data" => %{"document" => Map.put(screens, "content", "# Screens")}}}
+        })
+
+      context = %{issue_id: "issue-current"}
+      opts = [linear_client: client, parent_documents: true]
+
+      assert {:ok, %{"documents" => [own], "parent" => "TP-6", "parentDocuments" => [parent_document]}} = Linear.get_document(context, nil, opts)
+      assert_received {:linear_called, "SymphonyAgentReadableDocumentScope", %{id: "issue-current", first: 100}}
+      assert_received {:linear_called, "SymphonyAgentDocuments", %{ids: ["doc-1", "doc-screens"], first: 2}}
+      assert own["id"] == "doc-1"
+      assert parent_document["title"] == PromptSafety.linear_document_title("TP-6 · Screens")
+
+      assert {:ok, %{"content" => content}} = Linear.get_document(context, "doc-screens", opts)
+      assert content =~ "# Screens"
+      assert {:error, {:document_not_owned_by_issue, "doc-other"}} = Linear.get_document(context, "doc-other", opts)
+
+      # Writing stays limited to the issue's own documents, and other runs never see the parent's.
+      update = %{"document_id" => "doc-screens", "content" => "# Rewritten"}
+
+      assert {:error, {:document_not_owned_by_issue, "doc-screens"}} =
+               Linear.update_document(context, update, linear_client: client)
+
+      refute_received {:linear_called, "SymphonyAgentUpdateDocument", _variables}
+      assert {:error, {:document_not_owned_by_issue, "doc-screens"}} = Linear.get_document(context, "doc-screens", linear_client: client)
+      assert {:ok, listing} = Linear.get_document(context, nil, linear_client: client)
+      refute Map.has_key?(listing, "parentDocuments")
+
+      # An issue without a parent lists its own documents only.
+      orphan = document_client(self(), Map.put(@document_scope, "parent", nil))
+
+      assert {:ok, %{"documents" => [], "parent" => nil, "parentDocuments" => []}} =
+               Linear.get_document(context, nil, linear_client: orphan, parent_documents: true)
+    end
+
     # Answers each document operation by name; `overrides` replaces an answer.
     defp document_client(test_pid, scope, overrides \\ %{}) do
       fn query, variables, client_opts ->
@@ -1873,7 +1921,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
-    defp document_answer("SymphonyAgentDocumentScope", scope), do: {:ok, %{"data" => %{"issue" => scope}}}
+    defp document_answer("SymphonyAgentDocumentScope", scope), do: {:ok, %{"data" => %{"issue" => Map.delete(scope, "parent")}}}
+    defp document_answer("SymphonyAgentReadableDocumentScope", scope), do: {:ok, %{"data" => %{"issue" => scope}}}
 
     defp document_answer("SymphonyAgentCreateDocument", _scope),
       do: {:ok, %{"data" => %{"documentCreate" => %{"success" => true, "document" => @created_document}}}}
