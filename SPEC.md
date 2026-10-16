@@ -1471,7 +1471,10 @@ The QA agent:
   `qa_launch_app` MAY point the app, in QA mode only, at stand-ins on the pass's host ports: a
   fake `gh` that Symphony itself provides (never a script the agent wrote) forwarding each call to
   the agent's stub, a Linear GraphQL stub, and a folder picker that opens in a checkout
-  `qa_put_checkout` made. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  `qa_put_checkout` made. It MAY also launch the app in a light or dark appearance (`appearance`), set in
+  the app alone; it MUST NOT switch the QA host's own appearance. `qa_open_status_menu` opens a
+  launched app's status-bar menu on screen through a request file under that app's QA root, which
+  only an app in QA mode acts on, and returns the menu's window for `qa_screenshot`. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
   root since the last call, read where the app runs, and MUST read nothing outside that QA root.

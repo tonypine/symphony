@@ -6,7 +6,8 @@ import Foundation
 /// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai, with
 /// `SYMPHONY_BAR_QA_API_FIXTURES` it reads Symphony's local API from files (see `APIFixtures`), with
 /// `SYMPHONY_QA_LINEAR_URL` the Add Repo sheet asks a Linear stub instead of api.linear.app, and with
-/// `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` the sheet's folder picker opens in that folder.
+/// `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` the sheet's folder picker opens in that folder. With `SYMPHONY_BAR_QA_APPEARANCE`
+/// the app draws in light or dark whatever the Mac's own appearance, which QA never changes.
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -27,6 +28,8 @@ public struct QAMode: Equatable {
     /// The folder the Add Repo sheet's folder picker opens in, such as a checkout QA prepared, so a QA pass can
     /// pick it with the panel's Choose button: the panel has no path field to type into.
     public static let openPanelDirectoryKey = "SYMPHONY_BAR_QA_OPEN_PANEL_DIR"
+    /// `light` or `dark`: the appearance the app draws in, so QA can judge both on one Mac without switching the Mac's.
+    public static let appearanceKey = "SYMPHONY_BAR_QA_APPEARANCE"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
 
@@ -36,6 +39,12 @@ public struct QAMode: Equatable {
     public static let symphonyLogsFolder = "symphony-logs"
     public static let updatesFolder = "updates"
     public static let stateFolder = "state"
+
+    /// An appearance QA launches the app in.
+    public enum Appearance: String, Equatable {
+        case light
+        case dark
+    }
 
     public let root: URL
     /// True when `SYMPHONY_BAR_QA_SCRIPTED` is `1`.
@@ -52,6 +61,8 @@ public struct QAMode: Equatable {
     public let linearURL: URL?
     /// The folder picker's first folder from `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, nil for the panel's own choice.
     public let openPanelDirectory: URL?
+    /// The appearance from `SYMPHONY_BAR_QA_APPEARANCE`, nil to follow the Mac's.
+    public let appearance: Appearance?
 
     public init(
         root: URL,
@@ -61,7 +72,8 @@ public struct QAMode: Equatable {
         openRouterURL: URL? = nil,
         apiFixturesDirectory: URL? = nil,
         linearURL: URL? = nil,
-        openPanelDirectory: URL? = nil
+        openPanelDirectory: URL? = nil,
+        appearance: Appearance? = nil
     ) {
         self.root = root.standardizedFileURL
         self.scripted = scripted
@@ -71,6 +83,7 @@ public struct QAMode: Equatable {
         self.apiFixturesDirectory = apiFixturesDirectory?.standardizedFileURL
         self.linearURL = linearURL
         self.openPanelDirectory = openPanelDirectory
+        self.appearance = appearance
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
@@ -87,7 +100,8 @@ public struct QAMode: Equatable {
                 path.isEmpty ? nil : URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
             },
             linearURL: environment[linearURLKey].flatMap(loopbackURL),
-            openPanelDirectory: environment[openPanelDirectoryKey].flatMap(absoluteFolder)
+            openPanelDirectory: environment[openPanelDirectoryKey].flatMap(absoluteFolder),
+            appearance: environment[appearanceKey].flatMap { Appearance(rawValue: $0.trimmingWhitespace()) }
         )
     }
 

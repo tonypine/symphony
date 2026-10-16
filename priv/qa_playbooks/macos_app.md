@@ -13,7 +13,9 @@ for you on the host. They only act on this worktree's configured app and on apps
   pointing at the copy (returned as `api_fixtures`). The directory may hold only regular files,
   at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear, updates
   and the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`,
-  `update_feed_port`, `update_check_interval_seconds`.
+  `update_feed_port`, `update_check_interval_seconds`. Pass `appearance` (`light` or `dark`) to
+  draw the app in that appearance whatever the host's; without it the app follows the host. See
+  "Light and dark, and the status-bar menu" below.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
@@ -43,7 +45,13 @@ for you on the host. They only act on this worktree's configured app and on apps
   size `qa_resize_window` set. `healthy` is true when there are no problems. It works after the
   app has exited.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
-  once; it never replaces an existing file.
+  once; it never replaces an existing file. Pass `window_id` to save one window, such as the menu
+  `qa_open_status_menu` opened.
+- `qa_open_status_menu`: opens the app's status-bar menu (its menu bar item) on screen, as a
+  click on the item would, and returns the menu's `window_id` and `frame` once it shows. Close it
+  with `qa_key` and `key: "escape"`. Never press the status item with `qa_ax_press` or
+  `qa_click`: the press blocks until the menu closes (AXError -25204) and the click is refused as
+  covered.
 - `qa_quit_app`: quits the app and returns its recent output.
 - `qa_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (a test `symphony.yml`,
   a `WORKFLOW.md`) where the app can open it, and returns the `path` to give the app.
@@ -109,6 +117,23 @@ GitHub or Linear in QA:
   `qa_put_checkout`, pass its `path` as `open_panel_dir`, and the panel opens inside it: press
   its Choose button without selecting anything to choose that folder. Use one launch per
   checkout you need to pick.
+
+Light and dark, and the status-bar menu. A UI deliverable is judged by sight in both
+appearances. The host's appearance is never switched; launch the app once per appearance instead:
+
+- **Dark:** `qa_launch_app` with `appearance: "dark"` (plus the walkthrough's `api_fixtures` and
+  stand-ins). Open the windows the ticket changes, let them settle (step 4 below) and
+  `qa_screenshot` each, named with the appearance (for example `overview-dark`).
+- **Status-bar menu:** when the ticket changes the status-bar menu, or a step reads it:
+  `qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned (for example `status-menu-dark`), then
+  `qa_key` with `key: "escape"` to close it. Read the menu's items from `qa_ax_tree` as before
+  when a step needs their titles; the screenshot is for judging how it looks.
+- **Light:** `qa_quit_app`, then do the same with `appearance: "light"` (`overview-light`,
+  `status-menu-light`). At most three launched apps run at once, so quit each before the next.
+- **Judge** each pair side by side: text and icons stay readable, nothing keeps a light-only or
+  dark-only colour, and the two match the design. When `qa_open_status_menu` fails with
+  `qa_status_menu_not_opened`, call `qa_check_app`; a menu that never opens on a healthy app is a
+  failing step, quoted with the tool's message.
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.

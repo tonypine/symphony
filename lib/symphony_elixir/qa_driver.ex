@@ -53,11 +53,24 @@ defmodule SymphonyElixir.QaDriver do
     into the driver's `checkouts/<name>`, locally or on the QA host, and its
     `origin` is set to the `https://github.com/<owner>/<repo>` URL the agent
     names. Nothing is fetched from GitHub;
+  - `qa_open_status_menu` opens a launched app's status-bar menu on screen and
+    returns its window, for `qa_screenshot`. Pressing the status item through
+    Accessibility blocks until the menu closes, so the driver asks the app
+    instead: it writes `status-menu/open-<pid>` under the app's QA root, which
+    the app (in QA mode only) takes away before opening the menu as a click
+    would, then waits for the menu's window (the pop-up menu layer, 101) in the
+    helper's window list. A menu that does not open in time takes the request
+    back and fails with `qa_status_menu_not_opened`;
   - `qa_api_requests` returns the requests the app logged to `api-requests.jsonl`
     in its QA root since the last call (the POSTs it answered from
     `api_fixtures`), at most the last 500, and takes the log away so the next
     call returns only newer ones. The QA root is outside the agent sandbox, on
     the QA host for a `worker_host`, so the agent cannot read the log itself.
+
+  Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, sets
+  `SYMPHONY_BAR_QA_APPEARANCE`, and the app draws in that appearance whatever the
+  host's. The host's own appearance is never switched: a pass that dies would
+  leave it switched for the next one, and switching it needs Apple Events.
 
   App stand-ins: besides `api_fixtures`, `qa_launch_app` takes five optional
   arguments that point the app at stand-ins instead of real services, all only
@@ -155,6 +168,13 @@ defmodule SymphonyElixir.QaDriver do
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
   @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
+  @appearance_env "SYMPHONY_BAR_QA_APPEARANCE"
+  @appearances ~w(light dark)
+  # The window layer of a pop-up menu (`kCGPopUpMenuWindowLevel`), where the
+  # status item's menu opens.
+  @menu_layer 101
+  # How many times, and how many ms apart, `qa_open_status_menu` looks for the menu.
+  @status_menu_poll {40, 250}
   # The app logs each request it answers from API fixtures here, under its QA root.
   @api_requests_log "api-requests.jsonl"
   @max_api_requests 500
@@ -227,6 +247,12 @@ defmodule SymphonyElixir.QaDriver do
   @github_url ~r{\Ahttps://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?\z}
   @checkout_timeout_ms 60_000
 
+  # Asks the app with PID `$2` to open its status-bar menu: an empty
+  # `status-menu/open-<pid>` under its QA root (`$1`), which the app takes away.
+  @status_menu_script """
+  mkdir -p "$1/status-menu" && : > "$1/status-menu/open-$2"
+  """
+
   # Lists the crash reports named after the app (`$1`, its executable) in the
   # user's DiagnosticReports, one name per line. No folder means no reports.
   @crash_reports_script """
@@ -251,7 +277,7 @@ defmodule SymphonyElixir.QaDriver do
   """
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
-           ~w(qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests)
+           ~w(qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -284,7 +310,9 @@ defmodule SymphonyElixir.QaDriver do
   (the SSH host QA runs on, default this host), `:host` (overrides for the OS
   boundary, see `t:host/0`), `:git` (a `fn args, cwd -> {output, status}`) and
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
-  OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`).
+  OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
+  `:status_menu_poll` (`{attempts, interval_ms}` for `qa_open_status_menu`,
+  default `{40, 250}`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -493,6 +521,14 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, reports} <- crash_reports(config, app.name),
          {:ok, responding} <- responding(driver, config, pid, app) do
       {:ok, health(pid, page, app, reports -- app.crash_reports, responding, config)}
+    end
+  end
+
+  defp run_tool("qa_open_status_menu", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, helper} <- helper(driver, config),
+         :ok <- request_status_menu(config, pid) do
+      await_status_menu(config, helper, pid, config.status_menu_poll)
     end
   end
 
@@ -986,12 +1022,14 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, panel_dir} <- open_panel_dir(Map.get(args, "open_panel_dir"), checkouts),
          {:ok, feed_port} <- stub_port(args, "update_feed_port", ports),
          {:ok, interval} <- update_check_interval(Map.get(args, "update_check_interval_seconds")),
+         {:ok, appearance} <- appearance(Map.get(args, "appearance")),
          {:ok, gh_env} <- gh_env(config, gh_port) do
       linear_env = if linear_port, do: [{"SYMPHONY_QA_LINEAR_URL", "http://localhost:#{linear_port}/graphql"}], else: []
       panel_env = if panel_dir, do: [{"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", panel_dir}], else: []
       feed_env = if feed_port, do: [{"SYMPHONY_BAR_UPDATE_URL", "http://localhost:#{feed_port}/releases/latest"}], else: []
       interval_env = if interval, do: [{"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL", Integer.to_string(interval)}], else: []
-      {:ok, gh_env ++ linear_env ++ panel_env ++ feed_env ++ interval_env}
+      appearance_env = if appearance, do: [{@appearance_env, appearance}], else: []
+      {:ok, gh_env ++ linear_env ++ panel_env ++ feed_env ++ interval_env ++ appearance_env}
     end
   end
 
@@ -1019,6 +1057,10 @@ defmodule SymphonyElixir.QaDriver do
 
   defp update_check_interval(_other),
     do: tool_error("invalid_arguments", "`update_check_interval_seconds` must be a positive whole number of seconds.")
+
+  defp appearance(nil), do: {:ok, nil}
+  defp appearance(appearance) when appearance in @appearances, do: {:ok, appearance}
+  defp appearance(_other), do: tool_error("invalid_arguments", "`appearance` must be `light` or `dark`.")
 
   defp gh_env(_config, nil), do: {:ok, []}
 
@@ -1306,6 +1348,68 @@ defmodule SymphonyElixir.QaDriver do
     )
   end
 
+  # -- status-bar menu ---------------------------------------------------------
+
+  defp request_status_menu(config, pid) do
+    args = ["-c", @status_menu_script, "sh", config.qa_root, Integer.to_string(pid)]
+
+    case config.host.cmd.("/bin/sh", args, timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
+      {:ok, {_output, 0}} -> :ok
+      other -> tool_error("qa_status_menu_failed", "The request to open the status-bar menu could not be written: #{inspect(other)}")
+    end
+  end
+
+  defp await_status_menu(config, helper, pid, {attempts, interval_ms}) do
+    case run_helper(config, helper, ["windows", Integer.to_string(pid)]) do
+      {:ok, %{"windows" => windows}} when is_list(windows) ->
+        case Enum.find(windows, &status_menu?/1) do
+          %{} = menu ->
+            {:ok, status_menu_payload(pid, menu)}
+
+          nil when attempts > 1 ->
+            Process.sleep(interval_ms)
+            await_status_menu(config, helper, pid, {attempts - 1, interval_ms})
+
+          nil ->
+            cancel_status_menu(config, pid)
+
+            tool_error(
+              "qa_status_menu_not_opened",
+              "The app did not open its status-bar menu within #{status_menu_wait(config)} of the request (its window list showed no menu). " <>
+                "Check it is still responding with qa_check_app; an app built before qa_open_status_menu existed ignores the request."
+            )
+        end
+
+      {:ok, other} ->
+        cancel_status_menu(config, pid)
+        tool_error("qa_helper_failed", "The QA helper returned no window list: #{inspect(other)}")
+
+      {:error, _reason} = error ->
+        cancel_status_menu(config, pid)
+        error
+    end
+  end
+
+  # A request the app never took would open the menu later, in the middle of
+  # another step.
+  defp cancel_status_menu(config, pid) do
+    path = Path.join([config.qa_root, "status-menu", "open-#{pid}"])
+    config.host.cmd.("/bin/rm", ["-f", path], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
+  end
+
+  defp status_menu_wait(%{status_menu_poll: {attempts, interval_ms}}), do: "#{Float.round(attempts * interval_ms / 1000, 1)} s"
+
+  defp status_menu?(window), do: window["layer"] == @menu_layer and window["onscreen"] == true and visible?(window)
+
+  defp status_menu_payload(pid, menu) do
+    %{
+      "pid" => pid,
+      "window_id" => menu["id"],
+      "frame" => menu["frame"],
+      "note" => "The menu is open. Screenshot it with qa_screenshot and this window_id; qa_key with key `escape` closes it."
+    }
+  end
+
   # -- screenshots ------------------------------------------------------------
 
   defp screenshot_targets(windows, nil) do
@@ -1390,7 +1494,8 @@ defmodule SymphonyElixir.QaDriver do
       remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       git: Keyword.get(opts, :git, &default_git/2),
-      start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0)
+      start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0),
+      status_menu_poll: Keyword.get(opts, :status_menu_poll, @status_menu_poll)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}

@@ -524,7 +524,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval and open its folder picker in a qa_put_checkout checkout.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -553,6 +553,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "integer",
             "minimum" => 1,
             "description" => "Seconds between the app's background update checks (SYMPHONY_BAR_UPDATE_CHECK_INTERVAL), e.g. 30."
+          },
+          "appearance" => %{
+            "type" => "string",
+            "enum" => ~w(light dark),
+            "description" =>
+              "Launch the app light or dark (SYMPHONY_BAR_QA_APPEARANCE) whatever the host's appearance, which QA never changes. Omit it to follow the host. For both, launch once per appearance."
           }
         }
       }
@@ -693,6 +699,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "width" => %{"type" => "integer", "minimum" => 1400, "maximum" => 8192, "default" => 1400},
           "height" => %{"type" => "integer", "minimum" => 900, "maximum" => 8192, "default" => 900}
         }
+      }
+    },
+    %{
+      "name" => "qa_open_status_menu",
+      "description" =>
+        "Open the launched app's status-bar menu on screen, as a click on its menu bar item would, and return the menu's window_id and frame once it shows, for qa_screenshot. Close it with qa_key and key escape. Use it instead of qa_ax_press or qa_click on the status item, which block or are refused while the menu is open.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{"pid" => @pid_property}
       }
     },
     %{
@@ -944,7 +961,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir", "update_feed_port", "update_check_interval_seconds"],
+    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir", "update_feed_port", "update_check_interval_seconds", "appearance"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
@@ -955,6 +972,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
+    "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
     "qa_api_requests" => [],
