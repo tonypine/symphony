@@ -12,8 +12,9 @@ defmodule SymphonyElixir.Walkthrough do
     * `Proved by: QA`: the QA agent walks the step.
 
   A step with no `Proved by:` is read as `Proved by: QA`, so tickets written before the rule keep
-  working. The QA prompt (`SymphonyElixir.QaAgent`) tells QA to link, not walk, the named-test
-  steps.
+  working. The QA pre-check (`SymphonyElixir.QaPreCheck`) confirms the named-test steps on the PR
+  head before the QA agent starts, and the QA prompt (`SymphonyElixir.QaAgent`) tells QA to link,
+  not walk, them.
   """
 
   @heading ~r/^\s*\#{1,6}\s+User walkthrough\s*:?\s*$/i

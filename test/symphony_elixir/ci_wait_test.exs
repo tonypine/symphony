@@ -57,5 +57,10 @@ defmodule SymphonyElixir.CiWaitTest do
       attrs = CiWait.hold_attrs(%{sha: @sha, runs: []}, DateTime.add(@now, -60, :second), @now)
       assert attrs.reason =~ "still running after 1 minute (waiting since 01:44 UTC)"
     end
+
+    test "names the run that waits when it is not the epic review" do
+      attrs = CiWait.hold_attrs(%{sha: @sha, runs: [], run: "the QA pass"}, DateTime.add(@now, -61 * 60, :second), @now)
+      assert attrs.reason =~ "so Symphony stopped starting the QA pass. "
+    end
   end
 end
