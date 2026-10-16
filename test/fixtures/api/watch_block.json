@@ -1,0 +1,82 @@
+{
+  "action": "dispatch",
+  "actions": [
+    {
+      "action": "ci_fix",
+      "at": "2026-10-16T11:50:00Z",
+      "head": "abc000",
+      "rule": "R21",
+      "source": "poll"
+    }
+  ],
+  "applied": [],
+  "clears_when": null,
+  "decision": {
+    "args": {},
+    "clears_when": null,
+    "decided_at": "2026-10-16T12:00:00.250Z",
+    "error": null,
+    "head_sha": "abc123",
+    "kind": "dispatch",
+    "outcome": "recorded",
+    "owner": null,
+    "reason": "Rework: PR #42 is not red and not conflicting, and no run is active",
+    "rule": "R26",
+    "since": "2026-10-16T11:59:30Z",
+    "waits_on": null
+  },
+  "facts": {
+    "ahead": [],
+    "auto_merge": "off",
+    "base": "ok",
+    "ci": "green",
+    "competing": [],
+    "conflict_attempts": 0,
+    "failing_check": null,
+    "fix_failures": [],
+    "github": "ok",
+    "github_reset_at": null,
+    "head_origin": "symphony",
+    "head_sha": "abc123",
+    "hold": "none",
+    "landing_timed_out": false,
+    "max_red_attempts": 10,
+    "mergeable": "clean",
+    "missing_checks": [],
+    "origin": null,
+    "phase": "rework",
+    "pr": "open",
+    "pr_number": 42,
+    "pr_url": "https://github.com/acme/app/pull/42",
+    "rate_limit": {
+      "remaining": 4321,
+      "reset_at": "2026-10-16T13:00:00Z"
+    },
+    "read_at": "2026-10-16T12:00:00Z",
+    "red_attempts": 0,
+    "red_kind": "failure",
+    "rerun_done": false,
+    "review_comments": "none",
+    "run": "none",
+    "same_failure_streak": 0,
+    "source": "poll"
+  },
+  "head": "abc123",
+  "links": [],
+  "outcome": "recorded",
+  "owner": null,
+  "phase": "rework",
+  "pr_url": "https://github.com/acme/app/pull/42",
+  "read_at": "2026-10-16T12:00:00Z",
+  "reason": "Rework: PR #42 is not red and not conflicting, and no run is active",
+  "rule": "R26",
+  "silent": {
+    "bound": null,
+    "reason": "R26 decided `dispatch`, but no run started and no wait is recorded",
+    "since": "2026-10-16T11:59:30Z",
+    "ticks": 2
+  },
+  "since": "2026-10-16T11:59:30Z",
+  "source": "poll",
+  "summary": "PR #42 open · CI green · no conflict"
+}

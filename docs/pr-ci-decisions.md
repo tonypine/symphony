@@ -121,6 +121,37 @@ required check that never reports (R17), a check only a person clears outside `M
 check red on the base (R23). So are the CI rows with `pull_requests.checks` off and the landing rows
 (and a conflict in `Merging`) with `pull_requests.auto_merge` off.
 
+### Silent waits
+
+Each tick also looks for a ticket that waits with nothing under way and no reason anybody can act
+on (`SymphonyElixir.PrWatch.SilentWait`). A watched ticket with an active run or a hold is never
+silent, nor is one whose decision, made within the last two ticks, leaves it waiting on an owner
+until something happens (`owner` and `clears_when`). Any other ticket is quiet: a decision with no
+owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
+quiet on two ticks in a row is silent. A wait that outlived its bound is silent too: on `ci` past
+`ci.merging_wait_timeout_ms`, or on `github` still rate limited one tick past the reset.
+
+A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last
+rule, the bound that passed and why) and logs one `pr_watch.silent_wait` line when it turns silent.
+It leaves the list on the first tick a run is active, a hold is set or a wait is recorded.
+
+### The watch block and Check Now
+
+`GET /api/v1/state` lists each watched ticket under `issues` with its `watch` block, and
+`GET /api/v1/<identifier>` carries the same block: the phase, the PR `head`, how the facts arrived
+(`source`), the decision (`rule`, `action`, `reason`, `owner`, `clears_when`, since when it stands,
+its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last five actions
+applied (`actions`, each with its `source`) and the ticket's `silent` wait.
+`test/fixtures/api/watch_block.json` is an example of the block, which the API's tests compare
+against. `GET /api/v1/state` also carries GitHub's `rate_limit` (`remaining`, `limit`, `reset`) as the
+newest read left it; with under a tenth left, the watcher's next tick waits up to four intervals, or
+until the reset when that comes sooner.
+
+`POST /api/v1/issues/<identifier>/watch/check` (Check Now) makes the ticket's watcher read and
+decide at once and returns its new `watch` block; 404 when the watcher doesn't watch the ticket.
+A client that sends no `Origin` header (curl, the app) may call it; a browser on another origin is
+refused.
+
 ### Fix runs and their limits
 
 A CI Fix run sent for a red head spends a **red** attempt, held against

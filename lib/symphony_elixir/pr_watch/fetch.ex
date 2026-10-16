@@ -57,8 +57,12 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   }
   """
 
-  @typedoc "What GitHub said of its rate limit on the read: requests left and when the window resets."
-  @type rate_limit :: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil}
+  @typedoc "What GitHub said of its rate limit on the read: requests left of the window's limit, and when it resets."
+  @type rate_limit :: %{
+          remaining: non_neg_integer() | nil,
+          limit: non_neg_integer() | nil,
+          reset_at: DateTime.t() | nil
+        }
 
   @typedoc "One pull request as the watcher reads it, normalised."
   @type read :: %{
@@ -243,7 +247,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   end
 
   defp rate_limit(headers) do
-    %{remaining: integer(headers["x-ratelimit-remaining"]), reset_at: reset_at(integer(headers["x-ratelimit-reset"]))}
+    %{
+      remaining: integer(headers["x-ratelimit-remaining"]),
+      limit: integer(headers["x-ratelimit-limit"]),
+      reset_at: reset_at(integer(headers["x-ratelimit-reset"]))
+    }
   end
 
   defp integer(value) when is_binary(value) do
