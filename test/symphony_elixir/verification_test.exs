@@ -740,7 +740,9 @@ defmodule SymphonyElixir.VerificationTest do
       case result do
         {:ok, dev_server} ->
           assert File.exists?(Path.join(worktree, "bin/symphony"))
-          assert http_ok?("http://127.0.0.1:#{port}/")
+          # The health check answered on `/api/v1/state`; the dashboard's first page render on a
+          # fresh server, in the sandbox, on a shared runner, can take longer than one short try.
+          assert_http_ok_within("http://127.0.0.1:#{port}/", 10_000)
           assert :ok = Verification.stop_qa_dev_server(dev_server)
 
         {:error, reason} ->
@@ -1063,4 +1065,35 @@ defmodule SymphonyElixir.VerificationTest do
   rescue
     _exception -> false
   end
+
+  # Polls `url` until it answers 200, the way the dev server's own health check waits, and fails
+  # with the last status or exception once `timeout_ms` has passed.
+  defp assert_http_ok_within(url, timeout_ms) do
+    await_http_ok(url, System.monotonic_time(:millisecond) + timeout_ms, timeout_ms)
+  end
+
+  defp await_http_ok(url, deadline, timeout_ms) do
+    response = http_get(url)
+
+    cond do
+      match?({:ok, %{status: 200}}, response) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("#{url} did not answer 200 within #{timeout_ms} ms; last response: #{describe_response(response)}")
+
+      true ->
+        Process.sleep(100)
+        await_http_ok(url, deadline, timeout_ms)
+    end
+  end
+
+  defp http_get(url) do
+    Req.get(url, receive_timeout: 1_000, retry: false)
+  rescue
+    exception -> {:error, exception}
+  end
+
+  defp describe_response({:ok, %{status: status}}), do: "status #{status}"
+  defp describe_response({:error, exception}), do: Exception.format_banner(:error, exception)
 end
