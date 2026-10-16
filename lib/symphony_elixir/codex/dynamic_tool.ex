@@ -524,7 +524,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval and open its folder picker in a qa_put_checkout checkout.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -553,6 +553,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "integer",
             "minimum" => 1,
             "description" => "Seconds between the app's background update checks (SYMPHONY_BAR_UPDATE_CHECK_INTERVAL), e.g. 30."
+          },
+          "appearance" => %{
+            "type" => "string",
+            "enum" => ~w(light dark),
+            "description" =>
+              "Launch the app light or dark (SYMPHONY_BAR_QA_APPEARANCE) whatever the host's appearance, which QA never changes. Omit it to follow the host. For both, launch once per appearance."
           }
         }
       }
@@ -693,6 +699,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "width" => %{"type" => "integer", "minimum" => 1400, "maximum" => 8192, "default" => 1400},
           "height" => %{"type" => "integer", "minimum" => 900, "maximum" => 8192, "default" => 900}
         }
+      }
+    },
+    %{
+      "name" => "qa_open_status_menu",
+      "description" =>
+        "Open the launched app's status-bar menu on screen, as a click on its menu bar item would, and return the menu's window_id and frame once it shows, for qa_screenshot. Close it with qa_key and key escape. Use it instead of qa_ax_press or qa_click on the status item, which block or are refused while the menu is open.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{"pid" => @pid_property}
       }
     },
     %{
@@ -944,7 +961,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir", "update_feed_port", "update_check_interval_seconds"],
+    "qa_launch_app" => ["api_fixtures", "gh_stub_port", "linear_stub_port", "open_panel_dir", "update_feed_port", "update_check_interval_seconds", "appearance"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
@@ -955,6 +972,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
+    "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
     "qa_api_requests" => [],
@@ -1019,6 +1037,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   # moves the issue, comments, or writes to GitHub.
   @qa_tools MapSet.put(@read_only_tools, "linear_attach_file")
 
+  @qa_get_document_description "Without arguments, list the documents this issue's runs created (`documents`) and the ones its parent's runs created " <>
+                                 "(`parentDocuments`, such as the plan's Screens document), with id, title and url. " <>
+                                 "Pass `document_id` to read one of them in full. Any other document is refused."
+
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     context = tool_context(opts)
@@ -1044,8 +1066,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
   def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
-  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools)) ++ @qa_tool_schemas ++ @qa_android_tool_schemas
+
+  def tool_specs(:qa) do
+    @tool_schemas
+    |> Enum.filter(&(Map.get(&1, "name") in @qa_tools))
+    |> Enum.map(&qa_tool_spec/1)
+    |> Kernel.++(@qa_tool_schemas ++ @qa_android_tool_schemas)
+  end
+
   def tool_specs(_scope), do: tool_specs()
+
+  defp qa_tool_spec(%{"name" => "linear_get_document"} = spec), do: Map.put(spec, "description", @qa_get_document_description)
+  defp qa_tool_spec(spec), do: spec
 
   defp tool_context(opts) do
     %{
@@ -1171,7 +1203,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     Linear.update_document(context, args, opts)
   end
 
+  # A QA pass (and an epic review) judges the work against the design, which usually sits in the
+  # parent's documents; every other run reads only its own issue's.
   defp execute_linear_tool("linear_get_document", context, args, opts) do
+    opts = Keyword.put(opts, :parent_documents, Keyword.get(opts, :tool_scope) == :qa)
     Linear.get_document(context, Map.get(args, "document_id"), opts)
   end
 

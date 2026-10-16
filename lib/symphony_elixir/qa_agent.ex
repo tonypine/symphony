@@ -34,7 +34,11 @@ defmodule SymphonyElixir.QaAgent do
   Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
   session gets as `CLAUDE_CODE_TMPDIR` and a Codex session as `TMPDIR`, so the agent's
   `$TMPDIR` is in it rather than in the `/tmp/claude-<uid>` every Claude session shares or
-  Symphony's own temp folder. Processes the agent left running under the
+  Symphony's own temp folder. The HTML screens and images attached to the ticket and its parent
+  are downloaded into that folder before the agent starts and named in the prompt
+  (`SymphonyElixir.QaAgent.Design`), and the `:qa` scope's `linear_get_document` reads the
+  parent's documents too, so the agent judges a UI against the plan's Screens design. Processes
+  the agent left running under the
   worktree or that folder, even detached ones, are stopped before both are removed (see
   `SymphonyElixir.LeftoverProcesses`).
   """
@@ -47,6 +51,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Verification
@@ -104,7 +109,8 @@ defmodule SymphonyElixir.QaAgent do
           optional(:host_ports) => [pos_integer()],
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
-          optional(:journey) => %{source: String.t(), text: String.t() | nil}
+          optional(:journey) => %{source: String.t(), text: String.t() | nil},
+          optional(:design_files) => [Design.file()]
         }
   @type run_result :: %{result: result(), tokens: map()}
 
@@ -210,7 +216,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
-    #{decisions_rule(issue, job)}#{parent_section(parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -504,6 +510,37 @@ defmodule SymphonyElixir.QaAgent do
 
   defp parent_section(_parent), do: ""
 
+  # QA judges a UI by sight against the design (ADR 0003). The design usually sits on the plan
+  # parent, so the parent's documents are readable in this pass and its attached screens were
+  # downloaded before it started (`SymphonyElixir.QaAgent.Design`).
+  defp design_section(job, parent) do
+    owners = if is_map(parent), do: "this ticket's and the parent's", else: "this ticket's"
+
+    """
+
+    Design (judge every screen and UI change against it, in this order):
+    1. The Screens documents and HTML screens: #{owners} documents with `linear_get_document` (without
+       arguments it lists them; the parent's are under `parentDocuments`), and the files below.
+    2. `docs/design/design-system.md` and `docs/design/director-app-screens.md` in this worktree.
+    #{design_files_text(Map.get(job, :design_files, []))}
+    """
+  end
+
+  defp design_files_text([_file | _rest] = files) do
+    lines = Enum.map_join(files, "\n", &"- `#{&1.path}` (attached to #{&1.issue})")
+
+    """
+
+    Design files Symphony downloaded for this pass (HTML screens open offline in a browser; images on
+    this ticket itself may be an earlier run's screenshots, not the design):
+    #{lines}
+    """
+  end
+
+  defp design_files_text(_files) do
+    "\nNo HTML screens or image files are attached to this ticket or its parent: use the documents and the design docs above.\n"
+  end
+
   defp dev_server_section(url) when is_binary(url) do
     """
 
@@ -683,7 +720,7 @@ defmodule SymphonyElixir.QaAgent do
         try do
           case QaDriver.host_ports(driver) do
             {:ok, host_ports} ->
-              job = Map.put(job, :host_ports, host_ports)
+              job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
               prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
 
               agent_module
@@ -1081,6 +1118,10 @@ defmodule SymphonyElixir.QaAgent do
         {:ok, driver} = AndroidDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_android_driver_opts, [])))
         driver
     end
+  end
+
+  defp fetch_design(job, settings, opts) do
+    Design.fetch(job.issue, Keyword.fetch!(opts, :qa_tmp_dir), settings, Keyword.take(opts, [:linear_client, :download_client]))
   end
 
   defp fetch_parent(job, worktree, settings, opts) do

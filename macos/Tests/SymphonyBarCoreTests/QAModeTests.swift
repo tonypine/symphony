@@ -134,6 +134,23 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(qa([QAMode.openPanelDirectoryKey: ""])?.openPanelDirectory)
     }
 
+    func testQAModeReadsTheAppearanceToLaunchIn() {
+        func appearance(_ value: String?) -> QAMode.Appearance? {
+            let extra = value.map { [QAMode.appearanceKey: $0] } ?? [:]
+            return QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"].merging(extra) { $1 })?.appearance
+        }
+
+        XCTAssertEqual(appearance("dark"), .dark)
+        XCTAssertEqual(appearance(" light\n"), .light)
+        // Anything else, and no variable, follows the Mac's appearance.
+        XCTAssertNil(appearance("Dark"))
+        XCTAssertNil(appearance("sepia"))
+        XCTAssertNil(appearance(""))
+        XCTAssertNil(appearance(nil))
+        // Outside QA mode there is no QA appearance at all.
+        XCTAssertNil(QAMode.detect(environment: [QAMode.appearanceKey: "dark"]))
+    }
+
     func testQAModeAsksTheLinearStubWhenGivenOne() {
         XCTAssertEqual(AppStores(environment: [:], home: home).linearEndpoint, LinearClient.endpoint)
         XCTAssertEqual(
