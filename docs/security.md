@@ -83,7 +83,7 @@ Each layer covers a different way to write one of those paths:
 | Codex's `apply_patch` | Codex's filesystem permissions, if `apply_patch` runs under them; not yet checked with a real session ([TP-530](https://linear.app/tonypine/issue/TP-530)) |
 | A branch pushed with `github_push_branch`, or merged with `github_sync_base` | The tools, which refuse a branch that changes one of the paths |
 | A `git push` from the agent's shell | Claude's `Bash(git push:*)` deny rule, then CI |
-| A pull request that changes one of the paths | The `protected-paths` CI job, until a person waives it |
+| A pull request that changes one of the paths | The `protected-paths` CI job, until a person waives it, and Symphony's landing, which won't merge past it (see below) |
 
 The first three stop the write in the workspace, so a later session there can't load it. The others
 only stop the change from reaching the base branch.
@@ -111,6 +111,25 @@ Symphony's CI poller dispatches no CI-fix run and spends no fix attempt while it
 check; the issue waits for the waiver. The workflow tells Symphony's pull requests apart only by
 the `auto/` branch prefix. So it skips the case where a person's own open pull request on another
 branch is attached to the issue, and Symphony keeps working on that branch.
+
+#### What blocks the merge
+
+The base branch doesn't require the `protected paths` check, so GitHub on its own would merge past
+it: auto-merge waits only for required checks. What blocks the merge is Symphony's landing of a
+`Merging` ticket. While the CI poller has seen `protected paths` fail on the pull request's head,
+Symphony doesn't turn GitHub auto-merge on, squash-merge the pull request or update its branch, and
+turns auto-merge off if it is already on. The ticket stays in `Merging` on a Needs Decision hold
+that asks a person whether to send it to `Rework` or merge it themselves, and the dashboard shows
+it waiting for a person. Symphony checks again on every poll and lands the pull request as usual
+once the check passes on the head, or once the ticket's unlock decisions (see below) cover every
+protected path the pull request changes. Symphony reads those paths with git in the ticket's
+workspace, as the CI job does; a read that fails keeps the merge blocked. The landing agent's
+`github_merge_pull_request` refuses a pull request with any failed check, so it can't merge past it
+either. Only a person merging by hand does.
+
+The waiver itself needs someone other than the pull request's author, so it can't be given while
+Symphony opens pull requests as the operator's own GitHub account; an unlock decision is then the
+way to let Symphony land such a change.
 
 #### Unlocking a protected path for one run
 
@@ -144,7 +163,9 @@ protected whatever a decision says. A decision copied onto another ticket unlock
 since the ticket it names must be the one it is recorded on. Agents post as the operator's Linear
 user, so their comment and sub-issue tools refuse text that reads as such a grant: only a person
 grants one. The pull request still fails the `protected-paths` CI job until a person waives it, as
-above.
+above, but Symphony lands it: the merge gate above lets a pull request through when the ticket's
+decisions unlock every protected path it changes. A decision that leaves one of them out keeps it
+waiting for a person.
 
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see

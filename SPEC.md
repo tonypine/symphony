@@ -2419,6 +2419,18 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   the hold can't be stored, the poll records an error and the dispatch waits for the next poll (a
   red head can't merge). Escalation (`ci.max_retries` reached) starts no fix run and leaves
   auto-merge as it is.
+- A head on which the CI poller last saw a human-only check (`protected paths`) fail MUST NOT
+  land: the base branch doesn't require that check, so GitHub auto-merge would merge past it. The
+  poller MUST NOT turn auto-merge on, squash-merge or update the branch, and MUST turn auto-merge
+  off when it is on. Exception: the ticket's `PathUnlock` grants (a person's recorded decisions)
+  cover every protected path the PR changes, read with git in the ticket's workspace between the
+  PR's base and head commits as `mix protected_paths.check` reads them; a read that fails counts
+  as uncovered. A head the CI poller hasn't read yet keeps a waiting PR waiting. The state is
+  `protected_paths`. The first time in a `Merging` stay, the poller pauses the ticket in `Merging`
+  on a Needs Decision hold whose confirmation sends it to `Rework`; a request that can't be posted
+  is asked again on the next poll. Every poll checks again, and the PR lands as usual once the
+  check passes on the head or the grants cover the paths. The state is dropped when the ticket
+  leaves `Merging`.
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.
@@ -2427,7 +2439,7 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
   error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
   landing agent. The fallback lasts until the issue leaves `Merging`.
-- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `fallback`, `merged`) is kept in
+- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `protected_paths`, `fallback`, `merged`) is kept in
   the PR review record, logged on every change, and listed under `auto_merge` in
   `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
 - When an issue leaves `Merging` for any state but `Done` (a person's move in Linear, or the

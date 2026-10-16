@@ -15,7 +15,9 @@ defmodule SymphonyElixir.AutoMerge do
   is `CLEAN` with green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a
   finished workflow run), it is squash-merged right away. Merge conflicts take the PR poller's
   conflict path, with auto-merge turned off first (see `disable_for_conflict/5`) and kept off
-  for that head (see `conflict?/1`). Red CI takes
+  for that head (see `conflict?/1`). A head whose `protected paths` check failed lands only when the
+  ticket's unlock decisions cover the protected paths it changes (`SymphonyElixir.ProtectedPathsGate`);
+  until then auto-merge stays off and the ticket waits for a person (see `protected_paths?/1`). Red CI takes
   the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see
   `disable_for_ci_fix/5`), while a flaky rerun of the same commit leaves it on.
 
@@ -30,7 +32,7 @@ defmodule SymphonyElixir.AutoMerge do
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, Config, LandingOrder, TicketPullRequest}
+  alias SymphonyElixir.{CiPoller, Config, LandingOrder, ProtectedPathsGate, TicketPullRequest}
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
@@ -54,6 +56,7 @@ defmodule SymphonyElixir.AutoMerge do
           stalled_since: DateTime.t() | nil,
           head_moved_retries: non_neg_integer(),
           disabled_at: DateTime.t() | nil,
+          asked_at: DateTime.t() | nil,
           reason: String.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -118,6 +121,29 @@ defmodule SymphonyElixir.AutoMerge do
   def conflict?(%{state: "conflict"}), do: true
   def conflict?(_auto_merge), do: false
 
+  @doc """
+  True while the PR waits for a person because its `protected paths` check failed and the ticket's
+  unlock decisions don't cover the protected paths it changes (`SymphonyElixir.ProtectedPathsGate`).
+  Auto-merge stays off; `step/5` checks again on every poll and lands the PR once the check passes or
+  a decision covers them. The landing agent can't merge past a failed check either, so it isn't
+  dispatched.
+  """
+  @spec protected_paths?(term()) :: boolean()
+  def protected_paths?(%{state: "protected_paths"}), do: true
+  def protected_paths?(_auto_merge), do: false
+
+  @doc """
+  True when the PR waits for a person (`protected_paths?/1`) and the poller hasn't asked one yet
+  this `Merging` stay (see `asked/2`).
+  """
+  @spec ask_person?(term()) :: boolean()
+  def ask_person?(%{state: "protected_paths", asked_at: nil}), do: true
+  def ask_person?(_auto_merge), do: false
+
+  @doc "Marks that the poller asked a person about the PR this `Merging` stay."
+  @spec asked(t(), DateTime.t()) :: t()
+  def asked(auto_merge, %DateTime{} = now), do: %{auto_merge | asked_at: now}
+
   @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
   @spec armed?(term()) :: boolean()
   def armed?(%{state: state}) when state in ["enabled", "updating_branch", "waiting_to_land", "merging", "conflict"], do: true
@@ -129,8 +155,13 @@ defmodule SymphonyElixir.AutoMerge do
     * `{:ok, auto_merge}`: nothing more to do this poll.
     * `{:conflict, auto_merge}`: GitHub couldn't merge the base branch in; take the conflict path.
     * `{:fallback, auto_merge}`: auto-merge can't land it; the landing agent takes over.
+    * `{:protected_paths, auto_merge}`: its `protected paths` check failed and no decision covers
+      the paths it changes (`protected_paths?/1`); auto-merge is off and it waits for a person.
+
+  `opts[:issue]` is the ticket as this poll read it, whose unlock decisions the gate reads
+  (`SymphonyElixir.ProtectedPathsGate.check/4`, which takes `opts[:git]` too).
   """
-  @spec step(map(), map(), map(), keyword(), DateTime.t()) :: {:ok | :conflict | :fallback, t()}
+  @spec step(map(), map(), map(), keyword(), DateTime.t()) :: {:ok | :conflict | :fallback | :protected_paths, t()}
   def step(record, activity, settings, opts, %DateTime{} = now) do
     previous = Map.get(record, :auto_merge)
     head = Map.get(activity, :head_ref_oid)
@@ -141,14 +172,47 @@ defmodule SymphonyElixir.AutoMerge do
       cond do
         held?(current) or conflict?(current) -> {:ok, current}
         not is_binary(head) or not is_binary(Map.get(activity, :pr_node_id)) -> {:ok, %{current | state: current.state || "waiting"}}
-        true -> land(current, record, activity, settings, opts, now)
+        true -> guard(current, record, activity, settings, opts, now)
       end
 
     log_transition(record, previous, result)
     result
   end
 
-  defp land(%{state: "fallback"} = current, _record, _activity, _settings, _opts, _now), do: {:ok, current}
+  # Nothing lands, and the branch isn't updated, while the gate holds the head back. A PR that waits
+  # keeps waiting on a new head the CI poller hasn't read yet, whose check may fail again.
+  defp guard(%{state: "fallback"} = current, _record, _activity, _settings, _opts, _now), do: {:ok, current}
+
+  defp guard(current, record, activity, settings, opts, now) do
+    case ProtectedPathsGate.check(record, activity, Keyword.get(opts, :issue), Keyword.take(opts, [:git])) do
+      {:blocked, reason} -> hold_for_person(current, record, activity, reason, opts, now)
+      :unobserved when current.state == "protected_paths" -> {:ok, current}
+      _land -> current |> resume_landing() |> land(record, activity, settings, opts, now)
+    end
+  end
+
+  defp resume_landing(%{state: "protected_paths"} = current), do: %{current | state: nil, reason: nil}
+  defp resume_landing(current), do: current
+
+  # Auto-merge goes off when it is on, so GitHub doesn't merge past the check, which the base branch
+  # doesn't require. A failed call is retried on the next poll, where GitHub still shows it on.
+  defp hold_for_person(current, record, activity, reason, opts, now) do
+    waiting = %{current | state: "protected_paths", reason: truncate(reason)}
+
+    case turn_off(record, activity, waiting, opts, now) do
+      {:ok, waiting} ->
+        {:protected_paths, %{waiting | enabled_head_sha: nil}}
+
+      {:disabled, waiting} ->
+        Logger.warning("Auto-merge #{identifier(record)}: turned GitHub auto-merge off because #{reason} pr_url=#{pr_url(record, activity)} commit_sha=#{current.head_sha}")
+        {:protected_paths, waiting}
+
+      {:error, error} ->
+        Logger.warning("Auto-merge #{identifier(record)}: turning GitHub auto-merge off failed while #{reason}; retrying on the next poll commit_sha=#{current.head_sha}: #{format_reason(error)}")
+        {:protected_paths, waiting}
+    end
+  end
+
   defp land(current, record, activity, settings, opts, now), do: current |> ensure_enabled(record, activity, opts) |> continue(record, activity, settings, opts, now)
 
   defp continue({:ok, %{state: "merging"}} = result, _record, _activity, _settings, _opts, _now), do: result
@@ -184,6 +248,7 @@ defmodule SymphonyElixir.AutoMerge do
       stalled_since: nil,
       head_moved_retries: 0,
       disabled_at: nil,
+      asked_at: nil,
       reason: nil,
       updated_at: now
     }
@@ -444,6 +509,7 @@ defmodule SymphonyElixir.AutoMerge do
   def describe(%{state: "conflict", head_sha: head, disabled_at: %DateTime{}}), do: "blocked: conflict on #{short_sha(head)}; auto-merge off until the fix is approved again"
   def describe(%{state: "conflict", head_sha: head}), do: "blocked: conflict on #{short_sha(head)}"
   def describe(%{state: "ci_failure", head_sha: head}), do: "auto-merge off: CI failed on #{short_sha(head)}; the fix goes back through review"
+  def describe(%{state: "protected_paths", head_sha: head}), do: "auto-merge off: protected paths failed on #{short_sha(head)}; waiting for a person"
   def describe(%{state: "fallback", reason: reason}), do: "fell back to the landing agent: #{reason}"
   def describe(%{state: "merged"}), do: "merged"
   def describe(%{state: "waiting"}), do: "waiting for the PR head"

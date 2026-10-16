@@ -360,6 +360,27 @@ defmodule SymphonyElixir.CiPoller do
     end)
   end
 
+  @doc """
+  The human-only checks (`human_only_check?/1`) the poller last saw fail on the issue's PR at
+  `head`: `{:observed, checks}`, empty when none failed there, or `:unobserved` when its last read
+  was of another head or it has none. A failed check stays listed while its rerun runs, until the
+  head goes green or moves.
+  """
+  @spec human_only_failures(String.t(), String.t() | nil, keyword()) :: {:observed, [map()]} | :unobserved
+  def human_only_failures(issue_id, head, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.find_value(repo_keys_from_opts(opts), :unobserved, fn repo_key ->
+      case find_ci_check(run_store, repo_key, issue_id) do
+        %{last_observed_sha: ^head} = record when is_binary(head) ->
+          {:observed, record |> Map.get(:failed_checks) |> List.wrap() |> Enum.filter(&(is_map(&1) and human_only_check?(&1)))}
+
+        _other ->
+          nil
+      end
+    end)
+  end
+
   defp find_ci_check(run_store, repo_key, issue_id) do
     case list_ci_checks(run_store, repo_key) do
       {:ok, checks} -> Enum.find(checks, &(Map.get(&1, :issue_id) == issue_id))
