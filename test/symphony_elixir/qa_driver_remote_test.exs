@@ -82,6 +82,20 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
     """)
 
     write_script!(Path.join(qa_bin, "plutil"), "#!/bin/sh\nprintf 'Demo\\n'\n")
+
+    # clang and codesign for the appearance library: the library records the source it was built
+    # from, so a test can check the real source arrived.
+    write_script!(Path.join(qa_bin, "clang"), """
+    #!/bin/sh
+    if [ -n "$QA_FAKE_CLANG_FAIL" ]; then echo "error: clang failed"; exit 1; fi
+    while [ $# -gt 0 ]; do
+      case "$1" in -o) out=$2; shift ;; *.m) source=$1 ;; esac
+      shift
+    done
+    { echo "dylib from"; cat "$source"; } > "$out"
+    """)
+
+    write_script!(Path.join(qa_bin, "codesign"), "#!/bin/sh\nexit 0\n")
   end
 
   defp write_script!(path, body) do
@@ -477,6 +491,37 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert {:error, :ssh_not_found} = Remote.helper(ssh_host, dir)
     end
 
+    test "appearance_library builds into each run directory and reports failures", %{root: root, ssh_host: ssh_host} do
+      %{prepare: prepare, appearance_library: library} = Remote.host(ssh_host)
+      {:ok, dir} = prepare.(Path.join(root, "operator"), Path.join(root, "no-canary"))
+      {:ok, other_dir} = prepare.(Path.join(root, "operator"), Path.join(root, "no-canary"))
+
+      assert {:ok, path} = library.(dir)
+      assert path == Path.join(dir, "appearance/symphony-qa-appearance.dylib")
+      {source, _build} = Host.appearance_source()
+      assert File.read!(path) == "dylib from\n" <> source
+
+      # Built once per pass: a later launch reuses it.
+      File.write!(path, "built earlier")
+      assert {:ok, ^path} = Remote.appearance_library(ssh_host, dir)
+      assert File.read!(path) == "built earlier"
+
+      assert {:error, {:not_a_run_dir, "/tmp/elsewhere"}} = Remote.appearance_library(ssh_host, "/tmp/elsewhere")
+
+      System.put_env("QA_FAKE_CLANG_FAIL", "1")
+      on_exit(fn -> System.delete_env("QA_FAKE_CLANG_FAIL") end)
+      assert {:error, {:appearance_build_failed, 1, output}} = Remote.appearance_library(ssh_host, other_dir)
+      assert output =~ "clang failed"
+      assert File.ls!(Path.join(other_dir, "appearance")) |> Enum.sort() == ["build-appearance.sh", "symphony-qa-appearance.m"]
+
+      System.put_env("QA_FAKE_SSH_MODE", "output")
+      System.put_env("QA_FAKE_SSH_OUTPUT", "nothing useful\n")
+      assert {:error, {:appearance_build_failed, 0, "nothing useful\n"}} = Remote.appearance_library(ssh_host, dir)
+
+      System.put_env("PATH", "/nonexistent")
+      assert {:error, :ssh_not_found} = Remote.appearance_library(ssh_host, dir)
+    end
+
     test "read copies a regular file back and removes it", %{root: root, ssh_host: ssh_host} do
       file = Path.join(root, "shot.png")
       bytes = :crypto.strong_rand_bytes(5_000)
@@ -499,9 +544,9 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       write_script!(app, "#!/bin/sh\necho \"root=$SYMPHONY_BAR_QA_ROOT unset=${DROPPED:-none} args=$*\"\nexec sleep 30\n")
 
       env = [{"SYMPHONY_BAR_QA_ROOT", root}, {~c"DROPPED", false}]
-      assert {:ok, port, pid} = Remote.launch(ssh_host, app, cd: root, env: env, args: ["-AppleInterfaceStyle", "Dark"])
+      assert {:ok, port, pid} = Remote.launch(ssh_host, app, cd: root, env: env, args: ["-NSRequiresAquaSystemAppearance", "YES"])
       assert_receive {^port, {:data, data}}, 5_000
-      assert data =~ "root=#{root} unset=none args=-AppleInterfaceStyle Dark"
+      assert data =~ "root=#{root} unset=none args=-NSRequiresAquaSystemAppearance YES"
 
       assert :ok = Remote.kill(ssh_host, pid)
       assert_receive {^port, {:exit_status, _status}}, 5_000

@@ -8,6 +8,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
+  @appearance_library "/fake/symphony-qa-appearance.dylib"
 
   # Stands in for the QA agent's gh stub: it sends the test each call's form
   # fields and answers `api` calls with the default branch, anything else with a
@@ -68,7 +69,12 @@ defmodule SymphonyElixir.QaDriverTest do
           {:ok, port, pid}
         end),
       kill: fn pid -> send(test, {:killed, pid}) && :ok end,
-      helper: Map.get(overrides, :helper, fn -> {:ok, @helper} end)
+      helper: Map.get(overrides, :helper, fn -> {:ok, @helper} end),
+      appearance_library:
+        Map.get(overrides, :appearance_library, fn ->
+          send(test, :appearance_library)
+          {:ok, @appearance_library}
+        end)
     }
   end
 
@@ -1411,18 +1417,34 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = start_driver(worktree)
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
 
-      for {args, expected, app_args} <- [
-            {%{"appearance" => "dark"}, ~c"dark", ["-AppleInterfaceStyle", "Dark"]},
-            {%{"appearance" => "light"}, ~c"light", ["-NSRequiresAquaSystemAppearance", "YES"]},
-            {%{}, nil, []}
+      for {args, expected, app_args, library} <- [
+            {%{"appearance" => "dark"}, ~c"dark", [], String.to_charlist(@appearance_library)},
+            {%{"appearance" => "light"}, ~c"light", ["-NSRequiresAquaSystemAppearance", "YES"], String.to_charlist(@appearance_library)},
+            {%{}, nil, [], nil}
           ] do
         {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
         assert {:ok, %{"pid" => pid}} = result
         assert_received {:launched, _executable, launch_opts, _port, ^pid}
-        assert Map.new(launch_opts[:env])[~c"SYMPHONY_BAR_QA_APPEARANCE"] == expected
+        env = Map.new(launch_opts[:env])
+        assert env[~c"SYMPHONY_BAR_QA_APPEARANCE"] == expected
+        # The library sets any AppKit app's appearance from SYMPHONY_BAR_QA_APPEARANCE.
+        assert env[~c"DYLD_INSERT_LIBRARIES"] == library
+        if library, do: assert_received(:appearance_library), else: refute_received(:appearance_library)
         assert launch_opts[:args] == app_args
         assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       end
+    end
+
+    test "reports an appearance library it cannot build and launches nothing", %{worktree: worktree} do
+      failed = fn -> {:error, {:appearance_build_failed, 1, "clang: command not found"}} end
+      driver = start_driver(worktree, host: host(%{appearance_library: failed}))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      assert {:error, {:qa_tool, "qa_appearance_unavailable", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"appearance" => "dark"})
+      assert message =~ "draws the app dark"
+      assert message =~ "clang: command not found"
+      assert message =~ "verdict `blocked`"
+      refute_received {:launched, _executable, _opts, _port, _pid}
     end
 
     test "refuses any other appearance", %{worktree: worktree} do
@@ -1568,6 +1590,7 @@ defmodule SymphonyElixir.QaDriverTest do
           Map.get(overrides, :put, {:ok, "#{dir}/files/#{name}"})
         end,
         helper: fn dir -> send(test, {:helper, dir}) && {:ok, @helper} end,
+        appearance_library: fn dir -> send(test, {:appearance_library, dir}) && {:ok, dir <> "/appearance/symphony-qa-appearance.dylib"} end,
         tunnel: fn ports -> send(test, {:tunnel, ports}) && Map.get(overrides, :tunnel, &open_tunnel/0).() end,
         cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
       })
@@ -1656,6 +1679,20 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_received {:killed, ^pid}
       assert_received {:cleanup, @run_dir}
       refute File.exists?(scratch_dir)
+    end
+
+    test "builds the appearance library in the run directory and injects it", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host())
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"appearance" => "dark"}) end)
+      assert {:ok, %{"pid" => _pid}} = result
+      assert_received {:appearance_library, @run_dir}
+      assert_received {:launched, _executable, launch_opts, _port, _pid}
+      assert {"SYMPHONY_BAR_QA_APPEARANCE", "dark"} in launch_opts[:env]
+      assert {"DYLD_INSERT_LIBRARIES", @run_dir <> "/appearance/symphony-qa-appearance.dylib"} in launch_opts[:env]
+      assert launch_opts[:args] == []
+      QaDriver.stop(driver)
     end
 
     test "compiles a fresh helper for each pass", %{worktree: worktree} do
@@ -1932,10 +1969,19 @@ defmodule SymphonyElixir.QaDriverTest do
       assert is_port(port)
       assert Host.kill(pid) == :ok
       assert_receive {^port, {:exit_status, _status}}, 5_000
-      assert {:ok, port, _pid} = Host.launch("/bin/echo", cd: System.tmp_dir!(), env: [], args: ["-AppleInterfaceStyle", "Dark"])
-      assert_receive {^port, {:data, "-AppleInterfaceStyle Dark\n"}}, 5_000
+      assert {:ok, port, _pid} = Host.launch("/bin/echo", cd: System.tmp_dir!(), env: [], args: ["-NSRequiresAquaSystemAppearance", "YES"])
+      assert_receive {^port, {:data, "-NSRequiresAquaSystemAppearance YES\n"}}, 5_000
       assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
-      assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = Host.default()
+      host = Host.default()
+      assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = host
+      assert is_function(host.appearance_library, 0)
+    end
+
+    test "embeds the appearance library's source and its build script" do
+      {source, build} = Host.appearance_source()
+      assert source =~ "SYMPHONY_BAR_QA_APPEARANCE"
+      assert source =~ "NSAppearanceNameDarkAqua"
+      assert build =~ "clang -dynamiclib"
     end
   end
 

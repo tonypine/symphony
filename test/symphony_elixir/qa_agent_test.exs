@@ -693,6 +693,17 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "put that ticket's identifier in `covered_by`, so Symphony waits on that ticket instead of filing another"
     end
 
+    test "a step needing paid AI, real credentials or a backend QA lacks is judged through a stand-in, not blocked" do
+      prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
+
+      assert prompt =~
+               "needs a paid AI service, real credentials or a backend the QA host does not run (a database, a toolchain to build a bundled server or CLI) is never `blocked` for want of them, and never gets a real key"
+
+      assert prompt =~ "run the app against a stand-in you serve where the playbook lets a server listen"
+      assert prompt =~ "name what the stand-in replaced and the CI check that covers the real path"
+      assert prompt =~ "Mark the step `blocked` only when the app cannot be pointed at a stand-in."
+    end
+
     test "includes the ticket, the parent's criteria and the playbooks" do
       prompt = QaAgent.prompt(job(), %{"identifier" => "TP-243", "title" => "Parent", "description" => "- [ ] parent criterion"})
 
