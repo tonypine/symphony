@@ -32,6 +32,7 @@ defmodule SymphonyElixir.AgentRunner do
     PathUnlock,
     PromptBuilder,
     PrReviewPoller,
+    PrWatch,
     QaVerification,
     ReviewAgent,
     RunKind,
@@ -519,7 +520,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp pending_reviewer_rework_head_ref(_issue, _opts), do: nil
 
   defp pending_ci_rework_head_ref(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    case CiPoller.pending_ci_failure(issue_id, pending_lookup_opts(issue, opts)) do
+    case PrWatch.pending_ci_failure(issue_id, pending_lookup_opts(issue, opts)) do
       %{is_cross_repository: false, head_ref_name: head_ref} when is_binary(head_ref) and head_ref != "" ->
         head_ref
 
@@ -1471,7 +1472,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp pending_ci_failure(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    CiPoller.pending_ci_failure(issue_id, pending_lookup_opts(issue, opts))
+    PrWatch.pending_ci_failure(issue_id, pending_lookup_opts(issue, opts))
   end
 
   defp pending_ci_failure(_issue, _opts), do: nil
@@ -1485,14 +1486,14 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp pending_pr_conflict(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
-    PrReviewPoller.pending_pr_conflict(issue_id, pending_lookup_opts(issue, opts))
+    PrWatch.pending_pr_conflict(issue_id, pending_lookup_opts(issue, opts))
   end
 
   defp pending_pr_conflict(_issue, _opts), do: nil
 
   defp put_open_pr_overlap(opts, %Issue{id: issue_id} = issue) when is_binary(issue_id) do
     Keyword.put_new_lazy(opts, :open_pr_overlap, fn ->
-      PrReviewPoller.open_pr_overlap(issue_id, pending_lookup_opts(issue, opts))
+      PrWatch.open_pr_overlap(issue_id, pending_lookup_opts(issue, opts))
     end)
   end
 
@@ -1822,7 +1823,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A run on an issue whose PR is already open (a conflict, CI, QA or review fix) never takes the
   # post-PR stop: the signal that started it stays pending until the run ends. Once it has pushed
-  # a new head to that PR and CI on that head is running or green, the CI poller takes it from
+  # a new head to that PR and CI on that head is running or green, the PR and CI watcher takes it from
   # there: in the post-PR state it starts QA on green, and re-runs a flaky failure or dispatches a
   # fix run on red. So the run moves to that state instead of turning while CI runs until the idle
   # check parks it. A head the pre-push reviewer applies to but has not passed keeps the run going,
@@ -1933,12 +1934,8 @@ defmodule SymphonyElixir.AgentRunner do
     settings = Keyword.fetch!(run_context.opts, :settings)
     head = run_context.progress.head
 
-    # `Merging` means a human approved the merge, so the repair's return must re-arm auto-merge:
-    # the lane's entry turned it off and held it (see `AutoMerge.disable_for_ci_fix/5`).
-    if merging_state?(origin) do
-      PrReviewPoller.release_auto_merge_hold(issue_id, pending_lookup_opts(issue, run_context.opts))
-    end
-
+    # A return to `Merging` starts a new stay there, in which the PR and CI watcher turns
+    # auto-merge on again for the head (rule R30): the approval still covers the PR.
     label = "returning #{issue_context(issue)} to #{origin} from CI Fix"
     move = fn -> TransitionGuard.perform(issue_id, :ci_fix_mechanical, %{target: origin, settings: settings}) end
 
@@ -1972,7 +1969,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A Rework run that pushed a new head to its PR, with CI on it running or green, waits on that CI,
-  # so it is not idle: it moves to the post-PR state, where the CI poller takes the head over. That
+  # so it is not idle: it moves to the post-PR state, where the PR and CI watcher takes the head over. That
   # covers what `rework_finished?/2` skips, such as a Rework started by a CI failure, which stays
   # pending until the run ends. Outside Rework, `pushed_head_handoff_ci_action/2` already handed off
   # such a head once it passed the pre-push reviewer, so one left here awaits the reviewer. A run
@@ -2053,7 +2050,6 @@ defmodule SymphonyElixir.AgentRunner do
   defp do_hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, head, start_head, run_context) do
     if approved == true and head == start_head and head == signal_head do
       Logger.info("#{fix_run_name(kind)} for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
-      PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
       return_to_merging(issue, kind, head, run_context)
     else
       post_pr_state = post_pr_state(run_context)
@@ -2097,7 +2093,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # The CI action for the workspace HEAD when it is the attached PR's head, or nil. A PR with no
   # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable. A
-  # rerun the CI poller started on that head reads as running until its checks report again.
+  # rerun the PR and CI watcher started on that head reads as running until its checks report again.
   defp pushed_head_ci_action(%Issue{} = issue, run_context), do: issue |> pushed_head_ci_status(run_context) |> ci_action()
 
   defp ci_action(nil), do: nil
@@ -2194,7 +2190,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context) do
     lookup_opts = pending_lookup_opts(issue, run_context.opts)
-    ci_status = ci_status |> CiPoller.put_rerun_pending(issue.id, lookup_opts) |> CiPoller.put_landing_fallback(issue.id, lookup_opts)
+    ci_status = CiPoller.put_rerun_pending(ci_status, issue.id, lookup_opts)
 
     if CiPoller.landing_action(ci_status) == :pending do
       commit_sha = Map.get(ci_status, :commit_sha)

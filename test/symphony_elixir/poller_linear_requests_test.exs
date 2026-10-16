@@ -111,17 +111,10 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
                CiPoller.poll_once(github: GreenGitHub, now: @now)
 
       # `assignee: me` resolves the viewer once; each repository's states are read once. The poll
-      # also projects the machine CI labels on every head whose state it just wrote: one label
-      # lookup per machine label, plus the add that puts the wanted one on the issue.
-      assert linear_requests() == %{
-               "SymphonyLinearViewer" => 1,
-               "SymphonyLinearPoll" => 2,
-               "SymphonyResolveIssueLabel" => 3 * unquote(watched),
-               "SymphonyAddIssueLabel" => unquote(watched)
-             }
+      # only observes: the PR and CI watcher projects the machine CI labels, so it writes none.
+      assert linear_requests() == %{"SymphonyLinearViewer" => 1, "SymphonyLinearPoll" => 2}
 
-      # A poll that reads the same head state changes nothing, so it writes no labels: the
-      # steady-state budget stays flat as watched issues grow.
+      # The steady-state budget stays flat as watched issues grow.
       assert {:ok, %{processed: unquote(watched)}} = CiPoller.poll_once(github: GreenGitHub, now: DateTime.add(@now, 1, :minute))
       assert linear_requests() == %{"SymphonyLinearPoll" => 2}
 
