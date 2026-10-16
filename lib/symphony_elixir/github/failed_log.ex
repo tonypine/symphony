@@ -40,10 +40,10 @@ defmodule SymphonyElixir.GitHub.FailedLog do
 
   defp joined([{_run_id, excerpt}]), do: %{excerpt: excerpt, error: first_error(excerpt)}
 
-  defp joined(logs) do
+  defp joined([{_run_id, first} | _rest] = logs) do
     %{
       excerpt: Enum.map_join(logs, "\n\n", fn {run_id, excerpt} -> "Run #{run_id} failed log:\n#{excerpt}" end),
-      error: logs |> Enum.map(&first_error(elem(&1, 1))) |> Enum.find("", &(&1 != ""))
+      error: Enum.find_value(logs, &error_line(elem(&1, 1))) || first_error(first)
     }
   end
 
@@ -62,10 +62,11 @@ defmodule SymphonyElixir.GitHub.FailedLog do
 
   @doc "The first line of `excerpt` that reads like an error, trimmed; else its first line."
   @spec first_error(String.t()) :: String.t()
-  def first_error(excerpt) when is_binary(excerpt) do
-    lines = excerpt |> String.split("\n") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
-    Enum.find(lines, List.first(lines, ""), &String.match?(&1, @error_line))
-  end
+  def first_error(excerpt) when is_binary(excerpt), do: error_line(excerpt) || excerpt |> lines() |> List.first("")
+
+  defp error_line(excerpt), do: excerpt |> lines() |> Enum.find(&String.match?(&1, @error_line))
+
+  defp lines(excerpt), do: excerpt |> String.split("\n") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
 
   defp sanitize_utf8(binary) do
     if String.valid?(binary), do: binary, else: replace_invalid_bytes(binary, <<>>)

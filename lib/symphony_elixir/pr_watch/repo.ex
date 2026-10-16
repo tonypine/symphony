@@ -385,7 +385,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp rate_limited(entry, ticket, previous, limited, now) do
     base =
       previous ||
-        %{facts: Fetch.facts(ticket, nil), pr_url: entry.pr_url, head_sha: nil, read_at: nil, rate_limit: nil, applied: [], attempts: Attempts.new(), fix: @no_fix}
+        %{facts: Fetch.facts(ticket, nil), stay: entry.phase, pr_url: entry.pr_url, head_sha: nil, read_at: nil, rate_limit: nil, applied: [], attempts: Attempts.new(), fix: @no_fix}
 
     facts = %{base.facts | github: :rate_limited}
     decision = with {:ok, action} <- decide(facts, entry), do: decision_record(action, :recorded, base.attempts, facts, base.head_sha, now)
@@ -395,11 +395,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # The facts, completed with what the watcher keeps, the decision and what applying it did. A stay
   # in a new phase starts a new ledger; only the current head's actions are kept.
   defp decided(entry, ticket, read, previous, now, state, settings) do
-    new_stay? = previous == nil or previous.facts.phase != entry.phase
+    new_stay? = previous == nil or stay(previous) != entry.phase
     prior = (previous && previous.attempts) || Attempts.new()
     read = complete(read, prior, entry, state)
     observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record)})
-    attempts = Attempts.observe(prior, read, observed, now)
+    attempts = prior |> Attempts.observe(read, observed, now) |> cancel_stale_runs(read, state)
     facts = Fetch.facts(Map.merge(ticket, Attempts.facts(attempts, read, settings.ci, now)), read)
     head = read && read.head_sha
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
@@ -409,15 +409,26 @@ defmodule SymphonyElixir.PrWatch.Repo do
       {:ok, action} ->
         ctx = %{repo_key: state.repo_key, settings: settings, issue: entry.issue, read: read, facts: facts, attempts: attempts, applied: applied, fix: fix, now: now, opts: apply_opts(state)}
         result = Apply.apply(action, ctx)
-        attempts = cancel_stale_runs(result.attempts, read, state)
+        attempts = result.attempts
         project_ci(entry, facts, head, now, state)
 
-        %{facts: facts, decision: decision_record(result.action, result.outcome, attempts, facts, head, now), applied: result.applied, attempts: attempts, fix: result.fix}
+        %{
+          facts: facts,
+          stay: result.moved_to || entry.phase,
+          decision: decision_record(result.action, result.outcome, attempts, facts, head, now),
+          applied: result.applied,
+          attempts: attempts,
+          fix: result.fix
+        }
 
       :none ->
-        %{facts: facts, decision: nil, applied: applied, attempts: attempts, fix: fix}
+        %{facts: facts, stay: entry.phase, decision: nil, applied: applied, attempts: attempts, fix: fix}
     end
   end
+
+  # The phase of the record's stay: the one a move put the ticket in, else the one it was read in.
+  defp stay(%{stay: stay}) when is_atom(stay) and not is_nil(stay), do: stay
+  defp stay(previous), do: previous.facts.phase
 
   defp decide(facts, entry) do
     {:ok, PrDecision.decide(facts)}

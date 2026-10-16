@@ -7,7 +7,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
   @now ~U[2026-10-16 12:00:00Z]
 
-  # Linear: the watched states' issues from the test's env. Every write fails the test.
+  # Linear: the watched states' issues from the test's env. The CI label the watcher projects is
+  # reported to the test; every other write fails it.
   defmodule FakeTracker do
     def fetch_issues_by_states_with_failures(states) do
       send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:linear_read, states})
@@ -24,14 +25,16 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       update_issue_state: 2,
       add_issue_label: 2,
       remove_issue_label: 2,
-      create_reply: 3,
-      set_machine_label: 2
+      create_reply: 3
     ]
 
     for {name, arity} <- @writes do
       args = Macro.generate_arguments(arity, __MODULE__)
       def unquote(name)(unquote_splicing(args)), do: raise("PrWatch wrote to Linear: #{unquote(name)} #{inspect([unquote_splicing(args)])}")
     end
+
+    def set_machine_label(issue_id, label), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:label_set, issue_id, label}) && :ok
+    def clear_machine_label(_issue_id, _label), do: :ok
   end
 
   # GitHub: the open PRs from the test's env. Every write fails the test.
@@ -176,7 +179,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     assert %{facts: %Facts{phase: :code_review, pr: :open, pr_number: 1, ci: :green}} = watch(repo_key, "1")
     assert %{facts: %Facts{mergeable: :clean}} = watch(repo_key, "1")
-    assert %{facts: %Facts{run: :none, hold: :none, max_red_attempts: 3, ahead: []}} = watch(repo_key, "1")
+    assert %{facts: %Facts{run: :none, hold: :none, max_red_attempts: 10, ahead: []}} = watch(repo_key, "1")
 
     assert %{
              pr_url: "https://github.com/acme/app/pull/1",
@@ -186,10 +189,13 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
              github: :ok,
              rate_limit: %{remaining: 4000},
              landing: %{state: "Code Review", head_sha: "sha-1", state_since: @now, progress_at: @now},
-             decision: nil,
+             decision: %{rule: "R27", kind: :dispatch, reason: "The head is green, so the reviewer runs", head_sha: "sha-1", outcome: :recorded},
              applied: [],
              links: []
            } = watch(repo_key, "1")
+
+    # The head's CI label follows the facts.
+    assert_received {:label_set, "1", "CI green"}
 
     # In Progress counts once it has a PR; a watched state with no PR is watched without a read.
     assert %{facts: %Facts{phase: :in_progress, pr: :open}} = watch(repo_key, "3")

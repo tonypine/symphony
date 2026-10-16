@@ -20,7 +20,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   rerun named, so a rerun whose checks dropped out of the rollup reads as running rather than green
   (`rerun_pending?/2`); each red run's failing check and first error line (`fix_failures`, the fix
   ticket's evidence); the fix ticket a backstop filed; since when a `Merging` head has been
-  blocked by branch protection on green checks (`landing_timed_out`); the head an update-branch
+  blocked by branch protection on green checks (`landing_timed_out`); the head and cause the last
+  CI Fix run was sent for, so a ticket that entered CI Fix doesn't spend a second attempt on the
+  run already sent (`sent?/3`); the head an update-branch
   moved past, whose runs are cancelled once the head moves on; and the last head Symphony knows it
   put there in a `Merging` stay (`trusted_head`): the head the stay began on, one a run left, or
   the one an update-branch made. Any other head in `Merging` is a person's push (`head_origin`).
@@ -45,7 +47,8 @@ defmodule SymphonyElixir.PrWatch.Attempts do
           blocked: blocked() | nil,
           updated_from: String.t() | nil,
           trusted_head: String.t() | nil,
-          head_origin: :symphony | :person
+          head_origin: :symphony | :person,
+          sent: %{head_sha: String.t() | nil, cause: :red | :conflict} | nil
         }
 
   @conflict_free [:clean, :behind, :unstable, :blocked]
@@ -54,7 +57,18 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   @doc "No attempts spent."
   @spec new() :: t()
   def new do
-    %{red: 0, conflict: 0, reruns: %{}, fix_failures: [], fix_ticket: nil, blocked: nil, updated_from: nil, trusted_head: nil, head_origin: :symphony}
+    %{
+      red: 0,
+      conflict: 0,
+      reruns: %{},
+      fix_failures: [],
+      fix_ticket: nil,
+      blocked: nil,
+      updated_from: nil,
+      trusted_head: nil,
+      head_origin: :symphony,
+      sent: nil
+    }
   end
 
   @doc "The attempts a record kept, with defaults for what it lacks; anything else is `new/0`."
@@ -69,7 +83,8 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       blocked: blocked(Map.get(attempts, :blocked)),
       updated_from: string(Map.get(attempts, :updated_from)),
       trusted_head: string(Map.get(attempts, :trusted_head)),
-      head_origin: if(Map.get(attempts, :head_origin) == :person, do: :person, else: :symphony)
+      head_origin: if(Map.get(attempts, :head_origin) == :person, do: :person, else: :symphony),
+      sent: sent(Map.get(attempts, :sent))
     }
   end
 
@@ -197,6 +212,17 @@ defmodule SymphonyElixir.PrWatch.Attempts do
     %{attempts | conflict: attempts.conflict + 1}
   end
 
+  @doc """
+  Records that a CI Fix run was sent for `cause` on `head`: once the ticket is in CI Fix, the run
+  that takes that fix is the one already sent, so it spends no second attempt (`sent?/3`).
+  """
+  @spec sent(t(), String.t() | nil, :red | :conflict) :: t()
+  def sent(attempts, head, cause), do: %{normalize(attempts) | sent: %{head_sha: head, cause: cause}}
+
+  @doc "Whether a CI Fix run was already sent for `cause` on `head`."
+  @spec sent?(t(), String.t() | nil, :red | :conflict) :: boolean()
+  def sent?(attempts, head, cause), do: normalize(attempts).sent == %{head_sha: head, cause: cause}
+
   @doc "Records the fix ticket the red backstop waits on; its hold clearing restarts the red count."
   @spec filed(t(), String.t() | nil) :: t()
   def filed(attempts, identifier), do: %{normalize(attempts) | fix_ticket: string(identifier)}
@@ -223,6 +249,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   end
 
   defp failures(_failures), do: []
+
+  defp sent(%{cause: cause} = sent) when cause in [:red, :conflict], do: %{head_sha: string(Map.get(sent, :head_sha)), cause: cause}
+  defp sent(_sent), do: nil
 
   defp blocked(%{since: %DateTime{} = since} = blocked), do: %{head_sha: string(Map.get(blocked, :head_sha)), since: since}
   defp blocked(_blocked), do: nil

@@ -18,7 +18,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
     * `rerun_failed` – reruns the failed jobs of the head's failed workflow runs, once per head.
     * `ci_fix` – sends the ticket to CI Fix for a red head or a conflict, recording its origin, and
       spends one red or conflict attempt (`SymphonyElixir.PrWatch.Attempts`). In `Merging` auto-merge
-      goes off first. In CI Fix itself the ticket stays and the next run takes the fix.
+      goes off first. In CI Fix itself the ticket stays and the next run takes the fix; the run sent
+      when it entered the lane spends no second attempt.
     * `return_to_origin` – a green, conflict-free CI Fix ticket goes back where it came from, with
       the approval it carried.
     * `to_code_review` (a person pushed in `Merging`, D4) and `to_rework` (a conflict back after
@@ -98,13 +99,15 @@ defmodule SymphonyElixir.PrDecision.Apply do
   What applying did: the action as recorded (a filed fix ticket names itself in the reason), the
   attempts, the ledger and the fix context to keep, and the outcome: `:applied`, `:recorded` (nothing
   to do, already done, or a row this ticket doesn't apply), or `{:error, reason}`, which keeps the
-  attempts, ledger and fix context the tick began with.
+  attempts, ledger and fix context the tick began with. `moved_to` is the phase a move put the ticket
+  in, which starts a new stay even when the next read already finds it back where it was.
   """
   @type result :: %{
           action: Action.t(),
           attempts: Attempts.t(),
           applied: [entry()],
           fix: fix(),
+          moved_to: Facts.phase() | nil,
           outcome: :applied | :recorded | {:error, term()}
         }
 
@@ -114,6 +117,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     cond do
       not owned?(action, ctx) -> recorded(action, ctx)
       action.kind in @no_op -> recorded(action, ctx)
+      already_sent?(action, ctx) -> recorded(%{action | reason: "The CI Fix run already sent for this head takes the fix"}, ctx)
       applied?(ctx, action.rule) -> recorded(action, ctx)
       true -> action |> perform(ctx) |> finish(action, ctx)
     end
@@ -124,6 +128,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
   def applied?(ledger, rule, head) when is_list(ledger), do: Enum.any?(ledger, &(&1.rule == rule and &1.head_sha == head))
 
   defp applied?(ctx, rule), do: applied?(ctx.applied, rule, head(ctx))
+
+  # In CI Fix, the run the ticket entered the lane for takes that fix: no second attempt is spent.
+  defp already_sent?(%Action{kind: :ci_fix, args: %{cause: cause}}, %{facts: %{phase: :ci_fix}} = ctx), do: Attempts.sent?(ctx.attempts, head(ctx), cause)
+  defp already_sent?(_action, _ctx), do: false
 
   defp owned?(%Action{rule: rule}, _ctx) when rule in @recorded_only, do: false
   defp owned?(%Action{rule: "R2"}, ctx), do: ctx.facts.phase == :merging
@@ -136,7 +144,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp ci_enabled?(%{ci: %{enabled: enabled}}), do: enabled == true
   defp ci_enabled?(_settings), do: false
 
-  defp recorded(action, ctx), do: %{action: action, attempts: ctx.attempts, applied: ctx.applied, fix: ctx.fix, outcome: :recorded}
+  defp recorded(action, ctx), do: %{action: action, attempts: ctx.attempts, applied: ctx.applied, fix: ctx.fix, moved_to: nil, outcome: :recorded}
 
   defp finish({:ok, changes}, action, ctx) do
     entry = %{head_sha: head(ctx), rule: action.rule, kind: action.kind, at: ctx.now}
@@ -146,6 +154,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
       attempts: Map.get(changes, :attempts, ctx.attempts),
       applied: ctx.applied ++ [entry],
       fix: Map.get(changes, :fix, ctx.fix),
+      moved_to: Map.get(changes, :moved_to),
       outcome: :applied
     }
   end
@@ -173,11 +182,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   defp perform(%Action{kind: :ci_fix, args: %{cause: cause, origin: origin}} = action, ctx) do
-    with {:ok, fix} <- fix_context(cause, ctx),
-         :ok <- disarm_in_merging(ctx, cause),
-         :ok <- enter_ci_fix(origin, ctx) do
+    with {:ok, changes} <- send_fix(origin, cause, ctx) do
       record_fix_dispatch(action, cause, origin, ctx)
-      {:ok, %{attempts: spend(cause, fix, ctx), fix: fix}}
+      {:ok, changes}
     end
   end
 
@@ -189,7 +196,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
       _ = CiFix.record_origin(ctx.repo_key, ctx.issue.id, nil, store_opts(ctx))
       CiFix.record_verdict(ctx.repo_key, ctx.issue.id, "mechanical", %{to: origin_state, carried: true, head: head(ctx), reason: "green_and_conflict_free"})
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "ci fix return", %{to: origin_state, kind: :ci_fix, head: head(ctx), move: true})
-      {:ok, %{}}
+      {:ok, %{moved_to: origin}}
     end
   end
 
@@ -198,7 +205,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
          :ok <- move(:person_push, %{}, ctx) do
       comment(ctx, "#{action.reason}: Symphony moved this ticket back to #{ctx.settings.tracker.code_review_state} so the new head is reviewed again.")
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "person_push", to: ctx.settings.tracker.code_review_state})
-      {:ok, %{}}
+      {:ok, %{moved_to: :code_review}}
     end
   end
 
@@ -207,7 +214,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
          :ok <- move(:conflict_rework, %{}, ctx) do
       comment(ctx, "Symphony moved this ticket to #{@rework_state}: #{action.reason}. A rework run resolves the conflict on the same pull request.")
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "conflict", to: @rework_state, reason: action.reason})
-      {:ok, %{}}
+      {:ok, %{moved_to: :rework}}
     end
   end
 
@@ -284,6 +291,15 @@ defmodule SymphonyElixir.PrDecision.Apply do
         TicketSignals.record(ctx.repo_key, ctx.issue.id, "decision requested", %{to: ctx.issue.state, reason: "protected_paths"})
         {:ok, %{}}
       end
+    end
+  end
+
+  defp send_fix(origin, cause, ctx) do
+    with {:ok, fix} <- fix_context(cause, ctx),
+         :ok <- disarm_in_merging(ctx, cause),
+         :ok <- enter_ci_fix(origin, ctx) do
+      attempts = cause |> spend(fix, ctx) |> Attempts.sent(head(ctx), cause)
+      {:ok, %{attempts: attempts, fix: fix, moved_to: :ci_fix}}
     end
   end
 

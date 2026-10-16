@@ -128,8 +128,9 @@ defmodule SymphonyElixir.TicketState do
   resets), the rate limit the read left, and what the landing order keeps of the ticket (its state
   and head, and since when, its files and the PR it waits for). `decision` is what the watcher
   decided on the last read (`SymphonyElixir.PrDecision`): the rule, the kind of action, its reason,
-  who a wait is on and what ends it. `applied` lists the actions done in this stay in the phase, per
-  head and rule (`SymphonyElixir.PrDecision.Apply`), `attempts` the CI Fix runs counted and what
+  who a wait is on and what ends it. `stay` is the phase of the current stay (the one a move of the
+  watcher put the ticket in, else the one it was read in), and `applied` lists the actions done in
+  that stay, per head and rule (`SymphonyElixir.PrDecision.Apply`), `attempts` the CI Fix runs counted and what
   else the watcher keeps between reads (`SymphonyElixir.PrWatch.Attempts`), `fix` what the ticket's
   CI Fix run reads (the red head's failure, the conflict), and `links` the links it added.
   """
@@ -142,6 +143,7 @@ defmodule SymphonyElixir.TicketState do
           github: :ok | {:rate_limited, DateTime.t() | nil},
           rate_limit: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil} | nil,
           landing: landing() | nil,
+          stay: PrDecision.Facts.phase() | nil,
           decision: map() | nil,
           applied: [map()],
           attempts: map(),
@@ -547,6 +549,7 @@ defmodule SymphonyElixir.TicketState do
       github: normalize_github(Map.get(watch, :github)),
       rate_limit: normalize_rate_limit(Map.get(watch, :rate_limit)),
       landing: normalize_landing(Map.get(watch, :landing)),
+      stay: stay(Map.get(watch, :stay)),
       decision: map_decision(watch),
       applied: maps(Map.get(watch, :applied)),
       attempts: SymphonyElixir.PrWatch.Attempts.normalize(Map.get(watch, :attempts)),
@@ -556,6 +559,9 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_pr_watch(_watch), do: nil
+
+  defp stay(stay) when stay in [:in_progress, :code_review, :qa, :rework, :ci_fix, :merging], do: stay
+  defp stay(_stay), do: nil
 
   defp normalize_fix(%{} = fix), do: %{ci_failure: map_or_nil(Map.get(fix, :ci_failure)), pr_conflict: map_or_nil(Map.get(fix, :pr_conflict))}
   defp normalize_fix(_fix), do: %{ci_failure: nil, pr_conflict: nil}
