@@ -123,6 +123,8 @@ func describe(_ element: AXUIElement, path: String) -> [String: Any] {
         node["value"] = text(attribute(element, kAXValueAttribute as String))
     }
     node["description"] = text(attribute(element, kAXDescriptionAttribute as String))
+    // The tooltip's text (SwiftUI `.help`, AppKit `toolTip`), read without hovering.
+    node["help"] = text(attribute(element, kAXHelpAttribute as String))
     node["identifier"] = text(attribute(element, kAXIdentifierAttribute as String))
 
     if let enabled = attribute(element, kAXEnabledAttribute as String) as? Bool, !enabled {
@@ -151,7 +153,7 @@ func matches(_ node: [String: Any], role: String, needle: String) -> Bool {
     if !role.isEmpty, (node["role"] as? String) != role { return false }
     if needle.isEmpty { return true }
 
-    return ["title", "value", "description", "identifier"].contains { key in
+    return ["title", "value", "description", "help", "identifier"].contains { key in
         (node[key] as? String)?.localizedCaseInsensitiveContains(needle) ?? false
     }
 }
@@ -600,22 +602,53 @@ func selectRow(_ pid: pid_t, _ path: String) {
 
 func windowNumber(_ window: [String: Any]) -> Int? { window[kCGWindowNumber as String] as? Int }
 
-// The front-most on-screen window under the point, skipping fully transparent ones.
-func frontWindow(at point: CGPoint) -> [String: Any]? {
+// The on-screen windows under the point, front-most first, skipping fully transparent ones.
+func onScreenWindows(at point: CGPoint) -> [[String: Any]] {
     let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
 
-    return list.first { info in
+    return list.filter { info in
         guard let bounds = info[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
         return (info[kCGWindowAlpha as String] as? Double ?? 1) > 0 && rect.contains(point)
     }
 }
 
+func ownerPID(_ window: [String: Any]) -> pid_t? { (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) }
+
+// The process that would take a click at the point, as the accessibility hit
+// test sees it: the window server skips a window that lets clicks through.
+func processUnder(_ point: CGPoint) -> pid_t? {
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+          let hit else { return nil }
+    var owner: pid_t = 0
+    return AXUIElementGetPid(hit, &owner) == .success ? owner : nil
+}
+
+// What covers the app at the point, or nil when the click would reach it. The
+// window list also counts an overlay that lets clicks through (another app's
+// transparent window over the whole screen) as in front, so it decides only
+// when the hit test has no answer.
+func coverer(at point: CGPoint, pid: pid_t, windows: [[String: Any]]) -> String? {
+    if let owner = processUnder(point) {
+        if owner == pid { return nil }
+        let name = NSRunningApplication(processIdentifier: owner)?.localizedName ?? "process \(owner)"
+        return "\(name) (pid \(owner))"
+    }
+
+    guard let front = windows.first, ownerPID(front) != pid else { return nil }
+    let owner = front[kCGWindowOwnerName as String] as? String ?? "another app"
+    let title = front[kCGWindowName as String] as? String ?? ""
+    let layer = front[kCGWindowLayer as String] as? Int ?? 0
+    return "\(owner)'s window \"\(title)\" (layer \(layer))"
+}
+
 let clickPause: useconds_t = 50_000
 
 // Clicks the centre of the element's frame. The click goes only to the app's
-// PID, and only when the window in front at that point is the app's own, so a
-// covered or off-screen element fails rather than clicking something else.
+// PID, and only when the app's own window is on screen at that point and
+// nothing else would take the click there, so a covered or off-screen element
+// fails rather than clicking something else.
 func click(_ pid: pid_t, _ path: String, clicks: Int) {
     let app = application(pid)
     let target = resolve(app, path)
@@ -627,11 +660,12 @@ func click(_ pid: pid_t, _ path: String, clicks: Int) {
     let centre = CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2)
     bringForward(app, target)
 
-    guard let window = frontWindow(at: centre), let number = windowNumber(window) else {
+    let windows = onScreenWindows(at: centre)
+    guard let window = windows.first(where: { ownerPID($0) == pid }), let number = windowNumber(window) else {
         fail("not_on_screen", "The element at \(path) is not on screen; scroll it into view or raise its window.")
     }
-    guard (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid else {
-        fail("covered", "Another app's window covers the element at \(path); QA clicks only inside the app's own windows.")
+    if let blocker = coverer(at: centre, pid: pid, windows: windows) {
+        fail("covered", "\(blocker) covers the element at \(path); QA clicks only inside the app's own windows.")
     }
 
     for count in 1...clicks {

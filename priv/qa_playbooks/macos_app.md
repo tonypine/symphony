@@ -17,8 +17,10 @@ for you on the host. They only act on this worktree's configured app and on apps
   draw the app in that appearance whatever the host's, for any macOS app (Symphony launches it with
   AppKit's appearance arguments); without it the app follows the host. See
   "Light and dark, and the status-bar menu" below.
-- `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
-  `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
+- `qa_ax_tree`: the app's accessibility tree with each element's role, title, value, `help`
+  and `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
+  `help` is the text of the element's tooltip: a step that hovers to read a tooltip reads it
+  there (`text` matches it too), with no hover.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
   `qa_ax_set_value`: act on an element by the `path` `qa_ax_tree` gave it. `qa_ax_set_value`
   types into a text field the way a person does and presses Tab to commit it, so the app
@@ -32,8 +34,9 @@ for you on the host. They only act on this worktree's configured app and on apps
   `control`) in the app's focused window. A shortcut such as ⌘[ is `key: "["`,
   `modifiers: ["command"]`. It returns the `window` and `focused` element the key went to.
 - `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
-  no accessibility action reaches. It fails with `covered` or `not_on_screen` when another app's
-  window is in front or the element is scrolled away.
+  no accessibility action reaches. It fails with `not_on_screen` when the element is scrolled out
+  of the app's window, and with `covered` when another app would take the click at that point;
+  the message names that app, so quote it in the step's `details`.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
   usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
