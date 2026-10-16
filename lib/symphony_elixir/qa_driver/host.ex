@@ -128,7 +128,7 @@ defmodule SymphonyElixir.QaDriver.Host do
   @doc "Starts `executable` as a port owned by the caller. Options: `:cd`, `:env`, `:args`."
   @spec launch(String.t(), keyword()) :: {:ok, port(), pos_integer()} | {:error, term()}
   def launch(executable, opts) do
-    port_opts = [:binary, :exit_status, :stderr_to_stdout, cd: opts[:cd], env: opts[:env], args: Keyword.get(opts, :args, [])]
+    port_opts = [:binary, :exit_status, :stderr_to_stdout, cd: opts[:cd], env: opts[:env], args: opts[:args] || []]
     port = Port.open({:spawn_executable, executable}, port_opts)
     {:os_pid, pid} = Port.info(port, :os_pid)
     {:ok, port, pid}

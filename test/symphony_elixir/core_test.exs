@@ -690,12 +690,13 @@ defmodule SymphonyElixir.CoreTest do
     assert SymphonyElixir.QaAndroid.Emulator in test_children
   end
 
-  test "application starts PR review poller only in polling mode" do
+  test "application starts PR review poller and the PR watcher only in polling mode" do
     write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "tracker")
     tracker_children = SymphonyElixir.Application.child_specs_for_runtime(%{})
 
     refute SymphonyElixir.PrReviewPoller in tracker_children
     refute SymphonyElixir.CiPoller in tracker_children
+    refute Enum.any?(tracker_children, &match?({SymphonyElixir.PrWatch, _opts}, &1))
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -706,6 +707,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert SymphonyElixir.Orchestrator in polling_children
     assert SymphonyElixir.PrReviewPoller in polling_children
+    assert {SymphonyElixir.PrWatch, repo_keys: [Config.repo_key!()]} in polling_children
     refute SymphonyElixir.CiPoller in polling_children
 
     write_workflow_file!(Workflow.workflow_file_path(),

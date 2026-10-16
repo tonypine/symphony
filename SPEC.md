@@ -4427,6 +4427,12 @@ Minimum endpoints:
     first, with the PR they wait for and the `reason` (Section 7.5). The Mac app's ticket page shows
     it as a Lands after fact (`MT-1 (shares 2 files)`), and a `Merging` ticket's phase as `Waiting on
     MT-1 to land (shares 2 files)`.
+  - `issues` lists the tickets the PR and CI watcher watches, each with `issue_id`, `identifier`,
+    `repo_key` and `watch`: `facts`, the facts the decision table reads (`docs/pr-ci-decisions.md`)
+    plus `pr_url`, `head_sha`, `source` (`poll`), `read_at`, `github` (`ok` or `rate_limited`, with
+    `github_reset_at`) and `rate_limit` (`remaining`, `reset_at`); and `decision`, `applied` and
+    `links`, empty until the watcher decides. The facts are kept on the ticket's state record, so
+    they are listed right after a restart, before the watcher's first read.
   - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
     for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by
     MT-2`, `on a Needs Decision hold`, `priority medium is not in tickets.priorities (urgent, high)`,

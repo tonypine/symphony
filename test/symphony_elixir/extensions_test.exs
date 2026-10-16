@@ -8,6 +8,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketState}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
+  alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -499,6 +500,64 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
   end
 
+  test "phoenix observability api lists the watched issues with the facts read of their PRs" do
+    facts = Facts.new(phase: :code_review, ci: :green, pr_number: 9, ahead: [%{issue_identifier: "MT-2", pr_number: 2, files: ["SPEC.md"]}])
+    read_at = ~U[2026-10-16 12:00:00.500Z]
+
+    watch = %{
+      facts: facts,
+      pr_url: "https://github.com/acme/repo/pull/9",
+      head_sha: "abc123",
+      read_at: read_at,
+      rate_limit: %{remaining: 4000, reset_at: ~U[2026-10-16 13:00:00Z]}
+    }
+
+    :ok =
+      RunStore.put_ticket_pr_watch(
+        "default",
+        "watched-2",
+        "MT-WATCH-2",
+        Map.merge(watch, %{facts: %{facts | github: :rate_limited}, github: {:rate_limited, ~U[2026-10-16 12:10:00Z]}, rate_limit: nil})
+      )
+
+    :ok = RunStore.put_ticket_pr_watch("default", "watched-1", "MT-WATCH-1", watch)
+    :ok = RunStore.put_ticket_state(TicketState.new("default", "unwatched", %{issue_identifier: "MT-OTHER", phase: "Todo"}))
+
+    orchestrator_name = Module.concat(__MODULE__, :WatchedIssuesApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"issues" => [first, second]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{
+             "issue_id" => "watched-1",
+             "identifier" => "MT-WATCH-1",
+             "repo_key" => "default",
+             "watch" => %{
+               "facts" => %{
+                 "phase" => "code_review",
+                 "ci" => "green",
+                 "pr" => "open",
+                 "pr_number" => 9,
+                 "pr_url" => "https://github.com/acme/repo/pull/9",
+                 "head_sha" => "abc123",
+                 "source" => "poll",
+                 "read_at" => "2026-10-16T12:00:00Z",
+                 "github" => "ok",
+                 "github_reset_at" => nil,
+                 "rate_limit" => %{"remaining" => 4000, "reset_at" => "2026-10-16T13:00:00Z"},
+                 "ahead" => [%{"issue_identifier" => "MT-2", "pr_number" => 2, "files" => ["SPEC.md"]}],
+                 "competing" => []
+               },
+               "decision" => nil,
+               "applied" => [],
+               "links" => []
+             }
+           } = first
+
+    assert %{"identifier" => "MT-WATCH-2", "watch" => %{"facts" => %{"github" => "rate_limited", "github_reset_at" => "2026-10-16T12:10:00Z", "rate_limit" => nil}}} = second
+  end
+
   test "phoenix observability api shows a run waiting on a Symphony tool call" do
     pending_tool = %{name: "github_sync_base", started_at: ~U[2026-10-04 12:30:00.123Z], age_ms: 125_000}
     snapshot = update_in(static_snapshot().running, fn [running] -> [Map.put(running, :pending_tool, pending_tool)] end)
@@ -742,6 +801,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "since" => "2026-10-03T06:00:00Z"
                }
              ],
+             "issues" => [],
              "slot_waiting" => [
                %{
                  "issue_id" => "wait-http",

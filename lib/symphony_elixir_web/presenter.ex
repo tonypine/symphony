@@ -105,6 +105,7 @@ defmodule SymphonyElixirWeb.Presenter do
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           landing_waits: snapshot |> Map.get(:landing_waits, []) |> Enum.map(&landing_wait_payload/1),
+          issues: watched_issues_payload(),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&dispatch_skipped_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
@@ -344,6 +345,48 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Enum.map(&TicketState.normalize/1)
     |> Enum.find(&(&1.issue_identifier == issue_identifier))
   end
+
+  # The issues the PR and CI watcher watches, with the facts it last read of each one's PR, read
+  # from the ticket state records so they are there right after a restart.
+  defp watched_issues_payload do
+    RunStore.list_all_ticket_states()
+    |> List.wrap()
+    |> Enum.map(&TicketState.normalize/1)
+    |> Enum.filter(& &1.pr_watch)
+    |> Enum.sort_by(&{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
+    |> Enum.map(&watched_issue_payload/1)
+  end
+
+  defp watched_issue_payload(%{pr_watch: watch} = record) do
+    {github, reset_at} =
+      case watch.github do
+        {:rate_limited, reset_at} -> {"rate_limited", iso8601(reset_at)}
+        :ok -> {"ok", nil}
+      end
+
+    facts =
+      watch.facts
+      |> Map.from_struct()
+      |> Map.merge(%{
+        pr_url: watch.pr_url,
+        head_sha: watch.head_sha,
+        source: watch.source,
+        read_at: iso8601(watch.read_at),
+        github: github,
+        github_reset_at: reset_at,
+        rate_limit: rate_limit_payload(watch.rate_limit)
+      })
+
+    %{
+      issue_id: record.issue_id,
+      identifier: record.issue_identifier,
+      repo_key: record.repo_key,
+      watch: %{facts: facts, decision: watch.decision, applied: watch.applied, links: watch.links}
+    }
+  end
+
+  defp rate_limit_payload(%{remaining: remaining, reset_at: reset_at}), do: %{remaining: remaining, reset_at: iso8601(reset_at)}
+  defp rate_limit_payload(nil), do: nil
 
   @verdict_kinds ["code_review", "qa"]
 

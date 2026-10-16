@@ -153,11 +153,11 @@ defmodule SymphonyElixir.QaDriver.Remote do
   @doc """
   Starts `executable` on the QA host. The returned port belongs to the caller
   and carries the app's output and exit status like a local launch. Options:
-  `:cd`, `:env` (only these variables reach the app), `:args` (the executable's
-  arguments), `:reverse_forwards` (`{remote,
-  local}` addresses the app's SSH session forwards back to this host while it runs;
-  the launch fails when one can't be set up) and `:timeout_ms` (for the QA host to
-  answer, default 30 seconds).
+  `:cd`, `:env` (only these variables reach the app), `:args` (the app's
+  arguments), `:reverse_forwards` (`{remote, local}` addresses the app's SSH
+  session forwards back to this host while it runs; the launch fails when one
+  can't be set up) and `:timeout_ms` (for the QA host to answer, default 30
+  seconds).
   """
   @spec launch(String.t(), String.t(), keyword()) :: {:ok, port(), pos_integer()} | {:error, term()}
   def launch(ssh_host, executable, opts) do

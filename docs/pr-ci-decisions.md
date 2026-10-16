@@ -78,3 +78,20 @@ These actions leave the ticket waiting, so each names who it waits on and what e
 Owners: `agent`, `ci`, `github`, `person`, `symphony`.
 
 <!-- END mix pr_decision.table -->
+
+## Where the facts come from
+
+The watcher reads them by polling, one watcher per repository whose pull requests are polled,
+every `pull_requests.poll_interval_ms`. Each read takes the watched tickets from Linear: every
+ticket in `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, and in `In Progress` once it has a
+PR, whether or not Symphony ran it. It then reads each ticket's PR in one GitHub query, the checks
+its base branch requires (kept 10 minutes), the base branch's workflow runs only to tell a red head
+that is also red on the base, and, when two or more watched PRs are open, the repository's open PRs
+and their files once, for the landing order that fills `ahead`.
+
+The facts are kept on the ticket's state record and listed under each ticket's `watch.facts` in
+`/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
+limit marks the tickets it left unread `github: rate_limited` and waits for the reset.
+
+For now the watcher only gathers facts: no rule is applied, and the CI and PR review pollers still
+decide and act.
