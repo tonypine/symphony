@@ -130,20 +130,24 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert Map.keys(state.running) == ["todo-1"]
     assert state.slot_waiting == %{}
 
-    :ok =
-      RunStore.put_pr_review(%{
-        repo_key: "default",
-        issue_id: "land-1",
-        issue_identifier: "MT-LAND",
-        pr_url: "https://github.com/acme/repo/pull/1",
-        auto_merge: %{state: "enabled", head_sha: "abc1234def", updated_at: ~U[2026-10-03 12:00:00Z]}
-      })
+    # The PR watcher armed auto-merge and waits on CI (R32): still no agent.
+    wait = %{rule: "R32", kind: :wait, reason: "Checks are running on PR #1: auto-merge lands it when they pass", owner: :ci}
 
-    assert [%{issue_identifier: "MT-LAND", state: "enabled", status: "auto-merge on, waiting for CI on `abc1234`"}] =
+    SymphonyElixir.PrWatchSupport.put_watch!("default", "land-1",
+      identifier: "MT-LAND",
+      phase: :merging,
+      head_sha: "abc1234def",
+      facts: %{auto_merge: :armed, ci: :pending},
+      decision: wait
+    )
+
+    refute Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
+
+    assert [%{issue_identifier: "MT-LAND", state: "armed", head_sha: "abc1234def", status: "Checks are running on PR #1: auto-merge lands it when they pass"}] =
              snapshot_of(state).auto_merge
 
-    # The PR poller fell back (auto-merge couldn't be enabled): the landing agent runs.
-    :ok = RunStore.update_pr_review("default", "land-1", %{auto_merge: %{state: "fallback", reason: "not allowed"}})
+    # Branch protection held the PR past the merge wait (R31): the landing agent runs.
+    SymphonyElixir.PrWatchSupport.update_watch!("default", "land-1", &%{&1 | decision: %{rule: "R31", kind: :land_agent, reason: "Branch protection"}})
 
     state = Orchestrator.dispatch_chosen_issues_for_test([landing], %{state | running: %{}})
     assert %{run_profile: %{kind: :landing}} = state.running["land-1"]

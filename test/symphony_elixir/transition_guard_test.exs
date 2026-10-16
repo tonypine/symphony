@@ -79,6 +79,8 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
                %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
                %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
+               %{signal: :person_push, from: ["Merging"], to: :code_review_state},
+               %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
                %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
                %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
                %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}
@@ -208,6 +210,17 @@ defmodule SymphonyElixir.TransitionGuardTest do
       for origin <- ["Code Review", "QA", "Merging", "Rework"] do
         assert TransitionGuard.target(:ci_fix_mechanical, %{target: origin, settings: designed}) == origin
       end
+    end
+
+    test "the PR watcher's moves: a person's push in Merging goes back to Code Review (D4), a conflict that came back goes to Rework (D16)" do
+      assert TransitionGuard.legal?(:person_push, "Merging", nil)
+      refute TransitionGuard.legal?(:person_push, "QA", nil)
+      assert TransitionGuard.target(:person_push, %{settings: designed_settings()}) == "Code Review"
+      assert TransitionGuard.target(:person_push, %{settings: settings!(%{"tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"}})}) == "Peer Review"
+
+      for from <- ["Code Review", "QA", "CI Fix", "Merging"], do: assert(TransitionGuard.legal?(:conflict_rework, from, nil))
+      refute TransitionGuard.legal?(:conflict_rework, "Rework", nil)
+      assert TransitionGuard.target(:conflict_rework, %{settings: designed_settings()}) == "Rework"
     end
   end
 

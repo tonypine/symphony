@@ -676,6 +676,18 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert byte_size(prompt) < 12_000
   end
 
+  test "a failed protected paths check beside another one is named as not the fix run's to fix" do
+    prompt =
+      PromptBuilder.build_compact_prompt(
+        %{identifier: "ACME-3806", title: "Fix CI", repo_key: "default"},
+        ci_failure: %{failed_checks: [%{name: "protected paths"}, %{name: "specs"}], commit_sha: "0ddba11", log_excerpt: "boom"}
+      )
+
+    assert prompt =~ "Failed checks: protected paths, specs"
+    assert prompt =~ "`protected paths` is not yours to fix: it fails because this PR's own commits change an agent-protected path"
+    assert prompt =~ "adding the `protected-paths-approved` label"
+  end
+
   test "compact prompt keeps CI failure context without a log excerpt" do
     prompt =
       PromptBuilder.build_compact_prompt(

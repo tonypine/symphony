@@ -1,65 +1,25 @@
 defmodule SymphonyElixir.AutoMerge do
   @moduledoc """
-  Lands an approved (`Merging`) issue's pull request with GitHub auto-merge instead of a
-  landing agent.
+  The GitHub half of `SymphonyElixir.PrDecision.Apply` for a PR that lands: turning GitHub
+  auto-merge on (`arm/2`, rule R30) and off (`disarm/2`, R3, and before a fix run or a hold in
+  `Merging`), squash-merging a PR that can merge now (`merge/2`, R29), merging the base branch in
+  (`update_branch/2`, R28) and cancelling the CI runs an update-branch left on the head it replaced
+  (`cancel_stale_runs/3`). It decides nothing: the PR and CI watcher (`docs/pr-ci-decisions.md`)
+  picks the action, and these only make the call.
 
-  The PR review poller calls `step/5` for every poll of a `Merging` issue's open PR (and polls
-  at once when Symphony moves an issue into `Merging`). A PR that is already CLEAN with green or
-  no checks is squash-merged right away, without auto-merge. Otherwise it turns
-  on auto-merge once per head, and asks GitHub to merge the base branch in once per head when
-  the PR is `BEHIND`, unless it waits for another PR that shares its files to land first
-  (`SymphonyElixir.LandingOrder`). Only `Merging` PRs are updated: before it, a `BEHIND` PR is
-  left to its phase (see `SymphonyElixir.PrReviewPoller`). GitHub merges the PR when the required
-  checks pass; the poller then moves the issue to `Done`. When GitHub refuses auto-merge (the PR
-  can already merge, the branch has no protection, or the repository doesn't allow it) but the PR
-  is `CLEAN` with green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a
-  finished workflow run), it is squash-merged right away. Merge conflicts take the PR poller's
-  conflict path, with auto-merge turned off first (see `disable_for_conflict/5`) and kept off
-  for that head (see `conflict?/1`). A head whose `protected paths` check failed lands only when the
-  ticket's unlock decisions cover the protected paths it changes (`SymphonyElixir.ProtectedPathsGate`);
-  until then auto-merge stays off and the ticket waits for a person (see `protected_paths?/1`). Red CI takes
-  the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see
-  `disable_for_ci_fix/5`), while a flaky rerun of the same commit leaves it on.
+  Each takes the watcher's read of the PR (`SymphonyElixir.PrWatch.Fetch.read/2`): its URL, GraphQL
+  node id, head, number, title and body. `opts[:github]` replaces `SymphonyElixir.GitHub.PullRequest`
+  (tests); the other `opts` go to `gh`.
 
-  A head that moves between reading the PR and turning auto-merge on (a push, or an
-  update-branch) is retried with the head the next poll reads; only a head that keeps moving
-  falls back.
-
-  When auto-merge can't be used otherwise (a permission error, a refused PR that isn't clean
-  and green, or the PR stays blocked on a green head), the issue falls back to the landing
-  agent. The state lives under `:auto_merge` in the PR review record.
+  The texts it posts on the ticket when it turns auto-merge off or a landing agent takes the PR are
+  here too.
   """
 
-  require Logger
-
-  alias SymphonyElixir.{CiPoller, Config, LandingOrder, ProtectedPathsGate, TicketPullRequest}
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
   @merging_state "merging"
-  @behind_merge_state "BEHIND"
-  @blocked_merge_state "BLOCKED"
-  @clean_merge_state "CLEAN"
-  @unstable_merge_state "UNSTABLE"
-  @passing_conclusions ["success", "neutral", "skipped"]
-  @green_conclusion "SUCCESS"
-  @max_reason_length 300
-  @max_head_moved_retries 3
   @back_to_merging "moving this ticket to Merging again turns auto-merge back on."
-
-  @type state :: String.t()
-  @type t :: %{
-          state: state(),
-          head_sha: String.t() | nil,
-          enabled_head_sha: String.t() | nil,
-          update_branch_head_sha: String.t() | nil,
-          stalled_since: DateTime.t() | nil,
-          head_moved_retries: non_neg_integer(),
-          disabled_at: DateTime.t() | nil,
-          asked_at: DateTime.t() | nil,
-          reason: String.t() | nil,
-          updated_at: DateTime.t() | nil
-        }
 
   @doc "Auto-merge runs with PR polling on (`pull_requests.enabled`) and `pull_requests.auto_merge` on."
   @spec enabled?(map()) :: boolean()
@@ -72,538 +32,64 @@ defmodule SymphonyElixir.AutoMerge do
   def merging?(_issue), do: false
 
   @doc """
-  True when auto-merge lands this issue, so the orchestrator must not dispatch a landing
-  agent: the issue is in `Merging`, has a PR, auto-merge is on for its repository, and the
-  PR poller hasn't fallen back to the landing agent. A CI-failure hold (see `held?/1`) or a
-  conflict (see `conflict?/1`) means Symphony turned GitHub auto-merge off, so nothing lands the
-  PR: one still in `Merging` is a red or conflicting head the CI-fix move never took out of it
-  (an agent run still marked running, the conflict retries spent), and the landing agent takes it
-  over rather than every poll skipping it.
+  Turns GitHub auto-merge on (squash, the PR's title and body) for the read's head. GitHub refuses it
+  for a PR that can already merge (`{:error, :clean_status}`) and for a head that moved since the
+  read (`{:error, :head_moved}`).
   """
-  @spec owns_issue?(Issue.t(), keyword()) :: boolean()
-  def owns_issue?(%Issue{} = issue, opts \\ []) do
-    merging?(issue) and is_binary(TicketPullRequest.current_url(issue)) and
-      enabled_for_repo?(issue.repo_key) and
-      not handed_off?(Keyword.get(opts, :lookup, &SymphonyElixir.PrReviewPoller.auto_merge/2).(issue.id, repo_opts(issue.repo_key)))
+  @spec arm(map(), keyword()) :: :ok | {:error, term()}
+  def arm(pr, opts), do: with_request(pr, &github(opts).enable_auto_merge(pr.pr_url, &1, gh_opts(opts)))
+
+  @doc "Squash-merges the PR now, only if its head is still the read's."
+  @spec merge(map(), keyword()) :: :ok | {:error, term()}
+  def merge(pr, opts), do: with_request(pr, &github(opts).squash_merge(pr.pr_url, &1, gh_opts(opts)))
+
+  @doc "Turns GitHub auto-merge off for the PR."
+  @spec disarm(map(), keyword()) :: :ok | {:error, term()}
+  def disarm(%{pr_url: pr_url, pr_node_id: node_id}, opts) when is_binary(pr_url) do
+    if is_binary(node_id),
+      do: github(opts).disable_auto_merge(pr_url, node_id, gh_opts(opts)),
+      else: {:error, :missing_pr_node_id}
   end
-
-  defp handed_off?(auto_merge), do: fallback?(auto_merge) or held?(auto_merge) or conflict?(auto_merge)
-
-  defp enabled_for_repo?(repo_key) do
-    case Config.settings_for_repo(repo_key) do
-      {:ok, settings} -> enabled?(settings)
-      {:error, _reason} -> false
-    end
-  end
-
-  defp repo_opts(repo_key) when is_binary(repo_key) and repo_key != "", do: [repo_key: repo_key]
-  defp repo_opts(_repo_key), do: []
-
-  @doc "True once the record's auto-merge state hands the issue to the landing agent."
-  @spec fallback?(term()) :: boolean()
-  def fallback?(%{state: "fallback"}), do: true
-  def fallback?(_auto_merge), do: false
 
   @doc """
-  True while auto-merge is off for a CI-fix run (see `disable_for_ci_fix/5`). It stays off until
-  the issue leaves `Merging` and is approved into it again.
+  Asks GitHub to merge the base branch into the PR, only if the head is still the read's. A merge
+  that conflicts comes back as `{:error, :conflict}`: the next read shows the PR conflicting.
   """
-  @spec held?(term()) :: boolean()
-  def held?(%{state: "ci_failure"}), do: true
-  def held?(_auto_merge), do: false
+  @spec update_branch(map(), keyword()) :: :ok | {:error, term()}
+  def update_branch(%{pr_url: pr_url, head_sha: head}, opts) when is_binary(pr_url) do
+    if is_binary(head),
+      do: github(opts).update_branch(pr_url, head, gh_opts(opts)),
+      else: {:error, :missing_head_sha}
+  end
 
   @doc """
-  True while the PR is down the conflict path (see `conflict/3`). Auto-merge stays off for that
-  head: only a new head (the fix's push) or dropping the state (`PrReviewPoller.release_auto_merge_hold/2`)
-  turns it on again.
+  Cancels the CI runs still going on `stale_head`, which an update-branch replaced with the PR's new
+  head: they can never land and only hold runners. Returns the ids it cancelled.
   """
-  @spec conflict?(term()) :: boolean()
-  def conflict?(%{state: "conflict"}), do: true
-  def conflict?(_auto_merge), do: false
-
-  @doc """
-  True while the PR waits for a person because its `protected paths` check failed and the ticket's
-  unlock decisions don't cover the protected paths it changes (`SymphonyElixir.ProtectedPathsGate`).
-  Auto-merge stays off; `step/5` checks again on every poll and lands the PR once the check passes or
-  a decision covers them. The landing agent can't merge past a failed check either, so it isn't
-  dispatched.
-  """
-  @spec protected_paths?(term()) :: boolean()
-  def protected_paths?(%{state: "protected_paths"}), do: true
-  def protected_paths?(_auto_merge), do: false
-
-  @doc """
-  True when the PR waits for a person (`protected_paths?/1`) and the poller hasn't asked one yet
-  this `Merging` stay (see `asked/2`).
-  """
-  @spec ask_person?(term()) :: boolean()
-  def ask_person?(%{state: "protected_paths", asked_at: nil}), do: true
-  def ask_person?(_auto_merge), do: false
-
-  @doc "Marks that the poller asked a person about the PR this `Merging` stay."
-  @spec asked(t(), DateTime.t()) :: t()
-  def asked(auto_merge, %DateTime{} = now), do: %{auto_merge | asked_at: now}
-
-  @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
-  @spec armed?(term()) :: boolean()
-  def armed?(%{state: state}) when state in ["enabled", "updating_branch", "waiting_to_land", "merging", "conflict"], do: true
-  def armed?(_auto_merge), do: false
-
-  @doc """
-  One poll of a `Merging` issue's open, conflict-free PR. Returns the new auto-merge state:
-
-    * `{:ok, auto_merge}`: nothing more to do this poll.
-    * `{:conflict, auto_merge}`: GitHub couldn't merge the base branch in; take the conflict path.
-    * `{:fallback, auto_merge}`: auto-merge can't land it; the landing agent takes over.
-    * `{:protected_paths, auto_merge}`: its `protected paths` check failed and no decision covers
-      the paths it changes (`protected_paths?/1`); auto-merge is off and it waits for a person.
-
-  `opts[:issue]` is the ticket as this poll read it, whose unlock decisions the gate reads
-  (`SymphonyElixir.ProtectedPathsGate.check/4`, which takes `opts[:git]` too).
-  """
-  @spec step(map(), map(), map(), keyword(), DateTime.t()) :: {:ok | :conflict | :fallback | :protected_paths, t()}
-  def step(record, activity, settings, opts, %DateTime{} = now) do
-    previous = Map.get(record, :auto_merge)
-    head = Map.get(activity, :head_ref_oid)
-    current = for_head(previous, head, now)
-    cancel_stale_runs(previous, head, record, activity, opts)
-
-    result =
-      cond do
-        held?(current) or conflict?(current) -> {:ok, current}
-        not is_binary(head) or not is_binary(Map.get(activity, :pr_node_id)) -> {:ok, %{current | state: current.state || "waiting"}}
-        true -> guard(current, record, activity, settings, opts, now)
-      end
-
-    log_transition(record, previous, result)
-    result
+  @spec cancel_stale_runs(map(), String.t(), keyword()) :: {:ok, [integer()]} | {:error, term()}
+  def cancel_stale_runs(%{pr_url: pr_url}, stale_head, opts) when is_binary(pr_url) and is_binary(stale_head) do
+    github(opts).cancel_stale_runs(pr_url, stale_head, gh_opts(opts))
   end
 
-  # Nothing lands, and the branch isn't updated, while the gate holds the head back. A PR that waits
-  # keeps waiting on a new head the CI poller hasn't read yet, whose check may fail again.
-  defp guard(%{state: "fallback"} = current, _record, _activity, _settings, _opts, _now), do: {:ok, current}
-
-  defp guard(current, record, activity, settings, opts, now) do
-    case ProtectedPathsGate.check(record, activity, Keyword.get(opts, :issue), Keyword.take(opts, [:git])) do
-      {:blocked, reason} -> hold_for_person(current, record, activity, reason, opts, now)
-      :unobserved when current.state == "protected_paths" -> {:ok, current}
-      _land -> current |> resume_landing() |> land(record, activity, settings, opts, now)
-    end
-  end
-
-  defp resume_landing(%{state: "protected_paths"} = current), do: %{current | state: nil, reason: nil}
-  defp resume_landing(current), do: current
-
-  # Auto-merge goes off when it is on, so GitHub doesn't merge past the check, which the base branch
-  # doesn't require. A failed call is retried on the next poll, where GitHub still shows it on.
-  defp hold_for_person(current, record, activity, reason, opts, now) do
-    waiting = %{current | state: "protected_paths", reason: truncate(reason)}
-
-    case turn_off(record, activity, waiting, opts, now) do
-      {:ok, waiting} ->
-        {:protected_paths, %{waiting | enabled_head_sha: nil}}
-
-      {:disabled, waiting} ->
-        Logger.warning("Auto-merge #{identifier(record)}: turned GitHub auto-merge off because #{reason} pr_url=#{pr_url(record, activity)} commit_sha=#{current.head_sha}")
-        {:protected_paths, waiting}
-
-      {:error, error} ->
-        Logger.warning("Auto-merge #{identifier(record)}: turning GitHub auto-merge off failed while #{reason}; retrying on the next poll commit_sha=#{current.head_sha}: #{format_reason(error)}")
-        {:protected_paths, waiting}
-    end
-  end
-
-  defp land(current, record, activity, settings, opts, now), do: current |> ensure_enabled(record, activity, opts) |> continue(record, activity, settings, opts, now)
-
-  defp continue({:ok, %{state: "merging"}} = result, _record, _activity, _settings, _opts, _now), do: result
-  # The head moved under the enable call: nothing else acts on the stale head this poll.
-  defp continue({:retry, current}, _record, _activity, _settings, _opts, _now), do: {:ok, current}
-  defp continue({:ok, current}, record, activity, settings, opts, now), do: keep_up_to_date(current, record, activity, settings, opts, now)
-  defp continue(result, _record, _activity, _settings, _opts, _now), do: result
-
-  defp for_head(previous, head, now) when is_map(previous) do
-    base = Map.merge(empty(now), Map.take(previous, Map.keys(empty(now))))
-
-    if base.head_sha == head do
-      %{base | updated_at: now}
-    else
-      %{base | head_sha: head, stalled_since: nil, reason: nil, state: next_head_state(base.state), updated_at: now}
-    end
-  end
-
-  defp for_head(_previous, head, now), do: %{empty(now) | head_sha: head}
-
-  # A new head starts over from "enabled", a conflict's included: the fix pushed it. A fallback or
-  # a CI-fix hold stays until the issue leaves `Merging` (the PR poller clears it then), so pushes
-  # during that stay don't flip it back.
-  defp next_head_state(state) when state in ["conflict", "merging", "updating_branch", "waiting_to_land"], do: "enabled"
-  defp next_head_state(state), do: state
-
-  defp empty(now) do
-    %{
-      state: nil,
-      head_sha: nil,
-      enabled_head_sha: nil,
-      update_branch_head_sha: nil,
-      stalled_since: nil,
-      head_moved_retries: 0,
-      disabled_at: nil,
-      asked_at: nil,
-      reason: nil,
-      updated_at: now
-    }
-  end
-
-  # Turn auto-merge on once per head. GitHub keeps it on across later pushes, so a PR that
-  # already shows it on needs nothing.
-  defp ensure_enabled(current, record, activity, opts) do
-    head = current.head_sha
-
-    cond do
-      Map.get(activity, :auto_merge_enabled) == true ->
-        {:ok, %{current | state: enabled_state(current.state), enabled_head_sha: current.enabled_head_sha || head, head_moved_retries: 0, disabled_at: nil}}
-
-      current.enabled_head_sha == head ->
-        {:ok, %{current | state: enabled_state(current.state)}}
-
-      merge_state(activity) == @clean_merge_state ->
-        merge_if_ready(current, record, activity, opts)
-
-      true ->
-        enable(current, record, activity, opts)
-    end
-  end
-
-  # A PR that is already CLEAN when it enters `Merging` needs no auto-merge: when its checks are
-  # green it is squash-merged now, before the base branch moves on and leaves its head behind
-  # (another update-branch and another CI run). Otherwise auto-merge waits for the checks.
-  defp merge_if_ready(current, record, activity, opts) do
-    github = Keyword.get(opts, :github, PullRequest)
-    request = squash_request(activity, current.head_sha)
-    pr_url = pr_url(record, activity)
-    gh_opts = [cwd: Map.get(record, :workspace_path)]
-    head = current.head_sha
-
-    case github.fetch_ci_status(pr_url, gh_opts) do
-      {:ok, %{commit_sha: ^head} = status} ->
-        if mergeable_now?(status),
-          do: merge_ready(current, record, activity, pr_url, request, github, gh_opts, opts),
-          else: enable(current, record, activity, opts)
-
-      _status ->
-        enable(current, record, activity, opts)
-    end
-  end
-
-  # A merge GitHub refuses here (a check that just turned, a protection rule) leaves the PR to
-  # auto-merge, as if it hadn't been clean.
-  defp merge_ready(current, record, activity, pr_url, request, github, gh_opts, opts) do
-    Logger.info("Auto-merge #{identifier(record)}: the PR is clean and its checks are green; squash-merging it directly pr_url=#{pr_url} commit_sha=#{current.head_sha}")
-
-    case github.squash_merge(pr_url, request, gh_opts) do
-      :ok ->
-        {:ok, %{current | state: "merging", enabled_head_sha: current.head_sha}}
-
-      {:error, reason} ->
-        Logger.warning("Auto-merge #{identifier(record)}: squash-merging the clean PR failed; turning auto-merge on instead commit_sha=#{current.head_sha}: #{format_reason(reason)}")
-        enable(current, record, activity, opts)
-    end
-  end
-
-  # Keep what this head is already doing (updating, merging, conflict); otherwise it waits for CI.
-  defp enabled_state(state) when state in [nil, "waiting"], do: "enabled"
-  defp enabled_state(state), do: state
-
-  defp enable(current, record, activity, opts) do
-    github = Keyword.get(opts, :github, PullRequest)
-    request = squash_request(activity, current.head_sha)
-    pr_url = pr_url(record, activity)
-    gh_opts = [cwd: Map.get(record, :workspace_path)]
-
-    case github.enable_auto_merge(pr_url, request, gh_opts) do
-      :ok ->
-        {:ok, %{current | state: "enabled", enabled_head_sha: current.head_sha, head_moved_retries: 0, disabled_at: nil}}
-
-      {:error, :head_moved} ->
-        head_moved(current, record)
-
-      {:error, reason} ->
-        refused(current, record, pr_url, request, format_reason(reason), github, gh_opts)
-    end
-  end
-
-  # The head moved between reading the PR and this call (a push, or an update-branch; auto-merge
-  # may even be on already). Keep the record as it is and try again with the head the next
-  # poll reads. Only a head that keeps moving goes to the landing agent.
-  defp head_moved(current, record) do
-    retries = current.head_moved_retries + 1
-
-    if retries >= @max_head_moved_retries do
-      fallback(%{current | head_moved_retries: retries}, "the PR head moved #{retries} times in a row before auto-merge could be enabled")
-    else
-      reason = "the PR head moved from #{short_sha(current.head_sha)} before auto-merge could be enabled"
-      Logger.warning("Auto-merge #{identifier(record)}: #{reason}; retrying on the next poll commit_sha=#{current.head_sha}")
-      {:retry, %{current | state: current.state || "waiting", head_moved_retries: retries, reason: reason}}
-    end
-  end
-
-  # GitHub refuses auto-merge for a PR that can already merge (`clean status`), on a branch
-  # without protection, or in a repository that doesn't allow it. Look at the PR again: one
-  # that merged meanwhile takes the merged path, and a clean one with green or no checks is
-  # squash-merged now. Anything else goes to the landing agent.
-  defp refused(current, record, pr_url, request, reason, github, gh_opts) do
-    head = current.head_sha
-
-    case github.fetch_ci_status(pr_url, gh_opts) do
-      {:ok, %{state: "MERGED"}} ->
-        Logger.info("Auto-merge #{identifier(record)}: GitHub refused auto-merge (#{reason}); the PR is already merged pr_url=#{pr_url}")
-        {:ok, %{current | state: "merging", enabled_head_sha: head}}
-
-      {:ok, %{commit_sha: ^head} = status} ->
-        if mergeable_now?(status) do
-          merge_now(current, record, pr_url, request, reason, github, gh_opts)
-        else
-          fallback(current, "enabling auto-merge failed: #{reason}")
-        end
-
-      _status ->
-        fallback(current, "enabling auto-merge failed: #{reason}")
-    end
-  end
-
-  defp merge_now(current, record, pr_url, request, reason, github, gh_opts) do
-    Logger.info("Auto-merge #{identifier(record)}: GitHub refused auto-merge (#{reason}); squash-merging the clean PR directly pr_url=#{pr_url} commit_sha=#{current.head_sha}")
-
-    case github.squash_merge(pr_url, request, gh_opts) do
-      :ok -> {:ok, %{current | state: "merging", enabled_head_sha: current.head_sha}}
-      {:error, merge_reason} -> fallback(current, "squash merge failed: #{format_reason(merge_reason)}")
-    end
-  end
-
-  # An open PR GitHub calls CLEAN whose checks all passed. No checks at all counts too: a
-  # repository without CI has nothing to wait for. GitHub calls a PR UNSTABLE while a check it
-  # never closed reads in progress, so one with a stale check (see
-  # `PullRequest.fetch_ci_status/2`) and every other check passed can merge too.
-  defp mergeable_now?(status) do
-    checks = Map.get(status, :checks, [])
-
-    Map.get(status, :state) == "OPEN" and clean_but_for_stale_checks?(merge_state(status), checks) and
-      Enum.all?(checks, &(normalize(Map.get(&1, :conclusion)) in @passing_conclusions))
-  end
-
-  defp clean_but_for_stale_checks?(@clean_merge_state, _checks), do: true
-  defp clean_but_for_stale_checks?(@unstable_merge_state, checks), do: Enum.any?(checks, &(Map.get(&1, :stale) == true))
-  defp clean_but_for_stale_checks?(_merge_state, _checks), do: false
-
-  defp squash_request(activity, head) do
-    %{
-      pr_node_id: Map.get(activity, :pr_node_id),
+  defp with_request(%{pr_node_id: node_id, head_sha: head} = pr, call) when is_binary(node_id) and is_binary(head) do
+    call.(%{
+      pr_node_id: node_id,
       head_sha: head,
-      pr_number: Map.get(activity, :pr_number),
-      pr_title: Map.get(activity, :pr_title),
-      pr_description: Map.get(activity, :pr_description)
-    }
+      pr_number: Map.get(pr, :pr_number),
+      pr_title: Map.get(pr, :pr_title),
+      pr_description: Map.get(pr, :pr_description)
+    })
   end
 
-  # BEHIND: ask GitHub to merge the base branch in, once per head. CI then runs on the
-  # combined code and auto-merge fires when it passes. A PR that waits for another to land first
-  # (`opts[:landing_wait]`, see `SymphonyElixir.LandingOrder`) is left behind until then: that
-  # merge would put it behind again, so it merges the base branch once, after it.
-  defp keep_up_to_date(current, record, activity, settings, opts, now) do
-    current = if current.state == "waiting_to_land", do: %{current | state: "enabled", reason: nil}, else: current
-    wait = Keyword.get(opts, :landing_wait)
+  defp with_request(_pr, _call), do: {:error, :missing_pr_node_id}
 
-    cond do
-      merge_state(activity) != @behind_merge_state -> check_stalled(current, record, activity, settings, now)
-      is_map(wait) and current.update_branch_head_sha != current.head_sha -> {:ok, %{current | state: "waiting_to_land", reason: LandingOrder.reason(wait)}}
-      current.update_branch_head_sha != current.head_sha -> update_branch(current, record, activity, opts)
-      # Already asked GitHub for this head; wait for the merge commit.
-      true -> {:ok, %{current | state: "updating_branch"}}
-    end
-  end
-
-  defp update_branch(current, record, activity, opts) do
-    github = Keyword.get(opts, :github, PullRequest)
-
-    case github.update_branch(pr_url(record, activity), current.head_sha, cwd: Map.get(record, :workspace_path)) do
-      :ok ->
-        {:ok, %{current | state: "updating_branch", update_branch_head_sha: current.head_sha, reason: nil}}
-
-      {:error, :conflict} ->
-        {:conflict, %{current | state: "conflict", update_branch_head_sha: current.head_sha, reason: "merging the base branch in conflicts"}}
-
-      {:error, reason} ->
-        # Transient (or the head moved under us): try again on the next poll.
-        reason = format_reason(reason)
-        Logger.warning("Auto-merge update-branch failed for #{identifier(record)} commit_sha=#{current.head_sha}: #{reason}")
-        {:ok, %{current | reason: "updating the branch failed: #{reason}"}}
-    end
-  end
-
-  # Update-branch moved the PR past the head it was asked for: CI still running on that head can
-  # never land, so cancel it rather than let it hold runners. Only once the head has moved, so the
-  # PR's own head never reads as cancelled.
-  defp cancel_stale_runs(%{state: "updating_branch", head_sha: stale, update_branch_head_sha: stale}, head, record, activity, opts)
-       when is_binary(stale) and is_binary(head) and head != stale do
-    github = Keyword.get(opts, :github, PullRequest)
-
-    case github.cancel_stale_runs(pr_url(record, activity), stale, cwd: Map.get(record, :workspace_path)) do
-      {:ok, []} ->
-        :ok
-
-      {:ok, run_ids} ->
-        Logger.info("Auto-merge #{identifier(record)}: cancelled CI run(s) #{Enum.join(run_ids, ", ")} on #{short_sha(stale)}, which update-branch replaced with #{short_sha(head)}")
-
-      {:error, reason} ->
-        Logger.warning("Auto-merge #{identifier(record)}: could not cancel the CI runs on #{short_sha(stale)} after update-branch commit_sha=#{stale}: #{format_reason(reason)}")
-    end
-  end
-
-  defp cancel_stale_runs(_previous, _head, _record, _activity, _opts), do: :ok
-
-  # Auto-merge is on and the head is green, but GitHub still won't merge (for example a
-  # required check that never reports). Past `ci.merging_wait_timeout_ms`, hand it to the
-  # landing agent.
-  defp check_stalled(current, record, activity, settings, now) do
-    if Map.get(activity, :auto_merge_enabled) == true and merge_state(activity) == @blocked_merge_state and
-         green_head?(record, current.head_sha) do
-      stalled_since = current.stalled_since || now
-
-      if DateTime.diff(now, stalled_since, :millisecond) >= settings.ci.merging_wait_timeout_ms do
-        fallback(
-          %{current | stalled_since: stalled_since},
-          "GitHub still reports BLOCKED on green #{short_sha(current.head_sha)} after #{div(settings.ci.merging_wait_timeout_ms, 60_000)} min; a required check may never report"
-        )
-      else
-        {:ok, %{current | stalled_since: stalled_since}}
-      end
-    else
-      {:ok, %{current | stalled_since: nil}}
-    end
-  end
-
-  defp green_head?(record, head) do
-    case CiPoller.observed_head(Map.get(record, :issue_id), repo_opts(Map.get(record, :repo_key))) do
-      %{commit_sha: ^head, conclusion: @green_conclusion} -> true
-      _observed -> false
-    end
-  end
-
-  defp fallback(current, reason), do: {:fallback, %{current | state: "fallback", reason: truncate(reason)}}
-
-  @doc "The Linear comment posted when auto-merge falls back to the landing agent."
-  @spec fallback_comment(String.t() | nil, t()) :: String.t()
-  def fallback_comment(pr_url, %{reason: reason}) do
+  @doc "The Linear comment posted when a landing agent takes the PR over from auto-merge."
+  @spec fallback_comment(String.t() | nil, String.t()) :: String.t()
+  def fallback_comment(pr_url, reason) do
     "Symphony couldn't land #{pr_url || "this PR"} with GitHub auto-merge (#{reason}), so a landing agent will merge it instead."
   end
 
-  @doc """
-  Short status for the dashboard and `/api/v1/state`, for example
-  "auto-merge on, waiting for CI on `abc1234`".
-  """
-  @spec describe(term()) :: String.t() | nil
-  def describe(%{state: "enabled", head_sha: head}), do: "auto-merge on, waiting for CI on #{short_sha(head)}"
-  def describe(%{state: "updating_branch", head_sha: head}), do: "updating branch (#{short_sha(head)} is behind the base branch)"
-  def describe(%{state: "waiting_to_land", head_sha: head, reason: reason}), do: "#{short_sha(head)} is behind the base branch and #{reason}"
-  def describe(%{state: "merging", head_sha: head}), do: "merging #{short_sha(head)}"
-  def describe(%{state: "conflict", head_sha: head, disabled_at: %DateTime{}}), do: "blocked: conflict on #{short_sha(head)}; auto-merge off until the fix is approved again"
-  def describe(%{state: "conflict", head_sha: head}), do: "blocked: conflict on #{short_sha(head)}"
-  def describe(%{state: "ci_failure", head_sha: head}), do: "auto-merge off: CI failed on #{short_sha(head)}; the fix goes back through review"
-  def describe(%{state: "protected_paths", head_sha: head}), do: "auto-merge off: protected paths failed on #{short_sha(head)}; waiting for a person"
-  def describe(%{state: "fallback", reason: reason}), do: "fell back to the landing agent: #{reason}"
-  def describe(%{state: "merged"}), do: "merged"
-  def describe(%{state: "waiting"}), do: "waiting for the PR head"
-  def describe(_auto_merge), do: nil
-
-  @doc "Marks the state when the PR poller sends a conflicting PR down the conflict path."
-  @spec conflict(term(), String.t() | nil, DateTime.t()) :: t()
-  def conflict(previous, head, %DateTime{} = now) do
-    %{for_head(previous, head, now) | state: "conflict", reason: "the PR conflicts with the base branch"}
-  end
-
-  @doc """
-  Turns GitHub auto-merge off for a PR going down the conflict path, before the conflict-fix
-  run starts. The approval covered the diff before the conflict, so the fix goes back through
-  review, and only a fresh move to `Merging` turns auto-merge on again. `current` is the
-  conflict state the poller is about to store. Acts only when auto-merge is on: GitHub shows
-  it, or `step/5` turned it on for this head on this poll.
-
-    * `{:ok, auto_merge}`: auto-merge was off already; nothing changed.
-    * `{:disabled, auto_merge}`: turned off. `disabled_at` records when, and `enabled_head_sha`
-      is cleared so the next `Merging` stay turns it on again, even at the same head.
-    * `{:error, reason}`: it couldn't be turned off; the PR must not go to a conflict-fix run yet.
-  """
-  @spec disable_for_conflict(map(), map(), t(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
-  def disable_for_conflict(record, activity, current, opts, %DateTime{} = now) do
-    turn_off(record, activity, current, opts, now)
-  end
-
-  @doc """
-  Turns GitHub auto-merge off for a `Merging` PR whose red head goes to a CI-fix run, before
-  that run starts. The fix can push code the approval never covered, so it goes back through
-  review. `ci_status` is the CI poller's read of the PR (`pr_node_id`, `auto_merge_enabled`).
-  The returned state is a `ci_failure` hold, which `step/5` never turns on again; the PR
-  poller drops it once the issue leaves `Merging`, so only a fresh move to `Merging` turns
-  auto-merge back on, even when the head didn't change. Results as for `disable_for_conflict/5`.
-  """
-  @spec disable_for_ci_fix(map(), map(), term(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
-  def disable_for_ci_fix(record, ci_status, previous, opts, %DateTime{} = now) do
-    head = Map.get(ci_status, :commit_sha)
-    current = %{for_head(previous, head, now) | state: "ci_failure", enabled_head_sha: nil, reason: "CI failed; the fix goes back through review"}
-    activity = %{pr_url: Map.get(ci_status, :pr_url), pr_node_id: Map.get(ci_status, :pr_node_id), auto_merge_enabled: Map.get(ci_status, :auto_merge_enabled)}
-
-    turn_off(record, activity, current, opts, now)
-  end
-
-  @doc """
-  True while Symphony has GitHub auto-merge on for the PR (or is merging it) and hasn't turned it
-  off since: a record `disable_for_exit/5` acts on once the issue leaves `Merging`.
-  """
-  @spec on?(term()) :: boolean()
-  def on?(%{state: state, enabled_head_sha: head}) when state in ["enabled", "updating_branch", "waiting_to_land", "merging"], do: is_binary(head)
-  def on?(_auto_merge), do: false
-
-  @doc """
-  Turns GitHub auto-merge off for a PR whose issue left `Merging` for a state other than `Done`
-  (a person's move, or the Director's undo), so it doesn't merge without the approval. Results
-  as for `disable_for_conflict/5`; either way the PR poller then forgets the stay, so the next
-  move to `Merging` turns auto-merge on again, even at the same head.
-  """
-  @spec disable_for_exit(map(), map(), t(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
-  def disable_for_exit(record, activity, current, opts, %DateTime{} = now) do
-    turn_off(record, activity, current, opts, now)
-  end
-
-  defp turn_off(record, activity, current, opts, now) do
-    if auto_merge_on?(Map.get(record, :auto_merge), activity, current) do
-      case disable(record, activity, opts) do
-        :ok -> {:disabled, %{current | enabled_head_sha: nil, disabled_at: now, updated_at: now}}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      {:ok, current}
-    end
-  end
-
-  # The activity was read before `step/5` ran, so a head that step turned auto-merge on for
-  # on this poll counts too.
-  defp auto_merge_on?(previous, activity, current) do
-    previous_enabled_head = if is_map(previous), do: Map.get(previous, :enabled_head_sha)
-
-    Map.get(activity, :auto_merge_enabled) == true or
-      (current.enabled_head_sha == current.head_sha and previous_enabled_head != current.head_sha)
-  end
-
-  defp disable(record, activity, opts) do
-    github = Keyword.get(opts, :github, PullRequest)
-
-    case Map.get(activity, :pr_node_id) do
-      node_id when is_binary(node_id) -> github.disable_auto_merge(pr_url(record, activity), node_id, cwd: Map.get(record, :workspace_path))
-      _missing -> {:error, :missing_pr_node_id}
-    end
-  end
-
-  @doc "The Linear comment posted when auto-merge is turned off for a merge conflict."
+  @doc "The Linear comment posted when auto-merge is turned off because the PR conflicts with its base branch."
   @spec conflict_comment(String.t() | nil) :: String.t()
   def conflict_comment(pr_url) do
     "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because it conflicts with the base branch. " <>
@@ -619,7 +105,7 @@ defmodule SymphonyElixir.AutoMerge do
       @back_to_merging
   end
 
-  @doc "The Linear comment posted when auto-merge is turned off because the issue left `Merging` (see `disable_for_exit/5`)."
+  @doc "The Linear comment posted when auto-merge is turned off because the ticket left `Merging`."
   @spec exit_comment(String.t() | nil, String.t() | nil) :: String.t()
   def exit_comment(pr_url, state) do
     left = if state, do: "left Merging for #{state}", else: "left Merging"
@@ -628,48 +114,15 @@ defmodule SymphonyElixir.AutoMerge do
       "so the PR doesn't merge without an approval; moving this ticket to Merging again turns auto-merge back on."
   end
 
-  @doc "Marks the state once GitHub reports the PR merged."
-  @spec merged(term(), DateTime.t()) :: t()
-  def merged(previous, %DateTime{} = now) do
-    head = if is_map(previous), do: Map.get(previous, :head_sha)
-    %{for_head(previous, head, now) | state: "merged", reason: nil}
+  @doc "The Linear comment posted when auto-merge is turned off because a person pushed to the PR in `Merging`."
+  @spec person_push_comment(String.t() | nil) :: String.t()
+  def person_push_comment(pr_url) do
+    "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because a person pushed to it while it was in Merging: " <>
+      "the approval covered the diff before that push, so it goes back to Code Review; " <> @back_to_merging
   end
 
-  @doc "Logs a line when the auto-merge state changes."
-  @spec log_transition(map(), term(), {atom(), t()} | t()) :: :ok
-  def log_transition(record, previous, {_result, current}), do: log_transition(record, previous, current)
+  defp github(opts), do: Keyword.get(opts, :github, PullRequest)
+  defp gh_opts(opts), do: Keyword.drop(opts, [:github])
 
-  def log_transition(record, previous, %{} = current) do
-    if transition?(previous, current) do
-      message = "Auto-merge #{identifier(record)}: #{describe(current)} pr_url=#{Map.get(record, :pr_url)}"
-      if current.state == "fallback", do: Logger.error(message), else: Logger.info(message)
-    end
-
-    :ok
-  end
-
-  defp transition?(%{state: state, head_sha: head}, %{state: state, head_sha: head}), do: false
-  defp transition?(_previous, %{state: nil}), do: false
-  defp transition?(_previous, _current), do: true
-
-  defp merge_state(activity), do: activity |> Map.get(:merge_state_status) |> normalize() |> String.upcase()
-
-  defp pr_url(record, activity), do: Map.get(activity, :pr_url) || Map.get(record, :pr_url)
-
-  defp identifier(record), do: Map.get(record, :issue_identifier) || Map.get(record, :issue_id)
-
-  defp short_sha(sha) when is_binary(sha), do: "`#{String.slice(sha, 0, 7)}`"
-  defp short_sha(_sha), do: "an unknown head"
-
-  defp format_reason(:clean_status), do: "the PR can already merge"
-  defp format_reason({:gh_failed, _args, status, output}) when is_binary(output), do: "#{String.trim(output)} (exit #{status})"
-  defp format_reason(reason), do: inspect(reason)
-
-  defp truncate(reason) do
-    reason = reason |> String.replace(~r/\s+/, " ") |> String.trim()
-    if String.length(reason) > @max_reason_length, do: String.slice(reason, 0, @max_reason_length) <> "…", else: reason
-  end
-
-  defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
-  defp normalize(_value), do: ""
+  defp normalize(value), do: value |> String.trim() |> String.downcase()
 end

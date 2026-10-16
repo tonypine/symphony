@@ -12,7 +12,6 @@ defmodule SymphonyElixir.Orchestrator do
     AgentRunner,
     AgentTelemetry,
     AuditLog,
-    AutoMerge,
     BlockedHold,
     BreakdownReview,
     BuildInfo,
@@ -33,6 +32,7 @@ defmodule SymphonyElixir.Orchestrator do
     PlanReview,
     PrReviewPoller,
     PrRun,
+    PrWatch,
     Quality,
     QualityGate,
     RetiredStates,
@@ -3780,11 +3780,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp review_flow_reason(%Issue{id: issue_id} = issue, %State{merging_ci_waits: merging_ci_waits}) do
     cond do
       code_review_reviewer_disabled?(issue) -> "the reviewer is turned off for its repo"
-      code_review_head_blocked?(issue) -> "the reviewer waits for its head to go green"
-      qa_head_blocked?(issue) -> "QA waits for its head to go green"
       is_map_key(merging_ci_waits, issue_id) -> "held in Merging until CI settles on #{merging_ci_waits[issue_id].commit_sha}"
-      auto_merge_landing?(issue) -> "GitHub auto-merge is landing it"
-      true -> nil
+      true -> watch_gate_reason(issue)
     end
   end
 
@@ -4966,7 +4963,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _opts), do: {:ok, issue}
 
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true),
-    do: active_retry_issue?(issue, terminal_states) and !auto_merge_landing?(issue)
+    do: active_retry_issue?(issue, terminal_states) and !landing_gated?(issue)
 
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, _sticky_route?), do: retry_candidate_issue?(issue, terminal_states)
 
@@ -7769,8 +7766,8 @@ defmodule SymphonyElixir.Orchestrator do
 
     skipped = error_skipped ++ cached_skipped
 
-    {auto_merge, auto_merge_ms} = timed_part(&PrReviewPoller.auto_merge_statuses/0)
-    {landing_waits, landing_waits_ms} = timed_part(&PrReviewPoller.landing_waits/0)
+    {auto_merge, auto_merge_ms} = timed_part(&PrWatch.auto_merge_statuses/0)
+    {landing_waits, landing_waits_ms} = timed_part(&PrWatch.landing_waits/0)
     {run_history, run_history_ms} = timed_part(fn -> persisted_run_history(state.repo_key) end)
 
     awaiting_clarification =
@@ -9153,17 +9150,33 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
       !issue_held?(issue, terminal_states) and
-      !auto_merge_landing?(issue)
+      !landing_gated?(issue)
   end
 
-  # GitHub auto-merge lands a `Merging` issue without an agent (see AutoMerge); the landing
-  # agent only runs when the PR poller falls back to it.
-  defp auto_merge_landing?(%Issue{} = issue) do
-    if AutoMerge.owns_issue?(issue) do
-      Logger.debug("Skipping dispatch; GitHub auto-merge is landing #{issue_context(issue)}")
+  # With auto-merge on, the PR and CI watcher lands a `Merging` issue without an agent; the landing
+  # agent runs only when its decision hands the PR to one (`SymphonyElixir.PrWatch.dispatch_reason/2`).
+  defp landing_gated?(%Issue{} = issue) do
+    if merging_state?(issue.state) and watch_gate_reason(issue) != nil do
+      Logger.debug("Skipping dispatch; the PR watcher lands #{issue_context(issue)}")
       true
     else
       false
+    end
+  end
+
+  # Why the PR and CI watcher's decision holds the issue's run back: a Code Review or QA run starts
+  # on a green, conflict-free head (the decision `dispatch`), and a `Merging` landing agent only when
+  # the decision hands the PR to one. Nil in every other phase.
+  defp watch_gate_reason(%Issue{} = issue) do
+    case issue_repo_key(issue) do
+      repo_key when is_binary(repo_key) ->
+        case Config.settings_for_repo(repo_key) do
+          {:ok, settings} -> PrWatch.dispatch_reason(%{issue | repo_key: repo_key}, settings)
+          {:error, _reason} -> nil
+        end
+
+      nil ->
+        PrWatch.dispatch_reason(issue, Config.settings!())
     end
   end
 
@@ -9185,11 +9198,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp quiet_post_pr_issue?(_issue, _state), do: false
 
-  # The reviewer run starts only on a green head. A verdict binds to the head it judged, so a
-  # verdict on a red head is not actionable; a head whose checks are still running, or that has
-  # none yet, is not green either.
+  # The reviewer run starts only on a green, conflict-free head (the PR watcher's `dispatch`). A
+  # verdict binds to the head it judged, so a verdict on a red head is not actionable; a head whose
+  # checks are still running, or that has none yet, is not green either.
   defp code_review_head_blocked?(%Issue{} = issue) do
-    code_review_issue?(issue) and not green_head?(issue)
+    code_review_issue?(issue) and watch_gate_reason(issue) != nil
   end
 
   # A repo with the reviewer turned off cannot review anything. `ReviewAgent.evaluate/4` answers a
@@ -9229,13 +9242,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp green_head?(%Issue{} = issue) do
-    case ticket_ci_state(issue) do
-      %{status: status} -> normalize_issue_state(status) == "green"
-      _none -> false
-    end
-  end
-
   defp ticket_ci_state(%Issue{id: issue_id} = issue) when is_binary(issue_id) do
     case issue_repo_key(issue) do
       nil ->
@@ -9251,11 +9257,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp ticket_ci_state(_issue), do: nil
 
-  # The QA run starts only on a green head, exactly as the reviewer run does. A verdict binds to
-  # the head it judged, so a verdict on a red head is not actionable; a head whose checks are still
-  # running, or that has none yet, is not green either.
+  # The QA run starts only on a green, conflict-free head, exactly as the reviewer run does.
   defp qa_head_blocked?(%Issue{} = issue) do
-    qa_issue?(issue) and not green_head?(issue)
+    qa_issue?(issue) and watch_gate_reason(issue) != nil
   end
 
   defp qa_issue?(%Issue{state: state} = issue) when is_binary(state) do
@@ -9402,7 +9406,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp pending_reviewer_comments?(_issue_id, _repo_key), do: false
 
   defp pending_ci_failure?(issue_id, repo_key) when is_binary(issue_id) do
-    not is_nil(CiPoller.pending_ci_failure(issue_id, repo_key_opt(repo_key)))
+    not is_nil(PrWatch.pending_ci_failure(issue_id, repo_key_opt(repo_key)))
   end
 
   defp pending_ci_failure?(_issue_id, _repo_key), do: false

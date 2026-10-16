@@ -180,7 +180,8 @@ defmodule SymphonyElixir.Application do
     end
   end
 
-  # The PR and CI watcher only gathers facts for now; it watches the repos whose PRs are polled.
+  # The PR and CI watcher decides and acts on every CI and merge row; it watches the repos whose PRs
+  # are polled.
   defp pr_watch_child_spec(%SystemSchema{repos: repos}) do
     case for(repo <- repos, pr_review_enabled_for_repo?(repo), do: repo.name) do
       [] -> nil
