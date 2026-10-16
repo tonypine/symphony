@@ -53,6 +53,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Walkthrough
@@ -111,6 +112,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
           optional(:journey) => %{source: String.t(), text: String.t() | nil},
+          optional(:proofs) => [QaPreCheck.result()],
           optional(:design_files) => [Design.file()]
         }
   @type run_result :: %{result: result(), tokens: map()}
@@ -405,7 +407,24 @@ defmodule SymphonyElixir.QaAgent do
 
   # Each walkthrough step names the one place that proves it (ADR 0003): a named automated test or
   # QA. QA links a named test's result instead of walking its step, and walks the rest; a step with
-  # no `Proved by:` is a QA step, so tickets written before the rule are walked as before.
+  # no `Proved by:` is a QA step, so tickets written before the rule are walked as before. In the QA
+  # state Symphony's pre-check (`SymphonyElixir.QaPreCheck`) has already confirmed each named test on
+  # the head before the agent starts, so the agent only links the results it is given.
+  defp proof_routing(%{proofs: [_ | _] = proofs} = job, journey) do
+    """
+    Each walkthrough step names the one place that proves it. Symphony confirmed every step a named
+    automated test proves before you started: its check passed on `#{job.sha}` and its test is in the
+    checkout. Do not walk those steps and do not read their checks again. Report each as its own step
+    with the status `pass`, named after the walkthrough step, with the result below in `details` and
+    the check run's URL in `evidence`. Walk every step that says `Proved by: QA` or names no proof.
+
+    Steps a named test proves (confirmed by Symphony, do not walk them):
+    #{Enum.map_join(proofs, "", &confirmed_line/1)}
+    Steps to walk (`Proved by: QA`, or no proof named):
+    #{step_lines(Enum.reject(Map.get(journey, :steps, []), &Walkthrough.named_test?/1), false)}\
+    """
+  end
+
   defp proof_routing(job, journey) do
     """
     Each walkthrough step names the one place that proves it. A step ending in
@@ -442,6 +461,10 @@ defmodule SymphonyElixir.QaAgent do
         #{step_lines(qa_steps, false)}
         """
     end
+  end
+
+  defp confirmed_line(%{step: step} = proof) do
+    "- #{step.number}. #{String.replace(step.text, ~r/\s+/, " ")} #{Walkthrough.proof_line(step)}: pass, #{QaPreCheck.linked(proof)}\n"
   end
 
   defp step_lines([], _proof?), do: "- none\n"
