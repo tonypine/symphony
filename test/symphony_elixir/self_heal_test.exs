@@ -585,6 +585,19 @@ defmodule SymphonyElixir.SelfHealTest do
       assert description =~ "- Findings:\n  - `symphony check` exits 1"
     end
 
+    test "gives the run's own reason, not its first finding, with the findings listed apart" do
+      outcome = outcome(:environment_unreachable, %{reason: "the QA build has no hub command", findings: ["the count truncates"]})
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert %{description: description} = Process.get(:fixer_create)
+      assert description =~ "- Reason: the QA build has no hub command\n"
+      assert description =~ "- Findings:\n  - the count truncates"
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(%{outcome | reason: nil}))
+      assert %{description: description} = Process.get(:fixer_create)
+      assert description =~ "- Reason: the count truncates\n"
+    end
+
     test "falls back to the outcome's reason, and to a default when it has none" do
       assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable, %{reason: "the sandbox could not start"})))
       assert %{description: description} = Process.get(:fixer_create)

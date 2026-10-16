@@ -557,8 +557,10 @@ defmodule SymphonyElixir.SelfHeal do
   defp needs_person?(%{needs_person: true}), do: true
   defp needs_person?(_outcome), do: false
 
-  defp reason(%{findings: [first | _]}) when is_binary(first), do: first
+  # What blocked the run: its own reason first. Its findings are defects in the change, listed apart
+  # in the evidence, and stand in only when the run gave no reason.
   defp reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason
+  defp reason(%{findings: [first | _]}) when is_binary(first), do: first
   defp reason(_outcome), do: "the run could not verify the change"
 
   defp label(%Issue{identifier: identifier}) when is_binary(identifier), do: identifier

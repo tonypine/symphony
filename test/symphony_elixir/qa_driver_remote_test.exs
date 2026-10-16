@@ -496,12 +496,12 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
     test "launch returns the app's PID and its output; kill stops it", %{root: root, ssh_host: ssh_host} do
       app = Path.join(root, "app.sh")
-      write_script!(app, "#!/bin/sh\necho \"root=$SYMPHONY_BAR_QA_ROOT unset=${DROPPED:-none}\"\nexec sleep 30\n")
+      write_script!(app, "#!/bin/sh\necho \"root=$SYMPHONY_BAR_QA_ROOT unset=${DROPPED:-none} args=$*\"\nexec sleep 30\n")
 
       env = [{"SYMPHONY_BAR_QA_ROOT", root}, {~c"DROPPED", false}]
-      assert {:ok, port, pid} = Remote.launch(ssh_host, app, cd: root, env: env)
+      assert {:ok, port, pid} = Remote.launch(ssh_host, app, cd: root, env: env, args: ["-AppleInterfaceStyle", "Dark"])
       assert_receive {^port, {:data, data}}, 5_000
-      assert data =~ "root=#{root} unset=none"
+      assert data =~ "root=#{root} unset=none args=-AppleInterfaceStyle Dark"
 
       assert :ok = Remote.kill(ssh_host, pid)
       assert_receive {^port, {:exit_status, _status}}, 5_000
