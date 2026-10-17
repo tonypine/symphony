@@ -205,6 +205,31 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "Never add a label to say a person must act: `Needs Decision` is set by the tool, not by you."
   end
 
+  test "ci_triage fixes every red check at its cause and ends a CI-fix run in one of three ways" do
+    assert {:ok, body} = Playbook.fetch("ci_triage")
+    flat = String.replace(body, ~r/\s+/, " ")
+
+    assert flat =~ "Every red check is a defect to fix, never a check to rerun."
+    assert flat =~ "A test that fails only some of the time is a defect like any other."
+    assert flat =~ "fix it at that cause"
+    assert flat =~ "`mix test <file>:<line> --repeat-until-failure 500`"
+    assert flat =~ "Fix a failure in code the ticket didn't touch the same way, on the same branch"
+    assert flat =~ "make the failing step robust where you can, for example a bounded retry inside the step. When you cannot, ask with `linear_request_human_action`."
+    assert flat =~ "A CI-fix run ends in one of three ways only:"
+    assert flat =~ "**A new head.**"
+    assert flat =~ "**A move to `Rework`.**"
+    assert flat =~ "**A request for a person.**"
+    assert flat =~ "Deciding that a failure is flaky, or that it is not this ticket's, is not an ending"
+
+    refute flat =~ "flaky/retryable"
+    refute flat =~ "rerun of a flaky check"
+    refute flat =~ "document it in the workpad"
+
+    assert {:ok, status_map} = Playbook.fetch("status_map")
+    assert status_map =~ "every red check is fixed, never rerun"
+    refute status_map =~ "rerun of a flaky check"
+  end
+
   test "review_brief keeps one brief per ticket, edited in place, with the fixed format and the moves for each kind" do
     assert {:ok, body} = Playbook.fetch("review_brief")
     flat = String.replace(body, ~r/\s+/, " ")
