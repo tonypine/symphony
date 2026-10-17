@@ -2198,24 +2198,42 @@ github:
   # draft. A human reviewer marks it ready. Set to false to open PRs ready for
   # review by default. An explicit draft argument from the agent always wins.
   open_pull_requests_as_draft: true
-  # GitHub webhooks through a relay; they speed up the CI poll, which stays on.
+  # GitHub webhooks through a relay; they feed the PR and CI watcher, whose poll stays on.
   webhooks:
     enabled: false
     relay: smee # smee | cloudflare_tunnel | gh_webhook_forward
     secret: $GITHUB_WEBHOOK_SECRET # unset: read <state-root>/github_webhook_secret
-    events: [check_suite, check_run, workflow_run, pull_request]
+    events: [check_suite, check_run, workflow_run, pull_request, push, release]
+    fallback_poll_interval_ms: 300000 # the safety-net poll while deliveries are healthy
+    silence_alert_minutes: 10 # warn after this long without a delivery
 ```
 
-`webhooks` lets GitHub tell Symphony that a pull request's checks finished, so a CI result lands in
-seconds instead of up to one `pull_requests.poll_interval_ms`. Symphony listens on
-`127.0.0.1`, so the deliveries come through a relay to `POST /api/v1/github/webhook` on the
-dashboard port. A delivery about a PR the CI poller already watches runs the CI poll for that
-repository at once, and a `ping` (sent when a hook is created) runs a full poll. Deliveries whose
-`X-Hub-Signature-256` does not verify get `401` and are logged without their payload. The timed
-poll keeps running and catches up on anything the relay drops while the Mac sleeps or Symphony
-restarts. The dashboard's GitHub webhooks card shows whether webhooks are on, when the last
-delivery arrived, and how many CI results came through the relay and how many by polling. See
-[github-webhooks.md](github-webhooks.md) for relay setup on macOS.
+`webhooks` lets GitHub tell Symphony at once that a pull request's checks finished, its head moved,
+it closed, or its base branch moved, so a red head or a conflict reaches its CI Fix run within
+seconds instead of up to one `pull_requests.poll_interval_ms`. Symphony listens on `127.0.0.1`, so
+the deliveries come through a relay to `POST /api/v1/github/webhook` on the dashboard port. Each
+delivery patches the facts the PR and CI watcher keeps for the PRs it names (`watch.source` reads
+`webhook`), and the watcher reads those PRs 3 seconds later, once a CI run's burst of deliveries
+settled; only that read decides and acts, as the timed poll does, and only a read calls a head
+green. A `push` to a base branch marks every open watched PR on it as of unknown mergeability and
+reads them one by one, 1 second apart; a PR that closed by merging does the same for its base. A
+`ping` (sent when a hook is created) reads every watched PR. A `release` published on
+`tonypine/symphony`, the repository the macOS app updates from, records its newest release; the
+watcher of the first repository also reads it on each timed tick, with one conditional
+`gh api` request. Deliveries whose `X-Hub-Signature-256` does not verify get `401` and are logged
+without their payload.
+
+Polling stays on and catches up on anything the relay drops while the Mac sleeps or Symphony
+restarts. While deliveries are healthy (one arrived, and no read since found a change none
+reported) the watcher's timed poll is only a safety net, every `fallback_poll_interval_ms`; a read
+that finds a change no delivery reported marks them unhealthy, and the watcher polls every
+`pull_requests.poll_interval_ms` again until the next delivery. Each repository's health (last
+delivery, signature failures in the last 24 hours, deliveries missed) is kept across restarts. A
+repository with no delivery for `silence_alert_minutes` is reported as silent. The dashboard's
+GitHub webhooks card shows whether webhooks are on, when the last delivery arrived, and how many CI
+results came through the relay and how many by polling. Both intervals are in the app's Settings
+window, under **GitHub updates**. See [github-webhooks.md](github-webhooks.md) for relay setup on
+macOS.
 
 ### `notifications`
 

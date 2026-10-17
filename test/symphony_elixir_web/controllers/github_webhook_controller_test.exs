@@ -3,10 +3,13 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, post: 3, json_response: 2]
 
+  alias SymphonyElixir.PrWatch.Release
+
   @endpoint SymphonyElixirWeb.Endpoint
   @secret "s3cret"
 
-  defmodule ForwardingPoller do
+  # Stands in for a running PR watcher: it forwards what the controller hands it.
+  defmodule ForwardingWatcher do
     use GenServer
 
     def start_link(opts), do: GenServer.start_link(__MODULE__, Keyword.fetch!(opts, :owner), name: Keyword.fetch!(opts, :name))
@@ -16,19 +19,19 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
 
     @impl true
     def handle_cast(message, owner) do
-      send(owner, {:poller_cast, message})
+      send(owner, {:watcher_cast, message})
       {:noreply, owner}
     end
   end
 
   setup do
-    name = Module.concat(__MODULE__, "Poller#{System.unique_integer([:positive])}")
-    start_supervised!({ForwardingPoller, name: name, owner: self()})
+    name = Module.concat(__MODULE__, "Watcher#{System.unique_integer([:positive])}")
+    start_supervised!({ForwardingWatcher, name: name, owner: self()})
 
     endpoint_config =
       :symphony_elixir
       |> Application.get_env(SymphonyElixirWeb.Endpoint, [])
-      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64), ci_poller: name)
+      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64), pr_watchers: [name])
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
@@ -44,16 +47,44 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
     conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "ping"}, signature(body)])
 
     assert %{"error" => %{"code" => "not_found"}} = json_response(conn, 404)
-    refute_receive {:poller_cast, _message}
+    refute_receive {:watcher_cast, _message}
   end
 
-  test "hands a signed JSON delivery to the CI poller" do
-    body = Jason.encode!(%{"action" => "completed", "check_suite" => %{"head_sha" => "abc123"}})
+  test "hands a signed JSON delivery, and the repository it names, to the PR watcher" do
+    body = Jason.encode!(%{"action" => "completed", "check_suite" => %{"head_sha" => "abc123"}, "repository" => %{"html_url" => "https://github.com/acme/app"}})
     conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "check_suite"}, signature(body)])
 
     assert json_response(conn, 202) == %{"status" => "accepted"}
 
-    assert_receive {:poller_cast, {:webhook_delivery, {:ci, %{event: "check_suite", action: "completed", head_sha: "abc123", pr_urls: []}}}}
+    assert_receive {:watcher_cast, {:ingest, {:ci, %{event: "check_suite", action: "completed", head_sha: "abc123", pr_urls: []}}, "https://github.com/acme/app"}}
+
+    body = Jason.encode!(%{"ref" => "refs/heads/main", "after" => "abc", "repository" => %{"html_url" => "https://github.com/acme/app"}})
+    conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "push"}, signature(body)])
+
+    assert json_response(conn, 202) == %{"status" => "accepted"}
+    assert_receive {:watcher_cast, {:ingest, {:push, %{ref: "main"}}, "https://github.com/acme/app"}}
+
+    conn = post_webhook(Jason.encode!(%{"zen" => "hi"}), [{"content-type", "application/json"}, {"x-github-event", "ping"}, signature(Jason.encode!(%{"zen" => "hi"}))])
+    assert json_response(conn, 202) == %{"status" => "catching_up"}
+    assert_receive {:watcher_cast, {:ingest, :ping, nil}}
+  end
+
+  test "answers 503 while no PR watcher runs, except for a release, which is recorded anyway" do
+    stop_supervised!(ForwardingWatcher)
+    body = Jason.encode!(%{"action" => "completed", "check_suite" => %{"head_sha" => "abc123"}})
+    conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "check_suite"}, signature(body)])
+
+    assert %{"error" => %{"code" => "pr_watch_unavailable"}} = json_response(conn, 503)
+
+    release = %{"tag_name" => "v9.0.0", "published_at" => "2026-10-16T08:00:00Z"}
+    body = Jason.encode!(%{"action" => "published", "release" => release, "repository" => %{"full_name" => "tonypine/symphony"}})
+    conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "release"}, signature(body)])
+
+    assert json_response(conn, 202) == %{"status" => "accepted"}
+    assert %{tag: "v9.0.0", source: :webhook} = Release.latest()
+
+    conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "release"}, {"x-hub-signature-256", "sha256=00"}])
+    assert json_response(conn, 401)
   end
 
   test "reads the payload of a signed form-encoded delivery" do
@@ -62,13 +93,13 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
     conn = post_webhook(body, [{"content-type", "application/x-www-form-urlencoded"}, {"x-github-event", "check_run"}, signature(body)])
 
     assert json_response(conn, 202) == %{"status" => "accepted"}
-    assert_receive {:poller_cast, {:webhook_delivery, {:ci, %{event: "check_run", head_sha: "abc123"}}}}
+    assert_receive {:watcher_cast, {:ingest, {:ci, %{event: "check_run", head_sha: "abc123"}}, nil}}
 
     body = URI.encode_query(%{"payload" => "{not json"})
     conn = post_webhook(body, [{"content-type", "application/x-www-form-urlencoded"}, {"x-github-event", "check_run"}, signature(body)])
 
     assert json_response(conn, 202) == %{"status" => "ignored"}
-    assert_receive {:poller_cast, {:webhook_delivery, :ignored}}
+    assert_receive {:watcher_cast, {:ingest, :ignored, nil}}
   end
 
   test "rejects an unsigned delivery, or one in a content type it doesn't read, with 401 and no payload in the log" do
@@ -88,8 +119,21 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
     refute log =~ "payload-value"
     refute log =~ @secret
 
-    assert_receive {:poller_cast, {:webhook_delivery, {:rejected, :missing_signature}}}
-    assert_receive {:poller_cast, {:webhook_delivery, {:rejected, :bad_signature}}}
+    assert_receive {:watcher_cast, {:reject, :missing_signature, nil}}
+    assert_receive {:watcher_cast, {:reject, :bad_signature, nil}}
+  end
+
+  test "with no watchers named, hands deliveries to the running ones: none here" do
+    stop_supervised!(SymphonyElixirWeb.Endpoint)
+    config = :symphony_elixir |> Application.get_env(SymphonyElixirWeb.Endpoint, []) |> Keyword.delete(:pr_watchers)
+    Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, config)
+    start_supervised!({SymphonyElixirWeb.Endpoint, []})
+
+    body = Jason.encode!(%{"action" => "completed", "check_suite" => %{"head_sha" => "abc123"}})
+    conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "check_suite"}, signature(body)])
+
+    assert %{"error" => %{"code" => "pr_watch_unavailable"}} = json_response(conn, 503)
+    refute_receive {:watcher_cast, _message}
   end
 
   test "only takes POST" do

@@ -102,6 +102,13 @@ final class SettingsViewModel: ObservableObject {
     @Published var pendingToolReportMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultPendingToolReportMs)
     /// Why `symphony check` rejected the changed timeouts, shown in their section.
     @Published private(set) var timeoutsError: String?
+    /// `github.webhooks.fallback_poll_interval_ms` and `github.webhooks.silence_alert_minutes` in the configured
+    /// symphony.yml, in minutes: how often Symphony checks GitHub while webhook deliveries arrive, and how long it
+    /// waits without one before warning.
+    @Published var safetyNetCheckMinutes = GitHubUpdates.minutes(GitHubUpdates.defaultFallbackPollMs)
+    @Published var silenceAlertMinutes = GitHubUpdates.defaultSilenceAlertMinutes
+    /// Why `symphony check` rejected the changed GitHub update settings, shown in their section.
+    @Published private(set) var gitHubUpdatesError: String?
     /// `watchdog.dispatch_loop_*` in the configured symphony.yml: the runs of one kind a ticket may get without
     /// progress within each window, in minutes, before Symphony holds it instead of dispatching it again.
     @Published var dispatchLoopRuns = DispatchLoopLimits.defaultRuns
@@ -128,6 +135,10 @@ final class SettingsViewModel: ObservableObject {
     /// The timeouts read from symphony.yml, or nil when they couldn't be read. Only a timeout whose stepper
     /// moved is written.
     private var loadedTimeouts: OperationTimeouts?
+
+    /// The GitHub update settings read from symphony.yml, or nil when they couldn't be read. Only a setting whose
+    /// stepper moved is written.
+    private var loadedGitHubUpdates: GitHubUpdates?
 
     /// The dispatch-loop limits read from symphony.yml, or nil when they couldn't be read. Only a limit whose
     /// stepper moved is written.
@@ -191,6 +202,7 @@ final class SettingsViewModel: ObservableObject {
         loadWorkflowStates()
         loadTicketPatternsBuiltIn()
         loadTimeouts()
+        loadGitHubUpdates()
         loadDispatchLoopLimits()
         loadRunProfiles()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
@@ -344,6 +356,22 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The GitHub update steppers are off until a symphony.yml has been read, and while Save checks it.
+    var canEditGitHubUpdates: Bool { loadedGitHubUpdates != nil && !isSaving }
+
+    private func loadGitHubUpdates() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let updates = try SymphonyConfigFile(path: path).readGitHubUpdates()
+            safetyNetCheckMinutes = GitHubUpdates.minutes(updates.fallbackPollMs)
+            silenceAlertMinutes = GitHubUpdates.stepperMinutes(updates.silenceAlertMinutes)
+            loadedGitHubUpdates = updates
+        } catch {
+            configFileError = "Could not read the GitHub update settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The dispatch-loop steppers are off until a symphony.yml has been read, and while Save checks it.
     var canEditDispatchLoop: Bool { loadedDispatchLoopLimits != nil && !isSaving }
 
@@ -462,7 +490,8 @@ final class SettingsViewModel: ObservableObject {
 
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
-    /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError` or `dispatchLoopError`.
+    /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError` or
+    /// `dispatchLoopError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -483,6 +512,9 @@ final class SettingsViewModel: ObservableObject {
             pendingToolReport: pendingToolReportMinutes
         )
         let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
+        gitHubUpdatesError = nil
+        let updates = loadedGitHubUpdates?.settingMinutes(fallbackPoll: safetyNetCheckMinutes, silenceAlert: silenceAlertMinutes)
+        let oldUpdates = loadedGitHubUpdates.flatMap { $0 != updates ? $0 : nil }
         dispatchLoopError = nil
         let loopLimits = loadedDispatchLoopLimits?.setting(
             runs: dispatchLoopRuns,
@@ -501,7 +533,7 @@ final class SettingsViewModel: ObservableObject {
         let builtInPatterns = ticketPatternsBuiltIn
         let builtInPatternsChanged = loadedTicketPatternsBuiltIn.map { $0 != builtInPatterns } ?? false
 
-        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldLoopLimits != nil
+        guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldLoopLimits != nil
             || loadedPriorities != nil || loadedStates != nil || builtInPatternsChanged else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -517,6 +549,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let timeouts, let oldTimeouts {
                 saved = await saveTimeouts(timeouts, from: oldTimeouts, settings: settings, secrets: secrets)
+            }
+            if saved, let updates, let oldUpdates {
+                saved = await saveGitHubUpdates(updates, from: oldUpdates, settings: settings, secrets: secrets)
             }
             if saved, let loopLimits, let oldLoopLimits {
                 saved = await saveDispatchLoopLimits(loopLimits, from: oldLoopLimits, settings: settings, secrets: secrets)
@@ -646,6 +681,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTimeouts = timeouts
+        return true
+    }
+
+    /// Writes the GitHub update settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveGitHubUpdates(
+        _ updates: GitHubUpdates,
+        from loaded: GitHubUpdates,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeGitHubUpdates(updates, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the GitHub update settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            gitHubUpdatesError = "symphony check rejected these GitHub update settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedGitHubUpdates = updates
         return true
     }
 

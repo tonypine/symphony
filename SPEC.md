@@ -384,8 +384,8 @@ Who writes it, and when it changes:
   returns, beside the handoff signal. A new PR for a ticket replaces whatever PR the record held
   before (closed, merged or another URL).
 - Wherever Symphony already sees a PR finish, it marks the record holding that PR `closed` or
-  `merged`: the GitHub `pull_request` webhook's `closed` delivery, the CI poller's PR read, and the
-  PR review poller's PR read (the auto-merge lane). A record holding another PR is left alone.
+  `merged`: the CI poller's PR read and the PR review poller's PR read (the auto-merge lane). A
+  webhook delivery only patches the PR and CI watcher's facts, whose next read acts on it. A record holding another PR is left alone.
 - At startup, the backfill seeds a record, source `backfill`, for each ticket of each configured repo
   that has none, from the PR URLs Symphony already stores, first found wins: the CI poller's
   record, the PR review poller's record (unless the auto-merge lane saw that PR merge), then the
@@ -946,11 +946,19 @@ Fields:
   - `secret` (string, `$VAR` allowed): the hook's shared secret. When unset, Symphony reads
     `<state-root>/github_webhook_secret`. A delivery whose `X-Hub-Signature-256` does not verify
     gets `401` and is logged without its payload.
-  - `events` (list, default `[check_suite, check_run, workflow_run, pull_request]`): the event
-    types acted on.
-  - A delivery about a PR the CI poller already watches runs the CI poll for that repository at
-    once, through the same state machine as the timed poll; a `ping` runs a full poll. Polling
-    stays on and catches up on anything a relay drops.
+  - `events` (list, default `[check_suite, check_run, workflow_run, pull_request, push, release]`):
+    the event types acted on.
+  - `fallback_poll_interval_ms` (integer, default `300000`): the PR and CI watcher's timed poll
+    while deliveries are healthy.
+  - `silence_alert_minutes` (integer, default `10`): a repository with no delivery for this long is
+    reported as silent.
+  - A delivery patches the PR and CI watcher's facts for the PRs it names and the watcher reads
+    them 3 seconds later; only that read decides, through the same decision table as the timed
+    poll, and only a read writes a green head. A `push` to a base branch re-reads every open
+    watched PR on it, 1 second apart; a `ping` reads every watched PR. A published `release` of the
+    app's repository records its newest release, which the timed poll also reads. Polling stays
+    on: every `fallback_poll_interval_ms` while deliveries are healthy, and every
+    `pull_requests.poll_interval_ms` once a read finds a change no delivery reported.
 
 #### 5.4.8 `hooks` (object)
 

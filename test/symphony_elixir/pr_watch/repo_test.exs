@@ -81,6 +81,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     def list_ticket_states(_repo_key), do: {:error, :store_down}
     def list_runs_with_status(_status), do: {:error, :store_down}
     def put_ticket_pr_watch(_repo_key, _issue_id, _identifier, _watch), do: {:error, :store_down}
+    def get_github_updates(_key), do: {:error, :store_down}
+    def put_github_updates(_key, _value), do: {:error, :store_down}
     def list_pr_reviews(_repo_key), do: {:error, :store_down}
   end
 
@@ -460,6 +462,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid) end)
     assert log =~ "PR watch could not write the facts issue_id=1 issue_identifier=TP-1 reason=:store_down"
+    assert log =~ "PR watch could not keep the GitHub delivery health repo_key=#{repo_key} reason=:store_down"
     assert RunStore.get_ticket_state(repo_key, "1") == nil
   end
 
