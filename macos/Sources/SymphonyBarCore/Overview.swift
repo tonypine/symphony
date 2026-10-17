@@ -139,9 +139,15 @@ public struct Overview: Equatable {
         case stopForcing(String)
         /// Opens the Stop Run sheet (D12c); nothing stops until its button is pressed.
         case stopRun(String)
+        /// Check Now: the ticket's PR and CI watcher reads and decides at once.
+        case checkNow(String)
+        /// Opens the ticket's page (D3), named in full where the row's first button is another one.
+        case openTicket(String)
 
         public var title: String {
             switch self {
+            case .checkNow: PRWatchCard.checkNowTitle
+            case .openTicket: "Open Ticket"
             case .open: "Open"
             case .openInLinear: "Open in Linear"
             case .openDiagnostics: "Open Diagnostics"
@@ -166,6 +172,8 @@ public struct Overview: Equatable {
         case staleForced
         /// Processes left running after their runs ended.
         case strayProcesses
+        /// A watched ticket with nothing under way and no reason anybody can act on (S17).
+        case silentWait
     }
 
     public enum Severity: Int, Comparable {
@@ -195,7 +203,7 @@ public struct Overview: Equatable {
 
         /// The ticket the row is about, which Return and a double-click open; nil for a hold or stray processes.
         public var ticketIdentifier: String? {
-            kinds.contains { [.stuck, .failing, .staleForced, .conflict].contains($0) } ? id : nil
+            kinds.contains { [.stuck, .failing, .staleForced, .conflict, .silentWait].contains($0) } ? id : nil
         }
     }
 
@@ -537,6 +545,17 @@ public struct Overview: Equatable {
                 subject: ticket.identifier, kind: .staleForced, severity: .warning,
                 sentence: "\(ticket.identifier) has been forced\(forFor) and is still not done.",
                 ageSeconds: ticket.forcedForSeconds, fixes: fixes
+            ))
+        }
+
+        // S17: the watcher found nothing under way and no reason on it. A ticket of no known repo shows under every scope.
+        for wait in state.silentWaits where (wait.repoKey ?? index.repoKey(identifier: wait.identifier)).map(scope.includes) ?? true {
+            let phase = WatchBlock.phaseName(wait.phase).map { " in \($0)" } ?? ""
+            findings.append(Finding(
+                subject: wait.identifier, kind: .silentWait, severity: .problem,
+                sentence: "\(wait.identifier)\(phase): \(PRWatchCard.silentSentence(bound: wait.bound)).",
+                ageSeconds: wait.since.map { max(Int(reference.timeIntervalSince($0)), 0) },
+                fixes: [.checkNow(wait.identifier), .openTicket(wait.identifier)]
             ))
         }
 

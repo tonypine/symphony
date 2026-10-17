@@ -18,7 +18,8 @@ struct InboxContent: View {
                 openOverview: { model.show(.overview) },
                 openTicket: model.openTicket,
                 openMention: model.openPeek,
-                openMentionDirectly: model.openMentionDirectly
+                openMentionDirectly: model.openMentionDirectly,
+                watches: model.watchState.watches
             )
             // N4: a chip opens its peek beside the review, or over the window when that would leave it too narrow.
             .modifier(PeekPresenter(model: model))
@@ -65,6 +66,8 @@ struct InboxView: View {
     var openMention: (Mention) -> Void = { _ in }
     /// ⌘-click on a chip: the ticket's page, or the pull request on GitHub.
     var openMentionDirectly: (Mention) -> Void = { _ in }
+    /// The PR and CI watcher's block on each ticket, by identifier, for a watcher decision's evidence (S16).
+    var watches: [String: WatchBlock] = [:]
     /// True while the review is narrower than `narrowReviewWidth`.
     @State private var narrow = false
 
@@ -89,7 +92,8 @@ struct InboxView: View {
                                 openTicket: { openTicket(item.identifier) },
                                 openMention: openMention,
                                 openMentionDirectly: openMentionDirectly,
-                                narrow: narrow
+                                narrow: narrow,
+                                evidence: WatcherEvidence(item: item, watch: watches[item.identifier])
                             )
                             // Picking the write-in scrolls its field into view, once it is laid out.
                             .onChange(of: item.review.action?.isWriteIn(picks(item.id)) == true) { _, picked in
@@ -276,6 +280,8 @@ struct InboxReviewBody: View {
     var narrow = false
     /// The context card's clock: an earlier call today shows its time only.
     var now = Date()
+    /// What the watcher found behind its decision (S16), above the options.
+    var evidence: WatcherEvidence?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -289,7 +295,10 @@ struct InboxReviewBody: View {
                 BriefSections(brief: item.review.brief)
             case .action:
                 if let action = item.review.action {
-                    ActionCards(action: action, picks: picks, pick: { pick($0, 0) }, writeIn: writeIn, answerable: item.answerable, narrow: narrow)
+                    ActionCards(
+                        action: action, picks: picks, pick: { pick($0, 0) }, writeIn: writeIn, answerable: item.answerable, narrow: narrow,
+                        evidence: evidence
+                    )
                 }
             case .clarify:
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
@@ -633,6 +642,8 @@ private struct ActionCards: View {
     /// True when the item carries an answerable request.
     var answerable = false
     var narrow = false
+    /// What the watcher found behind its decision, between the story and the options.
+    var evidence: WatcherEvidence?
     @FocusState private var writeInFocused: Bool
 
     var body: some View {
@@ -644,6 +655,7 @@ private struct ActionCards: View {
             }
         }
         StoryCard(paragraphs: action.whyParagraphs, ifUnanswered: action.ifUnanswered)
+        if let evidence { EvidenceCard(evidence: evidence) }
         if !action.options.isEmpty {
             Card(title: "Options", hint: answerable && !narrow ? action.keyHint : nil) {
                 OptionCardList(
@@ -673,6 +685,36 @@ private struct ActionCards: View {
                         }
                         .accessibilityElement(children: .combine)
                     }
+                }
+            }
+        }
+    }
+}
+
+/// S16: what the PR and CI watcher found behind its decision: the checks, the files and the error lines.
+private struct EvidenceCard: View {
+    let evidence: WatcherEvidence
+
+    var body: some View {
+        Card(title: WatcherEvidence.title) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                Text(evidence.subject)
+                    .font(DesignTokens.TypeStyle.rowTitle.font)
+                    .help(evidence.help)
+                ForEach(Array(evidence.rows.enumerated()), id: \.offset) { _, row in
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                        Text(row.label)
+                            .font(DesignTokens.TypeStyle.callout.font)
+                            .foregroundStyle(.secondary)
+                        ForEach(Array(row.values.enumerated()), id: \.offset) { _, value in
+                            Text(value)
+                                .font(row.monospaced ? DesignTokens.TypeStyle.mono.font : DesignTokens.TypeStyle.body.font)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(row.accessibilityLabel)
                 }
             }
         }

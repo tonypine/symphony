@@ -140,6 +140,27 @@ GitHub or Linear in QA:
   `qa_put_checkout`, pass its `path` as `open_panel_dir`, and the panel opens inside it: press
   its Choose button without selecting anything to choose that folder. Use one launch per
   checkout you need to pick.
+- **PR and CI watcher:** pass `macos/Tests/Fixtures/director-app/pr-watch` as `api_fixtures`.
+  Its clock is 2026-10-16 12:04 UTC. Open each ticket from Tickets (or from Overview's Code
+  Review & QA and Merging tiles) and judge its **PR and CI** card, the first card on the page:
+  - TP-701 (Code Review, CI running): the first line reads "Waiting for CI on 9f8e7d6", then
+    "CI acts next, until the checks finish · 4 min", "Updated 4 min ago · check" and the fact
+    "Fix attempts: Checks 2 of 10 · conflict 1 of 3 · last: conflict with main". Press
+    **Check Now**: `qa_api_requests` lists a `POST /api/v1/issues/TP-701/watch/check`, and the
+    Updated line reads "Updated 3 s ago · check".
+  - Overview reads "1 thing needs attention." with the row "TP-702 in Rework: nothing is running
+    and nothing says why." and its buttons **Check Now** (prominent) and **Open Ticket**; Open
+    Ticket opens TP-702's page.
+  - Inbox, Decisions: TP-703's review has **What the watcher found** above its options, with the
+    failing check `protected paths` and the files `WORKFLOW.md` and
+    `config/settings_ui_exempt.yml`; "Drop the change in Rework" is marked Recommended. Send
+    Decision posts `POST /api/v1/control/decide` and the selection moves to TP-706.
+  - TP-704 (Merging): "Waiting on TP-705 to land · they change the same file (SPEC.md)" with
+    **Open TP-705**. TP-707: "CI keeps failing: waiting on TP-708, a fix ticket for the test
+    check" with **Open TP-708**. TP-709: "PR #709 was closed without merging. Sent back to
+    Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
+  - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
+    next, since when, Updated), each action row as one, and each button by its title.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
