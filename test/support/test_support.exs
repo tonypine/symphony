@@ -4,6 +4,7 @@ defmodule SymphonyElixir.TestSupport do
   @workflow_prompt "You are an agent for this repository."
   @supervised_child_wait_ms 5_000
   @supervised_child_retry_ms 10
+  @leftover_task_grace_ms 500
 
   defmacro __using__(_opts) do
     quote do
@@ -47,6 +48,8 @@ defmodule SymphonyElixir.TestSupport do
         ]
 
       setup do
+        SymphonyElixir.TestSupport.stop_leftover_work()
+
         workflow_root =
           Path.join(
             System.tmp_dir!(),
@@ -518,6 +521,49 @@ defmodule SymphonyElixir.TestSupport do
         Process.demonitor(ref, [:flush])
         stop_process(pid)
     end
+  end
+
+  # Work a test starts in the background outlives it: agent runs and an orchestrator's startup
+  # workspace sweep run under the shared TaskSupervisor, and so do WorkspaceCleanup's removals.
+  # Each reads the workflow, the workspace root and the run store as it gets to a step, so one left
+  # running acts on the next test's: it runs that test's `after_create` hook, sweeps that test's
+  # workspace root, or changes what that test dispatches. Every test starts with none left: they get a
+  # moment to finish, then are stopped. WorkspaceCleanup stops first, so it starts no queued
+  # removal meanwhile, and starts again empty.
+  def stop_leftover_work do
+    with supervisor when is_pid(supervisor) <- named_process(SymphonyElixir.TaskSupervisor),
+         [_ | _] = tasks <- Task.Supervisor.children(supervisor) do
+      cleanup_stopped? = stop_busy_workspace_cleanup()
+      await_or_stop_tasks(tasks, System.monotonic_time(:millisecond) + @leftover_task_grace_ms)
+      if cleanup_stopped?, do: :ok = restart_supervised_child(SymphonyElixir.WorkspaceCleanup)
+    end
+
+    :ok
+  end
+
+  defp stop_busy_workspace_cleanup do
+    with pid when is_pid(pid) <- named_process(SymphonyElixir.WorkspaceCleanup),
+         %{running: running, queue: queue} when map_size(running) > 0 or queue != [] <- :sys.get_state(pid) do
+      Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.WorkspaceCleanup) == :ok
+    else
+      _idle -> false
+    end
+  catch
+    :exit, _reason -> false
+  end
+
+  defp await_or_stop_tasks(tasks, deadline_ms) do
+    tasks
+    |> Enum.map(&{&1, Process.monitor(&1)})
+    |> Enum.each(fn {pid, ref} ->
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      after
+        max(deadline_ms - System.monotonic_time(:millisecond), 0) ->
+          Process.demonitor(ref, [:flush])
+          stop_process(pid)
+      end
+    end)
   end
 
   defp orchestrator_task?(pid) do
