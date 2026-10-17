@@ -215,6 +215,29 @@ installed, or once a failed one was rolled back, use the signed release pair ins
 install works is proved by the `macos-e2e` check, not by you: do not report the install itself as a
 step you proved, judge what the app shows.
 
+**One-time setup on the QA host.** The QA host gets a persistent test identity, installed and
+trusted once, rather than a throwaway one trusted for each pass: trusting a certificate needs
+`sudo`, so per-pass trust would need passwordless `sudo` for the QA user on every pass, and a pass
+that died would leave its trust setting behind. Whoever provisions the host does this as the QA
+user, from a checkout of this repository:
+
+```sh
+scripts/qa/install-test-signing-identity.sh          # asks for sudo once, to trust the certificate
+scripts/qa/install-test-signing-identity.sh --check  # says whether it is installed and trusted; no sudo
+```
+
+It creates a self-signed code-signing identity named `Symphony QA Test Signing`, never Symphony's
+release certificate, in a keychain of its own,
+`~/Library/Keychains/symphony-qa-signing.keychain-db`, whose password it keeps beside it in
+`symphony-qa-signing.password`. It puts that keychain on the user's keychain search list (codesign
+only finds an identity there) and trusts the certificate for code signing only
+(`sudo security add-trusted-cert -d -r trustRoot -p codeSign`). Running it again changes nothing
+once the identity is installed and trusted, and finishes an install that stopped half way. The
+pair's build also needs `minisign` and `jq` (`brew install minisign jq`) and the repository's
+toolchain for `make release`. This is host setup, not a pass step: you never install it yourself,
+and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` fails with
+`qa_signing_identity_missing` or `qa_signing_identity_untrusted`, as **Build** below says.
+
 - **Build:** `qa_build_release_pair` builds release N and its update N+1 on the machine the app
   runs on and returns their `manifest` (each one's `version` and `build`). It takes several
   minutes; call it once, after `qa_build`. A non-zero `exit_status` is a failing step; quote the
