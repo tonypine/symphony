@@ -110,13 +110,22 @@ public struct TicketPage: Equatable {
         /// NDJSON bodies of `/api/v1/audit`, one per query.
         public var audit: [Data]
         public var stops: [LocalStop]
+        /// Check Now's answer, with the watch block the watcher decided on just then.
+        public var check: Data?
+        /// Whether the Inbox holds a decision on the ticket, so the PR and CI card offers Open in Inbox.
+        public var inboxDecision: Bool
 
-        public init(state: Data? = nil, issue: Data? = nil, runs: Data? = nil, audit: [Data] = [], stops: [LocalStop] = []) {
+        public init(
+            state: Data? = nil, issue: Data? = nil, runs: Data? = nil, audit: [Data] = [], stops: [LocalStop] = [],
+            check: Data? = nil, inboxDecision: Bool = false
+        ) {
             self.state = state
             self.issue = issue
             self.runs = runs
             self.audit = audit
             self.stops = stops
+            self.check = check
+            self.inboxDecision = inboxDecision
         }
     }
 
@@ -147,6 +156,8 @@ public struct TicketPage: Equatable {
     /// Oldest first; the current step last.
     public var timeline: [Step]
     public var facts: [Fact]
+    /// S15: the PR and CI card, nil while the watcher doesn't watch the ticket.
+    public var watch: PRWatchCard?
     public var lastMessage: String?
     /// "13:40", or "Oct 6, 13:40" before today: when a done ticket merged.
     public var mergedText: String?
@@ -220,15 +231,25 @@ public struct TicketPage: Equatable {
         let blocked = state?.blocked?.first(where: matches)
         let shipped = state?.shippedToday?.first(where: matches)
         let forced = state?.forced?.first(where: matches)
-        // Its pull request shares files with one that lands first: Symphony keeps it off the base branch until then.
-        let landing = state?.landingWaits?.first(where: matches)
-        let landingLeader = landing.map { $0.waitsFor?.issueIdentifier ?? "another pull request" }
-        let sharedFiles = landing.flatMap(\.sharedFiles).map { " (shares \($0) \($0 == 1 ? "file" : "files"))" } ?? ""
+        // The watcher's newest word on the ticket's pull request: Check Now's, the ticket's own, or the state's.
+        let watchState = sources.state.map(WatchState.decode)
+        let watchCard = PRWatchCard(
+            watch: WatchBlock.newest([
+                sources.check.flatMap { WatchBlock.decode(carriedIn: $0) },
+                sources.issue.flatMap { WatchBlock.decode(carriedIn: $0) },
+                watchState?.watches[identifier],
+            ]),
+            inboxDecision: sources.inboxDecision,
+            rateLimit: watchState?.rateLimit,
+            reference: reference,
+            timeZone: timeZone
+        )
         let history = (state?.runHistory ?? []).filter(matches)
         let records = runs.filter { $0.issueIdentifier == identifier }
         let entries: [Entry?] = [running, retry, watching, waitingOnYou, slot, skipped, blocked, shipped, forced] + history.map { $0 }
 
         self.identifier = identifier
+        watch = watchCard
         title = entries.lazy.compactMap { $0?.title }.first
         repoKey = issue?.repoKey ?? entries.lazy.compactMap { $0?.repoKey }.first
         url = entries.lazy.compactMap { $0?.url.flatMap(URL.init(string:)) }.first
@@ -266,7 +287,7 @@ public struct TicketPage: Equatable {
         } else if waitingOnYou != nil {
             phase = .waiting(on: "you")
         } else if Self.isState(watching?.state, "Merging") {
-            phase = .waiting(on: landingLeader.map { "\($0) to land\(sharedFiles)" } ?? "CI")
+            phase = .waiting(on: watchCard?.waitingOn ?? "CI")
         } else if let watching, ["Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
             phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
@@ -393,7 +414,6 @@ public struct TicketPage: Equatable {
         facts.append(Fact(label: "Type", value: Self.type(title: title, inboxKind: waitingOnYou?.kind)))
         if let initiative { facts.append(Fact(label: "Initiative", value: initiative)) }
         if let pullRequest { facts.append(Fact(label: "Pull request", value: Self.pullRequestName(pullRequest), url: pullRequest)) }
-        if let landingLeader { facts.append(Fact(label: "Lands after", value: landingLeader + sharedFiles)) }
         if case let .done(_, mergedAt?) = phase {
             mergedText = clock(mergedAt)
             facts.append(Fact(label: "Merged", value: clock(mergedAt)))
@@ -593,9 +613,6 @@ public struct TicketPage: Equatable {
         let error: String?
         let reason: String?
         let blockedBy: [Blocker]?
-        // A landing_waits entry.
-        let waitsFor: Blocker?
-        let sharedFiles: Int?
         let kind: String?
         let completedAt: String?
         // A run_history entry.
@@ -644,7 +661,6 @@ public struct TicketPage: Equatable {
         let blocked: [Entry]?
         let shippedToday: [Entry]?
         let forced: [Entry]?
-        let landingWaits: [Entry]?
         let runHistory: [Entry]?
         let budget: Budget?
         let qa: Passes?

@@ -28,6 +28,8 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var updateHold: UpdateHold?
     /// The Overview's reading of the last state payload.
     @Published private(set) var overviewState: OverviewState?
+    /// The PR and CI watcher's reading of it: each watched ticket's block, for the Inbox's evidence (S16).
+    @Published private(set) var watchState = WatchState()
     /// The last answer to `/api/v1/repos`, for the Overview's repos line.
     @Published private(set) var repos: ReposPoll?
     /// All repos or one: filters every view, and is remembered across relaunches (P6).
@@ -175,6 +177,8 @@ final class SymphonyWindowModel: ObservableObject {
     var onScopeChange: (OverviewScope) -> Void = { _ in }
     /// Sends a control request to Symphony, or to the API fixtures in QA mode, and says how it went.
     var onControl: (ControlAction) async -> ControlResult = { _ in .done }
+    /// Check Now on a ticket: Symphony's watcher reads and decides at once, and answers with its new watch block.
+    var onCheckNow: (String) async -> WatchCheck.Result = { _ in .failed("") }
     var onOpenURL: (URL) -> Void = { _ in }
     /// Opens the transcript window of (identifier, repo key); `newWindow` (⌘-click) opens another beside it.
     var onOpenTranscript: (_ identifier: String, _ repoKey: String?, _ newWindow: Bool) -> Void = { _, _, _ in }
@@ -204,6 +208,10 @@ final class SymphonyWindowModel: ObservableObject {
     /// The runs and audit records are read again at most this often.
     static let ticketSlowInterval: TimeInterval = 10
     private var bannerTask: Task<Void, Never>?
+    /// The Inbox items the Director answered, by issue id: they leave the Inbox without a banner of their own.
+    private var answeredItems = Set<String>()
+    /// The tickets a Check Now is on its way for.
+    @Published private(set) var checkingNow = Set<String>()
     /// A sheet to open once the Inbox lists its item: Approve and Merge… chosen on a notification.
     private var pendingSheet: (id: String, move: InboxMove)?
     private var cancellables = Set<AnyCancellable>()
@@ -216,6 +224,7 @@ final class SymphonyWindowModel: ObservableObject {
             .sink { [weak self] data in
                 guard let self else { return }
                 overviewState = data.flatMap(OverviewState.decode)
+                watchState = data.map(WatchState.decode) ?? WatchState()
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
@@ -350,8 +359,9 @@ final class SymphonyWindowModel: ObservableObject {
                 inboxSheet = nil
                 // The picks were sent: Send Decisions turns off again.
                 inboxPicks.clear(sheet.itemID)
+                answeredItems.insert(sheet.itemID)
                 let outcome = result.moveOutcome ?? sheet.expectedOutcome
-                if outcome.moved { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
+                if sheet.selectsNext(after: outcome) { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
                 showBanner(sheet.banner(after: outcome))
             case let .failed(message):
                 inboxMoveError = message
@@ -414,6 +424,7 @@ final class SymphonyWindowModel: ObservableObject {
         Task {
             let result = await client.get(InboxPayload.path)
             if case let .loaded(data) = result, let payload = InboxPayload.decode(data) {
+                showDepartures(from: inbox?.items ?? [], to: payload.items)
                 inbox = payload
                 inboxResult = nil
                 openPendingSheet()
@@ -451,7 +462,42 @@ final class SymphonyWindowModel: ObservableObject {
             showUsage()
         case let .stopForcing(identifier):
             stopForcing(identifier)
+        case let .checkNow(identifier):
+            checkNow(identifier)
+        case let .openTicket(identifier):
+            openTicket(identifier)
         }
+    }
+
+    /// Check Now (S15, S17): the ticket's watcher reads and decides at once; its answer shows on the ticket's page
+    /// straight away, and the state and the page are read again.
+    func checkNow(_ identifier: String) {
+        guard !checkingNow.contains(identifier) else { return }
+        checkingNow.insert(identifier)
+        Task {
+            let result = await onCheckNow(identifier)
+            checkingNow.remove(identifier)
+            switch result {
+            case let .checked(data):
+                if shownTicket == identifier { ticketSources.check = data }
+            case let .failed(message):
+                SymphonyRunner.showAlert(title: message, body: "")
+            }
+            client.refresh()
+            readTicket()
+        }
+    }
+
+    /// Open in Inbox on the ticket's PR and CI card: the Inbox, on the ticket's item.
+    func openInInbox(_ identifier: String) {
+        showInbox(selecting: inbox?.items.first { $0.identifier == identifier }?.id)
+    }
+
+    /// S16: a watcher's decision that left the Inbox by itself says why in the banner, once.
+    private func showDepartures(from previous: [InboxItem], to current: [InboxItem]) {
+        let banners = WatcherDeparture.banners(previous: previous, current: current, answered: answeredItems, watches: watchState.watches)
+        answeredItems.subtract(previous.map(\.id).filter { id in !current.contains { $0.id == id } })
+        if let banner = banners.first, selection == .inbox, shownTicket == nil { showBanner(banner) }
     }
 
     /// Opens Usage and reads the history at once.
@@ -838,6 +884,7 @@ struct OverviewContent: View {
                     resume: { model.send(.resume) },
                     perform: model.perform,
                     controlInFlight: model.controlInFlight,
+                    checkingNow: model.checkingNow,
                     openInbox: { model.showInbox() },
                     openTicket: model.openTicket,
                     openTickets: model.showTickets,

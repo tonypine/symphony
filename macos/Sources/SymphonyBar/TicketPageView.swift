@@ -17,6 +17,7 @@ extension SymphonyWindowModel {
         var sources = ticketSources
         sources.state = client.stateJSON
         sources.stops = localStops
+        sources.inboxDecision = inbox?.items.contains { $0.identifier == identifier && $0.isDecision } ?? false
         return TicketPage(identifier: identifier, sources: sources, now: Date())
     }
 
@@ -84,6 +85,8 @@ extension SymphonyWindowModel {
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
+            // A Check Now answer that came in meanwhile stays.
+            sources.check = ticketSources.check
             ticketSources = sources
         }
     }
@@ -188,6 +191,22 @@ struct TicketPageActions {
     var stopForcing: () -> Void = {}
     /// A click on a ticket or pull request chip in the page's text.
     var openMention: (Mention) -> Void = { _ in }
+    /// The PR and CI card's Check Now, Open in Inbox and Open TP-x.
+    var checkNow: () -> Void = {}
+    var openInInbox: () -> Void = {}
+    var openTicket: (String) -> Void = { _ in }
+    /// True while a Check Now is on its way.
+    var checking = false
+
+    /// Acts on a PR and CI card's button.
+    func perform(_ button: PRWatchCard.Button) {
+        switch button {
+        case .checkNow: checkNow()
+        case let .openPR(url), let .openPullRequest(_, url): openURL(url)
+        case .openInInbox: openInInbox()
+        case let .openTicket(identifier): openTicket(identifier)
+        }
+    }
 }
 
 /// D3 for the window: the page with its Stop Run sheet, or a placeholder while it reads.
@@ -209,7 +228,11 @@ struct TicketPageContent: View {
                     revealWorktree: model.revealWorktree,
                     force: { model.openForceSheet(page.identifier) },
                     stopForcing: { model.stopForcing(page.identifier) },
-                    openMention: { ChipText.open($0, openTicket: model.openTicket, openURL: model.onOpenURL) }
+                    openMention: { ChipText.open($0, openTicket: model.openTicket, openURL: model.onOpenURL) },
+                    checkNow: { model.checkNow(page.identifier) },
+                    openInInbox: { model.openInInbox(page.identifier) },
+                    openTicket: model.openTicket,
+                    checking: model.checkingNow.contains(page.identifier)
                 )
             )
         } else {
@@ -257,6 +280,9 @@ struct TicketPageBody: View {
             layout {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
                     if let brief { BriefCards(brief: brief) }
+                    if let watch = page.watch {
+                        PRWatchCardView(card: watch, checking: actions.checking, perform: actions.perform)
+                    }
                     if let now = page.now {
                         Card(title: "Now") { NowGrid(now: now, reveal: actions.revealWorktree) }
                     }

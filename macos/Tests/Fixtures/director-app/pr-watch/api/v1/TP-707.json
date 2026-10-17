@@ -1,0 +1,158 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "connected": {
+    "blocked_by": [],
+    "blocks": [],
+    "parent": null,
+    "related": [],
+    "sub_tickets": []
+  },
+  "issue_id": "i-707",
+  "issue_identifier": "TP-707",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "symphony",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "verdicts": [],
+  "watch": {
+    "action": "wait",
+    "actions": [
+      {
+        "action": "ci_fix",
+        "at": "2026-10-16T10:40:00Z",
+        "head": "aa11bb22cc33",
+        "rule": "R21",
+        "source": "poll"
+      },
+      {
+        "action": "ci_fix",
+        "at": "2026-10-16T11:05:00Z",
+        "head": "dd44ee55ff66",
+        "rule": "R21",
+        "source": "poll"
+      },
+      {
+        "action": "ci_fix",
+        "at": "2026-10-16T11:25:00Z",
+        "head": "6f7a8b9c0d1e",
+        "rule": "R21",
+        "source": "poll"
+      },
+      {
+        "action": "file_fix_ticket",
+        "at": "2026-10-16T11:40:00Z",
+        "head": "6f7a8b9c0d1e2f3a4b5c",
+        "rule": "R20",
+        "source": "poll"
+      }
+    ],
+    "applied": [],
+    "clears_when": "what it waits on is done and the hold clears",
+    "decision": {
+      "args": {
+        "check": "test",
+        "fix_ticket": "TP-708"
+      },
+      "clears_when": "what it waits on is done and the hold clears",
+      "decided_at": "2026-10-16T12:03:50Z",
+      "error": null,
+      "head_sha": "6f7a8b9c0d1e2f3a4b5c",
+      "kind": "wait",
+      "outcome": "recorded",
+      "owner": "symphony",
+      "reason": "CI keeps failing: waiting on TP-708, a fix ticket for the `test` check",
+      "rule": "R4",
+      "since": "2026-10-16T11:40:00Z",
+      "waits_on": null
+    },
+    "facts": {
+      "ahead": [],
+      "auto_merge": "off",
+      "base": "ok",
+      "base_ref": null,
+      "ci": "red",
+      "competing": [],
+      "conflict_attempts": 0,
+      "failing_check": "test",
+      "fix_failures": [
+        {
+          "check": "test",
+          "error": "1 test failed: PrWatchTest \"waits on CI\"",
+          "head_sha": "aa11bb22cc33"
+        },
+        {
+          "check": "test",
+          "error": "1 test failed: PrWatchTest \"waits on CI\"",
+          "head_sha": "dd44ee55ff66"
+        },
+        {
+          "check": "test",
+          "error": "1 test failed: PrWatchTest \"waits on CI\"",
+          "head_sha": "6f7a8b9c0d1e"
+        }
+      ],
+      "github": "ok",
+      "github_reset_at": null,
+      "head_origin": "symphony",
+      "head_sha": "6f7a8b9c0d1e2f3a4b5c",
+      "hold": "blocked",
+      "landing_timed_out": false,
+      "max_red_attempts": 10,
+      "mergeable": "clean",
+      "missing_checks": [],
+      "no_ci": "not_configured",
+      "origin": null,
+      "phase": "code_review",
+      "pr": "open",
+      "pr_number": 707,
+      "pr_url": "https://github.com/tonypine/symphony/pull/707",
+      "rate_limit": {
+        "remaining": 4321,
+        "reset_at": "2026-10-16T13:00:00Z"
+      },
+      "read_at": "2026-10-16T12:03:50Z",
+      "red_attempts": 3,
+      "red_kind": "failure",
+      "rerun_done": false,
+      "review_comments": "none",
+      "run": "none",
+      "same_failure_streak": 3,
+      "source": "poll"
+    },
+    "head": "6f7a8b9c0d1e2f3a4b5c",
+    "links": [],
+    "outcome": "recorded",
+    "owner": "symphony",
+    "phase": "code_review",
+    "pr_url": "https://github.com/tonypine/symphony/pull/707",
+    "read_at": "2026-10-16T12:03:50Z",
+    "reason": "CI keeps failing: waiting on TP-708, a fix ticket for the `test` check",
+    "rule": "R4",
+    "silent": null,
+    "since": "2026-10-16T11:40:00Z",
+    "source": "poll",
+    "summary": null,
+    "waits_on": [
+      {
+        "identifier": "TP-708",
+        "kind": "fix_ticket"
+      }
+    ]
+  },
+  "watching": {
+    "pull_request_url": "https://github.com/tonypine/symphony/pull/707"
+  },
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/symphony/TP-707"
+  }
+}

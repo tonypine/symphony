@@ -106,6 +106,49 @@ func peekBesideReview() -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+// The PR and CI watcher's fixture (TP-946): its tickets measured against its state's clock.
+let watchAPI = here.appendingPathComponent("../Fixtures/director-app/pr-watch/api/v1").standardizedFileURL
+let watchState = try Data(contentsOf: watchAPI.appendingPathComponent("state.json"))
+let watchNow = ISO8601DateFormatter().date(from: "2026-10-16T12:04:12Z")!
+guard let watchInbox = InboxPayload.decode(try Data(contentsOf: watchAPI.appendingPathComponent("inbox.json"))) else {
+    fatalError("The PR and CI fixture's Inbox doesn't read")
+}
+
+/// S15: a ticket's whole page with its PR and CI card, in a 1200 pt window beside the sidebar.
+@MainActor
+func watchPage(_ identifier: String) -> some View {
+    let issue = try? Data(contentsOf: watchAPI.appendingPathComponent("\(identifier).json"))
+    let decision = watchInbox.items.contains { $0.identifier == identifier && $0.isDecision }
+    let page = TicketPage(
+        identifier: identifier, sources: TicketPage.Sources(state: watchState, issue: issue, inboxDecision: decision),
+        now: watchNow, timeZone: TimeZone(identifier: "UTC")!
+    )
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return TicketPageBody(page: page, actions: TicketPageActions(), width: width)
+        .frame(width: width)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// S16: the protected-paths decision's review, with what the watcher found above its options.
+@MainActor
+func watcherDecision() -> some View {
+    guard let item = watchInbox.items.first(where: { $0.identifier == "TP-703" }) else { fatalError("TP-703 is missing") }
+    let evidence = WatcherEvidence(item: item, watch: WatchState.decode(watchState).watches[item.identifier])
+    return InboxReviewBody(item: item, perform: { _ in }, now: watchNow, evidence: evidence)
+        .frame(width: 640)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// S17: the Overview with the silent Rework ticket in Needs attention.
+@MainActor
+func silentWaitOverview() -> some View {
+    guard let state = OverviewState.decode(watchState) else { fatalError("The PR and CI fixture's state doesn't read") }
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return OverviewBody(overview: Overview(state: state, now: watchNow, timeZone: TimeZone(identifier: "UTC")!), actions: OverviewActions(resume: {}, perform: { _ in }), width: width)
+        .frame(width: width)
+        .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -144,5 +187,11 @@ MainActor.assumeIsolated {
             render(review(identifier), scheme, to: "\(name)-chips-\(suffix).png")
         }
         render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
+        // The PR and CI watcher (TP-946): S15's states, S16 and S17.
+        for (identifier, name) in [("TP-701", "ci"), ("TP-704", "competing"), ("TP-707", "fix-ticket"), ("TP-703", "on-hold"), ("TP-709", "pr-closed")] {
+            render(watchPage(identifier), scheme, to: "pr-watch-\(name)-\(suffix).png")
+        }
+        render(watcherDecision(), scheme, to: "watcher-decision-\(suffix).png")
+        render(silentWaitOverview(), scheme, to: "silent-wait-\(suffix).png")
     }
 }

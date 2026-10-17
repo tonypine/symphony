@@ -112,6 +112,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 afterControl()
                 return result
             }
+            model.onCheckNow = { [weak self] identifier in
+                guard let self else { return .failed("") }
+                return await WatchCheck.send(
+                    identifier, stateRoot: stateRoot(), fallback: AppStores.current.apiFallback, transport: AppStores.current.apiTransport
+                )
+            }
             model.onOpenURL = { url in URLOpener.open(url) }
             model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
                 self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
