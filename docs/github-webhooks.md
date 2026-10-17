@@ -20,7 +20,8 @@ updating it on every merge would keep restarting its CI, and an agent run brings
 to date. It is updated once it reaches `Merging`.
 
 A `release` published on `tonypine/symphony`, the repository the macOS app updates from, records its
-newest release in Symphony.
+newest release in Symphony. `/api/v1/state` reports it under `app_update.latest_release`, and the app
+checks for the update on its next status poll instead of waiting for its own timer.
 
 Webhooks change how soon Symphony acts, never what it does. The timed poll keeps running and
 catches up on any delivery lost while the Mac sleeps, Symphony restarts or the relay drops. While

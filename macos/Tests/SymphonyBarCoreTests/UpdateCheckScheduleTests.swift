@@ -302,4 +302,128 @@ final class UpdateCheckScheduleTests: XCTestCase {
         schedule.finished(.available(release(build: 43)), at: at(14, 4))
         XCTAssertNil(schedule.menuLine(now: at(14, 5)))
     }
+
+    // MARK: - A release Symphony reports
+
+    private let running41 = AppBuild(build: 41, isDevelopment: false, version: "0.0.1.41")
+
+    private func reported(_ build: Int) -> ReportedRelease {
+        ReportedRelease(tag: "v0.0.1.\(build)", publishedAt: at(13, 0))
+    }
+
+    /// GitHub serving release 0.0.1.42, recording every request: a fake for `UpdateChecker`.
+    private func gitHub() throws -> StubUpdateTransport {
+        let download = "https://github.com/tonypine/symphony/releases/download/v0.0.1.42"
+        let release: [String: Any] = [
+            "tag_name": "v0.0.1.42",
+            "html_url": "https://github.com/tonypine/symphony/releases/tag/v0.0.1.42",
+            "body": "",
+            "assets": ["Symphony-0.0.1.42.zip", "Symphony-0.0.1.42.zip.sha256", "version.json"]
+                .map { ["name": $0, "browser_download_url": "\(download)/\($0)"] },
+        ]
+        let transport = StubUpdateTransport()
+        transport.responses[UpdateChecker.latestReleaseURL] =
+            (200, String(decoding: try JSONSerialization.data(withJSONObject: release), as: UTF8.self), [:])
+        transport.responses[URL(string: "\(download)/version.json")!] =
+            (200, #"{"version":"0.0.1.42","build":42,"zip":"Symphony-0.0.1.42.zip","minisig":null}"#, [:])
+        return transport
+    }
+
+    /// The app's status poll handler as `UpdatePoller` and `AppDelegate` run it: a reported release that should start
+    /// a check runs one, whose result goes to `AutoUpdater`. Returns what the updater decided.
+    private func poll(
+        _ release: ReportedRelease?,
+        schedule: inout UpdateCheckSchedule,
+        checker: UpdateChecker,
+        updater: inout AutoUpdater
+    ) async -> AutoUpdater.Action? {
+        guard schedule.checksAtOnce(for: release, running: running41, now: at(14, 0)) else { return nil }
+        schedule.began(reported: release)
+        let result = await checker.check(current: running41)
+        schedule.finished(result, at: at(14, 0))
+        guard case let .available(found) = result else { return nil }
+        let context = AutoUpdater.Context(
+            mode: .onRelease, time: .defaultUpdateTime, offer: .available(found), blocker: nil,
+            activity: .running(activeRuns: 1), runsTimeout: 600
+        )
+        return updater.checked(result, context)
+    }
+
+    func testANewerReportedReleaseStartsOneCheckAndOnReleaseInstallsIt() async throws {
+        let transport = try gitHub()
+        let checker = UpdateChecker(transport: transport)
+        var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+        var updater = AutoUpdater()
+
+        let action = await poll(reported(42), schedule: &schedule, checker: checker, updater: &updater)
+
+        guard case let .install(release, kind)? = action else { return XCTFail("expected an install, got \(String(describing: action))") }
+        XCTAssertEqual(release.build, 42)
+        XCTAssertEqual(kind, .onRelease)
+        XCTAssertEqual(schedule.reportedTag, "v0.0.1.42")
+
+        // The next polls report the same release: no more checks.
+        for _ in 0..<3 {
+            let again = await poll(reported(42), schedule: &schedule, checker: checker, updater: &updater)
+            XCTAssertNil(again)
+        }
+        XCTAssertEqual(transport.requests.filter { $0.url == UpdateChecker.latestReleaseURL }.count, 1)
+    }
+
+    func testTheRunningVersionOrAnOlderOneStartsNoCheck() {
+        let schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(41), running: running41, now: at(14, 0)))
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(40), running: running41, now: at(14, 0)))
+        XCTAssertFalse(schedule.checksAtOnce(for: nil, running: running41, now: at(14, 0)))
+        XCTAssertTrue(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 0)))
+    }
+
+    func testAReleaseAlreadyActedOnStartsNoCheck() {
+        var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+        schedule.began(reported: reported(42))
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 0)), "while it runs")
+
+        // Even a check that failed for it: the timer retries it.
+        schedule.finished(unreachable, at: at(14, 0))
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 1)))
+        XCTAssertTrue(schedule.checksAtOnce(for: reported(43), running: running41, now: at(14, 1)), "a newer one")
+
+        // A check the timer started is no report's.
+        schedule.began()
+        XCTAssertEqual(schedule.reportedTag, "v0.0.1.42")
+    }
+
+    func testAReleaseTheLastCheckFoundStartsNoCheck() {
+        var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+        schedule.began()
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 0)), "a check runs")
+
+        schedule.finished(.available(release(build: 42)), at: at(14, 0))
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 1)))
+        XCTAssertTrue(schedule.checksAtOnce(for: reported(43), running: running41, now: at(14, 1)))
+
+        schedule.finished(.upToDate(release(build: 41)), at: at(14, 2))
+        XCTAssertTrue(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 3)))
+    }
+
+    func testNoReportedCheckWhileGitHubsRateLimitHolds() {
+        var schedule = UpdateCheckSchedule(mode: .onRelease, releaseCheckMinutes: 5)
+        schedule.finished(rateLimited(until: at(14, 30)), at: at(14, 0))
+
+        XCTAssertFalse(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 10)))
+        XCTAssertTrue(schedule.checksAtOnce(for: reported(42), running: running41, now: at(14, 30)))
+    }
+
+    func testVersionsCompareByNumberPartByPart() {
+        XCTAssertTrue(UpdateCheckSchedule.isNewer("0.0.1.583", than: "0.0.1.42"))
+        XCTAssertTrue(UpdateCheckSchedule.isNewer("0.0.2", than: "0.0.1.999"))
+        XCTAssertTrue(UpdateCheckSchedule.isNewer("0.0.1.1", than: "0.0.1"))
+        XCTAssertFalse(UpdateCheckSchedule.isNewer("0.0.1.0", than: "0.0.1"))
+        XCTAssertFalse(UpdateCheckSchedule.isNewer("0.0.1.42", than: "0.0.1.583"))
+        XCTAssertTrue(UpdateCheckSchedule.isNewer("0.0.1.42", than: nil), "a build without a version")
+        XCTAssertTrue(UpdateCheckSchedule.isNewer("nightly", than: "0.0.1.42"))
+        XCTAssertFalse(UpdateCheckSchedule.isNewer("nightly", than: "nightly"))
+        XCTAssertTrue(UpdateCheckSchedule.isNewer("1..2", than: "1.2"))
+    }
 }

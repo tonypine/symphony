@@ -987,6 +987,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 }
             }
             autoUpdateTick()
+            // A release Symphony reports starts the update check now instead of at the timer.
+            if case let .state(snapshot) = poll { updates.reported(snapshot.latestRelease) }
         case .started, .exited:
             // Check straight away instead of waiting out the interval.
             poller.pollNow()

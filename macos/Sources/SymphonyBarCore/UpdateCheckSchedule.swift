@@ -9,6 +9,9 @@ import Foundation
 /// - After a check that hit GitHub's rate limit, it waits until GitHub lifts the limit, at most an hour, or the
 ///   usual interval when that is longer. Any other failed check, such as one that couldn't reach GitHub, retries at
 ///   the usual interval. A check chosen by hand counts too.
+/// - Symphony reports the newest release on each status poll (`ReportedRelease`), so the app hears of one without
+///   asking GitHub. A newer one than the app knows starts a check at once, one per release (`checksAtOnce`); the timer
+///   is the safety net for when Symphony doesn't report.
 public struct UpdateCheckSchedule: Equatable {
     /// The result of a finished check and when it finished.
     public struct Outcome: Equatable {
@@ -30,6 +33,8 @@ public struct UpdateCheckSchedule: Equatable {
     public private(set) var isChecking = false
     /// The last finished check, nil before the first.
     public private(set) var last: Outcome?
+    /// The tag of the last release Symphony reported that started a check, so a release starts one check at most.
+    public private(set) var reportedTag: String?
 
     public init(mode: UpdateMode, releaseCheckMinutes: Int, override: TimeInterval? = nil) {
         self.mode = mode
@@ -54,8 +59,50 @@ public struct UpdateCheckSchedule: Equatable {
         return checkNow
     }
 
-    public mutating func began() {
+    /// A check starts; `reported` is the release Symphony reported that started it, nil for any other check.
+    public mutating func began(reported: ReportedRelease? = nil) {
         isChecking = true
+        if let reported { reportedTag = reported.tag }
+    }
+
+    /// True when the release Symphony reports on a status poll should start a check now: it is newer than the running
+    /// build and than the release the last check found, no check started for it yet, and no check runs or waits out
+    /// GitHub's rate limit. The check that starts passes it to `began(reported:)`.
+    public func checksAtOnce(for release: ReportedRelease?, running: AppBuild, now: Date) -> Bool {
+        guard let release, release.tag != reportedTag, !isChecking, !rateLimited(at: now) else { return false }
+        return Self.isNewer(release.version, than: running.version)
+            && Self.isNewer(release.version, than: lastRelease?.version)
+    }
+
+    /// The release the last check found, available or not; nil before one did, or after a check failed.
+    private var lastRelease: Release? {
+        switch last?.result {
+        case let .available(release)?, let .upToDate(release)?: release
+        case .failed?, nil: nil
+        }
+    }
+
+    private func rateLimited(at now: Date) -> Bool {
+        guard case let .failed(_, retryAt?)? = last?.result else { return false }
+        return now < retryAt
+    }
+
+    /// Whether `version` is newer than `known`: by number part by part, as `0.0.1.583` after `0.0.1.42`. A version
+    /// that isn't all numbers is newer when it differs, and any version is newer than none.
+    static func isNewer(_ version: String, than known: String?) -> Bool {
+        guard let known else { return true }
+        guard let parts = numbers(version), let knownParts = numbers(known) else { return version != known }
+        for index in 0..<max(parts.count, knownParts.count) {
+            let part = index < parts.count ? parts[index] : 0
+            let knownPart = index < knownParts.count ? knownParts[index] : 0
+            if part != knownPart { return part > knownPart }
+        }
+        return false
+    }
+
+    private static func numbers(_ version: String) -> [Int]? {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        return parts.contains(nil) ? nil : parts.compactMap { $0 }
     }
 
     /// Records a check's result, which `interval` follows.

@@ -1,0 +1,10 @@
+{
+  "unblocks": 1,
+  "issue_identifiers": ["TP-1037"],
+  "latest_release": {
+    "repo": "tonypine/symphony",
+    "tag": "v0.0.1.583",
+    "published_at": "2026-10-16T08:00:00Z",
+    "source": "webhook"
+  }
+}

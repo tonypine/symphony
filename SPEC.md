@@ -956,7 +956,8 @@ Fields:
     them 3 seconds later; only that read decides, through the same decision table as the timed
     poll, and only a read writes a green head. A `push` to a base branch re-reads every open
     watched PR on it, 1 second apart; a `ping` reads every watched PR. A published `release` of the
-    app's repository records its newest release, which the timed poll also reads. Polling stays
+    app's repository records its newest release, which the timed poll also reads and
+    `/api/v1/state` reports to the app under `app_update.latest_release`. Polling stays
     on: every `fallback_poll_interval_ms` while deliveries are healthy, and every
     `pull_requests.poll_interval_ms` once a read finds a change no delivery reported.
 
@@ -2697,7 +2698,10 @@ An issue is dispatch-eligible only if all are true:
     commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
     `ahead` nor `identical`). Its `blocked` entry has `kind: "app_update"` and a `reason` such as
     "waiting for an app update: MT-15 merged in `9f54098`, running `d3d301b`", and
-    `app_update.unblocks` counts these issues. Blockers merged in another repository, a build from a
+    `app_update.unblocks` counts these issues, and `app_update.latest_release` reports the newest
+    published release of the repository the app updates from (`repo`, `tag`, `published_at`,
+    `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
+    at once instead of waiting for its own timer. Blockers merged in another repository, a build from a
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
     the issue at once. A lookup that fails releases it too, as before.
 - Parent rule passes:
@@ -4534,7 +4538,11 @@ Minimum endpoints:
           "summary": "MT-658 waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`"
         }
       ],
-      "app_update": {"unblocks": 1, "issue_identifiers": ["MT-658"]},
+      "app_update": {
+        "unblocks": 1,
+        "issue_identifiers": ["MT-658"],
+        "latest_release": {"repo": "tonypine/symphony", "tag": "v0.0.1.583", "published_at": "2026-02-24T18:00:00Z", "source": "webhook"}
+      },
       "forced": [
         {
           "issue_id": "vwx234",

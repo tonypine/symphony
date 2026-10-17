@@ -748,6 +748,12 @@ is up to date (vX)" or why the check failed, for example GitHub's rate limit.
   minutes, checks straight away and then on the new interval; switching to another mode goes back to every
   6 hours. Choosing Automatically when released in the picker also checks straight away, before Save, so the
   line shows what it finds.
+- Symphony tells the app when a release is out: `/api/v1/state` reports the newest release under
+  `app_update.latest_release`, which Symphony learns from GitHub's `release` delivery or its own authenticated
+  poll. When a status poll reports one newer than the running build and than the release the last check found, the
+  app checks at once, in every mode, and the mode then installs as usual: Automatically when released installs it
+  right away. Each reported release starts one check at most, none while a check runs or GitHub's rate limit holds,
+  so the timer above is only the safety net for when Symphony doesn't report.
 - A failed check shows no alert. After a check that hit GitHub's rate limit (HTTP 403 or 429), the next one waits
   until GitHub lifts the limit: `Retry-After` seconds, or else the `X-RateLimit-Reset` time, at most an hour, and
   never sooner than the usual interval. Any other failure, such as a check that couldn't reach GitHub, retries at

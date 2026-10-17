@@ -185,6 +185,40 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns)))
     }
 
+    /// `app_update` as Symphony serves it: the API's tests compare `WatchPayload.app_update/2` against this file too.
+    func testDecodesTheNewestReleaseFromTheSharedContract() throws {
+        let contract = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../test/fixtures/api/app_update_block.json")
+            .standardized
+        let block = try JSONSerialization.jsonObject(with: Data(contentsOf: contract))
+        let data = try recordedState(replacing: "app_update", with: block)
+
+        let release = ReportedRelease(tag: "v0.0.1.583", publishedAt: Date(timeIntervalSince1970: 1_792_137_600))
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(StateSnapshot(running: 1, budget: recordedBudget, updateUnblocks: 1, latestRelease: release, runs: recordedRuns))
+        )
+        XCTAssertEqual(release.version, "0.0.1.583")
+        XCTAssertEqual(ReportedRelease(tag: "0.0.1.583").version, "0.0.1.583")
+    }
+
+    func testANullOrTaglessReleaseIsNone() throws {
+        for latest: Any in [NSNull(), ["tag": NSNull()], ["tag": ""]] {
+            let data = try recordedState(replacing: "app_update", with: ["unblocks": 0, "latest_release": latest])
+            guard case .state(let snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+                return XCTFail("expected a state")
+            }
+            XCTAssertNil(snapshot.latestRelease)
+        }
+
+        let undated = try recordedState(replacing: "app_update", with: ["latest_release": ["tag": "v2"]])
+        guard case .state(let snapshot) = SymphonyState.poll(data: undated, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertEqual(snapshot.latestRelease, ReportedRelease(tag: "v2"))
+    }
+
     func testDecodesTheForcedTickets() throws {
         let data = try recordedState(replacing: "forced", with: [
             [

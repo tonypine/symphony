@@ -1,8 +1,8 @@
 import AppKit
 import SymphonyBarCore
 
-/// Checks GitHub for a newer Symphony at launch, on the interval `UpdateCheckSchedule` gives, and when Check for
-/// Updates or Check Now is chosen.
+/// Checks GitHub for a newer Symphony at launch, on the interval `UpdateCheckSchedule` gives, when Check for Updates
+/// or Check Now is chosen, and once when Symphony reports a newer release on a status poll.
 @MainActor
 final class UpdatePoller: ObservableObject {
     /// Called after each check; `manual` is true for a check started from the menu or Settings.
@@ -44,9 +44,16 @@ final class UpdatePoller: ObservableObject {
         }
     }
 
-    func check(manual: Bool) {
+    /// Takes the release Symphony reported on a status poll: checks at once when it is newer than this build and no
+    /// check started for it yet, so a new release costs one GitHub request and the timer stays the safety net.
+    func reported(_ release: ReportedRelease?) {
+        guard schedule.checksAtOnce(for: release, running: current, now: Date()) else { return }
+        check(manual: false, reported: release)
+    }
+
+    func check(manual: Bool, reported: ReportedRelease? = nil) {
         guard !isChecking else { return }
-        schedule.began()
+        schedule.began(reported: reported)
         timer?.invalidate()
         Task {
             let result = await checker.check(current: current)
