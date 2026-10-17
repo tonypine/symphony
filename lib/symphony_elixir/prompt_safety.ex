@@ -86,6 +86,10 @@ defmodule SymphonyElixir.PromptSafety do
   @spec ci_failure_log_excerpt(String.t()) :: String.t()
   def ci_failure_log_excerpt(value), do: linear_block(value, "ci_failure_log_excerpt", @ci_log_excerpt_limit)
 
+  @doc "One line of an earlier CI Fix run's failure (its check or first error line), as the CI Fix prompt lists it."
+  @spec ci_failure_line(String.t()) :: String.t()
+  def ci_failure_line(value), do: sanitize_untrusted_text(value, @pr_conflict_field_limit, "ci_failure", &escape_boundary_text/1)
+
   @spec pr_conflict_field(String.t()) :: String.t()
   def pr_conflict_field(value), do: sanitize_untrusted_text(value, @pr_conflict_field_limit, "pr_conflict", &escape_boundary_text/1)
 

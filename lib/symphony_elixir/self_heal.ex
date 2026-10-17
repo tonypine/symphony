@@ -327,23 +327,27 @@ defmodule SymphonyElixir.SelfHeal do
   # are found through the tickets' own self-heal records, so no second index is kept. A record is
   # reused only when its failure (`signature/1`) is the new one and its fix ticket is still open:
   # a fix ticket for another failure of the same component, or one already terminal or unreadable,
-  # would hold the ticket on a gap it does not track, so a new fix ticket is filed instead.
+  # would hold the ticket on a gap it does not track, so a new fix ticket is filed instead. A CI
+  # check is the exception: it gets one fix ticket per check per repo, whatever error each ticket
+  # hit, and each failure is attached to it.
   defp find_open_fix_ticket(ctx) do
-    %{component: component, scope: scope, signature: signature} = ctx
+    %{component: component, scope: scope} = ctx
 
     ctx.opts
     |> ticket_states()
     |> Enum.find_value(fn record ->
       case TicketState.self_heal(record) do
-        %{component: ^component, scope: ^scope, signature: ^signature, fix_ticket: identifier}
-        when is_binary(identifier) ->
-          open_fix_ticket(identifier, ctx)
+        %{component: ^component, scope: ^scope, fix_ticket: identifier} = previous when is_binary(identifier) ->
+          same_break?(component, previous.signature, ctx.signature) && open_fix_ticket(identifier, ctx)
 
         _none ->
           nil
       end
     end)
   end
+
+  defp same_break?(@ci_prefix <> _check, _signature, _new), do: true
+  defp same_break?(_component, signature, new), do: signature == new
 
   defp open_fix_ticket(identifier, ctx) do
     case tracker(ctx.opts).fetch_issue_by_identifier(identifier) do
@@ -530,6 +534,7 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp component_for({:ci_check_failed, check}) when is_binary(check), do: @ci_prefix <> check
+  defp component_for({:ci_check_failed, check, _error}) when is_binary(check), do: @ci_prefix <> check
   defp component_for({:qa_dev_server_failed, cause}), do: component_for(cause)
   defp component_for({:verification_failed, cause}), do: component_for(cause)
   defp component_for({:dev_server_exit, _status}), do: @dev_server
@@ -571,6 +576,8 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp signature_for(cause) when is_binary(cause), do: normalize(cause)
+  # A failed CI check is its name and the first line of its error, as the PR watcher's streak reads it.
+  defp signature_for({:ci_check_failed, check, error}) when is_binary(check) and is_binary(error), do: normalize("#{check}: #{error}")
   defp signature_for(nil), do: ""
   defp signature_for(cause), do: cause |> inspect() |> normalize()
 
