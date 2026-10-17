@@ -29,6 +29,7 @@
     "ahead": [],
     "auto_merge": "off",
     "base": "ok",
+    "base_red": null,
     "base_ref": null,
     "ci": "green",
     "competing": [],

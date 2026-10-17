@@ -87,7 +87,9 @@ ticket in `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, and in `In Progr
 PR, whether or not Symphony ran it. It then reads each ticket's PR in one GitHub query, the checks
 its base branch requires (kept 10 minutes), whether the base branch has workflow files (only for a
 head with no check at all, kept 10 minutes), the base branch's workflow runs only to tell a red head
-that is also red on the base, a red head's failed log once per head (its first error line), and,
+that is also red on the base (with the jobs of a run that failed there, and the two failed logs when
+the job of the same name failed too, kept 10 minutes per head job and base job), a red head's failed
+log once per head (its first error line), and,
 when two or more watched PRs are open, the repository's open PRs and their files once, for the
 landing order that fills `ahead`.
 
@@ -125,7 +127,12 @@ A red head whose only failure is `protected paths`, which only a person clears, 
 (R18): add the waiver label to the PR (the check runs again and passes), or drop the change in
 Rework. A check that is red on the base branch too (R23) is a wait on CI, with no CI Fix spent:
 logged once per base and check, listed under `red_bases` in `/api/v1/state`, and cleared once the
-base is green.
+base is green. A failing check counts as red on the base only when the job of the same name failed
+in its workflow's latest finished run there, not when another job of that workflow did; and when the
+head's failed log names failing tests (ExUnit, XCTest or pytest), only when the base's job failed
+every one of them too. A head log that names no test, or a log that can't be read, leaves the
+comparison by name only. The wait's reason and its log line name the base run and commit compared
+and whether by tests or by name only.
 
 ## What the watcher does
 
