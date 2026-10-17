@@ -1,6 +1,7 @@
 defmodule SymphonyElixirWeb.GitHubWebhookController do
   @moduledoc """
-  Receives GitHub webhook deliveries (through a relay) and hands them to the CI poller.
+  Receives GitHub webhook deliveries (through a relay) and hands them to the PR and CI watcher
+  (`SymphonyElixir.PrWatch.Ingest`).
 
   The `X-Hub-Signature-256` HMAC is the only authentication, so the route sits outside the
   same-origin and bearer-token pipelines. A rejected delivery is logged by delivery id, event and
@@ -12,8 +13,8 @@ defmodule SymphonyElixirWeb.GitHubWebhookController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.CiPoller
   alias SymphonyElixir.GitHub.Webhook
+  alias SymphonyElixir.PrWatch.Ingest
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.Plugs.RawBodyReader
 
@@ -31,27 +32,29 @@ defmodule SymphonyElixirWeb.GitHubWebhookController do
   defp handle_delivery(conn, webhooks) do
     event = header(conn, "x-github-event")
 
+    payload = payload(conn)
+
     case Webhook.verify(raw_body(conn), header(conn, "x-hub-signature-256"), Webhook.secret(webhooks)) do
       :ok ->
-        deliver(conn, Webhook.parse(event, payload(conn), webhooks.events))
+        deliver(conn, Webhook.parse(event, payload, webhooks.events), Webhook.repository_url(payload))
 
       {:error, reason} ->
         Logger.warning("Rejected GitHub webhook delivery=#{log_value(header(conn, "x-github-delivery"))} event=#{log_value(event)} reason=#{reason}")
-        _ = CiPoller.webhook_delivery({:rejected, reason}, ci_poller())
+        _ = Ingest.reject(reason, Webhook.repository_url(payload), ingest_opts())
         error_response(conn, 401, "invalid_signature", "The webhook signature did not verify")
     end
   end
 
-  defp deliver(conn, delivery) do
-    case CiPoller.webhook_delivery(delivery, ci_poller()) do
+  defp deliver(conn, delivery, repo_url) do
+    case Ingest.deliver(delivery, repo_url, ingest_opts()) do
       :ok -> conn |> put_status(202) |> json(%{status: delivery_status(delivery)})
-      :unavailable -> error_response(conn, 503, "ci_poller_unavailable", "The CI poller is not running")
+      :unavailable -> error_response(conn, 503, "pr_watch_unavailable", "The PR watcher is not running")
     end
   end
 
-  defp delivery_status({:ci, _event}), do: "accepted"
   defp delivery_status(:ping), do: "catching_up"
   defp delivery_status(:ignored), do: "ignored"
+  defp delivery_status(_delivery), do: "accepted"
 
   # Plug.Parsers caches the raw body of the JSON and form deliveries GitHub sends. Any other
   # content type leaves it unread, and an empty body fails the signature check.
@@ -78,7 +81,13 @@ defmodule SymphonyElixirWeb.GitHubWebhookController do
   defp log_value(value) when is_binary(value), do: value |> String.slice(0, 64) |> inspect()
   defp log_value(_value), do: "nil"
 
-  defp ci_poller, do: Endpoint.config(:ci_poller) || CiPoller
+  # The watchers to hand deliveries to: every running one, unless the endpoint names them (tests).
+  defp ingest_opts do
+    case Endpoint.config(:pr_watchers) do
+      watchers when is_list(watchers) -> [watchers: watchers]
+      nil -> []
+    end
+  end
 
   defp error_response(conn, status, code, message) do
     conn

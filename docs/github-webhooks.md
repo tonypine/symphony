@@ -1,21 +1,32 @@
 # GitHub webhooks on macOS
 
-Symphony's CI poller checks each watched pull request's head about once per
+Symphony's PR and CI watcher reads each watched pull request about once per
 `pull_requests.poll_interval_ms`. With `github.webhooks` on, GitHub also tells Symphony when a check
-suite, check run or workflow run finishes, or when a pull request's head moves or the PR closes. The
-CI poller then polls that PR's repository at once, so a green head lands, or a red one goes to the
-fix run, within seconds.
+suite, check run or workflow run finishes, when a pull request's head moves or the PR closes, and
+when a branch moves. The watcher patches what it knows of that PR (its state API shows
+`watch.source: webhook`) and reads it 3 seconds later, so a green head lands, or a red one goes to
+the fix run, within seconds. Only that read decides, as the timed poll does: one passing check
+never makes a head green by itself.
 
-A pull request that closes by merging also moves its base branch, so every other PR on it falls
-behind. That delivery makes the PR poller poll at once too: a `Merging` PR that is now `BEHIND`
-gets its update-branch in seconds, and once its head moves, the CI runs still going on the old head
-are cancelled, since that head can never merge. A PR still in Code Review, QA or Rework is left
-behind on purpose: a review or QA run starts only on a green head, so updating it on every merge
-would keep restarting its CI, and an agent run brings its own branch up to date. It is updated
-once it reaches `Merging`.
+A push to a base branch (or a pull request that closes by merging into it) can make every other PR
+on it fall behind or conflict. The watcher marks each open watched PR on that base as of unknown
+mergeability and reads them one by one, 1 second apart, while GitHub computes it again: a PR that
+now conflicts goes to CI Fix in seconds, or waits on the PR ahead of it that changes the same files,
+and a `Merging` PR that is now `BEHIND` gets its update-branch. A read that finds a conflict, or a
+PR waiting on its competitors, reads every watched PR and the repository's open PRs too, as the
+timed poll does, so the competitor's landing clears the wait in seconds as well. A PR still in Code
+Review, QA or Rework is left behind on purpose: a review or QA run starts only on a green head, so
+updating it on every merge would keep restarting its CI, and an agent run brings its own branch up
+to date. It is updated once it reaches `Merging`.
 
-Webhooks only speed up polling. The timed poll keeps running and catches up on any delivery lost
-while the Mac sleeps, Symphony restarts or the relay drops.
+A `release` published on `tonypine/symphony`, the repository the macOS app updates from, records its
+newest release in Symphony.
+
+Webhooks change how soon Symphony acts, never what it does. The timed poll keeps running and
+catches up on any delivery lost while the Mac sleeps, Symphony restarts or the relay drops. While
+deliveries are healthy it is only a safety net, every `github.webhooks.fallback_poll_interval_ms`
+(5 minutes). When a read finds a change no delivery reported, the deliveries count as unhealthy and
+the watcher polls every `pull_requests.poll_interval_ms` again until the next one arrives.
 
 ## How deliveries reach Symphony
 
@@ -67,8 +78,12 @@ github:
     enabled: true
     relay: smee
     secret: $GITHUB_WEBHOOK_SECRET   # leave out to use <state-root>/github_webhook_secret
-    # events: [check_suite, check_run, workflow_run, pull_request]
+    # events: [check_suite, check_run, workflow_run, pull_request, push, release]
+    # fallback_poll_interval_ms: 300000   # the safety-net poll while deliveries are healthy
+    # silence_alert_minutes: 10           # warn after this long without a delivery
 ```
+
+The app's Settings window has both intervals under **GitHub updates**.
 
 Restart Symphony. The dashboard's **GitHub webhooks** card shows "Active through smee".
 
@@ -101,7 +116,7 @@ Access bypass rule for that one path if the hostname is behind Access.
 ```sh
 gh extension install cli/gh-webhook
 gh webhook forward --repo <owner>/<repo> \
-  --events check_suite,check_run,workflow_run,pull_request \
+  --events check_suite,check_run,workflow_run,pull_request,push,release \
   --secret "$GITHUB_WEBHOOK_SECRET" \
   --url http://127.0.0.1:4040/api/v1/github/webhook
 ```
@@ -116,9 +131,9 @@ In the repository's **Settings → Webhooks → Add webhook**:
 - **Content type**: `application/json`.
 - **Secret**: the value from step 2.
 - **Events**: "Let me select individual events", then **Check suites**, **Check runs**,
-  **Workflow runs** and **Pull requests**.
+  **Workflow runs**, **Pull requests**, **Pushes** and **Releases**.
 
-GitHub sends a `ping` when the hook is saved. Symphony answers it by polling every watched PR at once,
+GitHub sends a `ping` when the hook is saved. Symphony answers it by reading every watched PR at once,
 which also catches up on anything missed. `gh webhook forward` creates the hook, and so sends a
 `ping`, every time it starts.
 
@@ -126,6 +141,9 @@ which also catches up on anything missed. `gh webhook forward` creates the hook,
 
 - The dashboard card shows the time of the last delivery and how many CI results came through the
   relay and how many by polling.
+- A log line `PR watch found a change no GitHub delivery reported` names the PR and the change a
+  read found that no delivery did; the watcher then polls at the poll interval until the next
+  delivery arrives.
 - GitHub's **Recent Deliveries** tab shows Symphony's answer: `202` when accepted, `401` for a bad
-  signature, `404` while `github.webhooks.enabled` is off, `503` while the CI poller isn't running
-  (`pull_requests.checks.enabled` off).
+  signature, `404` while `github.webhooks.enabled` is off, `503` while the PR watcher isn't running
+  (`pull_requests` polling off).

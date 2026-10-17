@@ -5,12 +5,25 @@ defmodule SymphonyElixir.GitHubWebhookTest do
   alias SymphonyElixir.GitHub.Webhook
   alias SymphonyElixir.{Paths, Secret}
 
-  @events ["check_suite", "check_run", "workflow_run", "pull_request"]
+  @events ["check_suite", "check_run", "workflow_run", "pull_request", "push", "release"]
   @repository %{"full_name" => "example/repo", "html_url" => "https://github.com/example/repo"}
 
   describe "config" do
-    test "webhooks are off by default and listen to every CI event" do
-      assert %Webhooks{enabled: false, relay: "smee", secret: nil, events: @events} = Config.settings!().github.webhooks
+    test "webhooks are off by default, listen to every CI, push and release event, and poll every 5 minutes while healthy" do
+      webhooks = Config.settings!().github.webhooks
+      assert %Webhooks{enabled: false, relay: "smee", secret: nil, events: @events} = webhooks
+      assert %Webhooks{fallback_poll_interval_ms: 300_000, silence_alert_minutes: 10} = webhooks
+    end
+
+    test "the safety-net interval and the silence alert are read, and must be positive" do
+      webhooks = %{fallback_poll_interval_ms: 120_000, silence_alert_minutes: 30}
+      write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: webhooks})
+      assert %Webhooks{fallback_poll_interval_ms: 120_000, silence_alert_minutes: 30} = Webhook.settings()
+
+      for webhooks <- [%{fallback_poll_interval_ms: 0}, %{silence_alert_minutes: 0}] do
+        write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: webhooks})
+        assert {:error, _reason} = Config.settings()
+      end
     end
 
     test "the secret resolves from the environment and never shows in inspect" do
@@ -33,7 +46,7 @@ defmodule SymphonyElixir.GitHubWebhookTest do
       write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: %{relay: "ngrok"}})
       assert {:error, _reason} = Config.settings()
 
-      write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: %{events: ["push"]}})
+      write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: %{events: ["issues"]}})
       assert {:error, _reason} = Config.settings()
     end
 
@@ -123,7 +136,8 @@ defmodule SymphonyElixir.GitHubWebhookTest do
                     conclusion: "failure",
                     completed_at: ~U[2026-05-06 09:00:00Z],
                     pr_urls: ["https://github.com/example/repo/pull/7"],
-                    merged: false
+                    merged: false,
+                    base_ref: nil
                   }}
       end
     end
@@ -152,7 +166,7 @@ defmodule SymphonyElixir.GitHubWebhookTest do
         payload = %{
           "action" => action,
           "repository" => @repository,
-          "pull_request" => %{"html_url" => "https://github.com/example/repo/pull/7", "head" => %{"sha" => "def456"}}
+          "pull_request" => %{"html_url" => "https://github.com/example/repo/pull/7", "head" => %{"sha" => "def456"}, "base" => %{"ref" => "main"}}
         }
 
         assert Webhook.parse("pull_request", payload, @events) ==
@@ -164,7 +178,8 @@ defmodule SymphonyElixir.GitHubWebhookTest do
                     conclusion: nil,
                     completed_at: nil,
                     pr_urls: ["https://github.com/example/repo/pull/7"],
-                    merged: false
+                    merged: false,
+                    base_ref: "main"
                   }}
       end
     end
@@ -181,6 +196,31 @@ defmodule SymphonyElixir.GitHubWebhookTest do
       assert Webhook.parse("pull_request", %{"action" => "closed", "pull_request" => %{"merged" => true}}, @events) == :ignored
     end
 
+    test "a push to a branch names the repository, the branch and its new head; a tag or a deleted branch is ignored" do
+      payload = %{"ref" => "refs/heads/main", "after" => "abc123", "repository" => @repository}
+
+      assert Webhook.parse("push", payload, @events) == {:push, %{repo_url: "https://github.com/example/repo", ref: "main", head_sha: "abc123"}}
+      assert Webhook.parse("push", %{payload | "after" => ""}, @events) == {:push, %{repo_url: "https://github.com/example/repo", ref: "main", head_sha: nil}}
+      assert Webhook.parse("push", %{payload | "ref" => "refs/tags/v1"}, @events) == :ignored
+      assert Webhook.parse("push", Map.put(payload, "deleted", true), @events) == :ignored
+      assert Webhook.parse("push", payload, ["check_suite"]) == :ignored
+    end
+
+    test "a published release names its repository, tag and publish time; a draft or another action is ignored" do
+      release = %{"tag_name" => "v1.2.0", "published_at" => "2026-10-16T08:00:00Z", "prerelease" => false}
+      payload = %{"action" => "published", "release" => release, "repository" => %{"full_name" => "tonypine/symphony"}}
+
+      assert Webhook.parse("release", payload, @events) ==
+               {:release, %{repo: "tonypine/symphony", tag: "v1.2.0", published_at: ~U[2026-10-16 08:00:00Z], prerelease: false}}
+
+      assert {:release, %{prerelease: true, published_at: nil}} =
+               Webhook.parse("release", put_in(payload, ["release"], %{release | "prerelease" => true, "published_at" => "soon"}), @events)
+
+      assert Webhook.parse("release", put_in(payload, ["release", "draft"], true), @events) == :ignored
+      assert Webhook.parse("release", %{payload | "action" => "created"}, @events) == :ignored
+      assert Webhook.parse("release", put_in(payload, ["release", "tag_name"], ""), @events) == :ignored
+    end
+
     test "pings, other actions, other events and events left out of the config" do
       assert Webhook.parse("ping", %{"zen" => "hi"}, []) == :ping
       assert Webhook.parse("check_suite", %{"action" => "requested", "check_suite" => %{"head_sha" => "abc"}}, @events) == :ignored
@@ -194,30 +234,10 @@ defmodule SymphonyElixir.GitHubWebhookTest do
     end
   end
 
-  describe "ci_status/1" do
-    test "a moved or reopened head is running, and a closed PR carries no state" do
-      assert Webhook.ci_status(%{action: "synchronize", conclusion: nil}) == "running"
-      assert Webhook.ci_status(%{action: "reopened", conclusion: nil}) == "running"
-      assert Webhook.ci_status(%{action: "closed", conclusion: nil}) == nil
-    end
-
-    test "a failed check is red, and a passing or conclusionless one carries no state of its own" do
-      for conclusion <- ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure"] do
-        assert Webhook.ci_status(%{action: "completed", conclusion: conclusion}) == "red"
-      end
-
-      assert Webhook.ci_status(%{action: "completed", conclusion: "SUCCESS"}) == nil
-      assert Webhook.ci_status(%{action: "completed", conclusion: nil}) == nil
-    end
-  end
-
-  test "matches_record?/2 matches the PR URL or the last observed head" do
-    record = %{pr_url: "https://github.com/Example/repo/pull/7/", last_observed_sha: "abc123", commit_sha: "abc123"}
-
-    assert Webhook.matches_record?(%{pr_urls: ["https://github.com/example/repo/pull/7"], head_sha: nil}, record)
-    assert Webhook.matches_record?(%{pr_urls: [], head_sha: "abc123"}, record)
-    refute Webhook.matches_record?(%{pr_urls: ["https://github.com/example/repo/pull/8"], head_sha: "zzz"}, record)
-    refute Webhook.matches_record?(%{pr_urls: ["https://github.com/example/repo/pull/7"], head_sha: nil}, %{})
+  test "repository_url/1 reads the repository a payload names" do
+    assert Webhook.repository_url(%{"repository" => @repository}) == "https://github.com/example/repo"
+    assert Webhook.repository_url(%{"repository" => %{"html_url" => ""}}) == nil
+    assert Webhook.repository_url(nil) == nil
   end
 
   defp sign(body, secret) do

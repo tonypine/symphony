@@ -6,19 +6,18 @@ defmodule SymphonyElixir.CiPoller do
   watcher (`SymphonyElixir.PrWatch`) reruns, sends a red head to CI Fix and files the red
   backstop's fix ticket.
 
-  With `github.webhooks.enabled`, GitHub deliveries that name a watched PR (see
-  `webhook_delivery/2`) run the same poll for that PR's repository right away, so a CI result
-  lands in seconds instead of up to one poll interval. The timed poll keeps running and catches
-  up on anything the relay dropped.
+  GitHub's webhook deliveries go to the PR and CI watcher (`SymphonyElixir.PrWatch.Ingest`), not
+  here; `status/0` shows their health beside the poller's own.
   """
 
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, CiState, Config, PrWatch}
-  alias SymphonyElixir.GitHub.{PullRequest, Webhook}
+  alias SymphonyElixir.{AuditLog, AutoMerge, Config, PrWatch}
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{Orchestrator, RunStore, TicketPullRequest, Tracker}
+  alias SymphonyElixir.PrWatch.Ingest
+  alias SymphonyElixir.{RunStore, TicketPullRequest, Tracker}
 
   @merging_state "Merging"
   @rework_state "Rework"
@@ -26,8 +25,6 @@ defmodule SymphonyElixir.CiPoller do
   @github_error_backoff_threshold 3
   @max_github_error_backoff_ms 300_000
   @status_table :ci_poller_status
-  # Coalesces the burst of deliveries a CI run sends (one per check run and suite) into one poll.
-  @webhook_debounce_ms 1_000
   @settled_conclusions ["SUCCESS", "FAILURE"]
   # Checks only a person can clear: the `protected-paths` workflow's job fails a PR whose own
   # commits change an agent-protected path until a person adds the waiver label.
@@ -39,15 +36,6 @@ defmodule SymphonyElixir.CiPoller do
     defstruct [
       :timer_ref,
       :poll_interval_ms,
-      :webhook_timer_ref,
-      webhook_repo_keys: MapSet.new(),
-      webhooks: %{
-        last_event_at: nil,
-        events_received: 0,
-        rejected: 0,
-        results_via_webhook: 0,
-        results_via_poll: 0
-      },
       consecutive_failures: 0,
       current_backoff_ms: nil,
       degraded?: false,
@@ -80,7 +68,7 @@ defmodule SymphonyElixir.CiPoller do
 
       _table ->
         case :ets.lookup(@status_table, :current) do
-          [{:current, status}] -> status
+          [{:current, status}] -> Map.put(status, :webhooks, Ingest.status())
           _other -> :unavailable
         end
     end
@@ -97,43 +85,12 @@ defmodule SymphonyElixir.CiPoller do
     {:ok, schedule_poll(state, 0)}
   end
 
-  @doc """
-  Hands a verified GitHub webhook delivery to the running poller: `{:ci, event}` (see
-  `SymphonyElixir.GitHub.Webhook.parse/3`), `:ping` (the relay (re)connected), `:ignored`, or
-  `{:rejected, reason}` for a delivery that failed the signature check.
-  """
-  @spec webhook_delivery(term(), GenServer.server()) :: :ok | :unavailable
-  def webhook_delivery(delivery, server \\ __MODULE__) do
-    case GenServer.whereis(server) do
-      nil -> :unavailable
-      _pid -> GenServer.cast(server, {:webhook_delivery, delivery})
-    end
-  end
-
-  @impl true
-  def handle_cast({:webhook_delivery, {:rejected, _reason}}, %State{} = state) do
-    {:noreply, update_webhook_stats(state, &Map.update!(&1, :rejected, fn count -> count + 1 end))}
-  end
-
-  def handle_cast({:webhook_delivery, delivery}, %State{} = state) do
-    state =
-      update_webhook_stats(state, &%{&1 | last_event_at: DateTime.utc_now(), events_received: &1.events_received + 1})
-
-    case delivery do
-      # GitHub pings a hook when it is created, which `gh webhook forward` does on every start:
-      # poll everything now to catch up on events missed while the relay was away.
-      :ping -> {:noreply, schedule_poll(state, 0)}
-      {:ci, event} -> {:noreply, handle_ci_delivery(state, event)}
-      _ignored -> {:noreply, state}
-    end
-  end
-
   @impl true
   def handle_info(:poll, %State{} = state) do
     {state, delay_ms} =
       case poll_cycle_result(state.opts) do
-        {:ok, summary} ->
-          {state |> count_results(:results_via_poll, summary) |> handle_poll_success(), state.poll_interval_ms}
+        {:ok, _summary} ->
+          {handle_poll_success(state), state.poll_interval_ms}
 
         {:error, message, reason} ->
           handle_poll_failure(state, message, reason)
@@ -143,158 +100,7 @@ defmodule SymphonyElixir.CiPoller do
     {:noreply, schedule_poll(state, delay_ms)}
   end
 
-  def handle_info(:webhook_poll, %State{} = state) do
-    state =
-      state.webhook_repo_keys
-      |> Enum.sort()
-      |> Enum.reduce(%{state | webhook_repo_keys: MapSet.new(), webhook_timer_ref: nil}, &webhook_poll_repo/2)
-
-    publish_status(state)
-    {:noreply, state}
-  end
-
   def handle_info(_message, state), do: {:noreply, state}
-
-  defp queue_webhook_poll(%State{} = state, event) do
-    case webhook_repo_keys(event, state.opts) do
-      [] ->
-        state
-
-      repo_keys ->
-        state = %{state | webhook_repo_keys: MapSet.union(state.webhook_repo_keys, MapSet.new(repo_keys))}
-
-        if is_reference(state.webhook_timer_ref) do
-          state
-        else
-          delay_ms = Keyword.get(state.opts, :webhook_debounce_ms, @webhook_debounce_ms)
-          %{state | webhook_timer_ref: Process.send_after(self(), :webhook_poll, delay_ms)}
-        end
-    end
-  end
-
-  defp handle_ci_delivery(%State{} = state, event) do
-    state
-    |> base_moved(event)
-    |> finish_pull_requests(event)
-    |> apply_webhook_ci_state(event)
-    |> queue_webhook_poll(event)
-  end
-
-  # A PR closed without merging is no longer its ticket's in-flight PR: the delivery marks the
-  # ticket's PR record (`SymphonyElixir.TicketPullRequest`) in every repo the poller serves. A merged
-  # one is left to the polls: the PR and CI watcher moves a `Merging` ticket to Done before it marks
-  # the PR finished.
-  defp finish_pull_requests(%State{} = state, %{action: "closed", merged: false, pr_urls: pr_urls}) do
-    for repo_key <- repo_keys_from_opts(state.opts), pr_url <- pr_urls do
-      TicketPullRequest.mark_finished(repo_key, pr_url, "closed")
-    end
-
-    state
-  end
-
-  defp finish_pull_requests(%State{} = state, _event), do: state
-
-  # A merged PR moved its base branch, so every other PR on it is now behind. The PR and CI watcher
-  # reads now instead of on its timer: a `Merging` PR gets its update-branch (and its CI on the stale
-  # head cancelled) in seconds, rather than finishing a CI run that can never land.
-  defp base_moved(%State{} = state, %{merged: true}) do
-    Keyword.get(state.opts, :on_base_moved, &PrWatch.poll_now/0).()
-    state
-  end
-
-  defp base_moved(%State{} = state, _event), do: state
-
-  # Only deliveries about a PR the poller already watches run a poll; the timed poll discovers
-  # new ones.
-  defp webhook_repo_keys(event, opts) do
-    event |> matching_ci_records(opts) |> Enum.map(fn {repo_key, _record} -> repo_key end) |> Enum.uniq()
-  end
-
-  # The watched CI records a delivery names, with the repo each belongs to.
-  defp matching_ci_records(event, opts) do
-    run_store = Keyword.get(opts, :run_store, RunStore)
-
-    for repo_key <- repo_keys_from_opts(opts),
-        {:ok, checks} <- [list_ci_checks(run_store, repo_key)],
-        record <- checks,
-        Webhook.matches_record?(event, record) do
-      {repo_key, record}
-    end
-  end
-
-  # A delivery writes the coarse CI state it carries into the store ahead of the poll it queues, so
-  # a red head or a new head moves the board without waiting for the poll (`SymphonyElixir.CiState`).
-  # A passing check names no state of its own — only the poll's rollup read calls a head green — and
-  # a delivery for a head the record has already moved past is left to the poll.
-  defp apply_webhook_ci_state(%State{} = state, event) do
-    status = Webhook.ci_status(event)
-    at = webhook_at(event)
-
-    Enum.each(matching_ci_records(event, state.opts), fn {repo_key, record} ->
-      issue_id = Map.get(record, :issue_id)
-
-      case {webhook_target(event, record), status} do
-        {:clear, _status} -> CiState.record(repo_key, issue_id, nil, nil, at, state.opts)
-        {{:write, head_sha}, status} when is_binary(status) -> CiState.record(repo_key, issue_id, head_sha, status, at, state.opts)
-        _no_state -> :ok
-      end
-    end)
-
-    state
-  end
-
-  # Which head of a record a delivery speaks for: a head-moving event names the new head, a closed
-  # PR clears the labels, and a check event applies only while it ran on the head the record holds.
-  defp webhook_target(%{action: action, head_sha: head_sha}, _record)
-       when action in ["synchronize", "reopened"] and is_binary(head_sha),
-       do: {:write, head_sha}
-
-  defp webhook_target(%{action: action}, _record) when action in ["synchronize", "reopened"], do: :skip
-  defp webhook_target(%{action: "closed"}, _record), do: :clear
-
-  defp webhook_target(%{head_sha: head_sha}, record) when is_binary(head_sha) do
-    case Map.get(record, :last_observed_sha) do
-      observed when observed in [nil, head_sha] -> {:write, head_sha}
-      _other -> :skip
-    end
-  end
-
-  defp webhook_target(_event, _record), do: :skip
-
-  # The check's own completion time when it carries one, so a slow delivery can't outrank a newer
-  # poll; otherwise the delivery time.
-  defp webhook_at(%{completed_at: %DateTime{} = at}), do: at
-  defp webhook_at(_event), do: DateTime.utc_now()
-
-  defp webhook_poll_repo(repo_key, %State{} = state) do
-    case poll_cycle_result(Keyword.put(state.opts, :repo_key, repo_key)) do
-      {:ok, summary} ->
-        state = count_results(state, :results_via_webhook, summary)
-        if summary.settled > 0, do: Keyword.get(state.opts, :on_webhook_result, &request_orchestrator_refresh/0).()
-        state
-
-      {:error, message, _reason} ->
-        Logger.warning("CI poll for a GitHub webhook failed repo_key=#{repo_key}: #{message}")
-        state
-    end
-  end
-
-  # The orchestrator releases a Merging CI hold on its next tick; ask for that tick now so a
-  # result that came in through a webhook lands in seconds.
-  defp request_orchestrator_refresh do
-    {:ok, _pid} = Task.start(fn -> Orchestrator.request_refresh() end)
-    :ok
-  end
-
-  defp count_results(%State{} = state, key, summary) do
-    update_webhook_stats(state, &Map.update!(&1, key, fn count -> count + summary.settled end))
-  end
-
-  defp update_webhook_stats(%State{} = state, fun) do
-    state = %{state | webhooks: fun.(state.webhooks)}
-    publish_status(state)
-    state
-  end
 
   @doc false
   @spec poll_once(keyword()) :: {:ok, poll_summary()} | {:error, term()}
@@ -1131,19 +937,8 @@ defmodule SymphonyElixir.CiPoller do
       status: if(state.degraded?, do: :degraded, else: :running),
       consecutive_failures: state.consecutive_failures,
       current_backoff_ms: state.current_backoff_ms,
-      poll_interval_ms: state.poll_interval_ms,
-      webhooks: Map.merge(webhook_settings_status(state.opts), state.webhooks)
+      poll_interval_ms: state.poll_interval_ms
     }
-  end
-
-  defp webhook_settings_status(opts) do
-    webhooks =
-      case Keyword.get(opts, :settings) do
-        %{github: %{webhooks: webhooks}} -> webhooks
-        _settings -> Webhook.settings()
-      end
-
-    %{enabled: webhooks.enabled, relay: webhooks.relay}
   end
 
   defp publish_status(%State{} = state) do

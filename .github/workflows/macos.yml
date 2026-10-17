@@ -16,6 +16,7 @@ on:
       - "scripts/qa/**"
       - ".xcode-version"
       - "test/support/**/*.py"
+      - "test/support/stubs/answers/**"
       - ".github/workflows/macos.yml"
 
 permissions:
@@ -53,7 +54,7 @@ jobs:
           # HEAD is the PR merged into its base, so HEAD^1 is the base.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode-developer-dir(-test)?\.sh$|scripts/qa/|\.xcode-version$|test/support/.*\.py$|\.github/workflows/macos\.yml$)'; then
+          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode-developer-dir(-test)?\.sh$|scripts/qa/|\.xcode-version$|test/support/.*\.py$|test/support/stubs/answers/|\.github/workflows/macos\.yml$)'; then
             echo "macos=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos=false" >> "$GITHUB_OUTPUT"
@@ -76,8 +77,8 @@ jobs:
       - name: Test the Xcode selection script
         run: sh scripts/ci/xcode-developer-dir-test.sh
 
-      # The shared test helpers (test/support/README.md): the update feed stand-in and the
-      # release pair's layout, on made-up inputs. No build, no sudo.
+      # The shared test helpers (test/support/README.md): the update feed, gh and Linear
+      # stand-ins and the release pair's layout, on made-up inputs. No build, no sudo.
       - name: Test the shared test helpers
         run: python3 --version && make support-test
 

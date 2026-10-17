@@ -57,16 +57,18 @@ class StubHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(length) if length else b""
 
-    def respond(self, status, body=b"", content_type="application/json", file=None, length=None, sent=None):
-        """Sends `body` (bytes, or a dict/list sent as JSON), or `length` bytes of the open `file`, and logs the request.
+    def respond(self, status, body=b"", content_type="application/json", file=None, length=None, sent=None,
+                fields=None):
+        """Logs the request, then sends `body` (bytes, or a dict/list as JSON) or `length` bytes of the open `file`.
 
-        `sent` is what the log records as the request's body, such as a POST's payload.
+        `sent` is what the log records as the request's body, such as a POST's payload. `fields` adds keys to the log
+        line, such as the call a stand-in read from the body.
         """
         if isinstance(body, (dict, list)):
             body = (json.dumps(body, sort_keys=True) + "\n").encode()
         elif isinstance(body, str):
             body = body.encode()
-        # Logged before the answer goes out, so a client that has its answer finds the request in the log.
+        # Logged before the answer is sent, so a client that has its answer finds the request in the log.
         entry = {
             "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "method": self.command,
@@ -75,6 +77,7 @@ class StubHandler(http.server.BaseHTTPRequestHandler):
         }
         if sent is not None:
             entry["body"] = sent
+        entry.update(fields or {})
         self.server.request_log.write(entry)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -121,6 +124,33 @@ class StubServer(http.server.ThreadingHTTPServer):
         self.server_close()
         if self._thread:
             self._thread.join(5)
+
+
+class StandIn:
+    """A stand-in's API for tests: its `server`, `url`, `port`, the `requests` it logged, `start` and `stop`."""
+
+    def __init__(self, handler, port=0, log=None):
+        self.server = StubServer(handler, port=port, log_path=log)
+
+    @property
+    def url(self):
+        return self.server.url
+
+    @property
+    def port(self):
+        return self.server.port
+
+    @property
+    def requests(self):
+        """Every request the stand-in answered, as logged (empty without a log file)."""
+        return self.server.request_log.entries()
+
+    def start(self):
+        self.server.start()
+        return self
+
+    def stop(self):
+        self.server.stop()
 
 
 def serve_cli(server, banner):

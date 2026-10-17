@@ -1198,6 +1198,35 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Keeps what Symphony knows of GitHub's updates under `key`: a repository's delivery health
+  (`{:health, repo_key}`) or the app repository's newest release (`{:release, "owner/name"}`),
+  so a restart keeps them (`SymphonyElixir.PrWatch.Ingest`).
+  """
+  @spec put_github_updates(term(), map()) :: :ok | {:error, term()}
+  def put_github_updates(key, value) when is_map(value) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> :mnesia.write({@totals_table, {:github_updates, key}, value}) end)
+    end
+  end
+
+  def put_github_updates(_key, _value), do: {:error, :invalid_github_updates}
+
+  @doc "What `put_github_updates/2` kept under `key`, or nil."
+  @spec get_github_updates(term()) :: map() | nil | {:error, term()}
+  def get_github_updates(key) do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_github_updates(key) end)
+    end
+  end
+
+  defp read_github_updates(key) do
+    case :mnesia.read(@totals_table, {:github_updates, key}) do
+      [{@totals_table, _key, value}] when is_map(value) -> value
+      _none -> nil
+    end
+  end
+
   @spec clear() :: :ok | {:error, term()}
   def clear do
     with :ok <- ensure_started() do

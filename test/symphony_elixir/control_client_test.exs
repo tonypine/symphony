@@ -256,6 +256,29 @@ defmodule SymphonyElixir.ControlClientTest do
     end
   end
 
+  describe "state/1" do
+    test "GETs the state with the bearer token and decodes it" do
+      parent = self()
+      opts = fn result -> dashboard_opts(parent, result) end
+
+      assert {:ok, %{"silent_waits" => []}} = ControlClient.state(opts.({:ok, 200, ~s({"silent_waits":[]})}))
+      assert_received {:got, "http://127.0.0.1:9999/api/v1/state", "test-token"}
+      assert {:ok, %{"running" => []}} = ControlClient.state(opts.({:ok, 200, %{"running" => []}}))
+    end
+
+    test "maps a body that is no state, 503, other statuses and transport errors" do
+      opts = fn result -> dashboard_opts(self(), result) end
+
+      assert {:error, {:invalid_state, "[]"}} = ControlClient.state(opts.({:ok, 200, "[]"}))
+      assert {:error, {:invalid_state, "<html>"}} = ControlClient.state(opts.({:ok, 200, "<html>"}))
+      assert {:error, {:invalid_state, nil}} = ControlClient.state(opts.({:ok, 200, nil}))
+      assert :unavailable = ControlClient.state(opts.({:ok, 503, ""}))
+      assert {:error, {:http_status, 401, "no"}} = ControlClient.state(opts.({:ok, 401, "no"}))
+      assert {:error, {:connection_failed, :econnrefused}} = ControlClient.state(opts.({:error, :econnrefused}))
+      assert {:error, :control_token_unavailable} = ControlClient.state(control_url: "http://127.0.0.1:9999")
+    end
+  end
+
   test "control_url prefers the option, then SYMPHONY_CONTROL_URL, then the persisted URL" do
     assert ControlClient.control_url() == "http://127.0.0.1:4000"
 

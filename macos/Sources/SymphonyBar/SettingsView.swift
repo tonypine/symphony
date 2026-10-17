@@ -298,6 +298,30 @@ struct SettingsView: View {
                 .disabled(!model.canEditTimeouts)
 
                 Section {
+                    MinutesRow(title: "Safety-net check every", minutes: $model.safetyNetCheckMinutes)
+                    Text(
+                        "While GitHub's webhook deliveries arrive, Symphony also checks every PR this often, to catch "
+                            + "one a delivery missed. Without deliveries it checks at the poll interval."
+                    )
+                    .foregroundStyle(.secondary)
+                    MinutesRow(title: "Warn me after no updates for", minutes: $model.silenceAlertMinutes)
+                    Text("Shows a warning when no delivery has arrived from GitHub for this long.")
+                        .foregroundStyle(.secondary)
+                    if let error = model.gitHubUpdatesError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("GitHub updates (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "github.webhooks.fallback_poll_interval_ms (default 5 minutes) and "
+                            + "github.webhooks.silence_alert_minutes (default 10 minutes). Save checks symphony.yml with "
+                            + "symphony check first; Symphony reads them on its next check, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditGitHubUpdates)
+
+                Section {
                     DispatchLoopRow(title: "Hold a ticket after", runs: $model.dispatchLoopRuns, minutes: $model.dispatchLoopWindowMinutes)
                     DispatchLoopRow(title: "Or after", runs: $model.dispatchLoopLongRuns, minutes: $model.dispatchLoopLongWindowMinutes)
                     Text(
@@ -477,6 +501,9 @@ struct SettingsView: View {
                 }
                 if model.timeoutsError != nil {
                     Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)
+                }
+                if model.gitHubUpdatesError != nil {
+                    Text("symphony check rejected the GitHub update settings; see GitHub updates.").foregroundStyle(.red)
                 }
                 if model.dispatchLoopError != nil {
                     Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
@@ -849,6 +876,23 @@ private struct TimeoutRow: View {
                 Text(minutes == 1 ? "1 minute" : "\(minutes) minutes")
                     .monospacedDigit()
                 Stepper(title, value: $minutes, in: OperationTimeouts.minuteRange)
+                    .labelsHidden()
+            }
+        }
+    }
+}
+
+/// A number of minutes, shown as "5 min", with a stepper over `GitHubUpdates.minuteRange`.
+private struct MinutesRow: View {
+    let title: String
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text("\(minutes) min")
+                    .monospacedDigit()
+                Stepper(title, value: $minutes, in: GitHubUpdates.minuteRange)
                     .labelsHidden()
             }
         }

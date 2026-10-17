@@ -87,7 +87,9 @@ ticket in `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, and in `In Progr
 PR, whether or not Symphony ran it. It then reads each ticket's PR in one GitHub query, the checks
 its base branch requires (kept 10 minutes), whether the base branch has workflow files (only for a
 head with no check at all, kept 10 minutes), the base branch's workflow runs only to tell a red head
-that is also red on the base, a red head's failed log once per head (its first error line), and,
+that is also red on the base (with the jobs of a run that failed there, and the two failed logs when
+the job of the same name failed too, kept 10 minutes per head job and base job), a red head's failed
+log once per head (its first error line), and,
 when two or more watched PRs are open or one conflicts or waits on its competitors, the
 repository's open PRs and their files once: the landing order fills `ahead`, and `competing` lists
 every open PR that shares a file with the ticket's, with its ticket when the watcher watches it,
@@ -129,7 +131,12 @@ A red head whose only failure is `protected paths`, which only a person clears, 
 (R18): add the waiver label to the PR (the check runs again and passes), or drop the change in
 Rework. A check that is red on the base branch too (R23) is a wait on CI, with no CI Fix spent:
 logged once per base and check, listed under `red_bases` in `/api/v1/state`, and cleared once the
-base is green.
+base is green. A failing check counts as red on the base only when the job of the same name failed
+in its workflow's latest finished run there, not when another job of that workflow did; and when the
+head's failed log names failing tests (ExUnit, XCTest or pytest), only when the base's job failed
+every one of them too. A head log that names no test, or a log that can't be read, leaves the
+comparison by name only. The wait's reason and its log line name the base run and commit compared
+and whether by tests or by name only.
 
 ## What the watcher does
 
@@ -180,7 +187,8 @@ opens:
 
 Each tick also looks for a ticket that waits with nothing under way and no reason anybody can act
 on (`SymphonyElixir.PrWatch.SilentWait`). A watched ticket with an active run or a hold is never
-silent, nor is one whose decision, made within the last two ticks, leaves it waiting on an owner
+silent, nor one the watcher acted on in this tick (a move, a rerun, a GitHub call), nor one whose
+decision, made within the last two ticks, leaves it waiting on an owner
 until something happens (`owner` and `clears_when`). Any other ticket is quiet: a decision with no
 owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
 quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, not polls, so a
@@ -258,3 +266,20 @@ unlinked when Symphony added the link. The hold clears once no competitor is lef
 read decides on the conflict: CI Fix, with the approvals carried forward. The R15 wait restarts the
 conflict count. A person's `Unblock` clears the hold and removes Symphony's links, and the ticket no
 longer waits on those PRs while they stay open.
+
+## Replayed incidents and the skip-reason sweep
+
+The tickets the old pollers parked until a person noticed (TP-896, TP-920/TP-892, TP-921/TP-891,
+TP-886, TP-903, TP-917), two tickets racing for the same files (D14) and a check that keeps
+failing (D15 (c)) are replayed as facts in `test/symphony_elixir/pr_watch/incidents_test.exs`, once
+by polling only and once by GitHub's deliveries (`SymphonyElixir.PrWatchParity`). Both runs make
+the same calls in the same order, and every ticket ends Done, in an action Symphony carries out, a
+wait with an owner, a hold that clears by itself or a person's decision, with no person's move on
+the way.
+
+`mix pr_watch.sweep [--since 7d]` checks the table against the live log: it lists every `Skipping
+dispatch` / `Not dispatching` line and `pr_watch.silent_wait` line in Symphony's log (and the
+silent waits listed now), maps each to its rule, to a dispatch gate that is no PR case (`gate:
+blocked by a ticket`, `gate: paused` and the like), or to `no rule`, and prints the count per rule,
+then `no rule: N` and each line no rule covers. A `no rule` line is a case for a new table row.
+`--log PATH` sweeps a saved log instead of this host's (`SymphonyElixir.PrWatch.Sweep`).

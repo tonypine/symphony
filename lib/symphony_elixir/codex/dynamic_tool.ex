@@ -537,11 +537,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "gh_stub_port" => %{
             "type" => "integer",
             "description" =>
-              "A QA_HOST_PORTS port where your gh stub listens. The app runs Symphony's fake gh (SYMPHONY_BAR_GH), which POSTs each call's arguments there (form fields argc, arg, arg…) and prints your answer: 200 → stdout, exit 0; other → stderr, exit 1."
+              "A QA_HOST_PORTS port where the shared gh stub (python3 -B test/support/stubs/gh.py) listens. The app runs Symphony's fake gh (SYMPHONY_BAR_GH), which POSTs each call's arguments there (form fields argc, arg, arg…) and prints the answer: 200 → stdout, exit 0; other → stderr, exit 1."
           },
           "linear_stub_port" => %{
             "type" => "integer",
-            "description" => "A QA_HOST_PORTS port where your Linear GraphQL stub listens; the app sends Linear queries to http://localhost:<port>/graphql."
+            "description" => "A QA_HOST_PORTS port where the shared Linear stub (python3 -B test/support/stubs/linear.py) listens; the app sends Linear queries to http://localhost:<port>/graphql."
           },
           "open_panel_dir" => %{"type" => "string", "description" => "A path qa_put_checkout returned; the app's folder picker opens in it."},
           "update_feed_port" => %{

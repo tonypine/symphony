@@ -92,21 +92,29 @@ Stand-ins for GitHub, Linear, updates and the folder picker (the Add Repo sheet,
 and anything else that runs `gh`, asks Linear or picks a folder). Never let the app reach real
 GitHub or Linear in QA:
 
-- **gh:** serve a gh stub on a `QA_HOST_PORTS` port and pass it as `qa_launch_app`'s
-  `gh_stub_port`. The app then runs Symphony's fake `gh` (through `SYMPHONY_BAR_GH`), which POSTs
-  each call to `http://localhost:<port>` as a form body: `argc`, then one `arg` field per
-  argument, in order (`urllib.parse.parse_qsl` keeps the order). Answer 200 with what `gh` would
-  print on stdout (exit status 0), or any other status with an error message (stderr, exit status
-  1). For example `api repos/acme/widgets --jq .default_branch` → `main`; `api
-  repos/acme/widgets/contents?ref=main --jq .[].name` → one file name per line. Log every call,
-  and quote the calls that bear on a step.
-- **Linear:** serve a GraphQL stub on another port and pass it as `linear_stub_port`; the app
-  POSTs `{"query", "variables"}` JSON to `http://localhost:<port>/graphql`. Answer by the query's
-  operation name: `SymphonyBarProjects` →
-  `{"data":{"projects":{"nodes":[{"id":"p1","name":"QA Project"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-  `SymphonyBarProjectTeams` → `{"data":{"project":{"teams":{"nodes":[{"id":"t1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
-  `SymphonyBarLabels` → `{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"macos","isGroup":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`.
-  Any made-up Linear key in Settings works with it.
+- **gh and Linear:** run Symphony's shared stubs, never ones you write. Start each on its own
+  `QA_HOST_PORTS` port with your shell tool's background option:
+  `python3 -B test/support/stubs/gh.py --port <port> --log "$TMPDIR/gh.log"` and
+  `python3 -B test/support/stubs/linear.py --port <port> --log "$TMPDIR/linear.log"`. Once they
+  print `gh stub on http://127.0.0.1:<port> …` and `Linear stub on http://127.0.0.1:<port>/graphql …`,
+  pass the ports as `qa_launch_app`'s `gh_stub_port` and `linear_stub_port`.
+  - The app then runs Symphony's fake `gh` (through `SYMPHONY_BAR_GH`), which sends each call
+    to the gh stub and prints its answer, and POSTs its Linear queries to the Linear stub's
+    `/graphql` (through `SYMPHONY_QA_LINEAR_URL`). Any made-up Linear key in Settings works.
+  - The gh stub answers the Add Repo sheet's calls for the repo `acme/widgets` (default branch
+    `main`, top-level files `README.md`, `mix.exs` and `mix.lock`: an Elixir project with Credo),
+    and opening its `WORKFLOW.md` pull request (`https://github.com/acme/widgets/pull/1`), so
+    put the checkout with `qa_put_checkout` and `remote_url` `https://github.com/acme/widgets`.
+    The Linear stub answers the sheet's projects (`QA Project`), a project's teams and the
+    labels (`macos`).
+  - A call they have no answer for gets a clear error: the gh stub's (`gh stub: no committed
+    answer for: gh …`) is what `gh` prints on stderr, so the app shows it as gh's error; the
+    Linear stub's is a GraphQL error naming the operation, which the app shows as Linear's.
+    When a step needs an answer they don't have, say so in `findings`, so one is committed to
+    `test/support/stubs/answers/` for the next pass.
+  - Each log has one JSON line per request (`method`, `path`, `status`, `time`, and the call:
+    `args` for gh, `operation` and `variables` for Linear). Quote the app's calls that bear on a
+    step from them in its `details`. `test/support/README.md` lists every option.
 - **Update feed:** run Symphony's shared feed server, never one you write. Start it on another
   `QA_HOST_PORTS` port with your shell tool's background option:
   `python3 -B test/support/stubs/update_feed.py --fake-release 9.9.9 9999 --port <port> --log "$TMPDIR/update-feed.log"`.
@@ -143,6 +151,27 @@ GitHub or Linear in QA:
   `qa_put_checkout`, pass its `path` as `open_panel_dir`, and the panel opens inside it: press
   its Choose button without selecting anything to choose that folder. Use one launch per
   checkout you need to pick.
+- **PR and CI watcher:** pass `macos/Tests/Fixtures/director-app/pr-watch` as `api_fixtures`.
+  Its clock is 2026-10-16 12:04 UTC. Open each ticket from Tickets (or from Overview's Code
+  Review & QA and Merging tiles) and judge its **PR and CI** card, the first card on the page:
+  - TP-701 (Code Review, CI running): the first line reads "Waiting for CI on 9f8e7d6", then
+    "CI acts next, until the checks finish · 4 min", "Updated 4 min ago · check" and the fact
+    "Fix attempts: Checks 2 of 10 · conflict 1 of 3 · last: conflict with main". Press
+    **Check Now**: `qa_api_requests` lists a `POST /api/v1/issues/TP-701/watch/check`, and the
+    Updated line reads "Updated 3 s ago · check".
+  - Overview reads "1 thing needs attention." with the row "TP-702 in Rework: nothing is running
+    and nothing says why." and its buttons **Check Now** (prominent) and **Open Ticket**; Open
+    Ticket opens TP-702's page.
+  - Inbox, Decisions: TP-703's review has **What the watcher found** above its options, with the
+    failing check `protected paths` and the files `WORKFLOW.md` and
+    `config/settings_ui_exempt.yml`; "Drop the change in Rework" is marked Recommended. Send
+    Decision posts `POST /api/v1/control/decide` and the selection moves to TP-706.
+  - TP-704 (Merging): "Waiting on TP-705 to land · they change the same file (SPEC.md)" with
+    **Open TP-705**. TP-707: "CI keeps failing: waiting on TP-708, a fix ticket for the test
+    check" with **Open TP-708**. TP-709: "PR #709 was closed without merging. Sent back to
+    Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
+  - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
+    next, since when, Updated), each action row as one, and each button by its title.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in

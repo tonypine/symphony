@@ -81,6 +81,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     def list_ticket_states(_repo_key), do: {:error, :store_down}
     def list_runs_with_status(_status), do: {:error, :store_down}
     def put_ticket_pr_watch(_repo_key, _issue_id, _identifier, _watch), do: {:error, :store_down}
+    def get_github_updates(_key), do: {:error, :store_down}
+    def put_github_updates(_key, _value), do: {:error, :store_down}
     def list_pr_reviews(_repo_key), do: {:error, :store_down}
   end
 
@@ -460,6 +462,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid) end)
     assert log =~ "PR watch could not write the facts issue_id=1 issue_identifier=TP-1 reason=:store_down"
+    assert log =~ "PR watch could not keep the GitHub delivery health repo_key=#{repo_key} reason=:store_down"
     assert RunStore.get_ticket_state(repo_key, "1") == nil
   end
 
@@ -532,6 +535,34 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert {:ok, _summary} = Repo.poll(pid)
     assert_received {:read, _url, opts}
     assert opts[:required_checks] == %{}
+  end
+
+  test "TP-1073: keeps how a red head compared with the base for 10 minutes, and names the base run R23 waits on", %{repo_key: repo_key} do
+    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+    key = {"https://github.com/acme/app/actions/runs/100/job/4", "74"}
+    base_red = %{check: "specs", sha: "c1c4ae62", run_id: "38988095659", basis: :tests}
+    red = %{ci: :red, red_kind: :also_red_on_base, failing_check: "specs", base_red: base_red, comparisons: %{key => :tests}}
+    reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), red)}})
+    clock = :counters.new(1, [])
+    pid = start_repo!(repo_key, now: fn -> DateTime.add(@now, :counters.get(clock, 1), :second) end)
+
+    log = capture_log(fn -> assert {:ok, _summary} = Repo.poll(pid) end)
+    assert log =~ "the `specs` check is red on main too"
+    assert log =~ "base_run_id=38988095659 base_sha=c1c4ae62 compared_by=tests"
+    assert %{decision: %{rule: "R23", reason: "The `specs` check is red on the base branch too: it failed the same tests on main at c1c4ae62 (run 38988095659)"}} = watch(repo_key, "1")
+    assert_received {:read, _url, opts}
+    assert opts[:base_comparisons] == %{}
+
+    Application.delete_env(:symphony_elixir, :pr_watch_test_reads)
+    :counters.put(clock, 1, 599)
+    assert {:ok, _summary} = Repo.poll(pid)
+    assert_received {:read, _url, opts}
+    assert opts[:base_comparisons] == %{key => :tests}
+
+    :counters.put(clock, 1, 600)
+    assert {:ok, _summary} = Repo.poll(pid)
+    assert_received {:read, _url, opts}
+    assert opts[:base_comparisons] == %{}
   end
 
   test "ticks by itself every poll interval", %{repo_key: repo_key} do

@@ -614,13 +614,16 @@ defmodule SymphonyElixir.Config.Schema do
 
     defmodule Webhooks do
       @moduledoc false
-      # GitHub webhooks delivered through a relay to `POST /api/v1/github/webhook`. They only
-      # speed up the CI poller; polling stays on and catches up on anything a relay drops.
+      # GitHub webhooks delivered through a relay to `POST /api/v1/github/webhook`. They feed the
+      # PR and CI watcher the same facts its reads find; polling stays on, every
+      # `fallback_poll_interval_ms` while deliveries are healthy, and catches up on anything a relay
+      # drops.
       use Ecto.Schema
       import Ecto.Changeset
 
       @relays ["smee", "cloudflare_tunnel", "gh_webhook_forward"]
-      @events ["check_suite", "check_run", "workflow_run", "pull_request"]
+      @events ["check_suite", "check_run", "workflow_run", "pull_request", "push", "release"]
+      @fields [:enabled, :relay, :secret, :events, :fallback_poll_interval_ms, :silence_alert_minutes]
 
       @type t :: %__MODULE__{}
 
@@ -631,14 +634,18 @@ defmodule SymphonyElixir.Config.Schema do
         field(:relay, :string, default: "smee")
         field(:secret, :string)
         field(:events, {:array, :string}, default: @events)
+        field(:fallback_poll_interval_ms, :integer, default: 300_000)
+        field(:silence_alert_minutes, :integer, default: 10)
       end
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         schema
-        |> cast(attrs, [:enabled, :relay, :secret, :events], empty_values: [])
+        |> cast(attrs, @fields, empty_values: [])
         |> validate_inclusion(:relay, @relays)
         |> validate_subset(:events, @events)
+        |> validate_number(:fallback_poll_interval_ms, greater_than: 0)
+        |> validate_number(:silence_alert_minutes, greater_than: 0)
       end
     end
 

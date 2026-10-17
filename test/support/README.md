@@ -9,7 +9,7 @@ The Elixir suite is unaffected: `mix test` loads only `*_test.exs` files, and `m
 
 | Folder | What |
 | --- | --- |
-| `stubs/` | Platform-neutral HTTP stand-ins. `_server.py` is what they share: a server bound to `127.0.0.1` only that logs one JSON line per request. `update_feed.py` is the update feed. |
+| `stubs/` | Platform-neutral HTTP stand-ins. `_server.py` is what they share: a server bound to `127.0.0.1` only that logs one JSON line per request. `update_feed.py` is the update feed; `gh.py` and `linear.py` are the gh and Linear stubs, answering from the committed files in `answers/`. |
 | `macos_release/` | The signed macOS release N and N+1: the signing identity (`signing.py`), the throwaway minisign key pair (`minisign_keys.py`) and the pair's build (`release_pair.py`). |
 | `tests/` | The helpers' own `unittest` tests. |
 
@@ -23,7 +23,7 @@ make support-test   # python3 -m unittest discover -s test/support/tests
 ```
 
 No build, no sudo, no signing: the release pair is tested on made-up inputs. The required `macos`
-workflow runs them whenever a Python file under `test/support/` changes.
+workflow runs them whenever a Python file under `test/support/` or a file under `test/support/stubs/answers/` changes.
 
 ## The release pair
 
@@ -124,3 +124,45 @@ Switch the mode while it runs: `curl -X POST --data none http://127.0.0.1:<port>
 From Python: `UpdateFeed(folder, fake=None, current=None, mode="publish", port=0, log=None).start()`,
 then `set_mode`, `latest_url`, `latest_requests` (how many checks it answered), `requests` (the log)
 and `stop()`.
+
+## The gh and Linear stubs
+
+```bash
+python3 -B test/support/stubs/gh.py --port 8124 --log gh.log
+python3 -B test/support/stubs/linear.py --port 8125 --log linear.log
+```
+
+What the app's GitHub and Linear calls reach in QA, in place of the real services. `qa_launch_app`'s
+`gh_stub_port` makes the app run Symphony's fake `gh`, which POSTs each call to
+`http://localhost:<port>` as a form body (`argc`, then one `arg` per argument, in order) and prints
+the answer: a 200 on stdout with exit status 0, anything else on stderr with exit status 1.
+`linear_stub_port` points the app's Linear queries at `http://localhost:<port>/graphql`. Each stub
+prints `gh stub on <url> (…)` or `Linear stub on <url>/graphql (…)` when it is ready, and stops on
+SIGINT or SIGTERM.
+
+| Stub | Answers | An unknown call |
+| --- | --- | --- |
+| `gh.py` | `POST /` with the fake `gh`'s form body: the first entry of `answers/gh.json` whose `args` match the call, one by one. A `*` inside an argument matches any text (such as a pull request's body); everything else matches only itself. | 404 with `gh stub: no committed answer for: gh …`, which the fake `gh` prints on stderr. A body that is not a call is a 400. |
+| `linear.py` | `POST /graphql` with `{"query", "variables"}` JSON: the answer `answers/linear.json` has for the query's operation name (`operationName`, else the name after `query`). Any API key works. | 400 with a GraphQL error naming the operation, in `message` and `extensions.userPresentableMessage`, which the app shows. A body that is not GraphQL is a 400, another path a 404. |
+
+The committed answers:
+
+- `answers/gh.json`: the Add Repo sheet's calls for the repo `acme/widgets`. Its probe answers
+  default branch `main` and the top-level files `README.md`, `mix.exs` (with Credo) and `mix.lock`;
+  opening the `WORKFLOW.md` pull request answers the base commit, the `symphony/add-workflow`
+  branch, the commit, the pull request `https://github.com/acme/widgets/pull/1`, and deleting the
+  branch after a failure. Each entry is `{"args": [...], "status": 200, "output": "..."}`; `status`
+  defaults to 200.
+- `answers/linear.json`: `SymphonyBarProjects` (one project, `QA Project`),
+  `SymphonyBarProjectTeams` (one team) and `SymphonyBarLabels` (one label, `macos`), under
+  `{"answers": {"<operation name>": <the response body>}}`.
+
+| Option | Effect |
+| --- | --- |
+| `--answers FILE` | Answer from this file instead of the committed one. |
+| `--port PORT` | The port on `127.0.0.1` (default: a free one). It never binds another address. |
+| `--log FILE` | Append one JSON line per request: `{"method", "path", "status", "time"}`, with the call (`"args"` for gh; `"operation"` and `"variables"` for Linear, never the `Authorization` header), or `"body"` when it could not be read as one. |
+
+From Python: `GhStub(answers=ANSWERS, port=0, log=None).start()` or
+`LinearStub(answers=ANSWERS, port=0, log=None).start()`, then `url` (`graphql_url` for Linear),
+`requests` (the log) and `stop()`.
