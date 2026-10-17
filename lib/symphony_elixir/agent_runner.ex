@@ -141,7 +141,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # The orchestrator holds the provider's runs until the limit resets instead of failing the run;
   # it does the same, until a probe gets through, for a model API the agent couldn't reach.
-  # An epic review's QA agent reports either one as `{:usage_limited, info}`.
+  # An epic review's or the QA state's agent reports either one as `{:usage_limited, info}`.
   defp provider_hold_reason({:usage_limited, %{} = info}) do
     if UsageLimit.api_unreachable?(info), do: {:model_api_unreachable, info}, else: {:usage_limited, info}
   end

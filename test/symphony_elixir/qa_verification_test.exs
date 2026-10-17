@@ -654,6 +654,54 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "**Verdict:** blocked → QA (blocked)"
     end
 
+    test "a usage limit holds the run instead of recording a blocked verdict" do
+      {workspace, _head} = git_workspace!()
+
+      info = %{
+        provider: "anthropic",
+        scope: :all,
+        source: :rate_limit_event,
+        window: "seven_day",
+        resets_at: ~U[2026-10-19 16:00:00Z],
+        utilization: nil,
+        overage: "rejected"
+      }
+
+      Process.put(:qa_agent_result, {:error, {:qa_agent_failed, {:usage_limited, info}}, %{input: 10}})
+
+      # SPEC §8.4.1: no verdict, no report, no self-heal — the orchestrator holds the run and starts
+      # it again once the limit resets.
+      assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+
+      assert verdicts() == []
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute_received {:fixer_create, _}
+    end
+
+    test "an unreachable model API holds the run instead of self-healing a QA environment block" do
+      {workspace, _head} = git_workspace!()
+
+      info = %{
+        provider: "anthropic",
+        scope: :all,
+        source: :api_unreachable,
+        error: "ENOTFOUND",
+        window: nil,
+        resets_at: nil,
+        utilization: nil
+      }
+
+      Process.put(:qa_agent_result, {:error, {:qa_agent_failed, {:model_api_unreachable, info}}, %{}})
+
+      assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+
+      assert verdicts() == []
+      refute Hold.held?(@repo_key, @issue_id, :blocked)
+      refute_received {:fixer_create, _}
+    end
+
     test "a block a QA answer says an open ticket already covers holds on that ticket and files nothing" do
       {workspace, _head} = git_workspace!()
 

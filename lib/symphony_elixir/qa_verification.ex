@@ -19,6 +19,9 @@ defmodule SymphonyElixir.QaVerification do
       no change to verify, never a docs-only one
     * `blocked` (tooling or environment) -> retried boundedly on the same head, then a Blocked hold
       with the reason recorded
+    * a provider usage limit, or a model API the agent could not reach -> no verdict and no report:
+      the run comes back as `{:error, {:usage_limited, info}}`, and the orchestrator holds it until
+      the limit resets (SPEC §8.4.1)
 
   Before the agent starts, the QA pre-check (`SymphonyElixir.QaPreCheck`) confirms each walkthrough
   step a named test proves, on the PR head: a passed check whose test is in the checkout reaches the
@@ -335,6 +338,26 @@ defmodule SymphonyElixir.QaVerification do
         apply_outcome(issue, opts, settings, head, outcome)
 
       {:error, reason, tokens} ->
+        agent_error(issue, opts, settings, head, reason, tokens, checks, playbooks)
+    end
+  end
+
+  # An agent that could not run at all: a usage limit, or a model API it could not reach, holds the
+  # run instead of applying a verdict (SPEC §8.4.1). The QA run records no verdict, writes no report
+  # and leaves the ticket's state alone; the orchestrator holds it and starts it again once the limit
+  # resets. Anything else is a block (retried boundedly, then self-healed, which classifies the
+  # block by its cause — `SymphonyElixir.SelfHeal`).
+  defp agent_error(issue, opts, settings, head, reason, tokens, checks, playbooks) do
+    case QaAgent.usage_limit(reason) do
+      %{} = info ->
+        Logger.info(
+          "QA for #{issue_label(issue)} head=#{head} could not run (provider usage limit or unreachable model API); " <>
+            "the ticket keeps its state and the run starts again once the hold lifts"
+        )
+
+        {:error, {:usage_limited, info}}
+
+      nil ->
         extra = %{tokens: tokens, playbooks: playbook_kinds(playbooks), checks: checks}
         blocked(issue, opts, settings, head, blocked_outcome(reason, extra))
     end

@@ -38,8 +38,13 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     assert flat =~
              "a walkthrough step that judges the macOS app by sight in dark mode, or judges the look of the status-bar menu, is a `Proved by: QA` step"
 
-    assert flat =~ "`qa_launch_app`'s `appearance` argument, `qa_open_status_menu`"
-    assert flat =~ "a walkthrough asks QA for light mode only and has QA read the status-bar menu from the accessibility tree"
+    assert flat =~
+             "QA walks it with TP-1045's tools: `qa_launch_app`'s `appearance` argument launches the app in light and in dark"
+
+    assert flat =~ "`qa_open_status_menu` with a `qa_screenshot` of the menu shows how it looks"
+
+    refute flat =~ "Until TP-1045 lands"
+    refute flat =~ "asks QA for light mode only"
   end
 
   test "the preview names none of the retired states, checks or tickets" do
