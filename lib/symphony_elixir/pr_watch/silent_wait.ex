@@ -69,8 +69,9 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   defp quiet_reason(decision), do: "the watcher's last decision (#{decision.rule}) is older than two ticks"
 
   # A ticket still quiet keeps counting from the tick it went quiet, one tick per poll interval
-  # passed, so extra polls inside an interval add none.
-  defp quiet(reason, %{previous: %{since: since}} = ctx) do
+  # passed, so extra polls inside an interval add none. A wait past its bound is no quiet streak:
+  # its `since` is the bound's start, so a ticket quiet after it starts counting afresh.
+  defp quiet(reason, %{previous: %{since: since, bound: nil}} = ctx) do
     %{since: since, ticks: 1 + div(DateTime.diff(ctx.now, since, :millisecond), ctx.interval_ms), bound: nil, reason: reason}
   end
 

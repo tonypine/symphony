@@ -95,6 +95,17 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
     assert SilentWait.check(watch(wait(:ci) |> Map.delete(:since)), ctx()) == nil
   end
 
+  test "a ticket quiet after a wait past its bound starts a fresh quiet streak" do
+    since = ago(@ci_wait + 10 * @interval)
+    past_bound = SilentWait.check(watch(wait(:ci, since: since, decided_at: ago(@interval))), ctx(now: ago(@interval)))
+    assert %{since: ^since, bound: "ci.merging_wait_timeout_ms"} = past_bound
+
+    # Its wait decision goes stale: quiet from this tick, not from when CI started.
+    stale = wait(:ci, since: since, decided_at: ago(2 * @interval))
+    assert %{since: @now, ticks: 1, bound: nil} = quiet = SilentWait.check(watch(stale), ctx(previous: past_bound))
+    refute SilentWait.listed?(quiet)
+  end
+
   test "a wait on GitHub's rate limit is silent one tick past its reset" do
     rate_limit = wait(:github, rule: "R1", clears_when: "the limit resets")
     assert SilentWait.check(watch(rate_limit, github: {:rate_limited, ago(@interval)}), ctx()) == nil
