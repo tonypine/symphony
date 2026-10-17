@@ -602,8 +602,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp normalize_poller_status(:unavailable), do: :unavailable
   defp normalize_poller_status(_status), do: :unavailable
 
-  # GitHub webhook deliveries the CI poller has seen, and how many CI results arrived through
-  # them versus through the timed poll.
+  # GitHub webhook deliveries the PR and CI watcher has seen, how many CI results arrived through
+  # them versus through the timed poll, and each repository's delivery health
+  # (`SymphonyElixir.PrWatch.Health`).
   defp normalize_webhooks(%{} = webhooks) do
     %{
       enabled: Map.get(webhooks, :enabled) == true,
@@ -612,11 +613,23 @@ defmodule SymphonyElixirWeb.Presenter do
       events_received: integer_map_value(webhooks, :events_received),
       rejected: integer_map_value(webhooks, :rejected),
       results_via_webhook: integer_map_value(webhooks, :results_via_webhook),
-      results_via_poll: integer_map_value(webhooks, :results_via_poll)
+      results_via_poll: integer_map_value(webhooks, :results_via_poll),
+      repos: webhooks |> Map.get(:repos, %{}) |> Map.new(fn {repo_key, health} -> {repo_key, normalize_delivery_health(health)} end)
     }
   end
 
   defp normalize_webhooks(_webhooks), do: nil
+
+  defp normalize_delivery_health(health) do
+    %{
+      healthy: Map.get(health, :healthy) == true,
+      silent: Map.get(health, :silent) == true,
+      last_delivery_at: iso8601(Map.get(health, :last_delivery_at)),
+      signature_failures_24h: integer_map_value(health, :signature_failures_24h),
+      missed: integer_map_value(health, :missed),
+      missed_at: iso8601(Map.get(health, :missed_at))
+    }
+  end
 
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(_value), do: nil

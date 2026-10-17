@@ -2,6 +2,7 @@ ExUnit.start()
 Code.require_file("support/snapshot_support.exs", __DIR__)
 Code.require_file("support/test_support.exs", __DIR__)
 Code.require_file("support/pr_watch_support.exs", __DIR__)
+Code.require_file("support/pr_watch_parity.exs", __DIR__)
 
 System.put_env(
   "SYMPHONY_SECRET_KEY_BASE",

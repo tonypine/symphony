@@ -507,6 +507,9 @@ defmodule SymphonyElixir.TicketStateTest do
             head_sha: "abc",
             source: :webhook,
             read_at: @at,
+            delivered_at: @at,
+            read_ci: :red,
+            base_ref: "main",
             github: {:rate_limited, @at},
             rate_limit: %{remaining: 12, reset_at: @at},
             landing: landing,
@@ -528,6 +531,9 @@ defmodule SymphonyElixir.TicketStateTest do
                head_sha: "abc",
                source: :webhook,
                read_at: @at,
+               delivered_at: @at,
+               read_ci: :red,
+               base_ref: "main",
                github: {:rate_limited, @at},
                rate_limit: %{remaining: 12, reset_at: @at},
                landing: %{
@@ -558,6 +564,9 @@ defmodule SymphonyElixir.TicketStateTest do
 
       assert %{
                source: :poll,
+               delivered_at: nil,
+               read_ci: nil,
+               base_ref: nil,
                github: :ok,
                rate_limit: nil,
                landing: nil,

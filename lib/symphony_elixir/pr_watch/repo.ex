@@ -25,6 +25,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
   It ticks every `pull_requests.poll_interval_ms`, and at once on `poll_now/1`. A GitHub error
   doubles the wait, up to 5 minutes; GitHub's rate limit stops the tick, marks the tickets it didn't
   read `github: {:rate_limited, reset_at}`, and waits for the reset.
+
+  GitHub's webhook deliveries come in through `ingest/3` (`SymphonyElixir.PrWatch.Ingest`): a
+  delivery patches the records it names (`source: :webhook`) and they are read again 3 seconds
+  later (the confirm read), or, for a push to their base, one by one 1 second apart. A confirm read
+  is a tick of those PRs only: it decides and acts as a timed tick does, keeping the landing order
+  of the last one. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
+  only the safety net, every `github.webhooks.fallback_poll_interval_ms`; one that finds a change
+  no delivery reported marks them unhealthy, and the next tick is back at the poll interval. The
+  watcher of the first repository also reads the app repository's newest release on each timed
+  tick (`SymphonyElixir.PrWatch.Release.poll/1`).
   """
 
   use GenServer
@@ -47,7 +57,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
-  alias SymphonyElixir.PrWatch.{Attempts, Fetch}
+  alias SymphonyElixir.PrWatch.{Attempts, Fetch, Health, Ingest, Release}
 
   @registry SymphonyElixir.Repo.Registry
   @in_progress_state "In Progress"
@@ -57,6 +67,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @max_backoff_ms 5 * 60_000
   @max_rate_limit_wait_ms 60 * 60_000
   @no_fix %{ci_failure: nil, pr_conflict: nil}
+  # Coalesces the burst of deliveries a CI run sends (one per check run and suite) into one read.
+  @confirm_delay_ms 3_000
+  # GitHub computes a PR's mergeability again after its base moves: its PRs are read one at a time.
+  @reread_gap_ms 1_000
 
   @typedoc "What one tick did."
   @type summary :: %{
@@ -69,8 +83,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @doc """
   Starts the watcher of `opts[:repo_key]`. Other `opts`, for tests: `:tracker`, `:fetch`,
   `:github`, `:run_store`, `:self_heal`, `:fixer`, `:git` and `:settings` (the modules and settings
-  it reads and acts through), `:now` (a clock function), `:interval_ms`, and `auto: false` to tick
-  only on `poll/2`.
+  it reads and acts through), `:now` (a clock function), `:timer` (`fn message, delay_ms -> ref`,
+  in place of `Process.send_after/3` for the confirm reads), `:interval_ms`, `app_release: true` to
+  read the app repository's newest release on each timed tick, and `auto: false` to tick only on
+  `poll/2`.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -90,6 +106,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @spec poll(GenServer.server(), timeout()) :: {:ok, summary()} | {:error, term()}
   def poll(server, timeout \\ 120_000), do: GenServer.call(server, :poll, timeout)
 
+  @doc """
+  Hands the watcher a verified webhook delivery and the repository URL its payload names (see
+  `SymphonyElixir.PrWatch.Ingest`).
+  """
+  @spec ingest(GenServer.server(), term(), String.t() | nil) :: :ok
+  def ingest(server, delivery, repo_url), do: GenServer.cast(server, {:ingest, delivery, repo_url})
+
+  @doc "Counts a delivery whose signature failed, when its payload names this watcher's repository."
+  @spec reject(GenServer.server(), atom(), String.t() | nil) :: :ok
+  def reject(server, reason, repo_url), do: GenServer.cast(server, {:reject, reason, repo_url})
+
   @doc "Asks the watcher to tick now instead of waiting for its timer; a no-op when it isn't running."
   @spec poll_now(GenServer.server()) :: :ok
   def poll_now(server) do
@@ -103,7 +130,21 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   @impl true
   def init(opts) do
-    state = %{repo_key: Keyword.fetch!(opts, :repo_key), opts: opts, timer: nil, failures: 0, required: %{}}
+    repo_key = Keyword.fetch!(opts, :repo_key)
+
+    state = %{
+      repo_key: repo_key,
+      opts: opts,
+      timer: nil,
+      failures: 0,
+      required: %{},
+      health: Health.load(Keyword.get(opts, :run_store, RunStore), repo_key),
+      confirm: MapSet.new(),
+      confirm_timer: nil,
+      rereads: [],
+      reread_timer: nil
+    }
+
     {:ok, schedule(state, 0)}
   end
 
@@ -114,11 +155,125 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   @impl true
+  def handle_cast({:ingest, delivery, repo_url}, state) do
+    now = now(state)
+    records = ticket_states(state)
+    named = named(delivery, records)
+    about? = about?(state, delivery, repo_url, named, records)
+    state = if about?, do: put_health(state, &Health.delivered(&1, now)), else: state
+
+    # GitHub pings a hook when it is created, which `gh webhook forward` does on every start: read
+    # everything now, to catch up on what was missed while the relay was away.
+    state =
+      case delivery do
+        :ping -> state |> tick() |> then(fn {reply, state} -> schedule(state, next_tick_ms(reply, state)) end)
+        _delivery -> state
+      end
+
+    {pushed, confirmed} =
+      case delivery do
+        {:push, _push} -> {named, []}
+        _delivery -> {behind_moved_base(delivery, repo_url, records, named), named}
+      end
+
+    confirmed = Enum.map(confirmed, &patch!(&1, delivery, now, state))
+    pushed = Enum.map(pushed, &patch!(&1, {:push, nil}, now, state))
+    {:noreply, state |> confirm(confirmed) |> reread(pushed)}
+  end
+
+  def handle_cast({:reject, _reason, repo_url}, state) do
+    if about_url?(state, repo_url, ticket_states(state)) do
+      now = now(state)
+      {:noreply, put_health(state, &Health.rejected(&1, now))}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info(:tick_now, state), do: {:noreply, schedule(state, 0)}
+
+  def handle_info(:confirm, state) do
+    {_reply, state} = tick(%{state | confirm: MapSet.new(), confirm_timer: nil}, {:only, state.confirm})
+    {:noreply, state}
+  end
+
+  def handle_info(:reread, %{rereads: [issue_id | rest]} = state) do
+    {_reply, state} = tick(%{state | rereads: rest, reread_timer: nil}, {:only, MapSet.new([issue_id])})
+    {:noreply, arm_reread(state)}
+  end
+
+  def handle_info(:reread, state), do: {:noreply, %{state | reread_timer: nil}}
 
   def handle_info(:tick, state) do
     {reply, state} = tick(state)
     {:noreply, schedule(%{state | timer: nil}, next_tick_ms(reply, state))}
+  end
+
+  # The watched records a delivery names, as `{issue_id, issue_identifier, watch}`.
+  defp named(delivery, records) do
+    for {issue_id, %{pr_watch: %{} = watch} = record} <- records, Ingest.names?(delivery, watch), do: {issue_id, record.issue_identifier, watch}
+  end
+
+  # The other open PRs on the base a merged PR moved, when its delivery stands for that push.
+  defp behind_moved_base(delivery, repo_url, records, named) do
+    case Ingest.base_moved(delivery, repo_url) do
+      nil -> []
+      push -> Enum.reject(named({:push, push}, records), fn {issue_id, _identifier, _watch} -> List.keymember?(named, issue_id, 0) end)
+    end
+  end
+
+  # A delivery is about this repository when it names one of its PRs or its payload names the
+  # repository; a ping that names none (an organisation's hook) is about every one.
+  defp about?(_state, _delivery, _repo_url, [_ | _], _records), do: true
+  defp about?(_state, :ping, nil, [], _records), do: true
+  defp about?(state, _delivery, repo_url, [], records), do: about_url?(state, repo_url, records)
+
+  defp about_url?(state, repo_url, records) do
+    Ingest.within?(state.health.github_url, repo_url) or
+      Enum.any?(records, fn {_issue_id, record} -> match?(%{pr_watch: %{pr_url: url}} when is_binary(url), record) and Ingest.within?(record.pr_watch.pr_url, repo_url) end)
+  end
+
+  # The record as the delivery leaves it, until the confirm read: its fact patch, and when a
+  # delivery last named it.
+  defp patch!({issue_id, identifier, watch}, delivery, now, state) do
+    watch = delivery |> Ingest.patch(watch) |> Map.merge(%{source: :webhook, delivered_at: now})
+    result = store(state).put_ticket_pr_watch(state.repo_key, issue_id, identifier, watch)
+    log_write(result, %{issue: %{id: issue_id, identifier: identifier}})
+    issue_id
+  end
+
+  defp confirm(state, []), do: state
+
+  defp confirm(state, issue_ids) do
+    state = %{state | confirm: MapSet.union(state.confirm, MapSet.new(issue_ids))}
+    if state.confirm_timer, do: state, else: %{state | confirm_timer: timer(state, :confirm, @confirm_delay_ms)}
+  end
+
+  defp reread(state, issue_ids), do: arm_reread(%{state | rereads: Enum.uniq(state.rereads ++ issue_ids)})
+
+  defp arm_reread(%{rereads: [_ | _], reread_timer: nil} = state), do: %{state | reread_timer: timer(state, :reread, @reread_gap_ms)}
+  defp arm_reread(state), do: state
+
+  defp timer(state, message, delay_ms) do
+    case Keyword.get(state.opts, :timer) do
+      timer when is_function(timer, 2) -> timer.(message, delay_ms)
+      nil -> Process.send_after(self(), message, delay_ms)
+    end
+  end
+
+  defp put_health(state, fun) do
+    case fun.(state.health) do
+      health when health == state.health ->
+        state
+
+      health ->
+        with {:error, reason} <- Health.save(store(state), state.repo_key, health) do
+          Logger.warning("PR watch could not keep the GitHub delivery health repo_key=#{state.repo_key} reason=#{inspect(reason)}")
+        end
+
+        %{state | health: health}
+    end
   end
 
   defp schedule(%{opts: opts} = state, delay_ms) do
@@ -132,7 +287,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp next_tick_ms({:ok, %{next_tick_ms: ms}}, _state), do: ms
   defp next_tick_ms({:error, _reason}, state), do: backoff_ms(state)
 
-  defp tick(state) do
+  # A tick reads every watched PR (`:all`, the timed tick) or only those a delivery named
+  # (`{:only, issue_ids}`, a confirm read), which keep the landing order of the last timed tick.
+  defp tick(state, scope \\ :all) do
     now = now(state)
 
     with {:ok, settings} <- settings(state),
@@ -140,29 +297,54 @@ defmodule SymphonyElixir.PrWatch.Repo do
       records = ticket_states(state)
       running = running_issue_ids(state)
       watched = Enum.flat_map(issues, &watched(&1, settings, records, running, state))
-      {reads, state} = read_all(watched, state, now)
-      ahead = landing(watched, reads, open_pulls(watched, state), settings, now)
-      Enum.each(watched, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), now, state, settings))
+      read = in_scope(watched, scope)
+      {reads, state} = read_all(read, state, now)
+      pulls = if scope == :all, do: open_pulls(watched, state), else: :stale
+      ahead = landing(watched, reads, pulls, settings, now)
+      seen = {if(scope == :all, do: :poll, else: :webhook), now}
+      health = Enum.reduce(read, state.health, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), seen, state, settings, &2))
+      state = put_health(state, fn _health -> Health.learn_url(health, repository_url(watched)) end)
       clear_left(records, watched, state)
-      summarize(watched, reads, settings, state, now)
+      if scope == :all and Keyword.get(state.opts, :app_release, false), do: poll_release(state, now)
+      summarize(scope, watched, reads, settings, state, now)
     else
       {:error, reason} ->
         Logger.warning("PR watch tick failed repo_key=#{state.repo_key} reason=#{inspect(reason)}")
-        {{:error, reason}, %{state | failures: state.failures + 1}}
+        {{:error, reason}, if(scope == :all, do: %{state | failures: state.failures + 1}, else: state)}
     end
   end
 
-  defp summarize(watched, reads, settings, state, now) do
+  defp in_scope(watched, :all), do: watched
+  defp in_scope(watched, {:only, issue_ids}), do: Enum.filter(watched, &MapSet.member?(issue_ids, &1.issue.id))
+
+  defp repository_url(watched), do: Enum.find_value(watched, &Ingest.repository_of(&1.pr_url))
+
+  defp poll_release(state, now) do
+    case Release.poll(run_store: store(state), now: fn -> now end, gh_runner: Keyword.get(state.opts, :gh_runner)) do
+      {:error, reason} -> Logger.debug("PR watch could not read the newest release of #{Release.app_repo()} reason=#{inspect(reason)}")
+      _read -> :ok
+    end
+  end
+
+  # A confirm read leaves the timed tick's pace and backoff as they were.
+  defp summarize(scope, watched, reads, settings, state, now) do
     errors = Enum.count(reads, &match?({_id, {:error, _reason}}, &1))
     limited = Enum.find_value(reads, fn {_id, read} -> match?({:rate_limited, _reset}, read) && read end)
-    failures = if errors > 0 or limited, do: state.failures + 1, else: 0
+
+    failures =
+      cond do
+        scope != :all -> state.failures
+        errors > 0 or limited -> state.failures + 1
+        true -> 0
+      end
+
     state = %{state | failures: failures}
 
     next_tick_ms =
       cond do
         limited -> rate_limit_wait_ms(limited, state, settings, now)
         errors > 0 -> backoff_ms(state, settings)
-        true -> interval_ms(state, settings)
+        true -> tick_interval_ms(state, settings)
       end
 
     {{:ok, %{watched: length(watched), errors: errors, rate_limited: limited, next_tick_ms: next_tick_ms}}, state}
@@ -370,7 +552,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp previous_ahead(%{record: %{pr_watch: %{facts: %Facts{ahead: ahead}}}}), do: ahead
   defp previous_ahead(_entry), do: []
 
-  defp write(entry, read, {landing, ahead}, now, state, settings) do
+  defp write(entry, read, {landing, ahead}, {source, now}, state, settings, health) do
     ticket = %{entry.ticket | ahead: ahead}
     previous = previous_watch(entry)
 
@@ -394,10 +576,47 @@ defmodule SymphonyElixir.PrWatch.Repo do
       end
 
     if watch do
-      watch = Map.merge(watch, %{source: :poll, landing: landing, links: []})
+      watch =
+        Map.merge(watch, %{
+          source: source,
+          landing: landing,
+          links: [],
+          delivered_at: carried(previous, :delivered_at, nil),
+          read_ci: watch.facts.ci,
+          base_ref: base_ref(read, previous)
+        })
+
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
+      observe(health, entry, previous, watch, {source, now}, state, settings)
+    else
+      health
     end
   end
+
+  defp base_ref({:ok, %{base_ref: base}}, _previous), do: base
+  defp base_ref(_read, previous), do: carried(previous, :base_ref, nil)
+
+  # What a read tells of the deliveries: a CI result it brought (a head the last read saw otherwise
+  # that is now red or green), and, on a timed tick with webhooks on, a change of the PR no delivery
+  # reported.
+  defp observe(health, entry, previous, %{github: :ok} = watch, {source, now}, state, settings) do
+    health = if previous && Health.new_result?(previous.read_ci || previous.facts.ci, watch.facts.ci), do: Health.result(health, source), else: health
+
+    case source == :poll and settings.github.webhooks.enabled and Health.unreported_change(previous, watch) do
+      change when change in [:head, :pr, :ci] ->
+        Logger.warning(
+          "PR watch found a change no GitHub delivery reported repo_key=#{state.repo_key} issue_identifier=#{entry.issue.identifier} " <>
+            "pr_url=#{watch.pr_url} change=#{change}; it reads every pull_requests.poll_interval_ms again until a delivery arrives"
+        )
+
+        Health.missed(health, watch.pr_url, change, now)
+
+      _none ->
+        health
+    end
+  end
+
+  defp observe(health, _entry, _previous, _watch, _source, _settings, _now), do: health
 
   # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits.
   defp rate_limited(entry, ticket, previous, limited, now) do
@@ -661,9 +880,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  defp interval_ms(state, settings) do
+  defp poll_interval_ms(state, settings) do
     Keyword.get(state.opts, :interval_ms) || settings.pr_review.poll_interval_ms || settings.polling.interval_ms
   end
+
+  # The safety net while deliveries are healthy, else the poll interval.
+  defp tick_interval_ms(state, settings), do: Health.interval_ms(state.health, settings.github.webhooks, poll_interval_ms(state, settings))
 
   defp backoff_ms(state) do
     case settings(state) do
@@ -673,12 +895,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp backoff_ms(state, settings) do
-    interval = interval_ms(state, settings)
+    interval = poll_interval_ms(state, settings)
     max(interval, min(interval * Integer.pow(2, min(state.failures, 10)), @max_backoff_ms))
   end
 
   defp rate_limit_wait_ms({:rate_limited, %DateTime{} = reset_at}, state, settings, now) do
-    max(interval_ms(state, settings), min(DateTime.diff(reset_at, now, :millisecond), @max_rate_limit_wait_ms))
+    max(poll_interval_ms(state, settings), min(DateTime.diff(reset_at, now, :millisecond), @max_rate_limit_wait_ms))
   end
 
   defp rate_limit_wait_ms(_limited, state, settings, _now), do: backoff_ms(state, settings)
