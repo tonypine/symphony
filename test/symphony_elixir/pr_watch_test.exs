@@ -185,6 +185,27 @@ defmodule SymphonyElixir.PrWatchTest do
     assert PrWatch.landing_waits(run_store: FailingStore) == []
   end
 
+  test "red_bases/1 lists each check red on a base branch once, with the tickets waiting for it" do
+    red_on_base = fn base, check ->
+      decision = %{rule: "R23", kind: :wait, reason: "red on the base"}
+      [phase: :qa, decision: decision, facts: %{ci: :red, base_ref: base, failing_check: check}]
+    end
+
+    PrWatchSupport.put_watch!(@repo_key, "31", [identifier: "TP-31"] ++ red_on_base.("main", "specs"))
+    PrWatchSupport.put_watch!(@repo_key, "30", [identifier: "TP-30"] ++ red_on_base.("main", "specs"))
+    PrWatchSupport.put_watch!(@repo_key, "32", red_on_base.("release", "lint"))
+    PrWatchSupport.put_watch!(@repo_key, "33", identifier: "TP-33", decision: %{rule: "R22", kind: :rerun_failed, reason: "rerun"})
+    PrWatchSupport.put_watch!(@repo_key, "34", [identifier: "TP-34"] ++ red_on_base.(nil, nil))
+
+    assert PrWatch.red_bases() == [
+             %{base: nil, check: nil, issue_identifiers: ["TP-34"]},
+             %{base: "main", check: "specs", issue_identifiers: ["TP-30", "TP-31"]},
+             %{base: "release", check: "lint", issue_identifiers: ["32"]}
+           ]
+
+    assert PrWatch.red_bases(run_store: FailingStore) == []
+  end
+
   test "poll_now/0 asks every running watcher to tick, and is a no-op without one" do
     assert PrWatch.poll_now() == :ok
 
