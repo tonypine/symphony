@@ -4,7 +4,8 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   under way and no reason anybody can act on. It reads the watcher's record of the ticket
   (`TicketState.pr_watch`), never GitHub, and runs on each tick (`SymphonyElixir.PrWatch.Repo`).
 
-  A ticket with an active run or a hold is never silent. Nor is one whose decision, made within the
+  A ticket with an active run or a hold is never silent, nor one the watcher acted on in this tick
+  (it moved the ticket, reran a check or called GitHub). Nor is one whose decision, made within the
   last two ticks, leaves it waiting on someone (`owner`) until something happens (`clears_when`),
   unless the wait outlived its bound: CI still running past `ci.merging_wait_timeout_ms`, or
   GitHub's rate limit still holding one tick past its reset. Any other ticket is quiet, and one
@@ -48,6 +49,7 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
     cond do
       not fresh?(decision, ctx) -> quiet(quiet_reason(decision), ctx)
       waiting?(decision) -> bound(watch, decision, ctx)
+      applied_now?(decision, ctx) -> nil
       true -> quiet("#{decision.rule} decided `#{decision.kind}`, but no run started and no wait is recorded", ctx)
     end
   end
@@ -61,6 +63,10 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   # A decision is the ticket's reason only while the watcher keeps making it.
   defp fresh?(%{decided_at: %DateTime{} = at}, ctx), do: DateTime.diff(ctx.now, at, :millisecond) < @silent_ticks * ctx.interval_ms
   defp fresh?(_decision, _ctx), do: false
+
+  # The watcher acted on this tick (a move, a rerun, a GitHub call): the ticket is moving, not waiting.
+  defp applied_now?(%{outcome: :applied, decided_at: at}, ctx), do: DateTime.compare(at, ctx.now) == :eq
+  defp applied_now?(_decision, _ctx), do: false
 
   defp waiting?(%{owner: owner, clears_when: clears_when}), do: owner in Action.owners() and is_binary(clears_when) and clears_when != ""
   defp waiting?(_decision), do: false

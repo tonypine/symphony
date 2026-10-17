@@ -22,7 +22,7 @@
 # `open`, which would start it without that environment, outside QA mode.
 #
 # Optional environment, for tests:
-#   SYMPHONY_UPDATE_OPEN          relaunch command (default /usr/bin/open)
+#   SYMPHONY_UPDATE_OPEN          relaunch command, one executable (default /usr/bin/open)
 #   SYMPHONY_UPDATE_WAIT_SECONDS  how long to wait for PID (default 120)
 set -u
 
@@ -51,7 +51,7 @@ relaunch() {
     log "started $current/Contents/MacOS/$executable in QA mode as pid $!"
     return
   fi
-  $open_command "$current" || log "couldn't relaunch $current"
+  "$open_command" "$current" || log "couldn't relaunch $current"
 }
 
 log "updating $current from $new, waiting for pid $pid to exit"

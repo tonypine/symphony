@@ -136,12 +136,13 @@ e2e:
 	python3 Tests/e2e/update_restart_e2e.py
 
 # Builds a signed release N and its update N+1 from this checkout at fixed paths under
-# build/release-pair (N/Symphony.app, feed/, manifest.json), signed with a throwaway or given
-# test identity and a throwaway minisign key. See ../test/support/README.md.
+# build/release-pair (N/Symphony.app, feed/, manifest.json), or RELEASE_PAIR_OUT, signed with a
+# throwaway or given test identity and a throwaway minisign key. See ../test/support/README.md.
 RELEASE_PAIR_BUILD_N ?= 90001
 RELEASE_PAIR_BUILD_N1 ?= 90002
+RELEASE_PAIR_OUT ?= build/release-pair
 release-pair:
-	python3 ../test/support/macos_release/release_pair.py --out build/release-pair \
+	python3 ../test/support/macos_release/release_pair.py --out "$(RELEASE_PAIR_OUT)" \
 		--build-n $(RELEASE_PAIR_BUILD_N) --build-n1 $(RELEASE_PAIR_BUILD_N1)
 
 # Renders the snapshots in Tests/Snapshots offscreen with ImageRenderer (no NSApplication, no window) and

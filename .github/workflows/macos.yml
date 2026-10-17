@@ -13,6 +13,7 @@ on:
       - "scripts/install-macos.sh"
       - "scripts/ci/xcode-developer-dir.sh"
       - "scripts/ci/xcode-developer-dir-test.sh"
+      - "scripts/qa/**"
       - ".xcode-version"
       - "test/support/**/*.py"
       - "test/support/stubs/answers/**"
@@ -54,7 +55,7 @@ jobs:
           # HEAD is the PR merged into its base, so HEAD^1 is the base.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode-developer-dir(-test)?\.sh$|\.xcode-version$|test/support/.*\.py$|test/support/stubs/answers/|test/fixtures/api/|\.github/workflows/macos\.yml$)'; then
+          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode-developer-dir(-test)?\.sh$|scripts/qa/|\.xcode-version$|test/support/.*\.py$|test/support/stubs/answers/|test/fixtures/api/|\.github/workflows/macos\.yml$)'; then
             echo "macos=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos=false" >> "$GITHUB_OUTPUT"
@@ -132,6 +133,15 @@ jobs:
       - name: Test the update helper
         working-directory: macos
         run: time sh Tests/update-helper-test.sh
+
+      # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
+      # keychain with a fake sudo. The real trust step stays off here: the macOS 26 runner refuses
+      # to allow admin trust changes in its authorization database (-60005), and without that the
+      # trust waits for a dialog no one can answer. The timeout turns any wait into a failure.
+      - name: Test the QA signing identity script
+        timeout-minutes: 5
+        run: |
+          time sh scripts/qa/install-test-signing-identity-test.sh
 
       # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
       # dark or light whatever this runner's appearance.
