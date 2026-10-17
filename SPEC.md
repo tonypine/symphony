@@ -941,8 +941,9 @@ Fields:
     draft directive (which a compacted bootstrap prompt would not).
 - `webhooks` (object)
   - `enabled` (boolean, default `false`): accept GitHub deliveries at `POST /api/v1/github/webhook`.
-  - `relay` (string, default `smee`): `smee`, `cloudflare_tunnel` or `gh_webhook_forward`; shown on
-    the dashboard.
+  - `relay` (string, default `smee`): `smee`, `cloudflare_tunnel`, `tailscale_funnel` or
+    `gh_webhook_forward`; shown on the dashboard. With `gh_webhook_forward` Symphony runs the relay
+    itself once its setup connected a repository.
   - `secret` (string, `$VAR` allowed): the hook's shared secret. When unset, Symphony reads
     `<state-root>/github_webhook_secret`. A delivery whose `X-Hub-Signature-256` does not verify
     gets `401` and is logged without its payload.
@@ -4722,6 +4723,25 @@ Minimum endpoints:
       ]
     }
     ```
+
+- `GET /api/v1/setup`
+  - The health model the app's Setup reads, one section per part of the setup. Read-only and
+    served like `/api/v1/state`. `github_updates` is instant GitHub updates (webhooks): `mode`
+    (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
+    its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
+    its `status` (`done`, `failed`, `waiting`, `pending`) and, when it failed, a plain-words
+    `detail` and `fix`, each repository's connection and health (last delivery, signature failures
+    in 24 hours, relay restarts, test), the poll intervals and GitHub's rate limit. `needs_setup`
+    is `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
+    no delivery for `silence_alert_minutes` after a read found a change none reported.
+- `POST /api/v1/setup/github_updates/<action>`
+  - `turn_on` (`relay`, `url`), `run_step` (`step`, and `url` for a URL relay's `relay` step),
+    `test` (`repo` optional), `restart_relay`, `recreate_secret`, `change_relay` (`relay`, `url`)
+    and `turn_off`; each answers with the section as it leaves it. Same-origin like Check Now: a
+    client that sends no `Origin` may call it. `404` for an unknown action or step, `422` for bad
+    params or a `symphony.yml` it can't edit, `409` while updates are off or nothing is connected.
+  - Turning off stops the relays, deletes only the hooks Symphony created (their ids are kept per
+    Mac in the run store) and keeps the secret. Polling never depends on any of it.
 
 - `GET /api/v1/inbox`
   - Returns everything that waits on the operator, oldest first (an item whose wait is unknown

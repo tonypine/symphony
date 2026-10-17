@@ -109,6 +109,8 @@ defmodule SymphonyElixir.Application do
              inbox_child_spec(system_config),
              initiatives_child_spec(system_config),
              SymphonyElixir.HttpServer,
+             # After the HTTP server: a relay forwards to the port it listens on.
+             SymphonyElixir.GitHub.RelaySupervisor,
              SymphonyElixir.StatusDashboard
            ])
         |> List.flatten()

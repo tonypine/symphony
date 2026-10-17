@@ -270,6 +270,22 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
+  describe "invalidate/1" do
+    test "drops a symphony.yml rewritten in the same second with the same length", %{root: root} do
+      symphony_path = Path.join(root, "symphony.yml")
+      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 7\n")
+      File.touch!(symphony_path, 1_700_000_000)
+      assert {:ok, %{"foo" => 7}} = Cache.get_symphony(symphony_path)
+
+      File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 8\n")
+      File.touch!(symphony_path, 1_700_000_000)
+      assert {:ok, %{"foo" => 7}} = Cache.get_symphony(symphony_path)
+
+      assert Cache.invalidate(symphony_path) == :ok
+      assert {:ok, %{"foo" => 8}} = Cache.get_symphony(symphony_path)
+    end
+  end
+
   describe "clear/0" do
     test "removes entries and watched-dir tracking", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")
