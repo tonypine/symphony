@@ -1,0 +1,92 @@
+{
+  "issue_id": "i-701",
+  "issue_identifier": "TP-701",
+  "repo_key": "symphony",
+  "watch": {
+    "action": "wait",
+    "actions": [
+      {
+        "action": "ci_fix",
+        "at": "2026-10-16T11:20:00Z",
+        "head": "1a2b3c4d5e6f",
+        "rule": "R21",
+        "source": "poll"
+      },
+      {
+        "action": "ci_fix",
+        "at": "2026-10-16T11:42:00Z",
+        "head": "5e6f7a8b9c0d",
+        "rule": "R14",
+        "source": "webhook"
+      }
+    ],
+    "applied": [],
+    "clears_when": "the checks finish",
+    "decision": {
+      "args": {},
+      "clears_when": "the checks finish",
+      "decided_at": "2026-10-16T12:00:12Z",
+      "error": null,
+      "head_sha": "9f8e7d6c5b4a3f2e1d0c",
+      "kind": "wait",
+      "outcome": "recorded",
+      "owner": "ci",
+      "reason": "Checks are running on PR #701's head",
+      "rule": "R24",
+      "since": "2026-10-16T12:00:00Z",
+      "waits_on": null
+    },
+    "facts": {
+      "ahead": [],
+      "auto_merge": "off",
+      "base": "ok",
+      "base_ref": null,
+      "ci": "pending",
+      "competing": [],
+      "conflict_attempts": 1,
+      "failing_check": null,
+      "fix_failures": [],
+      "github": "ok",
+      "github_reset_at": null,
+      "head_origin": "symphony",
+      "head_sha": "9f8e7d6c5b4a3f2e1d0c",
+      "hold": "none",
+      "landing_timed_out": false,
+      "max_red_attempts": 10,
+      "mergeable": "clean",
+      "missing_checks": [],
+      "no_ci": "not_configured",
+      "origin": null,
+      "phase": "code_review",
+      "pr": "open",
+      "pr_number": 701,
+      "pr_url": "https://github.com/tonypine/symphony/pull/701",
+      "rate_limit": {
+        "remaining": 4321,
+        "reset_at": "2026-10-16T13:00:00Z"
+      },
+      "read_at": "2026-10-16T12:04:09Z",
+      "red_attempts": 2,
+      "red_kind": "failure",
+      "rerun_done": false,
+      "review_comments": "none",
+      "run": "none",
+      "same_failure_streak": 0,
+      "source": "poll"
+    },
+    "head": "9f8e7d6c5b4a3f2e1d0c",
+    "links": [],
+    "outcome": "recorded",
+    "owner": "ci",
+    "phase": "code_review",
+    "pr_url": "https://github.com/tonypine/symphony/pull/701",
+    "read_at": "2026-10-16T12:04:09Z",
+    "reason": "Checks are running on PR #701's head",
+    "rule": "R24",
+    "silent": null,
+    "since": "2026-10-16T12:00:00Z",
+    "source": "poll",
+    "summary": null,
+    "waits_on": []
+  }
+}

@@ -32,6 +32,8 @@ public struct OverviewState: Equatable {
     public var blocked: [Blocked]
     /// Pull requests Symphony set to merge on their own once CI passes.
     public var autoMerge: [AutoMerge]
+    /// Tickets that wait with nothing under way and no reason anybody can act on (the PR and CI watcher's).
+    public var silentWaits: [WatchState.SilentWait]
 
     public struct Run: Equatable {
         public var issueID: String?
@@ -236,7 +238,8 @@ public struct OverviewState: Equatable {
         landing: [String] = [],
         strayProcesses: [StrayProcess] = [],
         blocked: [Blocked] = [],
-        autoMerge: [AutoMerge] = []
+        autoMerge: [AutoMerge] = [],
+        silentWaits: [WatchState.SilentWait] = []
     ) {
         self.snapshot = snapshot
         self.generatedAt = generatedAt
@@ -255,6 +258,7 @@ public struct OverviewState: Equatable {
         self.strayProcesses = strayProcesses
         self.blocked = blocked
         self.autoMerge = autoMerge
+        self.silentWaits = silentWaits
     }
 
     /// The Overview's state in a state payload, nil when it isn't one (an error, or not JSON).
@@ -333,7 +337,8 @@ public struct OverviewState: Equatable {
                     status: entry.status,
                     updatedAt: entry.updatedAt.flatMap(SymphonyState.parseDate)
                 )
-            }
+            },
+            silentWaits: WatchState.decode(data).silentWaits
         )
     }
 

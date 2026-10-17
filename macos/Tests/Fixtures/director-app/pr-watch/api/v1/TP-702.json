@@ -1,0 +1,110 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "connected": {
+    "blocked_by": [],
+    "blocks": [],
+    "parent": null,
+    "related": [],
+    "sub_tickets": []
+  },
+  "issue_id": "i-702",
+  "issue_identifier": "TP-702",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "symphony",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "verdicts": [],
+  "watch": {
+    "action": "dispatch",
+    "actions": [],
+    "applied": [],
+    "clears_when": "a run starts on the ticket",
+    "decision": {
+      "args": {},
+      "clears_when": null,
+      "decided_at": "2026-10-16T12:04:00Z",
+      "error": null,
+      "head_sha": "0d1c2b3a4f5e6d7c8b9a",
+      "kind": "dispatch",
+      "outcome": "recorded",
+      "owner": null,
+      "reason": "The rework run continues the PR",
+      "rule": "R26",
+      "since": "2026-10-16T11:56:00Z",
+      "waits_on": null
+    },
+    "facts": {
+      "ahead": [],
+      "auto_merge": "off",
+      "base": "ok",
+      "base_ref": null,
+      "ci": "green",
+      "competing": [],
+      "conflict_attempts": 0,
+      "failing_check": null,
+      "fix_failures": [],
+      "github": "ok",
+      "github_reset_at": null,
+      "head_origin": "symphony",
+      "head_sha": "0d1c2b3a4f5e6d7c8b9a",
+      "hold": "none",
+      "landing_timed_out": false,
+      "max_red_attempts": 10,
+      "mergeable": "clean",
+      "missing_checks": [],
+      "no_ci": "not_configured",
+      "origin": null,
+      "phase": "rework",
+      "pr": "open",
+      "pr_number": 702,
+      "pr_url": "https://github.com/tonypine/symphony/pull/702",
+      "rate_limit": {
+        "remaining": 4321,
+        "reset_at": "2026-10-16T13:00:00Z"
+      },
+      "read_at": "2026-10-16T12:04:00Z",
+      "red_attempts": 0,
+      "red_kind": "failure",
+      "rerun_done": false,
+      "review_comments": "none",
+      "run": "none",
+      "same_failure_streak": 0,
+      "source": "poll"
+    },
+    "head": "0d1c2b3a4f5e6d7c8b9a",
+    "links": [],
+    "outcome": "recorded",
+    "owner": "symphony",
+    "phase": "rework",
+    "pr_url": "https://github.com/tonypine/symphony/pull/702",
+    "read_at": "2026-10-16T12:04:00Z",
+    "reason": "The rework run continues the PR",
+    "rule": "R26",
+    "silent": {
+      "bound": null,
+      "reason": "R26 decided `dispatch`, but no run started and no wait is recorded",
+      "since": "2026-10-16T11:56:00Z",
+      "ticks": 3
+    },
+    "since": "2026-10-16T11:56:00Z",
+    "source": "poll",
+    "summary": null,
+    "waits_on": []
+  },
+  "watching": {
+    "pull_request_url": "https://github.com/tonypine/symphony/pull/702"
+  },
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/symphony/TP-702"
+  }
+}
