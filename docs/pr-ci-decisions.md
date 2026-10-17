@@ -88,8 +88,12 @@ PR, whether or not Symphony ran it. It then reads each ticket's PR in one GitHub
 its base branch requires (kept 10 minutes), whether the base branch has workflow files (only for a
 head with no check at all, kept 10 minutes), the base branch's workflow runs only to tell a red head
 that is also red on the base, a red head's failed log once per head (its first error line), and,
-when two or more watched PRs are open, the repository's open PRs and their files once, for the
-landing order that fills `ahead`.
+when two or more watched PRs are open or one conflicts or waits on its competitors, the
+repository's open PRs and their files once: the landing order fills `ahead`, and `competing` lists
+every open PR that shares a file with the ticket's, with its ticket when the watcher watches it,
+leaving out one on a hold or idle two hours. Neither names a PR whose wait would close a cycle of
+blocked-by links, nor one a person's `Unblock` released the ticket from, and a forced ticket has
+neither.
 
 The facts are kept on the ticket's state record and listed under each ticket's `watch.facts` in
 `/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
@@ -143,8 +147,7 @@ the run's prompt and cleans up after a merged or closed PR. The orchestrator sta
 or `QA` run only on the decision `dispatch`, and, with auto-merge on, a `Merging` landing agent only
 on `land_agent`.
 
-Some rows are recorded without an action until a later ticket applies them: stepping behind
-competing PRs (R15). So are the CI rows (R17 to R22, and R18 outside `Merging`) with
+Some rows are recorded without an action: the CI rows (R17 to R22, and R18 outside `Merging`) with
 `pull_requests.checks` off, and the landing rows (R18 in `Merging` too, and a conflict and review
 comments there) with `pull_requests.auto_merge` off.
 
@@ -173,6 +176,41 @@ opens:
 - **Review comments** to address in Code Review, QA or Merging (R13, D8): auto-merge goes off and
   the ticket goes back to In Progress on the same PR, where the run reads the comments.
 
+### Silent waits
+
+Each tick also looks for a ticket that waits with nothing under way and no reason anybody can act
+on (`SymphonyElixir.PrWatch.SilentWait`). A watched ticket with an active run or a hold is never
+silent, nor is one whose decision, made within the last two ticks, leaves it waiting on an owner
+until something happens (`owner` and `clears_when`). Any other ticket is quiet: a decision with no
+owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
+quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, not polls, so a
+`poll_now` or Check Now inside an interval adds none. A wait that outlived its bound is silent too: on `ci` past
+`ci.merging_wait_timeout_ms`, or on `github` still rate limited one tick past the reset.
+
+A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last
+rule, the bound that passed and why) and logs one `pr_watch.silent_wait` line when it turns silent.
+It leaves the list on the first tick a run is active, a hold is set or a wait is recorded.
+
+### The watch block and Check Now
+
+`GET /api/v1/state` lists each watched ticket under `issues` with its `watch` block, and
+`GET /api/v1/<identifier>` carries the same block: the phase, the PR `head`, how the facts arrived
+(`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and what clears it
+(`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last five actions
+applied (`actions`, each with its `source`) and the ticket's `silent` wait. A wait names its own owner and
+clearing condition; an action Symphony carries out names `symphony` until it is done (for
+`dispatch`, `a run starts on the ticket`), so the block always says who acts next. The silent-wait
+detector still counts only waits as recorded: a `dispatch` that no run followed stays quiet.
+`test/fixtures/api/watch_block.json` is an example of the block, which the API's tests compare
+against. `GET /api/v1/state` also carries GitHub's `rate_limit` (`remaining`, `limit`, `reset`) as the
+newest read left it; with under a tenth left, the watcher's next tick waits up to four intervals, or
+until the reset when that comes sooner.
+
+`POST /api/v1/issues/<identifier>/watch/check` (Check Now) makes the ticket's watcher read and
+decide at once and returns its new `watch` block; 404 when the watcher doesn't watch the ticket.
+A client that sends no `Origin` header (curl, the app) may call it; a browser on another origin is
+refused.
+
 ### Fix runs and their limits
 
 A CI Fix run sent for a red head spends a **red** attempt, held against
@@ -199,6 +237,24 @@ the ticket doesn't move. The hold clears by itself once the fix ticket is termin
 restarts, and the head gets CI Fix runs again. The same failure reaching the backstop again after its
 fix landed is the self-heal lane's own escalation to a person.
 
-A conflict back after its 3 fix runs with no open PR ahead of it goes to `Rework` (R15a), where a
-run can change as much as the conflict needs. A conflict while a PR that shares its files is ahead
-in the landing order waits for that one to land (R14a), auto-merge off in `Merging`.
+A conflict back after its 3 fix runs with no open PR competing goes to `Rework` (R15a), where a
+run can change as much as the conflict needs.
+
+### Waiting on competing PRs
+
+A conflict while a PR that shares its files is ahead in the landing order waits for that one to
+land (R14a); a conflict back after its 3 fix runs while open PRs share its files waits on all of
+them and steps behind them in the landing order, so none of them waits for it (R15). The wait is a
+visible dependency (`SymphonyElixir.PrWatch.Competitors`): auto-merge off in `Merging`, a `Blocked`
+hold of the landing kind in place ("Waiting on TP-1 and PR #12 (Docs pass) to land: they change the
+same files (SPEC.md)"), never a move, and a Linear blocked-by link from each competitor's ticket
+that Linear doesn't have yet. A person's PR gets no link. The ticket's record keeps the competitors
+under `links`, with whether Symphony added each link, and `/api/v1/state` lists them under
+`watch.waits_on`.
+
+Each read judges the wait before deciding. A competitor that lands stays linked, as history; one
+that leaves the race (its PR closed, on a hold, idle two hours, or no longer sharing a file) is
+unlinked when Symphony added the link. The hold clears once no competitor is left, and the same
+read decides on the conflict: CI Fix, with the approvals carried forward. The R15 wait restarts the
+conflict count. A person's `Unblock` clears the hold and removes Symphony's links, and the ticket no
+longer waits on those PRs while they stay open.

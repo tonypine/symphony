@@ -9,14 +9,16 @@ defmodule SymphonyElixir.PrWatch do
   The rest of Symphony reads that record through this module: the orchestrator's dispatch gates
   (`dispatch_reason/2`), a CI Fix run's prompt (`pending_ci_failure/2`, `pending_pr_conflict/2`),
   an agent's view of the open PRs that share its files (`open_pr_overlap/2`), and the state API's
-  landing waits, auto-merge list and red base branches (`red_bases/1`).
+  landing waits, auto-merge list, red base branches (`red_bases/1`), silent waits
+  (`silent_waits/1`) and rate limit (`rate_limit/1`). Check Now (`check/2`) makes a ticket's
+  watcher read and decide at once.
   """
 
   use Supervisor
 
-  alias SymphonyElixir.{Config, LandingOrder, RunStore, TicketState}
+  alias SymphonyElixir.{BlockedHold, Config, LandingOrder, RunStore, TicketState}
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.PrWatch.{Attempts, Repo}
+  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo, SilentWait}
 
   @registry SymphonyElixir.Repo.Registry
 
@@ -44,14 +46,82 @@ defmodule SymphonyElixir.PrWatch do
   branch that moved updates the PRs behind it, without waiting for the timer.
   """
   @spec poll_now() :: :ok
-  def poll_now do
-    if Process.whereis(@registry) do
-      @registry
-      |> Registry.select([{{{:pr_watch, :_}, :"$1", :_}, [], [:"$1"]}])
-      |> Enum.each(&Repo.poll_now/1)
-    end
+  def poll_now, do: Enum.each(running_watchers(), &Repo.poll_now/1)
 
-    :ok
+  @doc """
+  Check Now: makes the watcher of `issue_identifier`'s repository read and decide at once, and
+  returns the ticket's state record with the new decision. A ticket the watcher has no record of yet
+  (it just entered a watched phase) is looked for after every running watcher ticks.
+  `{:error, :not_watched}` when the watcher still doesn't watch it, `{:error, :watcher_not_running}`
+  when its repository's watcher isn't running, and the tick's error when it failed. `opts`:
+  `:run_store`, `:repo_key` and `:timeout`.
+  """
+  @spec check(String.t(), keyword()) :: {:ok, TicketState.t()} | {:error, term()}
+  def check(issue_identifier, opts \\ []) when is_binary(issue_identifier) do
+    timeout = Keyword.get(opts, :timeout, 120_000)
+
+    case find_record(issue_identifier, opts) do
+      %{repo_key: repo_key} ->
+        with {:ok, _summary} <- poll(GenServer.whereis(Repo.name(repo_key)), timeout), do: found(issue_identifier, opts)
+
+      nil ->
+        Enum.each(running_watchers(), &Repo.poll(&1, timeout))
+        found(issue_identifier, opts)
+    end
+  end
+
+  defp poll(nil, _timeout), do: {:error, :watcher_not_running}
+  defp poll(pid, timeout), do: Repo.poll(pid, timeout)
+
+  defp found(issue_identifier, opts) do
+    case find_record(issue_identifier, opts) do
+      %{} = record -> {:ok, record}
+      nil -> {:error, :not_watched}
+    end
+  end
+
+  defp find_record(issue_identifier, opts), do: opts |> records() |> Enum.find(&(&1.issue_identifier == issue_identifier))
+
+  defp running_watchers do
+    if Process.whereis(@registry), do: Registry.select(@registry, [{{{:pr_watch, :_}, :"$1", :_}, [], [:"$1"]}]), else: []
+  end
+
+  @doc """
+  Every watched ticket that waits silently (`SymphonyElixir.PrWatch.SilentWait`): its phase, since
+  when, the watcher's last rule, the bound that passed (nil when it is only quiet) and why.
+  """
+  @spec silent_waits(keyword()) :: [map()]
+  def silent_waits(opts \\ []) do
+    for %{pr_watch: %{silent: silent} = watch} = record <- records(opts), SilentWait.listed?(silent) do
+      %{
+        issue_id: record.issue_id,
+        issue_identifier: record.issue_identifier,
+        repo_key: record.repo_key,
+        phase: watch.stay || watch.facts.phase,
+        pr_url: watch.pr_url,
+        since: silent.since,
+        rule: watch.decision && watch.decision.rule,
+        bound: silent.bound,
+        reason: silent.reason
+      }
+    end
+    |> Enum.sort_by(&{DateTime.to_unix(&1.since, :microsecond), &1.issue_identifier || &1.issue_id || ""})
+  end
+
+  @doc """
+  GitHub's rate limit as the newest read that reported it left it: requests remaining, the window's
+  limit and when it resets. Nil before any read reported one.
+  """
+  @spec rate_limit(keyword()) :: map() | nil
+  def rate_limit(opts \\ []) do
+    opts
+    |> records()
+    |> Enum.filter(&match?(%{pr_watch: %{rate_limit: %{}, read_at: %DateTime{}}}, &1))
+    |> Enum.max_by(& &1.pr_watch.read_at, DateTime, fn -> nil end)
+    |> case do
+      nil -> nil
+      %{pr_watch: watch} -> watch.rate_limit
+    end
   end
 
   @doc """
@@ -170,15 +240,22 @@ defmodule SymphonyElixir.PrWatch do
   end
 
   @doc """
-  Every watched PR that waits for another to land first (`SymphonyElixir.LandingOrder`), with the
-  PR it waits for, how many files they share, and the reason the watcher recorded.
+  Every watched PR that waits for another to land first (`SymphonyElixir.LandingOrder`), or waits on
+  its competitors on a landing hold (`SymphonyElixir.PrWatch.Competitors`), with the PR it waits for
+  (the first competitor, for a hold), how many files they share, and the reason: the hold's, else
+  the one the watcher recorded.
   """
   @spec landing_waits(keyword()) :: [map()]
   def landing_waits(opts \\ []) do
     opts
     |> landing_records()
-    |> Enum.flat_map(fn
-      %{landing: %{waits_for: %{} = wait} = landing} = record ->
+    |> Enum.flat_map(&landing_wait/1)
+    |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+  end
+
+  defp landing_wait(%{landing: landing, hold: hold} = record) do
+    case landing.waits_for || held_wait(hold, record.links) do
+      %{} = wait ->
         [
           %{
             issue_id: record.issue_id,
@@ -188,20 +265,60 @@ defmodule SymphonyElixir.PrWatch do
             waits_for: Map.take(wait, [:issue_id, :issue_identifier, :pr_url, :state]),
             shared_files: wait.shared_files,
             files: wait.files,
-            reason: landing_reason(record.decision, wait),
-            since: landing.waits_since
+            reason: landing_reason(hold, record.decision, wait),
+            since: landing.waits_since || if(BlockedHold.landing?(hold), do: hold.set_at)
           }
         ]
 
-      _record ->
+      nil ->
         []
-    end)
-    |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+    end
   end
 
-  # The decision's own words when it is the landing wait; else how the landing order reads.
-  defp landing_reason(%{kind: kind, reason: reason}, _wait) when kind in [:wait_for_competitors, :wait] and is_binary(reason), do: reason
-  defp landing_reason(_decision, wait), do: LandingOrder.reason(wait)
+  # A landing hold waits on the competitors it recorded, the first of them named.
+  defp held_wait(hold, links) do
+    with true <- BlockedHold.landing?(hold),
+         [link | _] <- for(%{released: false} = link <- links, do: link) do
+      %{issue_id: link.issue_id, issue_identifier: link.issue_identifier || "PR ##{link.pr_number}", pr_url: link.pr_url, state: nil, shared_files: length(link.files), files: link.files}
+    else
+      _none -> nil
+    end
+  end
+
+  # The hold's words when the ticket waits on a landing hold; the decision's own words when it is the
+  # landing wait; else how the landing order reads.
+  defp landing_reason(hold, decision, wait) do
+    cond do
+      BlockedHold.landing?(hold) and is_binary(hold.reason) -> hold.reason
+      match?(%{kind: kind, reason: reason} when kind in [:wait_for_competitors, :wait] and is_binary(reason), decision) -> decision.reason
+      true -> LandingOrder.reason(wait)
+    end
+  end
+
+  @doc """
+  The competitors the issue's landing hold waits on, for the state API (`watch.waits_on`): each
+  one's ticket (else its PR), its PR, how many files they share and which. Empty without a wait.
+  """
+  @spec competitor_waits(TicketState.pr_watch() | nil) :: [map()]
+  def competitor_waits(%{links: links}) do
+    for %{released: false} = link <- links do
+      %{identifier: link.issue_identifier || "PR ##{link.pr_number}", kind: "competitor", pr_url: link.pr_url, shared_files: length(link.files), files: link.files}
+    end
+  end
+
+  def competitor_waits(_watch), do: []
+
+  @doc """
+  A person's `Unblock` of the issue's landing hold: the PR watcher of `repo_key` removes the links
+  Symphony added and stops waiting on those PRs (`SymphonyElixir.PrWatch.Competitors.release/3`),
+  in its own process when it runs. `opts` go to the release when it doesn't.
+  """
+  @spec release_competitors(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def release_competitors(repo_key, issue_id, opts \\ []) do
+    if Process.whereis(@registry) && GenServer.whereis(Repo.name(repo_key)),
+      do: Repo.release(Repo.name(repo_key), issue_id),
+      else: Competitors.release(repo_key, issue_id, opts)
+  end
 
   @doc """
   Every check red on a base branch that holds watched PRs (R23), once per base and check: the base,
@@ -250,7 +367,9 @@ defmodule SymphonyElixir.PrWatch do
         issue_identifier: record.issue_identifier,
         pr_url: watch.pr_url,
         landing: landing,
-        decision: watch.decision
+        decision: watch.decision,
+        hold: TicketState.get_hold(record, :blocked),
+        links: watch.links
       }
     end
   end

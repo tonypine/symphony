@@ -67,8 +67,12 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   }
   """
 
-  @typedoc "What GitHub said of its rate limit on the read: requests left and when the window resets."
-  @type rate_limit :: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil}
+  @typedoc "What GitHub said of its rate limit on the read: requests left of the window's limit, and when it resets."
+  @type rate_limit :: %{
+          remaining: non_neg_integer() | nil,
+          limit: non_neg_integer() | nil,
+          reset_at: DateTime.t() | nil
+        }
 
   @typedoc """
   One pull request as the watcher reads it, normalised. `failure/3` adds the red head's failure, and
@@ -115,7 +119,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   @typedoc """
   What Symphony knows of the ticket, beside its PR: its phase, holds and run, the landing order's
-  `ahead`, whether review comments wait to be addressed (`review_comments`, `:none` when absent),
+  `ahead` and the open PRs `competing` with it (`SymphonyElixir.PrWatch.Competitors`, `[]` when
+  absent), whether review comments wait to be addressed (`review_comments`, `:none` when absent),
   and the counts `SymphonyElixir.PrWatch.Attempts` keeps (`red_attempts`,
   `conflict_attempts`, `rerun_done`, `fix_failures`, `landing_timed_out`), which keep their
   defaults when absent.
@@ -163,7 +168,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       end
 
     ticket
-    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :review_comments | PrWatch.Attempts.fact_keys()])
+    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :competing, :review_comments | PrWatch.Attempts.fact_keys()])
     |> Map.put(:origin, if(ticket.phase == :ci_fix, do: ticket.origin))
     |> Map.merge(pr_facts)
     |> Facts.new()
@@ -266,7 +271,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   end
 
   defp rate_limit(headers) do
-    %{remaining: integer(headers["x-ratelimit-remaining"]), reset_at: reset_at(integer(headers["x-ratelimit-reset"]))}
+    %{
+      remaining: integer(headers["x-ratelimit-remaining"]),
+      limit: integer(headers["x-ratelimit-limit"]),
+      reset_at: reset_at(integer(headers["x-ratelimit-reset"]))
+    }
   end
 
   defp integer(value) when is_binary(value) do

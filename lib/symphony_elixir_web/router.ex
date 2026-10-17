@@ -20,6 +20,11 @@ defmodule SymphonyElixirWeb.Router do
     plug(SameOriginOrAllowlisted)
   end
 
+  # Check Now forces one more watcher tick; a client that sends no Origin (curl, the app) may ask.
+  pipeline :api_watch_check do
+    plug(SameOriginOrAllowlisted, allow_missing: true)
+  end
+
   pipeline :control_api do
     plug(BearerToken)
   end
@@ -46,6 +51,12 @@ defmodule SymphonyElixirWeb.Router do
     pipe_through(:api_state_changing)
 
     post("/api/v1/refresh", ObservabilityApiController, :refresh)
+  end
+
+  scope "/", SymphonyElixirWeb do
+    pipe_through(:api_watch_check)
+
+    post("/api/v1/issues/:issue_identifier/watch/check", ObservabilityApiController, :watch_check)
   end
 
   # GitHub webhook deliveries authenticate with their HMAC signature, not a browser origin.
@@ -104,6 +115,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/repos/:repo_key/issues/:identifier/transcript", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/issues/:identifier/transcript", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/issues/:issue_identifier/watch/check", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/github/webhook", ObservabilityApiController, :method_not_allowed)
     get("/api/v1/:issue_identifier", ObservabilityApiController, :issue)
     match(:*, "/api/v1/:issue_identifier", ObservabilityApiController, :method_not_allowed)
