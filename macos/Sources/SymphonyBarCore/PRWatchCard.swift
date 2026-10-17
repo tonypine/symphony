@@ -128,6 +128,7 @@ public struct PRWatchCard: Equatable {
         var word = "Waiting"
         var headline: String
         var waitingOn: String?
+        var clears = watch.clearsWhen.map { "until \(Self.plain($0))" }
         competitors = []
 
         if facts.github == "rate_limited" || watch.rule == "R1" {
@@ -156,6 +157,7 @@ public struct PRWatchCard: Equatable {
             let check = watch.decisionCheck ?? facts.fixFailures.last?.check ?? facts.failingCheck ?? "failing"
             headline = "CI keeps failing: waiting on \(fixTicket.identifier), a fix ticket for the \(check) check"
             waitingOn = "\(fixTicket.identifier), a CI fix ticket"
+            clears = Self.fixTicketExpectation(fixTicket.identifier)
         } else if !competing.isEmpty {
             let names = Self.list(competing.map(\.identifier))
             let files = Self.unique(competing.flatMap(\.files))
@@ -212,7 +214,7 @@ public struct PRWatchCard: Equatable {
         self.warning = warning
         self.waitingOn = waitingOn
         next = Self.ownerWords(watch.owner).map { "\($0) next" }
-        clears = watch.clearsWhen.map { "until \(Self.plain($0))" }
+        self.clears = clears
         ageSeconds = watch.since.map { max(Int(reference.timeIntervalSince($0)), 0) }
         age = ageSeconds.map(Overview.duration)
         updated = watch.readAt.map { read in
@@ -302,6 +304,15 @@ public struct PRWatchCard: Equatable {
     }
 
     /// The sentence for a silent wait (S17): quiet, or a wait past its bound.
+    /// What to expect from a silent wait (S17): what Check Now does, and when the row leaves.
+    public static let silentExpectation =
+        "Check Now has the watcher read it again and start it or say why; the row leaves once something does."
+
+    /// What follows the fix ticket's landing: one more CI Fix run, its counts started over.
+    public static func fixTicketExpectation(_ identifier: String) -> String {
+        "until \(identifier) lands; then one more CI Fix run starts, with fresh counts"
+    }
+
     public static func silentSentence(bound: String?) -> String {
         switch bound {
         case "ci.merging_wait_timeout_ms": "CI has been running longer than the wait allows, and nothing says why"

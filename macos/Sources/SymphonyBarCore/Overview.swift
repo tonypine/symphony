@@ -555,6 +555,7 @@ public struct Overview: Equatable {
                 subject: wait.identifier, kind: .silentWait, severity: .problem,
                 sentence: "\(wait.identifier)\(phase): \(PRWatchCard.silentSentence(bound: wait.bound)).",
                 ageSeconds: wait.since.map { max(Int(reference.timeIntervalSince($0)), 0) },
+                note: PRWatchCard.silentExpectation,
                 fixes: [.checkNow(wait.identifier), .openTicket(wait.identifier)]
             ))
         }

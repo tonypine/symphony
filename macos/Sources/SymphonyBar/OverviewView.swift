@@ -340,7 +340,7 @@ private struct AttentionRow: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(problem.sentence + (problem.age.map { ", \($0)" } ?? ""))
+        .accessibilityLabel([problem.sentence + (problem.age.map { ", \($0)" } ?? ""), problem.note].compactMap { $0 }.joined(separator: ". "))
         .accessibilityActions {
             ForEach(problem.fixes, id: \.self) { fix in
                 Button(fix.title) { actions.perform(fix) }

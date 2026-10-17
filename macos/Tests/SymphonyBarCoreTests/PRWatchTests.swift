@@ -221,6 +221,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(card.status, .problem)
         XCTAssertEqual(card.word, "Held")
         XCTAssertEqual(card.waitingOn, "T-9, a CI fix ticket")
+        XCTAssertEqual(card.clears, "until T-9 lands; then one more CI Fix run starts, with fresh counts")
         XCTAssertEqual(card.help, "Rule R4: CI keeps failing: waiting on T-9, a fix ticket for the `test` check")
         XCTAssertEqual(fact(card, "Checks"), "build failing")
         XCTAssertEqual(card.buttons.last, .openTicket("T-9"))
@@ -471,6 +472,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(row.severity, .problem)
         XCTAssertEqual(row.age, "5 min")
         XCTAssertEqual(row.fixes, [.checkNow("T-5"), .openTicket("T-5")])
+        XCTAssertEqual(row.note, "Check Now has the watcher read it again and start it or say why; the row leaves once something does.")
         XCTAssertEqual(row.fixes.map(\.title), ["Check Now", "Open Ticket"])
         XCTAssertEqual(row.ticketIdentifier, "T-5")
 
@@ -669,6 +671,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(overview.sentence, "1 thing needs attention.")
         XCTAssertEqual(overview.problems.map(\.sentence), ["TP-702 in Rework: nothing is running and nothing says why."])
         XCTAssertEqual(overview.problems.first?.fixes.map(\.title), ["Check Now", "Open Ticket"])
+        XCTAssertEqual(overview.problems.first?.note, PRWatchCard.silentExpectation)
 
         // Step 4: the protected-paths decision, its evidence, and the next item after it.
         let list = InboxList(items: inbox.items)
@@ -687,6 +690,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertTrue(competing.buttons.contains(.openTicket("TP-705")))
         let fixTicket = try page("TP-707")
         XCTAssertEqual(fixTicket.headline, "CI keeps failing: waiting on TP-708, a fix ticket for the test check")
+        XCTAssertEqual(fixTicket.clears, "until TP-708 lands; then one more CI Fix run starts, with fresh counts")
         XCTAssertTrue(fixTicket.buttons.contains(.openTicket("TP-708")))
         let closed = try page("TP-709")
         XCTAssertEqual(closed.headline, "PR #709 was closed without merging. Sent back to Rework, where the next run opens a new PR from main.")
