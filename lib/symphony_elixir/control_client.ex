@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ControlClient do
   PR dispatch, and forcing a ticket. Talks to the HTTP control plane at
   `POST /api/v1/control/*` so the CLI does not need distributed Erlang. It also
   fetches the terminal dashboard frame (`GET /api/v1/state?format=terminal`)
-  for `symphony dashboard`.
+  for `symphony dashboard`, and the state itself for `mix pr_watch.sweep`.
 
   Calls invoked from inside the daemon BEAM (e.g. tests, attached IEx)
   short-circuit to the in-process `SymphonyElixir.Orchestrator` GenServer
@@ -67,6 +67,35 @@ defmodule SymphonyElixir.ControlClient do
       end
     end
   end
+
+  @doc """
+  The running Symphony's state (`GET /api/v1/state`), decoded, with string keys. Always goes over
+  HTTP.
+  """
+  @spec state(keyword()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def state(opts \\ []) do
+    with {:ok, token} <- resolve_token(opts) do
+      getter = Keyword.get(opts, :http_get, &default_get/2)
+
+      case getter.(control_url(opts) <> @state_path, token) do
+        {:ok, 200, payload} -> decode_state(payload)
+        {:ok, 503, _payload} -> :unavailable
+        {:ok, status, payload} -> {:error, {:http_status, status, payload}}
+        {:error, reason} -> {:error, {:connection_failed, reason}}
+      end
+    end
+  end
+
+  defp decode_state(%{} = state), do: {:ok, state}
+
+  defp decode_state(payload) when is_binary(payload) do
+    case Jason.decode(payload) do
+      {:ok, %{} = state} -> {:ok, state}
+      _not_a_state -> {:error, {:invalid_state, payload}}
+    end
+  end
+
+  defp decode_state(payload), do: {:error, {:invalid_state, payload}}
 
   @doc """
   The control plane URL the client talks to: `:control_url`, then
