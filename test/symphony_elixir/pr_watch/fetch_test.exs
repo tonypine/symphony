@@ -10,7 +10,7 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
   @workflows "repos/acme/app/contents/.github/workflows?ref=main"
   @reset 1_800_000_000
 
-  defp headers(remaining \\ 4321), do: "HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: #{remaining}\r\nX-Ratelimit-Reset: #{@reset}\r\n\r\n"
+  defp headers(remaining \\ 4321), do: "HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: #{remaining}\r\nX-Ratelimit-Limit: 5000\r\nX-Ratelimit-Reset: #{@reset}\r\n\r\n"
 
   defp pull(attrs \\ %{}) do
     Map.merge(
@@ -95,7 +95,7 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
                missing_checks: [],
                failing_check: nil,
                required: nil,
-               rate_limit: %{remaining: 4321, reset_at: reset_at}
+               rate_limit: %{remaining: 4321, limit: 5000, reset_at: reset_at}
              } = read
 
       assert DateTime.to_unix(reset_at) == @reset

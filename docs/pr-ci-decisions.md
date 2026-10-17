@@ -173,6 +173,41 @@ opens:
 - **Review comments** to address in Code Review, QA or Merging (R13, D8): auto-merge goes off and
   the ticket goes back to In Progress on the same PR, where the run reads the comments.
 
+### Silent waits
+
+Each tick also looks for a ticket that waits with nothing under way and no reason anybody can act
+on (`SymphonyElixir.PrWatch.SilentWait`). A watched ticket with an active run or a hold is never
+silent, nor is one whose decision, made within the last two ticks, leaves it waiting on an owner
+until something happens (`owner` and `clears_when`). Any other ticket is quiet: a decision with no
+owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
+quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, not polls, so a
+`poll_now` or Check Now inside an interval adds none. A wait that outlived its bound is silent too: on `ci` past
+`ci.merging_wait_timeout_ms`, or on `github` still rate limited one tick past the reset.
+
+A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last
+rule, the bound that passed and why) and logs one `pr_watch.silent_wait` line when it turns silent.
+It leaves the list on the first tick a run is active, a hold is set or a wait is recorded.
+
+### The watch block and Check Now
+
+`GET /api/v1/state` lists each watched ticket under `issues` with its `watch` block, and
+`GET /api/v1/<identifier>` carries the same block: the phase, the PR `head`, how the facts arrived
+(`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and what clears it
+(`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last five actions
+applied (`actions`, each with its `source`) and the ticket's `silent` wait. A wait names its own owner and
+clearing condition; an action Symphony carries out names `symphony` until it is done (for
+`dispatch`, `a run starts on the ticket`), so the block always says who acts next. The silent-wait
+detector still counts only waits as recorded: a `dispatch` that no run followed stays quiet.
+`test/fixtures/api/watch_block.json` is an example of the block, which the API's tests compare
+against. `GET /api/v1/state` also carries GitHub's `rate_limit` (`remaining`, `limit`, `reset`) as the
+newest read left it; with under a tenth left, the watcher's next tick waits up to four intervals, or
+until the reset when that comes sooner.
+
+`POST /api/v1/issues/<identifier>/watch/check` (Check Now) makes the ticket's watcher read and
+decide at once and returns its new `watch` block; 404 when the watcher doesn't watch the ticket.
+A client that sends no `Origin` header (curl, the app) may call it; a browser on another origin is
+refused.
+
 ### Fix runs and their limits
 
 A CI Fix run sent for a red head spends a **red** attempt, held against

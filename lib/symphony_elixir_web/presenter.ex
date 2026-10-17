@@ -25,6 +25,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.Repo.Status, as: RepoStatus
+  alias SymphonyElixirWeb.WatchPayload
 
   @audit_page_size 200
   @audit_event_types ~w(
@@ -108,6 +109,8 @@ defmodule SymphonyElixirWeb.Presenter do
           landing_waits: snapshot |> Map.get(:landing_waits, []) |> Enum.map(&landing_wait_payload/1),
           red_bases: PrWatch.red_bases(),
           issues: watched_issues_payload(),
+          silent_waits: Enum.map(PrWatch.silent_waits(), &WatchPayload.silent_wait/1),
+          rate_limit: WatchPayload.rate_limit(PrWatch.rate_limit()),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&dispatch_skipped_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
@@ -299,7 +302,7 @@ defmodule SymphonyElixirWeb.Presenter do
         else
           payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
           record = ticket_state_record(payload.repo_key, payload.issue_id, issue_identifier)
-          {:ok, Map.put(payload, :verdicts, verdicts_payload(record))}
+          {:ok, payload |> Map.put(:verdicts, verdicts_payload(record)) |> Map.put(:watch, WatchPayload.watch(record))}
         end
 
       _ ->
@@ -327,7 +330,8 @@ defmodule SymphonyElixirWeb.Presenter do
 
         {:ok,
          %{payload | repo_key: record.repo_key, issue_id: record.issue_id}
-         |> Map.put(:verdicts, verdicts_payload(record))}
+         |> Map.put(:verdicts, verdicts_payload(record))
+         |> Map.put(:watch, WatchPayload.watch(record))}
     end
   end
 
@@ -359,36 +363,21 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Enum.map(&watched_issue_payload/1)
   end
 
-  defp watched_issue_payload(%{pr_watch: watch} = record) do
-    {github, reset_at} =
-      case watch.github do
-        {:rate_limited, reset_at} -> {"rate_limited", iso8601(reset_at)}
-        :ok -> {"ok", nil}
-      end
-
-    facts =
-      watch.facts
-      |> Map.from_struct()
-      |> Map.merge(%{
-        pr_url: watch.pr_url,
-        head_sha: watch.head_sha,
-        source: watch.source,
-        read_at: iso8601(watch.read_at),
-        github: github,
-        github_reset_at: reset_at,
-        rate_limit: rate_limit_payload(watch.rate_limit)
-      })
-
-    %{
-      issue_id: record.issue_id,
-      identifier: record.issue_identifier,
-      repo_key: record.repo_key,
-      watch: %{facts: facts, decision: watch.decision, applied: watch.applied, links: watch.links}
-    }
+  defp watched_issue_payload(record) do
+    %{issue_id: record.issue_id, identifier: record.issue_identifier, repo_key: record.repo_key, watch: WatchPayload.watch(record)}
   end
 
-  defp rate_limit_payload(%{remaining: remaining, reset_at: reset_at}), do: %{remaining: remaining, reset_at: iso8601(reset_at)}
-  defp rate_limit_payload(nil), do: nil
+  @doc """
+  Check Now (`POST /api/v1/issues/:issue_identifier/watch/check`): the watcher reads and decides on
+  the ticket at once (`SymphonyElixir.PrWatch.check/2`), and the payload carries its new `watch`
+  block.
+  """
+  @spec watch_check_payload(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def watch_check_payload(issue_identifier, opts \\ []) when is_binary(issue_identifier) do
+    with {:ok, record} <- PrWatch.check(issue_identifier, opts) do
+      {:ok, %{issue_identifier: issue_identifier, issue_id: record.issue_id, repo_key: record.repo_key, watch: WatchPayload.watch(record)}}
+    end
+  end
 
   @verdict_kinds ["code_review", "qa"]
 

@@ -33,6 +33,7 @@ When logging Codex execution lifecycle events, include:
   A callback that takes 1 s or more logs `Orchestrator slow handle_call|handle_info duration_ms= message=` (the message inspected with limits), and a snapshot build that does logs `Orchestrator snapshot build slow build_ms=` with `<part>_ms=` for its parts.
   The Linear calls the orchestrator needs an answer from run in tasks; one that dies logs `Async Linear task <kind> exited before replying:`, and one that cannot start logs `Failed to start async Linear task <kind>:`.
 - `WorkspaceCleanup`: removes ended issues' workspaces outside the orchestrator. A removal task that crashes logs `Workspace cleanup failed:`, and one that cannot start logs `Failed to start workspace cleanup:`, both with issue context, `worker_host=` and `reason=`.
+- `PrWatch.Repo`: a ticket that turns silent logs one `pr_watch.silent_wait` line with issue context, `repo_key=`, `phase=`, `since=`, `rule=`, `bound=` and `reason=` (`docs/pr-ci-decisions.md#silent-waits`); a read that leaves under a tenth of GitHub's rate limit logs `pr_watch.rate_limit_low`.
 - `Codex.AppServer`: log session start/completion/error with issue context and `session_id`.
 - `McpServer`: log JSON decode/framing failures, handler crashes, and response-send failures with MCP method, tool name, request ID, MCP session ID, payload byte size, and transport when available. Raw payload logging must stay redacted and preview-limited.
 

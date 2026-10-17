@@ -31,12 +31,29 @@ defmodule SymphonyElixirWeb.Plugs.SameOriginOrAllowlistedTest do
            }
   end
 
+  test "with allow_missing, lets a non-GET request without an Origin header through, and still checks one with it" do
+    conn =
+      :post
+      |> Plug.Test.conn("/api/v1/issues/TP-1/watch/check", "")
+      |> SameOriginOrAllowlisted.call(allow_missing: true)
+
+    refute conn.halted
+
+    conn =
+      :post
+      |> Plug.Test.conn("/api/v1/issues/TP-1/watch/check", "")
+      |> Plug.Conn.put_req_header("origin", "https://evil.example")
+      |> SameOriginOrAllowlisted.call(allow_missing: true)
+
+    assert conn.halted
+    assert conn.status == 403
+  end
+
   test "rejects non-GET requests with ambiguous Origin headers" do
     conn =
       :post
       |> Plug.Test.conn("/api/v1/refresh", "")
-      |> Plug.Conn.put_req_header("origin", "http://127.0.0.1:4000")
-      |> Plug.Conn.put_req_header("origin", "https://evil.example")
+      |> Map.update!(:req_headers, &[{"origin", "http://127.0.0.1:4000"}, {"origin", "https://evil.example"} | &1])
       |> SameOriginOrAllowlisted.call([])
 
     assert conn.halted

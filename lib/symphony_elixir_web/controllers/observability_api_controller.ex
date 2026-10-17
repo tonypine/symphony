@@ -62,6 +62,16 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     end
   end
 
+  @spec watch_check(Conn.t(), map()) :: Conn.t()
+  def watch_check(conn, %{"issue_identifier" => issue_identifier}) do
+    case Presenter.watch_check_payload(issue_identifier, Endpoint.config(:watch_check) || []) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :not_watched} -> error_response(conn, 404, "issue_not_watched", "The PR watcher doesn't watch this issue")
+      {:error, :watcher_not_running} -> error_response(conn, 503, "watcher_not_running", "The PR watcher of this issue's repo isn't running")
+      {:error, reason} -> error_response(conn, 502, "watch_check_failed", "The PR watcher could not read: #{inspect(reason)}")
+    end
+  end
+
   @spec pull_request(Conn.t(), map()) :: Conn.t()
   def pull_request(conn, %{"repo_key" => repo_key, "number" => number}) do
     opts = Keyword.merge([live: &live/0], Endpoint.config(:pull_request_page) || [])
