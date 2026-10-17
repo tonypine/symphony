@@ -146,6 +146,9 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
 
       empty = ClosedPullRequest.request(%Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}, {:no_change, "https://example.com/change"})
       assert empty.question =~ "TP-1 has a pull request that changes nothing"
+
+      named = ClosedPullRequest.request(%Issue{id: "issue-bare", identifier: "TP-1", title: "", state: ""}, {:no_change, @pr_url})
+      assert named.question =~ "TP-1 has a pull request (PR #512) that changes nothing"
     end
   end
 end
