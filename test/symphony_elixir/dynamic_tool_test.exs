@@ -834,6 +834,26 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("qa_open_status_menu", %{"pid" => 1, "path" => "0"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
+      assert %{"release_pair" => %{"type" => "boolean"}} = launch["inputSchema"]["properties"]
+
+      for {tool, args} <- [
+            {"qa_launch_app", %{"release_pair" => true}},
+            {"qa_build_release_pair", %{}},
+            {"qa_relaunched_app", %{"wait_seconds" => 30}},
+            {"qa_update_feed", %{"mode" => "none"}}
+          ] do
+        response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+      end
+
+      for {tool, args} <- [{"qa_build_release_pair", %{"out" => "/tmp"}}, {"qa_update_feed", %{"port" => 1}}] do
+        response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      end
+
+      feed = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_update_feed"))
+      assert %{"mode" => %{"enum" => ["publish", "none", "forbidden"]}} = feed["inputSchema"]["properties"]
+
       checkout = %{"local_path" => "qa-evidence/w.bundle", "remote_url" => "https://github.com/acme/widgets", "remote_name" => "w"}
       response = DynamicTool.execute("qa_put_checkout", checkout, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])

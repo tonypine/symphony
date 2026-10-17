@@ -69,6 +69,15 @@ defmodule SymphonyElixir.QaDriver do
     call returns only newer ones. The QA root is outside the agent sandbox, on
     the QA host for a `worker_host`, so the agent cannot read the log itself.
 
+  Release pair: `qa_build_release_pair` builds release N of the app and its
+  update N+1, signed with the QA host's test signing identity, into the private
+  directory where the app runs; `qa_launch_app` with `release_pair: true` starts
+  a fresh copy of N with the pair's update feed beside it; `qa_relaunched_app`
+  starts the app N's update helper asks for after an install or a rollback; and
+  `qa_update_feed` reads and switches the feed. See
+  `SymphonyElixir.QaDriver.ReleasePair`. When the driver stops it also stops the
+  feed and any process whose command line names the private directory.
+
   Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, sets
   `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects the
   appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built on the
@@ -172,7 +181,7 @@ defmodule SymphonyElixir.QaDriver do
   require Logger
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
-  alias SymphonyElixir.QaDriver.{Checks, Host, Remote}
+  alias SymphonyElixir.QaDriver.{Checks, Host, ReleasePair, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -195,6 +204,14 @@ defmodule SymphonyElixir.QaDriver do
   @host_port_count 3
   @tunnel_attempts 3
   @default_build_timeout_ms 900_000
+  # Two Symphony releases and a release build of the app.
+  @default_release_pair_timeout_ms 1_800_000
+  # How many ms apart `qa_relaunched_app` looks for the update helper's request.
+  @relaunch_poll_ms 1_000
+  @default_relaunch_wait_s 60
+  # How many times, and how many ms apart, the driver asks a starting feed for its mode.
+  @feed_poll {50, 100}
+  @feed_attempts 3
   @helper_timeout_ms 30_000
   @screenshot_timeout_ms 15_000
   @output_limit 8_000
@@ -289,7 +306,8 @@ defmodule SymphonyElixir.QaDriver do
   """
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
-           ~w(qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu)
+           ~w(qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
+           ~w(qa_build_release_pair qa_relaunched_app qa_update_feed)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -411,25 +429,50 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   defp run_tool("qa_launch_app", driver, config, args) do
-    with {:ok, fixtures} <- api_fixtures(config, args),
-         {:ok, built} <- fetch_build(driver),
-         {:ok, stand_ins} <- stand_ins(driver, config, args),
-         :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         :ok <- unchanged_build(config, built),
-         name = Path.basename(built.executable),
-         {:ok, reports} <- crash_reports(config, name),
-         {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
-         {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
-      app_args = appearance_args(Map.get(args, "appearance"))
-      stand_ins = stand_ins ++ library_env
-      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
-      GenServer.call(driver, {:launch, built.executable, info})
+    case Map.get(args, "release_pair") do
+      flag when flag in [nil, false] -> launch_build(driver, config, args)
+      true -> launch_pair(driver, config, args)
+      _other -> tool_error("invalid_arguments", "`release_pair` must be true or false.")
     end
   end
 
   defp run_tool("qa_quit_app", driver, _config, args) do
     with {:ok, pid} <- pid_argument(args) do
       GenServer.call(driver, {:quit, pid}, 30_000)
+    end
+  end
+
+  defp run_tool("qa_build_release_pair", driver, config, _args) do
+    with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
+         {:ok, source} <- ReleasePair.source(config),
+         {:ok, identity} <- ReleasePair.identity(config, source),
+         :ok <- ReleasePair.copy_feed_server(config, source),
+         :ok <- GenServer.call(driver, :stop_feed, 30_000),
+         {:ok, {output, status}} <- ReleasePair.build(config, source, identity) |> rebaseline_on_timeout(driver, config),
+         {:ok, ignored, _dirty} <- worktree_status(config) do
+      record_pair(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
+    end
+  end
+
+  defp run_tool("qa_relaunched_app", driver, config, args) do
+    with {:ok, wait_s} <- optional_integer(args, "wait_seconds", 1, 300),
+         {:ok, launches} <- pair_launches(driver),
+         {:ok, bundle} <- await_relaunch(config, wait_s || @default_relaunch_wait_s),
+         {:ok, info} <- relaunch_info(launches, bundle),
+         {:ok, name} <- bundle_executable_name(config, bundle),
+         {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), %{info | name: name}}) do
+      note = "The update helper asked to start this app again: the update it installed, or the build it rolled back to. Drive it with this PID."
+      {:ok, payload |> Map.merge(ReleasePair.bundle_version(config, bundle)) |> Map.merge(%{"bundle" => bundle, "note" => note})}
+    end
+  end
+
+  defp run_tool("qa_update_feed", driver, config, args) do
+    with {:ok, mode} <- feed_mode(Map.get(args, "mode")),
+         {:ok, feed} <- running_feed(driver),
+         {:ok, _mode} <- if(mode, do: ReleasePair.set_mode(config, feed.port_number, mode), else: {:ok, nil}),
+         {:ok, current} <- ReleasePair.mode(config, feed.port_number),
+         {:ok, requests} <- ReleasePair.requests(config, feed.log) do
+      {:ok, %{"mode" => current, "url" => ReleasePair.latest_url(feed.port_number), "requests" => requests}}
     end
   end
 
@@ -589,6 +632,54 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  # -- launches ---------------------------------------------------------------
+
+  defp launch_build(driver, config, args) do
+    with {:ok, fixtures} <- api_fixtures(config, args),
+         {:ok, built} <- fetch_build(driver),
+         {:ok, stand_ins} <- stand_ins(driver, config, args),
+         :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
+         :ok <- unchanged_build(config, built),
+         name = Path.basename(built.executable),
+         {:ok, reports} <- crash_reports(config, name),
+         {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
+         {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
+      app_args = appearance_args(Map.get(args, "appearance"))
+      stand_ins = stand_ins ++ library_env
+      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
+      GenServer.call(driver, {:launch, built.executable, info})
+    end
+  end
+
+  # N of the release pair, from a fresh copy, with the pair's feed beside it and
+  # Symphony's relaunch stand-in as the update helper's `open`.
+  defp launch_pair(driver, config, args) do
+    with :ok <- pair_feed_argument(args),
+         {:ok, fixtures} <- api_fixtures(config, args),
+         {:ok, _pair} <- fetch_pair(driver),
+         {:ok, stand_ins} <- stand_ins(driver, config, args),
+         {:ok, bundle} <- ReleasePair.copy_n(config),
+         {:ok, name} <- bundle_executable_name(config, bundle),
+         {:ok, reports} <- crash_reports(config, name),
+         {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
+         {:ok, relaunch} <- ReleasePair.install_relaunch(config),
+         {:ok, feed_port} <- GenServer.call(driver, :ensure_feed, 300_000),
+         {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
+      pair_env = [{"SYMPHONY_BAR_UPDATE_URL", ReleasePair.latest_url(feed_port)}, {"SYMPHONY_UPDATE_OPEN", relaunch}]
+      stand_ins = stand_ins ++ library_env ++ pair_env
+      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins}
+      info = Map.merge(info, %{pair_bundle: bundle, args: appearance_args(Map.get(args, "appearance"))})
+
+      with {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), info}) do
+        note =
+          "Release N of the pair runs from a fresh copy, and its update checks read the pair's feed, which offers N+1 " <>
+            "(qa_update_feed switches it and shows its requests). Once N installs N+1 and quits, call qa_relaunched_app."
+
+        {:ok, Map.merge(payload, %{"release_pair" => true, "bundle" => bundle, "note" => note})}
+      end
+    end
+  end
+
   # -- build and bundle checks ------------------------------------------------
 
   # Ignored files are inputs too: the host build reads caches such as SwiftPM's
@@ -649,14 +740,23 @@ defmodule SymphonyElixir.QaDriver do
 
   # A killed build has usually written part of its outputs already. The worktree
   # was clean when it started, so those outputs become the baseline too.
-  defp rebaseline_on_timeout({:error, {:qa_tool, "qa_build_timeout", _message}} = error, driver, config) do
-    with {:ok, ignored, _dirty} <- worktree_status(config) do
-      GenServer.call(driver, {:record_build, nil, ignored_signatures(config, ignored)})
-      error
-    end
+  # A pair that timed out is forgotten like a build, but the last build stays.
+  defp rebaseline_on_timeout({:error, {:qa_tool, "qa_build_timeout", _message}} = error, driver, config),
+    do: rebaseline(error, driver, config, &{:record_build, nil, &1})
+
+  defp rebaseline_on_timeout({:error, {:qa_tool, "qa_release_pair_timeout", _message}} = error, driver, config) do
+    GenServer.call(driver, {:record_pair, nil})
+    rebaseline(error, driver, config, &{:record_ignored, &1})
   end
 
   defp rebaseline_on_timeout(result, _driver, _config), do: result
+
+  defp rebaseline(error, driver, config, message) do
+    with {:ok, ignored, _dirty} <- worktree_status(config) do
+      GenServer.call(driver, message.(ignored_signatures(config, ignored)))
+      error
+    end
+  end
 
   # On a QA host the build gets a fresh copy of the worktree's HEAD. The worktree
   # is clean at this point, so HEAD is exactly what it holds.
@@ -895,6 +995,97 @@ defmodule SymphonyElixir.QaDriver do
       :ok
     else
       tool_error("qa_app_changed", "The app executable changed after the last qa_build. Run qa_build again; QA launches only what the build produced.")
+    end
+  end
+
+  # -- release pair -------------------------------------------------------------
+
+  # Like a build, the pair's outputs in the worktree become the ignored baseline
+  # whether or not it succeeded; the last qa_build's app stays launchable.
+  defp record_pair(driver, config, 0, output, ignored) do
+    GenServer.call(driver, {:record_ignored, ignored})
+
+    case ReleasePair.manifest(config) do
+      {:ok, manifest} ->
+        GenServer.call(driver, {:record_pair, %{manifest: manifest}})
+        note = "Launch release N with qa_launch_app and release_pair: true; its update checks find N+1 in the pair's feed."
+        {:ok, %{"exit_status" => 0, "output" => output, "manifest" => manifest, "note" => note}}
+
+      {:error, _reason} = error ->
+        GenServer.call(driver, {:record_pair, nil})
+        error
+    end
+  end
+
+  defp record_pair(driver, _config, status, output, ignored) do
+    GenServer.call(driver, {:record_ignored, ignored})
+    GenServer.call(driver, {:record_pair, nil})
+    {:ok, %{"exit_status" => status, "output" => output}}
+  end
+
+  defp fetch_pair(driver) do
+    case GenServer.call(driver, :pair) do
+      nil -> tool_error("qa_release_pair_not_built", "Run qa_build_release_pair first; release_pair launches the pair its last successful run built.")
+      pair -> {:ok, pair}
+    end
+  end
+
+  # The pair serves its own feed, which `update_feed_port` would replace.
+  defp pair_feed_argument(%{"update_feed_port" => port}) when not is_nil(port),
+    do: tool_error("invalid_arguments", "`update_feed_port` cannot be combined with `release_pair`, which serves the pair's own feed.")
+
+  defp pair_feed_argument(_args), do: :ok
+
+  defp pair_launches(driver) do
+    case GenServer.call(driver, :pair_launches) do
+      launches when map_size(launches) == 0 ->
+        tool_error("qa_release_pair_not_launched", "Launch release N with qa_launch_app and release_pair: true first; qa_relaunched_app starts what its update helper asks for.")
+
+      launches ->
+        {:ok, launches}
+    end
+  end
+
+  defp await_relaunch(config, wait_s), do: await_relaunch(config, wait_s, div(wait_s * 1_000 + config.relaunch_poll_ms - 1, config.relaunch_poll_ms))
+
+  defp await_relaunch(config, wait_s, attempts) do
+    case ReleasePair.take_relaunch(config) do
+      {:ok, bundle} when is_binary(bundle) ->
+        {:ok, bundle}
+
+      {:ok, nil} when attempts > 1 ->
+        Process.sleep(config.relaunch_poll_ms)
+        await_relaunch(config, wait_s, attempts - 1)
+
+      {:ok, nil} ->
+        tool_error(
+          "qa_no_relaunch",
+          "The update helper asked to start no app within #{wait_s} s. The update may still be downloading or waiting for " <>
+            "the app to quit: check the app with qa_check_app and the feed's requests with qa_update_feed, then call this again."
+        )
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp relaunch_info(launches, bundle) do
+    case Map.fetch(launches, bundle) do
+      {:ok, info} -> {:ok, info}
+      :error -> tool_error("qa_relaunch_unknown", "The update helper asked to start #{bundle}, which no release_pair launch in this QA pass started.")
+    end
+  end
+
+  defp feed_mode(nil), do: {:ok, nil}
+  defp feed_mode(mode) when is_binary(mode), do: if(mode in ReleasePair.modes(), do: {:ok, mode}, else: bad_feed_mode())
+  defp feed_mode(_mode), do: bad_feed_mode()
+
+  defp bad_feed_mode, do: tool_error("invalid_arguments", "`mode` must be one of #{Enum.join(ReleasePair.modes(), ", ")}.")
+
+  defp running_feed(driver) do
+    case GenServer.call(driver, :feed) do
+      nil -> tool_error("qa_update_feed_not_running", "The pair's update feed is not running: launch release N with qa_launch_app and release_pair: true.")
+      feed -> {:ok, feed}
     end
   end
 
@@ -1530,11 +1721,15 @@ defmodule SymphonyElixir.QaDriver do
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       git: Keyword.get(opts, :git, &default_git/2),
       start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0),
-      status_menu_poll: Keyword.get(opts, :status_menu_poll, @status_menu_poll)
+      status_menu_poll: Keyword.get(opts, :status_menu_poll, @status_menu_poll),
+      release_pair_timeout_ms: Keyword.get(opts, :release_pair_timeout_ms, @default_release_pair_timeout_ms),
+      relaunch_poll_ms: Keyword.get(opts, :relaunch_poll_ms, @relaunch_poll_ms),
+      feed_poll: Keyword.get(opts, :feed_poll, @feed_poll)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
     state = Map.merge(state, %{wide_pass: nil, launched_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
+    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil})
     {:ok, open_tunnel(state, @tunnel_attempts)}
   end
 
@@ -1624,6 +1819,25 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
     do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}
 
+  def handle_call({:record_ignored, ignored}, _from, state), do: {:reply, :ok, %{state | ignored: ignored}}
+  def handle_call({:record_pair, pair}, _from, state), do: {:reply, :ok, %{state | pair: pair}}
+  def handle_call(:pair, _from, state), do: {:reply, state.pair, state}
+  def handle_call(:pair_launches, _from, state), do: {:reply, state.pair_launches, state}
+  def handle_call(:feed, _from, state), do: {:reply, state.feed, state}
+
+  # The feed serves the pair's folder, which a new build replaces.
+  def handle_call(:stop_feed, _from, state) do
+    stop_feed(state)
+    {:reply, :ok, %{state | feed: nil}}
+  end
+
+  def handle_call(:ensure_feed, _from, state) do
+    case start_feed(state, @feed_attempts) do
+      {:ok, state} -> {:reply, {:ok, state.feed.port_number}, state}
+      {:error, _reason} = error -> {:reply, error, state}
+    end
+  end
+
   def handle_call(:stand_in_choices, _from, state), do: {:reply, %{host_ports: state.host_ports, checkouts: state.checkouts}, state}
   def handle_call({:checkout, path}, _from, state), do: {:reply, :ok, %{state | checkouts: [path | state.checkouts]}}
 
@@ -1694,6 +1908,12 @@ defmodule SymphonyElixir.QaDriver do
     {:noreply, %{state | tunnel: nil}}
   end
 
+  # The feed stopped during the pass: the next release_pair launch starts it again.
+  def handle_info({port, {:exit_status, status}}, %{feed: %{port: port}} = state) do
+    Logger.warning("QA driver update feed exited status=#{status}")
+    {:noreply, %{state | feed: nil}}
+  end
+
   def handle_info({port, {:exit_status, status}}, state) when is_port(port) do
     {:noreply, update_app(state, port, fn app -> %{app | exit_status: status} end)}
   end
@@ -1706,6 +1926,8 @@ defmodule SymphonyElixir.QaDriver do
   @impl true
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
+    stop_feed(state)
+    if state.pair_launches != %{}, do: stop_strays(state.config)
     if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
     if state.tunnel && Port.info(state.tunnel), do: Port.close(state.tunnel)
     if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
@@ -1722,6 +1944,7 @@ defmodule SymphonyElixir.QaDriver do
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
       payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
       payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
+      state = if info[:pair_bundle], do: put_in(state.pair_launches[info.pair_bundle], info), else: state
       {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app), launched_app?: true}}
     else
       {:error, {:qa_tool, _code, _message}} = error ->
@@ -1741,6 +1964,95 @@ defmodule SymphonyElixir.QaDriver do
       "The tunnel that forwards QA_HOST_PORTS (#{Enum.join(state.host_ports, ", ")}) from the QA host closed and could not reopen: " <>
         "#{state.tunnel_error}. #{Checks.blocked_hint()}"
     )
+  end
+
+  # -- update feed --------------------------------------------------------------
+
+  # The feed runs where the app does, on a fresh port each attempt, and is ready
+  # once it answers its mode.
+  defp start_feed(%{feed: %{}} = state, _attempts), do: {:ok, state}
+
+  defp start_feed(state, attempts) do
+    config = state.config
+    number = feed_port(config)
+    {executable, args, log} = ReleasePair.feed_command(config, number)
+    env = if config.remote?, do: [], else: AgentEnv.build()
+
+    case config.host.launch.(executable, cd: ReleasePair.feed_dir(config), env: env, args: args) do
+      {:ok, port, os_pid} ->
+        feed = %{port: port, os_pid: os_pid, port_number: number, log: log}
+
+        case await_feed(config, feed, config.feed_poll, "") do
+          :ok ->
+            Logger.info("QA driver started the update feed port=#{number}")
+            {:ok, %{state | feed: feed}}
+
+          {:error, why} when attempts > 1 ->
+            stop_feed(%{state | feed: feed})
+            Logger.info("QA driver retries the update feed on a fresh port: #{why}")
+            start_feed(state, attempts - 1)
+
+          {:error, why} ->
+            stop_feed(%{state | feed: feed})
+            tool_error("qa_update_feed_failed", "The pair's update feed did not start: #{why}")
+        end
+
+      {:error, reason} ->
+        tool_error("qa_update_feed_failed", "The pair's update feed could not start: #{inspect(reason)}")
+    end
+  end
+
+  defp await_feed(config, feed, {attempts, interval_ms}, output) do
+    port = feed.port
+
+    receive do
+      {^port, {:data, data}} ->
+        await_feed(config, feed, {attempts, interval_ms}, tail(output <> data, 2_000))
+
+      {^port, {:exit_status, status}} ->
+        {:error, "it exited with status #{status}: #{String.trim(output)}"}
+    after
+      0 ->
+        case ReleasePair.mode(config, feed.port_number, 1) do
+          {:ok, _mode} ->
+            :ok
+
+          {:error, _reason} when attempts > 1 ->
+            Process.sleep(interval_ms)
+            await_feed(config, feed, {attempts - 1, interval_ms}, output)
+
+          {:error, {:qa_tool, _code, message}} ->
+            {:error, "it never answered on port #{feed.port_number}. #{message} #{String.trim(output)}"}
+        end
+    end
+  end
+
+  defp feed_port(%{remote?: true}), do: Enum.random(@stub_remote_ports)
+
+  defp feed_port(_config) do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    port
+  end
+
+  defp stop_feed(%{feed: nil}), do: :ok
+
+  defp stop_feed(%{feed: feed, config: config}) do
+    config.host.kill.(feed.os_pid)
+    if Port.info(feed.port), do: Port.close(feed.port)
+    :ok
+  end
+
+  # An app a pair launch started can leave its update helper behind, and a
+  # relaunch request the pass never took leaves an app nobody started.
+  defp stop_strays(config) do
+    case ReleasePair.strays(config) do
+      [] -> :ok
+      pids -> config.host.cmd.("/bin/kill", ["-TERM" | Enum.map(pids, &Integer.to_string/1)], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
+    end
+
+    :ok
   end
 
   defp ensure_stub(%{stub: %{}} = state), do: {:ok, state}

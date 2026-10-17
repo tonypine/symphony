@@ -207,6 +207,21 @@ done
 [ "$(cat "$dir/qa-launched" 2> /dev/null)" = "$dir/qa" ] || fail "the new app wasn't started with the QA root: $(cat "$dir/log")"
 [ ! -e "$opened" ] || fail "the helper used open in QA mode"
 
+# QA mode with a relaunch command, as the QA driver sets for a release pair: the
+# helper runs that command, whose path may hold spaces, instead of the app.
+setup qa-mode-relaunch-command
+make_app "$current" 1
+make_app "$new" 2
+mkdir -p "$dir/QA driver/bin"
+printf '#!/bin/sh\necho "$SYMPHONY_BAR_QA_ROOT $1" >> "%s"\n' "$opened" > "$dir/QA driver/bin/relaunch"
+chmod +x "$dir/QA driver/bin/relaunch"
+SYMPHONY_BAR_QA_ROOT="$dir/qa" SYMPHONY_UPDATE_OPEN="$dir/QA driver/bin/relaunch" SYMPHONY_UPDATE_WAIT_SECONDS=10 \
+  sh "$helper" "$pid" "$current" "$new" "$previous" > "$dir/log" 2>&1
+status=$?
+expect_status 0
+expect "$current" 2
+expect_opened "$dir/qa $current"
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures update helper check(s) failed"
   exit 1
