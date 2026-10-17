@@ -67,6 +67,9 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
   last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
   `method`, `path` and `body`. The log lives where you cannot read it, so use this instead.
+- `qa_build_release_pair`, `qa_relaunched_app` and `qa_update_feed`, with `qa_launch_app`'s
+  `release_pair: true`: build release N and its update N+1 signed, launch N, and drive the app
+  after it installed N+1. See "After an update: the signed release pair" below.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
@@ -205,6 +208,34 @@ switched; launch the app once per appearance instead:
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
+
+After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
+key, so it never installs an update. When a step judges what the app shows once an update
+installed, or once a failed one was rolled back, use the signed release pair instead. Whether the
+install works is proved by the `macos-e2e` check, not by you: do not report the install itself as a
+step you proved, judge what the app shows.
+
+- **Build:** `qa_build_release_pair` builds release N and its update N+1 on the machine the app
+  runs on and returns their `manifest` (each one's `version` and `build`). It takes several
+  minutes; call it once, after `qa_build`. A non-zero `exit_status` is a failing step; quote the
+  end of the output. When it fails with `qa_signing_identity_missing` or
+  `qa_signing_identity_untrusted`, the QA host lacks its test signing identity: mark the steps that
+  need the pair `blocked` with the tool's message, finish the other steps, and answer `blocked`
+  with that message.
+- **Launch N:** `qa_launch_app` with `release_pair: true` (plus the walkthrough's `appearance`,
+  `api_fixtures` and `update_check_interval_seconds`; not `update_feed_port`). N starts from a fresh
+  copy, and its update checks read the pair's own feed, which offers N+1.
+- **The feed:** `qa_update_feed` returns its `mode` and the `requests` the app sent it (the
+  `/releases/latest` checks, the zip's download). Pass `mode` to switch it: `none` offers nothing
+  newer (the app is up to date), `forbidden` answers 403 (GitHub's rate limit), `publish` offers
+  N+1 again.
+- **Install:** let N install N+1 the way the walkthrough says (its menu's Update item, or an
+  automatic update mode with a short `update_check_interval_seconds`). N quits to install.
+- **After:** call `qa_relaunched_app`. It waits up to `wait_seconds` (60 by default) for the
+  update helper to ask for the app again, starts it and returns its new `pid` with the `version`
+  and `build` it runs: N+1 after an install, N after a rollback. Use that PID from then on, let the
+  window settle as in step 4, and `qa_screenshot` it. When it fails with `qa_no_relaunch`, check the
+  first app with `qa_check_app` and the feed with `qa_update_feed`, then call it again once.
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
