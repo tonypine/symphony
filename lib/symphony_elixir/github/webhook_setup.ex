@@ -116,20 +116,40 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   @doc """
   A delivery that verified, about the repository at `repo_url`: it completes that repository's
   running test. Called by the webhook controller for every verified delivery.
+
+  It is best effort: the delivery reaches the PR watcher whatever happens here. With no test
+  waiting for the repository it reads the record once and takes no lock; an error is logged and
+  answered `:ok`.
   """
   @spec delivered(String.t() | nil, keyword()) :: :ok
 
   def delivered(repo_url, opts) when is_binary(repo_url) do
     ctx = context(opts)
 
-    update(ctx, fn record ->
-      waiting = for {key, %{sent_at: %DateTime{}, verified_at: nil, github: github}} <- record.tests, same_repo?(repo_url, github), do: key
-      now = ctx.now.()
-      %{record | tests: Enum.reduce(waiting, record.tests, &put_in(&2, [&1, :verified_at], now))}
-    end)
+    if waiting_tests(load(ctx), repo_url) != [] do
+      update(ctx, fn record ->
+        now = ctx.now.()
+        %{record | tests: Enum.reduce(waiting_tests(record, repo_url), record.tests, &put_in(&2, [&1, :verified_at], now))}
+      end)
+    end
+
+    :ok
+  rescue
+    error -> delivery_not_recorded(Exception.message(error))
+  catch
+    kind, reason -> delivery_not_recorded(Exception.format_banner(kind, reason))
   end
 
   def delivered(_repo_url, _opts), do: :ok
+
+  defp waiting_tests(record, repo_url) do
+    for {key, %{sent_at: %DateTime{}, verified_at: nil, github: github}} <- record.tests, same_repo?(repo_url, github), do: key
+  end
+
+  defp delivery_not_recorded(reason) do
+    Logger.warning("Instant GitHub updates couldn't record a test delivery: #{String.slice(reason, 0, 300)}")
+    :ok
+  end
 
   @doc """
   At start: starts the relay of every repository instant updates connected through
@@ -227,16 +247,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   def run("gh_ready", _params, ctx), do: check("gh_ready", ctx)
 
+  # A secret already set stays, since hooks and running relays sign with it; `recreate_secret`
+  # makes a new one.
   def run("secret", _params, ctx) do
-    secret = WebhookSecret.generate()
-
-    case ctx.hand_off.(secret) do
-      :ok ->
-        write_config(ctx, [{["github", "webhooks", "secret"], WebhookSecret.setting()}])
-
-      {:error, reason} ->
-        {:error, %{detail: "Symphony couldn't save the webhook secret (#{format_reason(reason)}).", fix: "Check that Symphony's state folder can be written, then run this step again."}}
-    end
+    if check("secret", ctx) == :ok, do: write_secret_setting(ctx), else: make_secret(ctx)
   end
 
   def run("port", _params, ctx) do
@@ -320,7 +334,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp apply_action("recreate_secret", _params, ctx) do
     with :ok <- enabled(ctx),
-         :ok <- step_ok(record_step(ctx, "secret", run("secret", %{}, ctx))) do
+         :ok <- step_ok(record_step(ctx, "secret", make_secret(ctx))) do
       Enum.each(connected(load(ctx), ctx), &reconnect(&1, ctx))
     end
   end
@@ -468,6 +482,18 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp url_failure({:ok, _url} = ok, _ctx), do: ok
   defp url_failure({:error, :no_url}, ctx), do: failure(:relay_url, relay_kind(ctx))
+
+  defp make_secret(ctx) do
+    case ctx.hand_off.(WebhookSecret.generate()) do
+      :ok ->
+        write_secret_setting(ctx)
+
+      {:error, reason} ->
+        {:error, %{detail: "Symphony couldn't save the webhook secret (#{format_reason(reason)}).", fix: "Check that Symphony's state folder can be written, then run this step again."}}
+    end
+  end
+
+  defp write_secret_setting(ctx), do: write_config(ctx, [{["github", "webhooks", "secret"], WebhookSecret.setting()}])
 
   defp update_hook_secret(repo, ctx) do
     record = load(ctx)

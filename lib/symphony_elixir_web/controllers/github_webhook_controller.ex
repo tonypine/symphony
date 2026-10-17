@@ -37,7 +37,7 @@ defmodule SymphonyElixirWeb.GitHubWebhookController do
     case Webhook.verify(raw_body(conn), header(conn, "x-hub-signature-256"), Webhook.secret(webhooks)) do
       :ok ->
         repo_url = Webhook.repository_url(payload)
-        :ok = WebhookSetup.delivered(repo_url, Endpoint.config(:github_updates) || [])
+        WebhookSetup.delivered(repo_url, Endpoint.config(:github_updates) || [])
         deliver(conn, Webhook.parse(event, payload, webhooks.events), repo_url)
 
       {:error, reason} ->

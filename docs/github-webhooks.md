@@ -78,6 +78,12 @@ forwarding stopped"). Symphony starts it again after 1 second, doubling the wait
 while it keeps failing, and the section counts the restarts and shows the last error. A second
 `gh webhook forward` on the same repository fails with `Hook already exists`.
 
+`gh webhook forward` takes the secret only as its `--secret` argument: it reads no environment
+variable and no standard input for it. So while a relay runs, any process on this Mac can read
+the secret in its command line (`ps`). Symphony keeps it out of its own logs, its API and
+`symphony.yml`, and a URL relay's hooks get it from a file only Symphony can read. When other
+people sign in to this Mac, use a URL relay, or re-create the secret after they could have seen it.
+
 The rest of this page sets webhooks up by hand.
 
 ## 1. Pin the dashboard port

@@ -725,6 +725,36 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert WebhookSetup.section(opts).repos |> Enum.all?(&(&1.test == nil))
   end
 
+  test "running the secret step again keeps the secret already set", %{opts: opts} do
+    act("turn_on", %{"relay" => "gh_webhook_forward"}, opts)
+    act("run_step", %{"step" => "secret"}, opts)
+    assert_received {:handed_off, _first}
+
+    section = act("run_step", %{"step" => "secret"}, opts)
+    refute_received {:handed_off, _second}
+    assert %{status: "done"} = step(section, "secret")
+    assert webhooks()["secret"] == "$SYMPHONY_GITHUB_WEBHOOK_SECRET"
+  end
+
+  test "a delivery whose record can't be read is logged and still answered :ok", %{opts: opts} do
+    defmodule FailingStore do
+      def get_github_updates(_key), do: raise("store down")
+    end
+
+    defmodule ExitingStore do
+      def get_github_updates(_key), do: exit(:noproc)
+    end
+
+    log =
+      capture_log(fn ->
+        assert WebhookSetup.delivered("https://github.com/acme/app", Keyword.put(opts, :run_store, FailingStore)) == :ok
+        assert WebhookSetup.delivered("https://github.com/acme/app", Keyword.put(opts, :run_store, ExitingStore)) == :ok
+      end)
+
+    assert log =~ "couldn't record a test delivery: store down"
+    assert log =~ "couldn't record a test delivery: ** (exit) no process"
+  end
+
   test "the secret never appears in symphony.yml, the section or the logs", %{opts: opts} = ctx do
     log =
       capture_log(fn ->

@@ -11,8 +11,9 @@ defmodule SymphonyElixir.GitHub.Relay do
   1 s, doubling the wait up to 5 minutes while it keeps failing, and counts each restart and its
   last error for health (`status/1`). A run that lasted a minute starts the wait over at 1 s.
 
-  The secret reaches `gh` as `--secret`, which is how the extension takes it; it is scrubbed from
-  everything the relay keeps or logs.
+  The secret reaches `gh` as `--secret`: the extension reads it from no environment variable and
+  no standard input, so while the relay runs its command line (`ps`) shows it to any local process.
+  It is scrubbed from everything the relay keeps or logs.
   """
 
   use GenServer, restart: :transient
