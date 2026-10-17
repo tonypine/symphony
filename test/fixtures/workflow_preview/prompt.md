@@ -196,7 +196,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 - `Epic Review` -> an automatic integrity check of an epic parent once its children are terminal: artifacts, comments and PRs verified against the epic's intent. Pass moves it to `Done`; gaps are filed as follow-ups in `Todo` within the same epic and the parent returns to `Waiting on sub-tickets`.
 - `Merging` -> the machine lands the merge; follow the repo's landing flow (do not call `gh pr merge` directly). A red head or a conflict routes to `CI Fix`.
 - `Rework` -> a reviewer or QA returned the work for changes; continue on the existing PR (never from scratch). Changes done hand off to `Code Review` (for an epic parent, to `Plan Review`).
-- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: minimal repair only — formatting, a rerun of a flaky check, a dependency bump, resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing.
+- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: every red check is fixed, never rerun — formatting, a dependency bump, a failing or flaky test fixed at its cause (in code the ticket touched or not), resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing. The run ends in one of those three ways, never with nothing pushed.
 - `Done` -> terminal state; no further action required.
 
 `Blocked` and `Needs Decision` are labels, not states: they pause a ticket in its current phase and never move it. Do not change the issue or PR while a hold is set; it clears automatically when its condition clears (a dependency or fix ticket goes terminal, access is granted, or a decision is recorded) and the ticket continues from where it stopped.
@@ -213,7 +213,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Code Review` -> the reviewer agent judges the PR on its green head; do not change the issue or PR, stop and wait for the verdict.
    - `QA` -> a QA agent walks the change's user journeys end to end; do not change the issue or PR, stop and wait for the verdict.
-   - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: minimal repair on the same branch, or `Rework` when the repair is substantive.
+   - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: fix the red check at its cause on the same branch (never a rerun), `Rework` when the repair is substantive, or a request for a person when no change can fix it.
    - `Plan Review` -> a person reviews the plan; do nothing and stop.
    - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop. Symphony moves it to `Epic Review` itself once every sub-ticket is terminal.
    - `Epic Review` -> Symphony's epic review checks the epic against what shipped; do nothing and stop.
@@ -304,31 +304,53 @@ When a ticket has an attached PR, run this before the push that hands it off to
 
 Use this whenever pushed checks come back failing, at any push gate.
 
+Every red check is a defect to fix, never a check to rerun. You have no tool that
+reruns a check, and a rerun that comes back green only hides the defect: it fails
+again on the default branch and on other PRs.
+
 1. Read the check summary via `github_get_pr_checks()` to identify which check
    failed, then read the failed-step log excerpt via `github_get_failed_run_log()`.
-2. Categorize the failure as flaky/retryable infrastructure or a real code defect.
-3. For real failures, diagnose the root cause, fix it, rerun the failing tests and
-   the targeted checks locally (not the full suite: CI reruns it on push), then
-   loop back through the validation, diff-review, commit, and push gates.
-4. Never use `--no-verify`, `--force`, or skipped hooks to bypass failures.
-5. If the failure is in unrelated pre-existing code, document it in the workpad and
-   note it explicitly in the PR description.
+2. Diagnose the root cause, fix it, rerun the failing tests and the targeted checks
+   locally (not the full suite: CI reruns it on push), then loop back through the
+   validation, diff-review, commit, and push gates.
+3. A test that fails only some of the time is a defect like any other. Find why it
+   fails only some of the time (a race, an order or timing dependence, state shared
+   between tests) and fix it at that cause: make the race deterministic by injecting
+   the delay or the message order, and wait on a message or a monitor, not a sleep.
+   Prove the fix with a repeated run of that test alone, for example
+   `mix test <file>:<line> --repeat-until-failure 500`, and record the command and its
+   result in the workpad.
+4. Fix a failure in code the ticket didn't touch the same way, on the same branch: it
+   blocks this PR and every other one until someone fixes it. Say in the workpad and
+   the PR description which failure the fix is for and that it is outside the
+   ticket's scope.
+5. When no change to the code can fix the failure (a lost runner, a GitHub outage),
+   make the failing step robust where you can, for example a bounded retry inside
+   the step. When you cannot, ask with `linear_request_human_action`.
+6. Never use `--no-verify`, `--force`, or skipped hooks to bypass failures.
 
 On this repo a red head is an attribute of the PR, not a state of your own run: once
 the ticket is past the handoff, a red head or a merge conflict moves it to `CI Fix`,
-and the run you get there is this protocol's mechanical lane.
+and the run you get there is this protocol's mechanical lane. A CI-fix run ends in
+one of three ways only:
 
-- Make the minimal repair only: a formatting fix, a rerun of a flaky check, a
-  dependency bump, a resolved conflict. Push it to the same branch; a green head
-  returns the ticket to where it came from (`Code Review`, `QA`, `Merging` or
-  `Rework`) with its approvals carried forward.
-- When the repair needs a substantive change (new behaviour, a design change, more
-  than a mechanical fix), say why in the workpad, move the ticket to `Rework` with
-  `linear_update_state` (that move is the lane's substantive verdict), and stop: the
-  rework run makes the change and the new head is reviewed again.
-- When you cannot make the repair without access or a secret, ask with
-  `linear_request_human_action`; the `Needs Decision` hold keeps the ticket in
-  `CI Fix` until the answer.
+- **A new head.** Push the repair to the same branch: a formatting fix, a dependency
+  bump, a resolved conflict, a failing or flaky test fixed at its cause (in code the
+  ticket touched or not), a failing step made robust. A green head returns the ticket
+  to where it came from (`Code Review`, `QA`, `Merging` or `Rework`) with its
+  approvals carried forward.
+- **A move to `Rework`.** When the repair needs a substantive change (new behaviour,
+  a design change, more than a fix that keeps the PR doing what it was approved
+  for), say why in the workpad, move the ticket to `Rework` with `linear_update_state`
+  (that move is the lane's substantive verdict), and stop: the rework run makes the
+  change and the new head is reviewed again.
+- **A request for a person.** When you cannot make the repair without access or a
+  secret, or the failure is outside the code and no change to the step absorbs it,
+  ask with `linear_request_human_action`; the `Needs Decision` hold keeps the ticket
+  in `CI Fix` until the answer.
+
+Deciding that a failure is flaky, or that it is not this ticket's, is not an ending:
+a run that stops there pushes nothing, and the ticket stays red in `CI Fix`.
 
 
 ## Decisions for a person, checks for the machine (required behavior)

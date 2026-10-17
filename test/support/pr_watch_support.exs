@@ -13,7 +13,7 @@ defmodule SymphonyElixir.PrWatchSupport do
   @doc """
   Writes the record of `issue_id` in `repo_key`. `attrs`: `:phase` (default `:code_review`),
   `:facts` (overrides), `:decision` (a kind such as `:dispatch` or `:wait`, or a full decision map),
-  `:ci_failure`, `:pr_conflict`, `:attempts`, `:landing`, `:pr_url`, `:head_sha` and
+  `:ci_failure`, `:pr_conflict`, `:attempts`, `:landing`, `:links`, `:pr_url`, `:head_sha` and
   `:identifier`.
   """
   def put_watch!(repo_key, issue_id, attrs \\ []) do
@@ -34,7 +34,7 @@ defmodule SymphonyElixir.PrWatchSupport do
       applied: [],
       attempts: Keyword.get(attrs, :attempts, Attempts.new()),
       fix: %{ci_failure: Keyword.get(attrs, :ci_failure), pr_conflict: Keyword.get(attrs, :pr_conflict)},
-      links: []
+      links: Keyword.get(attrs, :links, [])
     }
 
     :ok = RunStore.put_ticket_pr_watch(repo_key, issue_id, Keyword.get(attrs, :identifier), watch)

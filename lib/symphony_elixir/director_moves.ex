@@ -22,7 +22,9 @@ defmodule SymphonyElixir.DirectorMoves do
   - `:backlog`: an open ticket gets the note as a comment when there is one, then moves to `Backlog`;
   - `:unblock`: a ticket waiting on an **access** hold — an agent's block report — or on a
     dispatch-loop hold (`SymphonyElixir.DispatchLoop`) has the hold cleared by hand and continues
-    in place, with no state move. A dependency or fix-ticket hold clears on its own, so it is
+    in place, with no state move. So does one waiting on its competing pull requests (a landing
+    hold, `SymphonyElixir.PrWatch.Competitors`): the blocked-by links Symphony added go, and it no
+    longer waits on those pull requests. A dependency or fix-ticket hold clears on its own, so it is
     refused;
   - `:decide`: a ticket waiting on a `Needs Decision` hold gets the Director's answer as a reply
     under the request comment, written into the Decisions section of the description
@@ -51,6 +53,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
   alias SymphonyElixir.{
     AuditLog,
+    BlockedHold,
     BreakdownReview,
     Config,
     Decisions,
@@ -58,6 +61,7 @@ defmodule SymphonyElixir.DirectorMoves do
     MergeConfirmation,
     Orchestrator,
     PlanReview,
+    PrWatch,
     Restart,
     SubIssueWait,
     TicketSignals,
@@ -373,12 +377,34 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # Unblock lifts an access or dispatch-loop hold in place: the store hold is cleared through `Hold`
   # (the store first, then the `Blocked` label), so the ticket keeps its phase and the next poll
-  # dispatches it again — for a loop, with its count started again. A hold waiting on anything else
-  # clears on its own, so it is refused.
+  # dispatches it again — for a loop, with its count started again. A landing hold first has the PR
+  # watcher release its competitors, so the next read doesn't wait on them again. A hold waiting on
+  # anything else clears on its own, so it is refused.
   defp unblock(%Issue{} = issue, opts) do
-    if issue |> blocked_hold(opts) |> Hold.unblockable?(),
-      do: clear_access_hold(issue, opts),
-      else: access_conflict(issue)
+    hold = blocked_hold(issue, opts)
+
+    cond do
+      Hold.unblockable?(hold) ->
+        clear_access_hold(issue, opts)
+
+      BlockedHold.landing?(hold) ->
+        release_competitors(issue, opts)
+        clear_access_hold(issue, opts)
+
+      true ->
+        access_conflict(issue)
+    end
+  end
+
+  # A release that fails is reported: the hold still clears, and the watcher unlinks what it can on
+  # its next read.
+  defp release_competitors(issue, opts) do
+    release = Keyword.get(opts, :release_competitors, &PrWatch.release_competitors/3)
+
+    case release.(issue.repo_key, issue.id, store_opts(opts)) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Unblocked #{issue.identifier} but couldn't release its competing pull requests: #{inspect(reason)}")
+    end
   end
 
   defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} is not waiting on an access hold"}}

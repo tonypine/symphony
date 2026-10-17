@@ -127,7 +127,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   @typedoc """
   What Symphony knows of the ticket, beside its PR: its phase, holds and run, the landing order's
-  `ahead`, whether review comments wait to be addressed (`review_comments`, `:none` when absent),
+  `ahead` and the open PRs `competing` with it (`SymphonyElixir.PrWatch.Competitors`, `[]` when
+  absent), whether review comments wait to be addressed (`review_comments`, `:none` when absent),
   and the counts `SymphonyElixir.PrWatch.Attempts` keeps (`red_attempts`,
   `conflict_attempts`, `rerun_done`, `fix_failures`, `landing_timed_out`), which keep their
   defaults when absent.
@@ -177,7 +178,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       end
 
     ticket
-    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :review_comments | PrWatch.Attempts.fact_keys()])
+    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :competing, :review_comments | PrWatch.Attempts.fact_keys()])
     |> Map.put(:origin, if(ticket.phase == :ci_fix, do: ticket.origin))
     |> Map.merge(pr_facts)
     |> Facts.new()

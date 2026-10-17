@@ -289,7 +289,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert {:ok, %{watched: 4}} = Repo.poll(pid)
 
     assert %{facts: %Facts{ahead: []}} = watch(repo_key, "2")
-    leader = %{issue_identifier: "TP-2", pr_number: 2, pr_url: "https://github.com/acme/app/pull/2", files: ["SPEC.md"]}
+    leader = %{issue_id: "2", issue_identifier: "TP-2", pr_number: 2, pr_url: "https://github.com/acme/app/pull/2", title: nil, head_sha: "sha-2", files: ["SPEC.md"]}
     assert %{facts: %Facts{ahead: [^leader]}} = watch(repo_key, "1")
     assert %{facts: %Facts{ahead: [], competing: []}} = watch(repo_key, "3")
     assert %{facts: %Facts{ahead: []}} = watch(repo_key, "4")

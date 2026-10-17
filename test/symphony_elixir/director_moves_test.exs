@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, DirectorMoves, Hold, PlanComments, RunStore, SubIssueWait}
+  alias SymphonyElixir.{AuditLog, BlockedHold, DirectorMoves, Hold, PlanComments, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -459,6 +459,25 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute Hold.held?("repo-director", "pr", :blocked)
       assert RunStore.get_ticket_state("repo-director", "pr").dispatches == []
       assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+    end
+
+    test "clears a landing hold in place after the PR watcher releases its competing PRs (TP-989)", %{opts: opts} do
+      put_issues([%{pr("Merging") | repo_key: "repo-director"}])
+      :ok = Hold.set("repo-director", "pr", :blocked, BlockedHold.landing_attrs([%{issue_identifier: "MOT-1", files: ["SPEC.md"]}]))
+      test_pid = self()
+      release = fn repo_key, issue_id, _opts -> send(test_pid, {:release, repo_key, issue_id}) && Process.get(:release_result, :ok) end
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :release_competitors, release))
+      assert_received {:release, "repo-director", "pr"}
+      refute Hold.held?("repo-director", "pr", :blocked)
+
+      # A release that fails is reported; the hold still clears.
+      :ok = Hold.set("repo-director", "pr", :blocked, BlockedHold.landing_attrs([%{issue_identifier: "MOT-1", files: ["SPEC.md"]}]))
+      Process.put(:release_result, {:error, :store_down})
+
+      log = capture_log(fn -> assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :release_competitors, release)) end)
+      assert log =~ "couldn't release its competing pull requests"
+      refute Hold.held?("repo-director", "pr", :blocked)
     end
 
     test "refuses a ticket with no hold, and one waiting on something other than access", %{opts: opts} do
