@@ -14,35 +14,50 @@ defmodule SymphonyElixir.PrDecision.Apply do
   The actions:
 
     * `wait`, `dispatch` – nothing to do here: a wait is recorded with its reason, and the
-      orchestrator dispatches a ticket whose decision is `dispatch` (or `land_agent`).
+      orchestrator dispatches a ticket whose decision is `dispatch` (or `land_agent`). A draft PR in
+      `Merging` (R10) has auto-merge turned off while it waits; marking it ready arms it again (R30).
     * `rerun_failed` – reruns the failed jobs of the head's failed workflow runs, once per head.
     * `ci_fix` – sends the ticket to CI Fix for a red head or a conflict, recording its origin, and
       spends one red or conflict attempt (`SymphonyElixir.PrWatch.Attempts`). In `Merging` auto-merge
       goes off first. In CI Fix itself the ticket stays and the next run takes the fix; the run sent
-      when it entered the lane spends no second attempt.
+      when it entered the lane spends no second attempt. A red head's fix context lists the earlier
+      fix runs' failures (check, first error line, head), so the run knows what was tried.
     * `return_to_origin` – a green, conflict-free CI Fix ticket goes back where it came from, with
       the approval it carried.
     * `to_code_review` (a person pushed in `Merging`, D4) and `to_rework` (a conflict back after
       the conflict fix runs with nobody competing, D16) – auto-merge goes off, then the move, with
-      the reason posted on the ticket.
+      the reason posted on the ticket. A PR closed without merging (R8, D5) goes to Rework the same
+      way, with no question: the rework run opens a new PR from main, which the facts then follow.
+    * `to_in_progress` – review comments still to address (R13, D8): auto-merge goes off, then the
+      ticket goes back to In Progress on the same PR, where the run reads the comments the PR
+      review poller keeps. In `Merging` only with auto-merge on, as the landing rows.
     * `update_branch`, `merge_now`, `arm`, `disarm` – the GitHub calls of a landing.
     * `land_agent` – says on the ticket that a landing agent takes the PR over; the orchestrator
       dispatches it.
-    * `close_out` – a merged `Merging` PR moves its ticket to Done, or to the waiting state when its
-      sub-issues are open.
-    * `file_fix_ticket` – the red backstop: auto-merge off, then the self-heal lane files or reuses
-      the fix ticket for the failing check and holds the ticket on it (D15 (c)).
+    * `close_out` – a merged PR moves its ticket to Done, or to the waiting state when its started
+      sub-issues are open, in every watched phase and whoever merged it.
+    * `file_fix_ticket` – the red backstop (10 fix runs, or 3 in a row on the same failure): auto-merge
+      off, then the self-heal lane files or reuses the fix ticket for the failing check and holds the
+      ticket on it (D15 (c)). The outcome it hands the lane carries the same signature the streak
+      compares (`SymphonyElixir.PrWatch.Attempts.cause/1`), and each fix run's failure and the red
+      count as evidence.
     * `wait_for_competitors` – the PRs ahead in the landing order (R14a), or every competing PR
       once the conflict came back after its fix runs (R15): in `Merging` auto-merge goes off, then
       a `Blocked` hold of the landing kind and a Linear blocked-by link from each competitor's
       ticket (`SymphonyElixir.PrWatch.Competitors`). The ledger doesn't hold it back: a hold that
       cleared on the same head while the conflict stays waits again.
-    * `decision` – a `Merging` PR whose only red check is one a person must clear asks a person.
+    * `decision` – a Needs Decision hold with its request, the ticket left in its phase: a ticket
+      past In Progress with no PR (R6: attach it, Restart, or cancel), a PR on another base than the
+      repo's (R7: put the base back, or accept the new base; `base_answer/3` reads the answer, and a
+      "put back" retargets the PR once), a required check that never reported (R17: proceed without
+      it for this PR, rerun, or fix the workflow in Rework; the answer is read back by
+      `SymphonyElixir.PrWatch.Repo`, `unreported_answer/1`), and a PR whose only red check is one a
+      person must clear (R18: add the waiver label, or drop the change in Rework). Answering an R17
+      or R18 Rework option moves the ticket there.
 
-  Rows other tickets build (a missing PR, a changed base, a closed PR, review comments, a required
-  check that never reports, a check red on the base) are recorded as the decision
-  without an action, and so are the CI rows with `pull_requests.checks` off and the landing rows
-  with auto-merge off.
+  The CI rows with `pull_requests.checks` off and the landing rows with auto-merge off are recorded
+  as the decision without an action. A check red on the base too (R23) is a wait on CI: nothing to
+  do until the base goes green.
   """
 
   import Kernel, except: [apply: 2]
@@ -53,6 +68,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
     AuditLog,
     AutoMerge,
     CiFix,
+    CiPoller,
+    Decisions,
+    MergeConfirmation,
     NeedsDecisionHold,
     Notifications,
     PrDecision,
@@ -76,16 +94,22 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   @rework_state "Rework"
   @merging_state "Merging"
+  @in_progress_state "In Progress"
 
-  # Rows a later ticket applies; until then their decision is only recorded.
-  @recorded_only ["R6", "R7", "R8", "R13", "R17", "R23"]
   # The CI rows (`pull_requests.checks`).
-  @ci_rules ["R19", "R20", "R21", "R22"]
+  @ci_rules ["R17", "R19", "R20", "R21", "R22"]
   # The landing rows, and a conflict in `Merging` (`pull_requests.auto_merge`).
   @landing_rules ["R3", "R28", "R29", "R30", "R31"]
   @conflict_rules ["R14", "R14a", "R15", "R15a"]
   # Kinds with nothing to apply.
   @no_op [:wait, :dispatch]
+  # R7's options, and what each answer does (`base_answer/3`).
+  @put_back "Put the base back"
+  @accept_base "Accept the new base"
+  # R17's options, and what each answer does to the head's wait (`unreported_answer/1`).
+  @proceed "Proceed without it for this PR"
+  @rerun "Rerun the checks"
+  @fix_in_rework "Fix the workflow in Rework"
 
   @typedoc "One action done in the stay: the head and rule it was for, its kind and when."
   @type entry :: %{head_sha: String.t() | nil, rule: String.t(), kind: Action.kind(), at: DateTime.t()}
@@ -99,7 +123,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @typedoc """
   What applying needs: the repo and its settings, the ticket as Linear read it, the watcher's read
   of its PR (nil without one), the facts decided on, the attempts, this stay's ledger, the fix
-  context, the competitors it recorded (`links`, `SymphonyElixir.PrWatch.Competitors`), the clock,
+  context, the clock, the ticket's recorded decisions (`decisions`, optional: R17 counts the earlier
+  answers to its question), the competitors it recorded (`links`, `SymphonyElixir.PrWatch.Competitors`),
   and the injectable `opts` (`:tracker`, `:github`, `:run_store`, `:self_heal`, `:fixer`,
   `:gh_runner`, `:linker`).
   """
@@ -114,6 +139,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
           required(:fix) => fix(),
           required(:now) => DateTime.t(),
           required(:opts) => keyword(),
+          optional(:decisions) => [map()],
           optional(:links) => [Competitors.link()]
         }
 
@@ -139,7 +165,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   def apply(%Action{} = action, ctx) do
     cond do
       not owned?(action, ctx) -> recorded(action, ctx)
-      action.kind in @no_op -> recorded(action, ctx)
+      no_op?(action, ctx) -> recorded(action, ctx)
       already_sent?(action, ctx) -> recorded(%{action | reason: "The CI Fix run already sent for this head takes the fix"}, ctx)
       action.kind != :wait_for_competitors and applied?(ctx, action.rule) -> recorded(action, ctx)
       true -> action |> perform(ctx) |> finish(action, ctx)
@@ -156,15 +182,20 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp already_sent?(%Action{kind: :ci_fix, args: %{cause: cause}}, %{facts: %{phase: :ci_fix}} = ctx), do: Attempts.sent?(ctx.attempts, head(ctx), cause)
   defp already_sent?(_action, _ctx), do: false
 
-  defp owned?(%Action{rule: rule}, _ctx) when rule in @recorded_only, do: false
-  defp owned?(%Action{rule: "R2"}, ctx), do: ctx.facts.phase == :merging
-  defp owned?(%Action{rule: "R18"}, ctx), do: ctx.facts.phase == :merging and AutoMerge.enabled?(ctx.settings)
+  defp owned?(%Action{rule: "R13"}, %{facts: %{phase: :merging}} = ctx), do: AutoMerge.enabled?(ctx.settings)
+  defp owned?(%Action{rule: "R18"}, %{facts: %{phase: :merging}} = ctx), do: AutoMerge.enabled?(ctx.settings)
+  defp owned?(%Action{rule: "R18"}, ctx), do: ci_enabled?(ctx.settings)
   defp owned?(%Action{rule: rule}, ctx) when rule in @ci_rules, do: ci_enabled?(ctx.settings)
   defp owned?(%Action{rule: rule}, ctx) when rule in @landing_rules, do: AutoMerge.enabled?(ctx.settings)
   defp owned?(%Action{rule: rule}, %{facts: %{phase: :merging}} = ctx) when rule in @conflict_rules, do: AutoMerge.enabled?(ctx.settings)
   defp owned?(_action, _ctx), do: true
 
   defp ci_enabled?(settings), do: settings.ci.enabled == true
+
+  # A wait or a dispatch has nothing to do, but a draft `Merging` PR (R10) has auto-merge turned off
+  # while it waits for a person, so it doesn't merge as a draft's checks pass.
+  defp no_op?(%Action{rule: "R10"}, %{facts: %{phase: :merging, auto_merge: :armed}} = ctx), do: not AutoMerge.enabled?(ctx.settings)
+  defp no_op?(action, _ctx), do: action.kind in @no_op
 
   defp recorded(action, ctx) do
     %{action: action, attempts: ctx.attempts, applied: ctx.applied, fix: ctx.fix, links: links(ctx), moved_to: nil, outcome: :recorded}
@@ -234,12 +265,38 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  defp perform(%Action{rule: "R10"}, ctx) do
+    with :ok <- disarm_if_armed(ctx, :draft), do: {:ok, %{}}
+  end
+
+  # A PR closed without merging (D5): Rework, where the run opens a new PR from main. A closed PR
+  # can't merge, so a failure to turn its auto-merge off doesn't hold the move back.
+  defp perform(%Action{kind: :to_rework, rule: "R8"} = action, ctx) do
+    disarm_closed(ctx)
+
+    with :ok <- move(:pr_closed, %{}, ctx) do
+      TicketPullRequest.mark_finished(ctx.repo_key, pr_url(ctx), "closed")
+      comment(ctx, "Symphony moved this ticket to #{@rework_state}: #{action.reason}. A rework run opens a new pull request from main.")
+      TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "pr_closed", to: @rework_state, reason: action.reason})
+      {:ok, %{moved_to: :rework}}
+    end
+  end
+
   defp perform(%Action{kind: :to_rework} = action, ctx) do
     with :ok <- disarm_if_armed(ctx, :conflict),
          :ok <- move(:conflict_rework, %{}, ctx) do
       comment(ctx, "Symphony moved this ticket to #{@rework_state}: #{action.reason}. A rework run resolves the conflict on the same pull request.")
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "conflict", to: @rework_state, reason: action.reason})
       {:ok, %{moved_to: :rework}}
+    end
+  end
+
+  defp perform(%Action{kind: :to_in_progress} = action, ctx) do
+    with :ok <- disarm_if_armed(ctx, :review_comments),
+         :ok <- move(:review_rework, %{target: @in_progress_state}, ctx) do
+      comment(ctx, "Symphony moved this ticket back to #{@in_progress_state}: #{action.reason}. The run addresses them on the same pull request.")
+      TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "review_comments", to: @in_progress_state})
+      {:ok, %{moved_to: :in_progress}}
     end
   end
 
@@ -313,14 +370,29 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
-  defp perform(%Action{kind: :decision}, ctx) do
-    with :ok <- disarm_if_armed(ctx, :protected_paths) do
-      held = %{id: ctx.issue.id, state: ctx.issue.state, repo_key: ctx.repo_key}
+  defp perform(%Action{kind: :decision, rule: "R6"}, ctx) do
+    with :ok <- ask(missing_pr_request(ctx), "pr_missing", ctx, nil), do: {:ok, %{}}
+  end
 
-      with :ok <- NeedsDecisionHold.pause(held, protected_paths_request(ctx), [tracker: tracker(ctx)] ++ store_opts(ctx), @rework_state) do
-        TicketSignals.record(ctx.repo_key, ctx.issue.id, "decision requested", %{to: ctx.issue.state, reason: "protected_paths"})
-        {:ok, %{}}
-      end
+  defp perform(%Action{kind: :decision, rule: "R7"}, %{read: %{base_answer: :put_back}} = ctx), do: put_base_back(ctx)
+
+  defp perform(%Action{kind: :decision, rule: "R7"}, ctx) do
+    with :ok <- ask(base_request(ctx), "base_changed", ctx, nil), do: {:ok, %{}}
+  end
+
+  defp perform(%Action{kind: :decision, rule: "R17"}, ctx) do
+    request = unreported_request(ctx)
+
+    with :ok <- ask(request, "required_check_missing", ctx) do
+      prior = Enum.count(Map.get(ctx, :decisions, []), &same_title?(&1, request.title))
+      {:ok, %{attempts: Attempts.asked(ctx.attempts, head(ctx), request.title, prior)}}
+    end
+  end
+
+  defp perform(%Action{kind: :decision}, ctx) do
+    with :ok <- disarm_if_armed(ctx, :protected_paths),
+         :ok <- ask(protected_paths_request(ctx), "protected_paths", ctx) do
+      {:ok, %{}}
     end
   end
 
@@ -349,9 +421,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   # What the CI Fix run reads: the failed checks with their log for a red head, the conflict for a
-  # conflicting one.
+  # conflicting one. The read already carries the log when it read it this tick.
   defp fix_context(:red, ctx) do
-    with {:ok, %{excerpt: excerpt, error: error}} <- FailedLog.read(run_ids(failed_checks(ctx)), ctx.settings.ci.log_excerpt_lines, github_opts(ctx)) do
+    with {:ok, %{excerpt: excerpt, error: error}} <- failed_log(ctx) do
       failure = %{
         commit_sha: head(ctx),
         head_ref_name: read_field(ctx, :head_ref),
@@ -360,6 +432,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
         failed_checks: failed_checks(ctx),
         log_excerpt: excerpt,
         first_error: error,
+        earlier_failures: ctx.attempts.fix_failures,
         approved: ctx.facts.phase == :merging or ctx.facts.origin == :merging
       }
 
@@ -390,8 +463,17 @@ defmodule SymphonyElixir.PrDecision.Apply do
     {:ok, %{ctx.fix | pr_conflict: conflict}}
   end
 
+  defp failed_log(ctx) do
+    case read_field(ctx, :failed_log) do
+      %{excerpt: _excerpt, error: _error} = log -> {:ok, log}
+      _none -> FailedLog.read(run_ids(failed_checks(ctx)), ctx.settings.ci.log_excerpt_lines, github_opts(ctx))
+    end
+  end
+
+  # The red run's failure is the head's signature the streak reads (`read.failure`), so the next head
+  # compares like with like; without one, the log the run reads.
   defp spend(:red, %{ci_failure: failure}, ctx) do
-    Attempts.spend(ctx.attempts, :red, %{check: ctx.facts.failing_check || "a check", error: failure.first_error})
+    Attempts.spend(ctx.attempts, :red, head_failure(ctx) || %{check: ctx.facts.failing_check || "a check", error: failure.first_error, head_sha: head(ctx)})
   end
 
   defp spend(:conflict, _fix, ctx), do: Attempts.spend(ctx.attempts, :conflict)
@@ -438,14 +520,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp heal(action, ctx) do
     check = Map.get(action.args, :check) || ctx.facts.failing_check || "a check"
     self_heal = Keyword.get(ctx.opts, :self_heal, SelfHeal)
-
-    outcome = %{
-      cause: {:ci_check_failed, check},
-      reason: "CI keeps failing: the `#{check}` check is still red on #{pr_name(ctx)} after #{ctx.facts.red_attempts} CI Fix runs",
-      findings: Enum.map(ctx.facts.fix_failures, &"#{&1.check}: #{&1.error}"),
-      pr_url: pr_url(ctx),
-      head_sha: head(ctx)
-    }
+    outcome = backstop_outcome(check, ctx)
 
     case self_heal.heal(ctx.issue, heal_opts(ctx, outcome)) do
       :filed ->
@@ -468,6 +543,39 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  @doc """
+  The outcome the red backstop hands the self-heal lane for `check`: its cause is the head's failure
+  (`SymphonyElixir.PrWatch.Attempts.cause/1`), so the lane's signature is the streak's, and its
+  evidence names each fix run's failing check, first error line and head, and the red count.
+  """
+  @spec backstop_outcome(String.t(), ctx()) :: map()
+  def backstop_outcome(check, ctx) do
+    error = (head_failure(ctx) || List.last(ctx.facts.fix_failures) || %{error: ""}).error
+    runs = "#{ctx.facts.red_attempts} of #{ctx.facts.max_red_attempts} CI Fix runs"
+    streak = if ctx.facts.same_failure_streak > 1, do: ", the last #{ctx.facts.same_failure_streak} in a row with the same failure", else: ""
+
+    %{
+      cause: Attempts.cause(%{check: check, error: error}),
+      reason: "CI keeps failing: the `#{check}` check is still red on #{pr_name(ctx)} after #{runs}#{streak}",
+      findings: Enum.map(ctx.facts.fix_failures, &finding/1),
+      pr_url: pr_url(ctx),
+      head_sha: head(ctx)
+    }
+  end
+
+  defp finding(%{head_sha: head} = failure) when is_binary(head), do: "#{failure.check} at #{String.slice(head, 0, 7)}: #{failure.error}"
+  defp finding(failure), do: "#{failure.check}: #{failure.error}"
+
+  # The current head's failure, as the read gave it.
+  defp head_failure(ctx) do
+    head = head(ctx)
+
+    case read_field(ctx, :failure) do
+      %{head_sha: ^head} = failure when is_binary(head) -> failure
+      _none -> nil
+    end
+  end
+
   defp heal_opts(ctx, outcome) do
     [outcome: outcome, attempts: ctx.facts.red_attempts, repo_key: ctx.repo_key]
     |> Keyword.merge(Keyword.take(ctx.opts, [:tracker, :fixer, :symphony_repo_key, :terminal_states]))
@@ -485,11 +593,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
     if SubIssueWait.wait_on_merge?(ctx.issue, ctx.settings.tracker.terminal_states, ctx.settings) do
       SubIssueWait.wait_on_merge(ctx.issue, ctx.settings, tracker(ctx))
     else
-      with :ok <- move(:landing_done, %{}, ctx) do
+      with :ok <- move(close_signal(ctx.facts.phase), %{}, ctx) do
         TicketSignals.record(ctx.repo_key, ctx.issue.id, "merge settled", %{to: "Done"})
       end
     end
   end
+
+  defp close_signal(:merging), do: :landing_done
+  defp close_signal(_phase), do: :pr_merged
 
   # Auto-merge.
 
@@ -537,28 +648,190 @@ defmodule SymphonyElixir.PrDecision.Apply do
     :ok
   end
 
+  defp disarm_closed(%{facts: %{auto_merge: :armed}} = ctx) do
+    case disarm(ctx, :pr_closed) do
+      :ok -> :ok
+      {:error, reason} -> Logger.info("PR watch could not turn auto-merge off on the closed #{pr_url(ctx)}; it can't merge: #{inspect(reason)}")
+    end
+  end
+
+  defp disarm_closed(_ctx), do: :ok
+
   defp disarm_comment(:conflict, ctx), do: AutoMerge.conflict_comment(pr_url(ctx))
   defp disarm_comment(:person_push, ctx), do: AutoMerge.person_push_comment(pr_url(ctx))
+
+  defp disarm_comment(:draft, ctx) do
+    "Symphony turned off GitHub auto-merge on #{pr_url(ctx) || "this PR"} because a person marked it as a draft. " <>
+      "Marking it ready for review turns auto-merge back on."
+  end
+
+  defp disarm_comment(:review_comments, ctx) do
+    "Symphony turned off GitHub auto-merge on #{pr_url(ctx) || "this PR"} because it has review comments to address. " <>
+      "The change they ask for goes back through review; moving this ticket to Merging again turns auto-merge back on."
+  end
+
   defp disarm_comment(_why, ctx), do: AutoMerge.ci_fix_comment(pr_url(ctx))
+
+  # A decision pauses the ticket in its phase on a Needs Decision hold; the option that moves it to
+  # `confirm` (Rework) does so once answered (`SymphonyElixir.NeedsDecisionHold`). With no `confirm`
+  # the ticket continues in place once a person answers.
+  defp ask(request, reason, ctx, confirm \\ @rework_state) do
+    held = %{id: ctx.issue.id, state: ctx.issue.state, repo_key: ctx.repo_key}
+
+    with :ok <- NeedsDecisionHold.pause(held, request, [tracker: tracker(ctx)] ++ store_opts(ctx), confirm) do
+      TicketSignals.record(ctx.repo_key, ctx.issue.id, "decision requested", %{to: ctx.issue.state, reason: reason})
+    end
+  end
 
   defp protected_paths_request(ctx) do
     label = label(ctx)
     pr = Request.pull_request(pr_url(ctx)) || "its pull request"
+    state = ctx.issue.state
 
     %{
       title: "Protected files changed on #{label}",
-      question: "The pull request of #{label} changes files that agents may only change with a person's permission, and no decision on #{label} gives it. How should it continue?",
+      question:
+        "The pull request of #{label} changes files that agents may only change with a person's permission, and that is the only failing check. " <>
+          "How should it continue?",
       why:
-        "Symphony's check for changes to those files failed on #{pr}. Symphony doesn't merge such a change without a person's permission. " <>
-          "A decision on #{label} that unlocks each changed file lets Symphony merge it as it is.",
-      if_unanswered: "#{label} stays in Merging and #{pr} isn't merged.",
+        "Symphony's check for changes to those files failed on #{pr}, and only a person can clear it. " <>
+          "Adding the #{CiPoller.waiver_label()} label to the pull request runs the check again, and it passes.",
+      if_unanswered: "#{label} stays in #{state} and #{pr} isn't merged.",
       options: [
-        %{label: "Send to Rework", effect: "the ticket moves to Rework, where a run takes the change to those files out of the pull request", recommended: true},
-        %{label: "Leave it", effect: "the ticket stays in Merging until you merge the pull request yourself; Symphony then moves it to Done", recommended: false}
+        %{
+          label: "Add the waiver label",
+          effect: "you add the #{CiPoller.waiver_label()} label to #{pr}; the check runs again and passes, and the ticket continues in #{state}",
+          recommended: false
+        },
+        %{label: "Drop the change in Rework", effect: "the ticket moves to Rework, where a run takes the change to those files out of the pull request", recommended: true}
       ],
       recommendation_reason: "No one allowed the change, so taking it out is the safe default."
     }
   end
+
+  defp missing_pr_request(ctx) do
+    label = label(ctx)
+    state = ctx.issue.state
+
+    %{
+      title: "No pull request on #{label}",
+      question: "#{mention(ctx)} is in #{state}, but Symphony finds no pull request for it, so there is nothing to review, check or merge. How should it continue?",
+      why:
+        "Symphony keeps the pull request a run opens for a ticket, and finds one a person opened from the ticket's branch. " <>
+          "It found neither for #{label}.",
+      if_unanswered: "#{label} stays in #{state} and nothing runs on it.",
+      options: [
+        %{
+          label: "Attach the PR",
+          effect: "you open or reopen the ticket's pull request on GitHub, then pick this; Symphony finds it and the ticket continues in #{state}",
+          recommended: true
+        },
+        %{label: "Restart", effect: "you restart the ticket from the Symphony app; it starts again from the main branch with a fresh pull request"},
+        %{label: "Cancel", effect: "you move the ticket to Canceled; nothing is merged"}
+      ],
+      recommendation_reason: "Attaching keeps the work and the reviews already done."
+    }
+  end
+
+  defp base_request(ctx) do
+    label = label(ctx)
+    state = ctx.issue.state
+    pr = pr_name(ctx)
+    {base, expected} = {read_field(ctx, :base_ref), read_field(ctx, :base_branch)}
+
+    %{
+      title: base_title(ctx.issue, ctx.read),
+      question: "#{subject(pr)} of #{mention(ctx)} merges into the #{base} branch, not into #{expected}, where the repo's pull requests merge. Which should it merge into?",
+      why: "Someone changed the branch #{pr} merges into on GitHub. Symphony merges a ticket's pull request into #{expected} unless a person says otherwise.",
+      if_unanswered: "#{label} stays in #{state} and #{pr} isn't reviewed or merged.",
+      options: [
+        %{label: @put_back, effect: "Symphony changes #{pr} to merge into #{expected} again, and the ticket continues in #{state}", recommended: true},
+        %{label: @accept_base, effect: "#{pr} keeps merging into #{base}, and the ticket continues in #{state}"}
+      ],
+      recommendation_reason: "The repo's pull requests merge into #{expected}; another branch is usually a slip."
+    }
+  end
+
+  @doc """
+  What a person answered to R7's question about `read`'s PR on another base, from the ticket's
+  recorded `decisions`: `:accept` (the PR keeps its new base), `:put_back` (Symphony retargets it to
+  the repo's base branch), or nil while nobody answered, or the answer picks neither option.
+  """
+  @spec base_answer([map()], Issue.t(), map()) :: :accept | :put_back | nil
+  def base_answer(decisions, %Issue{} = issue, read) do
+    with %{answer: answer} <- Decisions.find(decisions, base_title(issue, read), nil) do
+      case MergeConfirmation.picked_option([@put_back, @accept_base], [answer]) do
+        1 -> :put_back
+        2 -> :accept
+        nil -> nil
+      end
+    end
+  end
+
+  # The question names the PR and both branches, so an answer stands for that change of base only.
+  defp base_title(issue, read) do
+    pr = Request.pull_request(read.pr_url) || "The pull request"
+    "#{pr} of #{issue.identifier || issue.id} merges into #{read.base_ref}, not #{read.base_branch}"
+  end
+
+  defp put_base_back(ctx) do
+    github = Keyword.get(ctx.opts, :github, SymphonyElixir.GitHub.PullRequest)
+
+    with :ok <- github.change_base(pr_url(ctx), read_field(ctx, :base_branch), gh_opts(ctx)) do
+      comment(ctx, "Symphony changed #{pr_name(ctx)} to merge into #{read_field(ctx, :base_branch)} again, as a person decided.")
+      {:ok, %{}}
+    end
+  end
+
+  defp unreported_request(ctx) do
+    label = label(ctx)
+    pr = Request.pull_request(pr_url(ctx)) || "its pull request"
+    state = ctx.issue.state
+    checks = Enum.join(ctx.facts.missing_checks, ", ")
+    minutes = div(ctx.settings.ci.merging_wait_timeout_ms, 60_000)
+
+    %{
+      title: "Check #{checks} never reported on #{label}",
+      question: "The base branch requires the #{checks} check, but it never reported on #{pr} of #{label} within #{minutes} minutes. How should #{label} continue?",
+      why:
+        "No workflow reported the #{checks} check on the pull request's latest changes. " <>
+          "The check may have been renamed in the branch rules, or its workflow may not run on this pull request. " <>
+          "Symphony doesn't skip a required check without a person's say.",
+      if_unanswered: "#{label} stays in #{state} and keeps waiting for the check.",
+      options: [
+        %{
+          label: @proceed,
+          effect: "#{label} continues in #{state} on its current changes without the check; a new push waits for it again",
+          tradeoffs: [%{kind: "good", text: "the work goes on today"}, %{kind: "risk", text: "the change is not checked by #{checks}"}]
+        },
+        %{label: @rerun, effect: "Symphony runs the checks of #{pr} again and waits for the check once more", recommended: true},
+        %{label: @fix_in_rework, effect: "the ticket moves to Rework, where a run changes the workflow so it reports the check"}
+      ],
+      recommendation_reason: "A rerun costs nothing and shows whether the check was only lost."
+    }
+  end
+
+  @doc """
+  What a person's answer to R17 picks, read from the recorded answer text (an option's number or
+  label, as `SymphonyElixir.MergeConfirmation.picked_option/2` reads it): `:proceed`, `:rerun`,
+  `:rework`, or `:other` for an answer that picks none.
+  """
+  @spec unreported_answer(String.t() | nil) :: :proceed | :rerun | :rework | :other
+  def unreported_answer(answer) do
+    case MergeConfirmation.picked_option([@proceed, @rerun, @fix_in_rework], List.wrap(answer)) do
+      1 -> :proceed
+      2 -> :rerun
+      3 -> :rework
+      nil -> :other
+    end
+  end
+
+  @doc "Whether a recorded decision answers a question with `title`, ignoring case, spacing and Linear's escapes."
+  @spec same_title?(map(), String.t()) :: boolean()
+  def same_title?(%{title: recorded}, title) when is_binary(recorded), do: comparable(recorded) == comparable(title)
+  def same_title?(_decision, _title), do: false
+
+  defp comparable(text), do: text |> String.replace("\\", "") |> String.replace(~r/\s+/, " ") |> String.trim() |> String.downcase()
 
   # Linear.
 
@@ -599,6 +872,12 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp pr_name(ctx), do: Request.pull_request(pr_url(ctx)) || "its pull request"
 
   defp label(%{issue: %Issue{} = issue}), do: issue.identifier || issue.id
+
+  defp mention(%{issue: %Issue{title: title}} = ctx) when is_binary(title) and title != "", do: "#{label(ctx)} (#{title})"
+  defp mention(ctx), do: label(ctx)
+
+  # A phrase opening a sentence.
+  defp subject(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
 
   defp tracker(ctx), do: Keyword.get(ctx.opts, :tracker, Tracker)
   defp store(ctx), do: Keyword.get(ctx.opts, :run_store, RunStore)

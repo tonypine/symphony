@@ -509,8 +509,10 @@ defmodule SymphonyElixir.ExtensionsTest do
       pr_url: "https://github.com/acme/repo/pull/9",
       head_sha: "abc123",
       read_at: read_at,
-      rate_limit: %{remaining: 4000, reset_at: ~U[2026-10-16 13:00:00Z]}
+      rate_limit: %{remaining: 4000, limit: 5000, reset_at: ~U[2026-10-16 13:00:00Z]}
     }
+
+    silent = %{since: ~U[2026-10-16 11:59:00Z], ticks: 2, bound: nil, reason: "R26 decided `dispatch`, but no run started and no wait is recorded"}
 
     :ok =
       RunStore.put_ticket_pr_watch(
@@ -521,6 +523,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           facts: %{facts | github: :rate_limited},
           github: {:rate_limited, ~U[2026-10-16 12:10:00Z]},
           rate_limit: nil,
+          silent: silent,
           decision: %{rule: "R4", kind: :wait, reason: "CI keeps failing", waits_on: %{type: "fix_ticket", keys: ["MT-FIX"]}}
         })
       )
@@ -546,7 +549,23 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
-    assert %{"issues" => [first, second]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert %{"issues" => [first, second], "silent_waits" => silent_waits, "rate_limit" => rate_limit} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert silent_waits == [
+             %{
+               "issue_id" => "watched-2",
+               "identifier" => "MT-WATCH-2",
+               "repo_key" => "default",
+               "phase" => "code_review",
+               "pr_url" => "https://github.com/acme/repo/pull/9",
+               "since" => "2026-10-16T11:59:00Z",
+               "rule" => "R4",
+               "bound" => nil,
+               "reason" => "R26 decided `dispatch`, but no run started and no wait is recorded"
+             }
+           ]
+
+    assert rate_limit == %{"remaining" => 4000, "limit" => 5000, "reset" => "2026-10-16T13:00:00Z"}
 
     assert %{
              "issue_id" => "watched-1",
@@ -582,6 +601,12 @@ defmodule SymphonyElixir.ExtensionsTest do
                "waits_on" => [%{"identifier" => "MT-FIX", "kind" => "fix_ticket"}]
              }
            } = second
+
+    assert %{"phase" => "code_review", "head" => "abc123", "source" => "poll", "summary" => "PR #9 open · CI green · mergeability unknown"} = first["watch"]
+
+    # The ticket page reads the same block.
+    assert %{"issue_identifier" => "MT-WATCH-2", "watch" => %{"silent" => %{"ticks" => 2}, "phase" => "code_review"}} =
+             json_response(get(build_conn(), "/api/v1/MT-WATCH-2"), 200)
   end
 
   test "phoenix observability api shows a run waiting on a Symphony tool call" do
@@ -827,7 +852,10 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "since" => "2026-10-03T06:00:00Z"
                }
              ],
+             "red_bases" => [],
              "issues" => [],
+             "silent_waits" => [],
+             "rate_limit" => nil,
              "slot_waiting" => [
                %{
                  "issue_id" => "wait-http",
@@ -978,7 +1006,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{},
-             "verdicts" => []
+             "verdicts" => [],
+             "watch" => nil
            }
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
@@ -1010,7 +1039,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{},
-             "verdicts" => []
+             "verdicts" => [],
+             "watch" => nil
            }
 
     conn = get(build_conn(), "/api/v1/MT-MISSING")
@@ -1221,7 +1251,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                "reason" => "priority medium is not in tickets.priorities (urgent, high)",
                "since" => "2026-10-03T06:00:00Z"
              },
-             "verdicts" => []
+             "verdicts" => [],
+             "watch" => nil
            } = skipped = json_response(get(build_conn(), "/api/v1/MT-SKIP"), 200)
 
     refute Map.has_key?(skipped, "slot_waiting")

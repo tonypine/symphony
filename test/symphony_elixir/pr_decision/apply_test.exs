@@ -33,7 +33,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
           enable_auto_merge: 3,
           squash_merge: 3,
           disable_auto_merge: 3,
-          update_branch: 3
+          update_branch: 3,
+          change_base: 3
         ] do
       args = Macro.generate_arguments(arity, __MODULE__)
 
@@ -143,12 +144,11 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   describe "rows another ticket applies, waits and repeats" do
     test "are recorded without an action" do
       cases = [
-        {action("R8", :to_rework), ctx(:code_review)},
-        {action("R13", :to_in_progress), ctx(:qa)},
-        {action("R6", :decision, args: %{question: "q", options: []}, owner: :person), ctx(:merging)},
-        {action("R18", :decision, args: %{question: "q", options: []}, owner: :person), ctx(:code_review)},
-        {action("R2", :close_out), ctx(:code_review)},
+        {action("R23", :wait, owner: :ci), ctx(:qa)},
         {action("R4", :wait), ctx(:code_review)},
+        {action("R8", :dispatch, args: %{phase: :rework}), ctx(:rework)},
+        {action("R10", :wait), ctx(:qa, facts: %{auto_merge: :armed})},
+        {action("R10", :wait), ctx(:merging)},
         {action("R27", :dispatch, args: %{phase: :qa}), ctx(:qa)}
       ]
 
@@ -171,15 +171,23 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       competitors = %{prs: [%{issue_identifier: "TP-1", files: ["a.ex"]}], step_behind: true}
 
       for {action, phase} <- [
+            {action("R17", :decision, args: %{question: "q", options: []}, owner: :person), :code_review},
+            {action("R18", :decision, args: %{question: "q", options: []}, owner: :person), :qa},
+            {action("R18", :decision, args: %{question: "q", options: []}, owner: :person), :merging},
             {action("R22", :rerun_failed), :code_review},
             {action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), :qa},
             {action("R30", :arm), :merging},
             {action("R3", :disarm), :qa},
             {action("R14", :ci_fix, args: %{origin: :merging, cause: :conflict}), :merging},
-            {action("R15", :wait_for_competitors, args: competitors), :merging}
+            {action("R15", :wait_for_competitors, args: competitors), :merging},
+            {action("R13", :to_in_progress), :merging}
           ] do
         assert %{outcome: :recorded} = Apply.apply(action, ctx(phase))
       end
+
+      # A draft Merging PR keeps its auto-merge when the watcher doesn't land it.
+      assert %{outcome: :recorded} = Apply.apply(action("R10", :wait), ctx(:merging, facts: %{auto_merge: :armed}))
+      refute_received {:disable_auto_merge, _url, _node, _opts}
 
       # A conflict outside Merging is the watcher's whatever auto-merge says.
       assert %{outcome: :applied} = Apply.apply(action("R14", :ci_fix, args: %{origin: :qa, cause: :conflict}), ctx(:qa))
@@ -253,11 +261,31 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert_received {:fetch_failed_log, "11", [repo: "acme/app"]}
       assert_received {:move, @issue_id, "CI Fix"}
       assert origin() == "Code Review"
-      assert %{red: 1, conflict: 0, fix_failures: [%{check: "specs", error: "ERROR: specs failed"}]} = attempts
+      assert %{red: 1, conflict: 0, fix_failures: [%{check: "specs", error: "ERROR: specs failed", head_sha: "head-1"}]} = attempts
+      assert attempts.streak == attempts.fix_failures
 
       assert %{commit_sha: "head-1", head_ref_name: "auto/TP-7", failed_checks: [%{name: "specs"}], approved: false} = failure
+      assert failure.earlier_failures == []
       assert failure.log_excerpt =~ "ERROR: specs failed"
       refute_received {:disable_auto_merge, _url, _node, _opts}
+    end
+
+    test "a red head's fix run reads the earlier runs' failures, and the head's failure and log as the read carries them" do
+      earlier = [%{check: "specs", error: "ERROR: one", head_sha: "head-0"}]
+      failure = %{check: "specs", error: "ERROR: the signature", head_sha: "head-1"}
+      read = read(failure: failure, failed_log: %{excerpt: "the log read this tick", error: "ERROR: the log"})
+      ctx = ctx(:qa, read: read, attempts: %{Attempts.new() | red: 1, fix_failures: earlier, streak: earlier})
+
+      assert %{outcome: :applied, attempts: attempts, fix: %{ci_failure: fix}} = Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx)
+
+      refute_received {:fetch_failed_log, _run_id, _opts}
+      assert %{log_excerpt: "the log read this tick", first_error: "ERROR: the log", earlier_failures: ^earlier} = fix
+      assert attempts.fix_failures == earlier ++ [failure]
+      assert attempts.streak == earlier ++ [failure]
+
+      # A failure read for another head is not this one's.
+      ctx = ctx(:qa, read: read(failure: %{failure | head_sha: "head-0"}))
+      assert %{attempts: %{fix_failures: [%{error: "ERROR: specs failed", head_sha: "head-1"}]}} = Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx)
     end
 
     test "a red Merging head has auto-merge turned off first, and is marked approved" do
@@ -457,18 +485,20 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
           attempts: 10
         })
 
-      failures = for n <- 1..10, do: %{check: "specs", error: "ERROR #{n}"}
+      failures = for n <- 1..10, do: %{check: "specs", error: "ERROR #{n}", head_sha: "head-#{n}abcdef"}
       action = action("R20", :file_fix_ticket, args: %{check: "specs", evidence: failures}, reason: "CI keeps failing: waiting on a fix ticket for the `specs` check")
-      ctx = ctx(:code_review, facts: %{red_attempts: 10, fix_failures: failures})
+      ctx = ctx(:code_review, facts: %{red_attempts: 10, max_red_attempts: 10, fix_failures: failures})
 
       assert %{outcome: :applied, attempts: %{fix_ticket: "TP-90"}, action: recorded} = Apply.apply(action, ctx)
       assert recorded.reason == "CI keeps failing: waiting on TP-90, a fix ticket for the `specs` check"
       assert recorded.args.fix_ticket == "TP-90"
 
       assert_received {:heal, @issue_id, opts}
-      assert %{cause: {:ci_check_failed, "specs"}, pr_url: @pr_url, head_sha: "head-1"} = opts[:outcome]
-      assert opts[:outcome].reason =~ "the `specs` check is still red on PR #7 after 10 CI Fix runs"
+      # Without a failure for the head, the last fix run's is the cause.
+      assert %{cause: {:ci_check_failed, "specs", "ERROR 10"}, pr_url: @pr_url, head_sha: "head-1"} = opts[:outcome]
+      assert opts[:outcome].reason == "CI keeps failing: the `specs` check is still red on PR #7 after 10 of 10 CI Fix runs"
       assert length(opts[:outcome].findings) == 10
+      assert hd(opts[:outcome].findings) == "specs at head-1a: ERROR 1"
       assert opts[:attempts] == 10
       assert opts[:repo_key] == @repo_key
       refute_received {:move, _id, _state}
@@ -506,6 +536,85 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       Process.put(:heal_result, {:error, :linear_down})
       capture_log(fn -> assert %{outcome: {:error, :linear_down}} = Apply.apply(action, ctx(:qa, attempts: attempts)) end)
+    end
+  end
+
+  describe "the same failure 3 runs in a row (D15 (c))" do
+    test "the backstop's outcome names the streak, and its signature is the one the streak compares" do
+      failure = %{check: "specs", error: "** (MatchError) no match of right hand side", head_sha: "head-1"}
+      evidence = for n <- 1..3, do: %{failure | head_sha: "head-#{n - 1}"}
+      facts = %{red_attempts: 3, max_red_attempts: 10, same_failure_streak: 3, fix_failures: evidence}
+      ctx = ctx(:code_review, facts: facts, read: read(failure: failure))
+
+      assert %{outcome: :applied} = Apply.apply(action("R20", :file_fix_ticket, args: %{check: "specs"}), ctx)
+      assert_received {:heal, @issue_id, opts}
+      outcome = opts[:outcome]
+
+      assert outcome.reason == "CI keeps failing: the `specs` check is still red on PR #7 after 3 of 10 CI Fix runs, the last 3 in a row with the same failure"
+      assert outcome.findings == for(n <- 0..2, do: "specs at head-#{n}: ** (MatchError) no match of right hand side")
+      assert SymphonyElixir.SelfHeal.signature(outcome) == Attempts.signature(failure)
+      assert SymphonyElixir.SelfHeal.signature(outcome) == "specs: ** (MatchError) no match of right hand side"
+      assert SymphonyElixir.SelfHeal.component(outcome) == "ci:specs"
+      assert Apply.backstop_outcome("specs", ctx) == outcome
+
+      # Nothing to quote: an empty error, and evidence without heads.
+      ctx = ctx(:code_review, facts: %{red_attempts: 10, fix_failures: [%{check: "specs", error: "boom"}]}, read: read())
+      assert %{cause: {:ci_check_failed, "lint", "boom"}, findings: ["specs: boom"]} = Apply.backstop_outcome("lint", ctx)
+      assert %{cause: {:ci_check_failed, "lint", ""}} = Apply.backstop_outcome("lint", ctx(:code_review, read: read()))
+    end
+  end
+
+  describe "decisions a person makes, the ticket held in its phase" do
+    test "a required check that never reported asks with three options, and records the question on the head (R17)" do
+      action = action("R17", :decision, args: %{question: "q", options: []}, owner: :person)
+      unreported = %{head_sha: "head-1", since: @now, asked: nil, answer: nil}
+      decisions = [%{key: "c1", title: "Check build never reported on TP-7", answer: "1"}, %{key: "c2", title: "Other", answer: "x"}]
+      ctx = ctx(:code_review, facts: %{missing_checks: ["build"]}, attempts: %{Attempts.new() | unreported: unreported}) |> Map.put(:decisions, decisions)
+
+      assert %{outcome: :applied, attempts: attempts} = Apply.apply(action, ctx)
+      assert %{asked: %{title: "Check build never reported on TP-7", prior: 1}} = attempts.unreported
+
+      assert_received {:comment, @issue_id, "## Decision needed: Check build never reported on TP-7" <> body}
+      assert body =~ "1. **Proceed without it for this PR**"
+      assert body =~ "2. **Rerun the checks** (recommended)"
+      assert body =~ "3. **Fix the workflow in Rework**"
+      assert body =~ "within 30 minutes"
+
+      assert %{decision: %{options: options, confirm: "Rework"}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      assert [%{name: "decision requested", details: %{reason: "required_check_missing"}} | _] = signals
+      refute_received {:disable_auto_merge, _url, _node, _opts}
+
+      # No ticket record of decisions: none came before.
+      Hold.clear(@repo_key, @issue_id, :needs_decision)
+      assert %{attempts: %{unreported: %{asked: %{prior: 0}}}} = Apply.apply(action, Map.delete(ctx, :decisions))
+    end
+
+    test "only protected paths red asks a person in any phase: the waiver label, or Rework (R18, G10)" do
+      action = action("R18", :decision, args: %{question: "q", options: []}, owner: :person)
+
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:code_review, facts: %{failing_check: "protected paths"}))
+
+      assert_received {:comment, @issue_id, "## Decision needed: Protected files changed on TP-7" <> body}
+      assert body =~ "**Add the waiver label**: you add the protected-paths-approved label to PR #7"
+      assert body =~ "the ticket continues in Code Review"
+      assert body =~ "**Drop the change in Rework** (recommended): the ticket moves to Rework"
+      assert %{decision: %{confirm: "Rework"}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      refute_received {:disable_auto_merge, _url, _node, _opts}
+    end
+
+    test "an answer to R17 picks an option by its number or label, or none" do
+      assert Apply.unreported_answer("1") == :proceed
+      assert Apply.unreported_answer("Proceed without it for this PR") == :proceed
+      assert Apply.unreported_answer("2. once more please") == :rerun
+      assert Apply.unreported_answer("Fix the workflow in Rework") == :rework
+      assert Apply.unreported_answer("I'm not sure") == :other
+      assert Apply.unreported_answer(nil) == :other
+
+      assert Apply.same_title?(%{title: "Check build never reported on TP\\-7"}, "check  build never reported on TP-7")
+      refute Apply.same_title?(%{title: "Check e2e never reported on TP-7"}, "Check build never reported on TP-7")
+      refute Apply.same_title?(%{}, "Check build never reported on TP-7")
     end
   end
 
@@ -595,5 +704,136 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
     Process.put(:comment_result, {:error, :linear_down})
     capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action, ctx(:merging)) end)
+  end
+
+  describe "the PR's lifecycle (TP-944)" do
+    test "close_out closes a PR merged outside Merging, whoever merged it (R2)" do
+      for phase <- [:in_progress, :code_review, :qa, :rework, :ci_fix] do
+        :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
+        assert %{outcome: :applied} = Apply.apply(action("R2", :close_out, reason: "PR #7 was merged"), ctx(phase))
+        assert_received {:move, @issue_id, "Done"}
+        assert %{state: "merged"} = TicketPullRequest.get(@repo_key, @issue_id)
+      end
+
+      ctx = ctx(:qa)
+      ctx = %{ctx | issue: %{ctx.issue | sub_issues: [%{id: "sub-1", identifier: "TP-8", state: "In Progress"}]}}
+      assert %{outcome: :applied} = Apply.apply(action("R2", :close_out), ctx)
+      assert_received {:move, @issue_id, "Waiting on sub-tickets"}
+    end
+
+    test "a closed PR sends the ticket to Rework with its reason, auto-merge off and no question (R8, D5)" do
+      reason = "PR #7 was closed without merging"
+
+      assert %{outcome: :applied, moved_to: :rework} = Apply.apply(action("R8", :to_rework, reason: reason), ctx(:code_review, facts: %{auto_merge: :armed}))
+
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:move, @issue_id, "Rework"}
+      assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: PR #7 was closed without merging. A rework run opens a new pull request from main."}
+      refute_received {:comment, @issue_id, _other}
+      assert %{state: "closed"} = TicketPullRequest.get(@repo_key, @issue_id)
+      refute Hold.held?(@repo_key, @issue_id, :needs_decision)
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      assert [%{name: "review verdict", details: %{outcome: "pr_closed", to: "Rework"}} | _] = signals
+
+      # A closed PR can't merge: auto-merge GitHub won't turn off doesn't hold the move back.
+      Process.put(:disable_auto_merge, {:error, :closed})
+      log = capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action("R8", :to_rework, reason: reason), ctx(:merging, facts: %{auto_merge: :armed})) end)
+      assert log =~ "could not turn auto-merge off on the closed #{@pr_url}"
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:move, @issue_id, "Rework"}
+
+      # Without auto-merge there is nothing to turn off; a move Linear refuses is decided again.
+      Process.put(:move_result, {:error, :linear_down})
+      capture_log(fn -> assert %{outcome: {:error, {:move_failed, :pr_closed, :linear_down}}} = Apply.apply(action("R8", :to_rework, reason: reason), ctx(:qa)) end)
+      refute_received {:disable_auto_merge, _url, _node, _opts}
+    end
+
+    test "a draft Merging PR has auto-merge turned off while a person holds it (R10)" do
+      action = action("R10", :wait, reason: "A person marked PR #7 as a draft", owner: :person)
+
+      assert %{outcome: :applied, applied: [%{rule: "R10"}] = applied} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}))
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:comment, @issue_id, comment}
+      assert comment =~ "because a person marked it as a draft. Marking it ready for review turns auto-merge back on."
+
+      assert %{outcome: :recorded} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}, applied: applied))
+      assert %{outcome: :recorded} = Apply.apply(action, ctx(:merging))
+      refute_received {:disable_auto_merge, _url, _node, _opts}
+
+      Process.put(:disable_auto_merge, {:error, :boom})
+      capture_log(fn -> assert %{outcome: {:error, {:disable_auto_merge_failed, :boom}}} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed})) end)
+    end
+
+    test "review comments send a reviewed ticket back to In Progress on the same PR (R13, D8)" do
+      action = action("R13", :to_in_progress, reason: "PR #7 has review comments to address")
+
+      assert %{outcome: :applied, moved_to: :in_progress} = Apply.apply(action, ctx(:qa))
+      assert_received {:move, @issue_id, "In Progress"}
+      assert_received {:comment, @issue_id, "Symphony moved this ticket back to In Progress: PR #7 has review comments to address. The run addresses them on the same pull request."}
+      refute_received {:disable_auto_merge, _url, _node, _opts}
+
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}))
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:comment, @issue_id, disarmed}
+      assert disarmed =~ "because it has review comments to address"
+      assert_received {:move, @issue_id, "In Progress"}
+
+      Process.put(:move_result, {:error, :linear_down})
+      capture_log(fn -> assert %{outcome: {:error, {:move_failed, :review_rework, :linear_down}}} = Apply.apply(action, ctx(:code_review)) end)
+    end
+
+    test "a ticket past In Progress with no PR asks a person, and stays where it is (R6)" do
+      action = action("R6", :decision, args: %{question: "q", options: []}, owner: :person)
+
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:code_review, read: nil, facts: %{pr: :missing}))
+
+      assert_received {:comment, @issue_id, "## Decision needed: No pull request on TP-7" <> request}
+      assert request =~ "TP-7 (Add it) is in Code Review, but Symphony finds no pull request for it"
+      assert %{decision: %{options: options}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Attach the PR", "Restart", "Cancel"]
+      refute_received {:move, _id, _state}
+
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@repo_key, @issue_id))
+      assert [%{name: "decision requested", details: %{reason: "pr_missing"}} | _] = signals
+
+      # A ticket read without its title is named by its identifier alone.
+      Hold.clear(@repo_key, @issue_id, :needs_decision)
+      untitled = ctx(:merging, read: nil, facts: %{pr: :missing})
+      assert %{outcome: :applied} = Apply.apply(action, %{untitled | issue: %{untitled.issue | title: nil}})
+      assert_received {:comment, @issue_id, "## Decision needed: No pull request on TP-7\n\n**Question:** TP-7 is in Merging, but" <> _rest}
+    end
+
+    test "a PR on another base asks a person, and retargets it once they say to put it back (R7)" do
+      action = action("R7", :decision, args: %{question: "q", options: []}, owner: :person)
+      read = read(base_ref: "release", base_branch: "main")
+
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, read: read, facts: %{base: :changed}))
+      assert_received {:comment, @issue_id, "## Decision needed: PR #7 of TP-7 merges into release, not main" <> request}
+      assert request =~ "PR #7 of TP-7 (Add it) merges into the release branch, not into main"
+      assert %{decision: %{options: [%{label: "Put the base back", recommended: true}, %{label: "Accept the new base"}]}} = Hold.get(@repo_key, @issue_id, :needs_decision)
+      refute_received {:change_base, _url, _base, _opts}
+
+      put_back = ctx(:qa, read: Map.put(read, :base_answer, :put_back), facts: %{base: :changed})
+      assert %{outcome: :applied} = Apply.apply(action, put_back)
+      assert_received {:change_base, @pr_url, "main", opts}
+      assert opts[:repo] == "acme/app"
+      assert_received {:comment, @issue_id, "Symphony changed PR #7 to merge into main again, as a person decided."}
+
+      Process.put(:change_base, {:error, :forbidden})
+      capture_log(fn -> assert %{outcome: {:error, :forbidden}} = Apply.apply(action, put_back) end)
+    end
+
+    test "base_answer/3 reads a person's answer to R7's question from the recorded decisions" do
+      issue = %Issue{id: @issue_id, identifier: "TP-7"}
+      read = read(base_ref: "release", base_branch: "main")
+      decision = fn title, answer -> %{key: "c-1", title: title, question: "", answer: answer} end
+
+      assert Apply.base_answer([], issue, read) == nil
+      assert Apply.base_answer([decision.("PR \\#7 of TP-7 merges into release, not main", "Put the base back")], issue, read) == :put_back
+      assert Apply.base_answer([decision.("PR #7 of TP-7 merges into release, not main", "2")], issue, read) == :accept
+      assert Apply.base_answer([decision.("PR #7 of TP-7 merges into release, not main", "Whatever you think")], issue, read) == nil
+      assert Apply.base_answer([decision.("PR #7 of TP-7 merges into hotfix, not main", "Accept the new base")], issue, read) == nil
+      assert Apply.base_answer([decision.("The pull request of TP-7 merges into release, not main", "1")], issue, %{read | pr_url: nil}) == :put_back
+    end
   end
 end

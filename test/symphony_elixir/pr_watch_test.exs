@@ -47,8 +47,8 @@ defmodule SymphonyElixir.PrWatchTest do
       settings = Config.settings!()
       merging = issue("2", "Merging")
 
-      # No PR yet: the landing agent runs, as before the watcher.
-      assert PrWatch.dispatch_reason(merging, settings) == nil
+      # No PR: no landing agent; a person decides how it goes on (R6).
+      assert PrWatch.dispatch_reason(merging, settings) == "the PR watcher hasn't read its PR yet"
 
       PrWatchSupport.put_watch!(@repo_key, "2",
         phase: :merging,
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.PrWatchTest do
         decision: %{rule: "R6", kind: :decision, reason: "no PR"}
       )
 
-      assert PrWatch.dispatch_reason(merging, settings) == nil
+      assert PrWatch.dispatch_reason(merging, settings) == "the PR watcher (R6): no PR"
 
       :ok = TicketPullRequest.record_created(@repo_key, "3", "https://github.com/acme/app/pull/3", "auto/TP-3")
       assert PrWatch.dispatch_reason(issue("3", "Merging"), settings) == "the PR watcher hasn't read its PR yet"
@@ -254,6 +254,27 @@ defmodule SymphonyElixir.PrWatchTest do
     PrWatchSupport.put_watch!(@repo_key, "41", links: links)
     assert PrWatch.release_competitors(@repo_key, "41") == :ok
     assert [%{released: true}] = PrWatch.watch("41", repo_key: @repo_key).links
+  end
+
+  test "red_bases/1 lists each check red on a base branch once, with the tickets waiting for it" do
+    red_on_base = fn base, check ->
+      decision = %{rule: "R23", kind: :wait, reason: "red on the base"}
+      [phase: :qa, decision: decision, facts: %{ci: :red, base_ref: base, failing_check: check}]
+    end
+
+    PrWatchSupport.put_watch!(@repo_key, "31", [identifier: "TP-31"] ++ red_on_base.("main", "specs"))
+    PrWatchSupport.put_watch!(@repo_key, "30", [identifier: "TP-30"] ++ red_on_base.("main", "specs"))
+    PrWatchSupport.put_watch!(@repo_key, "32", red_on_base.("release", "lint"))
+    PrWatchSupport.put_watch!(@repo_key, "33", identifier: "TP-33", decision: %{rule: "R22", kind: :rerun_failed, reason: "rerun"})
+    PrWatchSupport.put_watch!(@repo_key, "34", [identifier: "TP-34"] ++ red_on_base.(nil, nil))
+
+    assert PrWatch.red_bases() == [
+             %{base: nil, check: nil, issue_identifiers: ["TP-34"]},
+             %{base: "main", check: "specs", issue_identifiers: ["TP-30", "TP-31"]},
+             %{base: "release", check: "lint", issue_identifiers: ["32"]}
+           ]
+
+    assert PrWatch.red_bases(run_store: FailingStore) == []
   end
 
   test "poll_now/0 asks every running watcher to tick, and is a no-op without one" do

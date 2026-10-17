@@ -693,6 +693,23 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "put that ticket's identifier in `covered_by`, so Symphony waits on that ticket instead of filing another"
     end
 
+    test "a step waiting on a QA tool or host setup the PR itself adds is skipped, not blocked, outside the epic review" do
+      prompt = QaAgent.prompt(job(), nil)
+      flat = String.replace(prompt, ~r/\s+/, " ")
+
+      assert flat =~
+               "A step that needs a QA tool or tool option this PR itself adds, or a one-time QA host setup the ticket lists under `After release`, cannot be walked in this pass"
+
+      assert flat =~ "Then mark the step `skipped`, and in `details` name the tool or setup it waits on"
+      assert flat =~ "It never makes the verdict `blocked`: a fix ticket could only repeat this PR."
+      assert flat =~ "A tool the PR does not add is missing as above."
+      assert prompt =~ ~r/Leave `covered_by` out otherwise\.\n\nA step that needs.*\n\nWhen one playbook/s
+
+      epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil)
+      refute epic =~ "this PR itself adds"
+      assert epic =~ "Leave `covered_by` out otherwise.\n\nWhen one playbook"
+    end
+
     test "a step needing paid AI, real credentials or a backend QA lacks is judged through a stand-in, not blocked" do
       prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
 

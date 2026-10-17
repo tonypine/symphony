@@ -30,6 +30,21 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   Since GitHub shows Symphony's pushes and a person's under the same account, the head's author
   can't tell them apart; where the head came from can.
 
+  Two more things, for the CI cases a plain read can't settle (D3, D15 (c)):
+
+    * **A check that never reports** (`unreported`): since when the head has waited on a check the
+      base branch requires, or on its first check at all while the base has workflows. Until
+      `merging_wait_timeout_ms` passes (`pull_requests.checks.landing_wait_timeout_ms`), the head
+      reads as running (`settle/4`); past it, a required check reads `required_missing` (R17 asks a
+      person) and a head with no check at all reads as having none. The person's answer is kept on
+      the head: `proceed` waives the missing checks for that head only, `rework` asks nothing more
+      on it, a rerun restarts the wait.
+    * **The same failure again** (`streak`): each red CI Fix run's failure, from the last green head
+      on. The current head's failure (`failure`: the failed check and the first line of its error,
+      read once per head) counts the runs before it, on earlier heads, that failed the same way
+      (`same_failure_streak`): 3 in a row reaches the red backstop. The signature is the self-heal
+      lane's own (`signature/1`), so the lane compares like with like after a fix lands.
+
   Everything here is pure: the caller passes the read and the clock.
   """
 
@@ -41,11 +56,25 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   @typedoc "Since when the head has been blocked by branch protection on green checks."
   @type blocked :: %{head_sha: String.t() | nil, since: DateTime.t()}
 
+  @typedoc """
+  Since when the head has waited on a check that never reported, the question R17 asked about it
+  (its title, and how many decisions with that title the ticket held before), and the answer.
+  """
+  @type unreported :: %{
+          head_sha: String.t() | nil,
+          since: DateTime.t(),
+          asked: %{title: String.t(), prior: non_neg_integer()} | nil,
+          answer: :proceed | :rework | nil
+        }
+
   @type t :: %{
           red: non_neg_integer(),
           conflict: non_neg_integer(),
           reruns: %{optional(String.t()) => [String.t()]},
           fix_failures: [Facts.failure()],
+          streak: [Facts.failure()],
+          failure: Facts.failure() | nil,
+          unreported: unreported() | nil,
           fix_ticket: String.t() | nil,
           blocked: blocked() | nil,
           updated_from: String.t() | nil,
@@ -65,6 +94,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       conflict: 0,
       reruns: %{},
       fix_failures: [],
+      streak: [],
+      failure: nil,
+      unreported: nil,
       fix_ticket: nil,
       blocked: nil,
       updated_from: nil,
@@ -82,6 +114,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       conflict: count(Map.get(attempts, :conflict)),
       reruns: reruns(Map.get(attempts, :reruns)),
       fix_failures: failures(Map.get(attempts, :fix_failures)),
+      streak: failures(Map.get(attempts, :streak)),
+      failure: attempts |> Map.get(:failure) |> List.wrap() |> failures() |> List.first(),
+      unreported: unreported(Map.get(attempts, :unreported)),
       fix_ticket: string(Map.get(attempts, :fix_ticket)),
       blocked: blocked(Map.get(attempts, :blocked)),
       updated_from: string(Map.get(attempts, :updated_from)),
@@ -95,15 +130,18 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   @doc "The facts these attempts fill, as `SymphonyElixir.PrWatch.Fetch.facts/2` takes them from the ticket."
   @spec fact_keys() :: [atom()]
-  def fact_keys, do: [:red_attempts, :conflict_attempts, :rerun_done, :fix_failures, :landing_timed_out, :head_origin]
+  def fact_keys, do: [:red_attempts, :conflict_attempts, :rerun_done, :same_failure_streak, :fix_failures, :landing_timed_out, :head_origin]
 
   @doc """
   The attempts after this tick's `read` of the PR (nil when the ticket has none), before deciding.
   `ticket` gives the phase, hold and run, whether this tick begins a new stay in the phase
   (`new_stay`), and the heads the ticket's runs left (`run_heads`). A fix ticket whose hold cleared
-  restarts the red count; a green, conflict-free PR resets both counts; the merge-wait clock runs
-  while a `Merging` head is blocked by branch protection on green checks; a `Merging` head
-  Symphony didn't put there is a person's. Only the current head's rerun is kept.
+  restarts the red count; a green, conflict-free PR resets both counts; a green head breaks the
+  same-failure streak; the merge-wait clock runs while a `Merging` head is blocked by branch
+  protection on green checks, and the unreported-check clock while the head waits on a check that
+  never reported (`read.ci` `required_missing`, or `awaiting_checks`); a `Merging` head Symphony
+  didn't put there is a person's. Only the current head's rerun and failure (`read.failure`) are
+  kept.
   """
   @spec observe(t(), map() | nil, map(), DateTime.t()) :: t()
   def observe(attempts, read, ticket, %DateTime{} = now) do
@@ -112,6 +150,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
     |> restart_after_fix_ticket(ticket)
     |> reset_when_settled(read)
     |> clock(read, ticket, now)
+    |> unreported_clock(read, now)
+    |> break_streak(read)
+    |> keep_head_failure(read)
     |> keep_head_reruns(read)
     |> head_origin(read, ticket)
   end
@@ -138,7 +179,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   defp restart_after_fix_ticket(attempts, _ticket), do: attempts
 
   defp reset_when_settled(attempts, %{pr: :open, ci: ci, mergeable: mergeable}) when ci in @green and mergeable in @conflict_free,
-    do: %{attempts | red: 0, conflict: 0, fix_failures: []}
+    do: %{attempts | red: 0, conflict: 0, fix_failures: [], streak: []}
 
   defp reset_when_settled(attempts, _read), do: attempts
 
@@ -151,12 +192,40 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   defp clock(attempts, _read, _ticket, _now), do: %{attempts | blocked: nil}
 
+  defp unreported_clock(attempts, %{head_sha: head} = read, now) do
+    if Map.get(read, :ci) == :required_missing or Map.get(read, :awaiting_checks) == true do
+      case attempts.unreported do
+        %{head_sha: ^head} -> attempts
+        _other -> %{attempts | unreported: %{head_sha: head, since: now, asked: nil, answer: nil}}
+      end
+    else
+      %{attempts | unreported: nil}
+    end
+  end
+
+  defp unreported_clock(attempts, _read, _now), do: %{attempts | unreported: nil}
+
+  defp break_streak(attempts, %{ci: ci}) when ci in @green, do: %{attempts | streak: []}
+  defp break_streak(attempts, _read), do: attempts
+
+  # The read's failure when it has one (`SymphonyElixir.PrWatch.Fetch.failure/3`), else the one kept
+  # for its head.
+  defp keep_head_failure(attempts, %{head_sha: head} = read) when is_binary(head) do
+    case Map.get(read, :failure) || attempts.failure do
+      %{head_sha: ^head} = failure -> %{attempts | failure: failure}
+      _other -> %{attempts | failure: nil}
+    end
+  end
+
+  defp keep_head_failure(attempts, _read), do: %{attempts | failure: nil}
+
   defp keep_head_reruns(attempts, %{head_sha: head}) when is_binary(head), do: %{attempts | reruns: Map.take(attempts.reruns, [head])}
   defp keep_head_reruns(attempts, _read), do: %{attempts | reruns: %{}}
 
   @doc """
   The facts for `decide/1`: the counts, whether the head's failed checks were rerun already (always,
-  with `flaky_retry` off), the fix runs' failures, and whether the merge wait (`timeout_ms`) passed.
+  with `flaky_retry` off), the same-failure streak, the fix runs' failures, and whether the merge
+  wait (`timeout_ms`) passed.
   """
   @spec facts(t(), map() | nil, ci_settings(), DateTime.t()) :: map()
   def facts(attempts, read, settings, %DateTime{} = now) do
@@ -166,6 +235,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       red_attempts: attempts.red,
       conflict_attempts: attempts.conflict,
       rerun_done: not settings.flaky_retry or rerun_done?(attempts, read),
+      same_failure_streak: same_failure_streak(attempts, read),
       fix_failures: attempts.fix_failures,
       landing_timed_out: timed_out?(attempts.blocked, now, settings.merging_wait_timeout_ms),
       head_origin: attempts.head_origin
@@ -177,6 +247,110 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   defp timed_out?(%{since: since}, now, timeout_ms), do: DateTime.diff(now, since, :millisecond) >= timeout_ms
   defp timed_out?(nil, _now, _timeout_ms), do: false
+
+  # The fix runs before the current head's failure, on earlier heads, that failed the same way, in a
+  # row back from the last one.
+  defp same_failure_streak(%{failure: %{head_sha: head} = failure} = attempts, %{head_sha: head}) when is_binary(head) do
+    signature = signature(failure)
+
+    attempts.streak
+    |> Enum.reject(&(Map.get(&1, :head_sha) == head))
+    |> Enum.reverse()
+    |> Enum.take_while(&(signature(&1) == signature))
+    |> length()
+  end
+
+  defp same_failure_streak(_attempts, _read), do: 0
+
+  @doc """
+  The read as the facts see it once the unreported-check wait is applied (`timeout_ms`, the
+  `merging_wait_timeout_ms` setting): a required check that hasn't reported reads as running until
+  the wait passes, unless the person waived it for this head (green) or sent the ticket to Rework
+  over it (running: the rework run fixes the workflow); a head with no check at all while the base
+  has workflows reads as having no CI (`no_ci: :not_reported`) once the wait passed. Any other read
+  is returned as it is.
+  """
+  @spec settle(map() | nil, t(), pos_integer(), DateTime.t()) :: map() | nil
+  def settle(%{ci: :required_missing, head_sha: head} = read, attempts, timeout_ms, %DateTime{} = now) do
+    case head_clock(attempts, head) do
+      %{answer: :proceed} -> %{read | ci: :green}
+      %{answer: nil} = unreported -> if timed_out?(unreported, now, timeout_ms), do: read, else: %{read | ci: :pending}
+      # Sent to Rework over it, or no clock on the head yet.
+      _rework_or_none -> %{read | ci: :pending}
+    end
+  end
+
+  def settle(%{awaiting_checks: true, head_sha: head} = read, attempts, timeout_ms, %DateTime{} = now) do
+    if timed_out?(head_clock(attempts, head), now, timeout_ms),
+      do: Map.merge(read, %{ci: :none, no_ci: :not_reported}),
+      else: read
+  end
+
+  def settle(read, _attempts, _timeout_ms, _now), do: read
+
+  defp head_clock(attempts, head) do
+    case normalize(attempts).unreported do
+      %{head_sha: ^head} = unreported -> unreported
+      _other -> nil
+    end
+  end
+
+  @doc """
+  Records that R17 asked a person about the check `head` waits on: the question's `title`, and how
+  many recorded decisions with that title the ticket held before (`prior`), so only a newer one
+  answers it (`answer/3`).
+  """
+  @spec asked(t(), String.t() | nil, String.t(), non_neg_integer()) :: t()
+  def asked(attempts, head, title, prior) do
+    attempts = normalize(attempts)
+
+    case head_clock(attempts, head) do
+      nil -> attempts
+      unreported -> %{attempts | unreported: %{unreported | asked: %{title: title, prior: prior}}}
+    end
+  end
+
+  @doc """
+  The question R17 asked about the current head and not yet answered, or nil: what `answer/3` looks
+  for among the ticket's recorded decisions.
+  """
+  @spec open_question(t()) :: %{title: String.t(), prior: non_neg_integer()} | nil
+  def open_question(attempts) do
+    case normalize(attempts).unreported do
+      %{asked: %{} = asked, answer: nil} -> asked
+      _none -> nil
+    end
+  end
+
+  @doc """
+  Records the person's answer to R17 on the current head: `:proceed` waives the missing checks for
+  that head, `:rework` asks nothing more on it (the move to Rework is the hold's), and `:rerun` (or
+  an answer that picks no option) restarts the wait at `now`, so the question can come again.
+  """
+  @spec answer(t(), :proceed | :rework | :rerun | :other, DateTime.t()) :: t()
+  def answer(attempts, pick, %DateTime{} = now) do
+    attempts = normalize(attempts)
+
+    case attempts.unreported do
+      nil -> attempts
+      unreported when pick in [:proceed, :rework] -> %{attempts | unreported: %{unreported | answer: pick}}
+      unreported -> %{attempts | unreported: %{unreported | since: now, asked: nil, answer: nil}}
+    end
+  end
+
+  @doc """
+  The cause the red backstop hands the self-heal lane for `failure` (`SymphonyElixir.PrDecision.Apply`):
+  the failed check and the first line of its error.
+  """
+  @spec cause(Facts.failure()) :: {:ci_check_failed, String.t(), String.t()}
+  def cause(%{check: check} = failure), do: {:ci_check_failed, check, Map.get(failure, :error) || ""}
+
+  @doc """
+  A failure's signature: `SymphonyElixir.SelfHeal.signature/1` of the outcome the red backstop
+  builds from it, so the streak and the self-heal lane read the same failure the same way.
+  """
+  @spec signature(Facts.failure()) :: String.t()
+  def signature(failure), do: SymphonyElixir.SelfHeal.signature(%{cause: cause(failure)})
 
   @doc """
   Whether a rerun of the head's failed checks has not reported yet: GitHub drops the rerun checks
@@ -193,19 +367,25 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   def rerun_pending?(_attempts, _read), do: false
 
-  @doc "Records that the failed `checks` of `head` were rerun."
+  @doc """
+  Records that the failed `checks` of `head` were rerun. The head's failure is read again once the
+  rerun failed too: the rerun's log is the one its next fix run reads.
+  """
   @spec rerun(t(), String.t() | nil, [String.t()]) :: t()
-  def rerun(attempts, head, checks) when is_binary(head), do: %{normalize(attempts) | reruns: %{head => Enum.filter(checks, &is_binary/1)}}
+  def rerun(attempts, head, checks) when is_binary(head), do: %{normalize(attempts) | reruns: %{head => Enum.filter(checks, &is_binary/1)}, failure: nil}
   def rerun(attempts, _head, _checks), do: normalize(attempts)
 
   @doc """
-  Spends one CI Fix run of `kind`. A red run records its failure (the failing check and the first
-  line of its error) as the fix ticket's evidence.
+  Spends one CI Fix run of `kind`. A red run records its failure (the failing check, the first line
+  of its error and the head) as the fix ticket's evidence and in the same-failure streak.
   """
   @spec spend(t(), :red | :conflict, Facts.failure() | nil) :: t()
   def spend(attempts, kind, failure \\ nil), do: spent(normalize(attempts), kind, failure)
 
-  defp spent(attempts, :red, failure), do: %{attempts | red: attempts.red + 1, fix_failures: attempts.fix_failures ++ List.wrap(failure)}
+  defp spent(attempts, :red, failure) do
+    %{attempts | red: attempts.red + 1, fix_failures: attempts.fix_failures ++ List.wrap(failure), streak: attempts.streak ++ List.wrap(failure)}
+  end
+
   defp spent(attempts, :conflict, _failure), do: %{attempts | conflict: attempts.conflict + 1}
 
   @doc """
@@ -225,7 +405,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   @doc "Restarts the red count and forgets the fix ticket: the head gets CI Fix runs again."
   @spec restart_red(t()) :: t()
-  def restart_red(attempts), do: %{normalize(attempts) | red: 0, fix_failures: [], fix_ticket: nil}
+  def restart_red(attempts), do: %{normalize(attempts) | red: 0, fix_failures: [], streak: [], fix_ticket: nil}
 
   @doc "Restarts the conflict count, once a wait that stepped behind competing PRs (R15) is over."
   @spec restart_conflict(t()) :: t()
@@ -245,13 +425,29 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   defp reruns(_reruns), do: %{}
 
   defp failures(failures) when is_list(failures) do
-    for %{check: check} = failure <- failures, is_binary(check), do: %{check: check, error: string(Map.get(failure, :error)) || ""}
+    for %{check: check} = failure <- failures, is_binary(check) do
+      %{check: check, error: string(Map.get(failure, :error)) || "", head_sha: string(Map.get(failure, :head_sha))}
+    end
   end
 
   defp failures(_failures), do: []
 
   defp sent(%{cause: cause} = sent) when cause in [:red, :conflict], do: %{head_sha: string(Map.get(sent, :head_sha)), cause: cause}
   defp sent(_sent), do: nil
+
+  defp unreported(%{since: %DateTime{} = since} = unreported) do
+    %{
+      head_sha: string(Map.get(unreported, :head_sha)),
+      since: since,
+      asked: asked(Map.get(unreported, :asked)),
+      answer: if(Map.get(unreported, :answer) in [:proceed, :rework], do: Map.get(unreported, :answer))
+    }
+  end
+
+  defp unreported(_unreported), do: nil
+
+  defp asked(%{title: title} = asked) when is_binary(title), do: %{title: title, prior: count(Map.get(asked, :prior))}
+  defp asked(_asked), do: nil
 
   defp blocked(%{since: %DateTime{} = since} = blocked), do: %{head_sha: string(Map.get(blocked, :head_sha)), since: since}
   defp blocked(_blocked), do: nil
