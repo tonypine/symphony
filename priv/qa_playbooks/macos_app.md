@@ -89,21 +89,29 @@ Stand-ins for GitHub, Linear, updates and the folder picker (the Add Repo sheet,
 and anything else that runs `gh`, asks Linear or picks a folder). Never let the app reach real
 GitHub or Linear in QA:
 
-- **gh:** serve a gh stub on a `QA_HOST_PORTS` port and pass it as `qa_launch_app`'s
-  `gh_stub_port`. The app then runs Symphony's fake `gh` (through `SYMPHONY_BAR_GH`), which POSTs
-  each call to `http://localhost:<port>` as a form body: `argc`, then one `arg` field per
-  argument, in order (`urllib.parse.parse_qsl` keeps the order). Answer 200 with what `gh` would
-  print on stdout (exit status 0), or any other status with an error message (stderr, exit status
-  1). For example `api repos/acme/widgets --jq .default_branch` → `main`; `api
-  repos/acme/widgets/contents?ref=main --jq .[].name` → one file name per line. Log every call,
-  and quote the calls that bear on a step.
-- **Linear:** serve a GraphQL stub on another port and pass it as `linear_stub_port`; the app
-  POSTs `{"query", "variables"}` JSON to `http://localhost:<port>/graphql`. Answer by the query's
-  operation name: `SymphonyBarProjects` →
-  `{"data":{"projects":{"nodes":[{"id":"p1","name":"QA Project"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-  `SymphonyBarProjectTeams` → `{"data":{"project":{"teams":{"nodes":[{"id":"t1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
-  `SymphonyBarLabels` → `{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"macos","isGroup":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`.
-  Any made-up Linear key in Settings works with it.
+- **gh and Linear:** run Symphony's shared stubs, never ones you write. Start each on its own
+  `QA_HOST_PORTS` port with your shell tool's background option:
+  `python3 -B test/support/stubs/gh.py --port <port> --log "$TMPDIR/gh.log"` and
+  `python3 -B test/support/stubs/linear.py --port <port> --log "$TMPDIR/linear.log"`. Once they
+  print `gh stub on http://127.0.0.1:<port> …` and `Linear stub on http://127.0.0.1:<port>/graphql …`,
+  pass the ports as `qa_launch_app`'s `gh_stub_port` and `linear_stub_port`.
+  - The app then runs Symphony's fake `gh` (through `SYMPHONY_BAR_GH`), which sends each call
+    to the gh stub and prints its answer, and POSTs its Linear queries to the Linear stub's
+    `/graphql` (through `SYMPHONY_QA_LINEAR_URL`). Any made-up Linear key in Settings works.
+  - The gh stub answers the Add Repo sheet's calls for the repo `acme/widgets` (default branch
+    `main`, top-level files `README.md`, `mix.exs` and `mix.lock`: an Elixir project with Credo),
+    and opening its `WORKFLOW.md` pull request (`https://github.com/acme/widgets/pull/1`), so
+    put the checkout with `qa_put_checkout` and `remote_url` `https://github.com/acme/widgets`.
+    The Linear stub answers the sheet's projects (`QA Project`), a project's teams and the
+    labels (`macos`).
+  - A call they have no answer for gets a clear error: the gh stub's (`gh stub: no committed
+    answer for: gh …`) is what `gh` prints on stderr, so the app shows it as gh's error; the
+    Linear stub's is a GraphQL error naming the operation, which the app shows as Linear's.
+    When a step needs an answer they don't have, say so in `findings`, so one is committed to
+    `test/support/stubs/answers/` for the next pass.
+  - Each log has one JSON line per request (`method`, `path`, `status`, `time`, and the call:
+    `args` for gh, `operation` and `variables` for Linear). Quote the app's calls that bear on a
+    step from them in its `details`. `test/support/README.md` lists every option.
 - **Update feed:** run Symphony's shared feed server, never one you write. Start it on another
   `QA_HOST_PORTS` port with your shell tool's background option:
   `python3 -B test/support/stubs/update_feed.py --fake-release 9.9.9 9999 --port <port> --log "$TMPDIR/update-feed.log"`.

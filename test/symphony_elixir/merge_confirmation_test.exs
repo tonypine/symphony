@@ -259,6 +259,16 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert MergeConfirmation.picked(ci_hold(), ["Leave it for now", "2"]) == {:ok, nil}
     end
 
+    test "picked_option names the one option among labels an answer picks, by number or label" do
+      labels = ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
+      assert MergeConfirmation.picked_option(labels, ["**Rerun the checks**"]) == 2
+      assert MergeConfirmation.picked_option(labels, ["option 3"]) == 3
+      assert MergeConfirmation.picked_option(labels, ["1", "proceed without it for this PR."]) == 1
+      assert MergeConfirmation.picked_option(labels, ["1", "2"]) == nil
+      assert MergeConfirmation.picked_option(labels, ["rerun them all"]) == nil
+      assert MergeConfirmation.picked_option(labels, []) == nil
+    end
+
     test "nothing is picked by free text, a longer word, conflicting answers or no hold" do
       assert MergeConfirmation.picked(ci_hold(), ["Neither: leave it alone", nil]) == :none
       assert MergeConfirmation.picked(ci_hold(), ["12 is the count"]) == :none

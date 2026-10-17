@@ -3,12 +3,18 @@ defmodule SymphonyElixir.GitHub.FailedLog do
   The failed log of a red head's workflow runs, cut down for a CI Fix run's prompt: the last lines
   of each run's `gh run view --log-failed`, starting at the first line that reads like an error, and
   that first error line alone, which the red backstop's fix ticket quotes as evidence.
+
+  `gh run view --log-failed` starts each line with the job, the step and a timestamp, tab separated.
+  The first error line drops them: the timestamp changes every run, and the line is the failure
+  signature the same-failure streak compares between runs.
   """
 
   alias SymphonyElixir.GitHub.PullRequest
 
   @no_run_id "No GitHub Actions run id was available for the failed check."
   @error_line ~r/(error|failed|failure|exception|stacktrace|traceback|panic)/i
+  @failed_test [~r/\A\d+\) (test .+ \([\w.]+\))\z/, ~r/\ATest Case '(.+)' failed/, ~r/\AFAILED (\S+)/]
+  @gh_prefix ~r/\A\s*(?:[^\t]*\t[^\t]*\t)?\x{FEFF}?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/u
 
   @typedoc "The excerpt for the prompt and the first error line in it."
   @type log :: %{excerpt: String.t(), error: String.t()}
@@ -47,6 +53,23 @@ defmodule SymphonyElixir.GitHub.FailedLog do
     }
   end
 
+  @doc """
+  The tests job `job` reports failed in `log`, a `gh run view --log-failed` output, once each in
+  order: ExUnit's `1) test … (Module)` headers, XCTest's failed test cases and pytest's `FAILED`
+  lines. None when the job names no failing test (a compile error, a lint) or isn't in the log.
+  """
+  @spec failed_tests(term(), String.t()) :: [String.t()]
+  def failed_tests(log, job) when is_binary(log) and is_binary(job) do
+    log
+    |> sanitize_utf8()
+    |> String.split("\n")
+    |> Enum.filter(&String.starts_with?(&1, job <> "\t"))
+    |> Enum.flat_map(fn line -> Enum.find_value(@failed_test, [], &Regex.run(&1, content(line), capture: :all_but_first)) end)
+    |> Enum.uniq()
+  end
+
+  def failed_tests(_log, _job), do: []
+
   @doc "The last `line_limit` lines of `log`, from the first one that reads like an error."
   @spec excerpt(term(), pos_integer()) :: String.t()
   def excerpt(log, line_limit) when is_binary(log) and is_integer(line_limit) and line_limit > 0 do
@@ -60,13 +83,21 @@ defmodule SymphonyElixir.GitHub.FailedLog do
 
   def excerpt(_log, _line_limit), do: ""
 
-  @doc "The first line of `excerpt` that reads like an error, trimmed; else its first line."
+  @doc """
+  The first line of `excerpt` that reads like an error, trimmed and without `gh`'s job, step and
+  timestamp columns; else its first line.
+  """
   @spec first_error(String.t()) :: String.t()
   def first_error(excerpt) when is_binary(excerpt), do: error_line(excerpt) || excerpt |> lines() |> List.first("")
 
   defp error_line(excerpt), do: excerpt |> lines() |> Enum.find(&String.match?(&1, @error_line))
 
-  defp lines(excerpt), do: excerpt |> String.split("\n") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+  defp lines(excerpt), do: excerpt |> String.split("\n") |> Enum.map(&content/1) |> Enum.reject(&(&1 == ""))
+
+  defp error?(line), do: String.match?(content(line), @error_line)
+
+  # The line without `gh`'s job, step and timestamp columns, trimmed.
+  defp content(line), do: line |> String.replace(@gh_prefix, "") |> String.trim()
 
   defp sanitize_utf8(binary) do
     if String.valid?(binary), do: binary, else: replace_invalid_bytes(binary, <<>>)
@@ -77,7 +108,7 @@ defmodule SymphonyElixir.GitHub.FailedLog do
   defp replace_invalid_bytes(<<_byte, rest::binary>>, acc), do: replace_invalid_bytes(rest, <<acc::binary, ??::utf8>>)
 
   defp prefer_error_start(lines) do
-    case Enum.find_index(lines, &String.match?(&1, @error_line)) do
+    case Enum.find_index(lines, &error?/1) do
       nil -> lines
       index -> Enum.drop(lines, index)
     end

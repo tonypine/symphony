@@ -823,7 +823,25 @@ defmodule SymphonyElixir.PromptBuilder do
       blank_fallback(Map.get(ci_failure, :log_excerpt), "No failed log output was available."),
       "END UNTRUSTED CI LOG"
     ])
+    |> Kernel.++(earlier_failure_lines(Map.get(ci_failure, :earlier_failures, [])))
     |> Enum.join("\n")
+  end
+
+  # What the earlier CI Fix runs on this ticket failed on, so this run doesn't repeat what was tried.
+  defp earlier_failure_lines([]), do: []
+
+  defp earlier_failure_lines(failures) do
+    lines =
+      failures
+      |> Enum.with_index(1)
+      |> Enum.map(fn {failure, index} -> "#{index}. #{failure.check} at #{failure.head}: #{failure.error}" end)
+
+    [
+      "",
+      "Earlier CI Fix runs on this ticket failed on these checks (check at head: first error line). " <>
+        "They did not fix it: if this failure is the same, try something else.",
+      "BEGIN UNTRUSTED CI LOG"
+    ] ++ lines ++ ["END UNTRUSTED CI LOG"]
   end
 
   defp human_only_check_lines([]), do: []
@@ -1006,12 +1024,28 @@ defmodule SymphonyElixir.PromptBuilder do
       %{
         failed_checks: failed_checks,
         commit_sha: commit_sha,
-        log_excerpt: PromptSafety.ci_failure_log_excerpt(log_excerpt)
+        log_excerpt: PromptSafety.ci_failure_log_excerpt(log_excerpt),
+        earlier_failures: ci_failure |> Map.get(:earlier_failures) |> normalize_earlier_failures()
       }
     end
   end
 
   defp normalize_ci_failure(_ci_failure), do: nil
+
+  defp normalize_earlier_failures(failures) when is_list(failures) do
+    for %{check: check} = failure <- failures, is_binary(check) do
+      %{
+        check: PromptSafety.ci_failure_line(check),
+        error: PromptSafety.ci_failure_line(blank_fallback(Map.get(failure, :error), "no error line")),
+        head: earlier_head(Map.get(failure, :head_sha))
+      }
+    end
+  end
+
+  defp normalize_earlier_failures(_failures), do: []
+
+  defp earlier_head(head) when is_binary(head) and head != "", do: head |> String.slice(0, 12) |> PromptSafety.ci_failure_line()
+  defp earlier_head(_head), do: "an unknown head"
 
   # Trims the raw CI log excerpt to its tail before normalization so the
   # compact prompt keeps the failing-check context without regrowing past the

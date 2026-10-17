@@ -23,6 +23,12 @@ defmodule SymphonyElixir.BlockedHold do
   back after the repair is compared against the failure the repair was for rather than judged as a
   fresh one that files another fix ticket.
 
+  The third is the landing hold (`waits_on` type `landing`): a conflicting pull request waits, in any
+  phase, on the open pull requests that change the same files (`SymphonyElixir.PrWatch.Competitors`).
+  Only the PR and CI watcher reads those pull requests, so it judges the hold on each of its reads
+  (`landing_desired/2`): the hold clears once no competitor is left in the race, and the sweep here
+  leaves it alone. A person's `Unblock` lifts it too.
+
   Only the holds that lift themselves are cleared here — one waiting on an access grant is lifted by
   a person's `Unblock` (see `SymphonyElixir.DirectorMoves`).
   """
@@ -35,6 +41,21 @@ defmodule SymphonyElixir.BlockedHold do
   @todo_state "todo"
   @dependency_type "dependency"
   @fix_ticket_type "fix_ticket"
+  @landing_type "landing"
+  @listed_files 10
+
+  @typedoc """
+  A pull request a landing hold waits on: its ticket when Symphony tracks it, its number, title and
+  URL, and the files it shares with the held one.
+  """
+  @type competitor :: %{
+          required(:files) => [String.t()],
+          optional(:issue_identifier) => String.t() | nil,
+          optional(:pr_number) => pos_integer() | nil,
+          optional(:pr_url) => String.t() | nil,
+          optional(:title) => String.t() | nil,
+          optional(atom()) => term()
+        }
 
   @typedoc "What the dependency state calls for: set the hold, clear it, or leave it as it is."
   @type action :: {:set, map()} | :clear | :none
@@ -75,6 +96,48 @@ defmodule SymphonyElixir.BlockedHold do
   end
 
   def fix_ticket_desired(_hold, _state, _terminal_states), do: :none
+
+  @doc "Whether `hold` is a landing hold: a conflict waiting on the pull requests competing with it."
+  @spec landing?(map() | term()) :: boolean()
+  def landing?(%{waits_on: %{type: @landing_type}}), do: true
+  def landing?(_hold), do: false
+
+  @doc """
+  The landing hold for waiting on `competitors`: `Waiting on TP-1 and PR #12 (Title) to land: they
+  change the same files (a.ex, b.md)`, keyed by each competitor's ticket, else its pull request.
+  """
+  @spec landing_attrs([competitor(), ...]) :: map()
+  def landing_attrs([_ | _] = competitors) do
+    files = competitors |> Enum.flat_map(& &1.files) |> Enum.uniq() |> Enum.take(@listed_files) |> Enum.join(", ")
+
+    %{
+      reason: "Waiting on #{Enum.map_join(competitors, " and ", &competitor_name/1)} to land: they change the same files (#{files})",
+      clearing_condition: "when every competing pull request lands or leaves the race",
+      waits_on: %{type: @landing_type, keys: Enum.map(competitors, &competitor_key/1)}
+    }
+  end
+
+  @doc """
+  What a landing hold calls for, given the competitors still in the race: `:clear` once none is
+  left, `{:set, attrs}` when the hold doesn't name the ones left yet, else `:none`. A hold of
+  another kind is left as it is.
+  """
+  @spec landing_desired(map() | nil, [competitor()]) :: {:set, map()} | :clear | :none
+  def landing_desired(hold, racing) do
+    cond do
+      not landing?(hold) -> :none
+      racing == [] -> :clear
+      Map.get(hold, :reason) == landing_attrs(racing).reason -> :none
+      true -> {:set, landing_attrs(racing)}
+    end
+  end
+
+  defp competitor_name(%{issue_identifier: identifier}) when is_binary(identifier), do: identifier
+  defp competitor_name(%{pr_number: number, title: title}) when is_binary(title), do: "PR ##{number} (#{title})"
+  defp competitor_name(%{pr_number: number}), do: "PR ##{number}"
+
+  defp competitor_key(%{issue_identifier: identifier}) when is_binary(identifier), do: identifier
+  defp competitor_key(competitor), do: Map.get(competitor, :pr_url) || competitor_name(competitor)
 
   @doc """
   Reconciles the Blocked hold of one issue against its blockers. `opts[:settings]` is the repo's
@@ -157,6 +220,9 @@ defmodule SymphonyElixir.BlockedHold do
       other -> {other, cache}
     end
   end
+
+  # The PR and CI watcher judges a landing hold on its own reads.
+  defp action(_issue, _terminal_states, %{waits_on: %{type: @landing_type}}, cache, _opts), do: {:none, cache}
 
   defp action(issue, terminal_states, current, cache, _opts), do: {desired(issue, terminal_states, current), cache}
 

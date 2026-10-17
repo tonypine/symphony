@@ -511,14 +511,16 @@ defmodule SymphonyElixir.TicketStateTest do
             read_ci: :red,
             base_ref: "main",
             github: {:rate_limited, @at},
-            rate_limit: %{remaining: 12, reset_at: @at},
+            rate_limit: %{remaining: 12, limit: 5000, reset_at: @at},
             landing: landing,
             stay: :qa,
             decision: %{rule: "R1"},
             applied: [%{rule: "R24"}, :junk],
             attempts: %{red: 2},
             fix: %{ci_failure: %{commit_sha: "abc"}, pr_conflict: :junk},
-            links: :junk
+            links: :junk,
+            actions: [%{rule: "R1"}, :junk, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}, %{rule: "R6"}],
+            silent: %{since: @at, ticks: 2, bound: " ", reason: "quiet", extra: 1}
           },
           @at
         )
@@ -535,7 +537,7 @@ defmodule SymphonyElixir.TicketStateTest do
                read_ci: :red,
                base_ref: "main",
                github: {:rate_limited, @at},
-               rate_limit: %{remaining: 12, reset_at: @at},
+               rate_limit: %{remaining: 12, limit: 5000, reset_at: @at},
                landing: %{
                  state: "QA",
                  head_sha: "abc",
@@ -550,7 +552,9 @@ defmodule SymphonyElixir.TicketStateTest do
                applied: [%{rule: "R24"}],
                attempts: %{Attempts.new() | red: 2},
                fix: %{ci_failure: %{commit_sha: "abc"}, pr_conflict: nil},
-               links: []
+               links: [],
+               actions: [%{rule: "R1"}, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}],
+               silent: %{since: @at, ticks: 2, bound: nil, reason: "quiet"}
              }
 
       assert TicketState.normalize(record) == record
@@ -573,7 +577,9 @@ defmodule SymphonyElixir.TicketStateTest do
                stay: nil,
                decision: nil,
                applied: [],
-               links: []
+               links: [],
+               actions: [],
+               silent: nil
              } =
                TicketState.pr_watch(sparse)
 

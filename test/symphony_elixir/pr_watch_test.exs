@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PrWatchTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{PrWatch, PrWatchSupport, TicketPullRequest}
+  alias SymphonyElixir.{BlockedHold, PrWatch, PrWatchSupport, TicketPullRequest}
   alias SymphonyElixir.PrWatch.{Attempts, Repo}
 
   @repo_key "default"
@@ -47,8 +47,8 @@ defmodule SymphonyElixir.PrWatchTest do
       settings = Config.settings!()
       merging = issue("2", "Merging")
 
-      # No PR yet: the landing agent runs, as before the watcher.
-      assert PrWatch.dispatch_reason(merging, settings) == nil
+      # No PR: no landing agent; a person decides how it goes on (R6).
+      assert PrWatch.dispatch_reason(merging, settings) == "the PR watcher hasn't read its PR yet"
 
       PrWatchSupport.put_watch!(@repo_key, "2",
         phase: :merging,
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.PrWatchTest do
         decision: %{rule: "R6", kind: :decision, reason: "no PR"}
       )
 
-      assert PrWatch.dispatch_reason(merging, settings) == nil
+      assert PrWatch.dispatch_reason(merging, settings) == "the PR watcher (R6): no PR"
 
       :ok = TicketPullRequest.record_created(@repo_key, "3", "https://github.com/acme/app/pull/3", "auto/TP-3")
       assert PrWatch.dispatch_reason(issue("3", "Merging"), settings) == "the PR watcher hasn't read its PR yet"
@@ -183,6 +183,98 @@ defmodule SymphonyElixir.PrWatchTest do
            ] = PrWatch.auto_merge_statuses(repo_key: @repo_key)
 
     assert PrWatch.landing_waits(run_store: FailingStore) == []
+  end
+
+  test "landing_waits/1 reads a landing hold: its reason, and its first competitor when the landing order names none (TP-989)" do
+    person = %{
+      issue_id: nil,
+      issue_identifier: nil,
+      pr_number: 50,
+      pr_url: "https://github.com/acme/app/pull/50",
+      title: "Docs",
+      files: ["SPEC.md"],
+      linked: false,
+      step_behind: true,
+      released: false
+    }
+
+    released = %{person | pr_number: 51, released: true}
+
+    landing = %{
+      files: ["SPEC.md"],
+      head_sha: "h",
+      state: "Merging",
+      state_since: @now,
+      progress_at: @now,
+      waits_for: nil,
+      waits_since: nil
+    }
+
+    wait = %{issue_id: "21", issue_identifier: "TP-21", pr_url: "https://github.com/acme/app/pull/21", state: "QA", shared_files: 1, files: ["SPEC.md"]}
+    hold = BlockedHold.landing_attrs([person])
+
+    PrWatchSupport.put_watch!(@repo_key, "30", identifier: "TP-30", landing: landing, links: [released, person])
+    :ok = RunStore.set_ticket_hold(@repo_key, "30", :blocked, hold)
+    waiting = %{landing | waits_for: wait, waits_since: @now}
+    PrWatchSupport.put_watch!(@repo_key, "31", identifier: "TP-31", landing: waiting, links: [person])
+    :ok = RunStore.set_ticket_hold(@repo_key, "31", :blocked, hold)
+    PrWatchSupport.put_watch!(@repo_key, "32", identifier: "TP-32", landing: %{landing | waits_for: wait}, decision: :dispatch)
+    :ok = RunStore.set_ticket_hold(@repo_key, "32", :blocked, %{reason: "access", waits_on: %{type: "access", keys: []}})
+    PrWatchSupport.put_watch!(@repo_key, "33", identifier: "TP-33", landing: landing, links: [released])
+    :ok = RunStore.set_ticket_hold(@repo_key, "33", :blocked, hold)
+
+    reason = "Waiting on PR #50 (Docs) to land: they change the same files (SPEC.md)"
+
+    assert [
+             %{
+               issue_identifier: "TP-30",
+               waits_for: %{issue_identifier: "PR #50", pr_url: "https://github.com/acme/app/pull/50"},
+               shared_files: 1,
+               reason: ^reason,
+               since: %DateTime{}
+             },
+             %{issue_identifier: "TP-31", waits_for: %{issue_identifier: "TP-21"}, reason: ^reason, since: @now},
+             %{issue_identifier: "TP-32", reason: "waits for TP-21 to land (shares 1 file)", since: nil}
+           ] = PrWatch.landing_waits()
+
+    watch = PrWatch.watch("30", repo_key: @repo_key)
+    assert PrWatch.competitor_waits(watch) == [%{identifier: "PR #50", kind: "competitor", pr_url: "https://github.com/acme/app/pull/50", shared_files: 1, files: ["SPEC.md"]}]
+    assert PrWatch.competitor_waits(nil) == []
+  end
+
+  test "release_competitors/3 releases in the repo's running watcher, or directly without one" do
+    link = %{issue_id: "i1", issue_identifier: "TP-1", pr_number: 1, pr_url: nil, title: nil, files: ["SPEC.md"]}
+    links = [Map.merge(link, %{linked: false, step_behind: false, released: false})]
+    PrWatchSupport.put_watch!(@repo_key, "40", links: links)
+
+    assert PrWatch.release_competitors(@repo_key, "40") == :ok
+    assert [%{released: true}] = PrWatch.watch("40", repo_key: @repo_key).links
+
+    start_supervised!({Repo, repo_key: @repo_key, auto: false})
+    PrWatchSupport.put_watch!(@repo_key, "41", links: links)
+    assert PrWatch.release_competitors(@repo_key, "41") == :ok
+    assert [%{released: true}] = PrWatch.watch("41", repo_key: @repo_key).links
+  end
+
+  test "red_bases/1 lists each check red on a base branch once, with the tickets waiting for it" do
+    red_on_base = fn base, check ->
+      decision = %{rule: "R23", kind: :wait, reason: "red on the base"}
+      [phase: :qa, decision: decision, facts: %{ci: :red, base_ref: base, failing_check: check}]
+    end
+
+    PrWatchSupport.put_watch!(@repo_key, "31", [identifier: "TP-31"] ++ red_on_base.("main", "specs"))
+    PrWatchSupport.put_watch!(@repo_key, "30", [identifier: "TP-30"] ++ red_on_base.("main", "specs"))
+    PrWatchSupport.put_watch!(@repo_key, "32", red_on_base.("release", "lint"))
+    PrWatchSupport.put_watch!(@repo_key, "33", identifier: "TP-33", decision: %{rule: "R22", kind: :rerun_failed, reason: "rerun"})
+    PrWatchSupport.put_watch!(@repo_key, "34", [identifier: "TP-34"] ++ red_on_base.(nil, nil))
+
+    assert PrWatch.red_bases() == [
+             %{base: nil, check: nil, issue_identifiers: ["TP-34"]},
+             %{base: "main", check: "specs", issue_identifiers: ["TP-30", "TP-31"]},
+             %{base: "release", check: "lint", issue_identifiers: ["32"]}
+           ]
+
+    assert PrWatch.red_bases(run_store: FailingStore) == []
   end
 
   test "poll_now/0 asks every running watcher to tick, and is a no-op without one" do

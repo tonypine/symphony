@@ -9,8 +9,9 @@ defmodule SymphonyElixir.PrDecision.Facts do
     another one (the kind of red, the conflict count) names that condition there and keeps its
     default otherwise. `combinations/1` enumerates every combination, which is how the table test
     proves that every situation has exactly one rule.
-  - **Carried.** Names and numbers the action quotes back (the PR number, the phase a CI Fix run
-    returns to, the failing check, the evidence of each fix run). They never choose a rule.
+  - **Carried.** Names and numbers the action quotes back (the PR number, the base branch, why a
+    head reads as having no CI, the phase a CI Fix run returns to, the failing check, the evidence
+    of each fix run, what a check red on the base too was compared with). They never choose a rule.
     `ahead` and `competing` are both: a rule reads them only as empty or not, and the action names
     the PRs in them.
 
@@ -25,13 +26,32 @@ defmodule SymphonyElixir.PrDecision.Facts do
   @typedoc "A PR that changes some of the same files, with its ticket when Symphony tracks it."
   @type competitor :: %{
           required(:files) => [String.t()],
+          optional(:issue_id) => String.t() | nil,
           optional(:issue_identifier) => String.t() | nil,
           optional(:pr_number) => pos_integer() | nil,
-          optional(:pr_url) => String.t() | nil
+          optional(:pr_url) => String.t() | nil,
+          optional(:title) => String.t() | nil,
+          optional(:head_sha) => String.t() | nil
         }
 
-  @typedoc "One CI Fix run's failure: the check that failed and the first line of its error."
-  @type failure :: %{check: String.t(), error: String.t()}
+  @typedoc """
+  One CI Fix run's failure: the check that failed, the first line of its error, and the head it
+  failed on. The check and the error are its signature (`SymphonyElixir.PrWatch.Attempts.signature/1`).
+  """
+  @type failure :: %{
+          required(:check) => String.t(),
+          required(:error) => String.t(),
+          optional(:head_sha) => String.t() | nil
+        }
+
+  @typedoc "How a check red on the base too was compared: by its failing tests, or by its name only."
+  @type base_basis :: :tests | :name
+
+  @typedoc """
+  What a check red on the base too was compared with: the check, the base's workflow run and the
+  commit it ran on, and how they were compared.
+  """
+  @type base_red :: %{check: String.t() | nil, sha: String.t() | nil, run_id: String.t(), basis: base_basis()}
 
   @type t :: %__MODULE__{
           phase: phase(),
@@ -43,11 +63,14 @@ defmodule SymphonyElixir.PrDecision.Facts do
           pr: :missing | :open | :draft | :closed | :merged,
           pr_number: pos_integer() | nil,
           base: :ok | :changed,
+          base_ref: String.t() | nil,
           head_origin: :symphony | :person,
           review_comments: :none | :unaddressed,
           ci: :pending | :green | :none | :red | :required_missing,
+          no_ci: :not_configured | :not_reported,
           missing_checks: [String.t()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
+          base_red: base_red() | nil,
           failing_check: String.t() | nil,
           rerun_done: boolean(),
           red_attempts: non_neg_integer(),
@@ -76,11 +99,14 @@ defmodule SymphonyElixir.PrDecision.Facts do
             pr: :open,
             pr_number: nil,
             base: :ok,
+            base_ref: nil,
             head_origin: :symphony,
             review_comments: :none,
             ci: :pending,
+            no_ci: :not_configured,
             missing_checks: [],
             red_kind: :failure,
+            base_red: nil,
             failing_check: nil,
             rerun_done: false,
             red_attempts: 0,

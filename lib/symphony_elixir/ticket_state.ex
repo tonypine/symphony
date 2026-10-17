@@ -122,6 +122,9 @@ defmodule SymphonyElixir.TicketState do
           waits_since: DateTime.t() | nil
         }
 
+  @typedoc "GitHub's rate limit as a read left it: requests remaining of the window's limit, and when it resets."
+  @type rate_limit :: %{remaining: non_neg_integer() | nil, limit: pos_integer() | nil, reset_at: DateTime.t() | nil}
+
   @typedoc """
   What the PR and CI watcher last read of the ticket's PR (`SymphonyElixir.PrWatch`): the facts
   `SymphonyElixir.PrDecision.decide/1` reads, the PR and head they were read on, how they arrived
@@ -136,6 +139,9 @@ defmodule SymphonyElixir.TicketState do
   that stay, per head and rule (`SymphonyElixir.PrDecision.Apply`), `attempts` the CI Fix runs counted and what
   else the watcher keeps between reads (`SymphonyElixir.PrWatch.Attempts`), `fix` what the ticket's
   CI Fix run reads (the red head's failure, the conflict), and `links` the links it added.
+  `actions` lists the last five actions applied, newest first, across stays, with how the facts
+  that called for each arrived, and `silent` the ticket's silence (`SymphonyElixir.PrWatch.SilentWait`),
+  nil while something is under way or it waits with a reason.
   """
   @type pr_watch :: %{
           facts: PrDecision.Facts.t(),
@@ -147,14 +153,16 @@ defmodule SymphonyElixir.TicketState do
           read_ci: :pending | :green | :none | :red | :required_missing | nil,
           base_ref: String.t() | nil,
           github: :ok | {:rate_limited, DateTime.t() | nil},
-          rate_limit: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil} | nil,
+          rate_limit: rate_limit() | nil,
           landing: landing() | nil,
           stay: PrDecision.Facts.phase() | nil,
           decision: map() | nil,
           applied: [map()],
           attempts: map(),
           fix: %{ci_failure: map() | nil, pr_conflict: map() | nil},
-          links: [map()]
+          links: [map()],
+          actions: [map()],
+          silent: SymphonyElixir.PrWatch.SilentWait.t() | nil
         }
 
   @type t :: %{
@@ -563,11 +571,18 @@ defmodule SymphonyElixir.TicketState do
       applied: maps(Map.get(watch, :applied)),
       attempts: Attempts.normalize(Map.get(watch, :attempts)),
       fix: normalize_fix(Map.get(watch, :fix)),
-      links: maps(Map.get(watch, :links))
+      links: maps(Map.get(watch, :links)),
+      actions: watch |> Map.get(:actions) |> maps() |> Enum.take(5),
+      silent: normalize_silent(Map.get(watch, :silent))
     }
   end
 
   defp normalize_pr_watch(_watch), do: nil
+
+  defp normalize_silent(%{since: %DateTime{}, ticks: ticks, reason: reason} = silent) when is_integer(ticks) and ticks > 0 and is_binary(reason),
+    do: %{since: silent.since, ticks: ticks, bound: map_string(silent, :bound), reason: reason}
+
+  defp normalize_silent(_silent), do: nil
 
   defp stay(stay) when stay in [:in_progress, :code_review, :qa, :rework, :ci_fix, :merging], do: stay
   defp stay(_stay), do: nil
@@ -586,7 +601,13 @@ defmodule SymphonyElixir.TicketState do
 
   defp normalize_rate_limit(%{} = limit) do
     remaining = Map.get(limit, :remaining)
-    %{remaining: if(is_integer(remaining) and remaining >= 0, do: remaining), reset_at: map_datetime(limit, :reset_at)}
+    total = Map.get(limit, :limit)
+
+    %{
+      remaining: if(is_integer(remaining) and remaining >= 0, do: remaining),
+      limit: if(is_integer(total) and total > 0, do: total),
+      reset_at: map_datetime(limit, :reset_at)
+    }
   end
 
   defp normalize_rate_limit(_limit), do: nil

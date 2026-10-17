@@ -577,6 +577,40 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:ok, "other log"} = PullRequest.fetch_failed_log("987", gh_runner: other_repo, repo: "acme/cycle")
   end
 
+  test "rerun reruns every job of a run, in the named repository" do
+    runner = fn
+      ["run", "rerun", "987", "-R", "acme/app"], _opts -> {"", 0}
+      ["run", "rerun", "988"], _opts -> {"run 988 cannot be rerun", 1}
+    end
+
+    assert :ok = PullRequest.rerun("987", gh_runner: runner, repo: "acme/app")
+    assert {:error, {:gh_failed, _args, 1, "run 988 cannot be rerun"}} = PullRequest.rerun(988, gh_runner: runner)
+    assert {:error, :invalid_run_id} = PullRequest.rerun(nil, [])
+  end
+
+  test "workflow_files? says whether the base branch has workflow files" do
+    pr_url = "https://github.com/acme/app/pull/7"
+    endpoint = "repos/acme/app/contents/.github/workflows?ref=release%2F1.0"
+    runner = fn output -> fn ["api", ^endpoint], _opts -> output end end
+    listing = fn entries -> {Jason.encode!(entries), 0} end
+
+    assert {:ok, true} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.(listing.([%{"type" => "file", "name" => "ci.yml"}])))
+    assert {:ok, true} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.(listing.([%{"type" => "file", "name" => "lint.yaml"}])))
+
+    for entries <- [[], [%{"type" => "file", "name" => "README.md"}], [%{"type" => "dir", "name" => "x.yml"}], [:bad]] do
+      assert {:ok, false} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.(listing.(entries)))
+    end
+
+    assert {:ok, false} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"gh: Not Found (HTTP 404)", 1}))
+    assert {:error, {:gh_failed, _args, 1, "gh: boom"}} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"gh: boom", 1}))
+    assert {:error, :invalid_workflows_payload} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"{}", 0}))
+    assert {:error, :invalid_workflows_payload} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"nope", 0}))
+    assert {:error, :invalid_pr_url} = PullRequest.workflow_files?("https://example.com/acme/app/pull/7", "main")
+
+    unavailable = fn _args, _opts -> raise ErlangError, original: :enoent end
+    assert {:error, {:gh_unavailable, _message}} = PullRequest.workflow_files?(pr_url, "main", gh_runner: unavailable)
+  end
+
   test "list_branch_runs reads the latest workflow runs on a branch in one request" do
     runner = fn
       ["run", "list", "-R", "acme/cycle", "--branch", "main", "--limit", "50", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
@@ -615,6 +649,28 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     failing = fn _args, _opts -> {"HTTP 404", 1} end
     assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: failing)
+  end
+
+  test "run_jobs reads a run's commit and the jobs of its latest attempt" do
+    runner = fn
+      ["run", "view", "12", "--json", "headSha,jobs", "-R", "acme/cycle"], _opts ->
+        {Jason.encode!(%{
+           "headSha" => "c1c4ae62",
+           "jobs" => [%{"databaseId" => 7, "name" => "coverage (4/4)", "conclusion" => "success"}, %{"name" => "coverage (3/4)", "conclusion" => "failure"}, "not a job"]
+         }), 0}
+
+      ["run", "view", "13", "--json", "headSha,jobs"], _opts ->
+        {Jason.encode!(%{"headSha" => "abc"}), 0}
+
+      ["run", "view", "14" | _rest], _opts ->
+        {"HTTP 404", 1}
+    end
+
+    assert {:ok, %{head_sha: "c1c4ae62", jobs: [success, failure]}} = PullRequest.run_jobs("12", gh_runner: runner, repo: "acme/cycle")
+    assert success == %{id: "7", name: "coverage (4/4)", conclusion: "SUCCESS"}
+    assert failure == %{id: nil, name: "coverage (3/4)", conclusion: "FAILURE"}
+    assert {:error, :invalid_run_jobs_payload} = PullRequest.run_jobs("13", gh_runner: runner)
+    assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.run_jobs("14", gh_runner: runner)
   end
 
   test "list_commit_runs reads the workflow runs on one commit, of the repo given or the checkout's" do
@@ -1027,6 +1083,18 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
       denied = fn _args, _opts -> {"gh: Resource not accessible by integration", 1} end
       assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.close(pr_url, gh_runner: denied)
+    end
+
+    test "change_base retargets the pull request to another base branch" do
+      pr_url = "https://github.com/org/repo/pull/42"
+
+      runner = fn ["api", "repos/org/repo/pulls/42", "--method", "PATCH", "-f", "base=main"], _opts -> {~s({"base":{"ref":"main"}}), 0} end
+
+      assert :ok = PullRequest.change_base(pr_url, "main", gh_runner: runner)
+      assert {:error, :invalid_pr_url} = PullRequest.change_base("https://example.com/nope", "main", gh_runner: runner)
+
+      denied = fn _args, _opts -> {"gh: Resource not accessible by integration", 1} end
+      assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.change_base(pr_url, "main", gh_runner: denied)
     end
 
     test "update_branch asks GitHub to merge the base in for the expected head" do

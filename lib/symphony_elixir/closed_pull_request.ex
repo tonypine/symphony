@@ -9,11 +9,13 @@ defmodule SymphonyElixir.ClosedPullRequest do
   reads as a docs-only change, and the ticket lands in `Merging` with nothing reviewed or verified.
 
   This module stops that. `guard/3` runs before a run starts (`SymphonyElixir.AgentRunner`): a
-  ticket in a phase that works on its existing pull request — Code Review, QA, CI Fix, Rework or
-  Merging — whose recorded pull request (`SymphonyElixir.TicketPullRequest`) is closed is paused on
-  a Needs Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`) instead. The QA run checks the
-  same before its policy (`SymphonyElixir.QaVerification`), and the QA run and the Code Review
-  approve hold an empty diff rather than skip QA (`SymphonyElixir.QaPolicy`).
+  ticket in a phase that judges, repairs or lands its existing pull request — Code Review, QA, CI
+  Fix or Merging — whose recorded pull request (`SymphonyElixir.TicketPullRequest`) is closed is
+  paused on a Needs Decision hold (`SymphonyElixir.NeedsDecisionHold.pause/4`) instead. The PR and
+  CI watcher sends such a ticket to Rework first (rule R8, D5), and a Rework run starts: it opens a
+  new pull request from main. The QA run checks the same before its policy
+  (`SymphonyElixir.QaVerification`), and the QA run and the Code Review approve hold an empty diff
+  rather than skip QA (`SymphonyElixir.QaPolicy`).
 
   The request asks a person to reopen the pull request (the recommended option: the next poll's
   lookup records it open again, `SymphonyElixir.TicketPullRequest.Lookup`), restart the ticket, or
@@ -26,7 +28,6 @@ defmodule SymphonyElixir.ClosedPullRequest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{NeedsDecisionHold, TicketPullRequest}
 
-  @rework_state "Rework"
   @merging_state "Merging"
 
   @typedoc """
@@ -101,12 +102,12 @@ defmodule SymphonyElixir.ClosedPullRequest do
     }
   end
 
-  # Code Review, QA and CI Fix judge or repair the pull request's head, Rework continues it, and
-  # Merging lands it: none of them has anything to work on once it is closed. Todo and In Progress
-  # build a change and open their pull request themselves.
+  # Code Review, QA and CI Fix judge or repair the pull request's head, and Merging lands it: none
+  # of them has anything to work on once it is closed. Todo and In Progress build a change and open
+  # their pull request themselves, and so does Rework once its pull request was closed (D5).
   defp pull_request_phase?(%Issue{state: state}, settings) when is_binary(state) do
     tracker = settings.tracker
-    phases = [tracker.code_review_state, tracker.qa_state, tracker.ci_fix_state, @rework_state, @merging_state]
+    phases = [tracker.code_review_state, tracker.qa_state, tracker.ci_fix_state, @merging_state]
 
     Enum.any?(phases, &(normalize(&1) == normalize(state)))
   end

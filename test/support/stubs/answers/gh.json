@@ -1,0 +1,95 @@
+{
+  "about": "The gh stand-in's answers (test/support/stubs/gh.py) for the repo acme/widgets, the Add Repo sheet's calls: its probe (default branch, top-level files, mix.exs), then the WORKFLOW.md pull request (base commit, branch, commit, pull request, and deleting the branch after a failure). The first entry whose args match a call answers it; a * inside an argument matches any text. status (default 200) and output are what the fake gh prints: stdout with exit status 0 for a 200, stderr with exit status 1 otherwise. See test/support/README.md.",
+  "answers": [
+    {
+      "args": [
+        "api",
+        "repos/acme/widgets",
+        "--jq",
+        ".default_branch"
+      ],
+      "output": "main\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/acme/widgets/contents?ref=main",
+        "--jq",
+        ".[].name"
+      ],
+      "output": "README.md\nmix.exs\nmix.lock\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/acme/widgets/contents/mix.exs?ref=main",
+        "-H",
+        "Accept: application/vnd.github.raw"
+      ],
+      "output": "defmodule Widgets.MixProject do\n  use Mix.Project\n\n  def project do\n    [app: :widgets, version: \"0.1.0\", elixir: \"~> 1.19\", deps: deps()]\n  end\n\n  defp deps do\n    [{:credo, \"~> 1.7\", only: [:dev, :test], runtime: false}]\n  end\nend\n"
+    },
+    {
+      "args": [
+        "api",
+        "repos/acme/widgets/git/ref/heads/main",
+        "--jq",
+        ".object.sha"
+      ],
+      "output": "4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
+    },
+    {
+      "args": [
+        "api",
+        "-X",
+        "POST",
+        "repos/acme/widgets/git/refs",
+        "-f",
+        "ref=refs/heads/symphony/add-workflow",
+        "-f",
+        "sha=4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+      ],
+      "output": "{\"ref\": \"refs/heads/symphony/add-workflow\", \"object\": {\"sha\": \"4b825dc642cb6eb9a060e54bf8d69288fbee4904\", \"type\": \"commit\"}}\n"
+    },
+    {
+      "args": [
+        "api",
+        "-X",
+        "PUT",
+        "repos/acme/widgets/contents/WORKFLOW.md",
+        "-f",
+        "message=Add WORKFLOW.md for Symphony",
+        "-f",
+        "content=*",
+        "-f",
+        "branch=symphony/add-workflow"
+      ],
+      "output": "{\"content\": {\"name\": \"WORKFLOW.md\", \"path\": \"WORKFLOW.md\"}, \"commit\": {\"sha\": \"1111111111111111111111111111111111111111\"}}\n"
+    },
+    {
+      "args": [
+        "pr",
+        "create",
+        "--repo",
+        "acme/widgets",
+        "--base",
+        "main",
+        "--head",
+        "symphony/add-workflow",
+        "--title",
+        "Add WORKFLOW.md for Symphony",
+        "--body",
+        "*"
+      ],
+      "output": "https://github.com/acme/widgets/pull/1\n"
+    },
+    {
+      "args": [
+        "api",
+        "-X",
+        "DELETE",
+        "repos/acme/widgets/git/refs/heads/symphony/add-workflow"
+      ],
+      "output": ""
+    }
+  ]
+}

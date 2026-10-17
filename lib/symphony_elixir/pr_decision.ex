@@ -200,8 +200,8 @@ defmodule SymphonyElixir.PrDecision do
       %{
         id: "R17",
         phases: @pr_phases,
-        when: "A required check never reported within the timeout",
-        then: "`decision`: proceed without it for this head, rerun, or fix the workflow in Rework",
+        when: "A required check never reported within `landing_wait_timeout_ms`",
+        then: "`decision`: proceed without it for this PR (this head only), rerun, or fix the workflow in Rework",
         guard: &required_missing?/1,
         build: &ask_about_missing_check/1
       },
@@ -438,7 +438,7 @@ defmodule SymphonyElixir.PrDecision do
 
   defp dispatch_reason(%{phase: :in_progress}), do: {"R12", "The agent continues the PR"}
   defp dispatch_reason(%{phase: :rework}), do: {"R26", "The rework run continues the PR"}
-  defp dispatch_reason(%{ci: :none} = facts), do: {"R27", "No CI configured on the base: counts as green, so #{reviewer(facts)} runs"}
+  defp dispatch_reason(%{ci: :none} = facts), do: {"R27", "#{no_ci(facts)}: counts as green, so #{reviewer(facts)} runs"}
   defp dispatch_reason(facts), do: {"R27", "The head is green, so #{reviewer(facts)} runs"}
 
   defp wait_for_ahead(facts) do
@@ -483,7 +483,7 @@ defmodule SymphonyElixir.PrDecision do
 
   defp ask_about_missing_check(facts) do
     decision("R17", "Required check #{Enum.join(facts.missing_checks, ", ")} never reported on #{pr(facts)}", [
-      "Proceed without it for this head",
+      "Proceed without it for this PR",
       "Rerun the checks",
       "Fix the workflow in Rework"
     ])
@@ -500,7 +500,13 @@ defmodule SymphonyElixir.PrDecision do
 
   defp file_fix_ticket(facts) do
     Action.new!("R20", :file_fix_ticket,
-      args: %{check: facts.failing_check, evidence: facts.fix_failures},
+      args: %{
+        check: facts.failing_check,
+        evidence: facts.fix_failures,
+        red_attempts: facts.red_attempts,
+        max_red_attempts: facts.max_red_attempts,
+        same_failure_streak: facts.same_failure_streak
+      },
       reason: "CI keeps failing: waiting on a fix ticket for #{check(facts)}",
       owner: :symphony,
       clears_when: "the fix ticket is terminal"
@@ -515,7 +521,7 @@ defmodule SymphonyElixir.PrDecision do
   end
 
   defp rerun_red(facts), do: Action.new!("R22", :rerun_failed, reason: "#{subject(check(facts))} failed on #{pr(facts)}: rerunning it once before CI Fix")
-  defp wait_for_base(facts), do: wait("R23", "#{subject(check(facts))} is red on the base branch too", :ci, "the check goes green on the base branch")
+  defp wait_for_base(facts), do: wait("R23", "#{subject(check(facts))} is red on the base branch too#{base_compared(facts)}", :ci, "the check goes green on the base branch")
   defp wait_for_checks(facts), do: wait("R24", "Checks are running on #{pr(facts)}'s head", :ci, "the checks finish")
 
   defp return_to_origin(facts) do
@@ -554,11 +560,30 @@ defmodule SymphonyElixir.PrDecision do
   defp origin(%{phase: :ci_fix, origin: origin}), do: origin
   defp origin(%{phase: phase}), do: phase
 
+  defp no_ci(%{no_ci: :not_reported}), do: "No check reported on the head within the wait"
+  defp no_ci(%{base_ref: base}) when is_binary(base), do: "No CI configured on #{base}"
+  defp no_ci(_facts), do: "No CI configured on the base"
+
   defp reviewer(%{phase: :code_review}), do: "the reviewer"
   defp reviewer(%{phase: :qa}), do: "the QA agent"
 
   defp pr(%{pr_number: number}) when is_integer(number), do: "PR ##{number}"
   defp pr(_facts), do: "the PR"
+
+  # What R23 compared on the base: the base's run and commit, and the failing tests or the name alone.
+  defp base_compared(%{base_red: %{run_id: run_id, basis: basis} = red} = facts) do
+    on = "#{facts.base_ref || "the base branch"}#{short_sha(red[:sha])} (run #{run_id})"
+
+    case basis do
+      :tests -> ": it failed the same tests on #{on}"
+      :name -> ": the check of that name failed on #{on}, compared by name only"
+    end
+  end
+
+  defp base_compared(_facts), do: ""
+
+  defp short_sha(sha) when is_binary(sha), do: " at #{String.slice(sha, 0, 8)}"
+  defp short_sha(_sha), do: ""
 
   defp check(%{failing_check: check}) when is_binary(check), do: "the `#{check}` check"
   defp check(_facts), do: "a check"

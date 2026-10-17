@@ -67,6 +67,23 @@ defmodule SymphonyElixir.LandingOrderTest do
       assert %{"follower" => %{issue_id: "busy"}} = LandingOrder.waits([held, member("busy", 4, ["x"]), follower], @now)
     end
 
+    test "a PR that stepped behind others (R15) ranks after each of them, so none waits for it" do
+      ahead = member("ahead", 5, ["x"])
+      stepped = member("stepped", 4, ["x"], behind: ["ahead", "behind"])
+      behind = member("behind", 1, ["x"])
+
+      # Before the step, the PR behind waits for it.
+      assert %{"behind" => %{issue_id: "stepped"}} = LandingOrder.waits([member("stepped", 4, ["x"]), behind], @now)
+
+      waits = LandingOrder.waits([stepped, behind], @now)
+      assert waits["stepped"].issue_id == "behind"
+      refute Map.has_key?(waits, "behind")
+
+      waits = LandingOrder.waits([ahead, stepped, behind], @now)
+      assert waits["behind"].issue_id == "ahead"
+      assert waits["stepped"].issue_id == "ahead"
+    end
+
     test "a forced ticket never waits" do
       assert LandingOrder.waits([member("a", 5, ["x"]), member("b", 3, ["x"], forced: true)], @now) == %{}
     end
