@@ -9,7 +9,7 @@
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Code Review` -> the reviewer agent judges the PR on its green head; do not change the issue or PR, stop and wait for the verdict.
    - `QA` -> a QA agent walks the change's user journeys end to end; do not change the issue or PR, stop and wait for the verdict.
-   - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: minimal repair on the same branch, or `Rework` when the repair is substantive.
+   - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: fix the red check at its cause on the same branch (never a rerun), `Rework` when the repair is substantive, or a request for a person when no change can fix it.
    - `Plan Review` -> a person reviews the plan; do nothing and stop.
    - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop. Symphony moves it to `Epic Review` itself once every sub-ticket is terminal.
    - `Epic Review` -> Symphony's epic review checks the epic against what shipped; do nothing and stop.
