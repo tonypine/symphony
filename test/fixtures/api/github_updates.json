@@ -1,0 +1,163 @@
+{
+  "github_updates": {
+    "enabled": true,
+    "events": [
+      "check_suite",
+      "check_run",
+      "workflow_run",
+      "pull_request",
+      "push",
+      "release"
+    ],
+    "mode": "on",
+    "poll": {
+      "fallback_interval_ms": 300000,
+      "interval_ms": 30000,
+      "silence_alert_minutes": 10
+    },
+    "rate_limit": {
+      "limit": 5000,
+      "remaining": 4321,
+      "reset_at": "2026-10-17T10:00:00Z"
+    },
+    "relay": {
+      "kind": "gh_webhook_forward",
+      "label": "GitHub CLI forwarding",
+      "local_url": "http://127.0.0.1:4040/api/v1/github/webhook",
+      "payload_url": null,
+      "runs_in_symphony": true,
+      "url": null
+    },
+    "repos": [
+      {
+        "connection": "webhook",
+        "degraded": false,
+        "deliveries": 3,
+        "github": "acme/app",
+        "healthy": true,
+        "hook": null,
+        "key": "app",
+        "last_delivery_at": "2026-10-17T09:00:05Z",
+        "missed_at": null,
+        "relay": {
+          "failures": 0,
+          "last_error": null,
+          "restarts": 1,
+          "started_at": "2026-10-17T09:00:00Z",
+          "state": "running"
+        },
+        "relay_restarts": 1,
+        "signature_failures_24h": 1,
+        "silent": false,
+        "test": {
+          "sent_at": "2026-10-17T09:00:00Z",
+          "verified_at": "2026-10-17T09:00:00Z"
+        }
+      },
+      {
+        "connection": "polling",
+        "degraded": false,
+        "deliveries": 0,
+        "github": "acme/lib",
+        "healthy": false,
+        "hook": null,
+        "key": "lib",
+        "last_delivery_at": null,
+        "missed_at": null,
+        "relay": null,
+        "relay_restarts": 0,
+        "signature_failures_24h": 0,
+        "silent": true,
+        "test": null
+      }
+    ],
+    "secret": {
+      "env": "SYMPHONY_GITHUB_WEBHOOK_SECRET",
+      "item": "symphony-github-webhook",
+      "present": true
+    },
+    "steps": [
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": "Through GitHub CLI forwarding",
+        "fix": null,
+        "id": "relay",
+        "kind": "relay",
+        "repo": null,
+        "status": "done",
+        "title": "Choose how GitHub's updates reach this Mac"
+      },
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "gh_ready",
+        "kind": "gh_ready",
+        "repo": null,
+        "status": "done",
+        "title": "GitHub CLI signed in, with access to webhooks"
+      },
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "secret",
+        "kind": "secret",
+        "repo": null,
+        "status": "done",
+        "title": "Webhook secret saved"
+      },
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "port",
+        "kind": "port",
+        "repo": null,
+        "status": "done",
+        "title": "Symphony's port pinned"
+      },
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": null,
+        "fix": null,
+        "id": "repo:app",
+        "kind": "repo",
+        "repo": "app",
+        "status": "done",
+        "title": "Webhook on acme/app"
+      },
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": "You need admin access to acme/lib to add a webhook.",
+        "fix": "Ask an owner of acme/lib for admin access, or leave lib on polling.",
+        "id": "repo:lib",
+        "kind": "repo",
+        "repo": "lib",
+        "status": "failed",
+        "title": "Webhook on acme/lib"
+      },
+      {
+        "checked_at": "2026-10-17T09:00:00Z",
+        "detail": "received and verified",
+        "fix": null,
+        "id": "test:app",
+        "kind": "test",
+        "repo": "app",
+        "status": "done",
+        "title": "Test delivery from acme/app"
+      },
+      {
+        "checked_at": null,
+        "detail": null,
+        "fix": null,
+        "id": "test:lib",
+        "kind": "test",
+        "repo": "lib",
+        "status": "pending",
+        "title": "Test delivery from acme/lib"
+      }
+    ],
+    "turned_on_at": "2026-10-17T09:00:00Z"
+  }
+}

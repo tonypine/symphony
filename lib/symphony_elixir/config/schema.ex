@@ -621,7 +621,7 @@ defmodule SymphonyElixir.Config.Schema do
       use Ecto.Schema
       import Ecto.Changeset
 
-      @relays ["smee", "cloudflare_tunnel", "gh_webhook_forward"]
+      @relays ["smee", "cloudflare_tunnel", "gh_webhook_forward", "tailscale_funnel"]
       @events ["check_suite", "check_run", "workflow_run", "pull_request", "push", "release"]
       @fields [:enabled, :relay, :secret, :events, :fallback_poll_interval_ms, :silence_alert_minutes]
 

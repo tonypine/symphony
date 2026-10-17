@@ -37,10 +37,54 @@ internet and forwards them to `http://127.0.0.1:<dashboard port>/api/v1/github/w
 | --- | --- | --- |
 | [smee.io](https://smee.io) | `smee` | Free, no account. Anyone with the channel URL can read the deliveries, so keep it private. |
 | [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) | `cloudflare_tunnel` | Needs a Cloudflare account and a domain. Most reliable. |
-| `gh webhook forward` | `gh_webhook_forward` | Needs the `gh` webhook extension. GitHub says it is not meant for production. |
+| [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) | `tailscale_funnel` | Needs a Tailscale account. Serves Symphony's port on a public `ts.net` name. |
+| `gh webhook forward` | `gh_webhook_forward` | The default when Symphony sets it up. Needs the `gh` webhook extension, which Symphony installs. GitHub lets one person forward a repository at a time. |
 
 Every delivery is checked against the hook's secret (`X-Hub-Signature-256`). One that does not
 verify gets `401` and a log line naming its delivery id, event and reason, never the payload.
+
+## Let Symphony set it up
+
+Symphony runs every step itself; the app's Setup drives it, and `curl` can too:
+
+```sh
+curl -s localhost:4040/api/v1/setup | jq .github_updates          # mode, steps, repos
+curl -X POST localhost:4040/api/v1/setup/github_updates/turn_on -d '{"relay":"gh_webhook_forward"}'
+curl -X POST localhost:4040/api/v1/setup/github_updates/run_step -d '{"step":"secret"}'
+curl -X POST localhost:4040/api/v1/setup/github_updates/test
+curl -X POST localhost:4040/api/v1/setup/github_updates/turn_off
+```
+
+| Step | Done when | What running it does |
+| --- | --- | --- |
+| `relay` | `gh`'s webhook extension is installed, or a URL relay's public URL is known | installs `cli/gh-webhook`, or keeps the `url` given |
+| `gh_ready` | `gh` is signed in with the `admin:repo_hook` scope | checks again (signing in is yours: `gh auth refresh -h github.com -s admin:repo_hook`) |
+| `secret` | a webhook secret is set | makes one, hands it to the app (secret `symphony-github-webhook`, passed as `SYMPHONY_GITHUB_WEBHOOK_SECRET`) and writes `secret: $SYMPHONY_GITHUB_WEBHOOK_SECRET` |
+| `port` | `dashboard.port` is pinned to the port Symphony listens on | pins it |
+| `repo:<key>` | the repository's relay runs, or its hook exists | checks admin access, then starts `gh webhook forward` or adds the hook with `gh api repos/:repo/hooks` |
+| `test:<key>` | a delivery from the repository verified after the test | starts the relay again (GitHub pings the new hook) or pings the hook; it fails after 30 s |
+
+A failed step says what is wrong and how to fix it, and a repository whose step fails (no admin
+access, say) stays on polling while the others connect. `mode` is `on` once every connected
+repository's test verified, and `degraded` while a relay can't restart or a repository heard
+nothing for `silence_alert_minutes` after a read found a change no delivery reported. A
+`symphony.yml` brought from another Mac with webhooks on reads `needs_setup` until the setup runs
+on this Mac. Turning off stops the relays, deletes only the hooks Symphony created and keeps the
+secret.
+
+Symphony restarts a `gh webhook forward` that stops: when its connection to GitHub drops, the
+extension retries three times, 5 seconds apart, then exits ("unable to connect to webhooks server,
+forwarding stopped"). Symphony starts it again after 1 second, doubling the wait up to 5 minutes
+while it keeps failing, and the section counts the restarts and shows the last error. A second
+`gh webhook forward` on the same repository fails with `Hook already exists`.
+
+`gh webhook forward` takes the secret only as its `--secret` argument: it reads no environment
+variable and no standard input for it. So while a relay runs, any process on this Mac can read
+the secret in its command line (`ps`). Symphony keeps it out of its own logs, its API and
+`symphony.yml`, and a URL relay's hooks get it from a file only Symphony can read. When other
+people sign in to this Mac, use a URL relay, or re-create the secret after they could have seen it.
+
+The rest of this page sets webhooks up by hand.
 
 ## 1. Pin the dashboard port
 
