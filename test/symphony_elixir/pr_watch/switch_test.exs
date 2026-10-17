@@ -27,7 +27,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
             fix_tickets: %{},
             open_pulls: nil,
             now: ~U[2026-10-16 12:00:00Z],
-            cancel_result: {:ok, [1]}
+            cancel_result: {:ok, [1]},
+            log: "setup\nERROR: specs failed at stub_test.exs:21\nstack"
           }
         end,
         name: __MODULE__
@@ -79,7 +80,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     def rerun_failed(run_id, _opts), do: World.call(:rerun, run_id)
-    def fetch_failed_log(_run_id, _opts), do: {:ok, "setup\nERROR: specs failed at stub_test.exs:21\nstack"}
+
+    def rerun(run_id, opts) do
+      World.call(:rerun_all, {run_id, opts[:repo]})
+      if run_id == "41", do: {:error, :gone}, else: :ok
+    end
+
+    def fetch_failed_log(_run_id, _opts), do: {:ok, World.get(:log)}
 
     def enable_auto_merge(pr_url, request, _opts) do
       World.call(:arm, {pr_url, request.head_sha})
@@ -249,6 +256,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       for run <- 1..10 do
         head = "head-1-#{run}"
         pr!("1", head_sha: head)
+        # Each run fails differently, so no same-failure streak cuts the 10 runs short.
+        World.update(:log, fn _log -> "setup\nERROR: specs failed at stub_test.exs:#{run}\nstack" end)
 
         # The first read of a red head reruns its failed check; the head still red goes to CI Fix.
         tick!(pid)
@@ -267,7 +276,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert moves(issue_id) == List.duplicate("CI Fix", 10)
       assert %{red: 10, fix_failures: failures} = attempts(issue_id)
       assert length(failures) == 10
-      assert hd(failures) == %{check: "specs", error: "ERROR: specs failed at stub_test.exs:21"}
+      assert hd(failures) == %{check: "specs", error: "ERROR: specs failed at stub_test.exs:1", head_sha: "head-1-1"}
 
       # The backstop: one fix ticket for the failing check, linked as a blocker, and a Blocked hold.
       tick!(pid)
@@ -423,6 +432,202 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pr!("1", dirty())
       tick!(pid)
       assert %{rule: "R14", reason: "PR #1 conflicts with main: conflict fix run 1 of 3"} = decision(issue_id)
+    end
+  end
+
+  describe "CI cases nothing handled before (TP-943)" do
+    defp timeout_ms, do: Config.settings!().ci.merging_wait_timeout_ms
+
+    # A person answers the ticket's open question, as the Inbox records it: the answer in the
+    # ticket's decisions, then the hold cleared.
+    defp answer!(issue_id, key, title, answer) do
+      entry = SymphonyElixir.Decisions.entry(key, ~D[2026-10-16], title, title, answer)
+      {:ok, _decisions} = RunStore.record_ticket_decisions(@repo_key, issue_id, [entry], [])
+      :ok = Hold.clear(@repo_key, issue_id, :needs_decision, tracker: Tracker)
+    end
+
+    defp asked(issue_id, title), do: Enum.count(comments(issue_id), &(&1 =~ "## Decision needed: #{title}"))
+
+    test "walkthrough 1: a repo with no workflows gets its reviewer on a head with no checks (G1, D2)" do
+      issue_id = ticket!("1", "Code Review", ci: :none, check_names: [])
+      pid = start!()
+      tick!(pid)
+
+      assert %{rule: "R27", kind: :dispatch, reason: "No CI configured on main: counts as green, so the reviewer runs"} = decision(issue_id)
+      assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) == nil
+    end
+
+    test "a head with no checks while the base has workflows waits for them, and goes on without them past the wait" do
+      issue_id = ticket!("1", "QA", ci: :pending, awaiting_checks: true, check_names: [])
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R24", kind: :wait, owner: :ci} = decision(issue_id)
+
+      advance!(timeout_ms())
+      tick!(pid)
+      assert %{rule: "R27", reason: "No check reported on the head within the wait: counts as green, so the QA agent runs"} = decision(issue_id)
+    end
+
+    test "walkthrough 2–3: a required check that never reports asks a person past the wait; proceeding waives it for that head only (G2, D3)" do
+      issue_id = ticket!("1", "Code Review", ci: :required_missing, missing_checks: ["build"], run_ids: ["40", "41"])
+      title = "Check build never reported on TP-1"
+      pid = start!()
+
+      # Within the wait the head reads as running, in any phase.
+      tick!(pid)
+      assert %{rule: "R24", kind: :wait} = decision(issue_id)
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+
+      advance!(timeout_ms())
+      tick!(pid, 3)
+      assert %{decision: %{title: ^title, options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
+      assert asked(issue_id, title) == 1
+      assert %{rule: "R4", owner: :person} = decision(issue_id)
+      assert state(issue_id) == "Code Review"
+
+      # Proceed: the ticket continues on that head.
+      answer!(issue_id, "c1", title, "Proceed without it for this PR")
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+      assert %{ci: :green} = watch(issue_id).facts
+
+      # A new head waits for the check again, and asks again past the wait.
+      pr!("1", head_sha: "head-1-2")
+      tick!(pid)
+      assert %{rule: "R24"} = decision(issue_id)
+      advance!(timeout_ms())
+      tick!(pid)
+      assert asked(issue_id, title) == 2
+
+      # Rerun: the head's runs run again (one GitHub refused is logged), and the wait starts over.
+      answer!(issue_id, "c2", title, "2")
+      assert capture_log(fn -> tick!(pid) end) =~ "PR watch could not rerun run 41"
+      assert World.calls(:rerun_all) == [{"40", "acme/app"}, {"41", "acme/app"}]
+      assert %{rule: "R24"} = decision(issue_id)
+      advance!(timeout_ms())
+      tick!(pid)
+      assert asked(issue_id, title) == 3
+
+      # Fix the workflow in Rework: the answer moved it there; the rework run goes ahead and nothing is asked again.
+      answer!(issue_id, "c3", title, "Fix the workflow in Rework")
+      move!(issue_id, "Rework")
+      tick!(pid, 2)
+      assert %{rule: "R26", kind: :dispatch} = decision(issue_id)
+      assert asked(issue_id, title) == 3
+    end
+
+    test "an answer that picks no option asks again once the wait passes again" do
+      issue_id = ticket!("1", "QA", ci: :required_missing, missing_checks: ["build"])
+      pid = start!()
+      tick!(pid)
+      advance!(timeout_ms())
+      tick!(pid, 2)
+      assert asked(issue_id, "Check build never reported on TP-1") == 1
+      answer!(issue_id, "c1", "Check build never reported on TP-1", "not sure")
+      tick!(pid)
+      assert %{rule: "R24"} = decision(issue_id)
+      advance!(timeout_ms())
+      tick!(pid)
+      assert asked(issue_id, "Check build never reported on TP-1") == 2
+    end
+
+    test "a check red on the base too waits on CI, spends no CI Fix, is logged once per base and clears once the base is green" do
+      first = ticket!("1", "QA", red() ++ [red_kind: :also_red_on_base])
+      second = ticket!("2", "Code Review", red() ++ [red_kind: :also_red_on_base])
+      pid = start!()
+
+      log = capture_log(fn -> tick!(pid, 3) end)
+      assert %{rule: "R23", kind: :wait, owner: :ci, reason: "The `specs` check is red on the base branch too"} = decision(first)
+      assert %{rule: "R23"} = decision(second)
+      assert [_once] = Regex.scan(~r/the `specs` check is red on main too/, log)
+      assert moves(first) == [] and moves(second) == []
+      assert World.calls(:rerun) == []
+      assert %{red: 0} = attempts(first)
+      assert PrWatch.red_bases() == [%{base: "main", check: "specs", issue_identifiers: ["TP-1", "TP-2"]}]
+
+      # The base went green: the head is a plain failure again, and the wait is gone.
+      pr!("1", red_kind: :failure)
+      pr!("2", red_kind: :failure)
+      log = capture_log(fn -> tick!(pid) end)
+      assert log =~ "no PR waits on the `specs` check of main any more"
+      assert PrWatch.red_bases() == []
+      assert %{rule: "R22"} = decision(first)
+    end
+
+    test "a workflow whose every run was cancelled is rerun once, with no attempt spent (R19)" do
+      cancelled = [red_kind: :cancelled, failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "CANCELLED"}]]
+      issue_id = ticket!("1", "Code Review", red() ++ cancelled)
+      pid = start!()
+      tick!(pid, 3)
+
+      assert World.calls(:rerun) == ["77"]
+      assert %{rule: "R19", kind: :rerun_failed} = decision(issue_id)
+      assert %{red: 0, fix_failures: []} = attempts(issue_id)
+      assert moves(issue_id) == []
+    end
+
+    test "walkthrough 4: the same failure 3 CI Fix runs in a row files a fix ticket and holds the ticket, with no question (D15 (c))" do
+      heads = ["aaaaaaa1", "bbbbbbb2", "ccccccc3", "ddddddd4"]
+      issue_id = ticket!("1", "Code Review", red() ++ [head_sha: hd(heads)])
+      pid = start!()
+
+      for {head, run} <- Enum.with_index(Enum.take(heads, 3), 1) do
+        tick!(pid)
+        assert %{rule: "R22"} = decision(issue_id)
+        # Twice in a row is not enough: another CI Fix run.
+        assert %{same_failure_streak: streak} = watch(issue_id).facts
+        assert streak == run - 1
+
+        tick!(pid)
+        assert %{rule: "R21", reason: reason} = decision(issue_id)
+        assert reason == "The `specs` check failed on PR #1: CI Fix run #{run} of 10"
+        # The fix run reads what the runs before it failed on.
+        assert %{ci_failure: %{earlier_failures: earlier}} = watch(issue_id).fix
+        assert length(earlier) == run - 1
+        assert attempts(issue_id).failure.head_sha == head
+
+        fix_run_returns!(issue_id, "1", "Code Review", Enum.at(heads, run), red())
+      end
+
+      tick!(pid)
+      assert %{same_failure_streak: 3, red_attempts: 3} = watch(issue_id).facts
+      assert %{rule: "R20", kind: :file_fix_ticket, reason: "CI keeps failing: waiting on TP-FIX1, a fix ticket for the `specs` check"} = decision(issue_id)
+
+      assert [{"TP-FIX1", %{component: "ci:specs", description: description}}] = World.calls(:fix_ticket)
+      assert description =~ "after 3 of 10 CI Fix runs, the last 3 in a row with the same failure"
+
+      for head <- Enum.take(heads, 3) do
+        assert description =~ "specs at #{String.slice(head, 0, 7)}: ERROR: specs failed at stub_test.exs:21"
+      end
+
+      assert World.calls(:blocked_by) == [{issue_id, "TP-FIX1"}]
+      assert %{waits_on: %{type: "fix_ticket", keys: ["TP-FIX1"]}} = Hold.get(@repo_key, issue_id, :blocked)
+      refute Hold.held?(@repo_key, issue_id, :needs_decision)
+      assert state(issue_id) == "Code Review"
+
+      # The lane keeps the same signature the streak compared.
+      lane = TicketState.self_heal(RunStore.get_ticket_state(@repo_key, issue_id))
+      assert lane.signature == Attempts.signature(attempts(issue_id).failure)
+
+      tick!(pid)
+      assert %{rule: "R4", reason: "CI keeps failing: waiting on TP-FIX1, a fix ticket for the `specs` check"} = decision(issue_id)
+    end
+
+    test "a different failure in between resets the streak" do
+      issue_id = ticket!("1", "QA", red())
+      pid = start!()
+
+      for {error, run} <- Enum.with_index(["ERROR: one", "ERROR: two", "ERROR: one"], 1) do
+        World.update(:log, fn _log -> "setup\n#{error}\nstack" end)
+        tick!(pid, 2)
+        assert %{rule: "R21"} = decision(issue_id)
+        fix_run_returns!(issue_id, "1", "QA", "head-1-#{run + 1}", red())
+      end
+
+      tick!(pid)
+      assert %{same_failure_streak: 1, red_attempts: 3} = watch(issue_id).facts
+      assert %{rule: "R22"} = decision(issue_id)
     end
   end
 
@@ -735,7 +940,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{red: 2} = attempts(issue_id)
     end
 
-    test "CiPoller.await_waiver → R18: a protected paths check that only a person clears is left alone outside Merging" do
+    test "CiPoller.await_waiver → R18: a protected paths check that only a person clears asks a person outside Merging too (G10)" do
       issue_id =
         ticket!("1", "QA",
           ci: :red,
@@ -745,8 +950,11 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         )
 
       pid = start!()
-      tick!(pid, 2)
-      assert %{rule: "R18", kind: :decision, outcome: :recorded} = decision(issue_id)
+      tick!(pid, 3)
+      assert %{decision: %{title: "Protected files changed on TP-1", options: options}} = Hold.get(@repo_key, issue_id, :needs_decision)
+      assert Enum.map(options, & &1.label) == ["Add the waiver label", "Drop the change in Rework"]
+      assert [_one] = Enum.filter(comments(issue_id), &String.starts_with?(&1, "## Decision needed: Protected files"))
+      assert %{rule: "R4", owner: :person} = decision(issue_id)
       assert moves(issue_id) == []
       assert World.calls(:rerun) == []
     end

@@ -577,6 +577,40 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:ok, "other log"} = PullRequest.fetch_failed_log("987", gh_runner: other_repo, repo: "acme/cycle")
   end
 
+  test "rerun reruns every job of a run, in the named repository" do
+    runner = fn
+      ["run", "rerun", "987", "-R", "acme/app"], _opts -> {"", 0}
+      ["run", "rerun", "988"], _opts -> {"run 988 cannot be rerun", 1}
+    end
+
+    assert :ok = PullRequest.rerun("987", gh_runner: runner, repo: "acme/app")
+    assert {:error, {:gh_failed, _args, 1, "run 988 cannot be rerun"}} = PullRequest.rerun(988, gh_runner: runner)
+    assert {:error, :invalid_run_id} = PullRequest.rerun(nil, [])
+  end
+
+  test "workflow_files? says whether the base branch has workflow files" do
+    pr_url = "https://github.com/acme/app/pull/7"
+    endpoint = "repos/acme/app/contents/.github/workflows?ref=release%2F1.0"
+    runner = fn output -> fn ["api", ^endpoint], _opts -> output end end
+    listing = fn entries -> {Jason.encode!(entries), 0} end
+
+    assert {:ok, true} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.(listing.([%{"type" => "file", "name" => "ci.yml"}])))
+    assert {:ok, true} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.(listing.([%{"type" => "file", "name" => "lint.yaml"}])))
+
+    for entries <- [[], [%{"type" => "file", "name" => "README.md"}], [%{"type" => "dir", "name" => "x.yml"}], [:bad]] do
+      assert {:ok, false} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.(listing.(entries)))
+    end
+
+    assert {:ok, false} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"gh: Not Found (HTTP 404)", 1}))
+    assert {:error, {:gh_failed, _args, 1, "gh: boom"}} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"gh: boom", 1}))
+    assert {:error, :invalid_workflows_payload} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"{}", 0}))
+    assert {:error, :invalid_workflows_payload} = PullRequest.workflow_files?(pr_url, "release/1.0", gh_runner: runner.({"nope", 0}))
+    assert {:error, :invalid_pr_url} = PullRequest.workflow_files?("https://example.com/acme/app/pull/7", "main")
+
+    unavailable = fn _args, _opts -> raise ErlangError, original: :enoent end
+    assert {:error, {:gh_unavailable, _message}} = PullRequest.workflow_files?(pr_url, "main", gh_runner: unavailable)
+  end
+
   test "list_branch_runs reads the latest workflow runs on a branch in one request" do
     runner = fn
       ["run", "list", "-R", "acme/cycle", "--branch", "main", "--limit", "50", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->

@@ -20,16 +20,23 @@ defmodule SymphonyElixir.PrWatch.Repo do
   A tick reads each watched PR once (`SymphonyElixir.PrWatch.Fetch.read/2`) and, when two or more
   watched PRs are open, the repository's open PRs and their files once, for the landing order:
   `ahead` is the PR `SymphonyElixir.LandingOrder.waits/2` makes the ticket wait for (none for a
-  forced ticket). The checks a base branch requires are kept 10 minutes.
+  forced ticket). The checks a base branch requires, and whether it has workflow files, are kept 10
+  minutes.
 
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
   running), in `Merging` a failed `protected paths` check that the ticket's unlock decisions cover
-  (`SymphonyElixir.ProtectedPathsGate`; the head reads as green), the reviewer comments still to
-  address, which the PR review poller keeps (`SymphonyElixir.PrReviewPoller.review_comments/5`), and
-  a person's answer to R7's question about a PR on another base: accepted, the base reads as the
-  repo's; put back, R7 asks GitHub to retarget the PR. The ticket's CI label
-  (`SymphonyElixir.CiState`) is projected from the facts.
+  (`SymphonyElixir.ProtectedPathsGate`; the head reads as green), a red head's failure
+  (`SymphonyElixir.PrWatch.Fetch.failure/3`, read once per head, for the same-failure streak), the
+  wait on a check that never reported (`SymphonyElixir.PrWatch.Attempts.settle/4`), with the
+  person's answer when R17 asked one: a waiver for the head, a rerun of its checks, or Rework, the
+  reviewer comments still to address, which the PR review poller keeps
+  (`SymphonyElixir.PrReviewPoller.review_comments/5`), and a person's answer to R7's question about
+  a PR on another base: accepted, the base reads as the repo's; put back, R7 asks GitHub to retarget
+  the PR. The ticket's CI label (`SymphonyElixir.CiState`) is projected from the facts.
+
+  A check red on the base branch too (R23) is logged once per base and check while PRs wait on it,
+  and once more when it no longer holds any.
 
   It ticks every `pull_requests.poll_interval_ms`, and at once on `poll_now/1`. A GitHub error
   doubles the wait, up to 5 minutes; GitHub's rate limit stops the tick, marks the tickets it didn't
@@ -113,7 +120,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   @impl true
   def init(opts) do
-    state = %{repo_key: Keyword.fetch!(opts, :repo_key), opts: opts, timer: nil, failures: 0, required: %{}}
+    state = %{repo_key: Keyword.fetch!(opts, :repo_key), opts: opts, timer: nil, failures: 0, required: %{}, workflows: %{}, red_bases: MapSet.new()}
     {:ok, schedule(state, 0)}
   end
 
@@ -153,9 +160,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
       watched = Enum.flat_map(issues, &watched(&1, settings, {records, reviews}, running, state))
       {reads, state} = read_all(watched, state, now)
       ahead = landing(watched, reads, open_pulls(watched, state), settings, now)
-      Enum.each(watched, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), now, state, settings))
+      watches = Enum.map(watched, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), now, state, settings))
       clear_left(records, watched, state)
-      summarize(watched, reads, settings, state, now)
+      summarize(watched, reads, settings, report_red_bases(watches, state), now)
     else
       {:error, reason} ->
         Logger.warning("PR watch tick failed repo_key=#{state.repo_key} reason=#{inspect(reason)}")
@@ -232,50 +239,61 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # Reads each watched PR once, in order, until GitHub's rate limit stops the tick: the PRs left
   # unread are marked with it.
   defp read_all(watched, state, now) do
-    required = Map.reject(state.required, fn {_base, {_names, at}} -> DateTime.diff(now, at, :millisecond) >= @required_checks_ttl_ms end)
+    cache = %{required: fresh(state.required, now), workflows: fresh(state.workflows, now)}
     fetch = Keyword.get(state.opts, :fetch, Fetch)
 
-    {reads, required} =
-      Enum.reduce(watched, {%{}, required}, fn
+    {reads, cache} =
+      Enum.reduce(watched, {%{}, cache}, fn
         %{pr_url: nil}, acc ->
           acc
 
-        %{issue: issue, pr_url: pr_url}, {reads, required} ->
-          read_unless_limited(fetch, issue, pr_url, reads, required, state, now)
+        %{issue: issue, pr_url: pr_url}, {reads, cache} ->
+          read_unless_limited(fetch, issue, pr_url, reads, cache, state, now)
       end)
 
-    {reads, %{state | required: required}}
+    {reads, Map.merge(state, cache)}
   end
 
-  defp read_unless_limited(fetch, issue, pr_url, reads, required, state, now) do
+  # What a base branch was read to have (its required checks, whether it has workflow files), kept
+  # for 10 minutes.
+  defp fresh(cache, now), do: Map.reject(cache, fn {_base, {_value, at}} -> DateTime.diff(now, at, :millisecond) >= @required_checks_ttl_ms end)
+
+  defp read_unless_limited(fetch, issue, pr_url, reads, cache, state, now) do
     case Enum.find_value(reads, fn {_id, read} -> match?({:rate_limited, _reset}, read) && read end) do
-      nil -> read_one(fetch, issue, pr_url, reads, required, state, now)
-      limited -> {Map.put(reads, issue.id, limited), required}
+      nil -> read_one(fetch, issue, pr_url, reads, cache, state, now)
+      limited -> {Map.put(reads, issue.id, limited), cache}
     end
   end
 
-  defp read_one(fetch, issue, pr_url, reads, required, state, now) do
-    known = Map.new(required, fn {base, {names, _at}} -> {base, names} end)
+  defp read_one(fetch, issue, pr_url, reads, cache, state, now) do
+    known = fn kind -> Map.new(Map.fetch!(cache, kind), fn {base, {value, _at}} -> {base, value} end) end
 
-    case fetch.read(pr_url, Keyword.merge(gh_opts(state) ++ base_opts(state), required_checks: known)) do
+    opts = Keyword.merge(gh_opts(state) ++ base_opts(state), required_checks: known.(:required), base_workflows: known.(:workflows))
+
+    case fetch.read(pr_url, opts) do
       {:ok, read} ->
-        {Map.put(reads, issue.id, {:ok, read}), cache_required(required, Map.get(read, :required), now)}
+        cache = %{
+          required: cache_base(cache.required, Map.get(read, :required), now),
+          workflows: cache_base(cache.workflows, Map.get(read, :workflows), now)
+        }
+
+        {Map.put(reads, issue.id, {:ok, read}), cache}
 
       {:error, reason} ->
         case Fetch.rate_limited(reason) do
           nil ->
             Logger.warning("PR watch read failed issue_id=#{issue.id} issue_identifier=#{issue.identifier} pr_url=#{pr_url} reason=#{inspect(reason)}")
-            {Map.put(reads, issue.id, {:error, reason}), required}
+            {Map.put(reads, issue.id, {:error, reason}), cache}
 
           limited ->
             Logger.warning("PR watch hit GitHub's rate limit issue_id=#{issue.id} issue_identifier=#{issue.identifier} reset_at=#{inspect(elem(limited, 1))}")
-            {Map.put(reads, issue.id, limited), required}
+            {Map.put(reads, issue.id, limited), cache}
         end
     end
   end
 
-  defp cache_required(required, {base, names}, now), do: Map.put(required, base, {names, now})
-  defp cache_required(required, _none, _now), do: required
+  defp cache_base(cache, {base, value}, now), do: Map.put(cache, base, {value, now})
+  defp cache_base(cache, _none, _now), do: cache
 
   # The repository's open PRs and their files, read once, when there are two watched PRs to order.
   defp open_pulls(watched, state) do
@@ -418,6 +436,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if watch do
       watch = Map.merge(watch, %{source: :poll, landing: landing, links: []})
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
+      watch
     end
   end
 
@@ -439,19 +458,31 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp decided(entry, ticket, read, previous, now, state, settings) do
     new_stay? = new_stay?(previous, entry)
     prior = carried(previous, :attempts, Attempts.new())
-    read = complete(read, prior, entry, state)
+    read = read |> complete(prior, entry, state) |> with_failure(prior, settings, state)
     observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record)})
     attempts = prior |> Attempts.observe(read, observed, now) |> cancel_stale_runs(read, state)
     ticket = Map.put(ticket, :review_comments, review_comments(entry, read, settings, now))
     head = read[:head_sha]
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
     {read, applied} = base_answer(read, applied, entry)
+    {attempts, applied} = take_answer(attempts, applied, entry, read, now, state)
+    read = Attempts.settle(read, attempts, settings.ci.merging_wait_timeout_ms, now)
     facts = Fetch.facts(Map.merge(ticket, Attempts.facts(attempts, read, settings.ci, now)), read)
     fix = settle_fix(carried(previous, :fix, @no_fix), facts)
 
     case decide(facts, entry) do
       {:ok, action} ->
-        ctx = %{repo_key: state.repo_key, settings: settings, issue: entry.issue, read: read, facts: facts, now: now, opts: apply_opts(state)}
+        ctx = %{
+          repo_key: state.repo_key,
+          settings: settings,
+          issue: entry.issue,
+          read: read,
+          facts: facts,
+          now: now,
+          decisions: decisions(entry.record),
+          opts: apply_opts(state)
+        }
+
         result = Apply.apply(action, Map.merge(ctx, %{attempts: attempts, applied: applied, fix: fix}))
         attempts = result.attempts
         project_ci(entry, facts, head, now, state)
@@ -538,8 +569,69 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp base_answer(read, applied, _entry), do: {read, applied}
 
-  defp decisions(%{decisions: decisions}), do: decisions
-  defp decisions(nil), do: []
+  # A red head's failure, read once per head: the same-failure streak compares it.
+  defp with_failure(nil, _attempts, _settings, _state), do: nil
+
+  defp with_failure(read, attempts, settings, state) do
+    Fetch.failure(read, attempts.failure, [line_limit: settings.ci.log_excerpt_lines] ++ Keyword.take(state.opts, [:github, :gh_runner]))
+  end
+
+  # The person's answer to the question R17 asked about the head, once the hold it set has cleared:
+  # a waiver for the head, a rerun of its checks (the question may come again, so R17 leaves the
+  # ledger), or Rework, which the hold's answer already moved it to.
+  defp take_answer(attempts, applied, %{ticket: %{hold: :none}} = entry, read, now, state) do
+    with %{title: title, prior: prior} <- Attempts.open_question(attempts),
+         %{answer: answer} <- entry.record |> decisions() |> Enum.filter(&Apply.same_title?(&1, title)) |> Enum.at(prior) do
+      pick = Apply.unreported_answer(answer)
+      Logger.info("PR watch read the answer to #{title}: #{pick} issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier}")
+      if pick == :rerun, do: rerun_head(read, state)
+      applied = if pick in [:rerun, :other], do: Enum.reject(applied, &(&1.rule == "R17")), else: applied
+      {Attempts.answer(attempts, pick, now), applied}
+    else
+      _unanswered -> {attempts, applied}
+    end
+  end
+
+  defp take_answer(attempts, applied, _entry, _read, _now, _state), do: {attempts, applied}
+
+  # Reruns every workflow run of the head, so a check that never reported gets another chance.
+  defp rerun_head(read, state) do
+    github = Keyword.get(state.opts, :github, PullRequest)
+    opts = gh_opts(state) ++ Fetch.repo_opts(read.pr_url)
+
+    for run_id <- Map.get(read, :run_ids, []) do
+      case github.rerun(run_id, opts) do
+        :ok -> Logger.info("PR watch reran run #{run_id} of #{read.head_sha} pr_url=#{read.pr_url}")
+        {:error, reason} -> Logger.warning("PR watch could not rerun run #{run_id} pr_url=#{read.pr_url} reason=#{inspect(reason)}")
+      end
+    end
+  end
+
+  defp decisions(%{decisions: decisions}) when is_list(decisions), do: decisions
+  defp decisions(_record), do: []
+
+  # A check red on the base too holds every PR it fails (R23): said once per base and check while it
+  # holds any, and once when it no longer does. A tick GitHub's rate limit cut short tells nothing.
+  defp report_red_bases(watches, state) do
+    if Enum.any?(watches, &match?(%{github: {:rate_limited, _reset_at}}, &1)), do: state, else: report_red_bases!(watches, state)
+  end
+
+  defp report_red_bases!(watches, state) do
+    red =
+      for %{decision: %{rule: "R23"}, facts: facts} <- watches, into: MapSet.new() do
+        {facts.base_ref || "the base branch", facts.failing_check || "a check"}
+      end
+
+    for {base, check} <- MapSet.difference(red, state.red_bases) do
+      Logger.warning("PR watch: the `#{check}` check is red on #{base} too; the PRs it fails wait for #{base} to go green repo_key=#{state.repo_key}")
+    end
+
+    for {base, check} <- MapSet.difference(state.red_bases, red) do
+      Logger.info("PR watch: no PR waits on the `#{check}` check of #{base} any more repo_key=#{state.repo_key}")
+    end
+
+    %{state | red_bases: red}
+  end
 
   # The heads the ticket's runs left, which Symphony put there.
   defp run_heads(%{dispatches: dispatches}) do

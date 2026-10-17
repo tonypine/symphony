@@ -361,13 +361,23 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       if Enum.any?(args, &(&1 in ["-X", "--method", "merge", "close", "edit", "rerun", "update-branch"])) or Enum.any?(args, &(&1 =~ "mutation")),
         do: flunk("PrWatch wrote to GitHub: #{inspect(args)}")
 
-      {"HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 10\r\n\r\n" <> body, 0}
+      case args do
+        # The base branch has no workflow files: the head with no checks has no CI.
+        ["api", "repos/acme/app/contents/.github/workflows?ref=main"] -> {"[]", 0}
+        _other -> {"HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 10\r\n\r\n" <> body, 0}
+      end
     end
 
     pid = start_repo!(repo_key, fetch: SymphonyElixir.PrWatch.Fetch, gh_runner: gh_runner)
     assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid)
-    assert %{facts: %Facts{phase: :merging, mergeable: :behind, ci: :none}} = watch(repo_key, "1")
+    assert %{facts: %Facts{phase: :merging, mergeable: :behind, ci: :none, base_ref: "main"}} = watch(repo_key, "1")
     assert_received {:gh, ["api", "--include", "graphql" | _rest]}
+    assert_received {:gh, ["api", "repos/acme/app/contents/.github/workflows?ref=main"]}
+
+    # What the base has is kept: the next tick doesn't read it again.
+    flush()
+    assert {:ok, %{errors: 0}} = Repo.poll(pid)
+    refute_received {:gh, ["api", "repos/acme/app/contents/.github/workflows?ref=main"]}
   end
 
   test "a rate-limited read backs off until the reset and marks the tickets it didn't read", %{repo_key: repo_key} do

@@ -27,7 +27,7 @@ in order and the first that matches decides.
 | R15 | Code Review, QA, Rework, CI Fix, Merging | The conflict is back after 3 fix runs and open PRs share its files | `wait_for_competitors` on every competing PR, stepping behind them |
 | R15a | Code Review, QA, Rework, CI Fix, Merging | The conflict is back after 3 fix runs and no open PR competes | `to_rework` (Rework: `dispatch`) |
 | R16 | Merging | GitHub has not computed whether the PR can merge | `wait` on `github` |
-| R17 | Code Review, QA, Rework, CI Fix, Merging | A required check never reported within the timeout | `decision`: proceed without it for this head, rerun, or fix the workflow in Rework |
+| R17 | Code Review, QA, Rework, CI Fix, Merging | A required check never reported within `landing_wait_timeout_ms` | `decision`: proceed without it for this PR (this head only), rerun, or fix the workflow in Rework |
 | R18 | Code Review, QA, Rework, CI Fix, Merging | Only a check a person must clear is red (`protected paths`) | `decision`: add the waiver label, or drop the change in Rework |
 | R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled | `rerun_failed`, no attempt spent |
 | R20 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same failure 3 fix runs in a row or `red_attempts` at `max_red_attempts` | `file_fix_ticket` for the failing check, waiting on `symphony` until it is terminal |
@@ -85,9 +85,11 @@ The watcher reads them by polling, one watcher per repository whose pull request
 every `pull_requests.poll_interval_ms`. Each read takes the watched tickets from Linear: every
 ticket in `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, and in `In Progress` once it has a
 PR, whether or not Symphony ran it. It then reads each ticket's PR in one GitHub query, the checks
-its base branch requires (kept 10 minutes), the base branch's workflow runs only to tell a red head
-that is also red on the base, and, when two or more watched PRs are open, the repository's open PRs
-and their files once, for the landing order that fills `ahead`.
+its base branch requires (kept 10 minutes), whether the base branch has workflow files (only for a
+head with no check at all, kept 10 minutes), the base branch's workflow runs only to tell a red head
+that is also red on the base, a red head's failed log once per head (its first error line), and,
+when two or more watched PRs are open, the repository's open PRs and their files once, for the
+landing order that fills `ahead`.
 
 The facts are kept on the ticket's state record and listed under each ticket's `watch.facts` in
 `/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
@@ -102,6 +104,28 @@ head Symphony put on a `Merging` PR (any other one is a person's push). In `Merg
 review comments still to address come from the PR review poller's record: reviewer comments left on
 the current head, once `pull_requests.review_comments.rework_delay_minutes` has passed since the
 latest one (a push that addresses them moves the head, so they never send the fix back twice).
+
+### Checks that never report, and no CI
+
+A head with no check at all on a base branch with no workflow files has no CI: `ci: none`, which
+counts as green (D2), and the decision says so ("No CI configured on main"). With workflow files on
+the base, the head waits for its first check; past `pull_requests.checks.landing_wait_timeout_ms`
+with none, it reads as having no CI too ("No check reported on the head within the wait"), so a
+workflow that never runs on pull requests doesn't park the ticket.
+
+A check the base branch requires that hasn't reported reads as running until the same wait passes,
+in any phase. Past it, R17 asks a person (D3), with the ticket held in its phase: **Proceed without
+it for this PR** waives the check for that head only (a new head waits for it again), **Rerun the
+checks** reruns the head's workflow runs and starts the wait over, and **Fix the workflow in
+Rework** moves the ticket to Rework, where nothing is asked again on that head. The watcher reads
+the answer from the ticket's recorded decisions once the hold clears; an answer that picks no option
+starts the wait over, and the question comes again.
+
+A red head whose only failure is `protected paths`, which only a person clears, asks in every phase
+(R18): add the waiver label to the PR (the check runs again and passes), or drop the change in
+Rework. A check that is red on the base branch too (R23) is a wait on CI, with no CI Fix spent:
+logged once per base and check, listed under `red_bases` in `/api/v1/state`, and cleared once the
+base is green.
 
 ## What the watcher does
 
@@ -120,10 +144,9 @@ or `QA` run only on the decision `dispatch`, and, with auto-merge on, a `Merging
 on `land_agent`.
 
 Some rows are recorded without an action until a later ticket applies them: stepping behind
-competing PRs (R15), a required check that never reports (R17), a check only a person clears
-outside `Merging` (R18) and a check red on the base (R23). So are the CI rows with
-`pull_requests.checks` off and the landing rows (and a conflict and review comments in `Merging`)
-with `pull_requests.auto_merge` off.
+competing PRs (R15). So are the CI rows (R17 to R22, and R18 outside `Merging`) with
+`pull_requests.checks` off, and the landing rows (R18 in `Merging` too, and a conflict and review
+comments there) with `pull_requests.auto_merge` off.
 
 ### A PR's life
 
@@ -153,16 +176,25 @@ opens:
 ### Fix runs and their limits
 
 A CI Fix run sent for a red head spends a **red** attempt, held against
-`pull_requests.checks.max_fix_attempts` (default 10). A run sent for a conflict spends a
-**conflict** attempt, against a fixed 3. A run never spends the other kind, and the run a ticket
+`pull_requests.checks.max_fix_attempts` (default 10). Its prompt lists the earlier runs' failures
+(the check, its first error line and the head), so it knows what was tried. A run sent for a
+conflict spends a **conflict** attempt, against a fixed 3. A run never spends the other kind, and the run a ticket
 entered CI Fix for spends no second attempt while it works there. Both counts reset only once the
 PR is green **and** conflict-free: a conflicting PR keeps its last green checks, because GitHub runs
 no workflow on it while it conflicts.
 
+The red backstop also stops **the same failure in a row** (`same_failure_streak`, D15 (c)). A red
+head's signature is its failed check and the first error line of its failed log. Each CI Fix run
+that pushed a head failing with the same signature as the run before adds 1; a different failure, a
+green head, a green and conflict-free PR, or a cleared fix-ticket hold starts it again. At 3 the
+backstop fires, whatever the red count: twice in a row still gets another CI Fix run. The signature
+is the self-heal lane's own for the fix ticket, so the lane's check for the same failure after a fix
+lands compares like with like.
+
 At the red backstop (R20) the watcher turns auto-merge off and hands the failing check to the
 self-heal lane, which files one fix ticket per failing check per repo (component `ci:<check>`) or
-reuses the open one, attaches each fix run's failing check and first error line, the PR and its head
-as evidence, links it as a blocker and holds the ticket on it, in place. No question is asked and
+reuses the open one, attaches each fix run's failing check, first error line and head, the red
+count ("3 of 10 CI Fix runs"), the PR and its head as evidence, links it as a blocker and holds the ticket on it, in place. No question is asked and
 the ticket doesn't move. The hold clears by itself once the fix ticket is terminal, the red count
 restarts, and the head gets CI Fix runs again. The same failure reaching the backstop again after its
 fix landed is the self-heal lane's own escalation to a person.

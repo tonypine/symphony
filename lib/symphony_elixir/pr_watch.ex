@@ -9,7 +9,7 @@ defmodule SymphonyElixir.PrWatch do
   The rest of Symphony reads that record through this module: the orchestrator's dispatch gates
   (`dispatch_reason/2`), a CI Fix run's prompt (`pending_ci_failure/2`, `pending_pr_conflict/2`),
   an agent's view of the open PRs that share its files (`open_pr_overlap/2`), and the state API's
-  landing waits and auto-merge list.
+  landing waits, auto-merge list and red base branches (`red_bases/1`).
   """
 
   use Supervisor
@@ -202,6 +202,23 @@ defmodule SymphonyElixir.PrWatch do
   # The decision's own words when it is the landing wait; else how the landing order reads.
   defp landing_reason(%{kind: kind, reason: reason}, _wait) when kind in [:wait_for_competitors, :wait] and is_binary(reason), do: reason
   defp landing_reason(_decision, wait), do: LandingOrder.reason(wait)
+
+  @doc """
+  Every check red on a base branch that holds watched PRs (R23), once per base and check: the base,
+  the check and the tickets waiting for it to go green, for the state API. It clears by itself once
+  the base is green and no PR waits on it.
+  """
+  @spec red_bases(keyword()) :: [map()]
+  def red_bases(opts \\ []) do
+    opts
+    |> records()
+    |> Enum.filter(&match?(%{pr_watch: %{decision: %{rule: "R23"}}}, &1))
+    |> Enum.group_by(fn %{pr_watch: %{facts: facts}} -> {facts.base_ref, facts.failing_check} end)
+    |> Enum.map(fn {{base, check}, records} ->
+      %{base: base, check: check, issue_identifiers: records |> Enum.map(&(&1.issue_identifier || &1.issue_id)) |> Enum.sort()}
+    end)
+    |> Enum.sort_by(&{&1.base || "", &1.check || ""})
+  end
 
   @doc """
   Every watched `Merging` PR, with whether GitHub auto-merge is on and what the watcher decided, for
