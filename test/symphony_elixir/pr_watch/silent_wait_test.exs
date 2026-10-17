@@ -60,6 +60,21 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
     refute SilentWait.listed?(nil)
   end
 
+  test "a ticket the watcher acted on in this tick is moving, not quiet; an action from an earlier tick is no reason" do
+    quiet = SilentWait.check(watch(decision(%{})), ctx())
+
+    # Auto-merge armed one interval after the ticket went quiet: no second quiet tick.
+    later = DateTime.add(@now, @interval, :millisecond)
+    armed = decision(rule: "R30", kind: :arm, outcome: :applied, decided_at: later)
+    assert SilentWait.check(watch(armed), ctx(now: later, previous: quiet)) == nil
+
+    # The same decision read again on a later tick, with nothing applied, is quiet.
+    assert %{ticks: 1, reason: "R30 decided `arm`, but no run started and no wait is recorded"} =
+             SilentWait.check(watch(armed), ctx(now: DateTime.add(later, 1_000, :millisecond)))
+
+    assert %{ticks: 1} = SilentWait.check(watch(decision(outcome: :recorded)), ctx())
+  end
+
   test "extra polls inside one poll interval add no quiet tick" do
     first = SilentWait.check(watch(decision(%{})), ctx())
 

@@ -59,7 +59,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   later (the confirm read), or, for a push to their base, one by one 1 second apart (a PR whose
   mergeability GitHub hasn't computed yet is read again after the others, up to 5 times). A confirm read
   is a tick of those PRs only: it decides and acts as a timed tick does, keeping the landing order
-  of the last one. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
+  of the last one, unless one of them conflicts or waits on its competitors: then it reads every
+  watched PR and the open PRs, as a timed tick, so the landing order and the race are as fresh as a
+  poll's. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
   only the safety net, every `github.webhooks.fallback_poll_interval_ms`; one that finds a change
   no delivery reported marks them unhealthy, and the next tick is back at the poll interval. The
   watcher of the first repository also reads the app repository's newest release on each timed
@@ -367,12 +369,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
       reviews = review_records(state)
       watched = Enum.flat_map(issues, &watched(&1, settings, {records, reviews}, running, state))
       {reads, state} = read_all(in_scope(watched, scope), state, now)
-      pulls = if scope == :all, do: open_pulls(watched, reads, state), else: :stale
+      {reads, state, decided} = widen(scope, watched, reads, state, now)
+      pulls = if decided == :all, do: open_pulls(watched, reads, state), else: :stale
       {landings, members} = landing(watched, reads, pulls, settings, now)
       race = race(watched, reads, pulls, members, now)
       watched = Enum.map(watched, &settle(&1, pulls, Map.get(landings, &1.issue.id), race, state, settings))
       seen = {if(scope == :all, do: :poll, else: :webhook), now}
-      {watches, health} = write_all(in_scope(watched, scope), {reads, landings, pulls}, race, seen, state, settings)
+      {watches, health} = write_all(in_scope(watched, decided), {reads, landings, pulls}, race, seen, state, settings)
       state = put_health(state, fn _health -> Health.learn_url(health, repository_url(watched)) end)
       clear_left(records, watched, state)
       if scope == :all and Keyword.get(state.opts, :app_release, false), do: poll_release(state, now)
@@ -381,6 +384,21 @@ defmodule SymphonyElixir.PrWatch.Repo do
       {:error, reason} ->
         Logger.warning("PR watch tick failed repo_key=#{state.repo_key} reason=#{inspect(reason)}")
         {{:error, reason}, if(scope == :all, do: %{state | failures: state.failures + 1}, else: state)}
+    end
+  end
+
+  # A confirm read that finds a conflict, or a ticket waiting on its competitors, reads the other
+  # watched PRs and the repository's open PRs too, and decides on all of them as a timed tick does:
+  # the landing order and the race need every PR, so a delivery reaches the same decision a poll
+  # would. Returns the reads and what the tick decides on.
+  defp widen(:all, _watched, reads, state, _now), do: {reads, state, :all}
+
+  defp widen(scope, watched, reads, state, now) do
+    if Enum.any?(in_scope(watched, scope), &competes?(&1, reads)) do
+      {rest, state} = watched |> Enum.reject(&Map.has_key?(reads, &1.issue.id)) |> read_all(state, now)
+      {Map.merge(reads, rest), state, :all}
+    else
+      {reads, state, scope}
     end
   end
 

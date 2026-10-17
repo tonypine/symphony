@@ -120,8 +120,8 @@ defmodule SymphonyElixir.PrWatch.ParityTest do
     assert Parity.state("2") == "CI Fix"
     assert Parity.state("1") == "Code Review"
     assert %{source: :webhook, facts: %{mergeable: :clean}} = Parity.watch("1")
-    # A PR on another base was not touched by the push.
-    assert %{source: :poll} = Parity.watch("3")
+    # The push named no PR on another base: the full read that PR 2's conflict set off reads it unpatched.
+    assert %{delivered_at: nil, facts: %{mergeable: :clean}} = Parity.watch("3")
 
     Parity.reset!()
     assert Parity.run(fixture, :poll).actions == delivered.actions

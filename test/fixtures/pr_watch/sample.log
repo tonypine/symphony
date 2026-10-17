@@ -1,0 +1,18 @@
+2026-10-15T08:00:00.104211+00:00 info: Dispatching issue_id=a0 issue_identifier=TP-900 state="In Progress" slot=1 forced=false
+2026-10-15T08:00:01.120533+00:00 debug: Skipping dispatch: issue_id=a1 issue_identifier=TP-901 state="Code Review"; the PR watcher (R24): Checks are running on PR #501's head
+2026-10-15T08:00:01.130002+00:00 info: Not dispatching the reviewer for issue_id=a1 issue_identifier=TP-901: its head is running
+2026-10-15T08:02:11.000000+00:00 debug: Skipping dispatch: issue_id=a2 issue_identifier=TP-902 state="Merging"; the PR watcher (R32): Checks are running on PR #502: auto-merge lands it when they pass
+2026-10-15T08:02:11.004000+00:00 debug: Skipping dispatch; the PR watcher lands issue_id=a2 issue_identifier=TP-902
+2026-10-15T09:15:42.500000+00:00 debug: Skipping dispatch: issue_id=a3 issue_identifier=TP-903 state="QA"; the PR watcher (R14a): Lands after TP-917: they change the same files (SPEC.md)
+2026-10-15T09:15:42.510000+00:00 info: Not dispatching QA for issue_id=a3 issue_identifier=TP-903: its head is green
+2026-10-15T09:16:00.000000+00:00 debug: Skipping dispatch: issue_id=a4 issue_identifier=TP-904 state="Code Review"; the PR watcher hasn't read its PR yet
+2026-10-15T10:00:00.000000+00:00 debug: Skipping dispatch: issue_id=a5 issue_identifier=TP-905 state="Merging"; on a Blocked hold
+2026-10-15T10:00:00.010000+00:00 debug: Skipping dispatch: issue_id=a6 issue_identifier=TP-906 state="Todo"; blocked by TP-890, TP-891
+2026-10-15T10:00:00.020000+00:00 debug: Skipping dispatch: issue_id=a7 issue_identifier=TP-907 state="Todo"; priority High is not in tickets.priorities (Urgent)
+2026-10-15T10:00:00.030000+00:00 debug: Skipping dispatch: issue_id=a8 issue_identifier=TP-908 state="Todo"; dispatch is paused by the operator
+2026-10-15T10:00:00.040000+00:00 debug: Skipping dispatch: issue_id=a9 issue_identifier=TP-909 state="Rework"; Claude 5-hour limit reached
+2026-10-15T10:00:00.050000+00:00 debug: Skipping dispatch: issue_id=a10 issue_identifier=TP-910 state="In Progress"; already running
+2026-10-15T10:05:00.000000+00:00 debug: Skipping dispatch; Linear is rate-limited for issue_id=a11 issue_identifier=TP-911
+2026-10-16T11:20:00.000000+00:00 warning: pr_watch.silent_wait issue_id=a12 issue_identifier=TP-912 repo_key=symphony phase=code_review since=2026-10-16T11:19:00Z rule=R27 bound=none reason="R27 decided `dispatch`, but no run started and no wait is recorded"
+2026-10-16T12:30:00.000000+00:00 warning: pr_watch.silent_wait issue_id=a13 issue_identifier=TP-913 repo_key=symphony phase=merging since=2026-10-16T12:00:00Z rule=R32 bound=ci.merging_wait_timeout_ms reason="R32: CI has been running for more than 30 min"
+2026-10-16T12:31:00.000000+00:00 info: PR watch cleared the landing hold of issue_id=a5 issue_identifier=TP-905: no competing pull request is left
