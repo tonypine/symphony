@@ -7,6 +7,8 @@ struct OverviewActions {
     var perform: (Overview.Fix) -> Void
     /// The control request under way; its button is off until it is answered.
     var controlInFlight: ControlAction?
+    /// The tickets a Check Now is on its way for; their Check Now is off until it is answered.
+    var checkingNow: Set<String> = []
     /// The Waiting on you tile opens the Inbox.
     var openInbox: () -> Void = {}
     /// Return or a double-click on a ticket row opens its page (D3).
@@ -338,7 +340,7 @@ private struct AttentionRow: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(problem.sentence + (problem.age.map { ", \($0)" } ?? ""))
+        .accessibilityLabel([problem.sentence + (problem.age.map { ", \($0)" } ?? ""), problem.note].compactMap { $0 }.joined(separator: ". "))
         .accessibilityActions {
             ForEach(problem.fixes, id: \.self) { fix in
                 Button(fix.title) { actions.perform(fix) }
@@ -369,6 +371,7 @@ private struct FixButton: View {
 
     private var disabled: Bool {
         if case let .stopForcing(identifier) = fix { return actions.controlInFlight == .stopForcing(identifier) }
+        if case let .checkNow(identifier) = fix { return actions.checkingNow.contains(identifier) }
         return false
     }
 }

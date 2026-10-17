@@ -1,0 +1,138 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "connected": {
+    "blocked_by": [],
+    "blocks": [],
+    "parent": null,
+    "related": [],
+    "sub_tickets": []
+  },
+  "issue_id": "i-704",
+  "issue_identifier": "TP-704",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "symphony",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "verdicts": [],
+  "watch": {
+    "action": "wait",
+    "actions": [
+      {
+        "action": "ci_fix",
+        "at": "2026-10-16T11:10:00Z",
+        "head": "2d3e4f5a6b7c",
+        "rule": "R14",
+        "source": "poll"
+      },
+      {
+        "action": "wait_for_competitors",
+        "at": "2026-10-16T11:50:00Z",
+        "head": "3e4f5a6b7c8d9e0f1a2b",
+        "rule": "R14a",
+        "source": "poll"
+      }
+    ],
+    "applied": [],
+    "clears_when": "what it waits on is done and the hold clears",
+    "decision": {
+      "args": {},
+      "clears_when": "what it waits on is done and the hold clears",
+      "decided_at": "2026-10-16T12:03:40Z",
+      "error": null,
+      "head_sha": "3e4f5a6b7c8d9e0f1a2b",
+      "kind": "wait",
+      "outcome": "recorded",
+      "owner": "symphony",
+      "reason": "A Blocked hold pauses the ticket",
+      "rule": "R4",
+      "since": "2026-10-16T11:50:00Z",
+      "waits_on": null
+    },
+    "facts": {
+      "ahead": [
+        {
+          "files": [
+            "SPEC.md"
+          ],
+          "issue_identifier": "TP-705",
+          "pr_number": 705
+        }
+      ],
+      "auto_merge": "off",
+      "base": "ok",
+      "base_ref": null,
+      "ci": "green",
+      "competing": [],
+      "conflict_attempts": 1,
+      "failing_check": null,
+      "fix_failures": [],
+      "github": "ok",
+      "github_reset_at": null,
+      "head_origin": "symphony",
+      "head_sha": "3e4f5a6b7c8d9e0f1a2b",
+      "hold": "blocked",
+      "landing_timed_out": false,
+      "max_red_attempts": 10,
+      "mergeable": "dirty",
+      "missing_checks": [],
+      "no_ci": "not_configured",
+      "origin": null,
+      "phase": "merging",
+      "pr": "open",
+      "pr_number": 704,
+      "pr_url": "https://github.com/tonypine/symphony/pull/704",
+      "rate_limit": {
+        "remaining": 4321,
+        "reset_at": "2026-10-16T13:00:00Z"
+      },
+      "read_at": "2026-10-16T12:03:40Z",
+      "red_attempts": 0,
+      "red_kind": "failure",
+      "rerun_done": false,
+      "review_comments": "none",
+      "run": "none",
+      "same_failure_streak": 0,
+      "source": "poll"
+    },
+    "head": "3e4f5a6b7c8d9e0f1a2b",
+    "links": [],
+    "outcome": "recorded",
+    "owner": "symphony",
+    "phase": "merging",
+    "pr_url": "https://github.com/tonypine/symphony/pull/704",
+    "read_at": "2026-10-16T12:03:40Z",
+    "reason": "A Blocked hold pauses the ticket",
+    "rule": "R4",
+    "silent": null,
+    "since": "2026-10-16T11:50:00Z",
+    "source": "poll",
+    "summary": null,
+    "waits_on": [
+      {
+        "files": [
+          "SPEC.md"
+        ],
+        "identifier": "TP-705",
+        "kind": "competitor",
+        "pr_url": "https://github.com/tonypine/symphony/pull/705",
+        "shared_files": 1
+      }
+    ]
+  },
+  "watching": {
+    "pull_request_url": "https://github.com/tonypine/symphony/pull/704"
+  },
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/symphony/TP-704"
+  }
+}

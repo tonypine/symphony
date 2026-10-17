@@ -420,6 +420,10 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// What the sheet expects Symphony to answer, for an answer that didn't say.
     public var expectedOutcome: MoveOutcome { MoveOutcome(moved: targetState != nil, toState: targetState) }
 
+    /// Whether the Inbox selects the next item once the move is made (P4): after the ticket moved, or after a
+    /// request was answered, which leaves the Inbox with the next poll even when the ticket stays in its phase.
+    public func selectsNext(after outcome: MoveOutcome) -> Bool { outcome.moved || isDecision }
+
     /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
     /// A restart offers no Undo: it closed the pull request, deleted the workspace and superseded the
     /// workpad, and Symphony can't take any of that back. Unblock moves nothing, so it says what it did
