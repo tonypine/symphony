@@ -98,7 +98,10 @@ ticket's record): the CI Fix runs counted, the heads whose failed checks it rera
 checks have reported yet (a head whose rerun hasn't reported reads as running), since when a
 `Merging` head has been blocked by branch protection on green checks (the merge wait), and the last
 head Symphony put on a `Merging` PR (any other one is a person's push). In `Merging`, a failed
-`protected paths` check that the ticket's unlock decisions cover doesn't hold the head back.
+`protected paths` check that the ticket's unlock decisions cover doesn't hold the head back. The
+review comments still to address come from the PR review poller's record: reviewer comments left on
+the current head, once `pull_requests.review_comments.rework_delay_minutes` has passed since the
+latest one (a push that addresses them moves the head, so they never send the fix back twice).
 
 ## What the watcher does
 
@@ -110,16 +113,42 @@ applied once per head and rule in a stay, so a repeated read never repeats a mov
 update-branch or a fix-ticket filing; one that fails is not recorded, and the next read decides
 again. The ticket's CI label (`CI green`, `CI red`, `CI running`) follows the facts.
 
-The CI and PR review pollers decide nothing: the CI poller keeps the head it last read for a landing
-agent's CI wait, and the PR review poller sends a ticket with reviewer comments back to work and
-cleans up after a merged or closed PR. The orchestrator starts a `Code Review` or `QA` run only on
-the decision `dispatch`, and, with auto-merge on, a `Merging` landing agent only on `land_agent`.
+The CI and PR review pollers decide nothing in the watched phases: the CI poller keeps the head it
+last read for a landing agent's CI wait, and the PR review poller keeps a PR's reviewer comments for
+the run's prompt and cleans up after a merged or closed PR. The orchestrator starts a `Code Review`
+or `QA` run only on the decision `dispatch`, and, with auto-merge on, a `Merging` landing agent only
+on `land_agent`.
 
-Some rows are recorded without an action until a later ticket applies them: a missing PR (R6), a
-changed base (R7), a closed PR (R8), review comments (R13), stepping behind competing PRs (R15), a
-required check that never reports (R17), a check only a person clears outside `Merging` (R18) and a
-check red on the base (R23). So are the CI rows with `pull_requests.checks` off and the landing rows
-(and a conflict in `Merging`) with `pull_requests.auto_merge` off.
+Some rows are recorded without an action until a later ticket applies them: stepping behind
+competing PRs (R15), a required check that never reports (R17), a check only a person clears
+outside `Merging` (R18) and a check red on the base (R23). So are the CI rows with
+`pull_requests.checks` off and the landing rows (and a conflict and review comments in `Merging`)
+with `pull_requests.auto_merge` off.
+
+### A PR's life
+
+The facts follow the ticket's PR from open to merged or closed, and then the new PR a rework run
+opens:
+
+- **Merged**, by Symphony or by a person on GitHub, in any watched phase (R2): the ticket moves to
+  Done, or waits on its started sub-tickets. A PR merged before the watcher followed it (a ticket
+  reopened after its merge) is not followed: that ticket has no PR yet.
+- **Closed without merging**, or its branch deleted (R8, D5): a run that is working is left to end;
+  in In Progress or Rework the next run opens a new PR from main; in Code Review, QA, CI Fix or
+  Merging auto-merge goes off and the ticket moves to Rework with the reason "PR #N was closed
+  without merging", with no question. The rework run is dispatched on the closed PR and never moved
+  again for it; once it opens its new PR, the facts describe that one.
+- **Draft** in Code Review, QA or Merging (R10): a wait on a person until it is marked ready for
+  review. In `Merging` auto-merge goes off while it is a draft, and the landing resumes once it is
+  ready.
+- **On another base** than the repo's `base_branch` (else GitHub's default branch) (R7): a person is
+  asked. "Put the base back" retargets the PR once; "Accept the new base" lets it go on, for that
+  base only.
+- **No PR** past In Progress (R6): a person is asked to attach it, restart or cancel the ticket.
+  In Progress without a PR waits for the agent to open one (R5). A plan parent never has one and
+  isn't watched without it.
+- **Review comments** to address in Code Review, QA or Merging (R13, D8): auto-merge goes off and
+  the ticket goes back to In Progress on the same PR, where the run reads the comments.
 
 ### Fix runs and their limits
 

@@ -1,9 +1,11 @@
 defmodule SymphonyElixir.PrReviewPoller do
   @moduledoc """
-  Polling-mode pull request review poller: reviewer comments and requested changes on a PR send its
-  ticket back to `In Progress` with the comments, and a merged or closed PR's record and workspace
-  are cleaned up. A conflict, a red head, auto-merge and the landing are the PR and CI watcher's
-  (`SymphonyElixir.PrWatch`): this poller decides nothing from them.
+  Polling-mode pull request review poller: it keeps the reviewer comments on a ticket's PR that are
+  still to address, for the run's prompt, and cleans up a merged or closed PR's record and
+  workspace. A conflict, a red head, auto-merge, the landing and a PR's end are the PR and CI
+  watcher's (`SymphonyElixir.PrWatch`), and so are the review comments in `Code Review`, `QA` and
+  `Merging`: the watcher reads them here (`review_comments/5`) and its rule R13 sends the ticket
+  back to `In Progress`. Only a ticket in another phase is sent back by this poller.
   """
 
   use GenServer
@@ -189,6 +191,29 @@ defmodule SymphonyElixir.PrReviewPoller do
         nil
     end
   end
+
+  @doc """
+  Whether the reviewer comments the PR review record keeps are still to address on the PR at
+  `pr_url`, whose head is `head_sha`: `:unaddressed` once the rework delay
+  (`pull_requests.review_comments.rework_delay_minutes`) has passed since the latest of them, while
+  the head is still the one they were left on, else `:none`. A push that addresses them moves the
+  head, so they read as addressed before the run's end advances the record's cursor; a record of
+  another PR, or of one Symphony cannot rework from (a fork), has none. The PR and CI watcher's
+  `review_comments` fact (`SymphonyElixir.PrWatch.Repo`).
+  """
+  @spec review_comments(map() | nil, String.t() | nil, String.t() | nil, map(), DateTime.t()) :: :none | :unaddressed
+  def review_comments(%{pr_url: pr_url} = record, pr_url, head_sha, settings, now) when is_binary(pr_url) do
+    on_head? = string_field(record, :pending_reviewer_comments_reviewed_head_sha) in [nil, head_sha]
+    latest = datetime_field(record, :last_unaddressed_comment_at)
+
+    pending? =
+      reviewer_comments_pending?(record) and not unsupported_cross_repo?(record) and on_head? and
+        cooldown_elapsed?(latest, now, settings.pr_review.cooldown_minutes)
+
+    if pending?, do: :unaddressed, else: :none
+  end
+
+  def review_comments(_record, _pr_url, _head_sha, _settings, _now), do: :none
 
   # The PR head branch the workspace should track when a reviewer-comment rework
   # is pending for the issue, so the rework agent resets onto the latest remote
@@ -575,10 +600,9 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp issue_in_repo?(%Issue{}, repo_key), do: repo_key == Config.repo_key_or_nil()
 
   # The phases whose PR this poller reads for its review activity and its end. A conflict, a red
-  # head, auto-merge and the landing are the PR and CI watcher's (`SymphonyElixir.PrWatch`); here a
-  # `Code Review`, `QA` or `Rework` record acts only on a merged or closed PR, and a `Merging` one
-  # (with auto-merge on) on reviewer comments too, which send it back to `In Progress`
-  # (`acted_on?/3`).
+  # head, auto-merge, the landing and the review comments are the PR and CI watcher's
+  # (`SymphonyElixir.PrWatch`); here a `Code Review`, `QA`, `Rework` or `Merging` (with auto-merge
+  # on) record only cleans up after a merged or closed PR (`acted_on?/3`).
   defp watched_states(settings) do
     if AutoMerge.enabled?(settings),
       do: [@merging_state | phase_states(settings)],
@@ -750,16 +774,16 @@ defmodule SymphonyElixir.PrReviewPoller do
       else: complete_review_update(opts, record, attrs, {:watching, Map.get(record, :issue_id)})
   end
 
-  # A phase's record acts only on the PR's end: its verdicts and review comments belong to the
-  # phase's own machinery. A `Merging` record acts on reviewer comments too. Anything else keeps
-  # the record watching, which also keeps it from being aged out as stale.
+  # A record in a phase the PR and CI watcher decides for acts only on the PR's end: its review
+  # comments are the watcher's rule R13, which reads them from the record (`review_comments/5`).
+  # Anything else keeps the record watching, which also keeps it from being aged out as stale.
   defp acted_on?(action, record, opts) do
-    cond do
-      member?(record, opts, :phase_issue_ids) -> action in [:merged, :closed]
-      member?(record, opts, :merging_issue_ids) -> action in [:merged, :closed, :changes_requested, :review_comments]
-      true -> action in [:merged, :closed, :changes_requested, :review_comments]
-    end
+    if watcher_phase?(record, opts),
+      do: action in [:merged, :closed],
+      else: action in [:merged, :closed, :changes_requested, :review_comments]
   end
+
+  defp watcher_phase?(record, opts), do: member?(record, opts, :phase_issue_ids) or member?(record, opts, :merging_issue_ids)
 
   defp member?(record, opts, key), do: MapSet.member?(Keyword.get(opts, key, MapSet.new()), Map.get(record, :issue_id))
 
@@ -789,13 +813,13 @@ defmodule SymphonyElixir.PrReviewPoller do
     TicketPullRequest.mark_finished(Map.get(record, :repo_key) || Keyword.get(opts, :repo_key), Map.get(record, :pr_url), pr_state)
   end
 
-  # GitHub merged the PR. A `Merging` ticket is the PR and CI watcher's to close out (rule R2): it
-  # moves the ticket to Done before it marks the PR finished, so here it only gets the merged
-  # cleanup. In another phase, whoever merged it, an issue with sub-issues still open waits on them
-  # instead of closing (see SubIssueWait.wait_on_merge?/3), even when Linear's GitHub integration
-  # moved it to Done already. Then the usual merged cleanup.
+  # GitHub merged the PR. A ticket in a phase the PR and CI watcher decides for is its to close out
+  # (rule R2), whoever merged it: it moves the ticket to Done before it marks the PR finished, so
+  # here it only gets the merged cleanup. In another phase an issue with sub-issues still open waits
+  # on them instead of closing (see SubIssueWait.wait_on_merge?/3), even when Linear's GitHub
+  # integration moved it to Done already. Then the usual merged cleanup.
   defp finish_merged(record, settings, opts, now) do
-    if member?(record, opts, :merging_issue_ids) do
+    if watcher_phase?(record, opts) do
       {:ok, record}
     else
       finish_pull_request(record, "merged", opts)

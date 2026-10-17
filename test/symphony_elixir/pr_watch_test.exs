@@ -47,8 +47,8 @@ defmodule SymphonyElixir.PrWatchTest do
       settings = Config.settings!()
       merging = issue("2", "Merging")
 
-      # No PR yet: the landing agent runs, as before the watcher.
-      assert PrWatch.dispatch_reason(merging, settings) == nil
+      # No PR: no landing agent; a person decides how it goes on (R6).
+      assert PrWatch.dispatch_reason(merging, settings) == "the PR watcher hasn't read its PR yet"
 
       PrWatchSupport.put_watch!(@repo_key, "2",
         phase: :merging,
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.PrWatchTest do
         decision: %{rule: "R6", kind: :decision, reason: "no PR"}
       )
 
-      assert PrWatch.dispatch_reason(merging, settings) == nil
+      assert PrWatch.dispatch_reason(merging, settings) == "the PR watcher (R6): no PR"
 
       :ok = TicketPullRequest.record_created(@repo_key, "3", "https://github.com/acme/app/pull/3", "auto/TP-3")
       assert PrWatch.dispatch_reason(issue("3", "Merging"), settings) == "the PR watcher hasn't read its PR yet"

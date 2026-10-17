@@ -62,20 +62,20 @@ defmodule SymphonyElixir.ClosedPullRequestTest do
       assert Enum.map(options, &{&1.label, &1.recommended}) == [{"Reopen", true}, {"Restart", false}, {"Cancel", false}]
     end
 
-    test "holds every phase that works on the existing pull request", %{issue_id: issue_id} do
+    test "holds every phase that judges, repairs or lands the existing pull request", %{issue_id: issue_id} do
       close_pull_request(issue_id)
 
-      for state <- ["Code Review", "QA", "CI Fix", "Rework", " merging "] do
+      for state <- ["Code Review", "QA", "CI Fix", " merging "] do
         RunStore.delete_ticket_state(@repo_key, issue_id)
         assert :held = ClosedPullRequest.guard(issue(issue_id, state), settings!(), [])
         assert Hold.held?(@repo_key, issue_id, :needs_decision)
       end
     end
 
-    test "lets a ticket that builds its own change run", %{issue_id: issue_id} do
+    test "lets a ticket that builds its own change run, Rework too: its run opens a new pull request from main (D5)", %{issue_id: issue_id} do
       close_pull_request(issue_id)
 
-      for state <- ["Todo", "In Progress", nil] do
+      for state <- ["Todo", "In Progress", "Rework", nil] do
         assert :run = ClosedPullRequest.guard(issue(issue_id, state), settings!(), [])
       end
 
