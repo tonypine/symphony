@@ -2220,7 +2220,7 @@ reads them one by one, 1 second apart; a PR that closed by merging does the same
 `ping` (sent when a hook is created) reads every watched PR. A `release` published on
 `tonypine/symphony`, the repository the macOS app updates from, records its newest release; the
 watcher of the first repository also reads it on each timed tick, with one conditional
-`gh api` request. Deliveries whose `X-Hub-Signature-256` does not verify get `401` and are logged
+`gh api` request. `/api/v1/state` reports it to the macOS app under `app_update.latest_release`. Deliveries whose `X-Hub-Signature-256` does not verify get `401` and are logged
 without their payload.
 
 Polling stays on and catches up on anything the relay drops while the Mac sleeps or Symphony

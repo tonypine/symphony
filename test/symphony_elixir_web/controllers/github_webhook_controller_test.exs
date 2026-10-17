@@ -1,7 +1,7 @@
 defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
   use SymphonyElixir.TestSupport
 
-  import Phoenix.ConnTest, only: [build_conn: 0, post: 3, json_response: 2]
+  import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
 
   alias SymphonyElixir.PrWatch.Release
 
@@ -24,14 +24,35 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
     end
   end
 
+  # Answers `GET /api/v1/state` with an idle snapshot.
+  defmodule IdleOrchestrator do
+    use GenServer
+
+    def start_link(name), do: GenServer.start_link(__MODULE__, nil, name: name)
+
+    @impl true
+    def init(nil), do: {:ok, nil}
+
+    @impl true
+    def handle_call(:snapshot, _from, state), do: {:reply, %{running: [], retrying: [], rate_limits: nil}, state}
+  end
+
   setup do
     name = Module.concat(__MODULE__, "Watcher#{System.unique_integer([:positive])}")
     start_supervised!({ForwardingWatcher, name: name, owner: self()})
+    orchestrator = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
+    start_supervised!(%{id: IdleOrchestrator, start: {IdleOrchestrator, :start_link, [orchestrator]}})
 
     endpoint_config =
       :symphony_elixir
       |> Application.get_env(SymphonyElixirWeb.Endpoint, [])
-      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64), pr_watchers: [name])
+      |> Keyword.merge(
+        server: false,
+        secret_key_base: String.duplicate("s", 64),
+        pr_watchers: [name],
+        orchestrator: orchestrator,
+        snapshot_timeout_ms: 1_000
+      )
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
@@ -85,6 +106,18 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
 
     conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "release"}, {"x-hub-signature-256", "sha256=00"}])
     assert json_response(conn, 401)
+  end
+
+  test "a published release of the app's repository shows under app_update in the state" do
+    assert %{"app_update" => %{"latest_release" => nil}} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    release = %{"tag_name" => "v0.0.1.583", "published_at" => "2026-10-16T08:00:00Z", "prerelease" => false}
+    body = Jason.encode!(%{"action" => "published", "release" => release, "repository" => %{"full_name" => "tonypine/symphony"}})
+    conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "release"}, signature(body)])
+    assert json_response(conn, 202) == %{"status" => "accepted"}
+
+    assert %{"app_update" => %{"latest_release" => latest}} = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert latest == %{"repo" => "tonypine/symphony", "tag" => "v0.0.1.583", "published_at" => "2026-10-16T08:00:00Z", "source" => "webhook"}
   end
 
   test "reads the payload of a signed form-encoded delivery" do

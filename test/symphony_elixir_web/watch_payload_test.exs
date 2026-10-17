@@ -7,6 +7,8 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
 
   # The `watch` block's contract with the app: the app's decoding tests read this file too.
   @fixture Path.expand("../fixtures/api/watch_block.json", __DIR__)
+  # The `app_update` block's contract with the app, read by its `StateSnapshotTests` too.
+  @app_update_fixture Path.expand("../fixtures/api/app_update_block.json", __DIR__)
 
   @at ~U[2026-10-16 12:00:00.250Z]
 
@@ -118,5 +120,35 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
 
     assert WatchPayload.rate_limit(%{remaining: 12, reset_at: nil}) == %{remaining: 12, limit: nil, reset: nil}
     assert WatchPayload.rate_limit(nil) == nil
+  end
+
+  describe "app_update/2" do
+    @blocked [
+      %{issue_id: "issue-1037", identifier: "TP-1037", kind: :app_update},
+      %{issue_id: "issue-9", identifier: "TP-9", blockers: []}
+    ]
+
+    test "the app_update block matches the contract the app decodes" do
+      release = %{
+        repo: "tonypine/symphony",
+        tag: "v0.0.1.583",
+        published_at: ~U[2026-10-16 08:00:00.123Z],
+        etag: ~s("e1"),
+        source: :webhook,
+        recorded_at: @at
+      }
+
+      contract = @app_update_fixture |> File.read!() |> Jason.decode!()
+      assert json(WatchPayload.app_update(@blocked, release)) == contract
+    end
+
+    test "no release is null, and a release without a publish time keeps its tag" do
+      assert WatchPayload.app_update([], nil) == %{unblocks: 0, issue_identifiers: [], latest_release: nil}
+
+      release = %{repo: "tonypine/symphony", tag: "v2", published_at: nil, etag: nil, source: :poll, recorded_at: @at}
+
+      assert %{unblocks: 1, latest_release: %{tag: "v2", published_at: nil, source: :poll}} =
+               WatchPayload.app_update(@blocked, release)
+    end
   end
 end
