@@ -13,6 +13,7 @@ defmodule SymphonyElixir.GitHub.FailedLog do
 
   @no_run_id "No GitHub Actions run id was available for the failed check."
   @error_line ~r/(error|failed|failure|exception|stacktrace|traceback|panic)/i
+  @failed_test [~r/\A\d+\) (test .+ \([\w.]+\))\z/, ~r/\ATest Case '(.+)' failed/, ~r/\AFAILED (\S+)/]
   @gh_prefix ~r/\A\s*(?:[^\t]*\t[^\t]*\t)?\x{FEFF}?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/u
 
   @typedoc "The excerpt for the prompt and the first error line in it."
@@ -51,6 +52,23 @@ defmodule SymphonyElixir.GitHub.FailedLog do
       error: Enum.find_value(logs, &error_line(elem(&1, 1))) || first_error(first)
     }
   end
+
+  @doc """
+  The tests job `job` reports failed in `log`, a `gh run view --log-failed` output, once each in
+  order: ExUnit's `1) test … (Module)` headers, XCTest's failed test cases and pytest's `FAILED`
+  lines. None when the job names no failing test (a compile error, a lint) or isn't in the log.
+  """
+  @spec failed_tests(term(), String.t()) :: [String.t()]
+  def failed_tests(log, job) when is_binary(log) and is_binary(job) do
+    log
+    |> sanitize_utf8()
+    |> String.split("\n")
+    |> Enum.filter(&String.starts_with?(&1, job <> "\t"))
+    |> Enum.flat_map(fn line -> Enum.find_value(@failed_test, [], &Regex.run(&1, content(line), capture: :all_but_first)) end)
+    |> Enum.uniq()
+  end
+
+  def failed_tests(_log, _job), do: []
 
   @doc "The last `line_limit` lines of `log`, from the first one that reads like an error."
   @spec excerpt(term(), pos_integer()) :: String.t()

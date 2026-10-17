@@ -61,6 +61,32 @@ defmodule SymphonyElixir.GitHub.FailedLogTest do
     assert FailedLog.first_error("a\tb\tERROR: kept") == "a\tb\tERROR: kept"
   end
 
+  test "failed_tests/2 names the tests one job failed, once each: ExUnit, XCTest and pytest" do
+    stamp = "2026-10-16T21:02:11.4Z"
+
+    log =
+      Enum.join(
+        [
+          "coverage (4/4)\tRun mix test\t#{stamp}   1) test renders the block (MyApp.WatchTest)",
+          "coverage (4/4)\tRun mix test\t#{stamp}      test/my_app/watch_test.exs:56",
+          "coverage (3/4)\tRun mix test\t#{stamp}   1) test races the clock (MyApp.ClockTest)",
+          "coverage (4/4)\tRun mix test\t#{stamp}   2) test renders a (nested) title (MyApp.WatchTest)",
+          "coverage (4/4)\tRun mix test\t#{stamp}   1) test renders the block (MyApp.WatchTest)",
+          "macos\tswift test\t#{stamp} Test Case '-[AppTests.MenuTests testOpens]' failed (0.012 seconds).",
+          "py\tpytest\t#{stamp} FAILED tests/test_app.py::test_sum - assert 2 == 3",
+          <<"py\tpytest\t#{stamp} short test summary ", 0xFF>>
+        ],
+        "\n"
+      )
+
+    assert FailedLog.failed_tests(log, "coverage (4/4)") == ["test renders the block (MyApp.WatchTest)", "test renders a (nested) title (MyApp.WatchTest)"]
+    assert FailedLog.failed_tests(log, "coverage (3/4)") == ["test races the clock (MyApp.ClockTest)"]
+    assert FailedLog.failed_tests(log, "macos") == ["-[AppTests.MenuTests testOpens]"]
+    assert FailedLog.failed_tests(log, "py") == ["tests/test_app.py::test_sum"]
+    assert FailedLog.failed_tests(log, "lint") == []
+    assert FailedLog.failed_tests(nil, "lint") == []
+  end
+
   test "read/3 fetches each run's failed log, with its excerpt and first error line" do
     assert {:ok, %{excerpt: "ERROR: broken\nstack\nlast", error: "ERROR: broken"}} = FailedLog.read(["1"], 3, github: GitHub, repo: "acme/app")
     assert_received {:fetch_failed_log, "1", [repo: "acme/app"]}
