@@ -28,7 +28,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   GitHub's webhook deliveries come in through `ingest/3` (`SymphonyElixir.PrWatch.Ingest`): a
   delivery patches the records it names (`source: :webhook`) and they are read again 3 seconds
-  later (the confirm read), or, for a push to their base, one by one 1 second apart. A confirm read
+  later (the confirm read), or, for a push to their base, one by one 1 second apart (a PR whose
+  mergeability GitHub hasn't computed yet is read again after the others, up to 5 times). A confirm read
   is a tick of those PRs only: it decides and acts as a timed tick does, keeping the landing order
   of the last one. While deliveries are healthy (`SymphonyElixir.PrWatch.Health`) the timed tick is
   only the safety net, every `github.webhooks.fallback_poll_interval_ms`; one that finds a change
@@ -69,8 +70,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @no_fix %{ci_failure: nil, pr_conflict: nil}
   # Coalesces the burst of deliveries a CI run sends (one per check run and suite) into one read.
   @confirm_delay_ms 3_000
-  # GitHub computes a PR's mergeability again after its base moves: its PRs are read one at a time.
+  # GitHub computes a PR's mergeability again after its base moves: its PRs are read one at a time,
+  # and one GitHub hasn't computed yet is read again, up to 5 times.
   @reread_gap_ms 1_000
+  @max_rereads 5
 
   @typedoc "What one tick did."
   @type summary :: %{
@@ -142,6 +145,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       confirm: MapSet.new(),
       confirm_timer: nil,
       rereads: [],
+      reread_tries: %{},
       reread_timer: nil
     }
 
@@ -200,7 +204,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   def handle_info(:reread, %{rereads: [issue_id | rest]} = state) do
     {_reply, state} = tick(%{state | rereads: rest, reread_timer: nil}, {:only, MapSet.new([issue_id])})
-    {:noreply, arm_reread(state)}
+    {:noreply, state |> reread_unknown(issue_id) |> arm_reread()}
   end
 
   def handle_info(:reread, state), do: {:noreply, %{state | reread_timer: nil}}
@@ -250,7 +254,26 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if state.confirm_timer, do: state, else: %{state | confirm_timer: timer(state, :confirm, @confirm_delay_ms)}
   end
 
-  defp reread(state, issue_ids), do: arm_reread(%{state | rereads: Enum.uniq(state.rereads ++ issue_ids)})
+  defp reread(state, []), do: state
+
+  defp reread(state, issue_ids) do
+    tries = Map.merge(state.reread_tries, Map.new(issue_ids, &{&1, 0}))
+    arm_reread(%{state | rereads: Enum.uniq(state.rereads ++ issue_ids), reread_tries: tries})
+  end
+
+  # A PR whose mergeability GitHub hadn't computed yet goes to the back of the queue, until its tries
+  # run out; the timed tick reads it after that.
+  defp reread_unknown(state, issue_id) do
+    tries = Map.get(state.reread_tries, issue_id, 0) + 1
+
+    with true <- tries < @max_rereads,
+         %{} = record <- store(state).get_ticket_state(state.repo_key, issue_id),
+         %{facts: %{mergeable: :unknown}} <- TicketState.pr_watch(record) do
+      %{state | rereads: Enum.uniq(state.rereads ++ [issue_id]), reread_tries: Map.put(state.reread_tries, issue_id, tries)}
+    else
+      _settled -> %{state | reread_tries: Map.delete(state.reread_tries, issue_id)}
+    end
+  end
 
   defp arm_reread(%{rereads: [_ | _], reread_timer: nil} = state), do: %{state | reread_timer: timer(state, :reread, @reread_gap_ms)}
   defp arm_reread(state), do: state

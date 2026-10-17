@@ -221,6 +221,29 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{reread_timer: nil} = :sys.get_state(pid)
     end
 
+    test "a PR whose mergeability GitHub hasn't computed yet is read again after the others, up to 5 times" do
+      pid = started!([{"1", "Code Review", []}, {"2", "QA", []}])
+      flush_timers()
+      Parity.change!([{"1", mergeable: :unknown}, {"2", mergeable: :unknown}])
+
+      :ok = Ingest.deliver(push(), @repo_url, watchers: [pid])
+      _state = :sys.get_state(pid)
+
+      # 1, 2, then 1 again; 2 settles to DIRTY on its second read and goes to CI Fix.
+      reread!(pid, 2)
+      Parity.change!([{"2", mergeable: :dirty}])
+      assert %{rereads: ["issue-1", "issue-2"]} = :sys.get_state(pid)
+      reread!(pid, 2)
+      assert %{rereads: ["issue-1"], reread_tries: %{"issue-1" => 2}} = :sys.get_state(pid)
+      assert Parity.state("2") == "CI Fix"
+
+      # Still unknown after its fifth read, it is left to the timed tick.
+      reread!(pid, 3)
+      assert %{rereads: [], reread_tries: tries} = :sys.get_state(pid)
+      assert tries == %{}
+      assert %{facts: %{mergeable: :unknown}} = Parity.watch("1")
+    end
+
     test "a ping reads every watched PR now" do
       pid = started!([{"1", "Code Review", []}])
       Parity.change!([{"1", red()}])
@@ -366,6 +389,13 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{repos: repos, last_event_at: nil} = Ingest.status(repo_keys: [], now: fn -> now end)
       assert repos == %{}
       assert %{enabled: true} = Ingest.status()
+    end
+  end
+
+  defp reread!(pid, times) do
+    for _read <- 1..times do
+      send(pid, :reread)
+      _state = :sys.get_state(pid)
     end
   end
 
