@@ -23,7 +23,8 @@ defmodule SymphonyElixir.PrWatch do
   @registry SymphonyElixir.Repo.Registry
 
   @doc """
-  Starts a watcher for each repository in `opts[:repo_keys]`. The other `opts` go to each
+  Starts a watcher for each repository in `opts[:repo_keys]`; the first one also reads the app
+  repository's newest release (`SymphonyElixir.PrWatch.Release`). The other `opts` go to each
   `SymphonyElixir.PrWatch.Repo`.
   """
   @spec start_link(keyword()) :: Supervisor.on_start()
@@ -35,9 +36,11 @@ defmodule SymphonyElixir.PrWatch do
   def init(opts) do
     repo_opts = Keyword.drop(opts, [:name, :repo_keys])
 
+    # One watcher reads the app repository's newest release, on its own timed tick.
     opts
     |> Keyword.fetch!(:repo_keys)
-    |> Enum.map(&{Repo, Keyword.put(repo_opts, :repo_key, &1)})
+    |> Enum.with_index()
+    |> Enum.map(fn {repo_key, index} -> {Repo, Keyword.merge(repo_opts, repo_key: repo_key, app_release: index == 0)} end)
     |> Supervisor.init(strategy: :one_for_one)
   end
 

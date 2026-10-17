@@ -2622,7 +2622,17 @@ defmodule SymphonyElixir.ExtensionsTest do
       events_received: 12,
       rejected: 1,
       results_via_webhook: 3,
-      results_via_poll: 2
+      results_via_poll: 2,
+      repos: %{
+        "default" => %{
+          healthy: false,
+          silent: false,
+          last_delivery_at: ~U[2026-10-16 11:58:00Z],
+          signature_failures_24h: 1,
+          missed: 2,
+          missed_at: ~U[2026-10-16 11:59:00Z]
+        }
+      }
     }
 
     cases = [
@@ -2641,6 +2651,20 @@ defmodule SymphonyElixir.ExtensionsTest do
 
       assert html =~ "GitHub webhooks"
       Enum.each(expected, &assert(html =~ &1))
+
+      # The state API shows each repository's delivery health.
+      if name == :WebhooksActiveOrchestrator do
+        assert %{"pollers" => %{"ci" => %{"webhooks" => %{"repos" => %{"default" => health}}}}} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+        assert health == %{
+                 "healthy" => false,
+                 "silent" => false,
+                 "last_delivery_at" => "2026-10-16T11:58:00Z",
+                 "signature_failures_24h" => 1,
+                 "missed" => 2,
+                 "missed_at" => "2026-10-16T11:59:00Z"
+               }
+      end
 
       stop_supervised!(SymphonyElixirWeb.Endpoint)
       GenServer.stop(pid)

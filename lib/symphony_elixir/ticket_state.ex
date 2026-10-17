@@ -128,7 +128,9 @@ defmodule SymphonyElixir.TicketState do
   @typedoc """
   What the PR and CI watcher last read of the ticket's PR (`SymphonyElixir.PrWatch`): the facts
   `SymphonyElixir.PrDecision.decide/1` reads, the PR and head they were read on, how they arrived
-  (`:poll` or `:webhook`) and when, whether GitHub's rate limit stopped the read (with when it
+  (`:poll` or `:webhook`) and when, when a webhook delivery last named the PR (`delivered_at`), the
+  CI the last read found (`read_ci`, which a delivery's patch of `facts` leaves), the base branch it
+  was read on, whether GitHub's rate limit stopped the read (with when it
   resets), the rate limit the read left, and what the landing order keeps of the ticket (its state
   and head, and since when, its files and the PR it waits for). `decision` is what the watcher
   decided on the last read (`SymphonyElixir.PrDecision`): the rule, the kind of action, its reason,
@@ -147,6 +149,9 @@ defmodule SymphonyElixir.TicketState do
           head_sha: String.t() | nil,
           source: :poll | :webhook,
           read_at: DateTime.t() | nil,
+          delivered_at: DateTime.t() | nil,
+          read_ci: :pending | :green | :none | :red | :required_missing | nil,
+          base_ref: String.t() | nil,
           github: :ok | {:rate_limited, DateTime.t() | nil},
           rate_limit: rate_limit() | nil,
           landing: landing() | nil,
@@ -555,6 +560,9 @@ defmodule SymphonyElixir.TicketState do
       head_sha: map_string(watch, :head_sha),
       source: if(Map.get(watch, :source) == :webhook, do: :webhook, else: :poll),
       read_at: map_datetime(watch, :read_at),
+      delivered_at: map_datetime(watch, :delivered_at),
+      read_ci: read_ci(Map.get(watch, :read_ci)),
+      base_ref: map_string(watch, :base_ref),
       github: normalize_github(Map.get(watch, :github)),
       rate_limit: normalize_rate_limit(Map.get(watch, :rate_limit)),
       landing: normalize_landing(Map.get(watch, :landing)),
@@ -584,6 +592,9 @@ defmodule SymphonyElixir.TicketState do
 
   defp map_or_nil(%{} = map), do: map
   defp map_or_nil(_value), do: nil
+
+  defp read_ci(ci) when ci in [:pending, :green, :none, :red, :required_missing], do: ci
+  defp read_ci(_ci), do: nil
 
   defp normalize_github({:rate_limited, reset_at}), do: {:rate_limited, datetime(reset_at)}
   defp normalize_github(_github), do: :ok

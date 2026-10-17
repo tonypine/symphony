@@ -1,18 +1,17 @@
 defmodule SymphonyElixir.GitHub.Webhook do
   @moduledoc """
-  Verifies and reads GitHub webhook deliveries for the CI poller.
+  Verifies and reads GitHub webhook deliveries for the PR and CI watcher.
 
   Symphony listens on 127.0.0.1, so deliveries reach it through a relay (smee.io, a Cloudflare
-  tunnel or `gh webhook forward`). A delivery only tells the CI poller which pull request to poll
-  now; the poll itself decides what happens, so webhooks and polling share one state machine.
+  tunnel or `gh webhook forward`). A delivery patches the facts the watcher keeps and asks it to
+  read the PR now (`SymphonyElixir.PrWatch.Ingest`); only that read decides what happens, so
+  webhooks and polling share one state machine.
   """
 
   alias SymphonyElixir.{Config, Paths, Secret}
   alias SymphonyElixir.Config.Schema.GitHub.Webhooks
 
   @signature_prefix "sha256="
-
-  @failure_conclusions ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]
 
   @type ci_event :: %{
           event: String.t(),
@@ -21,10 +20,17 @@ defmodule SymphonyElixir.GitHub.Webhook do
           conclusion: String.t() | nil,
           completed_at: DateTime.t() | nil,
           pr_urls: [String.t()],
-          merged: boolean()
+          merged: boolean(),
+          base_ref: String.t() | nil
         }
 
-  @type delivery :: {:ci, ci_event()} | :ping | :ignored
+  @typedoc "A push to a branch of `repo_url`: the branch and the commit it now points at."
+  @type push :: %{repo_url: String.t(), ref: String.t(), head_sha: String.t() | nil}
+
+  @typedoc "A release published on `repo` (`owner/name`): its tag and when it was published."
+  @type release :: %{repo: String.t(), tag: String.t(), published_at: DateTime.t() | nil, prerelease: boolean()}
+
+  @type delivery :: {:ci, ci_event()} | {:push, push()} | {:release, release()} | :ping | :ignored
 
   @doc "The `github.webhooks` settings, or the defaults (off) when the config can't be read."
   @spec settings() :: Webhooks.t()
@@ -74,8 +80,10 @@ defmodule SymphonyElixir.GitHub.Webhook do
 
   @doc """
   Reads a delivery: `{:ci, event}` when a check finished or a pull request's head changed or
-  closed (`merged: true` when it closed by merging, which moves its base branch), `:ping` when GitHub (re)connected the hook, and `:ignored` for anything else,
-  including event types left out of `github.webhooks.events`.
+  closed (`merged: true` when it closed by merging, which moves its base branch, `base_ref`),
+  `{:push, push}` when a branch moved, `{:release, release}` when a release was published, `:ping`
+  when GitHub (re)connected the hook, and `:ignored` for anything else, including event types left
+  out of `github.webhooks.events`.
   """
   @spec parse(String.t() | nil, term(), [String.t()]) :: delivery()
   def parse("ping", _payload, _events), do: :ping
@@ -108,7 +116,22 @@ defmodule SymphonyElixir.GitHub.Webhook do
     head_sha = get_in(pull_request, ["head", "sha"])
 
     with {:ci, event} <- ci_event("pull_request", action, head_sha, nil, nil, string_list([Map.get(pull_request, "html_url")])) do
-      {:ci, %{event | merged: action == "closed" and Map.get(pull_request, "merged") == true}}
+      {:ci, %{event | merged: action == "closed" and Map.get(pull_request, "merged") == true, base_ref: string(get_in(pull_request, ["base", "ref"]))}}
+    end
+  end
+
+  # A branch that moved; a deleted branch or a tag names no base a PR could be on.
+  defp parse_event("push", %{"ref" => "refs/heads/" <> branch, "repository" => %{"html_url" => repo_url}} = payload)
+       when is_binary(repo_url) and branch != "" do
+    if Map.get(payload, "deleted") == true, do: :ignored, else: {:push, %{repo_url: repo_url, ref: branch, head_sha: string(Map.get(payload, "after"))}}
+  end
+
+  defp parse_event("release", %{"action" => "published", "release" => %{"tag_name" => tag} = release, "repository" => %{"full_name" => repo}})
+       when is_binary(tag) and tag != "" and is_binary(repo) do
+    if Map.get(release, "draft") == true do
+      :ignored
+    else
+      {:release, %{repo: repo, tag: tag, published_at: parse_datetime(Map.get(release, "published_at")), prerelease: Map.get(release, "prerelease") == true}}
     end
   end
 
@@ -125,7 +148,8 @@ defmodule SymphonyElixir.GitHub.Webhook do
        conclusion: normalize_id(conclusion),
        completed_at: completed_at,
        pr_urls: pr_urls,
-       merged: false
+       merged: false,
+       base_ref: nil
      }}
   end
 
@@ -151,25 +175,6 @@ defmodule SymphonyElixir.GitHub.Webhook do
 
   defp normalize_id(_value), do: nil
 
-  @doc """
-  The coarse CI state a delivery carries of its own, for the machine to write without waiting for
-  the poll: `"running"` for a head that moved (a push or a reopen), `"red"` for a check that
-  failed, and nil when the delivery names no state by itself.
-
-  A check that passed only says *this* check passed, not that the head is green — that is the
-  poll's authoritative rollup read — so it carries nothing here and can never contradict a
-  `"green"` the poll already recorded. A closed PR also carries nothing: clearing its labels is
-  the poller's decision, not a state.
-  """
-  @spec ci_status(ci_event()) :: String.t() | nil
-  def ci_status(%{action: action}) when action in ["synchronize", "reopened"], do: "running"
-
-  def ci_status(%{conclusion: conclusion}) do
-    if String.upcase(normalize_id(conclusion) || "") in @failure_conclusions, do: "red", else: nil
-  end
-
-  def ci_status(_event), do: nil
-
   defp pr_urls(%{"repository" => %{"html_url" => repo_url}}, pull_requests) when is_binary(repo_url) and is_list(pull_requests) do
     pull_requests
     |> Enum.map(fn
@@ -183,16 +188,14 @@ defmodule SymphonyElixir.GitHub.Webhook do
 
   defp string_list(values), do: Enum.filter(values, &(is_binary(&1) and &1 != ""))
 
-  @doc "True when the event names this CI record's PR or its last observed head."
-  @spec matches_record?(ci_event(), map()) :: boolean()
-  def matches_record?(%{pr_urls: pr_urls, head_sha: head_sha}, record) when is_map(record) do
-    pr_url = normalize_url(Map.get(record, :pr_url))
-    shas = [Map.get(record, :last_observed_sha), Map.get(record, :commit_sha)]
+  @doc """
+  The `repository.html_url` a delivery's payload names, or nil. Read before the signature is
+  checked too, only to count a rejected delivery against its repository's health.
+  """
+  @spec repository_url(term()) :: String.t() | nil
+  def repository_url(%{"repository" => %{"html_url" => url}}) when is_binary(url) and url != "", do: url
+  def repository_url(_payload), do: nil
 
-    (is_binary(pr_url) and Enum.any?(pr_urls, &(normalize_url(&1) == pr_url))) or
-      (is_binary(head_sha) and head_sha in shas)
-  end
-
-  defp normalize_url(url) when is_binary(url), do: url |> String.trim() |> String.trim_trailing("/") |> String.downcase()
-  defp normalize_url(_url), do: nil
+  defp string(value) when is_binary(value) and value != "", do: value
+  defp string(_value), do: nil
 end
