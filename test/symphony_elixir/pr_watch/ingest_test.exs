@@ -244,6 +244,36 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{facts: %{mergeable: :unknown}} = Parity.watch("1")
     end
 
+    test "a confirm read that finds a conflict or a competitor wait reads every watched PR and the open PRs, as a poll does" do
+      Parity.tickets!(%{
+        tickets: [{"1", "QA", []}, {"2", "Merging", ci: :pending, mergeable: :blocked, auto_merge: :armed}],
+        files: %{"1" => ["SPEC.md"], "2" => ["SPEC.md", "lib/b.ex"]}
+      })
+
+      pid = Parity.start!()
+      Parity.tick!(pid)
+      flush_timers()
+      Parity.change!([{"2", mergeable: :dirty}])
+      Parity.advance!(1_000)
+
+      # PR 2's reread finds the conflict: PR 1 is read again with it, and the conflict waits on PR 1.
+      :ok = Ingest.deliver(push(), @repo_url, watchers: [pid])
+      reread!(pid, 2)
+      assert %{decision: %{rule: "R14a", kind: :wait_for_competitors}, source: :webhook} = Parity.watch("2")
+      assert %{read_at: read_at} = Parity.watch("1")
+      assert read_at == Parity.now()
+      assert Parity.state("2") == "Merging"
+      assert Parity.blockers("2") == ["TP-1"]
+
+      # PR 1 merges: PR 2's reread sees it gone from the open PRs, its hold clears and it gets its CI Fix run.
+      Parity.change!([{"1", pr: :merged}])
+      :ok = Ingest.deliver(merged("1"), nil, watchers: [pid])
+      reread!(pid, 1)
+      assert Parity.state("2") == "CI Fix"
+      assert %{decision: %{rule: "R14"}} = Parity.watch("2")
+      assert Parity.ending("2").holds == []
+    end
+
     test "a ping reads every watched PR now" do
       pid = started!([{"1", "Code Review", []}])
       Parity.change!([{"1", red()}])

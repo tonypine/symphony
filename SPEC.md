@@ -2371,7 +2371,8 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
   what ends it), the actions applied in the stay, the attempts and what a `CI Fix` run's prompt
   reads (the red head's failure, the conflict). `/api/v1/state` lists them under each watched
   issue's `watch`. The ticket's CI label follows the facts.
-- Each poll also flags a silent wait: a watched ticket with no active run, no hold and no decision
+- Each poll also flags a silent wait: a watched ticket with no active run, no hold, no action the
+  watcher applied on that poll and no decision
   from the last two polls that names who it waits on and what ends the wait, on two polls at least
   a poll interval apart (an extra poll inside an interval counts for none), or a wait on CI past
   `ci.merging_wait_timeout_ms` or on GitHub's rate limit one poll past its reset. `/api/v1/state` lists it under `silent_waits`, and it logs one `pr_watch.silent_wait`
