@@ -12,8 +12,8 @@ defmodule SymphonyElixir.CiFix do
   (`SymphonyElixir.TicketState`), which is what lets the repair return where it came from.
 
   The repair run itself is an ordinary executor run, constrained by the repo's `ci_fix` run profile
-  and the playbook to minimal work: formatting, a flaky rerun, a dependency bump, a
-  conflict resolution — no behavior change. `SymphonyElixir.AgentRunner` reads `origin/3` back and
+  and the playbook to minimal work: formatting, a failing or flaky test fixed at its cause (never
+  a rerun), a dependency bump, a conflict resolution — no behavior change. `SymphonyElixir.AgentRunner` reads `origin/3` back and
   returns the ticket with `:ci_fix_mechanical`, releasing the auto-merge hold when the origin is
   `Merging`, so the approval an earlier verdict earned still covers the PR.
 

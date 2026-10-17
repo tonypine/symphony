@@ -118,7 +118,12 @@ defmodule SymphonyElixir.PrDecisionTest do
     test "G1: no CI configured counts as green, so Code Review dispatches the reviewer (R27, D2)" do
       action = decide(phase: :code_review, ci: :none)
       assert %Action{rule: "R27", kind: :dispatch, args: %{phase: :code_review}} = action
-      assert action.reason =~ "No CI configured"
+      assert action.reason == "No CI configured on the base: counts as green, so the reviewer runs"
+      assert decide(phase: :code_review, ci: :none, base_ref: "main").reason == "No CI configured on main: counts as green, so the reviewer runs"
+
+      assert decide(phase: :qa, ci: :none, no_ci: :not_reported).reason ==
+               "No check reported on the head within the wait: counts as green, so the QA agent runs"
+
       assert %Action{rule: "R27", reason: "The head is green, so the QA agent runs"} = decide(phase: :qa)
     end
 
@@ -126,7 +131,7 @@ defmodule SymphonyElixir.PrDecisionTest do
       action = decide(phase: :merging, ci: :required_missing, missing_checks: ["build"])
       assert %Action{rule: "R17", kind: :decision, owner: :person} = action
       assert action.args.question == "Required check build never reported on PR #42"
-      assert action.args.options == ["Proceed without it for this head", "Rerun the checks", "Fix the workflow in Rework"]
+      assert action.args.options == ["Proceed without it for this PR", "Rerun the checks", "Fix the workflow in Rework"]
     end
 
     test "G3: a conflict back after 3 fix runs never parks silently: it waits on its competitors or goes to Rework" do
@@ -280,7 +285,7 @@ defmodule SymphonyElixir.PrDecisionTest do
       evidence = [%{check: "test", error: "** (MatchError) no match"}, %{check: "test", error: "** (MatchError) no match"}]
       action = red(same_failure_streak: 3, fix_failures: evidence)
 
-      assert action.args == %{check: "test", evidence: evidence}
+      assert action.args == %{check: "test", evidence: evidence, red_attempts: 0, max_red_attempts: 10, same_failure_streak: 3}
       assert action.owner == :symphony
       assert action.reason == "CI keeps failing: waiting on a fix ticket for the `test` check"
       assert action.clears_when == "the fix ticket is terminal"

@@ -1486,6 +1486,45 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [%{status: "watching"}] = RunStore.list_pr_reviews()
   end
 
+  test "review comments in Code Review, QA and Merging are kept for the PR and CI watcher, which moves the ticket (R13)" do
+    now = ~U[2026-05-01 09:00:00Z]
+
+    for state <- ["Code Review", "QA", "Merging"] do
+      :ok = put_review(now)
+      Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: state)])
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, %{rework_activity(DateTime.add(now, -31, :minute)) | head_ref_oid: "head-1"})
+
+      assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_receive {:issue_state_update, _, _}, 50
+      assert [%{pending_reviewer_comments: [%{id: "comment-1"}]} = record] = RunStore.list_pr_reviews()
+      assert record.pending_reviewer_comments_reviewed_head_sha == "head-1"
+
+      settings = Config.settings!()
+      assert PrReviewPoller.review_comments(record, record.pr_url, "head-1", settings, now) == :unaddressed
+      assert PrReviewPoller.review_comments(record, record.pr_url, "head-2", settings, now) == :none
+      assert PrReviewPoller.review_comments(record, "https://github.com/example/repo/pull/9", "head-1", settings, now) == :none
+      assert PrReviewPoller.review_comments(record, record.pr_url, "head-1", settings, DateTime.add(now, -25, :minute)) == :none
+      assert PrReviewPoller.review_comments(Map.put(record, :is_cross_repository, true), record.pr_url, "head-1", settings, now) == :none
+      assert PrReviewPoller.review_comments(nil, record.pr_url, "head-1", settings, now) == :none
+      RunStore.delete_pr_review(@repo_key, "issue-1780")
+    end
+  end
+
+  test "a PR merged in Code Review is the PR and CI watcher's to close out: only the cleanup here (R2)" do
+    now = ~U[2026-05-01 09:00:00Z]
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Code Review")])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
+    :ok = put_review(now)
+
+    assert {:ok, %{actions: [{:cleanup, "issue-1780", "merged"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, workspace: FakeWorkspace, now: now)
+
+    refute_receive {:issue_state_update, _, _}, 50
+    assert %{state: "open"} = TicketPullRequest.get(@repo_key, "issue-1780")
+  end
+
   test "a PR that conflicts with its base branch is left to the PR and CI watcher" do
     now = ~U[2026-05-01 09:00:00Z]
 

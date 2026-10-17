@@ -1,6 +1,9 @@
 defmodule SymphonyElixirWeb.Plugs.SameOriginOrAllowlisted do
   @moduledoc """
   Rejects non-GET requests unless their Origin is trusted by the dashboard policy.
+
+  With `allow_missing: true`, a request with no Origin passes too: browsers send one on every
+  cross-origin POST, so only a non-browser client (curl, the app) sends none.
   """
 
   @behaviour Plug
@@ -16,15 +19,18 @@ defmodule SymphonyElixirWeb.Plugs.SameOriginOrAllowlisted do
   @spec call(Conn.t(), keyword()) :: Conn.t()
   def call(%Conn{method: "GET"} = conn, _opts), do: conn
 
-  def call(%Conn{} = conn, _opts) do
+  def call(%Conn{} = conn, opts) do
     case get_req_header(conn, "origin") do
+      [] ->
+        if Keyword.get(opts, :allow_missing, false), do: conn, else: reject(conn)
+
       [origin] ->
         origin
         |> URI.parse()
         |> HttpServer.allowed_origin?()
         |> maybe_allow(conn)
 
-      _missing_or_ambiguous ->
+      _ambiguous ->
         reject(conn)
     end
   end

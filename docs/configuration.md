@@ -1071,14 +1071,18 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` reruns the failed jobs of a red head once before a `CI Fix` run.
 - `checks.max_fix_attempts` (default 10) is a backstop, not a budget: once that many `CI Fix` runs
-  were sent for red heads, Symphony files a fix ticket for the failing check (or reuses the open one)
-  and holds the ticket on it, in place, until the fix ticket is done; then the count restarts. A
+  were sent for red heads, or 3 in a row met the same failure (the same check and first error line),
+  Symphony files a fix ticket for the failing check (or reuses the open one) and holds the ticket on
+  it, in place, until the fix ticket is done; then the count restarts. A
   conflict gets 3 fix runs whatever this says, then, with no open PR competing for its files, goes
   to `Rework`. The counts reset once the PR is green and conflict-free. `checks.escalate_to_state`
   is deprecated: it loads with a warning and does nothing.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` PR may stay `BLOCKED` by branch
   protection on a green head before a landing agent takes it over, and how long a landing run that
-  ended on pending checks waits for its head to settle.
+  ended on pending checks waits for its head to settle. In any phase it is also how long a head waits
+  for a check its base branch requires before a person is asked whether to go on without it, and
+  how long a head with no check at all waits for its first one when the base branch has workflows
+  (a base without workflow files has no CI, which counts as green).
 - `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
   auto-merge instead of a landing agent, so they take no agent slot:
   - A ticket Symphony moves into `Merging` is looked at right away. A PR that is already `CLEAN`
@@ -1116,7 +1120,11 @@ pull_requests:
     keeps the place of the state it returns to), then the one longest in its state. The others keep working, but get no conflict fix and no
     "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
     its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
-    one up, and a forced ticket never waits. `/api/v1/state` lists the waits under `landing_waits`
+    one up, and a forced ticket never waits. A PR that conflicts while one ahead shares its files,
+    or whose conflict came back after its 3 fix runs while other open PRs share them, waits on them
+    as a Linear blocked-by link and a `Blocked` hold ("Waiting on MT-1 to land: they change the
+    same files (SPEC.md)"), which clears by itself once they land or leave the race; Symphony
+    removes only the links it added. `/api/v1/state` lists the waits under `landing_waits`
     ("Lands after MT-1: they change the same files (lib/a.ex)"), the Mac app's ticket page shows
     them as Lands after, and the agent's first prompt names the open PRs that share files with its
     own, so it can stack on one instead. Nothing to configure.
