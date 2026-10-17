@@ -297,12 +297,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
       records = ticket_states(state)
       running = running_issue_ids(state)
       watched = Enum.flat_map(issues, &watched(&1, settings, records, running, state))
-      read = in_scope(watched, scope)
-      {reads, state} = read_all(read, state, now)
+      to_read = in_scope(watched, scope)
+      {reads, state} = read_all(to_read, state, now)
       pulls = if scope == :all, do: open_pulls(watched, state), else: :stale
       ahead = landing(watched, reads, pulls, settings, now)
       seen = {if(scope == :all, do: :poll, else: :webhook), now}
-      health = Enum.reduce(read, state.health, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), seen, state, settings, &2))
+      health = Enum.reduce(to_read, state.health, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), seen, state, settings, &2))
       state = put_health(state, fn _health -> Health.learn_url(health, repository_url(watched)) end)
       clear_left(records, watched, state)
       if scope == :all and Keyword.get(state.opts, :app_release, false), do: poll_release(state, now)

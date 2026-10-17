@@ -299,8 +299,11 @@ struct SettingsView: View {
 
                 Section {
                     MinutesRow(title: "Safety-net check every", minutes: $model.safetyNetCheckMinutes)
-                    Text("While GitHub's webhook deliveries arrive, Symphony also checks every PR this often, to catch one a delivery missed. Without deliveries it checks at the poll interval.")
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "While GitHub's webhook deliveries arrive, Symphony also checks every PR this often, to catch "
+                            + "one a delivery missed. Without deliveries it checks at the poll interval."
+                    )
+                    .foregroundStyle(.secondary)
                     MinutesRow(title: "Warn me after no updates for", minutes: $model.silenceAlertMinutes)
                     Text("Shows a warning when no delivery has arrived from GitHub for this long.")
                         .foregroundStyle(.secondary)
