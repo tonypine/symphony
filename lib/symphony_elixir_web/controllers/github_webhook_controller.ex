@@ -13,7 +13,7 @@ defmodule SymphonyElixirWeb.GitHubWebhookController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.GitHub.Webhook
+  alias SymphonyElixir.GitHub.{Webhook, WebhookSetup}
   alias SymphonyElixir.PrWatch.Ingest
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.Plugs.RawBodyReader
@@ -36,7 +36,9 @@ defmodule SymphonyElixirWeb.GitHubWebhookController do
 
     case Webhook.verify(raw_body(conn), header(conn, "x-hub-signature-256"), Webhook.secret(webhooks)) do
       :ok ->
-        deliver(conn, Webhook.parse(event, payload, webhooks.events), Webhook.repository_url(payload))
+        repo_url = Webhook.repository_url(payload)
+        :ok = WebhookSetup.delivered(repo_url, Endpoint.config(:github_updates) || [])
+        deliver(conn, Webhook.parse(event, payload, webhooks.events), repo_url)
 
       {:error, reason} ->
         Logger.warning("Rejected GitHub webhook delivery=#{log_value(header(conn, "x-github-delivery"))} event=#{log_value(event)} reason=#{reason}")

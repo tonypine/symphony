@@ -2201,8 +2201,8 @@ github:
   # GitHub webhooks through a relay; they feed the PR and CI watcher, whose poll stays on.
   webhooks:
     enabled: false
-    relay: smee # smee | cloudflare_tunnel | gh_webhook_forward
-    secret: $GITHUB_WEBHOOK_SECRET # unset: read <state-root>/github_webhook_secret
+    relay: smee # smee | cloudflare_tunnel | tailscale_funnel | gh_webhook_forward
+    secret: $SYMPHONY_GITHUB_WEBHOOK_SECRET # unset: read <state-root>/github_webhook_secret
     events: [check_suite, check_run, workflow_run, pull_request, push, release]
     fallback_poll_interval_ms: 300000 # the safety-net poll while deliveries are healthy
     silence_alert_minutes: 10 # warn after this long without a delivery
@@ -2234,6 +2234,14 @@ GitHub webhooks card shows whether webhooks are on, when the last delivery arriv
 results came through the relay and how many by polling. Both intervals are in the app's Settings
 window, under **GitHub updates**. See [github-webhooks.md](github-webhooks.md) for relay setup on
 macOS.
+
+Symphony can set webhooks up itself (`GET /api/v1/setup` → `github_updates`, and
+`POST /api/v1/setup/github_updates/<action>`): turning them on writes `enabled` and `relay`, the
+secret step writes `secret: $SYMPHONY_GITHUB_WEBHOOK_SECRET` (never the value), and the port step
+pins `dashboard.port`; turning them off writes `enabled: false`. With `relay: gh_webhook_forward`
+Symphony runs one `gh webhook forward` per connected repository and restarts it when it drops; the
+other relays need their public URL, and Symphony adds a hook to each repository with
+`gh api repos/:repo/hooks`.
 
 ### `notifications`
 

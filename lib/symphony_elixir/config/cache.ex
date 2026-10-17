@@ -82,15 +82,15 @@ defmodule SymphonyElixir.Config.Cache do
   end
 
   @doc """
-  Drops the cached workflow for `path` so the next read loads it from disk, even
+  Drops the cached workflow or `symphony.yml` for `path` so the next read loads it from disk, even
   when the rewrite kept the same mtime and size.
   """
   @spec invalidate(Path.t()) :: :ok
   def invalidate(path) when is_binary(path) do
-    key = cache_key(:workflow, Path.expand(path))
-    :persistent_term.erase(key)
+    stale = for kind <- [:workflow, :symphony], do: cache_key(kind, Path.expand(path))
+    Enum.each(stale, &:persistent_term.erase/1)
     keys = :persistent_term.get(@index_key, MapSet.new())
-    :persistent_term.put(@index_key, MapSet.delete(keys, key))
+    :persistent_term.put(@index_key, MapSet.difference(keys, MapSet.new(stale)))
     :ok
   end
 
