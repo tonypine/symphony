@@ -40,7 +40,7 @@ defmodule SymphonyElixir.GitHub.WebhookSecret do
   `SymphonyElixir.AgentEnv` passes an allowlist).
   """
   @spec hand_off(Secret.t()) :: :ok | {:error, File.posix()}
-  def hand_off(%Secret{} = secret) do
+  def hand_off(secret) do
     file = Paths.github_webhook_secret_file()
     temporary = "#{file}.#{System.unique_integer([:positive])}"
 
