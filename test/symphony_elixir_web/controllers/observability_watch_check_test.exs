@@ -72,6 +72,22 @@ defmodule SymphonyElixirWeb.ObservabilityWatchCheckTest do
            } = watch
   end
 
+  test "Check Now on a silent Rework ticket the watcher sends a run names who acts next and what clears it" do
+    PrWatchSupport.put_watch!(@repo_key, "issue-1", identifier: "TP-1", phase: :rework, decision: :dispatch)
+
+    start_supervised!(
+      {Watcher,
+       fn ->
+         PrWatchSupport.put_watch!(@repo_key, "issue-1", identifier: "TP-1", phase: :rework, decision: :dispatch)
+         {:ok, %{watched: 1, errors: 0, rate_limited: nil, next_tick_ms: 30_000}}
+       end}
+    )
+
+    assert %{"watch" => %{"action" => "dispatch", "rule" => rule, "reason" => reason} = watch} = json_response(check("TP-1"), 200)
+    assert is_binary(rule) and is_binary(reason)
+    assert %{"owner" => "symphony", "clears_when" => "a run starts on the ticket"} = watch
+  end
+
   test "Check Now names a ticket the watcher doesn't watch, a watcher that isn't running, and a tick that failed" do
     assert %{"error" => %{"code" => "issue_not_watched"}} = json_response(check("TP-404"), 404)
 

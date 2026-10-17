@@ -140,9 +140,12 @@ It leaves the list on the first tick a run is active, a hold is set or a wait is
 
 `GET /api/v1/state` lists each watched ticket under `issues` with its `watch` block, and
 `GET /api/v1/<identifier>` carries the same block: the phase, the PR `head`, how the facts arrived
-(`source`), the decision (`rule`, `action`, `reason`, `owner`, `clears_when`, since when it stands,
-its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last five actions
-applied (`actions`, each with its `source`) and the ticket's `silent` wait.
+(`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and what clears it
+(`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last five actions
+applied (`actions`, each with its `source`) and the ticket's `silent` wait. A wait names its own owner and
+clearing condition; an action Symphony carries out names `symphony` until it is done (for
+`dispatch`, `a run starts on the ticket`), so the block always says who acts next. The silent-wait
+detector still counts only waits as recorded: a `dispatch` that no run followed stays quiet.
 `test/fixtures/api/watch_block.json` is an example of the block, which the API's tests compare
 against. `GET /api/v1/state` also carries GitHub's `rate_limit` (`remaining`, `limit`, `reset`) as the
 newest read left it; with under a tenth left, the watcher's next tick waits up to four intervals, or

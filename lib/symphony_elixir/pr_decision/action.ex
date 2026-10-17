@@ -29,6 +29,21 @@ defmodule SymphonyElixir.PrDecision.Action do
   ]
   @waiting_kinds [:wait, :wait_for_competitors, :file_fix_ticket, :decision]
   @owners [:agent, :ci, :github, :person, :symphony]
+  @next_steps %{
+    rerun_failed: "the failed checks run again",
+    ci_fix: "a CI Fix run starts",
+    return_to_origin: "the ticket returns to the phase it came from",
+    dispatch: "a run starts on the ticket",
+    to_code_review: "the ticket moves to Code Review",
+    to_in_progress: "the ticket moves to In Progress",
+    to_rework: "the ticket moves to Rework",
+    update_branch: "the branch is updated with the base",
+    merge_now: "the PR merges",
+    arm: "auto-merge is on for the PR",
+    disarm: "auto-merge is off for the PR",
+    land_agent: "a landing run starts",
+    close_out: "the ticket moves to Done"
+  }
 
   @type kind ::
           :wait
@@ -75,6 +90,19 @@ defmodule SymphonyElixir.PrDecision.Action do
   @doc "Every owner a wait can name."
   @spec owners() :: [owner()]
   def owners, do: @owners
+
+  @doc """
+  Who acts next on a kind that doesn't leave the ticket waiting, and what clears it: Symphony carries
+  out every such action, and the ticket moves on once it is done. Nil for a waiting kind, whose
+  action names its own owner and clearing condition.
+  """
+  @spec next_step(kind()) :: {owner(), String.t()} | nil
+  def next_step(kind) do
+    case Map.fetch(@next_steps, kind) do
+      {:ok, clears_when} -> {:symphony, clears_when}
+      :error -> nil
+    end
+  end
 
   @doc "Whether `action` leaves the ticket waiting."
   @spec waiting?(t()) :: boolean()

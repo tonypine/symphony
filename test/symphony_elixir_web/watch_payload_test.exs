@@ -57,6 +57,12 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
     assert json(WatchPayload.watch(record())) == @fixture |> File.read!() |> Jason.decode!()
   end
 
+  test "a wait keeps its own owner and clearing condition" do
+    decision = %{rule: "R23", kind: :wait, reason: "The base is red too", owner: :ci, clears_when: "the base goes green", since: nil, outcome: :recorded}
+
+    assert %{owner: "ci", clears_when: "the base goes green", action: "wait"} = WatchPayload.watch(record(%{decision: decision}))
+  end
+
   test "a ticket the watcher doesn't watch has no watch block" do
     assert WatchPayload.watch(TicketState.new("default", "issue-1")) == nil
     assert WatchPayload.watch(nil) == nil

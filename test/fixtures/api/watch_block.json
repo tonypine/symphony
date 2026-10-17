@@ -10,7 +10,7 @@
     }
   ],
   "applied": [],
-  "clears_when": null,
+  "clears_when": "a run starts on the ticket",
   "decision": {
     "args": {},
     "clears_when": null,
@@ -64,7 +64,7 @@
   "head": "abc123",
   "links": [],
   "outcome": "recorded",
-  "owner": null,
+  "owner": "symphony",
   "phase": "rework",
   "pr_url": "https://github.com/acme/app/pull/42",
   "read_at": "2026-10-16T12:00:00Z",

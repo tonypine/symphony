@@ -8,6 +8,7 @@ defmodule SymphonyElixirWeb.WatchPayload do
   example of it, which the API's tests compare against and the app's decoding tests read.
   """
 
+  alias SymphonyElixir.PrDecision.Action
   alias SymphonyElixir.TicketState
 
   @pr_words %{missing: "no PR", open: "open", draft: "a draft", closed: "closed", merged: "merged"}
@@ -24,14 +25,15 @@ defmodule SymphonyElixirWeb.WatchPayload do
 
   @doc """
   The `watch` block of a ticket state record: the phase, the PR head the facts were read on and how
-  they arrived (`source`), the decision (`rule`, `action`, `reason`, `owner`, `clears_when`, since
-  when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last
+  they arrived (`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and
+  what clears it (`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last
   five actions applied with how their facts arrived, and the ticket's silence. `decision`,
   `applied` and `links` are the record's own. Nil when the watcher doesn't watch the ticket.
   """
   @spec watch(TicketState.t() | nil) :: map() | nil
   def watch(%{pr_watch: %{} = watch}) do
     decision = watch.decision || %{}
+    {owner, clears_when} = next_step(decision)
 
     %{
       phase: name(watch.stay || watch.facts.phase),
@@ -42,8 +44,8 @@ defmodule SymphonyElixirWeb.WatchPayload do
       rule: decision[:rule],
       action: name(decision[:kind]),
       reason: decision[:reason],
-      owner: name(decision[:owner]),
-      clears_when: decision[:clears_when],
+      owner: name(owner),
+      clears_when: clears_when,
       since: iso8601(decision[:since]),
       outcome: name(decision[:outcome]),
       summary: summary(watch),
@@ -78,6 +80,11 @@ defmodule SymphonyElixirWeb.WatchPayload do
   @spec rate_limit(map() | nil) :: map() | nil
   def rate_limit(%{} = rate_limit), do: %{remaining: rate_limit.remaining, limit: Map.get(rate_limit, :limit), reset: iso8601(rate_limit.reset_at)}
   def rate_limit(nil), do: nil
+
+  # Who acts next and what clears it: a wait's own, or for an action Symphony carries out (such as
+  # `dispatch`), Symphony until the action is done.
+  defp next_step(%{owner: owner} = decision) when not is_nil(owner), do: {owner, decision[:clears_when]}
+  defp next_step(decision), do: Action.next_step(decision[:kind]) || {nil, decision[:clears_when]}
 
   # The facts in one line, as a person reads them.
   defp summary(%{facts: facts} = watch) do
