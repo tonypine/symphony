@@ -218,14 +218,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
         _delivery -> state
       end
 
+    base = Ingest.base_moved(delivery, repo_url)
+
     {pushed, confirmed} =
       case delivery do
         {:push, _push} -> {named, []}
-        _delivery -> {behind_moved_base(delivery, repo_url, records, named), named}
+        _delivery -> {behind_moved_base(base, records, named), named}
       end
 
     confirmed = Enum.map(confirmed, &patch!(&1, delivery, now, state))
-    pushed = Enum.map(pushed, &patch!(&1, {:push, nil}, now, state))
+    pushed = Enum.map(pushed, &patch!(&1, {:push, base}, now, state))
     {:noreply, state |> confirm(confirmed) |> reread(pushed)}
   end
 
@@ -264,11 +266,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # The other open PRs on the base a merged PR moved, when its delivery stands for that push.
-  defp behind_moved_base(delivery, repo_url, records, named) do
-    case Ingest.base_moved(delivery, repo_url) do
-      nil -> []
-      push -> Enum.reject(named({:push, push}, records), fn {issue_id, _identifier, _watch} -> List.keymember?(named, issue_id, 0) end)
-    end
+  defp behind_moved_base(nil, _records, _named), do: []
+
+  defp behind_moved_base(push, records, named) do
+    Enum.reject(named({:push, push}, records), fn {issue_id, _identifier, _watch} -> List.keymember?(named, issue_id, 0) end)
   end
 
   # A delivery is about this repository when it names one of its PRs or its payload names the
