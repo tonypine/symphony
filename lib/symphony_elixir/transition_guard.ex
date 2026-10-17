@@ -94,6 +94,11 @@ defmodule SymphonyElixir.TransitionGuard do
   # no open PR competing for its files, to `Rework`, where a run can change as much as the conflict
   # needs (D16).
   #
+  # Its lifecycle moves (TP-944): `:pr_closed` sends a ticket whose PR was closed without merging out
+  # of a phase that works on that PR to `Rework`, where the run opens a new one from main (D5);
+  # `:pr_merged` closes a ticket whose PR merged outside `Merging`, by a person or anyone else, as
+  # `:landing_done` does in `Merging`; `:wait_on_merge` holds either one on its open sub-issues.
+  #
   # The lane's other two exits have no row, because they are not machine moves: a repair the fixing
   # agent judges substantive is the agent's own request to set `Rework` (an agent state request is
   # validated by `resolve_request/2`, never performed through this table), and a repair it cannot
@@ -143,7 +148,7 @@ defmodule SymphonyElixir.TransitionGuard do
     # Every sub-issue is terminal: Done.
     %{signal: :sub_issues_done, from: ["Waiting on sub-tickets"], to: "Done"},
     # A PR merged with sub-issues still open: wait on them.
-    %{signal: :wait_on_merge, from: ["Merging"], to: :waiting_on_sub_issues},
+    %{signal: :wait_on_merge, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix", "Merging"], to: :waiting_on_sub_issues},
     # Plan approval promotes a Backlog sub-ticket to Todo.
     %{signal: :breakdown_promote, from: ["Backlog"], to: "Todo"},
     # Re-planning cancels a Backlog sub-ticket (the caller supplies the canceled state it finds).
@@ -163,6 +168,8 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
     %{signal: :person_push, from: ["Merging"], to: :code_review_state},
     %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+    %{signal: :pr_closed, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+    %{signal: :pr_merged, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix"], to: "Done"},
     %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
     %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
     %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}

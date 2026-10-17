@@ -170,8 +170,9 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert SelfHeal.component(%{reason: "no QA playbook applies"}) == "qa_playbook"
 
-      # The PR and CI watcher's red backstop names the failing check.
+      # The PR and CI watcher's red backstop names the failing check, with or without its error.
       assert SelfHeal.component(%{cause: {:ci_check_failed, "make all"}}) == "ci:make all"
+      assert SelfHeal.component(%{cause: {:ci_check_failed, "make all", "ERROR: boom"}}) == "ci:make all"
     end
 
     test "falls back to the flow's own environment for anything unrecognized" do
@@ -298,6 +299,28 @@ defmodule SymphonyElixir.SelfHealTest do
       # The same check failing the same way after its fix landed escalates, as any block does.
       Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: ~s({:ci_check_failed, "specs"})}))
       assert :escalated = SelfHeal.heal(issue(), heal_opts(ci))
+    end
+
+    test "a failed check's signature is its name and first error line, the same failure the PR watcher's streak counts" do
+      assert SelfHeal.signature(%{cause: {:ci_check_failed, "specs", "  ERROR:\tboom  "}}) == "specs: ERROR: boom"
+
+      # After its fix landed, the same error escalates; another error of the same check is progress.
+      ci = outcome({:ci_check_failed, "specs", "ERROR: boom"})
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: "specs: ERROR: boom"}))
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(ci))
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: "specs: ERROR: other"}))
+      assert :retry = SelfHeal.heal(issue(), heal_opts(ci, attempts: 1))
+    end
+
+    test "a failing check gets one open fix ticket per repo, whatever error each ticket hit" do
+      other = recorded(@repo_key, "other-issue", %{component: "ci:specs", scope: @repo_key, signature: "specs: ERROR: other", fix_ticket: @fix_ticket})
+      Process.put(:ticket_states, [other])
+      Process.put({:fix_ticket_state, @fix_ticket}, {:ok, %Issue{id: "fix-id", identifier: @fix_ticket, state: "Todo"}})
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome({:ci_check_failed, "specs", "ERROR: boom"}), terminal_states: ["Done"]))
+      assert Process.get(:fixer_create) == nil
+      assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
+      assert evidence =~ "specs: ERROR: boom"
     end
 
     test "a block a person must clear keeps the access hold and files nothing" do

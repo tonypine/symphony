@@ -2289,8 +2289,10 @@ The poller:
   an open PR;
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
-- waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
-  back to `In Progress` for orchestrator-owned rework handling;
+- waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before the issue
+  goes back to `In Progress` for orchestrator-owned rework handling: the PR and CI watcher's rule R13
+  moves an issue in Code Review, QA or Merging (with auto-merge on) from the comments this poller
+  keeps on the PR's current head, and this poller moves one in any other phase;
 - records the PR head observed when review comments enter pending rework, and only marks those
   comments addressed after the remote PR head advances past that recorded head;
 - tracks the last addressed reviewer comment by id; if that comment is later deleted (its id is no
@@ -4362,6 +4364,9 @@ Minimum endpoints:
     first, with the PR they wait for and the `reason` (Section 7.5). The Mac app's ticket page shows
     it as a Lands after fact (`MT-1 (shares 2 files)`), and a `Merging` ticket's phase as `Waiting on
     MT-1 to land (shares 2 files)`.
+  - `red_bases` lists each check that is red on a base branch and holds watched PRs (rule R23 of
+    `docs/pr-ci-decisions.md`), once per base and check: `base`, `check` and the
+    `issue_identifiers` waiting for it to go green. A row leaves once the base is green.
   - `issues` lists the tickets the PR and CI watcher watches, each with `issue_id`, `identifier`,
     `repo_key` and `watch`: `facts`, the facts the decision table reads (`docs/pr-ci-decisions.md`)
     plus `pr_url`, `head_sha`, `source` (`poll`), `read_at`, `github` (`ok` or `rate_limited`, with

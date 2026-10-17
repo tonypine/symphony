@@ -107,6 +107,7 @@ defmodule SymphonyElixirWeb.Presenter do
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           landing_waits: snapshot |> Map.get(:landing_waits, []) |> Enum.map(&landing_wait_payload/1),
+          red_bases: PrWatch.red_bases(),
           issues: watched_issues_payload(),
           silent_waits: Enum.map(PrWatch.silent_waits(), &WatchPayload.silent_wait/1),
           rate_limit: WatchPayload.rate_limit(PrWatch.rate_limit()),

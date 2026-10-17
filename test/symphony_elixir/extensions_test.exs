@@ -824,6 +824,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "since" => "2026-10-03T06:00:00Z"
                }
              ],
+             "red_bases" => [],
              "issues" => [],
              "silent_waits" => [],
              "rate_limit" => nil,

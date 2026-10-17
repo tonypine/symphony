@@ -81,6 +81,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     def list_ticket_states(_repo_key), do: {:error, :store_down}
     def list_runs_with_status(_status), do: {:error, :store_down}
     def put_ticket_pr_watch(_repo_key, _issue_id, _identifier, _watch), do: {:error, :store_down}
+    def list_pr_reviews(_repo_key), do: {:error, :store_down}
   end
 
   setup do
@@ -197,7 +198,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       issue("2", "In Progress"),
       repo_key |> with_pr(issue("3", "In Progress"), 3),
       issue("4", "Todo"),
-      issue("5", "QA"),
+      issue("5", "Rework", labels: ["plan"]),
       issue("6", "Code Review", repo_key: "other-repo")
     ])
 
@@ -229,10 +230,14 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     # The head's CI label follows the facts.
     assert_received {:label_set, "1", "CI green"}
 
-    # In Progress counts once it has a PR; a watched state with no PR is watched without a read.
+    # A watched state with no PR is watched without a read: In Progress waits for the agent to open
+    # one (R5). A plan parent never opens one, so it isn't watched.
     assert %{facts: %Facts{phase: :in_progress, pr: :open}} = watch(repo_key, "3")
-    assert %{facts: %Facts{phase: :qa, pr: :missing}, pr_url: nil, head_sha: nil, landing: nil} = watch(repo_key, "5")
-    assert RunStore.get_ticket_state(repo_key, "2") == nil
+
+    assert %{facts: %Facts{phase: :in_progress, pr: :missing}, pr_url: nil, landing: nil} = watch(repo_key, "2")
+    assert %{decision: %{rule: "R5", kind: :wait, owner: :agent}} = watch(repo_key, "2")
+
+    assert RunStore.get_ticket_state(repo_key, "5") == nil
     assert RunStore.get_ticket_state(repo_key, "4") == nil
     assert RunStore.get_ticket_state(repo_key, "6") == nil
   end
@@ -356,13 +361,23 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       if Enum.any?(args, &(&1 in ["-X", "--method", "merge", "close", "edit", "rerun", "update-branch"])) or Enum.any?(args, &(&1 =~ "mutation")),
         do: flunk("PrWatch wrote to GitHub: #{inspect(args)}")
 
-      {"HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 10\r\n\r\n" <> body, 0}
+      case args do
+        # The base branch has no workflow files: the head with no checks has no CI.
+        ["api", "repos/acme/app/contents/.github/workflows?ref=main"] -> {"[]", 0}
+        _other -> {"HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 10\r\n\r\n" <> body, 0}
+      end
     end
 
     pid = start_repo!(repo_key, fetch: SymphonyElixir.PrWatch.Fetch, gh_runner: gh_runner)
     assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid)
-    assert %{facts: %Facts{phase: :merging, mergeable: :behind, ci: :none}} = watch(repo_key, "1")
+    assert %{facts: %Facts{phase: :merging, mergeable: :behind, ci: :none, base_ref: "main"}} = watch(repo_key, "1")
     assert_received {:gh, ["api", "--include", "graphql" | _rest]}
+    assert_received {:gh, ["api", "repos/acme/app/contents/.github/workflows?ref=main"]}
+
+    # What the base has is kept: the next tick doesn't read it again.
+    flush()
+    assert {:ok, %{errors: 0}} = Repo.poll(pid)
+    refute_received {:gh, ["api", "repos/acme/app/contents/.github/workflows?ref=main"]}
   end
 
   test "a rate-limited read backs off until the reset and marks the tickets it didn't read", %{repo_key: repo_key} do
@@ -440,7 +455,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
   end
 
   test "a store that can't be read or written leaves the tick going", %{repo_key: repo_key} do
-    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1), issue("2", "QA")])
+    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1), issue("2", "In Progress")])
     pid = start_repo!(repo_key, run_store: FailingStore, settings: Config.settings!())
 
     log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %{watched: 2, errors: 0}} = Repo.poll(pid) end)

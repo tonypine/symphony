@@ -7,6 +7,7 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
   @pr_url "https://github.com/acme/app/pull/42"
   @rules "repos/acme/app/rules/branches/main?per_page=100"
   @branch "repos/acme/app/branches/main"
+  @workflows "repos/acme/app/contents/.github/workflows?ref=main"
   @reset 1_800_000_000
 
   defp headers(remaining \\ 4321), do: "HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: #{remaining}\r\nX-Ratelimit-Limit: 5000\r\nX-Ratelimit-Reset: #{@reset}\r\n\r\n"
@@ -24,9 +25,8 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
         "headRefOid" => "abc123",
         "mergeable" => "MERGEABLE",
         "mergeStateStatus" => "CLEAN",
-        "reviewDecision" => nil,
+        "headRef" => %{"name" => "auto/TP-1"},
         "autoMergeRequest" => nil,
-        "reviewThreads" => %{"nodes" => []},
         "commits" => %{"nodes" => [%{"commit" => %{"statusCheckRollup" => %{"contexts" => %{"nodes" => [check("make all", "SUCCESS")]}}}}]}
       },
       attrs
@@ -90,7 +90,6 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
                base_ref: "main",
                head_sha: "abc123",
                auto_merge: :off,
-               review_comments: :none,
                mergeable: :clean,
                ci: :green,
                missing_checks: [],
@@ -112,17 +111,17 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert_received {:gh, ["api", "--include", "--hostname", "github.example.com", "graphql" | _rest]}
     end
 
-    test "reads the PR's lifecycle, auto-merge, review and merge state" do
+    test "reads the PR's lifecycle, auto-merge and merge state" do
       cases = [
         {%{"merged" => true, "state" => "MERGED"}, :pr, :merged},
         {%{"merged" => nil, "state" => "MERGED"}, :pr, :merged},
         {%{"state" => "CLOSED"}, :pr, :closed},
+        {%{"state" => "CLOSED", "headRef" => nil}, :pr, :closed},
+        {%{"headRef" => nil}, :pr, :closed},
+        {%{"isDraft" => true, "headRef" => nil}, :pr, :closed},
         {%{"isDraft" => true}, :pr, :draft},
         {%{"baseRefName" => "release"}, :base, :changed},
         {%{"autoMergeRequest" => %{"enabledAt" => "2026-10-16T00:00:00Z"}}, :auto_merge, :armed},
-        {%{"reviewThreads" => %{"nodes" => [%{"isResolved" => false, "isOutdated" => false}]}}, :review_comments, :unaddressed},
-        {%{"reviewThreads" => %{"nodes" => [%{"isResolved" => false, "isOutdated" => true}, %{"isResolved" => true}]}}, :review_comments, :none},
-        {%{"reviewDecision" => "CHANGES_REQUESTED"}, :review_comments, :unaddressed},
         {%{"mergeable" => "CONFLICTING", "mergeStateStatus" => "BLOCKED"}, :mergeable, :dirty},
         {%{"mergeStateStatus" => "DIRTY"}, :mergeable, :dirty},
         {%{"mergeStateStatus" => "BEHIND"}, :mergeable, :behind},
@@ -139,18 +138,71 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       end
     end
 
+    test "the base is compared with the repo's base branch when the caller names one, else the default branch" do
+      on_develop = {response(pull(%{"baseRefName" => "develop"}), "main"), 0}
+      known = %{"develop" => []}
+
+      assert {:ok, %{base: :changed, base_branch: "develop"}} = read({response(pull(), "main"), 0}, %{}, base_branch: "develop")
+      assert {:ok, %{base: :ok, base_branch: "develop"}} = read(on_develop, %{}, base_branch: "develop", required_checks: known)
+      assert {:ok, %{base: :changed, base_branch: "main"}} = read(on_develop, %{}, required_checks: known)
+    end
+
     test "a PR whose base is the default branch of a repo that doesn't name one is on its base" do
       assert {:ok, %{base: :ok}} = read({headers() <> Jason.encode!(%{"data" => %{"repository" => %{"defaultBranchRef" => nil, "pullRequest" => pull(%{"baseRefName" => "dev"})}}}), 0})
     end
 
     test "reads pending, no CI and status contexts" do
-      assert {:ok, %{ci: :pending}} = read({response(pull(rollup([check("make all", nil)]))), 0})
-      assert {:ok, %{ci: :none}} = read({response(pull(rollup([]))), 0})
-      assert {:ok, %{ci: :none}} = read({response(pull(%{"commits" => %{"nodes" => [%{"commit" => %{"statusCheckRollup" => nil}}]}})), 0})
+      assert {:ok, %{ci: :pending, awaiting_checks: false}} = read({response(pull(rollup([check("make all", nil)]))), 0})
+      no_workflows = [base_workflows: %{"main" => false}]
+      no_rollup = %{"commits" => %{"nodes" => [%{"commit" => %{"statusCheckRollup" => nil}}]}}
+
+      assert {:ok, %{ci: :none, no_ci: :not_configured, workflows: nil}} =
+               read({response(pull(rollup([]))), 0}, %{}, no_workflows)
+
+      assert {:ok, %{ci: :none}} = read({response(pull(no_rollup)), 0}, %{}, no_workflows)
 
       status = %{"__typename" => "StatusContext", "context" => "deploy/preview", "state" => "SUCCESS", "targetUrl" => "https://ci.example/1"}
       assert {:ok, %{ci: :green}} = read({response(pull(rollup([status]))), 0})
       assert {:ok, %{ci: :pending}} = read({response(pull(rollup([%{status | "state" => "PENDING"}]))), 0})
+    end
+
+    test "a head with no checks: no CI only when the base has no workflow files (D2)" do
+      no_checks = {response(pull(rollup([]))), 0}
+      listing = fn names -> {Jason.encode!(Enum.map(names, &%{"type" => "file", "name" => &1})), 0} end
+
+      # Not known yet: read now, and handed back for the caller to keep.
+      assert {:ok, %{ci: :none, awaiting_checks: false, workflows: {"main", false}}} =
+               read(no_checks, %{@workflows => listing.(["README.md"])})
+
+      assert_received {:gh, ["api", @workflows]}
+      assert {:ok, %{ci: :none, workflows: {"main", false}}} = read(no_checks, %{@workflows => {"gh: Not Found (HTTP 404)", 1}})
+
+      # Workflows on the base: the head waits for its first check.
+      assert {:ok, %{ci: :pending, awaiting_checks: true, workflows: {"main", true}}} =
+               read(no_checks, %{@workflows => listing.(["ci.yml"])})
+
+      assert {:ok, %{ci: :pending, awaiting_checks: true, workflows: nil}} =
+               read(no_checks, %{}, base_workflows: %{"main" => true})
+
+      assert {:ok, %{workflows: {"main", true}}} = read(no_checks, %{@workflows => listing.(["lint.yaml"])})
+
+      # A base that can't be read counts as having workflows; so does a listing that isn't one.
+      assert {:ok, %{ci: :pending, awaiting_checks: true, workflows: nil}} = read(no_checks, %{@workflows => {"gh: boom", 1}})
+      assert {:ok, %{ci: :pending, workflows: nil}} = read(no_checks, %{@workflows => {"{}", 0}})
+
+      # A head with checks, or one a required check is missing on, never reads the workflows.
+      flush_gh()
+      assert {:ok, %{ci: :green}} = read({response(pull()), 0})
+      assert {:ok, %{ci: :required_missing}} = read(no_checks, %{}, required_checks: %{"main" => ["build"]})
+      refute_received {:gh, ["api", @workflows]}
+
+      # Without a base branch there is none to read.
+      assert {:ok, %{ci: :pending, workflows: nil}} = read({response(pull(Map.merge(rollup([]), %{"baseRefName" => nil}))), 0})
+    end
+
+    test "carries every workflow run id of the head, for a rerun" do
+      checks = rollup([check("make all", "SUCCESS", run: 100), check("lint", "SUCCESS", run: 100), check("test", nil, run: 101, workflow: "test")])
+      assert {:ok, %{run_ids: ["100", "101"]}} = read({response(pull(checks)), 0})
     end
 
     test "a check the base branch requires that never reported keeps the head from green" do
@@ -297,6 +349,75 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
     end
   end
 
+  describe "failure/3" do
+    defmodule Logs do
+      def fetch_failed_log(run_id, opts) do
+        send(self(), {:log, run_id, opts[:repo]})
+
+        case run_id do
+          "500" -> {:error, :gone}
+          _other -> {:ok, "setup\nERROR: test failed in run #{run_id}\nstack"}
+        end
+      end
+    end
+
+    defp red_read(attrs \\ %{}) do
+      Map.merge(
+        %{
+          pr_url: @pr_url,
+          head_sha: "abc123",
+          ci: :red,
+          red_kind: :failure,
+          failing_check: "test",
+          failed_checks: [%{name: "test", run_id: "100"}]
+        },
+        attrs
+      )
+    end
+
+    test "reads a plain red head's failed check and first error line once, with the log for the fix run" do
+      read = Fetch.failure(red_read(), nil, github: Logs, line_limit: 5)
+      assert %{failure: %{check: "test", error: "ERROR: test failed in run 100", head_sha: "abc123"}, failed_log: %{excerpt: excerpt}} = read
+      assert excerpt =~ "ERROR: test failed in run 100"
+      assert_received {:log, "100", "acme/app"}
+
+      # Known for this head: not read again.
+      known = %{check: "test", error: "ERROR: earlier", head_sha: "abc123"}
+      assert %{failure: ^known} = read = Fetch.failure(red_read(), known, github: Logs)
+      refute Map.has_key?(read, :failed_log)
+      refute_received {:log, _run_id, _repo}
+
+      # Known for another head: read.
+      assert %{failure: %{error: "ERROR: test failed in run 100"}} = Fetch.failure(red_read(), %{known | head_sha: "old"}, github: Logs)
+    end
+
+    test "names a check when the read names none, the host of an Enterprise PR, and nothing when the log can't be read" do
+      assert %{failure: %{check: "a check"}} = Fetch.failure(red_read(%{failing_check: nil}), nil, github: Logs)
+
+      enterprise = red_read(%{pr_url: "https://github.example.com/acme/app/pull/7"})
+      assert %{failure: %{}} = Fetch.failure(enterprise, nil, github: Logs, github_enterprise_hosts: ["github.example.com"])
+      assert_received {:log, "100", "github.example.com/acme/app"}
+
+      assert %{failure: nil} = Fetch.failure(red_read(%{failed_checks: [%{name: "test", run_id: "500"}]}), nil, github: Logs)
+      assert %{failure: %{}} = Fetch.failure(red_read(%{pr_url: "not a url"}), nil, github: Logs)
+    end
+
+    test "repo_opts names the repository `gh run` acts on" do
+      assert Fetch.repo_opts(@pr_url) == [repo: "acme/app"]
+      assert Fetch.repo_opts("https://github.example.com/acme/app/pull/7", github_enterprise_hosts: ["github.example.com"]) == [repo: "github.example.com/acme/app"]
+      assert Fetch.repo_opts("not a url") == []
+      assert Fetch.repo_opts(nil) == []
+    end
+
+    test "a head that isn't a plain red has no failure" do
+      for attrs <- [%{ci: :green}, %{red_kind: :cancelled}, %{red_kind: :human_only}, %{head_sha: nil}] do
+        assert %{failure: nil} = Fetch.failure(red_read(attrs), nil, github: Logs)
+      end
+
+      refute_received {:log, _run_id, _repo}
+    end
+  end
+
   describe "facts/2" do
     @ticket %{phase: :code_review, origin: :qa, hold: :none, run: :none, max_red_attempts: 3, ahead: []}
 
@@ -306,7 +427,12 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
       facts = Fetch.facts(%{@ticket | ahead: ahead}, read)
       assert %Facts{phase: :code_review, origin: nil, pr: :open, pr_number: 42, ci: :green, mergeable: :behind} = facts
-      assert %Facts{max_red_attempts: 3, ahead: ^ahead, competing: []} = facts
+      assert %Facts{max_red_attempts: 3, ahead: ^ahead, competing: [], review_comments: :none} = facts
+    end
+
+    test "takes the review comments to address from the ticket, not from the read" do
+      assert {:ok, read} = read({response(pull()), 0})
+      assert %Facts{review_comments: :unaddressed} = Fetch.facts(Map.put(@ticket, :review_comments, :unaddressed), read)
     end
 
     test "keeps the origin only in CI Fix, and reads a ticket without a PR as missing" do
