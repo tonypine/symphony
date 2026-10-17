@@ -140,7 +140,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   @impl true
   def init(opts) do
-    state = %{repo_key: Keyword.fetch!(opts, :repo_key), opts: opts, timer: nil, failures: 0, required: %{}, workflows: %{}, red_bases: MapSet.new()}
+    state = %{repo_key: Keyword.fetch!(opts, :repo_key), opts: opts, timer: nil, failures: 0, required: %{}, workflows: %{}, comparisons: %{}, red_bases: MapSet.new()}
     {:ok, schedule(state, 0)}
   end
 
@@ -273,7 +273,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # Reads each watched PR once, in order, until GitHub's rate limit stops the tick: the PRs left
   # unread are marked with it.
   defp read_all(watched, state, now) do
-    cache = %{required: fresh(state.required, now), workflows: fresh(state.workflows, now)}
+    cache = Map.new([:required, :workflows, :comparisons], &{&1, fresh(Map.fetch!(state, &1), now)})
     fetch = Keyword.get(state.opts, :fetch, Fetch)
 
     {reads, cache} =
@@ -288,8 +288,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
     {reads, Map.merge(state, cache)}
   end
 
-  # What a base branch was read to have (its required checks, whether it has workflow files), kept
-  # for 10 minutes.
+  # What a base branch was read to have (its required checks, whether it has workflow files), and how
+  # a red head's failed log compared with the base's, kept for 10 minutes.
   defp fresh(cache, now), do: Map.reject(cache, fn {_base, {_value, at}} -> DateTime.diff(now, at, :millisecond) >= @required_checks_ttl_ms end)
 
   defp read_unless_limited(fetch, issue, pr_url, reads, cache, state, now) do
@@ -302,13 +302,19 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp read_one(fetch, issue, pr_url, reads, cache, state, now) do
     known = fn kind -> Map.new(Map.fetch!(cache, kind), fn {base, {value, _at}} -> {base, value} end) end
 
-    opts = Keyword.merge(gh_opts(state) ++ base_opts(state), required_checks: known.(:required), base_workflows: known.(:workflows))
+    opts =
+      Keyword.merge(gh_opts(state) ++ base_opts(state),
+        required_checks: known.(:required),
+        base_workflows: known.(:workflows),
+        base_comparisons: known.(:comparisons)
+      )
 
     case fetch.read(pr_url, opts) do
       {:ok, read} ->
         cache = %{
           required: cache_base(cache.required, Map.get(read, :required), now),
-          workflows: cache_base(cache.workflows, Map.get(read, :workflows), now)
+          workflows: cache_base(cache.workflows, Map.get(read, :workflows), now),
+          comparisons: Enum.reduce(Map.get(read, :comparisons, %{}), cache.comparisons, &cache_base(&2, &1, now))
         }
 
         {Map.put(reads, issue.id, {:ok, read}), cache}
@@ -839,13 +845,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp report_red_bases!(watches, state) do
-    red =
-      for %{decision: %{rule: "R23"}, facts: facts} <- watches, into: MapSet.new() do
-        {facts.base_ref || "the base branch", facts.failing_check || "a check"}
+    compared =
+      for %{decision: %{rule: "R23"}, facts: facts} <- watches, into: %{} do
+        {{facts.base_ref || "the base branch", facts.failing_check || "a check"}, Map.get(facts, :base_red)}
       end
 
-    for {base, check} <- MapSet.difference(red, state.red_bases) do
-      Logger.warning("PR watch: the `#{check}` check is red on #{base} too; the PRs it fails wait for #{base} to go green repo_key=#{state.repo_key}")
+    red = compared |> Map.keys() |> MapSet.new()
+
+    for {base, check} = key <- MapSet.difference(red, state.red_bases) do
+      Logger.warning("PR watch: the `#{check}` check is red on #{base} too; the PRs it fails wait for #{base} to go green repo_key=#{state.repo_key}#{base_run(compared[key])}")
     end
 
     for {base, check} <- MapSet.difference(state.red_bases, red) do
@@ -854,6 +862,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     %{state | red_bases: red}
   end
+
+  # The base's run and commit the check was compared with, and whether by its tests or its name only.
+  defp base_run(%{run_id: run_id, sha: sha, basis: basis}), do: " base_run_id=#{run_id} base_sha=#{sha} compared_by=#{basis}"
+  defp base_run(_unknown), do: ""
 
   # The heads the ticket's runs left, which Symphony put there.
   defp run_heads(%{dispatches: dispatches}) do

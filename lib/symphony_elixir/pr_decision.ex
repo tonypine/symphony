@@ -521,7 +521,7 @@ defmodule SymphonyElixir.PrDecision do
   end
 
   defp rerun_red(facts), do: Action.new!("R22", :rerun_failed, reason: "#{subject(check(facts))} failed on #{pr(facts)}: rerunning it once before CI Fix")
-  defp wait_for_base(facts), do: wait("R23", "#{subject(check(facts))} is red on the base branch too", :ci, "the check goes green on the base branch")
+  defp wait_for_base(facts), do: wait("R23", "#{subject(check(facts))} is red on the base branch too#{base_compared(facts)}", :ci, "the check goes green on the base branch")
   defp wait_for_checks(facts), do: wait("R24", "Checks are running on #{pr(facts)}'s head", :ci, "the checks finish")
 
   defp return_to_origin(facts) do
@@ -569,6 +569,21 @@ defmodule SymphonyElixir.PrDecision do
 
   defp pr(%{pr_number: number}) when is_integer(number), do: "PR ##{number}"
   defp pr(_facts), do: "the PR"
+
+  # What R23 compared on the base: the base's run and commit, and the failing tests or the name alone.
+  defp base_compared(%{base_red: %{run_id: run_id, basis: basis} = red} = facts) do
+    on = "#{facts.base_ref || "the base branch"}#{short_sha(red[:sha])} (run #{run_id})"
+
+    case basis do
+      :tests -> ": it failed the same tests on #{on}"
+      :name -> ": the check of that name failed on #{on}, compared by name only"
+    end
+  end
+
+  defp base_compared(_facts), do: ""
+
+  defp short_sha(sha) when is_binary(sha), do: " at #{String.slice(sha, 0, 8)}"
+  defp short_sha(_sha), do: ""
 
   defp check(%{failing_check: check}) when is_binary(check), do: "the `#{check}` check"
   defp check(_facts), do: "a check"

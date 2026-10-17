@@ -651,6 +651,28 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: failing)
   end
 
+  test "run_jobs reads a run's commit and the jobs of its latest attempt" do
+    runner = fn
+      ["run", "view", "12", "--json", "headSha,jobs", "-R", "acme/cycle"], _opts ->
+        {Jason.encode!(%{
+           "headSha" => "c1c4ae62",
+           "jobs" => [%{"databaseId" => 7, "name" => "coverage (4/4)", "conclusion" => "success"}, %{"name" => "coverage (3/4)", "conclusion" => "failure"}, "not a job"]
+         }), 0}
+
+      ["run", "view", "13", "--json", "headSha,jobs"], _opts ->
+        {Jason.encode!(%{"headSha" => "abc"}), 0}
+
+      ["run", "view", "14" | _rest], _opts ->
+        {"HTTP 404", 1}
+    end
+
+    assert {:ok, %{head_sha: "c1c4ae62", jobs: [success, failure]}} = PullRequest.run_jobs("12", gh_runner: runner, repo: "acme/cycle")
+    assert success == %{id: "7", name: "coverage (4/4)", conclusion: "SUCCESS"}
+    assert failure == %{id: nil, name: "coverage (3/4)", conclusion: "FAILURE"}
+    assert {:error, :invalid_run_jobs_payload} = PullRequest.run_jobs("13", gh_runner: runner)
+    assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.run_jobs("14", gh_runner: runner)
+  end
+
   test "list_commit_runs reads the workflow runs on one commit, of the repo given or the checkout's" do
     runner = fn
       ["run", "list", "--commit", "abc123", "--limit", "100", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
