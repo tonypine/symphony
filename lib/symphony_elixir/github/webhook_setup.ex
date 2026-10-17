@@ -121,16 +121,12 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   def delivered(repo_url, opts) when is_binary(repo_url) do
     ctx = context(opts)
-    record = load(ctx)
 
-    waiting = for {key, %{sent_at: %DateTime{}, verified_at: nil, github: github}} <- record.tests, same_repo?(repo_url, github), do: key
-
-    if waiting != [] do
+    update(ctx, fn record ->
+      waiting = for {key, %{sent_at: %DateTime{}, verified_at: nil, github: github}} <- record.tests, same_repo?(repo_url, github), do: key
       now = ctx.now.()
-      save(ctx, %{record | tests: Enum.reduce(waiting, record.tests, &put_in(&2, [&1, :verified_at], now))})
-    end
-
-    :ok
+      %{record | tests: Enum.reduce(waiting, record.tests, &put_in(&2, [&1, :verified_at], now))}
+    end)
   end
 
   def delivered(_repo_url, _opts), do: :ok
@@ -285,15 +281,16 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   ## Actions
 
   defp apply_action("turn_on", params, ctx) do
-    with {:ok, relay} <- relay_param(params),
-         {:ok, url} <- optional_url(params, relay) do
-      # Another relay than before: what the old one connected goes first, as with change_relay.
-      if relay != relay_kind(ctx), do: switch_relay(ctx)
+    old_relay = relay_kind(ctx)
 
-      with :ok <- config_result(ctx, [{["github", "webhooks", "enabled"], "true"}, {["github", "webhooks", "relay"], relay}]) do
-        update(ctx, &%{&1 | turned_on_at: &1.turned_on_at || ctx.now.(), relay_url: url || kept_url(&1, relay)})
-        check_all(ctx)
-      end
+    # symphony.yml changes first, so an edit that fails leaves the setup as it was.
+    with {:ok, relay} <- relay_param(params),
+         {:ok, url} <- optional_url(params, relay),
+         :ok <- config_result(ctx, [{["github", "webhooks", "enabled"], "true"}, {["github", "webhooks", "relay"], relay}]) do
+      # Another relay than before: what the old one connected goes, as with change_relay.
+      if relay != old_relay, do: switch_relay(ctx)
+      update(ctx, &%{&1 | turned_on_at: &1.turned_on_at || ctx.now.(), relay_url: url || kept_url(&1, relay)})
+      check_all(ctx)
     end
   end
 
@@ -331,21 +328,18 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   defp apply_action("change_relay", params, ctx) do
     with :ok <- enabled(ctx),
          {:ok, relay} <- relay_param(params),
-         {:ok, url} <- optional_url(params, relay) do
+         {:ok, url} <- optional_url(params, relay),
+         :ok <- config_result(ctx, [{["github", "webhooks", "relay"], relay}]) do
       switch_relay(ctx)
-
-      with :ok <- config_result(ctx, [{["github", "webhooks", "relay"], relay}]) do
-        update(ctx, &%{&1 | relay_url: url})
-        record_step(ctx, "relay", check("relay", ctx))
-        :ok
-      end
+      update(ctx, &%{&1 | relay_url: url})
+      record_step(ctx, "relay", check("relay", ctx))
+      :ok
     end
   end
 
   defp apply_action("turn_off", _params, ctx) do
-    disconnect(ctx)
-
     with :ok <- config_result(ctx, [{["github", "webhooks", "enabled"], "false"}]) do
+      disconnect(ctx)
       update(ctx, &%{&1 | turned_on_at: nil, steps: Map.take(&1.steps, ["relay", "gh_ready", "secret", "port"]), tests: %{}})
     end
   end
@@ -364,10 +358,9 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
   defp disconnect(ctx) do
     for key <- RelaySupervisor.repo_keys(ctx.relays), do: RelaySupervisor.stop(ctx.relays, key)
 
-    update(ctx, fn record ->
-      hooks = Map.reject(record.hooks, fn {_key, hook} -> delete_hook(hook, ctx) == :ok end)
-      %{record | hooks: hooks}
-    end)
+    # GitHub is asked outside the record's lock; only the hooks it deleted leave the record.
+    deleted = Enum.filter(load(ctx).hooks, fn {_key, hook} -> delete_hook(hook, ctx) == :ok end)
+    update(ctx, &%{&1 | hooks: Map.reject(&1.hooks, fn entry -> entry in deleted end)})
   end
 
   defp reconnect(repo, ctx) do
@@ -932,8 +925,19 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     end
   end
 
+  # Setup actions and webhook deliveries change the record from different processes; the lock
+  # keeps one from overwriting what another just stored.
   defp update(ctx, fun) do
-    save(ctx, fun.(load(ctx)))
+    :global.trans(
+      {__MODULE__, self()},
+      fn ->
+        record = load(ctx)
+        changed = fun.(record)
+        if changed != record, do: save(ctx, changed)
+      end,
+      [node()]
+    )
+
     :ok
   end
 

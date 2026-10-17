@@ -477,6 +477,61 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert %{status: "done"} = step(section, "secret")
   end
 
+  test "an action whose symphony.yml edit fails leaves the hooks, the relays and the record as they were", %{opts: opts, dir: dir} = ctx do
+    act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/a"}, opts)
+    act("run_step", %{"step" => "secret"}, opts)
+    act("run_step", %{"step" => "repo:app"}, opts)
+    gh_calls()
+    before = WebhookSetup.section(opts)
+
+    unwritable = Keyword.put(opts, :symphony_file, Path.join(dir, "missing.yml"))
+
+    for {action, params} <- [{"turn_off", %{}}, {"change_relay", %{"relay" => "gh_webhook_forward"}}, {"turn_on", %{"relay" => "gh_webhook_forward"}}] do
+      assert {:error, {:config, "Symphony couldn't change symphony.yml" <> _}} = WebhookSetup.action(action, params, unwritable)
+    end
+
+    refute Enum.any?(gh_calls(), fn {args, _input} -> "DELETE" in args end)
+    assert %{"enabled" => true, "relay" => "smee"} = webhooks()
+    assert WebhookSetup.section(opts) == before
+    assert repo(before, "app").hook == %{id: 11, created_by_symphony: true}
+
+    # A relay Symphony runs keeps running too.
+    set_up_forwarding(ctx)
+    assert {:error, {:config, _message}} = WebhookSetup.action("turn_off", %{}, unwritable)
+    assert RelaySupervisor.repo_keys(ctx.relays) == ["app"]
+  end
+
+  test "a delivery waits while a setup action changes the record, then keeps both changes", %{opts: opts} do
+    act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/a"}, opts)
+    act("run_step", %{"step" => "secret"}, opts)
+    act("run_step", %{"step" => "port"}, opts)
+    act("run_step", %{"step" => "repo:app"}, opts)
+    act("test", %{}, opts)
+
+    # Another process holds the record's lock, as a setup action does while it stores a result.
+    test = self()
+
+    holder =
+      spawn_link(fn ->
+        :global.set_lock({WebhookSetup, self()}, [node()])
+        send(test, :locked)
+        receive do: (:release -> :global.del_lock({WebhookSetup, self()}, [node()]))
+        send(test, :released)
+      end)
+
+    assert_receive :locked
+    delivery = Task.async(fn -> WebhookSetup.delivered("https://github.com/acme/app", opts) end)
+    assert Task.yield(delivery, 100) == nil
+
+    send(holder, :release)
+    assert_receive :released
+    assert Task.await(delivery) == :ok
+
+    section = WebhookSetup.section(opts)
+    assert section.mode == "on"
+    assert repo(section, "app").hook == %{id: 11, created_by_symphony: true}
+  end
+
   ## J6: a symphony.yml brought from another Mac
 
   test "on with no setup on this Mac needs setup, with the steps already done shown done", %{opts: opts, secret: secret} do
