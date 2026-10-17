@@ -426,7 +426,10 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert {:ok, %{next_tick_ms: 120_000}} = Repo.poll(pid)
     assert {:ok, %{next_tick_ms: 240_000}} = Repo.poll(pid)
     assert {:ok, %{next_tick_ms: 300_000}} = Repo.poll(pid)
-    assert watch(repo_key, "1") == before
+
+    # The record stays; only its silence is added. The clock stands still, so it counts no tick.
+    assert %{silent: %{since: @now, ticks: 1}} = after_errors = watch(repo_key, "1")
+    assert %{before | silent: nil} == %{after_errors | silent: nil}
 
     Application.delete_env(:symphony_elixir, :pr_watch_test_reads)
     assert {:ok, %{errors: 0, next_tick_ms: 30_000}} = Repo.poll(pid)
@@ -565,6 +568,190 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert {:error, _reason} = Repo.poll(pid)
     assert Process.read_timer(:sys.get_state(pid).timer) > 290_000
     GenServer.stop(pid)
+  end
+
+  describe "silent waits (TP-945)" do
+    setup %{repo_key: repo_key} do
+      clock = start_supervised!({Agent, fn -> @now end})
+      %{clock: clock, pid: start_repo!(repo_key, name: Repo.name(repo_key), now: fn -> Agent.get(clock, & &1) end)}
+    end
+
+    defp advance!(clock, ms), do: Agent.update(clock, &DateTime.add(&1, ms, :millisecond))
+
+    defp silent_lines(log), do: log |> String.split("\n") |> Enum.filter(&(&1 =~ "pr_watch.silent_wait"))
+
+    defp tick_logged!(pid) do
+      capture_log(fn -> assert {:ok, _summary} = Repo.poll(pid) end) |> silent_lines()
+    end
+
+    test "a Rework ticket with no run and no wait is listed on its second tick, logged once, and leaves when a run starts",
+         %{repo_key: repo_key, clock: clock, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Rework"), 1)])
+
+      # The watcher decides to dispatch the rework run (R26), and no run starts.
+      assert tick_logged!(pid) == []
+      assert %{decision: %{rule: "R26", kind: :dispatch}, silent: %{ticks: 1, since: @now}} = watch(repo_key, "1")
+      assert PrWatch.silent_waits(repo_key: repo_key) == []
+
+      advance!(clock, 30_000)
+      assert [line] = tick_logged!(pid)
+
+      assert line =~
+               "pr_watch.silent_wait issue_id=1 issue_identifier=TP-1 repo_key=#{repo_key} phase=rework since=2026-10-16T12:00:00Z rule=R26 bound=none " <>
+                 ~s(reason="R26 decided `dispatch`, but no run started and no wait is recorded")
+
+      assert [listed] = PrWatch.silent_waits(repo_key: repo_key)
+
+      assert %{issue_id: "1", issue_identifier: "TP-1", repo_key: ^repo_key, phase: :rework} = listed
+      assert %{since: @now, rule: "R26", bound: nil} = listed
+      assert listed.pr_url == pr_url(1)
+
+      # Still silent on the next tick: listed, not logged again.
+      advance!(clock, 30_000)
+      assert tick_logged!(pid) == []
+      assert [%{since: @now}] = PrWatch.silent_waits(repo_key: repo_key)
+
+      # A run starts: the ticket leaves on the next tick.
+      :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-1", issue_id: "1", status: "running"})
+      assert tick_logged!(pid) == []
+      assert %{silent: nil, decision: %{rule: "R9"}} = watch(repo_key, "1")
+      assert PrWatch.silent_waits(repo_key: repo_key) == []
+    end
+
+    test "a ticket no rule decides on is silent from its second tick", %{repo_key: repo_key, clock: clock, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{mergeable: :bogus})}})
+
+      assert tick_logged!(pid) == []
+
+      # A poll inside the interval (a webhook, Check Now) is no second tick.
+      advance!(clock, 5_000)
+      assert tick_logged!(pid) == []
+      assert PrWatch.silent_waits(repo_key: repo_key) == []
+
+      advance!(clock, 25_000)
+      assert [line] = tick_logged!(pid)
+      assert line =~ ~s(phase=qa since=2026-10-16T12:00:00Z rule=none bound=none reason="the watcher has no decision on it")
+    end
+
+    test "a silent ticket leaves once a wait is recorded on it", %{repo_key: repo_key, clock: clock, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Rework"), 1)])
+      assert {:ok, _summary} = Repo.poll(pid)
+      advance!(clock, 30_000)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert [%{issue_identifier: "TP-1"}] = PrWatch.silent_waits(repo_key: repo_key)
+
+      # The same check is red on the base: the ticket waits on CI (R23), a reason anybody can read.
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :red, red_kind: :also_red_on_base, failing_check: "specs"})}})
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{silent: nil, decision: %{rule: "R23", owner: :ci, clears_when: clears_when}} = watch(repo_key, "1")
+      assert is_binary(clears_when)
+      assert PrWatch.silent_waits(repo_key: repo_key) == []
+    end
+
+    test "a wait owned by GitHub past its reset and a tick is listed with that bound", %{repo_key: repo_key, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+
+      # Due to reset half a tick ago: still a reason.
+      reads!(%{pr_url(1) => {:error, {:rate_limited, DateTime.add(@now, -15, :second)}}})
+      assert tick_logged!(pid) == []
+      assert %{decision: %{rule: "R1", owner: :github}, silent: nil} = watch(repo_key, "1")
+
+      reset_at = DateTime.add(@now, -31, :second)
+      reads!(%{pr_url(1) => {:error, {:rate_limited, reset_at}}})
+      assert [line] = tick_logged!(pid)
+      assert line =~ "rule=R1 bound=rate_limit_reset"
+
+      assert [%{issue_identifier: "TP-1", bound: "rate_limit_reset", since: ^reset_at, reason: "R1: GitHub's rate limit was due to reset at 2026-10-16T11:59:29Z"}] =
+               PrWatch.silent_waits(repo_key: repo_key)
+    end
+
+    test "a wait on CI keeps since when it began and is listed past ci.merging_wait_timeout_ms", %{repo_key: repo_key, clock: clock, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :pending})}})
+
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R24", owner: :ci, since: @now}, silent: nil} = watch(repo_key, "1")
+
+      advance!(clock, Config.settings!().ci.merging_wait_timeout_ms + 1)
+      assert [line] = tick_logged!(pid)
+      assert line =~ "rule=R24 bound=ci.merging_wait_timeout_ms"
+      assert %{decision: %{since: @now, decided_at: decided_at}, silent: silent} = watch(repo_key, "1")
+      assert %{bound: "ci.merging_wait_timeout_ms", since: @now} = silent
+      assert decided_at != @now
+
+      # Green: a new decision, standing since this tick.
+      reads!(%{})
+      advance!(clock, 30_000)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R27", since: since}} = watch(repo_key, "1")
+      assert since == Agent.get(clock, & &1)
+    end
+
+    test "Check Now reads and decides within the call, and names a ticket the watcher doesn't watch", %{repo_key: repo_key, clock: clock} do
+      issues!([repo_key |> with_pr(issue("1", "Rework"), 1)])
+
+      # No record yet: every running watcher ticks, and the new record is the answer.
+      assert {:ok, %{issue_identifier: "TP-1", pr_watch: %{decision: %{rule: "R26", decided_at: @now}}}} = PrWatch.check("TP-1", repo_key: repo_key)
+
+      advance!(clock, 60_000)
+      later = Agent.get(clock, & &1)
+      assert {:ok, %{pr_watch: %{decision: %{rule: "R26", decided_at: ^later}}}} = PrWatch.check("TP-1", repo_key: repo_key)
+
+      assert PrWatch.check("TP-404", repo_key: repo_key) == {:error, :not_watched}
+      assert PrWatch.check("TP-404") == {:error, :not_watched}
+
+      issues!({:error, :unauthorized})
+      assert capture_log(fn -> assert PrWatch.check("TP-1", repo_key: repo_key) == {:error, :unauthorized} end) =~ "PR watch tick failed"
+
+      stop_supervised!({Repo, repo_key})
+      assert PrWatch.check("TP-1", repo_key: repo_key) == {:error, :watcher_not_running}
+      assert PrWatch.check("TP-404", repo_key: repo_key) == {:error, :not_watched}
+    end
+
+    test "under a tenth of GitHub's rate limit left, the tick waits up to four intervals, or until the reset", %{repo_key: repo_key, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+
+      low = fn reset_at ->
+        rate_limit = %{remaining: 499, limit: 5000, reset_at: reset_at}
+        reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{rate_limit: rate_limit})}})
+      end
+
+      low.(DateTime.add(@now, 600, :second))
+      assert capture_log(fn -> assert {:ok, %{next_tick_ms: 120_000}} = Repo.poll(pid) end) =~ "pr_watch.rate_limit_low repo_key=#{repo_key} remaining=499 limit=5000 next_tick_ms=120000"
+
+      low.(DateTime.add(@now, 45, :second))
+      assert {:ok, %{next_tick_ms: 45_000}} = Repo.poll(pid)
+
+      low.(DateTime.add(@now, -5, :second))
+      assert {:ok, %{next_tick_ms: 30_000}} = Repo.poll(pid)
+
+      low.(nil)
+      assert {:ok, %{next_tick_ms: 120_000}} = Repo.poll(pid)
+
+      assert %{remaining: 499, limit: 5000, reset_at: nil} = PrWatch.rate_limit(repo_key: repo_key)
+
+      # A tenth or more left: the interval.
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{rate_limit: %{remaining: 500, limit: 5000, reset_at: nil}})}})
+      assert {:ok, %{next_tick_ms: 30_000}} = Repo.poll(pid)
+    end
+
+    test "an action applied joins the last five, with how its facts arrived", %{repo_key: repo_key, clock: clock, pid: pid} do
+      write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true})
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+
+      for n <- 1..6 do
+        # Each red head is rerun once (R22); its failed checks carry no run id, so nothing is called.
+        red = %{head_sha: "sha-#{n}", ci: :red, failing_check: "specs", failed_checks: [], check_names: ["specs"]}
+        reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), red)}})
+        assert {:ok, _summary} = Repo.poll(pid)
+        advance!(clock, 1_000)
+      end
+
+      assert %{actions: actions} = watch(repo_key, "1")
+      assert Enum.map(actions, & &1.head_sha) == ["sha-6", "sha-5", "sha-4", "sha-3", "sha-2"]
+      assert [%{rule: "R22", kind: :rerun_failed, source: :poll, at: %DateTime{}} | _older] = actions
+    end
   end
 
   describe "PrWatch" do

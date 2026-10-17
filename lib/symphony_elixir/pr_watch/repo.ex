@@ -40,7 +40,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   It ticks every `pull_requests.poll_interval_ms`, and at once on `poll_now/1`. A GitHub error
   doubles the wait, up to 5 minutes; GitHub's rate limit stops the tick, marks the tickets it didn't
-  read `github: {:rate_limited, reset_at}`, and waits for the reset.
+  read `github: {:rate_limited, reset_at}`, and waits for the reset. With under a tenth of the rate
+  limit left, it waits up to four intervals, or until the reset when that comes sooner.
+
+  Each tick also runs the silent-wait detector (`SymphonyElixir.PrWatch.SilentWait`) on every
+  watched ticket and keeps its result on the record (`silent`); a ticket that turns silent logs one
+  `pr_watch.silent_wait` line. The record keeps since when the decision stands (`decision.since`)
+  and the last five actions applied (`actions`).
   """
 
   use GenServer
@@ -64,7 +70,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
-  alias SymphonyElixir.PrWatch.{Attempts, Fetch}
+  alias SymphonyElixir.PrWatch.{Attempts, Fetch, SilentWait}
 
   @registry SymphonyElixir.Repo.Registry
   @in_progress_state "In Progress"
@@ -173,6 +179,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp summarize(watched, reads, settings, state, now) do
     errors = Enum.count(reads, &match?({_id, {:error, _reason}}, &1))
     limited = Enum.find_value(reads, fn {_id, read} -> match?({:rate_limited, _reset}, read) && read end)
+    low = Enum.find_value(reads, fn {_id, read} -> low_rate_limit(read) end)
     failures = if errors > 0 or limited, do: state.failures + 1, else: 0
     state = %{state | failures: failures}
 
@@ -180,6 +187,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       cond do
         limited -> rate_limit_wait_ms(limited, state, settings, now)
         errors > 0 -> backoff_ms(state, settings)
+        low -> slow_ms(low, state, settings, now)
         true -> interval_ms(state, settings)
       end
 
@@ -433,12 +441,65 @@ defmodule SymphonyElixir.PrWatch.Repo do
           nil
       end
 
+    # A read that failed keeps the record the ticket had; only its silence moves.
+    watch = if watch, do: watch |> Map.merge(%{source: :poll, landing: landing, links: []}) |> settled(previous), else: previous
+
     if watch do
-      watch = Map.merge(watch, %{source: :poll, landing: landing, links: []})
+      watch = silence(watch, entry, previous, now, state, settings)
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
       watch
     end
   end
+
+  # The decision keeps since when it stands while the watcher makes the same one on the same head,
+  # and an action applied joins the last five.
+  defp settled(watch, previous) do
+    watch
+    |> Map.put(:decision, since(watch.decision, previous && previous.decision))
+    |> Map.put(:actions, actions(watch, previous))
+  end
+
+  defp since(nil, _previous), do: nil
+
+  defp since(decision, %{since: %DateTime{} = since} = previous) do
+    same? = Map.take(previous, [:rule, :kind, :head_sha]) == Map.take(decision, [:rule, :kind, :head_sha])
+    Map.put(decision, :since, if(same?, do: since, else: decision.decided_at))
+  end
+
+  defp since(decision, _previous), do: Map.put(decision, :since, decision.decided_at)
+
+  defp actions(%{decision: %{outcome: :applied} = decision, source: source}, previous) do
+    action = %{rule: decision.rule, kind: decision.kind, head_sha: decision.head_sha, at: decision.decided_at, source: source}
+    Enum.take([action | carried(previous, :actions, [])], 5)
+  end
+
+  defp actions(_watch, previous), do: carried(previous, :actions, [])
+
+  defp silence(watch, entry, previous, now, state, settings) do
+    before = previous && Map.get(previous, :silent)
+
+    silent =
+      SilentWait.check(watch, %{
+        run: entry.ticket.run,
+        hold: entry.ticket.hold,
+        now: now,
+        interval_ms: interval_ms(state, settings),
+        ci_wait_ms: settings.ci.merging_wait_timeout_ms,
+        previous: before
+      })
+
+    if SilentWait.listed?(silent) and not SilentWait.listed?(before) do
+      Logger.warning(
+        "pr_watch.silent_wait issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} repo_key=#{state.repo_key} " <>
+          "phase=#{entry.phase} since=#{DateTime.to_iso8601(silent.since)} rule=#{rule(watch)} bound=#{silent.bound || "none"} reason=#{inspect(silent.reason)}"
+      )
+    end
+
+    Map.put(watch, :silent, silent)
+  end
+
+  defp rule(%{decision: %{rule: rule}}), do: rule
+  defp rule(_watch), do: "none"
 
   # A read GitHub refused keeps what the record held, its facts marked rate limited: R1 waits.
   defp rate_limited(entry, ticket, previous, limited, now) do
@@ -825,6 +886,28 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp rate_limit_wait_ms(_limited, state, settings, _now), do: backoff_ms(state, settings)
+
+  # A read that left under a tenth of GitHub's rate limit.
+  defp low_rate_limit({:ok, %{rate_limit: %{remaining: remaining, limit: limit} = rate_limit}})
+       when is_integer(remaining) and is_integer(limit) and remaining * 10 < limit,
+       do: rate_limit
+
+  defp low_rate_limit(_read), do: nil
+
+  # Up to four intervals, or until the reset when that comes sooner, never under one interval.
+  defp slow_ms(rate_limit, state, settings, now) do
+    interval = interval_ms(state, settings)
+
+    until_reset =
+      case rate_limit.reset_at do
+        %DateTime{} = reset_at -> DateTime.diff(reset_at, now, :millisecond)
+        nil -> 4 * interval
+      end
+
+    wait_ms = max(interval, min(4 * interval, until_reset))
+    Logger.info("pr_watch.rate_limit_low repo_key=#{state.repo_key} remaining=#{rate_limit.remaining} limit=#{rate_limit.limit} next_tick_ms=#{wait_ms}")
+    wait_ms
+  end
 
   defp gh_opts(state), do: Keyword.take(state.opts, [:gh_runner])
 

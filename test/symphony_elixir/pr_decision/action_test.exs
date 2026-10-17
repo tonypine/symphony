@@ -36,4 +36,15 @@ defmodule SymphonyElixir.PrDecision.ActionTest do
     assert Action.waiting_kinds() -- Action.kinds() == []
     assert Action.owners() == [:agent, :ci, :github, :person, :symphony]
   end
+
+  test "names Symphony as next for every kind it carries out, and leaves a wait its own owner" do
+    for kind <- Action.kinds() -- Action.waiting_kinds() do
+      assert {:symphony, clears_when} = Action.next_step(kind)
+      assert is_binary(clears_when) and clears_when != ""
+    end
+
+    assert Action.next_step(:dispatch) == {:symphony, "a run starts on the ticket"}
+    assert Enum.all?(Action.waiting_kinds(), &(Action.next_step(&1) == nil))
+    assert Action.next_step(nil) == nil
+  end
 end
