@@ -113,6 +113,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   `:self_heal`, `:fixer`, `:gh_runner`).
   """
   @type ctx :: %{
+          optional(:decisions) => [map()],
           repo_key: String.t(),
           settings: map(),
           issue: Issue.t(),
