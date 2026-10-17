@@ -9,6 +9,7 @@ defmodule SymphonyElixirWeb.WatchPayload do
   """
 
   alias SymphonyElixir.PrDecision.Action
+  alias SymphonyElixir.PrWatch
   alias SymphonyElixir.TicketState
 
   @pr_words %{missing: "no PR", open: "open", draft: "a draft", closed: "closed", merged: "merged"}
@@ -27,8 +28,10 @@ defmodule SymphonyElixirWeb.WatchPayload do
   The `watch` block of a ticket state record: the phase, the PR head the facts were read on and how
   they arrived (`source`), the decision (`rule`, `action`, `reason`, who acts next (`owner`) and
   what clears it (`clears_when`), since when it stands, its `outcome`), the facts in one line (`summary`) and in full (`facts`), the last
-  five actions applied with how their facts arrived, and the ticket's silence. `decision`,
-  `applied` and `links` are the record's own. Nil when the watcher doesn't watch the ticket.
+  five actions applied with how their facts arrived, the ticket's silence, and what it waits on
+  (`waits_on`: the competing PRs of its landing hold, and the fix ticket of the red backstop, D15).
+  `decision`, `applied` and `links` are the record's own. Nil when the watcher doesn't watch the
+  ticket.
   """
   @spec watch(TicketState.t() | nil) :: map() | nil
   def watch(%{pr_watch: %{} = watch}) do
@@ -54,7 +57,8 @@ defmodule SymphonyElixirWeb.WatchPayload do
       silent: silent(watch.silent),
       decision: watch.decision,
       applied: watch.applied,
-      links: watch.links
+      links: watch.links,
+      waits_on: waits_on(watch)
     }
   end
 
@@ -85,6 +89,16 @@ defmodule SymphonyElixirWeb.WatchPayload do
   # `dispatch`), Symphony until the action is done.
   defp next_step(%{owner: owner} = decision) when not is_nil(owner), do: {owner, decision[:clears_when]}
   defp next_step(decision), do: Action.next_step(decision[:kind]) || {nil, decision[:clears_when]}
+
+  defp waits_on(watch) do
+    fix_tickets =
+      case watch.decision do
+        %{waits_on: %{type: "fix_ticket", keys: keys}} -> Enum.map(keys, &%{identifier: &1, kind: "fix_ticket"})
+        _other -> []
+      end
+
+    PrWatch.competitor_waits(watch) ++ fix_tickets
+  end
 
   # The facts in one line, as a person reads them.
   defp summary(%{facts: facts} = watch) do

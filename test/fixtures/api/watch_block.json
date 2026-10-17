@@ -80,5 +80,6 @@
   },
   "since": "2026-10-16T11:59:30Z",
   "source": "poll",
-  "summary": "PR #42 open · CI green · no conflict"
+  "summary": "PR #42 open · CI green · no conflict",
+  "waits_on": []
 }
