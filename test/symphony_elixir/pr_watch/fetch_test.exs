@@ -25,9 +25,8 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
         "headRefOid" => "abc123",
         "mergeable" => "MERGEABLE",
         "mergeStateStatus" => "CLEAN",
-        "reviewDecision" => nil,
+        "headRef" => %{"name" => "auto/TP-1"},
         "autoMergeRequest" => nil,
-        "reviewThreads" => %{"nodes" => []},
         "commits" => %{"nodes" => [%{"commit" => %{"statusCheckRollup" => %{"contexts" => %{"nodes" => [check("make all", "SUCCESS")]}}}}]}
       },
       attrs
@@ -91,7 +90,6 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
                base_ref: "main",
                head_sha: "abc123",
                auto_merge: :off,
-               review_comments: :none,
                mergeable: :clean,
                ci: :green,
                missing_checks: [],
@@ -113,17 +111,17 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert_received {:gh, ["api", "--include", "--hostname", "github.example.com", "graphql" | _rest]}
     end
 
-    test "reads the PR's lifecycle, auto-merge, review and merge state" do
+    test "reads the PR's lifecycle, auto-merge and merge state" do
       cases = [
         {%{"merged" => true, "state" => "MERGED"}, :pr, :merged},
         {%{"merged" => nil, "state" => "MERGED"}, :pr, :merged},
         {%{"state" => "CLOSED"}, :pr, :closed},
+        {%{"state" => "CLOSED", "headRef" => nil}, :pr, :closed},
+        {%{"headRef" => nil}, :pr, :closed},
+        {%{"isDraft" => true, "headRef" => nil}, :pr, :closed},
         {%{"isDraft" => true}, :pr, :draft},
         {%{"baseRefName" => "release"}, :base, :changed},
         {%{"autoMergeRequest" => %{"enabledAt" => "2026-10-16T00:00:00Z"}}, :auto_merge, :armed},
-        {%{"reviewThreads" => %{"nodes" => [%{"isResolved" => false, "isOutdated" => false}]}}, :review_comments, :unaddressed},
-        {%{"reviewThreads" => %{"nodes" => [%{"isResolved" => false, "isOutdated" => true}, %{"isResolved" => true}]}}, :review_comments, :none},
-        {%{"reviewDecision" => "CHANGES_REQUESTED"}, :review_comments, :unaddressed},
         {%{"mergeable" => "CONFLICTING", "mergeStateStatus" => "BLOCKED"}, :mergeable, :dirty},
         {%{"mergeStateStatus" => "DIRTY"}, :mergeable, :dirty},
         {%{"mergeStateStatus" => "BEHIND"}, :mergeable, :behind},
@@ -138,6 +136,15 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
         assert {:ok, read} = read({response(pull(attrs)), 0})
         assert Map.fetch!(read, field) == expected, "#{inspect(attrs)} → #{field}"
       end
+    end
+
+    test "the base is compared with the repo's base branch when the caller names one, else the default branch" do
+      on_develop = {response(pull(%{"baseRefName" => "develop"}), "main"), 0}
+      known = %{"develop" => []}
+
+      assert {:ok, %{base: :changed, base_branch: "develop"}} = read({response(pull(), "main"), 0}, %{}, base_branch: "develop")
+      assert {:ok, %{base: :ok, base_branch: "develop"}} = read(on_develop, %{}, base_branch: "develop", required_checks: known)
+      assert {:ok, %{base: :changed, base_branch: "main"}} = read(on_develop, %{}, required_checks: known)
     end
 
     test "a PR whose base is the default branch of a repo that doesn't name one is on its base" do
@@ -420,7 +427,12 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
       facts = Fetch.facts(%{@ticket | ahead: ahead}, read)
       assert %Facts{phase: :code_review, origin: nil, pr: :open, pr_number: 42, ci: :green, mergeable: :behind} = facts
-      assert %Facts{max_red_attempts: 3, ahead: ^ahead, competing: []} = facts
+      assert %Facts{max_red_attempts: 3, ahead: ^ahead, competing: [], review_comments: :none} = facts
+    end
+
+    test "takes the review comments to address from the ticket, not from the read" do
+      assert {:ok, read} = read({response(pull()), 0})
+      assert %Facts{review_comments: :unaddressed} = Fetch.facts(Map.put(@ticket, :review_comments, :unaddressed), read)
     end
 
     test "keeps the origin only in CI Fix, and reads a ticket without a PR as missing" do

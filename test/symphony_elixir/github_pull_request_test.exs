@@ -1063,6 +1063,18 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.close(pr_url, gh_runner: denied)
     end
 
+    test "change_base retargets the pull request to another base branch" do
+      pr_url = "https://github.com/org/repo/pull/42"
+
+      runner = fn ["api", "repos/org/repo/pulls/42", "--method", "PATCH", "-f", "base=main"], _opts -> {~s({"base":{"ref":"main"}}), 0} end
+
+      assert :ok = PullRequest.change_base(pr_url, "main", gh_runner: runner)
+      assert {:error, :invalid_pr_url} = PullRequest.change_base("https://example.com/nope", "main", gh_runner: runner)
+
+      denied = fn _args, _opts -> {"gh: Resource not accessible by integration", 1} end
+      assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.change_base(pr_url, "main", gh_runner: denied)
+    end
+
     test "update_branch asks GitHub to merge the base in for the expected head" do
       pr_url = "https://github.com/org/repo/pull/42"
 

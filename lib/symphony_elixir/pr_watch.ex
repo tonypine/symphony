@@ -14,7 +14,7 @@ defmodule SymphonyElixir.PrWatch do
 
   use Supervisor
 
-  alias SymphonyElixir.{Config, LandingOrder, RunStore, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{Config, LandingOrder, RunStore, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{Attempts, Repo}
 
@@ -76,23 +76,16 @@ defmodule SymphonyElixir.PrWatch do
   Why the orchestrator must not start a run for `issue` now, from the watcher's decision on it, or
   nil when it may. Only the phases whose run waits on the PR are gated: `Code Review` and `QA` run
   on a decision to `dispatch` (a green, conflict-free head), and `Merging`, with auto-merge on,
-  runs only the landing agent the decision hands it to (`land_agent`), or one with no PR. A ticket
-  the watcher hasn't decided on yet waits for it.
+  runs only the landing agent the decision hands it to (`land_agent`); one with no PR waits for a
+  person's answer (R6). A ticket the watcher hasn't decided on yet waits for it.
   """
   @spec dispatch_reason(Issue.t(), map()) :: String.t() | nil
   def dispatch_reason(%Issue{} = issue, settings) do
     case gated_phase(issue.state, settings) do
       nil -> nil
-      :landing -> landing_gate(issue, watch(issue.id, repo_opts(issue)))
-      :review -> gate(:review, watch(issue.id, repo_opts(issue)))
+      phase -> gate(phase, watch(issue.id, repo_opts(issue)))
     end
   end
-
-  # A `Merging` ticket with no PR gets the landing agent, as before the watcher: asking about the
-  # missing PR is rule R6's, which TP-944 applies.
-  defp landing_gate(issue, nil), do: if(TicketPullRequest.current_url(issue), do: gate(:landing, nil))
-  defp landing_gate(_issue, %{facts: %{pr: :missing}}), do: nil
-  defp landing_gate(_issue, watch), do: gate(:landing, watch)
 
   defp gated_phase(state, settings) when is_binary(state) do
     cond do

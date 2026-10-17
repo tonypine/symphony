@@ -3,8 +3,10 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   The PR and CI watcher's GitHub read, and the facts it builds from it.
 
   `read/2` reads one pull request in one GraphQL query: its state, draft flag, base and the
-  repository's default branch, head, mergeability, merge state, auto-merge request, review decision,
-  review threads and the head's check rollup. Run through `gh api --include`, so the response's
+  repository's default branch, head and whether its branch still exists, mergeability, merge state,
+  auto-merge request and the head's check rollup. An open PR whose branch was deleted reads as
+  closed. Its base is compared with the repo's `base_branch` when the caller names one, else with
+  the repository's default branch. Run through `gh api --include`, so the response's
   `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Three more reads happen
   only when needed: the checks the base branch requires (unless the caller already knows them;
   `SymphonyElixir.PrWatch.Repo` keeps them 10 minutes per base); for a head with no check at all,
@@ -19,9 +21,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   `facts/2` turns a read and what Symphony knows of the ticket into
   `SymphonyElixir.PrDecision.Facts`. It is pure. The counts of fix runs, the rerun flag and the
-  merge wait come from the ticket, as `SymphonyElixir.PrWatch.Attempts` keeps them. The read also
-  carries what acting on the PR needs (its node id, title and body, the failed checks' runs), for
-  `SymphonyElixir.PrDecision.Apply`. Nothing here writes to GitHub.
+  merge wait come from the ticket, as `SymphonyElixir.PrWatch.Attempts` keeps them, and so do the
+  review comments still to address, which the PR review poller reads
+  (`SymphonyElixir.PrReviewPoller`). The read also carries what acting on the PR needs (its node
+  id, title and body, the failed checks' runs), for `SymphonyElixir.PrDecision.Apply`. Nothing here
+  writes to GitHub.
   """
 
   require Logger
@@ -37,9 +41,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     repository(owner: $owner, name: $name) {
       defaultBranchRef { name }
       pullRequest(number: $number) {
-        id number url title body state isDraft merged baseRefName baseRefOid headRefName headRefOid mergeable mergeStateStatus reviewDecision
+        id number url title body state isDraft merged baseRefName baseRefOid headRefName headRefOid mergeable mergeStateStatus
+        headRef { name }
         autoMergeRequest { enabledAt }
-        reviewThreads(first: 100) { nodes { isResolved isOutdated } }
         commits(last: 1) {
           nodes {
             commit {
@@ -78,9 +82,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           pr: :open | :draft | :closed | :merged | :missing,
           base: :ok | :changed,
           base_ref: String.t() | nil,
+          base_branch: String.t() | nil,
           head_sha: String.t() | nil,
           auto_merge: :off | :armed,
-          review_comments: :none | :unaddressed,
           mergeable: :clean | :behind | :dirty | :unstable | :blocked | :unknown,
           ci: :pending | :green | :none | :red | :required_missing,
           no_ci: :not_configured | :not_reported,
@@ -111,7 +115,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   @typedoc """
   What Symphony knows of the ticket, beside its PR: its phase, holds and run, the landing order's
-  `ahead`, and the counts `SymphonyElixir.PrWatch.Attempts` keeps (`red_attempts`,
+  `ahead`, whether review comments wait to be addressed (`review_comments`, `:none` when absent),
+  and the counts `SymphonyElixir.PrWatch.Attempts` keeps (`red_attempts`,
   `conflict_attempts`, `rerun_done`, `fix_failures`, `landing_timed_out`), which keep their
   defaults when absent.
   """
@@ -130,7 +135,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   already known per base branch (`%{base => names}`): a base not in it is read, and the read carries
   them as `required: {base, names}` for the caller to keep; `:base_workflows`, whether each base
   branch has workflow files (`%{base => boolean}`), read and carried as `workflows: {base, boolean}`
-  the same way; `:gh_runner` and `:cwd`, passed to `gh`.
+  the same way; `:base_branch`, the branch the repo's PRs merge into (else the repository's default
+  branch); `:gh_runner` and `:cwd`, passed to `gh`.
   """
   @spec read(String.t(), keyword()) :: {:ok, read()} | {:error, term()}
   def read(pr_url, opts) when is_binary(pr_url) and is_list(opts) do
@@ -153,11 +159,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     pr_facts =
       case read do
         nil -> %{pr: :missing}
-        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :review_comments, :ci, :no_ci, :missing_checks, :red_kind, :failing_check, :mergeable])
+        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :ci, :no_ci, :missing_checks, :red_kind, :failing_check, :mergeable])
       end
 
     ticket
-    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead | PrWatch.Attempts.fact_keys()])
+    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :review_comments | PrWatch.Attempts.fact_keys()])
     |> Map.put(:origin, if(ticket.phase == :ci_fix, do: ticket.origin))
     |> Map.merge(pr_facts)
     |> Facts.new()
@@ -282,9 +288,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       pr: :missing,
       base: :ok,
       base_ref: nil,
+      base_branch: nil,
       head_sha: nil,
       auto_merge: :off,
-      review_comments: :none,
       mergeable: :unknown,
       ci: :pending,
       no_ci: :not_configured,
@@ -308,6 +314,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   defp normalize(pr_url, pull, repository, rate_limit, repo, opts) do
     base_ref = pull["baseRefName"]
+    base_branch = Keyword.get(opts, :base_branch) || get_in(repository, ["defaultBranchRef", "name"])
     head_sha = pull["headRefOid"]
     checks = checks(pr_url, head_sha, pull)
     {names, required} = required(pr_url, base_ref, checks, opts)
@@ -319,11 +326,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       pr_url: pr_url,
       pr_number: pull["number"],
       pr: pr_state(pull),
-      base: base(base_ref, get_in(repository, ["defaultBranchRef", "name"])),
+      base: base(base_ref, base_branch),
       base_ref: base_ref,
+      base_branch: base_branch,
       head_sha: head_sha,
       auto_merge: if(is_map(pull["autoMergeRequest"]), do: :armed, else: :off),
-      review_comments: review_comments(pull),
       mergeable: mergeable(pull["mergeable"], pull["mergeStateStatus"]),
       ci: elem(ci, 0),
       no_ci: :not_configured,
@@ -348,21 +355,13 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   defp pr_state(%{"merged" => true}), do: :merged
   defp pr_state(%{"state" => "MERGED"}), do: :merged
   defp pr_state(%{"state" => "CLOSED"}), do: :closed
+  # Deleting an open PR's branch leaves nothing to merge: it reads as closed.
+  defp pr_state(%{"state" => "OPEN", "headRef" => nil}), do: :closed
   defp pr_state(%{"isDraft" => true}), do: :draft
   defp pr_state(_pull), do: :open
 
   defp base(base_ref, default) when is_binary(base_ref) and is_binary(default) and base_ref != default, do: :changed
   defp base(_base_ref, _default), do: :ok
-
-  defp review_comments(pull) do
-    unresolved? =
-      pull
-      |> get_in(["reviewThreads", "nodes"])
-      |> List.wrap()
-      |> Enum.any?(&(is_map(&1) and &1["isResolved"] == false and &1["isOutdated"] != true))
-
-    if unresolved? or pull["reviewDecision"] == "CHANGES_REQUESTED", do: :unaddressed, else: :none
-  end
 
   defp mergeable("CONFLICTING", _merge_state), do: :dirty
   defp mergeable(_mergeable, "DIRTY"), do: :dirty

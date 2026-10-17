@@ -153,12 +153,23 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert %{run_profile: %{kind: :landing}} = state.running["land-1"]
   end
 
-  test "with GitHub auto-merge on, a Merging ticket without a PR still gets the landing agent", ctx do
+  test "with GitHub auto-merge on, a Merging ticket without a PR waits for a person instead of a landing agent", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2, pr_review_mode: "polling")
     landing = issue("land-1", "MT-LAND", "Merging")
     tracked([landing])
 
-    assert Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
+    # Not read yet: it waits for the watcher.
+    refute Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
+
+    # The watcher found no PR and asks a person (R6): still no landing agent.
+    SymphonyElixir.PrWatchSupport.put_watch!("default", "land-1",
+      identifier: "MT-LAND",
+      phase: :merging,
+      facts: %{pr: :missing},
+      decision: %{rule: "R6", kind: :decision, reason: "The ticket is in Merging with no PR"}
+    )
+
+    refute Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
   end
 
   test "a resume of Medium priority goes before an Urgent Todo when a slot frees", ctx do

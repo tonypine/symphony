@@ -675,6 +675,19 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @doc "Retargets the PR at `pr_url` to merge into `base`."
+  @spec change_base(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def change_base(pr_url, base, opts \\ []) when is_binary(pr_url) and is_binary(base) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--method", "PATCH", "-f", "base=#{base}"],
+         {:ok, _output} <- run_gh(args, opts) do
+      :ok
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc """
   Merges the base branch into the PR branch on GitHub, only if the head is still
   `expected_head_sha`. A merge conflict comes back as `{:error, :conflict}`.

@@ -7,9 +7,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
   for its repository.
 
   The watch set is read from Linear each tick, never from Symphony's runs: every ticket of the
-  repository in `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, and in `In Progress` once it
-  has a PR. So a ticket a person moved by hand is watched from the next tick. A ticket that leaves
-  the set loses its record.
+  repository in `In Progress`, `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, except a plan
+  parent with no PR, which never opens one. So a ticket a person moved by hand is watched from the
+  next tick. A ticket that leaves the set loses its record.
+
+  The facts follow the ticket's PR through its whole life: its open PR
+  (`SymphonyElixir.TicketPullRequest`), else the one closed without merging (R8 sends the ticket to
+  Rework, whose run opens a new PR the facts then follow), else the one merged while the watcher
+  followed it (R2 closes the ticket out). A PR merged before the stay, as a reopened ticket's, is
+  not followed: that ticket has no PR yet.
 
   A tick reads each watched PR once (`SymphonyElixir.PrWatch.Fetch.read/2`) and, when two or more
   watched PRs are open, the repository's open PRs and their files once, for the landing order:
@@ -21,10 +27,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
   running), in `Merging` a failed `protected paths` check that the ticket's unlock decisions cover
   (`SymphonyElixir.ProtectedPathsGate`; the head reads as green), a red head's failure
-  (`SymphonyElixir.PrWatch.Fetch.failure/3`, read once per head, for the same-failure streak), and
-  the wait on a check that never reported (`SymphonyElixir.PrWatch.Attempts.settle/4`), with the
-  person's answer when R17 asked one: a waiver for the head, a rerun of its checks, or Rework. The
-  ticket's CI label (`SymphonyElixir.CiState`) is projected from the facts.
+  (`SymphonyElixir.PrWatch.Fetch.failure/3`, read once per head, for the same-failure streak), the
+  wait on a check that never reported (`SymphonyElixir.PrWatch.Attempts.settle/4`), with the
+  person's answer when R17 asked one: a waiver for the head, a rerun of its checks, or Rework, the
+  reviewer comments still to address, which the PR review poller keeps
+  (`SymphonyElixir.PrReviewPoller.review_comments/5`), and a person's answer to R7's question about
+  a PR on another base: accepted, the base reads as the repo's; put back, R7 asks GitHub to retarget
+  the PR. The ticket's CI label (`SymphonyElixir.CiState`) is projected from the facts.
 
   A check red on the base branch too (R23) is logged once per base and check while PRs wait on it,
   and once more when it no longer holds any.
@@ -45,6 +54,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     LandingOrder,
     PrDecision,
     ProtectedPathsGate,
+    PrReviewPoller,
     RunStore,
     TicketPullRequest,
     TicketState,
@@ -146,7 +156,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
          {:ok, issues} <- watched_issues(state, settings) do
       records = ticket_states(state)
       running = running_issue_ids(state)
-      watched = Enum.flat_map(issues, &watched(&1, settings, records, running, state))
+      reviews = review_records(state)
+      watched = Enum.flat_map(issues, &watched(&1, settings, {records, reviews}, running, state))
       {reads, state} = read_all(watched, state, now)
       ahead = landing(watched, reads, open_pulls(watched, state), settings, now)
       watches = Enum.map(watched, &write(&1, Map.get(reads, &1.issue.id), Map.get(ahead, &1.issue.id), now, state, settings))
@@ -187,12 +198,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  defp watched(issue, settings, records, running, state) do
+  defp watched(issue, settings, {records, reviews}, running, state) do
     phase = phase(issue.state, settings)
-    pr_url = TicketPullRequest.current_url(issue, state.repo_key)
     record = Map.get(records, issue.id)
+    pr_url = pr_url(issue, record, state.repo_key)
 
-    if is_nil(phase) or (phase == :in_progress and is_nil(pr_url)) do
+    if is_nil(phase) or (is_nil(pr_url) and Issue.breakdown?(issue)) do
       []
     else
       [
@@ -201,6 +212,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           phase: phase,
           pr_url: pr_url,
           record: record,
+          review: Map.get(reviews, issue.id),
           ticket: %{
             phase: phase,
             origin: origin(record, settings),
@@ -213,6 +225,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
       ]
     end
   end
+
+  # The PR the facts follow (see the moduledoc): the open one, else the closed one, else the merged
+  # one the watcher's record already followed.
+  defp pr_url(issue, record, repo_key) do
+    TicketPullRequest.current_url(issue, repo_key) || finished_url(TicketPullRequest.get(repo_key, issue.id), record)
+  end
+
+  defp finished_url(%{state: "closed", pr_url: url}, _record), do: url
+  defp finished_url(%{state: "merged", pr_url: url}, %{pr_watch: %{pr_url: url}}), do: url
+  defp finished_url(_pr, _record), do: nil
 
   # Reads each watched PR once, in order, until GitHub's rate limit stops the tick: the PRs left
   # unread are marked with it.
@@ -246,7 +268,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp read_one(fetch, issue, pr_url, reads, cache, state, now) do
     known = fn kind -> Map.new(Map.fetch!(cache, kind), fn {base, {value, _at}} -> {base, value} end) end
 
-    case fetch.read(pr_url, Keyword.merge(gh_opts(state), required_checks: known.(:required), base_workflows: known.(:workflows))) do
+    opts = Keyword.merge(gh_opts(state) ++ base_opts(state), required_checks: known.(:required), base_workflows: known.(:workflows))
+
+    case fetch.read(pr_url, opts) do
       {:ok, read} ->
         cache = %{
           required: cache_base(cache.required, Map.get(read, :required), now),
@@ -437,8 +461,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
     read = read |> complete(prior, entry, state) |> with_failure(prior, settings, state)
     observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record)})
     attempts = prior |> Attempts.observe(read, observed, now) |> cancel_stale_runs(read, state)
+    ticket = Map.put(ticket, :review_comments, review_comments(entry, read, settings, now))
     head = read[:head_sha]
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
+    {read, applied} = base_answer(read, applied, entry)
     {attempts, applied} = take_answer(attempts, applied, entry, read, now, state)
     read = Attempts.settle(read, attempts, settings.ci.merging_wait_timeout_ms, now)
     facts = Fetch.facts(Map.merge(ticket, Attempts.facts(attempts, read, settings.ci, now)), read)
@@ -526,6 +552,22 @@ defmodule SymphonyElixir.PrWatch.Repo do
       [] -> nil
     end
   end
+
+  # The reviewer comments still to address on the head, as the PR review poller keeps them.
+  defp review_comments(_entry, nil, _settings, _now), do: :none
+  defp review_comments(entry, read, settings, now), do: PrReviewPoller.review_comments(entry.review, entry.pr_url, read.head_sha, settings, now)
+
+  # A person's answer to R7's question about the PR's base, once recorded: accepted, the base reads
+  # as the repo's; put back, R7 applies again to retarget the PR.
+  defp base_answer(%{base: :changed} = read, applied, entry) do
+    case Apply.base_answer(decisions(entry.record), entry.issue, read) do
+      :accept -> {%{read | base: :ok}, applied}
+      :put_back -> {Map.put(read, :base_answer, :put_back), Enum.reject(applied, &(&1.rule == "R7"))}
+      nil -> {read, applied}
+    end
+  end
+
+  defp base_answer(read, applied, _entry), do: {read, applied}
 
   # A red head's failure, read once per head: the same-failure streak compares it.
   defp with_failure(nil, _attempts, _settings, _state), do: nil
@@ -702,6 +744,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
+  # The PR review poller's records, by issue: the reviewer comments it keeps for each ticket.
+  defp review_records(state) do
+    case store(state).list_pr_reviews(state.repo_key) do
+      records when is_list(records) -> Map.new(records, &{&1.issue_id, &1})
+      {:error, _reason} -> %{}
+    end
+  end
+
   defp running_issue_ids(state) do
     case store(state).list_runs_with_status("running") do
       runs when is_list(runs) -> for(%{issue_id: id} = run <- runs, Map.get(run, :repo_key) in [nil, state.repo_key], into: MapSet.new(), do: id)
@@ -777,6 +827,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp rate_limit_wait_ms(_limited, state, settings, _now), do: backoff_ms(state, settings)
 
   defp gh_opts(state), do: Keyword.take(state.opts, [:gh_runner])
+
+  # The branch the repo's PRs merge into, when its configuration names one.
+  defp base_opts(state) do
+    case Config.repo_base_branch(state.repo_key) do
+      {:ok, branch} when is_binary(branch) and branch != "" -> [base_branch: branch]
+      _none -> []
+    end
+  end
+
   defp store(state), do: Keyword.get(state.opts, :run_store, RunStore)
   defp now(state), do: Keyword.get(state.opts, :now, &DateTime.utc_now/0).()
 end
