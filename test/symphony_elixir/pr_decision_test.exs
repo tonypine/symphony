@@ -303,6 +303,18 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert %Action{rule: "R23", kind: :wait, owner: :ci} = red(red_kind: :also_red_on_base)
     end
 
+    test "R23 names the base's run and commit it compared the check with, and how" do
+      base_red = %{check: "test", sha: "c1c4ae62d2b0d1f6", run_id: "38988095659", basis: :tests}
+
+      assert red(red_kind: :also_red_on_base, base_ref: "main", base_red: base_red).reason ==
+               "The `test` check is red on the base branch too: it failed the same tests on main at c1c4ae62 (run 38988095659)"
+
+      assert red(red_kind: :also_red_on_base, base_red: %{base_red | basis: :name, sha: nil}).reason ==
+               "The `test` check is red on the base branch too: the check of that name failed on the base branch (run 38988095659), compared by name only"
+
+      assert red(red_kind: :also_red_on_base).reason == "The `test` check is red on the base branch too"
+    end
+
     test "TP-920: a red head in Code Review goes to CI Fix instead of waiting for green" do
       assert %Action{rule: "R21", kind: :ci_fix, args: %{origin: :code_review}} = red([])
     end

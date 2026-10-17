@@ -11,7 +11,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
     proves that every situation has exactly one rule.
   - **Carried.** Names and numbers the action quotes back (the PR number, the base branch, why a
     head reads as having no CI, the phase a CI Fix run returns to, the failing check, the evidence
-    of each fix run). They never choose a rule.
+    of each fix run, what a check red on the base too was compared with). They never choose a rule.
     `ahead` and `competing` are both: a rule reads them only as empty or not, and the action names
     the PRs in them.
 
@@ -44,6 +44,15 @@ defmodule SymphonyElixir.PrDecision.Facts do
           optional(:head_sha) => String.t() | nil
         }
 
+  @typedoc "How a check red on the base too was compared: by its failing tests, or by its name only."
+  @type base_basis :: :tests | :name
+
+  @typedoc """
+  What a check red on the base too was compared with: the check, the base's workflow run and the
+  commit it ran on, and how they were compared.
+  """
+  @type base_red :: %{check: String.t() | nil, sha: String.t() | nil, run_id: String.t(), basis: base_basis()}
+
   @type t :: %__MODULE__{
           phase: phase(),
           origin: :code_review | :qa | :rework | :merging | nil,
@@ -61,6 +70,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
           no_ci: :not_configured | :not_reported,
           missing_checks: [String.t()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
+          base_red: base_red() | nil,
           failing_check: String.t() | nil,
           rerun_done: boolean(),
           red_attempts: non_neg_integer(),
@@ -96,6 +106,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
             no_ci: :not_configured,
             missing_checks: [],
             red_kind: :failure,
+            base_red: nil,
             failing_check: nil,
             rerun_done: false,
             red_attempts: 0,

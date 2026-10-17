@@ -39,7 +39,7 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       "name" => name,
       "status" => if(conclusion, do: "COMPLETED", else: "IN_PROGRESS"),
       "conclusion" => conclusion,
-      "detailsUrl" => "https://github.com/acme/app/actions/runs/#{Keyword.get(opts, :run, 100)}/job/1",
+      "detailsUrl" => "https://github.com/acme/app/actions/runs/#{Keyword.get(opts, :run, 100)}/job/#{Keyword.get(opts, :job, 1)}",
       "checkSuite" => %{"workflowRun" => %{"workflow" => %{"name" => Keyword.get(opts, :workflow, "ci")}}}
     }
   end
@@ -63,9 +63,28 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
         ["api", "--include" | _rest] -> graphql
         ["api", endpoint] -> Map.fetch!(rest, endpoint)
         ["run", "list" | _rest] -> Map.fetch!(rest, :runs)
+        ["run", "view", run_id, "--json", "headSha,jobs" | _rest] -> Map.fetch!(rest, {:jobs, run_id})
+        ["run", "view", run_id, "--log-failed" | _rest] -> Map.fetch!(rest, {:log, run_id})
       end
     end
   end
+
+  # The base's latest runs, `{workflow, conclusion, run id}` each, newest first.
+  defp base_runs(runs) do
+    {Jason.encode!(
+       for {workflow, conclusion, id} <- runs do
+         %{"databaseId" => id, "workflowName" => workflow, "status" => "completed", "conclusion" => conclusion, "url" => "u", "createdAt" => "2026-10-16T00:00:00Z"}
+       end
+     ), 0}
+  end
+
+  # A run's commit and jobs, `{name, conclusion, job id}` each.
+  defp jobs(sha, jobs) do
+    {Jason.encode!(%{"headSha" => sha, "jobs" => for({name, conclusion, id} <- jobs, do: %{"databaseId" => id, "name" => name, "conclusion" => conclusion})}), 0}
+  end
+
+  # A run's `gh run view --log-failed`: each `{job, line}` as gh prints it.
+  defp failed_log(lines), do: {Enum.map_join(lines, "\n", fn {job, line} -> "#{job}\tRun mix test\t2026-10-16T21:02:11.4Z #{line}" end), 0}
 
   defp flush_gh do
     receive do
@@ -235,28 +254,39 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
     end
 
     test "classifies a red head: plain, cancelled, a person's check, red on the base too" do
-      runs = fn conclusions ->
-        {Jason.encode!(
-           for {workflow, conclusion} <- conclusions do
-             %{"databaseId" => 1, "workflowName" => workflow, "status" => "completed", "conclusion" => conclusion, "url" => "u", "createdAt" => "2026-10-16T00:00:00Z"}
-           end
-         ), 0}
-      end
+      failing = rollup([check("make all", "SUCCESS"), check("test", "FAILURE", workflow: "ci"), check("lint", "FAILURE", workflow: "lint", run: 200, job: 2)])
 
-      failing = rollup([check("make all", "SUCCESS"), check("test", "FAILURE", workflow: "ci"), check("lint", "FAILURE", workflow: "lint", run: 200)])
+      green_on_base = %{:runs => base_runs([{"ci", "success", 1}, {"lint", "failure", 2}])}
 
-      green_on_base = %{runs: runs.([{"ci", "success"}, {"lint", "failure"}])}
-
-      assert {:ok, %{ci: :red, red_kind: :failure, failing_check: "test"}} =
+      assert {:ok, %{ci: :red, red_kind: :failure, base_red: nil, failing_check: "test"}} =
                read({response(pull(failing)), 0}, green_on_base)
 
       assert_received {:gh, ["run", "list", "-R", "acme/app", "--branch", "main", "--limit", "30" | _rest]}
+      refute_received {:gh, ["run", "view" | _rest]}
 
-      assert {:ok, %{red_kind: :also_red_on_base}} =
-               read({response(pull(failing)), 0}, %{runs: runs.([{"ci", "failure"}, {"lint", "failure"}, {"ci", "success"}])})
+      # Both checks failed on the base, and neither log names a failing test: compared by name only.
+      red_head = {response(pull(failing)), 0}
 
-      # The base's runs can't be read: a plain failure.
+      red_on_base = %{
+        :runs => base_runs([{"ci", "failure", 1}, {"lint", "failure", 2}, {"ci", "success", 3}]),
+        {:jobs, "1"} => jobs("base1", [{"build", "success", 10}, {"test", "failure", 11}]),
+        {:jobs, "2"} => jobs("base1", [{"lint", "failure", 12}]),
+        {:log, "100"} => failed_log([{"test", "** (CompileError) lib/app.ex:3: undefined function boom/0"}]),
+        {:log, "200"} => failed_log([{"lint", "lib/app.ex:3 Line is too long"}])
+      }
+
+      assert {:ok, %{red_kind: :also_red_on_base, base_red: base_red} = read} = read(red_head, red_on_base)
+      comparisons = read.comparisons
+      assert base_red == %{check: "test", sha: "base1", run_id: "1", basis: :name}
+
+      assert comparisons == %{{"https://github.com/acme/app/actions/runs/100/job/1", "11"} => :name, {"https://github.com/acme/app/actions/runs/200/job/2", "12"} => :name}
+      assert_received {:gh, ["run", "view", "1", "--json", "headSha,jobs", "-R", "acme/app"]}
+      assert_received {:gh, ["run", "view", "100", "--log-failed", "-R", "acme/app"]}
+
+      # The base's runs, or its run's jobs, can't be read: a plain failure.
       assert {:ok, %{red_kind: :failure}} = read({response(pull(failing)), 0}, %{runs: {"boom", 1}})
+      no_jobs = %{red_on_base | {:jobs, "1"} => {"boom", 1}}
+      assert {:ok, %{red_kind: :failure, base_red: nil}} = read({response(pull(failing)), 0}, no_jobs)
 
       flush_gh()
 
@@ -277,15 +307,85 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       refute_received {:gh, ["run", "list" | _rest]}
     end
 
+    test "TP-1073: a check that passed on the base isn't red there because another job of its workflow failed" do
+      head = rollup([check("coverage (3/4)", "SUCCESS", workflow: "make-all"), check("coverage (4/4)", "FAILURE", workflow: "make-all")])
+
+      base = %{
+        :runs => base_runs([{"make-all", "failure", 38_988_095_659}]),
+        {:jobs, "38988095659"} => jobs("c1c4ae62", [{"coverage (3/4)", "failure", 1}, {"coverage (4/4)", "success", 2}])
+      }
+
+      assert {:ok, %{ci: :red, red_kind: :failure, base_red: nil} = read} = read({response(pull(head)), 0}, base)
+      assert read.failing_check == "coverage (4/4)"
+      refute_received {:gh, ["run", "view", _run_id, "--log-failed" | _rest]}
+    end
+
+    test "the same check is red on the base only when it failed the same tests there" do
+      head =
+        rollup([
+          check("coverage (2/4)", "FAILURE", workflow: "make-all", job: 2),
+          check("coverage (4/4)", "FAILURE", workflow: "make-all", job: 4)
+        ])
+
+      graphql = {response(pull(head)), 0}
+      flaky = "1) test a tick that races the clock (SymphonyElixir.OrchestratorTest)"
+      own = "1) test the watch block renders (SymphonyElixirWeb.WatchPayloadTest)"
+      other = "2) test the clock (SymphonyElixir.ClockTest)"
+
+      base = fn base_log ->
+        %{
+          :runs => base_runs([{"make-all", "failure", 7}]),
+          {:jobs, "7"} => jobs("c1c4ae62", [{"coverage (2/4)", "failure", 72}, {"coverage (4/4)", "failure", 74}]),
+          {:log, "100"} => failed_log([{"coverage (2/4)", "  " <> flaky}, {"coverage (4/4)", flaky}, {"coverage (4/4)", "  " <> flaky}]),
+          {:log, "7"} => failed_log(base_log)
+        }
+      end
+
+      # Both checks failed the tests they failed on the base, which read its jobs once.
+      same = base.([{"coverage (2/4)", flaky}, {"coverage (4/4)", flaky}, {"coverage (4/4)", other}])
+
+      assert {:ok, %{red_kind: :also_red_on_base, base_red: base_red, comparisons: comparisons}} = read(graphql, same)
+      assert base_red == %{check: "coverage (2/4)", sha: "c1c4ae62", run_id: "7", basis: :tests}
+
+      assert comparisons |> Map.values() |> Enum.uniq() == [:tests]
+      assert_received {:gh, ["run", "view", "7", "--json" | _rest]}
+      refute_received {:gh, ["run", "view", "7", "--json" | _rest]}
+
+      # A test of the head's own that the base never failed: the head's failure, not the base's.
+      different = base.([{"coverage (2/4)", flaky}, {"coverage (4/4)", other}])
+      assert {:ok, %{red_kind: :failure, base_red: nil, comparisons: comparisons}} = read(graphql, different)
+      assert comparisons[{"https://github.com/acme/app/actions/runs/100/job/4", "74"}] == :different
+
+      # The head's own new test, failing in the job of the same name on the base for another test.
+      own_test = Map.put(different, {:log, "100"}, failed_log([{"coverage (2/4)", flaky}, {"coverage (4/4)", own}]))
+      assert {:ok, %{red_kind: :failure}} = read(graphql, own_test)
+
+      # A comparison already made isn't read again.
+      flush_gh()
+      known = Map.new(comparisons, fn {key, _basis} -> {key, :tests} end)
+
+      assert {:ok, %{red_kind: :also_red_on_base, comparisons: %{}}} =
+               read(graphql, different, base_comparisons: known)
+
+      refute_received {:gh, ["run", "view", _run_id, "--log-failed" | _rest]}
+
+      # A log that can't be read leaves the names compared, and isn't kept.
+      unread = Map.put(same, {:log, "7"}, {"HTTP 410", 1})
+      assert {:ok, %{red_kind: :also_red_on_base, base_red: %{basis: :name}} = read} = read(graphql, unread)
+      assert read.comparisons == %{}
+    end
+
     test "a GitHub Enterprise red head reads the base's runs on its host" do
       pr_url = "https://github.example.com/acme/app/pull/7"
-      runs = {Jason.encode!([%{"workflowName" => "ci", "status" => "completed", "conclusion" => "failure"}]), 0}
-      gh = runner({response(pull(rollup([check("test", "FAILURE")]))), 0}, %{runs: runs})
+      runs = {Jason.encode!([%{"databaseId" => 5, "workflowName" => "ci", "status" => "completed", "conclusion" => "failure"}]), 0}
+      base = %{:runs => runs, {:jobs, "5"} => jobs("base1", [{"test", "failure", 50}]), {:log, "100"} => failed_log([{"test", "boom"}])}
+      gh = runner({response(pull(rollup([check("test", "FAILURE")]))), 0}, base)
 
       assert {:ok, %{red_kind: :also_red_on_base}} =
                Fetch.read(pr_url, gh_runner: gh, github_enterprise_hosts: ["github.example.com"], required_checks: %{})
 
       assert_received {:gh, ["run", "list", "-R", "github.example.com/acme/app" | _rest]}
+      assert_received {:gh, ["run", "view", "5", "--json", "headSha,jobs", "-R", "github.example.com/acme/app"]}
     end
 
     test "only the newest run of a workflow counts" do

@@ -95,6 +95,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           created_at: DateTime.t() | nil
         }
 
+  @type run_job :: %{id: String.t() | nil, name: String.t() | nil, conclusion: String.t() | nil}
+
   @type open_pull_request :: %{
           number: non_neg_integer() | nil,
           url: String.t() | nil,
@@ -487,6 +489,25 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   def list_commit_runs(sha, opts \\ []) when is_binary(sha) and is_list(opts) do
     list_runs(["run", "list", "--commit", sha, "--limit", to_string(Keyword.get(opts, :limit, 100)), "--json", @run_fields] ++ repo_args(opts), opts)
   end
+
+  @doc """
+  The commit a workflow run ran on and its jobs, as its latest attempt left them: each job's id,
+  name and conclusion. The repository is `:repo` when given, else the checkout's at `:cwd`.
+  """
+  @spec run_jobs(String.t(), keyword()) :: {:ok, %{head_sha: String.t() | nil, jobs: [run_job()]}} | {:error, term()}
+  def run_jobs(run_id, opts \\ []) when is_binary(run_id) and is_list(opts) do
+    with {:ok, output} <- run_gh(["run", "view", run_id, "--json", "headSha,jobs"] ++ repo_args(opts), opts) do
+      case Jason.decode(output) do
+        {:ok, %{"jobs" => jobs} = run} when is_list(jobs) ->
+          {:ok, %{head_sha: normalize_id(run["headSha"]), jobs: for(job <- jobs, is_map(job), do: normalize_run_job(job))}}
+
+        _other ->
+          {:error, :invalid_run_jobs_payload}
+      end
+    end
+  end
+
+  defp normalize_run_job(job), do: %{id: normalize_id(job["databaseId"]), name: job["name"], conclusion: upcase(job["conclusion"])}
 
   defp list_runs(args, opts) do
     with {:ok, output} <- run_gh(args, opts) do
