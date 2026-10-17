@@ -558,7 +558,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "string",
             "enum" => ~w(light dark),
             "description" =>
-              "Launch the app light or dark whatever the host's appearance, which QA never changes: any macOS app, through AppKit's appearance default passed as a launch argument, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it to follow the host. For both, launch once per appearance."
+              "Launch the app light or dark whatever the host's appearance, which QA never changes: any AppKit app, through a library Symphony injects that sets the app's appearance and prints `symphony-qa-appearance: <light|dark>` to its output, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it to follow the host. For both, launch once per appearance."
           },
           "release_pair" => %{
             "type" => "boolean",
@@ -623,7 +623,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_ax_tree",
       "description" =>
-        "Read the launched app's accessibility tree: role, title, value, identifier and frame (x, y, w, h) per element. With role or text, returns matching elements as a flat list. Size-capped.",
+        "Read the launched app's accessibility tree: role, title, value, help (its tooltip's text), identifier and frame (x, y, w, h) per element. With role or text, returns matching elements as a flat list. Size-capped.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -631,7 +631,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "properties" => %{
           "pid" => @pid_property,
           "role" => %{"type" => "string", "maxLength" => 64, "description" => "Only elements with this AX role, e.g. AXTextField."},
-          "text" => %{"type" => "string", "maxLength" => 200, "description" => "Only elements whose title, value, description or identifier contains this."},
+          "text" => %{"type" => "string", "maxLength" => 200, "description" => "Only elements whose title, value, description, help or identifier contains this."},
           "max_depth" => %{"type" => "integer", "minimum" => 1, "maximum" => 40, "default" => 12},
           "max_nodes" => %{"type" => "integer", "minimum" => 1, "maximum" => 1000, "default" => 300}
         }
@@ -683,7 +683,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_click",
       "description" =>
-        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app's window covers it. The click goes to the app alone.",
+        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app would take the click there, naming that app. The click goes to the app alone.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,

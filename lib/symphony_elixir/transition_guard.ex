@@ -3,8 +3,8 @@ defmodule SymphonyElixir.TransitionGuard do
   The one writer for ticket state moves.
 
   Every Linear state move routes through this module. The machine's own moves — the orchestrator,
-  the CI and PR review pollers, the Code Review, QA and epic review runs, the runner, the Director app, the
-  workpad bootstrap, the Linear tool's human-action request and withdrawal, and its sub-issue
+  the PR and CI watcher, the PR review poller, the Code Review, QA and epic review runs, the
+  runner, the Director app, the workpad bootstrap, the Linear tool's human-action request and withdrawal, and its sub-issue
   cancel — are performed by `perform/4`, the only caller of `Tracker.update_issue_state/2`. An
   agent's request to set a state (the Linear tool's `update_state`) is validated by
   `resolve_request/2`, which applies the machine's refusals and redirects and returns the same
@@ -87,6 +87,18 @@ defmodule SymphonyElixir.TransitionGuard do
   # the caller read back from the ticket, so the lane never has to name a state itself. A red head
   # or a conflict outside those phases takes `:ci_fix_dispatch` or `:review_rework` to `In Progress`.
   #
+  # The PR and CI watcher's two moves out of a reviewed phase (`SymphonyElixir.PrDecision.Apply`):
+  # `:person_push` sends a `Merging` ticket whose head a person pushed back to the configured Code
+  # Review state, since the approval covered the diff before that push (D4); `:conflict_rework`
+  # sends a ticket whose conflict with the base branch came back after the conflict fix runs, with
+  # no open PR competing for its files, to `Rework`, where a run can change as much as the conflict
+  # needs (D16).
+  #
+  # Its lifecycle moves (TP-944): `:pr_closed` sends a ticket whose PR was closed without merging out
+  # of a phase that works on that PR to `Rework`, where the run opens a new one from main (D5);
+  # `:pr_merged` closes a ticket whose PR merged outside `Merging`, by a person or anyone else, as
+  # `:landing_done` does in `Merging`; `:wait_on_merge` holds either one on its open sub-issues.
+  #
   # The lane's other two exits have no row, because they are not machine moves: a repair the fixing
   # agent judges substantive is the agent's own request to set `Rework` (an agent state request is
   # validated by `resolve_request/2`, never performed through this table), and a repair it cannot
@@ -136,7 +148,7 @@ defmodule SymphonyElixir.TransitionGuard do
     # Every sub-issue is terminal: Done.
     %{signal: :sub_issues_done, from: ["Waiting on sub-tickets"], to: "Done"},
     # A PR merged with sub-issues still open: wait on them.
-    %{signal: :wait_on_merge, from: ["Merging"], to: :waiting_on_sub_issues},
+    %{signal: :wait_on_merge, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix", "Merging"], to: :waiting_on_sub_issues},
     # Plan approval promotes a Backlog sub-ticket to Todo.
     %{signal: :breakdown_promote, from: ["Backlog"], to: "Todo"},
     # Re-planning cancels a Backlog sub-ticket (the caller supplies the canceled state it finds).
@@ -154,6 +166,10 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
     %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
     %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
+    %{signal: :person_push, from: ["Merging"], to: :code_review_state},
+    %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+    %{signal: :pr_closed, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+    %{signal: :pr_merged, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix"], to: "Done"},
     %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
     %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
     %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}
@@ -234,8 +250,9 @@ defmodule SymphonyElixir.TransitionGuard do
   A move into a retired state is refused with `{:error, {:retired_state, target}}`, and one whose
   target resolves to no state name (a requested or configured state that is nil or blank) with
   `{:error, {:unresolved_target, signal}}`, before Linear is asked.
-  A move into `Merging` asks the PR poller to poll now (`opts[:on_merging]` overrides it), so a PR
-  that is already green merges at once instead of on the next timer, by when its head may be behind.
+  A move into `Merging` asks the PR and CI watcher to read now (`opts[:on_merging]` overrides it), so
+  a PR that is already green merges at once instead of on the next timer, by when its head may be
+  behind.
   """
   @spec perform(String.t(), signal(), context(), keyword()) :: :ok | {:error, term()}
   def perform(issue_id, signal, ctx \\ %{}, opts \\ []) do
@@ -256,7 +273,7 @@ defmodule SymphonyElixir.TransitionGuard do
   defp update_state(issue_id, target, opts) do
     case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue_id, target) do
       :ok when target == @merging_state ->
-        Keyword.get(opts, :on_merging, &SymphonyElixir.PrReviewPoller.poll_now/0).()
+        Keyword.get(opts, :on_merging, &SymphonyElixir.PrWatch.poll_now/0).()
         :ok
 
       result ->

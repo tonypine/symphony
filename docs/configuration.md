@@ -1045,7 +1045,7 @@ pull_requests:
     enabled: true
     log_excerpt_lines: 200
     retry_failed_once: true
-    max_fix_attempts: 3
+    max_fix_attempts: 10
     landing_wait_timeout_ms: 1800000
   learnings:
     enabled: false
@@ -1058,83 +1058,76 @@ pull_requests:
 - `enabled: true` enables PR review polling.
 - `enabled: false` keeps tracker-state-driven review behavior.
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
-- PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
-  conflict-resolution context into the next prompt. The agent still owns the merge resolution.
-  A conflict on an issue that waits on a person (outside `tracker.active_states` with
-  `needs-human` or another `escalate.labels` label other
-  than `plan` and `breakdown`) gets no
-  state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
-  or removes the label. So does one on an issue in none of the active states, the review states
-  and `Merging` (`Backlog`, say, label or not) until a person promotes it.
+- PR polling runs the PR and CI watcher ([PR and CI decisions](pr-ci-decisions.md)): each poll it
+  reads every watched ticket's PR, decides what its phase and PR call for, and acts. A PR that
+  conflicts with its base branch sends the ticket to `CI Fix` with the conflict's context in the
+  next prompt; the agent still owns the merge resolution. A ticket on a `Blocked` or `Needs
+  Decision` hold is never moved by its PR: it waits for the hold to clear.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
   from the PR author and the current `gh` user still count as review feedback, so your own review comments on an
   agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
   with a hidden `<!-- symphony:agent -->` marker and skips those.
-- `checks.retry_failed_once` retries one likely-flaky failure before escalating.
-- `checks.max_fix_attempts` bounds automated CI rework. Once it is used up, the issue stays in its
-  phase on a **Needs Decision** hold whose
-  confirmation sends it to `Rework`. `checks.escalate_to_state` is deprecated: it loads with a
-  warning and does nothing.
-- A red head on an issue that waits on a person (outside `tracker.active_states` with
-  `needs-human` or another `escalate.labels` label other
-  than `plan` and `breakdown`) gets no
-  re-run, CI-fix run, escalation or state move, and uses no fix attempt. So does one on an issue in
-  none of the active states, the review states and `Merging` (`Backlog`,
-  say, label or not). The normal CI flow resumes once a person moves the issue on or removes the
-  label, or the head turns green.
-- `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
-  run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
-  the landing agent again once the CI poller sees that head go green (a red head goes through the
-  normal CI-failure fix loop), or after this timeout. With `auto_merge`, a PR that stays `BLOCKED`
-  with auto-merge on and a green head for this long falls back to the landing agent.
+- `checks.retry_failed_once` reruns the failed jobs of a red head once before a `CI Fix` run.
+- `checks.max_fix_attempts` (default 10) is a backstop, not a budget: once that many `CI Fix` runs
+  were sent for red heads, or 3 in a row met the same failure (the same check and first error line),
+  Symphony files a fix ticket for the failing check (or reuses the open one) and holds the ticket on
+  it, in place, until the fix ticket is done; then the count restarts. A
+  conflict gets 3 fix runs whatever this says, then, with no open PR competing for its files, goes
+  to `Rework`. The counts reset once the PR is green and conflict-free. `checks.escalate_to_state`
+  is deprecated: it loads with a warning and does nothing.
+- `checks.landing_wait_timeout_ms` bounds how long a `Merging` PR may stay `BLOCKED` by branch
+  protection on a green head before a landing agent takes it over, and how long a landing run that
+  ended on pending checks waits for its head to settle. In any phase it is also how long a head waits
+  for a check its base branch requires before a person is asked whether to go on without it, and
+  how long a head with no check at all waits for its first one when the base branch has workflows
+  (a base without workflow files has no CI, which counts as green).
 - `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
   auto-merge instead of a landing agent, so they take no agent slot:
   - A ticket Symphony moves into `Merging` is looked at right away. A PR that is already `CLEAN`
     with green checks (or none) is squash-merged at once, before the base branch can move on and
     leave it behind; otherwise auto-merge takes it.
   - Symphony turns on auto-merge (squash, the PR title and body) once per PR head. GitHub merges it
-    when the required checks pass, and Symphony moves the ticket to `Done`. When GitHub refuses
-    auto-merge (the PR can already merge, no branch protection, or the repository doesn't allow
-    it) and the PR is `CLEAN` with green checks or none, Symphony squash-merges it right away.
-    When the head moved between Symphony reading the PR and turning auto-merge on (a push or an
-    update-branch), Symphony tries again with the new head on the next poll; only a head that
-    moves 3 times in a row falls back to the landing agent.
+    when the required checks pass, and Symphony moves the ticket to `Done` (or to the waiting state
+    when started sub-tickets are open). When GitHub refuses auto-merge (the PR can already merge, no
+    branch protection, or the repository doesn't allow it), the PR is squash-merged once it is
+    green and can merge. A head that moved under the call is read again on the next poll.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
-    merged code and auto-merge fires when it passes. A PR that waits for another to land first (see
-    the landing order below) is updated once that one has landed.
-  - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
-    context (an agent run; a `designed` repo's ticket enters `CI Fix`, which returns it to
-    `Merging`). The approval covered the diff before the conflict, so the fix goes back through
-    review, and moving the ticket to `Merging` again turns auto-merge back on. Auto-merge stays off
-    on the conflicting head meanwhile, even when GitHub briefly stops reporting the conflict after
-    the base branch moves. A ticket the conflict leaves in `Merging` (an agent run still marked
-    running, or the conflict retries spent) goes to the landing agent rather than waiting. The
-    audit log (`auto_merge_disabled`, `reason: conflict`) and a ticket comment record it.
-  - A red head first gets one flaky rerun of the same commit (`ci.flaky_retry`), with auto-merge
-    left on. The CI-fix run after that turns auto-merge off before it starts, like a conflict: the
-    fix goes back through review, and moving the ticket to `Merging` again turns auto-merge back
-    on. The audit log (`auto_merge_disabled`, `reason: ci_failure`) and a ticket comment record it.
+    merged code and auto-merge fires when it passes. The CI runs still going on the head it
+    replaced are cancelled. A PR that waits for another to land first (see the landing order below)
+    is updated once that one has landed.
+  - A red head first gets one rerun of its failed jobs, with auto-merge left on. A `CI Fix` run
+    after that, or one for a merge conflict, turns auto-merge off before it starts: the fix goes
+    back through review, and the ticket's return to `Merging` turns auto-merge back on. Auto-merge
+    is never turned on while the PR conflicts. The audit log (`auto_merge_disabled`) and a ticket
+    comment record it.
   - A failed `protected paths` check holds the PR back even though the base branch doesn't require
-    it: auto-merge stays off (or is turned off) and the ticket waits in `Merging` on a Needs
-    Decision hold, unless a decision on the ticket unlocks every protected path the PR changes. See
+    it: auto-merge goes off and the ticket waits in `Merging` on a Needs Decision hold, unless a
+    decision on the ticket unlocks every protected path the PR changes. See
     [Security](security.md#what-blocks-the-merge).
-  - When auto-merge can't be used (GitHub refuses it and the PR isn't clean and green, a
-    permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
-    the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
-  - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
-    "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
+  - A person's push to the PR while it is in `Merging` turns auto-merge off and sends the ticket back
+    to `Code Review`: the approval covered the diff before that push.
+  - A PR that stays `BLOCKED` by branch protection on a green head past
+    `checks.landing_wait_timeout_ms` goes to the landing agent, with a comment on the ticket.
+  - `/api/v1/state` (`auto_merge`) and the dashboard show each `Merging` PR, whether auto-merge is on
+    and what the watcher decided, for example "Checks are running on PR #12: auto-merge lands it
+    when they pass".
   - Landing order: when open PRs change the same files, each merge would reopen a conflict on the
     others. So Symphony reads the files of every open PR on each poll and lands PRs that share a
-    file one after another: the ticket furthest along first (`Merging`, QA, Code Review, `Rework`),
-    then the one longest in its state. The others keep working, but get no conflict fix and no
+    file one after another: PRs that conflict with the base branch after the ones that don't, then
+    the ticket furthest along first (`Merging`, QA, Code Review, `Rework`; a ticket in `CI Fix`
+    keeps the place of the state it returns to), then the one longest in its state. The others keep working, but get no conflict fix and no
     "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
     its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
-    one up, and a forced ticket never waits. `/api/v1/state` lists the waits under `landing_waits`
-    ("waits for MT-1 to land (shares 2 files)"), the Mac app's ticket page shows them as Lands
-    after, and the agent's first prompt names the open PRs that share files with its own, so it can
-    stack on one instead. Nothing to configure.
+    one up, and a forced ticket never waits. A PR that conflicts while one ahead shares its files,
+    or whose conflict came back after its 3 fix runs while other open PRs share them, waits on them
+    as a Linear blocked-by link and a `Blocked` hold ("Waiting on MT-1 to land: they change the
+    same files (SPEC.md)"), which clears by itself once they land or leave the race; Symphony
+    removes only the links it added. `/api/v1/state` lists the waits under `landing_waits`
+    ("Lands after MT-1: they change the same files (lib/a.ex)"), the Mac app's ticket page shows
+    them as Lands after, and the agent's first prompt names the open PRs that share files with its
+    own, so it can stack on one instead. Nothing to configure.
   - Moving a ticket out of `Merging` to any state but `Done` (by hand in Linear, or with the
     Director's Undo) turns auto-merge off on the next poll, with a ticket comment and an
     `auto_merge_disabled` audit event (`reason: "left_merging"`), so the PR doesn't merge without
@@ -1232,9 +1225,13 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | nothing else | skipped (internal changes rely on tests and the pre-push review) |
 
 The built-in `cli` playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and
-`lib/mix/tasks/**`. It builds the CLI, runs the walkthrough commands with throwaway config and
-state under `$TMPDIR`, and attaches a command transcript. A CLI pass typically costs 1–4 minutes
-and 50–150k tokens.
+`lib/mix/tasks/**`. Every built-in playbook also triggers on its own instructions,
+`priv/qa_playbooks/<kind>.md`, and the `macos_app` and `android_app` playbooks on the host driver
+behind their tools (`lib/symphony_elixir/qa_driver.ex`, `lib/symphony_elixir/qa_driver/**` and
+`priv/qa_driver/**`; `lib/symphony_elixir/qa_android/**`), so a change to how QA drives the app
+gets a pass that drives it. The `cli` playbook builds the CLI, runs the walkthrough commands with
+throwaway config and state under `$TMPDIR`, and attaches a command transcript. A CLI pass
+typically costs 1–4 minutes and 50–150k tokens.
 
 The QA agent (`runtime` and `command`, defaulting to `agent.runtime` and `agent.command`) runs in
 a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. Each pass
@@ -1580,7 +1577,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in. `update_feed_port` sets `SYMPHONY_BAR_UPDATE_URL` to `http://localhost:<port>/releases/latest`, the release feed the app's update checks read instead of GitHub's; the QA agent serves it there with the shared feed server, `python3 -B test/support/stubs/update_feed.py` (a made-up newer release, a release pair's feed, nothing newer or a 403, every request logged; see [`test/support/README.md`](../test/support/README.md#the-update-feed)). `update_check_interval_seconds` sets `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's background update checks. `appearance`, `light` or `dark`, makes the app draw in that appearance whatever the QA host's: it passes AppKit's appearance default as a launch argument (`-AppleInterfaceStyle Dark`, or `-NSRequiresAquaSystemAppearance YES` for light), which any macOS app reads, and sets `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads; without it the app follows the host. The host's own appearance is never switched: a pass that died would leave it switched for the next pass, and switching it needs Apple Events, which the QA host blocks. With `release_pair: true` it starts a fresh copy of the [signed release pair](#the-signed-release-pair)'s N instead of the `qa_build` bundle, with the pair's update feed beside it | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass; an `update_check_interval_seconds` that is not a positive integer; an `appearance` other than `light` or `dark`; `release_pair` before a successful `qa_build_release_pair`, or with `update_feed_port` |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on a `worker_host`) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in. `update_feed_port` sets `SYMPHONY_BAR_UPDATE_URL` to `http://localhost:<port>/releases/latest`, the release feed the app's update checks read instead of GitHub's; the QA agent serves it there with the shared feed server, `python3 -B test/support/stubs/update_feed.py` (a made-up newer release, a release pair's feed, nothing newer or a 403, every request logged; see [`test/support/README.md`](../test/support/README.md#the-update-feed)). `update_check_interval_seconds` sets `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's background update checks. `appearance`, `light` or `dark`, makes the app draw in that appearance whatever the QA host's: it sets `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects Symphony's appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built with `clang` on the machine the app runs on, once per source under the state root or once per pass in the QA host's run directory) with `DYLD_INSERT_LIBRARIES`, which reads the same variable and sets any AppKit app's appearance as it finishes launching, printing `symphony-qa-appearance: <light|dark>` to the app's output. AppKit reads the system appearance from the global defaults only, so a launch argument such as `-AppleInterfaceStyle Dark` cannot do it; a light launch also passes `-NSRequiresAquaSystemAppearance YES`. An app built with the hardened runtime ignores the library. Without `appearance` the app follows the host. The host's own appearance is never switched: a pass that died would leave it switched for the next pass, and switching it needs Apple Events, which the QA host blocks. With `release_pair: true` it starts a fresh copy of the [signed release pair](#the-signed-release-pair)'s N instead of the `qa_build` bundle, with the pair's update feed beside it | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass; an `update_check_interval_seconds` that is not a positive integer; an `appearance` other than `light` or `dark`, or an appearance library that cannot be built (`qa_appearance_unavailable`); `release_pair` before a successful `qa_build_release_pair`, or with `update_feed_port` |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |

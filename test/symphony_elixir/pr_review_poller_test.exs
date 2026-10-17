@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.PrReviewPollerTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Notifications.Event
   alias SymphonyElixir.PrReviewPoller
@@ -10,7 +9,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   @repo_key "default"
 
   defmodule FakeTracker do
-    alias SymphonyElixir.HumanActions.PlainWords
     alias SymphonyElixir.Linear.Issue
 
     @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]}
@@ -56,7 +54,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     defp maybe_send_pending_context_at_transition(recipient, issue_id) do
       if Application.get_env(:symphony_elixir, :pr_review_test_capture_pending_at_transition, false) do
         comments = SymphonyElixir.PrReviewPoller.pending_reviewer_comments(issue_id)
-        conflict = SymphonyElixir.PrReviewPoller.pending_pr_conflict(issue_id)
+        conflict = SymphonyElixir.PrWatch.pending_pr_conflict(issue_id)
 
         send(recipient, {:pending_reviewer_comments_at_transition, issue_id, comments})
         send(recipient, {:pending_pr_conflict_at_transition, issue_id, conflict})
@@ -76,7 +74,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   end
 
   defmodule IssueReadFailingTracker do
-    alias SymphonyElixir.HumanActions.PlainWords
     alias SymphonyElixir.Linear.Issue
 
     # The issue sits outside the watched states (`Backlog`), so the poller reads it by id.
@@ -506,7 +503,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     end
 
     poll = fn ->
-      assert {:ok, %{actions: [{:active_run, "issue-1780", :conflict}]}} =
+      assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
                PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
     end
 
@@ -1413,312 +1410,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     refute_receive {:issue_state_update, _, _}
   end
 
-  test "moves an approved issue back to an active state for orchestrator-owned merge handling" do
-    now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, review_decision: "APPROVED"))
-    :ok = put_review(now)
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :merge, "In Progress"}]}} =
-             PrReviewPoller.poll_once(
-               tracker: FakeTracker,
-               github: FakeGitHub,
-               now: now
-             )
-
-    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
-
-    assert [%{status: "merge_requested", target_issue_state: "In Progress", last_action: "merge"}] =
-             RunStore.list_pr_reviews()
-  end
-
-  test "moves an approved cross-repo issue to merge even when reviewer comments remain" do
-    now = ~U[2026-05-01 09:00:00Z]
-    latest_comment_at = DateTime.add(now, -31, :minute)
-    issue = in_review_issue(updated_at: now)
-
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(latest_comment_at,
-        is_cross_repository: true,
-        head_ref_name: "contributor/fork-fix",
-        head_ref_oid: "fork-head-sha",
-        review_decision: "APPROVED",
-        comments: [
-          %{
-            id: "comment-1",
-            kind: "comment",
-            author: "human-reviewer",
-            body: "Please refactor this before merge.",
-            url: "https://github.com/example/repo/pull/1780#issuecomment-1",
-            created_at: latest_comment_at,
-            updated_at: latest_comment_at
-          }
-        ]
-      )
-    )
-
-    :ok = put_review(now)
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :merge, "In Progress"}]}} =
-             PrReviewPoller.poll_once(
-               tracker: FakeTracker,
-               github: FakeGitHub,
-               now: now
-             )
-
-    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
-
-    assert [
-             %{
-               status: "merge_requested",
-               target_issue_state: "In Progress",
-               last_action: "merge",
-               is_cross_repository: true,
-               pending_reviewer_comments: [%{id: "comment-1"}]
-             }
-           ] = RunStore.list_pr_reviews()
-
-    assert PrReviewPoller.pending_pr_head_ref("issue-1780") == nil
-  end
-
-  test "dispatches merge conflicts with PR metadata for the next prompt" do
-    now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    Application.put_env(:symphony_elixir, :pr_review_test_capture_pending_at_transition, true)
-    :ok = put_review(now)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        merge_state_status: "DIRTY",
-        head_ref_name: "auto/ACME-1780",
-        head_ref_oid: "head-sha",
-        base_ref_name: "main",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    assert_receive {:pending_reviewer_comments_at_transition, "issue-1780", []}
-
-    assert_receive {:pending_pr_conflict_at_transition, "issue-1780",
-                    %{
-                      head_ref: "auto/ACME-1780",
-                      head_sha: "head-sha",
-                      base_ref: "main",
-                      base_sha: "base-sha",
-                      conflict_key: "head-sha|base-sha"
-                    }}
-
-    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
-
-    assert [
-             %{
-               status: "conflict_requested",
-               last_action: "conflict",
-               conflict_retry_count: 1,
-               dispatched_conflict_keys: ["head-sha|base-sha"],
-               conflict_context: %{
-                 pr_url: "https://github.com/example/repo/pull/1780",
-                 head_ref: "auto/ACME-1780",
-                 head_sha: "head-sha",
-                 base_ref: "main",
-                 base_sha: "base-sha",
-                 conflict_key: "head-sha|base-sha",
-                 retry_count: 1,
-                 max_retries: 3
-               }
-             }
-           ] = RunStore.list_pr_reviews()
-
-    # Found outside Merging, the conflict is not on an approved PR.
-    assert %{
-             head_ref: "auto/ACME-1780",
-             head_sha: "head-sha",
-             base_ref: "main",
-             base_sha: "base-sha",
-             conflict_key: "head-sha|base-sha",
-             approved: false
-           } = PrReviewPoller.pending_pr_conflict("issue-1780")
-
-    # The legacy conflict path records no CI Fix origin: the ticket went to In Progress as before.
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == nil
-  end
-
-  test "a conflict on a designed repo's Merging ticket enters CI Fix with Merging recorded as the origin" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
-    )
-
-    now = ~U[2026-05-01 09:00:00Z]
-    issue = %{in_review_issue(updated_at: now) | state: "Merging"}
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    :ok = put_review(now)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        merge_state_status: "DIRTY",
-        head_ref_name: "auto/ACME-1780",
-        head_ref_oid: "head-sha",
-        base_ref_name: "main",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "Merging"
-  end
-
-  describe "landing order" do
-    setup do
-      on_exit(fn ->
-        Application.delete_env(:symphony_elixir, :pr_review_test_activities)
-        Application.delete_env(:symphony_elixir, :pr_review_test_pr_files)
-      end)
-
-      write_workflow_file!(Workflow.workflow_file_path(),
-        tracker_kind: "memory",
-        pr_review_mode: "polling",
-        repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
-      )
-
-      :ok
-    end
-
-    test "three PRs that share files land one after another, each follower fixing its conflict once, after its leader" do
-      now = ~U[2026-05-01 09:00:00Z]
-
-      Application.put_env(:symphony_elixir, :pr_review_test_pr_files, %{
-        landing_pr_url(1) => ["lib/a.ex", "lib/shared.ex"],
-        landing_pr_url(2) => ["lib/shared.ex", "lib/b.ex"],
-        landing_pr_url(3) => ["lib/shared.ex", "lib/b.ex", "lib/c.ex"]
-      })
-
-      for {id, number} <- [{"a", 1}, {"b", 2}, {"c", 3}], do: :ok = put_landing_review(now, id, number)
-
-      # Poll 1: A is landing; B and C already conflict with main.
-      landing_states(%{"a" => "Merging", "b" => "QA", "c" => "Code Review"}, now)
-      landing_activities(%{1 => {"OPEN", :clean, "head-a"}, 2 => {"OPEN", :conflict, "head-b"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-0", now)
-
-      assert {:ok, %{actions: actions}} = landing_poll(now)
-      assert {:landing_wait, "issue-b", "ACME-A"} in actions
-      assert {:landing_wait, "issue-c", "ACME-A"} in actions
-      refute_received {:issue_state_update, _id, _state}
-
-      assert [
-               %{
-                 issue_identifier: "ACME-B",
-                 state: "QA",
-                 waits_for: %{issue_identifier: "ACME-A", state: "Merging"},
-                 shared_files: 1,
-                 files: ["lib/shared.ex"],
-                 reason: "waits for ACME-A to land (shares 1 file)",
-                 since: ^now
-               },
-               %{issue_identifier: "ACME-C", waits_for: %{issue_identifier: "ACME-A"}, reason: "waits for ACME-A to land (shares 1 file)"}
-             ] = PrReviewPoller.landing_waits()
-
-      # A waiting follower's conflict is no prompt to fix it yet.
-      assert PrReviewPoller.pending_pr_conflict("issue-b") == nil
-
-      # Poll 2: A merged. B, next in line, merges main once; C now waits for B.
-      landing_activities(%{1 => {"MERGED", :clean, "head-a"}, 2 => {"OPEN", :conflict, "head-b"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-1", now)
-
-      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 60))
-      assert {:cleanup, "issue-a", "merged"} in actions
-      assert {:state_transitioned, "issue-b", :conflict, "CI Fix"} in actions
-      assert {:landing_wait, "issue-c", "ACME-B"} in actions
-      assert_received {:issue_state_update, "issue-a", "Done"}
-      assert_received {:issue_state_update, "issue-b", "CI Fix"}
-      refute_received {:issue_state_update, "issue-c", _state}
-      assert [%{issue_identifier: "ACME-C", reason: "waits for ACME-B to land (shares 2 files)"}] = PrReviewPoller.landing_waits()
-
-      # Poll 3: B is in CI Fix, which the poller doesn't read: it keeps its place ahead of C.
-      landing_states(%{"b" => "CI Fix", "c" => "Code Review"}, now)
-      landing_activities(%{2 => {"OPEN", :clean, "head-b2"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-1", now)
-      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 120))
-      assert {:landing_wait, "issue-c", "ACME-B"} in actions
-      refute_received {:issue_state_update, "issue-c", _state}
-
-      # Poll 4: B back through QA into Merging. C still waits.
-      landing_states(%{"b" => "Merging", "c" => "Code Review"}, now)
-      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 180))
-      assert {:landing_wait, "issue-c", "ACME-B"} in actions
-      refute_received {:issue_state_update, "issue-c", _state}
-
-      # Poll 5: B merged. C merges main once, with both A's and B's changes.
-      landing_activities(%{2 => {"MERGED", :clean, "head-b2"}, 3 => {"OPEN", :conflict, "head-c"}}, "base-2", now)
-      assert {:ok, %{actions: actions}} = landing_poll(DateTime.add(now, 240))
-      assert {:state_transitioned, "issue-c", :conflict, "CI Fix"} in actions
-      assert_received {:issue_state_update, "issue-b", "Done"}
-      assert_received {:issue_state_update, "issue-c", "CI Fix"}
-      assert PrReviewPoller.landing_waits() == []
-      assert [%{conflict_retry_count: 1, dispatched_conflict_keys: ["head-c|base-2"]}] = RunStore.list_pr_reviews()
-    end
-
-    test "conflicting PRs that share no file each get their conflict fix at once" do
-      now = ~U[2026-05-01 09:00:00Z]
-
-      files = %{landing_pr_url(1) => ["lib/a.ex"], landing_pr_url(2) => ["lib/b.ex"]}
-      Application.put_env(:symphony_elixir, :pr_review_test_pr_files, files)
-      for {id, number} <- [{"a", 1}, {"b", 2}], do: :ok = put_landing_review(now, id, number)
-      landing_states(%{"a" => "QA", "b" => "Code Review"}, now)
-      landing_activities(%{1 => {"OPEN", :conflict, "head-a"}, 2 => {"OPEN", :conflict, "head-b"}}, "base-0", now)
-
-      assert {:ok, %{actions: actions}} = landing_poll(now)
-      assert Enum.sort(actions) == [{:state_transitioned, "issue-a", :conflict, "CI Fix"}, {:state_transitioned, "issue-b", :conflict, "CI Fix"}]
-      assert PrReviewPoller.landing_waits() == []
-
-      # Each record still keeps the files its PR changes.
-      assert [["lib/a.ex"], ["lib/b.ex"]] = RunStore.list_pr_reviews() |> Enum.sort_by(& &1.issue_id) |> Enum.map(& &1.landing.files)
-    end
-
-    test "the first prompt names the open PRs that share files, and the one this PR waits for" do
-      now = ~U[2026-05-01 09:00:00Z]
-
-      Application.put_env(:symphony_elixir, :pr_review_test_pr_files, %{
-        landing_pr_url(1) => ["lib/a.ex", "lib/shared.ex"],
-        landing_pr_url(2) => ["lib/shared.ex"],
-        landing_pr_url(3) => ["lib/c.ex"]
-      })
-
-      for {id, number} <- [{"a", 1}, {"b", 2}, {"c", 3}], do: :ok = put_landing_review(now, id, number)
-      landing_states(%{"a" => "QA", "b" => "Code Review", "c" => "Rework"}, now)
-      landing_activities(%{1 => {"OPEN", :clean, "head-a"}, 2 => {"OPEN", :clean, "head-b"}, 3 => {"OPEN", :clean, "head-c"}}, "base-0", now)
-      assert {:ok, _summary} = landing_poll(now)
-
-      assert %{
-               waits_for: %{issue_identifier: "ACME-A"},
-               shared: [%{issue_identifier: "ACME-A", state: "QA", files: ["lib/shared.ex"]}],
-               open: []
-             } = PrReviewPoller.open_pr_overlap("issue-b")
-
-      assert PrReviewPoller.open_pr_overlap("issue-c") == nil
-
-      # A ticket without a PR in the map sees every open one and its files.
-      assert %{shared: [], open: open} = PrReviewPoller.open_pr_overlap("issue-new")
-      assert Enum.map(open, & &1.issue_identifier) |> Enum.sort() == ["ACME-A", "ACME-B", "ACME-C"]
-    end
-  end
-
   test "discovers a designed repo's Code Review, QA and Rework PRs so a conflict there is polled" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -1761,162 +1452,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert discovered == %{"issue-cr" => "watching", "issue-qa" => "watching", "issue-rw" => "watching"}
   end
 
-  test "a conflict on a designed repo's Code Review, QA or Rework ticket enters CI Fix with the origin recorded" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
-    )
-
-    now = ~U[2026-05-01 09:00:00Z]
-
-    issues =
-      for {state, id, identifier} <- [
-            {"Code Review", "issue-cr", "ACME-CR"},
-            {"QA", "issue-qa", "ACME-QA"},
-            {"Rework", "issue-rw", "ACME-RW"}
-          ] do
-        assert :ok =
-                 RunStore.put_run(%{
-                   repo_key: @repo_key,
-                   run_id: "run-#{id}",
-                   issue_id: id,
-                   issue_identifier: identifier,
-                   status: "success",
-                   workspace_path: "/tmp/workspaces/#{identifier}",
-                   worker_host: nil,
-                   started_at: DateTime.add(now, -120, :second),
-                   ended_at: DateTime.add(now, -60, :second)
-                 })
-
-        %{in_review_issue(updated_at: now, id: id, identifier: identifier) | state: state}
-      end
-
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, issues)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        merge_state_status: "DIRTY",
-        head_ref_name: "auto/ACME",
-        head_ref_oid: "head-sha",
-        base_ref_name: "main",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: actions}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    assert Enum.sort(actions) == [
-             {:state_transitioned, "issue-cr", :conflict, "CI Fix"},
-             {:state_transitioned, "issue-qa", :conflict, "CI Fix"},
-             {:state_transitioned, "issue-rw", :conflict, "CI Fix"}
-           ]
-
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-cr") == "Code Review"
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-qa") == "QA"
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-rw") == "Rework"
-
-    assert_receive {:issue_state_update, "issue-cr", "CI Fix"}
-    assert_receive {:issue_state_update, "issue-qa", "CI Fix"}
-    assert_receive {:issue_state_update, "issue-rw", "CI Fix"}
-  end
-
-  test "a Code Review ticket back from CI Fix on the same conflict enters CI Fix again, then waits on a Needs Decision hold" do
-    now = ~U[2026-05-01 09:00:00Z]
-    conflicting_pr!("Code Review", now)
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} = poll_conflict(now)
-    assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
-
-    # A minute later the read may still show the ticket in Code Review: the dispatch stands.
-    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} = poll_conflict(DateTime.add(now, 1, :minute))
-    refute_receive {:issue_state_update, "issue-1780", _state}, 50
-
-    # The repair pushed nothing and returned the ticket to Code Review on the same head. The base
-    # branch moved on, but the conflict's key did not, and the reviewer waits for a clean head.
-    for minutes <- [5, 10] do
-      assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} =
-               poll_conflict(DateTime.add(now, minutes, :minute))
-
-      assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
-    end
-
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "Code Review"
-    assert [%{conflict_retry_count: 3}] = RunStore.list_pr_reviews()
-
-    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} = poll_conflict(DateTime.add(now, 15, :minute))
-
-    refute_receive {:issue_state_update, "issue-1780", _state}, 50
-    assert_receive {:issue_comment, "issue-1780", body}
-    assert body =~ "## Decision needed: Merge conflict persists on ACME-1780"
-    assert body =~ "after 3 attempts to reconcile them"
-    assert body =~ "reconcile PR #1780 with the latest merged work"
-    assert body =~ "**If unanswered:** ACME-1780 stays where it is"
-    assert PlainWords.tokens(body) == []
-
-    hold = SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision)
-    assert SymphonyElixir.MergeConfirmation.confirm_target(hold) == "Rework"
-
-    assert [%{status: "conflict_escalated", target_issue_state: "Code Review", escalated_conflict_key: "head-sha|base-sha"}] =
-             RunStore.list_pr_reviews()
-
-    # The conflict waits for the answer: no second request, no move.
-    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} = poll_conflict(DateTime.add(now, 20, :minute))
-    refute_receive {:issue_comment, "issue-1780", _body}, 50
-    refute_receive {:issue_state_update, "issue-1780", _state}, 50
-  end
-
-  test "a QA ticket back from CI Fix on the same conflict enters CI Fix again" do
-    now = ~U[2026-05-01 09:00:00Z]
-    conflicting_pr!("QA", now, conflict_dispatched(now))
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "CI Fix"}]}} =
-             poll_conflict(DateTime.add(now, 5, :minute))
-
-    assert_receive {:issue_state_update, "issue-1780", "CI Fix"}
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == "QA"
-    assert [%{conflict_retry_count: 2}] = RunStore.list_pr_reviews()
-  end
-
-  test "a Rework ticket on a conflict CI Fix already took stays with its rework run" do
-    now = ~U[2026-05-01 09:00:00Z]
-    conflicting_pr!("Rework", now, conflict_dispatched(now))
-
-    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} = poll_conflict(DateTime.add(now, 5, :minute))
-    refute_receive {:issue_state_update, "issue-1780", _state}, 50
-  end
-
-  test "a conflict hold that cannot be posted is retried on the next poll" do
-    now = ~U[2026-05-01 09:00:00Z]
-    conflicting_pr!("Code Review", now, %{conflict_retry_count: 3, dispatched_conflict_keys: ["old-head|base-sha"]})
-    Application.put_env(:symphony_elixir, :pr_review_test_comment_failures, ["issue-1780"])
-
-    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :conflict, reason}]}} = poll_conflict(now)
-    assert reason == {:decision_request_failed, :linear_unavailable}
-
-    assert SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision) == nil
-    assert [%{status: "state_transition_error"} = review] = RunStore.list_pr_reviews()
-    refute review[:escalated_conflict_key]
-
-    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} = poll_conflict(DateTime.add(now, 1, :minute))
-    assert_receive {:issue_comment, "issue-1780", _body}
-  end
-
-  test "a Merging ticket with its conflict retries spent is left to the landing agent" do
-    now = ~U[2026-05-01 09:00:00Z]
-    conflicting_pr!("Merging", now, %{conflict_retry_count: 3, dispatched_conflict_keys: ["old-head|base-sha"]})
-
-    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} = poll_conflict(now)
-
-    refute_receive {:issue_comment, "issue-1780", _body}, 50
-    assert SymphonyElixir.Hold.get(@repo_key, "issue-1780", :needs_decision) == nil
-    assert [%{status: "conflict_escalated", target_issue_state: "Merging"}] = RunStore.list_pr_reviews()
-  end
-
   test "review activity on a designed repo's Code Review ticket does not move it" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -1951,307 +1486,67 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [%{status: "watching"}] = RunStore.list_pr_reviews()
   end
 
-  test "a conflict on a designed repo's In Review ticket keeps the legacy path" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
-    )
-
+  test "review comments in Code Review, QA and Merging are kept for the PR and CI watcher, which moves the ticket (R13)" do
     now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+
+    for state <- ["Code Review", "QA", "Merging"] do
+      :ok = put_review(now)
+      Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: state)])
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, %{rework_activity(DateTime.add(now, -31, :minute)) | head_ref_oid: "head-1"})
+
+      assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_receive {:issue_state_update, _, _}, 50
+      assert [%{pending_reviewer_comments: [%{id: "comment-1"}]} = record] = RunStore.list_pr_reviews()
+      assert record.pending_reviewer_comments_reviewed_head_sha == "head-1"
+
+      settings = Config.settings!()
+      assert PrReviewPoller.review_comments(record, record.pr_url, "head-1", settings, now) == :unaddressed
+      assert PrReviewPoller.review_comments(record, record.pr_url, "head-2", settings, now) == :none
+      assert PrReviewPoller.review_comments(record, "https://github.com/example/repo/pull/9", "head-1", settings, now) == :none
+      assert PrReviewPoller.review_comments(record, record.pr_url, "head-1", settings, DateTime.add(now, -25, :minute)) == :none
+      assert PrReviewPoller.review_comments(Map.put(record, :is_cross_repository, true), record.pr_url, "head-1", settings, now) == :none
+      assert PrReviewPoller.review_comments(nil, record.pr_url, "head-1", settings, now) == :none
+      RunStore.delete_pr_review(@repo_key, "issue-1780")
+    end
+  end
+
+  test "a PR merged in Code Review is the PR and CI watcher's to close out: only the cleanup here (R2)" do
+    now = ~U[2026-05-01 09:00:00Z]
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Code Review")])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     :ok = put_review(now)
 
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        merge_state_status: "DIRTY",
-        head_ref_name: "auto/ACME-1780",
-        head_ref_oid: "head-sha",
-        base_ref_name: "main",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
-    # The legacy conflict path records no CI Fix origin.
-    assert SymphonyElixir.CiFix.origin(@repo_key, "issue-1780") == nil
-  end
-
-  test "deduplicates repeated polls of the same merge conflict" do
-    now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-
-    :ok =
-      put_review(now, %{
-        status: "conflict_requested",
-        conflict_retry_count: 1,
-        dispatched_conflict_keys: ["head-sha|base-sha"],
-        last_conflict_key: "head-sha|base-sha",
-        conflict_context: %{
-          pr_url: "https://github.com/example/repo/pull/1780",
-          head_ref: "auto/ACME-1780",
-          head_sha: "head-sha",
-          base_ref: "main",
-          base_sha: "base-sha",
-          conflict_key: "head-sha|base-sha",
-          retry_count: 1,
-          max_retries: 3
-        }
-      })
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        head_ref_oid: "head-sha",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+    assert {:ok, %{actions: [{:cleanup, "issue-1780", "merged"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, workspace: FakeWorkspace, now: now)
 
     refute_receive {:issue_state_update, _, _}, 50
-    assert [%{conflict_retry_count: 1, dispatched_conflict_keys: ["head-sha|base-sha"]}] = RunStore.list_pr_reviews()
-    assert %{conflict_key: "head-sha|base-sha"} = PrReviewPoller.pending_pr_conflict("issue-1780")
+    assert %{state: "open"} = TicketPullRequest.get(@repo_key, "issue-1780")
   end
 
-  test "escalates new merge conflicts after the retry limit" do
+  test "a PR that conflicts with its base branch is left to the PR and CI watcher" do
     now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
 
-    :ok =
-      put_review(now, %{
-        conflict_retry_count: 3,
-        dispatched_conflict_keys: ["old-head|base-sha"]
-      })
+    for state <- ["Code Review", "QA", "Rework"] do
+      :ok = put_review(now)
+      Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: state)])
+      activity = open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, activity)
 
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        head_ref_oid: "new-head",
-        base_ref_oid: "base-sha"
-      )
-    )
+      assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
-    assert {:ok, %{actions: [{:conflict_escalated, "issue-1780", 3}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    refute_receive {:issue_state_update, _, _}, 50
-
-    assert [
-             %{
-               status: "conflict_escalated",
-               conflict_retry_count: 3,
-               # The ticket stays where the conflict found it.
-               target_issue_state: "In Progress",
-               error: "merge conflict retry limit reached"
-             }
-           ] = RunStore.list_pr_reviews()
-  end
-
-  test "does not dispatch merge conflicts while an agent run is active" do
-    now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-
-    Application.put_env(:symphony_elixir, :pr_review_test_review_records, %{
-      issue.id => review_record(now)
-    })
-
-    Application.put_env(:symphony_elixir, :pr_review_test_runs, [
-      review_run(issue, "/tmp/workspaces/ACME-1780", now, %{status: "running"})
-    ])
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        head_ref_oid: "head-sha",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: [{:active_run, "issue-1780", :conflict}]}} =
-             PrReviewPoller.poll_once(
-               tracker: FakeTracker,
-               run_store: StatefulRunStore,
-               github: FakeGitHub,
-               now: now
-             )
-
-    refute_receive {:issue_state_update, _, _}, 50
-    assert [%{status: "conflict_active_run"} = record] = StatefulRunStore.list_pr_reviews()
-    refute Map.has_key?(record, :conflict_retry_count)
-  end
-
-  test "leaves a merge conflict alone while the issue is in Backlog, label or not, until a person promotes it" do
-    now = ~U[2026-05-01 09:00:00Z]
-    parked = %{in_review_issue(updated_at: now) | state: "Backlog", labels: ["needs-human"]}
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [parked])
-    :ok = put_review(now)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
-    )
-
-    poll = &PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, &1, :minute))
-
-    log =
-      capture_log([level: :info], fn ->
-        for minute <- [1, 2, 3] do
-          assert {:ok, %{actions: [{:conflict_awaiting_human_action, "issue-1780"}]}} = poll.(minute)
-        end
-      end)
-
-    assert [_once] = String.split(log, "conflicts with the base branch while the issue waits in Backlog for a person") |> tl()
-    refute_receive {:issue_state_update, _issue_id, _state}, 50
-
-    assert [%{status: "conflict_awaiting_human_action", conflict_context: %{conflict_key: "head-sha|base-sha"}} = record] =
-             RunStore.list_pr_reviews()
-
-    assert Map.get(record, :conflict_retry_count, 0) == 0
-    assert Map.get(record, :dispatched_conflict_keys, []) == []
-
-    # A person removes the label: Backlog still means nobody promoted the ticket, so it stays put.
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{parked | labels: []}])
-
-    assert {:ok, %{actions: [{:conflict_awaiting_human_action, "issue-1780"}]}} = poll.(4)
-    refute_receive {:issue_state_update, _issue_id, _state}, 50
-    assert [%{status: "conflict_awaiting_human_action"} = record] = RunStore.list_pr_reviews()
-    assert Map.get(record, :conflict_retry_count, 0) == 0
-
-    # A person promotes it to Todo: the next conflicting poll takes the conflict path as before.
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{parked | labels: [], state: "Todo"}])
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} = poll.(5)
-    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
-
-    assert [%{status: "conflict_requested", conflict_retry_count: 1, dispatched_conflict_keys: ["head-sha|base-sha"]}] =
-             RunStore.list_pr_reviews()
-  end
-
-  test "a parked issue's conflict waits even with the conflict retries spent" do
-    now = ~U[2026-05-01 09:00:00Z]
-    parked = %{in_review_issue(updated_at: now, state: "Merging") | labels: ["Needs-Human", "breakdown"]}
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [parked])
-    :ok = put_review(now, %{conflict_retry_count: 3, dispatched_conflict_keys: ["old-head|base-sha"]})
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "new-head", base_ref_oid: "base-sha")
-    )
-
-    assert {:ok, %{actions: [{:conflict_awaiting_human_action, "issue-1780"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    refute_receive {:issue_state_update, _issue_id, _state}, 50
-    assert [%{status: "conflict_awaiting_human_action", conflict_retry_count: 3}] = RunStore.list_pr_reviews()
-  end
-
-  test "a merge conflict on an issue in an active state with a person's label takes the conflict path" do
-    now = ~U[2026-05-01 09:00:00Z]
-    issue = %{in_review_issue(updated_at: now) | state: "In Progress", labels: ["needs-human"]}
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    :ok = put_review(now)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
-    )
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :conflict, "In Progress"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-  end
-
-  test "a failed issue read on a merge conflict records a poll error instead of moving the issue" do
-    now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-    :ok = put_review(now)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
-    )
-
-    assert {:ok, %{actions: [{:poll_error, "issue-1780", {:issue_read_failed, :linear_unavailable}}]}} =
-             PrReviewPoller.poll_once(tracker: IssueReadFailingTracker, github: FakeGitHub, now: now)
-
-    refute_receive {:issue_state_update, _issue_id, _state}, 50
-    assert [record] = RunStore.list_pr_reviews()
-    assert Map.get(record, :dispatched_conflict_keys, []) == []
-  end
-
-  test "clears merge conflict state when the PR becomes clean and skips cross-repo conflicts" do
-    now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-
-    :ok =
-      put_review(now, %{
-        status: "conflict_requested",
-        conflict_retry_count: 1,
-        dispatched_conflict_keys: ["head-sha|base-sha"],
-        last_conflict_key: "head-sha|base-sha",
-        conflict_context: %{
-          head_sha: "head-sha",
-          base_sha: "base-sha",
-          conflict_key: "head-sha|base-sha"
-        }
-      })
-
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, mergeable: "MERGEABLE"))
-
-    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
-    assert [
-             %{
-               conflict_context: nil,
-               conflict_retry_count: 0,
-               dispatched_conflict_keys: [],
-               last_conflict_key: nil,
-               last_conflict_at: nil
-             }
-           ] = RunStore.list_pr_reviews()
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        is_cross_repository: true,
-        head_ref_oid: "fork-head",
-        base_ref_oid: "base-sha"
-      )
-    )
-
-    assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
-             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
-
-    refute_receive {:issue_state_update, _, _}, 50
+      refute_receive {:issue_state_update, _, _}, 50
+      refute_receive {:issue_comment, _, _}, 0
+    end
   end
 
   test "defers state transitions while dispatch is paused and processes them on resume" do
     now = ~U[2026-05-01 09:00:00Z]
     issue = in_review_issue(updated_at: now)
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, review_decision: "APPROVED"))
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, rework_activity(DateTime.add(now, -31, :minute)))
 
     Application.put_env(:symphony_elixir, :pr_review_test_review_records, %{
       issue.id => review_record(now)
@@ -2263,7 +1558,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       paused_at: now
     })
 
-    assert {:ok, %{actions: [{:state_transition_deferred, "issue-1780", :merge, "In Progress"}]}} =
+    assert {:ok, %{actions: [{:state_transition_deferred, "issue-1780", :rework, "In Progress"}]}} =
              PrReviewPoller.poll_once(
                tracker: FakeTracker,
                run_store: StatefulRunStore,
@@ -2275,17 +1570,16 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert [
              %{
-               status: "merge_deferred",
+               status: "rework_deferred",
                target_issue_state: "In Progress",
                last_action: nil,
-               last_action_at: nil,
-               last_review_decision: "APPROVED"
+               last_action_at: nil
              }
            ] = StatefulRunStore.list_pr_reviews()
 
     Application.put_env(:symphony_elixir, :pr_review_test_pause, %{paused: false, reason: nil, paused_at: nil})
 
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :merge, "In Progress"}]}} =
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :rework, "In Progress"}]}} =
              PrReviewPoller.poll_once(
                tracker: FakeTracker,
                run_store: StatefulRunStore,
@@ -2295,7 +1589,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert_receive {:issue_state_update, "issue-1780", "In Progress"}
 
-    assert [%{status: "merge_requested", target_issue_state: "In Progress", last_action: "merge"}] =
+    assert [%{status: "rework_requested", target_issue_state: "In Progress", last_action: "rework"}] =
              StatefulRunStore.list_pr_reviews()
   end
 
@@ -3291,32 +2585,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [%{pending_reviewer_comments: [], pending_last_addressed_comment_id: nil}] = RunStore.list_pr_reviews()
   end
 
-  test "approval wins over stale cleanup" do
-    now = ~U[2026-05-01 09:00:00Z]
-    old_activity_at = DateTime.add(now, -8, :day)
-
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(old_activity_at, review_decision: "APPROVED")
-    )
-
-    :ok = put_review(now)
-
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :merge, "In Progress"}]}} =
-             PrReviewPoller.poll_once(
-               tracker: FakeTracker,
-               github: FakeGitHub,
-               workspace: FakeWorkspace,
-               now: now
-             )
-
-    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
-    refute_receive {:remove_workspace, _, _}, 50
-  end
-
   test "does not respawn rework when only PR activity changed after handled review comments" do
     now = ~U[2026-05-01 09:00:00Z]
     review_activity_at = DateTime.add(now, -90, :minute)
@@ -3551,21 +2819,21 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     Application.put_env(
       :symphony_elixir,
       :pr_review_test_activity,
-      open_activity(latest_review_at, review_decision: "APPROVED")
+      rework_activity(latest_review_at)
     )
 
     :ok = put_review(now)
 
     Application.put_env(:symphony_elixir, :pr_review_test_state_update_failures, ["issue-1780"])
 
-    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :merge, :linear_unavailable}]}} =
+    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :rework, :linear_unavailable}]}} =
              PrReviewPoller.poll_once(
                tracker: FakeTracker,
                github: FakeGitHub,
                now: now
              )
 
-    assert [%{status: "state_transition_error", error: ":linear_unavailable", last_action: "merge"}] =
+    assert [%{status: "state_transition_error", error: ":linear_unavailable", last_action: "rework"}] =
              RunStore.list_pr_reviews()
   end
 
@@ -3573,41 +2841,26 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
     latest_review_at = DateTime.add(now, -31, :minute)
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-    activity = open_activity(latest_review_at, review_decision: "APPROVED")
+    activity = rework_activity(latest_review_at)
     Application.put_env(:symphony_elixir, :pr_review_test_activity, activity)
     :ok = put_review(now)
 
     Application.put_env(:symphony_elixir, :pr_review_test_state_update_failures, ["issue-1780"])
     Application.put_env(:symphony_elixir, :pr_review_test_state_update_failure_reason, :state_not_found)
 
-    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :merge, {:state_not_found, "In Progress"}}]}} =
+    assert {:ok, %{actions: [{:state_transition_error, "issue-1780", :rework, {:state_not_found, "In Progress"}}]}} =
              PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
     assert [%{status: "state_transition_error", error: ~s({:state_not_found, "In Progress"})}] = RunStore.list_pr_reviews()
   end
 
-  test "cleans up workspace and tracking when PR is merged or stale" do
+  test "cleans up workspace and tracking when PR is merged" do
     now = ~U[2026-05-01 09:00:00Z]
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     :ok = put_review(now)
 
     assert {:ok, %{actions: [{:cleanup, "issue-1780", "merged"}]}} =
-             PrReviewPoller.poll_once(
-               tracker: FakeTracker,
-               github: FakeGitHub,
-               workspace: FakeWorkspace,
-               now: now
-             )
-
-    assert_receive {:remove_workspace, "/tmp/workspaces/ACME-1780", nil}
-    assert [] = RunStore.list_pr_reviews()
-
-    stale_activity_at = DateTime.add(now, -8, :day)
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(stale_activity_at))
-    :ok = put_review(now)
-
-    assert {:ok, %{actions: [{:cleanup, "issue-1780", "stale"}]}} =
              PrReviewPoller.poll_once(
                tracker: FakeTracker,
                github: FakeGitHub,
@@ -4256,8 +3509,8 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   test "poll callback logs warning-level signals for review action errors" do
     now = ~U[2026-05-01 09:00:00Z]
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, review_decision: "APPROVED"))
-    Application.put_env(:symphony_elixir, :pr_review_test_update_status_failures, ["merge_transition_pending"])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, rework_activity(DateTime.add(now, -31, :minute)))
+    Application.put_env(:symphony_elixir, :pr_review_test_update_status_failures, ["rework_transition_pending"])
 
     Application.put_env(:symphony_elixir, :pr_review_test_review_records, %{
       "issue-1780" => review_record(now)
@@ -4281,7 +3534,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       end)
 
     refute_receive {:issue_state_update, _, _}, 50
-    assert log =~ "PR review transition update error issue_id=issue-1780 action=merge"
+    assert log =~ "PR review transition update error issue_id=issue-1780 action=rework"
     assert log =~ "update_pr_review_failed"
   end
 
@@ -4289,18 +3542,18 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     now = ~U[2026-05-01 09:00:00Z]
     issue = in_review_issue(updated_at: now)
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
-    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, review_decision: "APPROVED"))
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, rework_activity(DateTime.add(now, -31, :minute)))
 
     Application.put_env(:symphony_elixir, :pr_review_test_review_records, %{
       issue.id => review_record(now)
     })
 
-    Application.put_env(:symphony_elixir, :pr_review_test_update_status_failures, ["merge_transition_pending"])
+    Application.put_env(:symphony_elixir, :pr_review_test_update_status_failures, ["rework_transition_pending"])
 
     assert {:ok,
             %{
               actions: [
-                {:state_transition_update_error, "issue-1780", :merge, {:update_pr_review_failed, :disk_full}}
+                {:state_transition_update_error, "issue-1780", :rework, {:update_pr_review_failed, :disk_full}}
               ]
             }} =
              PrReviewPoller.poll_once(
@@ -4318,7 +3571,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              }
            ] = StatefulRunStore.list_pr_reviews()
 
-    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :merge, "In Progress"}]}} =
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :rework, "In Progress"}]}} =
              PrReviewPoller.poll_once(
                tracker: FakeTracker,
                run_store: StatefulRunStore,
@@ -4471,84 +3724,6 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              StatefulRunStore.list_pr_reviews()
   end
 
-  defp landing_pr_url(number), do: "https://github.com/example/repo/pull/#{number}"
-
-  defp put_landing_review(now, id, number) do
-    identifier = "ACME-#{String.upcase(id)}"
-
-    put_review(now, %{issue_id: "issue-#{id}", issue_identifier: identifier, pr_url: landing_pr_url(number), workspace_path: "/tmp/workspaces/#{identifier}"})
-  end
-
-  defp landing_states(states, now) do
-    issues =
-      for {id, state} <- states do
-        identifier = "ACME-#{String.upcase(id)}"
-        number = %{"a" => 1, "b" => 2, "c" => 3}[id]
-        in_review_issue(updated_at: now, id: "issue-#{id}", identifier: identifier, pr_url: landing_pr_url(number), state: state)
-      end
-
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, issues)
-  end
-
-  defp landing_activities(prs, base, now) do
-    activities =
-      Map.new(prs, fn {number, {state, mergeable, head}} ->
-        merge =
-          if mergeable == :conflict,
-            do: [mergeable: "CONFLICTING", merge_state_status: "DIRTY"],
-            else: [mergeable: "MERGEABLE", merge_state_status: "CLEAN"]
-
-        refs = [head_ref_name: "auto/#{number}", head_ref_oid: head, base_ref_name: "main", base_ref_oid: base]
-        activity = open_activity(now, [state: state, pr_number: number] ++ refs ++ merge)
-
-        {landing_pr_url(number), %{activity | pr_url: landing_pr_url(number)}}
-      end)
-
-    Application.put_env(:symphony_elixir, :pr_review_test_activities, activities)
-  end
-
-  defp landing_poll(now) do
-    capture_log(fn ->
-      result = PrReviewPoller.poll_once(tracker: FakeTracker, github: LandingGitHub, workspace: FakeWorkspace, now: now)
-      send(self(), {:landing_poll, result})
-    end)
-
-    assert_received {:landing_poll, result}
-    result
-  end
-
-  # A ticket in `state` whose PR conflicts with its base on `head-sha|base-sha`.
-  defp conflicting_pr!(state, now, review_attrs \\ %{}) do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      pr_review_mode: "polling",
-      repos: [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
-    )
-
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [%{in_review_issue(updated_at: now) | state: state}])
-    :ok = put_review(now, review_attrs)
-
-    Application.put_env(
-      :symphony_elixir,
-      :pr_review_test_activity,
-      open_activity(now,
-        mergeable: "CONFLICTING",
-        merge_state_status: "DIRTY",
-        head_ref_name: "auto/ACME-1780",
-        head_ref_oid: "head-sha",
-        base_ref_name: "main",
-        base_ref_oid: "base-sha"
-      )
-    )
-  end
-
-  # A conflict CI Fix took at `now` on `head-sha|base-sha`.
-  defp conflict_dispatched(now) do
-    %{conflict_retry_count: 1, dispatched_conflict_keys: ["head-sha|base-sha"], last_action: "conflict", last_action_at: now}
-  end
-
-  defp poll_conflict(now), do: PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
-
   defp put_finished_run(issue, now) do
     RunStore.put_run(%{
       repo_key: @repo_key,
@@ -4627,6 +3802,15 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       updated_at: now
     }
     |> Map.merge(attrs)
+  end
+
+  # A PR a person left a review comment on at `at`, which sends its ticket back to work.
+  defp rework_activity(at) do
+    open_activity(at,
+      comments: [
+        %{id: "comment-1", kind: "comment", author: "human-reviewer", body: "Please refactor this.", url: "https://github.com/example/repo/pull/1780#issuecomment-1", created_at: at, updated_at: at}
+      ]
+    )
   end
 
   defp in_review_issue(opts) do

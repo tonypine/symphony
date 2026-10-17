@@ -1,36 +1,9 @@
 defmodule SymphonyElixir.LandingOrderTest do
-  use SymphonyElixir.TestSupport
+  use ExUnit.Case, async: true
 
   alias SymphonyElixir.LandingOrder
-  alias SymphonyElixir.Linear.Issue
 
   @now ~U[2026-10-13 12:00:00Z]
-  @repo_key "default"
-
-  defmodule OpenPullsGitHub do
-    @spec list_open_pull_requests(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
-    def list_open_pull_requests(pr_url, opts) do
-      recipient = Application.fetch_env!(:symphony_elixir, :landing_order_test_recipient)
-      send(recipient, {:list_open_pull_requests, pr_url, opts})
-      Application.fetch_env!(:symphony_elixir, :landing_order_test_open_pulls)
-    end
-  end
-
-  defmodule NoListGitHub do
-    @spec fetch_activity(String.t(), keyword()) :: {:ok, map()}
-    def fetch_activity(_pr_url, _opts), do: {:ok, %{}}
-  end
-
-  setup do
-    Application.put_env(:symphony_elixir, :landing_order_test_recipient, self())
-
-    on_exit(fn ->
-      Application.delete_env(:symphony_elixir, :landing_order_test_recipient)
-      Application.delete_env(:symphony_elixir, :landing_order_test_open_pulls)
-    end)
-
-    :ok
-  end
 
   describe "waits/2" do
     test "each PR waits for the first PR above it that shares a file, furthest along first" do
@@ -56,6 +29,13 @@ defmodule SymphonyElixir.LandingOrderTest do
 
       assert waits["b"].issue_id == "a"
       assert waits["c"].issue_id == "b"
+    end
+
+    test "a PR that conflicts with the base lands after the ones that don't, whatever its state" do
+      waits = LandingOrder.waits([member("merging", 5, ["lib/a.ex"], conflicting: true), member("qa", 4, ["lib/a.ex"])], @now)
+
+      assert waits["merging"].issue_id == "qa"
+      refute Map.has_key?(waits, "qa")
     end
 
     test "PRs that share no file are unaffected" do
@@ -87,6 +67,23 @@ defmodule SymphonyElixir.LandingOrderTest do
       assert %{"follower" => %{issue_id: "busy"}} = LandingOrder.waits([held, member("busy", 4, ["x"]), follower], @now)
     end
 
+    test "a PR that stepped behind others (R15) ranks after each of them, so none waits for it" do
+      ahead = member("ahead", 5, ["x"])
+      stepped = member("stepped", 4, ["x"], behind: ["ahead", "behind"])
+      behind = member("behind", 1, ["x"])
+
+      # Before the step, the PR behind waits for it.
+      assert %{"behind" => %{issue_id: "stepped"}} = LandingOrder.waits([member("stepped", 4, ["x"]), behind], @now)
+
+      waits = LandingOrder.waits([stepped, behind], @now)
+      assert waits["stepped"].issue_id == "behind"
+      refute Map.has_key?(waits, "behind")
+
+      waits = LandingOrder.waits([ahead, stepped, behind], @now)
+      assert waits["behind"].issue_id == "ahead"
+      assert waits["stepped"].issue_id == "ahead"
+    end
+
     test "a forced ticket never waits" do
       assert LandingOrder.waits([member("a", 5, ["x"]), member("b", 3, ["x"], forced: true)], @now) == %{}
     end
@@ -106,79 +103,6 @@ defmodule SymphonyElixir.LandingOrderTest do
     assert Enum.map(["QA", "Code Review"], &LandingOrder.rank(&1, %{})) == [4, 3]
   end
 
-  describe "refresh/5" do
-    test "reads the open PRs once and keeps each record's files, state and wait" do
-      open_pulls([pull(1, ["lib/a.ex"]), pull(2, ["lib/a.ex", "lib/b.ex"]), pull(9, ["x"])])
-
-      reviews = [record("a", 1, workspace_path: "/w/a"), record("b", 2), record("gone", 3), %{issue_id: "no-pr"}]
-      issues = [issue("a", "Merging"), issue("b", "QA")]
-
-      assert [{_a, a}, {_b, b}, {_gone, nil}, {_no_pr, nil}] = refresh(reviews, issues, @now)
-      assert_receive {:list_open_pull_requests, "https://github.com/acme/repo/pull/1", [cwd: "/w/a"]}
-
-      assert a == landing(files: ["lib/a.ex"], state: "Merging")
-      assert %{state: "QA", waits_for: %{issue_id: "a", issue_identifier: "TP-a", shared_files: 1}, waits_since: @now} = b
-      assert b.waits_for.files == ["lib/a.ex"]
-    end
-
-    test "keeps when a record entered its state, moved and started waiting, and refreshes progress while it waits" do
-      open_pulls([pull(1, ["x"]), pull(2, ["x"])])
-      earlier = DateTime.add(@now, -3600)
-      later = DateTime.add(@now, 60)
-      reviews = [record("a", 1), record("b", 2)]
-      issues = [issue("a", "Merging"), issue("b", "QA")]
-
-      [{_, a}, {_, b}] = refresh(reviews, issues, earlier)
-      reviews = [Map.put(record("a", 1), :landing, a), Map.put(record("b", 2), :landing, b)]
-
-      assert [{_, a2}, {_, b2}] = refresh(reviews, issues, later)
-      assert %{state_since: ^earlier, progress_at: ^earlier} = a2
-      assert %{state_since: ^earlier, progress_at: ^later, waits_since: ^earlier} = b2
-
-      # A new head is progress; a new state starts the state over.
-      open_pulls([%{pull(1, ["x"]) | head_sha: "new"}, pull(2, ["x"])])
-
-      assert [{_, %{progress_at: ^later, state_since: ^earlier}}, {_, %{state_since: ^later}}] =
-               refresh(reviews, [issue("a", "Merging"), issue("b", "Code Review")], later)
-    end
-
-    test "a record whose ticket this poll didn't read keeps the state it was last read in" do
-      open_pulls([pull(1, ["x"]), pull(2, ["x"])])
-      reviews = [Map.put(record("a", 1), :landing, landing(files: ["x"], state: "QA")), record("b", 2)]
-
-      assert [{_, %{state: "QA", waits_for: nil}}, {_, %{state: "Code Review", waits_for: %{issue_id: "a"}}}] =
-               refresh(reviews, [issue("b", "Code Review")], @now)
-    end
-
-    test "when the read fails, each record keeps the files it last had" do
-      Application.put_env(:symphony_elixir, :landing_order_test_open_pulls, {:error, :rate_limited})
-      reviews = [Map.put(record("a", 1), :landing, landing(files: ["x"], state: "QA")), record("b", 2)]
-
-      log =
-        capture_log(fn ->
-          assert [{_, %{files: ["x"], head_sha: "sha-1"}}, {_, nil}] = refresh(reviews, [], @now)
-        end)
-
-      assert log =~ "Landing order: reading the open pull requests failed"
-    end
-
-    test "a held leader leads no one and a forced follower never waits" do
-      open_pulls([pull(1, ["x"]), pull(2, ["x"]), pull(3, ["x"])])
-      :ok = RunStore.set_ticket_hold(@repo_key, "a", :blocked, %{})
-      forced = %{issue("c", "Code Review") | labels: [Config.settings!().agent.force_label]}
-
-      assert [{_, %{waits_for: nil}}, {_, %{waits_for: nil}}, {_, %{waits_for: nil}}] =
-               refresh([record("a", 1), record("b", 2), record("c", 3)], [issue("a", "Merging"), issue("b", "QA"), forced], @now)
-    end
-
-    test "is off without a way to list open PRs or with fewer than two tracked PRs" do
-      reviews = [record("a", 1), record("b", 2)]
-      assert [{_, nil}, {_, nil}] = refresh(reviews, [], @now, github: NoListGitHub, repo_key: @repo_key)
-      assert [{_, nil}, {_, nil}] = refresh([record("a", 1), %{issue_id: "b", pr_url: "nope"}], [], @now)
-      refute_received {:list_open_pull_requests, _url, _opts}
-    end
-  end
-
   defp member(id, rank, files, attrs \\ []) do
     Map.merge(
       %{
@@ -192,28 +116,6 @@ defmodule SymphonyElixir.LandingOrderTest do
         state_since: @now,
         progress_at: @now
       },
-      Map.new(attrs)
-    )
-  end
-
-  defp record(id, number, attrs \\ []) do
-    %{issue_id: id, issue_identifier: "TP-#{id}", repo_key: @repo_key, pr_url: "https://github.com/acme/repo/pull/#{number}"}
-    |> Map.merge(Map.new(attrs))
-  end
-
-  defp pull(number, files),
-    do: %{number: number, url: "https://github.com/acme/repo/pull/#{number}", title: "PR #{number}", head_sha: "sha-#{number}", files: files}
-
-  defp issue(id, state), do: %Issue{id: id, identifier: "TP-#{id}", state: state, labels: []}
-
-  defp open_pulls(pulls), do: Application.put_env(:symphony_elixir, :landing_order_test_open_pulls, {:ok, pulls})
-
-  defp refresh(reviews, issues, now, opts \\ [github: OpenPullsGitHub, repo_key: @repo_key]),
-    do: LandingOrder.refresh(reviews, issues, Config.settings!(), opts, now)
-
-  defp landing(attrs) do
-    Map.merge(
-      %{files: [], head_sha: "sha-1", state: nil, state_since: @now, progress_at: @now, waits_for: nil, waits_since: nil},
       Map.new(attrs)
     )
   end

@@ -4,16 +4,16 @@ defmodule SymphonyElixir.CiFix do
 
   Every phase carries a CI attribute (`SymphonyElixir.CiState`). When a head goes red — or a PR
   conflicts with its base branch — while the ticket sits in `Code Review`, `QA`, `Merging` or
-  `Rework`, the ticket enters this lane. A red head or a conflict in any other state takes the
-  red → `In Progress` fix loop. The two pollers detect it
-  (`SymphonyElixir.CiPoller`, `SymphonyElixir.PrReviewPoller`), call `entry/2` to pick the edge for
-  the state the ticket is in, and call `record_origin/4` before performing that edge through
-  `SymphonyElixir.TransitionGuard`. The origin is recorded on the ticket
+  `Rework`, the ticket enters this lane. The PR and CI watcher decides it (rules R14 and R21 of
+  `docs/pr-ci-decisions.md`) and its writer (`SymphonyElixir.PrDecision.Apply`) calls `entry/2` to
+  pick the edge for the state the ticket is in, and `record_origin/4` before performing that edge
+  through `SymphonyElixir.TransitionGuard`. A green, conflict-free head returns a ticket left in the
+  lane to its origin (R25). The origin is recorded on the ticket
   (`SymphonyElixir.TicketState`), which is what lets the repair return where it came from.
 
   The repair run itself is an ordinary executor run, constrained by the repo's `ci_fix` run profile
-  and the playbook to minimal work: formatting, a flaky rerun, a dependency bump, a
-  conflict resolution — no behavior change. `SymphonyElixir.AgentRunner` reads `origin/3` back and
+  and the playbook to minimal work: formatting, a failing or flaky test fixed at its cause (never
+  a rerun), a dependency bump, a conflict resolution — no behavior change. `SymphonyElixir.AgentRunner` reads `origin/3` back and
   returns the ticket with `:ci_fix_mechanical`, releasing the auto-merge hold when the origin is
   `Merging`, so the approval an earlier verdict earned still covers the PR.
 

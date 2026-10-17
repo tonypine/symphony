@@ -3,36 +3,47 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   The PR and CI watcher's GitHub read, and the facts it builds from it.
 
   `read/2` reads one pull request in one GraphQL query: its state, draft flag, base and the
-  repository's default branch, head, mergeability, merge state, auto-merge request, review decision,
-  review threads and the head's check rollup. Run through `gh api --include`, so the response's
-  `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Two more reads happen
+  repository's default branch, head and whether its branch still exists, mergeability, merge state,
+  auto-merge request and the head's check rollup. An open PR whose branch was deleted reads as
+  closed. Its base is compared with the repo's `base_branch` when the caller names one, else with
+  the repository's default branch. Run through `gh api --include`, so the response's
+  `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Three more reads happen
   only when needed: the checks the base branch requires (unless the caller already knows them;
-  `SymphonyElixir.PrWatch.Repo` keeps them 10 minutes per base), and, for a red
+  `SymphonyElixir.PrWatch.Repo` keeps them 10 minutes per base); for a head with no check at all,
+  whether the base branch has workflow files (kept the same way): without them the head has no CI
+  (`ci: :none`, D2), with them it waits for its first check (`awaiting_checks`); and, for a red
   head that is neither cancelled nor only a person's to clear, the base branch's latest workflow
   runs, to tell a check that is also red on the base. A read GitHub's rate limit refused is
   `{:error, {:rate_limited, reset_at}}`.
 
+  `failure/3` reads the red head's failure the same-failure streak compares: its failed check and the
+  first line of its failed log, once per head.
+
   `facts/2` turns a read and what Symphony knows of the ticket into
   `SymphonyElixir.PrDecision.Facts`. It is pure. The counts of fix runs, the rerun flag and the
-  merge wait keep their defaults: `PrWatch.Attempts` fills them when the watcher starts deciding.
-  Nothing here writes to GitHub.
+  merge wait come from the ticket, as `SymphonyElixir.PrWatch.Attempts` keeps them, and so do the
+  review comments still to address, which the PR review poller reads
+  (`SymphonyElixir.PrReviewPoller`). The read also carries what acting on the PR needs (its node
+  id, title and body, the failed checks' runs), for `SymphonyElixir.PrDecision.Apply`. Nothing here
+  writes to GitHub.
   """
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, PrDecision.Facts}
-  alias SymphonyElixir.GitHub.PullRequest
+  alias SymphonyElixir.{CiPoller, PrDecision.Facts, PrWatch}
+  alias SymphonyElixir.GitHub.{FailedLog, PullRequest}
 
   @base_runs_limit 30
+  @log_lines 20
 
   @query """
   query($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
       defaultBranchRef { name }
       pullRequest(number: $number) {
-        number url state isDraft merged baseRefName headRefName headRefOid mergeable mergeStateStatus reviewDecision
+        id number url title body state isDraft merged baseRefName baseRefOid headRefName headRefOid mergeable mergeStateStatus
+        headRef { name }
         autoMergeRequest { enabledAt }
-        reviewThreads(first: 100) { nodes { isResolved isOutdated } }
         commits(last: 1) {
           nodes {
             commit {
@@ -56,42 +67,81 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   }
   """
 
-  @typedoc "What GitHub said of its rate limit on the read: requests left and when the window resets."
-  @type rate_limit :: %{remaining: non_neg_integer() | nil, reset_at: DateTime.t() | nil}
+  @typedoc "What GitHub said of its rate limit on the read: requests left of the window's limit, and when it resets."
+  @type rate_limit :: %{
+          remaining: non_neg_integer() | nil,
+          limit: non_neg_integer() | nil,
+          reset_at: DateTime.t() | nil
+        }
 
-  @typedoc "One pull request as the watcher reads it, normalised."
+  @typedoc """
+  One pull request as the watcher reads it, normalised. `failure/3` adds the red head's failure, and
+  the failed log when it read it.
+  """
   @type read :: %{
+          optional(:failure) => Facts.failure() | nil,
+          optional(:failed_log) => FailedLog.log(),
           pr_url: String.t(),
           pr_number: pos_integer() | nil,
           pr: :open | :draft | :closed | :merged | :missing,
           base: :ok | :changed,
           base_ref: String.t() | nil,
+          base_branch: String.t() | nil,
           head_sha: String.t() | nil,
           auto_merge: :off | :armed,
-          review_comments: :none | :unaddressed,
           mergeable: :clean | :behind | :dirty | :unstable | :blocked | :unknown,
           ci: :pending | :green | :none | :red | :required_missing,
+          no_ci: :not_configured | :not_reported,
+          awaiting_checks: boolean(),
           missing_checks: [String.t()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
           failing_check: String.t() | nil,
+          failed_checks: [check()],
+          check_names: [String.t()],
+          run_ids: [String.t()],
+          pr_node_id: String.t() | nil,
+          pr_title: String.t() | nil,
+          pr_description: String.t() | nil,
+          head_ref: String.t() | nil,
+          base_sha: String.t() | nil,
           rate_limit: rate_limit(),
-          required: {String.t(), [String.t()]} | nil
+          required: {String.t(), [String.t()]} | nil,
+          workflows: {String.t(), boolean()} | nil
         }
 
-  @typedoc "What Symphony knows of the ticket, beside its PR."
+  @typedoc "A failed check of the head: its name, the workflow run it belongs to and how it ended."
+  @type check :: %{
+          name: String.t() | nil,
+          run_id: String.t() | nil,
+          workflow_name: String.t() | nil,
+          conclusion: String.t() | nil
+        }
+
+  @typedoc """
+  What Symphony knows of the ticket, beside its PR: its phase, holds and run, the landing order's
+  `ahead` and the open PRs `competing` with it (`SymphonyElixir.PrWatch.Competitors`, `[]` when
+  absent), whether review comments wait to be addressed (`review_comments`, `:none` when absent),
+  and the counts `SymphonyElixir.PrWatch.Attempts` keeps (`red_attempts`,
+  `conflict_attempts`, `rerun_done`, `fix_failures`, `landing_timed_out`), which keep their
+  defaults when absent.
+  """
   @type ticket :: %{
-          phase: Facts.phase(),
-          origin: Facts.phase() | nil,
-          hold: :none | :needs_decision | :blocked,
-          run: :none | :active,
-          max_red_attempts: pos_integer(),
-          ahead: [Facts.competitor()]
+          required(:phase) => Facts.phase(),
+          required(:origin) => Facts.phase() | nil,
+          required(:hold) => :none | :needs_decision | :blocked,
+          required(:run) => :none | :active,
+          required(:max_red_attempts) => pos_integer(),
+          required(:ahead) => [Facts.competitor()],
+          optional(atom()) => term()
         }
 
   @doc """
   Reads the pull request at `pr_url` (see the moduledoc). `opts`: `:required_checks`, the checks
   already known per base branch (`%{base => names}`): a base not in it is read, and the read carries
-  them as `required: {base, names}` for the caller to keep; `:gh_runner` and `:cwd`, passed to `gh`.
+  them as `required: {base, names}` for the caller to keep; `:base_workflows`, whether each base
+  branch has workflow files (`%{base => boolean}`), read and carried as `workflows: {base, boolean}`
+  the same way; `:base_branch`, the branch the repo's PRs merge into (else the repository's default
+  branch); `:gh_runner` and `:cwd`, passed to `gh`.
   """
   @spec read(String.t(), keyword()) :: {:ok, read()} | {:error, term()}
   def read(pr_url, opts) when is_binary(pr_url) and is_list(opts) do
@@ -114,11 +164,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     pr_facts =
       case read do
         nil -> %{pr: :missing}
-        read -> Map.take(read, [:pr, :pr_number, :base, :auto_merge, :review_comments, :ci, :missing_checks, :red_kind, :failing_check, :mergeable])
+        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :ci, :no_ci, :missing_checks, :red_kind, :failing_check, :mergeable])
       end
 
     ticket
-    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead])
+    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :competing, :review_comments | PrWatch.Attempts.fact_keys()])
     |> Map.put(:origin, if(ticket.phase == :ci_fix, do: ticket.origin))
     |> Map.merge(pr_facts)
     |> Facts.new()
@@ -221,7 +271,11 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   end
 
   defp rate_limit(headers) do
-    %{remaining: integer(headers["x-ratelimit-remaining"]), reset_at: reset_at(integer(headers["x-ratelimit-reset"]))}
+    %{
+      remaining: integer(headers["x-ratelimit-remaining"]),
+      limit: integer(headers["x-ratelimit-limit"]),
+      reset_at: reset_at(integer(headers["x-ratelimit-reset"]))
+    }
   end
 
   defp integer(value) when is_binary(value) do
@@ -243,64 +297,80 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       pr: :missing,
       base: :ok,
       base_ref: nil,
+      base_branch: nil,
       head_sha: nil,
       auto_merge: :off,
-      review_comments: :none,
       mergeable: :unknown,
       ci: :pending,
+      no_ci: :not_configured,
+      awaiting_checks: false,
       missing_checks: [],
       red_kind: :failure,
       failing_check: nil,
+      failed_checks: [],
+      check_names: [],
+      run_ids: [],
+      pr_node_id: nil,
+      pr_title: nil,
+      pr_description: nil,
+      head_ref: nil,
+      base_sha: nil,
       rate_limit: rate_limit,
-      required: nil
+      required: nil,
+      workflows: nil
     }
   end
 
   defp normalize(pr_url, pull, repository, rate_limit, repo, opts) do
     base_ref = pull["baseRefName"]
+    base_branch = Keyword.get(opts, :base_branch) || get_in(repository, ["defaultBranchRef", "name"])
     head_sha = pull["headRefOid"]
     checks = checks(pr_url, head_sha, pull)
     {names, required} = required(pr_url, base_ref, checks, opts)
-    ci = ci(checks, names)
+    {workflows?, workflows} = workflows(pr_url, base_ref, checks, names, opts)
+    ci = ci(checks, names, workflows?)
     failing = Enum.filter(checks, &(PullRequest.check_result(&1) == :failed))
 
     %{
       pr_url: pr_url,
       pr_number: pull["number"],
       pr: pr_state(pull),
-      base: base(base_ref, get_in(repository, ["defaultBranchRef", "name"])),
+      base: base(base_ref, base_branch),
       base_ref: base_ref,
+      base_branch: base_branch,
       head_sha: head_sha,
       auto_merge: if(is_map(pull["autoMergeRequest"]), do: :armed, else: :off),
-      review_comments: review_comments(pull),
       mergeable: mergeable(pull["mergeable"], pull["mergeStateStatus"]),
       ci: elem(ci, 0),
+      no_ci: :not_configured,
+      awaiting_checks: checks == [] and elem(ci, 0) == :pending,
       missing_checks: elem(ci, 1),
       red_kind: red_kind(elem(ci, 0), failing, base_ref, repo, opts),
       failing_check: failing |> Enum.map(& &1.name) |> List.first(),
+      failed_checks: Enum.map(failing, &Map.take(&1, [:name, :run_id, :workflow_name, :conclusion])),
+      check_names: checks |> Enum.map(& &1.name) |> Enum.uniq(),
+      run_ids: run_ids(checks),
+      pr_node_id: pull["id"],
+      pr_title: pull["title"],
+      pr_description: pull["body"],
+      head_ref: pull["headRefName"],
+      base_sha: pull["baseRefOid"],
       rate_limit: rate_limit,
-      required: required
+      required: required,
+      workflows: workflows
     }
   end
 
   defp pr_state(%{"merged" => true}), do: :merged
   defp pr_state(%{"state" => "MERGED"}), do: :merged
   defp pr_state(%{"state" => "CLOSED"}), do: :closed
+  # Deleting an open PR's branch leaves nothing to merge: it reads as closed.
+  defp pr_state(%{"state" => "OPEN", "headRef" => nil}), do: :closed
   defp pr_state(%{"isDraft" => true}), do: :draft
   defp pr_state(_pull), do: :open
 
   defp base(base_ref, default) when is_binary(base_ref) and is_binary(default) and base_ref != default, do: :changed
   defp base(_base_ref, _default), do: :ok
-
-  defp review_comments(pull) do
-    unresolved? =
-      pull
-      |> get_in(["reviewThreads", "nodes"])
-      |> List.wrap()
-      |> Enum.any?(&(is_map(&1) and &1["isResolved"] == false and &1["isOutdated"] != true))
-
-    if unresolved? or pull["reviewDecision"] == "CHANGES_REQUESTED", do: :unaddressed, else: :none
-  end
 
   defp mergeable("CONFLICTING", _merge_state), do: :dirty
   defp mergeable(_mergeable, "DIRTY"), do: :dirty
@@ -350,7 +420,30 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     end
   end
 
-  defp ci(checks, required) do
+  # A head with no check at all and nothing required: whether the base has workflow files tells no
+  # CI from CI that hasn't started yet. `{workflows?, read}`, as `required/4`. A base that can't be
+  # read counts as having workflows, so the head waits rather than skipping CI it has.
+  defp workflows(pr_url, base_ref, [], [], opts) when is_binary(base_ref) do
+    case Map.fetch(Keyword.get(opts, :base_workflows, %{}), base_ref) do
+      {:ok, workflows?} -> {workflows?, nil}
+      :error -> read_workflows(pr_url, base_ref, opts)
+    end
+  end
+
+  defp workflows(_pr_url, _base_ref, _checks, _required, _opts), do: {true, nil}
+
+  defp read_workflows(pr_url, base_ref, opts) do
+    case PullRequest.workflow_files?(pr_url, base_ref, opts) do
+      {:ok, workflows?} ->
+        {workflows?, {base_ref, workflows?}}
+
+      {:error, reason} ->
+        Logger.warning("PR watch could not read the workflows of #{base_ref} pr_url=#{pr_url} reason=#{inspect(reason)}")
+        {true, nil}
+    end
+  end
+
+  defp ci(checks, required, workflows?) do
     results = Enum.map(checks, &PullRequest.check_result/1)
     missing = required -- Enum.map(checks, & &1.name)
 
@@ -358,8 +451,58 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       :failed in results -> {:red, []}
       :pending in results -> {:pending, []}
       missing != [] -> {:required_missing, missing}
+      checks == [] and workflows? -> {:pending, []}
       checks == [] -> {:none, []}
       true -> {:green, []}
+    end
+  end
+
+  defp run_ids(checks), do: checks |> Enum.map(&Map.get(&1, :run_id)) |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq()
+
+  @doc """
+  The read with the red head's failure (`failure`): its first failed check and the first error line
+  of the failed log (`SymphonyElixir.GitHub.FailedLog`), the signature the same-failure streak
+  compares, for a red head that is a plain failure. `known` is the failure already read for a head:
+  when it is this head's, the log isn't read again. A log read now is carried too (`failed_log`),
+  so a CI Fix sent on this read doesn't read it a second time. Any other read, or a log that can't
+  be read, has no failure. `opts`: `:line_limit` (the excerpt's lines), `:github` and `:gh_runner`.
+  """
+  @spec failure(read(), Facts.failure() | nil, keyword()) :: read()
+  def failure(%{ci: :red, red_kind: :failure, head_sha: head} = read, known, opts) when is_binary(head) do
+    case known do
+      %{head_sha: ^head} -> Map.put(read, :failure, known)
+      _other -> read_failure(read, head, opts)
+    end
+  end
+
+  def failure(read, _known, _opts), do: Map.put(read, :failure, nil)
+
+  defp read_failure(read, head, opts) do
+    run_ids = run_ids(Map.get(read, :failed_checks, []))
+    log_opts = Keyword.take(opts, [:github, :gh_runner]) ++ repo_opts(read.pr_url, opts)
+
+    case FailedLog.read(run_ids, Keyword.get(opts, :line_limit, @log_lines), log_opts) do
+      {:ok, log} ->
+        read
+        |> Map.put(:failure, %{check: read.failing_check || "a check", error: log.error, head_sha: head})
+        |> Map.put(:failed_log, log)
+
+      {:error, reason} ->
+        Logger.warning("PR watch could not read the failed log of #{head} pr_url=#{read.pr_url} reason=#{inspect(reason)}")
+        Map.put(read, :failure, nil)
+    end
+  end
+
+  @doc """
+  The `repo:` option `gh run` needs for the repository of `pr_url` when it doesn't run in a clone of
+  it (`owner/repo`, or `host/owner/repo` on GitHub Enterprise); none for a URL that isn't a PR's.
+  """
+  @spec repo_opts(String.t() | nil, keyword()) :: keyword()
+  def repo_opts(pr_url, opts \\ []) do
+    case PullRequest.parse_url(pr_url, opts) do
+      {:ok, %{host: "github.com", owner: owner, repo: repo}} -> [repo: "#{owner}/#{repo}"]
+      {:ok, %{host: host, owner: owner, repo: repo}} -> [repo: "#{host}/#{owner}/#{repo}"]
+      :error -> []
     end
   end
 

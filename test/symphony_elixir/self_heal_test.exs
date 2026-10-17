@@ -169,6 +169,10 @@ defmodule SymphonyElixir.SelfHealTest do
       end
 
       assert SelfHeal.component(%{reason: "no QA playbook applies"}) == "qa_playbook"
+
+      # The PR and CI watcher's red backstop names the failing check, with or without its error.
+      assert SelfHeal.component(%{cause: {:ci_check_failed, "make all"}}) == "ci:make all"
+      assert SelfHeal.component(%{cause: {:ci_check_failed, "make all", "ERROR: boom"}}) == "ci:make all"
     end
 
     test "falls back to the flow's own environment for anything unrecognized" do
@@ -183,6 +187,8 @@ defmodule SymphonyElixir.SelfHealTest do
       assert SelfHeal.scope("qa_environment", @repo_key, symphony_repo_key: @symphony_repo_key) == @symphony_repo_key
       assert SelfHeal.scope("worker_host", @repo_key, symphony_repo_key: @symphony_repo_key) == @symphony_repo_key
       assert SelfHeal.scope("qa_playbook", @repo_key, symphony_repo_key: @symphony_repo_key) == @symphony_repo_key
+      # A CI check belongs to the repo whose CI fails.
+      assert SelfHeal.scope("ci:make all", @repo_key, symphony_repo_key: @symphony_repo_key) == @repo_key
     end
 
     test "falls back to the configured primary repo when none is given" do
@@ -254,6 +260,67 @@ defmodule SymphonyElixir.SelfHealTest do
 
       assert {:blocked, %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
       assert {@issue_id, "Blocked"} = Process.get(:machine_label)
+    end
+
+    test "a CI check that keeps failing files a fix ticket in the repo whose CI fails, naming the pull request" do
+      ci = outcome({:ci_check_failed, "specs"}, %{reason: "CI keeps failing", pr_url: "https://github.com/acme/app/pull/7", head_sha: "abcdef123456"})
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(ci))
+
+      assert %{scope: @repo_key, component: "ci:specs", title: "Self-heal: CI keeps failing the specs check", description: description} = Process.get(:fixer_create)
+      assert description =~ "- Pull request: https://github.com/acme/app/pull/7 at `abcdef1`"
+      assert description =~ "CI Fix runs could not make the `specs` check pass on PR #7."
+      assert description =~ "The failure may be that pull request's own rather than this repo's CI"
+      assert %{component: "ci:specs", scope: @repo_key, signature: ~s({:ci_check_failed, "specs"})} = Process.get(:recorded_self_heal)
+
+      # A pull request read without its head is named without one.
+      assert :filed = SelfHeal.heal(issue(), heal_opts(Map.delete(ci, :head_sha)))
+      assert %{description: description} = Process.get(:fixer_create)
+      assert description =~ "- Pull request: https://github.com/acme/app/pull/7\n"
+    end
+
+    test "a CI check failing after another component's block, or another check's, files its own fix ticket" do
+      ci = outcome({:ci_check_failed, "specs"})
+
+      for previous <- [
+            %{component: "ci:lint", scope: @repo_key, signature: ~s({:ci_check_failed, "lint"})},
+            %{component: "qa_environment", scope: @symphony_repo_key, signature: "an old failure"}
+          ] do
+        Process.delete(:fixer_create)
+        Process.put(:ticket_state, recorded(@repo_key, @issue_id, previous))
+        assert :filed = SelfHeal.heal(issue(), heal_opts(ci))
+        assert %{component: "ci:specs"} = Process.get(:fixer_create)
+      end
+
+      # A QA block after a CI backstop is a new break too.
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: "x"}))
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
+
+      # The same check failing the same way after its fix landed escalates, as any block does.
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: ~s({:ci_check_failed, "specs"})}))
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(ci))
+    end
+
+    test "a failed check's signature is its name and first error line, the same failure the PR watcher's streak counts" do
+      assert SelfHeal.signature(%{cause: {:ci_check_failed, "specs", "  ERROR:\tboom  "}}) == "specs: ERROR: boom"
+
+      # After its fix landed, the same error escalates; another error of the same check is progress.
+      ci = outcome({:ci_check_failed, "specs", "ERROR: boom"})
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: "specs: ERROR: boom"}))
+      assert :escalated = SelfHeal.heal(issue(), heal_opts(ci))
+      Process.put(:ticket_state, recorded(@repo_key, @issue_id, %{component: "ci:specs", scope: @repo_key, signature: "specs: ERROR: other"}))
+      assert :retry = SelfHeal.heal(issue(), heal_opts(ci, attempts: 1))
+    end
+
+    test "a failing check gets one open fix ticket per repo, whatever error each ticket hit" do
+      other = recorded(@repo_key, "other-issue", %{component: "ci:specs", scope: @repo_key, signature: "specs: ERROR: other", fix_ticket: @fix_ticket})
+      Process.put(:ticket_states, [other])
+      Process.put({:fix_ticket_state, @fix_ticket}, {:ok, %Issue{id: "fix-id", identifier: @fix_ticket, state: "Todo"}})
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome({:ci_check_failed, "specs", "ERROR: boom"}), terminal_states: ["Done"]))
+      assert Process.get(:fixer_create) == nil
+      assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
+      assert evidence =~ "specs: ERROR: boom"
     end
 
     test "a block a person must clear keeps the access hold and files nothing" do

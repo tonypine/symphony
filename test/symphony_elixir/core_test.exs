@@ -132,7 +132,8 @@ defmodule SymphonyElixir.CoreTest do
     assert config.ci.poll_interval_ms == nil
     assert config.ci.log_excerpt_lines == 200
     assert config.ci.flaky_retry == true
-    assert config.ci.max_retries == 3
+    # A backstop, not a budget (D15): ten red fix runs before the watcher files a fix ticket.
+    assert config.ci.max_retries == 10
     assert config.ci.merging_wait_timeout_ms == 1_800_000
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
@@ -3666,6 +3667,9 @@ defmodule SymphonyElixir.CoreTest do
     refute prompt =~ "Auto Review"
     assert prompt =~ "## PR feedback sweep protocol (required)"
     assert prompt =~ "## CI failure triage protocol (required when checks are red)"
+    assert prompt =~ "Every red check is a defect to fix, never a check to rerun."
+    assert prompt =~ "A CI-fix run ends in\none of three ways only:"
+    refute prompt =~ "a rerun of a flaky check"
     assert prompt =~ "## Blocked-access escape hatch (required behavior)"
     assert prompt =~ "## In-execution clarification escape hatch (required behavior)"
     assert prompt =~ "## Completion bar before the handoff"
@@ -4169,23 +4173,19 @@ defmodule SymphonyElixir.CoreTest do
     now = ~U[2026-10-13 12:00:00Z]
 
     for {id, files} <- [{"issue-own", ["lib/a.ex", "lib/b.ex"]}, {"issue-other", ["lib/b.ex"]}] do
-      :ok =
-        RunStore.put_pr_review(%{
-          repo_key: "default",
-          issue_id: id,
-          issue_identifier: String.upcase(id),
-          pr_url: "https://github.com/example/repo/pull/#{byte_size(id)}",
-          landing: %{
-            files: files,
-            head_sha: "head",
-            state: "QA",
-            state_since: now,
-            progress_at: now,
-            waits_for: nil,
-            waits_since: nil
-          },
-          updated_at: now
-        })
+      SymphonyElixir.PrWatchSupport.put_watch!("default", id,
+        identifier: String.upcase(id),
+        pr_url: "https://github.com/example/repo/pull/#{byte_size(id)}",
+        landing: %{
+          files: files,
+          head_sha: "head",
+          state: "QA",
+          state_since: now,
+          progress_at: now,
+          waits_for: nil,
+          waits_since: nil
+        }
+      )
     end
 
     issue = %Issue{id: "issue-own", identifier: "ISSUE-OWN", title: "Overlap", state: "Rework", repo_key: "default"}
@@ -4410,25 +4410,22 @@ defmodule SymphonyElixir.CoreTest do
     try do
       %{workspace_root: workspace_root, pr_head_sha: pr_head_sha} = setup_worktree_pr_head!(test_root)
 
-      assert :ok =
-               RunStore.put_ci_check(%{
-                 repo_key: "default",
-                 issue_id: "issue-ci-sync",
-                 issue_identifier: "RSM-CI",
-                 pr_url: "https://github.test/org/repo/pull/10",
-                 workspace_path: "/tmp/workspaces/RSM-CI",
-                 status: "dispatch_requested",
-                 ci_retry_count: 1,
-                 ci_failure: %{
-                   commit_sha: pr_head_sha,
-                   head_ref_name: "feature-head",
-                   is_cross_repository: false,
-                   head_repository: %{name_with_owner: "org/repo"},
-                   failed_checks: [%{name: "specs"}],
-                   log_excerpt: "specs failed"
-                 },
-                 updated_at: ~U[2026-05-05 02:00:00Z]
-               })
+      # The failure the PR watcher sent the ticket to CI Fix for.
+      SymphonyElixir.PrWatchSupport.put_fix!(
+        "default",
+        "issue-ci-sync",
+        :ci_failure,
+        %{
+          commit_sha: pr_head_sha,
+          head_ref_name: "feature-head",
+          is_cross_repository: false,
+          head_repository: %{name_with_owner: "org/repo"},
+          failed_checks: [%{name: "specs"}],
+          log_excerpt: "specs failed"
+        },
+        identifier: "RSM-CI",
+        pr_url: "https://github.test/org/repo/pull/10"
+      )
 
       issue = %Issue{
         id: "issue-ci-sync",
@@ -5044,18 +5041,9 @@ defmodule SymphonyElixir.CoreTest do
     assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: ["make-all"]}}) == 2
     refute_received {:merging_ci_wait, _issue_id, _wait}
 
-    # Without required checks, the queued check holds it, until the CI poller's landing wait lets the head past.
+    # Without required checks, the queued check holds it until it finishes.
     assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 1
     assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-ready"}}
-
-    :ok = RunStore.put_ci_check(%{repo_key: "default", issue_id: "issue-merging-continue", landing_fallback_sha: "sha-ready"})
-
-    try do
-      assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 2
-      refute_received {:merging_ci_wait, _issue_id, _wait}
-    after
-      RunStore.delete_ci_check("default", "issue-merging-continue")
-    end
   end
 
   defp run_merging_landing_turns(ci_status_result) do

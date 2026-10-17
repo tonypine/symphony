@@ -63,7 +63,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :idle_park, from: ["In Progress", "Rework"], to: "Backlog"},
                %{signal: :director_move, from: :any, to: :requested},
                %{signal: :sub_issues_done, from: ["Waiting on sub-tickets"], to: "Done"},
-               %{signal: :wait_on_merge, from: ["Merging"], to: :waiting_on_sub_issues},
+               %{signal: :wait_on_merge, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix", "Merging"], to: :waiting_on_sub_issues},
                %{signal: :breakdown_promote, from: ["Backlog"], to: "Todo"},
                %{signal: :breakdown_cancel, from: ["Backlog"], to: :requested},
                %{signal: :restart, from: :any, to: "In Progress"},
@@ -79,6 +79,10 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
                %{signal: :ci_fix_enter_rework, from: ["Rework"], to: :ci_fix_state},
                %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
+               %{signal: :person_push, from: ["Merging"], to: :code_review_state},
+               %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+               %{signal: :pr_closed, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+               %{signal: :pr_merged, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix"], to: "Done"},
                %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
                %{signal: :epic_review_pass, from: ["Epic Review"], to: "Done"},
                %{signal: :epic_review_gaps, from: ["Epic Review"], to: :waiting_on_sub_issues}
@@ -208,6 +212,30 @@ defmodule SymphonyElixir.TransitionGuardTest do
       for origin <- ["Code Review", "QA", "Merging", "Rework"] do
         assert TransitionGuard.target(:ci_fix_mechanical, %{target: origin, settings: designed}) == origin
       end
+    end
+
+    test "the PR watcher's moves: a person's push in Merging goes back to Code Review (D4), a conflict that came back goes to Rework (D16)" do
+      assert TransitionGuard.legal?(:person_push, "Merging", nil)
+      refute TransitionGuard.legal?(:person_push, "QA", nil)
+      assert TransitionGuard.target(:person_push, %{settings: designed_settings()}) == "Code Review"
+      assert TransitionGuard.target(:person_push, %{settings: settings!(%{"tracker" => %{"kind" => "memory", "code_review_state" => "Peer Review"}})}) == "Peer Review"
+
+      for from <- ["Code Review", "QA", "CI Fix", "Merging"], do: assert(TransitionGuard.legal?(:conflict_rework, from, nil))
+      refute TransitionGuard.legal?(:conflict_rework, "Rework", nil)
+      assert TransitionGuard.target(:conflict_rework, %{settings: designed_settings()}) == "Rework"
+    end
+
+    test "the PR watcher's lifecycle moves: a closed PR goes to Rework (D5), a PR merged outside Merging closes the ticket" do
+      for from <- ["Code Review", "QA", "CI Fix", "Merging"], do: assert(TransitionGuard.legal?(:pr_closed, from, "Rework"))
+      refute TransitionGuard.legal?(:pr_closed, "Rework", nil)
+      refute TransitionGuard.legal?(:pr_closed, "In Progress", nil)
+
+      for from <- ["In Progress", "Code Review", "QA", "Rework", "CI Fix"], do: assert(TransitionGuard.legal?(:pr_merged, from, "Done"))
+      refute TransitionGuard.legal?(:pr_merged, "Merging", nil)
+
+      for from <- ["In Progress", "Code Review", "QA", "Rework", "CI Fix", "Merging"], do: assert(TransitionGuard.legal?(:wait_on_merge, from, nil))
+      assert TransitionGuard.target(:wait_on_merge, %{settings: designed_settings()}) == "Waiting on sub-tickets"
+      assert TransitionGuard.target(:epic_review_enter, %{settings: designed_settings()}) == "Epic Review"
     end
   end
 

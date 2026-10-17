@@ -141,6 +141,12 @@ jobs:
         run: |
           time sh scripts/qa/install-test-signing-identity-test.sh
 
+      # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
+      # dark or light whatever this runner's appearance.
+      - name: Test the QA appearance library
+        working-directory: macos
+        run: time sh Tests/qa-appearance-test.sh
+
   install-script:
     name: install script
     runs-on: macos-26

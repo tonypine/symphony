@@ -329,6 +329,38 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @doc """
+  Whether `base` in the repository of `pr_url` has workflow files (`.github/workflows/*.yml` or
+  `*.yaml`), in one REST read: a base without them has no CI configured. A missing folder is false.
+  """
+  @spec workflow_files?(String.t(), String.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
+  def workflow_files?(pr_url, base, opts \\ []) when is_binary(pr_url) and is_binary(base) do
+    case parse_github_pr_url(pr_url, opts) do
+      {:ok, host, owner, repo, _number} ->
+        ref = URI.encode(base, &URI.char_unreserved?/1)
+        host |> github_api_args("repos/#{owner}/#{repo}/contents/.github/workflows?ref=#{ref}") |> run_gh(opts) |> workflow_files()
+
+      :error ->
+        {:error, :invalid_pr_url}
+    end
+  end
+
+  defp workflow_files({:ok, output}) do
+    case Jason.decode(output) do
+      {:ok, entries} when is_list(entries) -> {:ok, Enum.any?(entries, &workflow_file?/1)}
+      _other -> {:error, :invalid_workflows_payload}
+    end
+  end
+
+  defp workflow_files({:error, {:gh_failed, _args, _status, output} = reason}) do
+    if output =~ "HTTP 404", do: {:ok, false}, else: {:error, reason}
+  end
+
+  defp workflow_files({:error, reason}), do: {:error, reason}
+
+  defp workflow_file?(%{"type" => "file", "name" => name}) when is_binary(name), do: Path.extname(name) in [".yml", ".yaml"]
+  defp workflow_file?(_entry), do: false
+
   @doc "The commit a merged pull request landed as, or nil while it is not merged."
   @spec merge_commit_sha(String.t(), keyword()) :: {:ok, String.t() | nil} | {:error, term()}
   def merge_commit_sha(pr_url, opts \\ []) when is_binary(pr_url) do
@@ -528,11 +560,24 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   def fetch_pr_reviews(_pr_url, _opts), do: {:error, :invalid_pr_url}
 
+  def rerun(run_id, opts \\ [])
+
+  @doc "Reruns every job of a workflow run, as `gh run rerun` does without `--failed`."
+  @spec rerun(String.t() | integer(), keyword()) :: :ok | {:error, term()}
+  def rerun(run_id, opts) when (is_binary(run_id) or is_integer(run_id)) and is_list(opts) do
+    case run_gh(["run", "rerun", to_string(run_id)] ++ repo_args(opts), opts) do
+      {:ok, _output} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def rerun(_run_id, _opts), do: {:error, :invalid_run_id}
+
   def rerun_failed(run_id, opts \\ [])
 
   @spec rerun_failed(String.t() | integer(), keyword()) :: :ok | {:error, term()}
   def rerun_failed(run_id, opts) when (is_binary(run_id) or is_integer(run_id)) and is_list(opts) do
-    case run_gh(["run", "rerun", to_string(run_id), "--failed"], opts) do
+    case run_gh(["run", "rerun", to_string(run_id), "--failed"] ++ repo_args(opts), opts) do
       {:ok, _output} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -622,6 +667,19 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   def close(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
     with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
          args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--method", "PATCH", "-f", "state=closed"],
+         {:ok, _output} <- run_gh(args, opts) do
+      :ok
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Retargets the PR at `pr_url` to merge into `base`."
+  @spec change_base(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def change_base(pr_url, base, opts \\ []) when is_binary(pr_url) and is_binary(base) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}") ++ ["--method", "PATCH", "-f", "base=#{base}"],
          {:ok, _output} <- run_gh(args, opts) do
       :ok
     else

@@ -166,6 +166,20 @@ defmodule SymphonyElixir.MergeConfirmation do
     end
   end
 
+  @doc """
+  The number (from 1) of the one option among `labels` that `answers` pick, as `picked/2` reads a
+  pick (its number or its label, alone or set off by punctuation), or nil when none or several do.
+  """
+  @spec picked_option([String.t()], [String.t()]) :: pos_integer() | nil
+  def picked_option(labels, answers) when is_list(labels) and is_list(answers) do
+    options = Enum.map(labels, &{normalize(&1), ""})
+
+    case answers |> Enum.flat_map(&picks(&1, options)) |> Enum.uniq() do
+      [option] -> Enum.find_index(options, &(&1 == option)) + 1
+      _none_or_ambiguous -> nil
+    end
+  end
+
   # The options an answer picks: the one its number or label opens with.
   defp picks(answer, options) when is_binary(answer) do
     head = answer |> String.replace(~r/[*_`>#]/, "") |> String.trim() |> String.downcase()

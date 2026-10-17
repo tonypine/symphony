@@ -242,10 +242,18 @@ defmodule SymphonyElixir.QaAgent do
     a fake CLI, a stub service, a checkout, a folder or a driver tool the QA setup lacks is fixed by
     an agent through a fix ticket. Leave it false too when the cause is the build or the code.
 
+    A step whose real path needs a paid AI service, real credentials or a backend the QA host does
+    not run (a database, a toolchain to build a bundled server or CLI) is never `blocked` for want
+    of them, and never gets a real key: run the app against a stand-in you serve where the playbook
+    lets a server listen, such as a stub of the project's API answering with what the real path
+    would store, and judge what the app shows `pass` or `fail`. In `details`, name what the
+    stand-in replaced and the CI check that covers the real path. Mark the step `blocked` only when
+    the app cannot be pointed at a stand-in.
+
     When a QA tool or capability is missing and an open ticket already tracks adding it (one named
     in the issue, its comments or its relations), put that ticket's identifier in `covered_by`, so
     Symphony waits on that ticket instead of filing another. Leave `covered_by` out otherwise.
-
+    #{own_tools_rule(job)}
     When one playbook is blocked, mark its steps `blocked` and continue with the other playbooks'
     steps: report `pass` or `fail` for every step that could run. The verdict stays `blocked` while
     any step is blocked, with each failing step's defect in `details`.
@@ -402,6 +410,26 @@ defmodule SymphonyElixir.QaAgent do
     A step only the operator can take once the change is live (in production, on their own machine,
     with their account), and anything under an `After release` heading, is not yours to run: name it
     in your report as outside QA's reach and judge the rest. It never fails or blocks the ticket.
+    """
+  end
+
+  # A PR that adds a QA tool, or a QA host setup it lists under `After release`, cannot have its
+  # own step walked with them: the Symphony running QA offers a tool only once the PR merges and the
+  # app updates. `blocked` there sends the self-heal lane after a fix that only this PR's release
+  # makes, and the ticket waits on it for good (TP-1070). The epic review runs on the merged result,
+  # where the tools exist.
+  defp own_tools_rule(%{epic_review: true}), do: ""
+
+  defp own_tools_rule(_job) do
+    """
+
+    A step that needs a QA tool or tool option this PR itself adds, or a one-time QA host setup the
+    ticket lists under `After release`, cannot be walked in this pass: Symphony offers a new tool
+    only once the PR merges and the app updates, and the setup runs after release. Confirm the PR
+    adds it (the tool's definition is in the PR's diff against its base branch, or the setup is under
+    `After release`). Then mark the step `skipped`, and in `details` name the tool or setup it waits
+    on and say it can be walked once the PR is released. It never makes the verdict `blocked`: a fix
+    ticket could only repeat this PR. A tool the PR does not add is missing as above.
     """
   end
 

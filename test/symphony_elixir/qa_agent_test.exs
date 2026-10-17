@@ -396,6 +396,36 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [_cli, %{kind: "macos_app", build_timeout_ms: nil}] = Selection.playbooks(odd_timeout)
     end
 
+    test "a change to a playbook's own instructions or to the host driver behind its tools selects that playbook" do
+      config = %{playbooks: %{"macos_app" => %{"build" => "make -C macos app", "app" => "macos/build/Symphony.app"}}}
+
+      # TP-1043: the macOS playbook and a tool description changed, with no Swift file, and the
+      # ticket's walkthrough asks QA to drive the app.
+      walkthrough = issue(%{description: "## User walkthrough\n\n1. On the Add Repo sheet, pick a repository."})
+      changed = ["lib/symphony_elixir/codex/dynamic_tool.ex", "priv/qa_playbooks/macos_app.md", "test/support/stubs/gh.py"]
+      assert {:run, [%{kind: "cli"}, %{kind: "macos_app"}]} = Selection.decide(walkthrough, changed, config)
+
+      for path <- ["lib/symphony_elixir/qa_driver.ex", "lib/symphony_elixir/qa_driver/host.ex", "priv/qa_driver/Info.plist"] do
+        assert {:run, [%{kind: "macos_app"}]} = Selection.decide(issue(), [path], config)
+      end
+
+      assert {:run, [%{kind: "cli"}]} = Selection.decide(issue(), ["priv/qa_playbooks/cli.md", "lib/symphony_elixir/qa_agent.ex"], config)
+      assert {:skip, _reason} = Selection.decide(issue(), ["priv/qa_playbooks/macos_app.md", "lib/symphony_elixir/qa_agent.ex"], %{})
+
+      android = %{"build" => "./gradlew assembleDebug", "apk_path" => "app.apk", "application_ids" => ["com.example.app"]}
+      android_config = %{android: %{avd: "Pixel"}, playbooks: %{"android_app" => android}}
+
+      for path <- ["priv/qa_playbooks/android_app.md", "lib/symphony_elixir/qa_android/driver.ex"] do
+        assert {:run, [%{kind: "android_app"}]} = Selection.decide(issue(), [path, "lib/symphony_elixir/qa_agent.ex"], android_config)
+      end
+
+      assert {:run, [%{kind: "web"}]} =
+               Selection.decide(issue(), ["priv/qa_playbooks/web.md", "lib/symphony_elixir/qa_agent.ex"], %{}, dev_server?: true)
+
+      # A kind from config has no instructions file: it triggers on its `paths` or its label only.
+      assert [_cli, %{kind: "api", paths: []}] = Selection.playbooks(%{playbooks: %{"api" => %{"prompt" => "### Playbook: api"}}})
+    end
+
     test "the android_app playbook runs only when the repo names its build, APK and app IDs and the host names an AVD" do
       kotlin = ["app/src/main/java/com/example/app/LoginActivity.kt"]
       android = %{"build" => "./gradlew :app:assembleDebug", "apk_path" => "app/build/outputs/apk/debug/app-debug.apk", "application_ids" => ["com.example.app"]}
@@ -661,6 +691,34 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "a missing secret or API key, an account, or a real device this QA host lacks"
       refute prompt =~ "check a step by hand or on a real device"
       assert prompt =~ "put that ticket's identifier in `covered_by`, so Symphony waits on that ticket instead of filing another"
+    end
+
+    test "a step waiting on a QA tool or host setup the PR itself adds is skipped, not blocked, outside the epic review" do
+      prompt = QaAgent.prompt(job(), nil)
+      flat = String.replace(prompt, ~r/\s+/, " ")
+
+      assert flat =~
+               "A step that needs a QA tool or tool option this PR itself adds, or a one-time QA host setup the ticket lists under `After release`, cannot be walked in this pass"
+
+      assert flat =~ "Then mark the step `skipped`, and in `details` name the tool or setup it waits on"
+      assert flat =~ "It never makes the verdict `blocked`: a fix ticket could only repeat this PR."
+      assert flat =~ "A tool the PR does not add is missing as above."
+      assert prompt =~ ~r/Leave `covered_by` out otherwise\.\n\nA step that needs.*\n\nWhen one playbook/s
+
+      epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil)
+      refute epic =~ "this PR itself adds"
+      assert epic =~ "Leave `covered_by` out otherwise.\n\nWhen one playbook"
+    end
+
+    test "a step needing paid AI, real credentials or a backend QA lacks is judged through a stand-in, not blocked" do
+      prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
+
+      assert prompt =~
+               "needs a paid AI service, real credentials or a backend the QA host does not run (a database, a toolchain to build a bundled server or CLI) is never `blocked` for want of them, and never gets a real key"
+
+      assert prompt =~ "run the app against a stand-in you serve where the playbook lets a server listen"
+      assert prompt =~ "name what the stand-in replaced and the CI check that covers the real path"
+      assert prompt =~ "Mark the step `blocked` only when the app cannot be pointed at a stand-in."
     end
 
     test "includes the ticket, the parent's criteria and the playbooks" do

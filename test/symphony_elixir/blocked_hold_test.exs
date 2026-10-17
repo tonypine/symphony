@@ -299,6 +299,43 @@ defmodule SymphonyElixir.BlockedHoldTest do
     }
   end
 
+  describe "the landing hold (TP-989)" do
+    @tracked %{issue_identifier: "TP-1", pr_number: 1, pr_url: "https://github.com/acme/app/pull/1", files: ["SPEC.md", "a.ex"]}
+    @person %{pr_number: 12, pr_url: "https://github.com/acme/app/pull/12", title: "Docs pass", files: ["SPEC.md", "b.md"]}
+    @untitled %{pr_number: 13, files: ["SPEC.md"]}
+
+    test "names each competitor, its ticket else its PR, and the files they share" do
+      assert BlockedHold.landing_attrs([@tracked, @person, @untitled]) == %{
+               reason: "Waiting on TP-1 and PR #12 (Docs pass) and PR #13 to land: they change the same files (SPEC.md, a.ex, b.md)",
+               clearing_condition: "when every competing pull request lands or leaves the race",
+               waits_on: %{type: "landing", keys: ["TP-1", "https://github.com/acme/app/pull/12", "PR #13"]}
+             }
+
+      assert BlockedHold.landing?(BlockedHold.landing_attrs([@tracked]))
+      refute BlockedHold.landing?(%{waits_on: %{type: "dependency", keys: []}})
+      refute BlockedHold.landing?(nil)
+    end
+
+    test "clears once no competitor is left, renames the ones left, and leaves another hold alone" do
+      hold = BlockedHold.landing_attrs([@tracked, @person])
+
+      assert BlockedHold.landing_desired(hold, []) == :clear
+      assert BlockedHold.landing_desired(hold, [@tracked, @person]) == :none
+      assert {:set, %{reason: "Waiting on TP-1 to land: they change the same files (SPEC.md, a.ex)"}} = BlockedHold.landing_desired(hold, [@tracked])
+      assert BlockedHold.landing_desired(%{waits_on: %{type: "access", keys: []}}, []) == :none
+      assert BlockedHold.landing_desired(nil, [@tracked]) == :none
+    end
+
+    test "the sweep leaves a landing hold to the PR watcher, in any phase" do
+      :ok = RunStore.set_ticket_hold(@repo_key, @issue_id, :blocked, BlockedHold.landing_attrs([@tracked]))
+
+      for state <- ["Todo", "Merging"] do
+        assert BlockedHold.sync(issue(state: state, blocked_by: [blocker("TP-1", "Done")]), @terminal, settings: designed_settings()) == :none
+        assert BlockedHold.landing?(stored_hold())
+      end
+    end
+  end
+
   describe "the fix-ticket hold" do
     test "wants the clear only once the fix ticket is terminal" do
       hold = %{waits_on: %{type: "fix_ticket", keys: ["TP-900"]}}
