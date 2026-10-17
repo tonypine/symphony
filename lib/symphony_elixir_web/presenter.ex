@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Inbox,
     Initiatives,
     Orchestrator,
+    PrWatch,
     Quality,
     RetiredStates,
     RunKind,
@@ -381,8 +382,20 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_id: record.issue_id,
       identifier: record.issue_identifier,
       repo_key: record.repo_key,
-      watch: %{facts: facts, decision: watch.decision, applied: watch.applied, links: watch.links}
+      watch: %{facts: facts, decision: watch.decision, applied: watch.applied, links: watch.links, waits_on: waits_on_payload(watch)}
     }
+  end
+
+  # What the ticket waits on: the competing PRs of its landing hold, and the fix ticket of the red
+  # backstop (D15).
+  defp waits_on_payload(watch) do
+    fix_tickets =
+      case watch.decision do
+        %{waits_on: %{type: "fix_ticket", keys: keys}} -> Enum.map(keys, &%{identifier: &1, kind: "fix_ticket"})
+        _other -> []
+      end
+
+    PrWatch.competitor_waits(watch) ++ fix_tickets
   end
 
   defp rate_limit_payload(%{remaining: remaining, reset_at: reset_at}), do: %{remaining: remaining, reset_at: iso8601(reset_at)}

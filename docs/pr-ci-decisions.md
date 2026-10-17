@@ -86,8 +86,12 @@ every `pull_requests.poll_interval_ms`. Each read takes the watched tickets from
 ticket in `Code Review`, `QA`, `Rework`, `CI Fix` or `Merging`, and in `In Progress` once it has a
 PR, whether or not Symphony ran it. It then reads each ticket's PR in one GitHub query, the checks
 its base branch requires (kept 10 minutes), the base branch's workflow runs only to tell a red head
-that is also red on the base, and, when two or more watched PRs are open, the repository's open PRs
-and their files once, for the landing order that fills `ahead`.
+that is also red on the base, and, when two or more watched PRs are open or one conflicts or waits
+on its competitors, the repository's open PRs and their files once: the landing order fills `ahead`,
+and `competing` lists every open PR that shares a file with the ticket's, with its ticket when the
+watcher watches it, leaving out one on a hold or idle two hours. Neither names a PR whose wait
+would close a cycle of blocked-by links, nor one a person's `Unblock` released the ticket from, and
+a forced ticket has neither.
 
 The facts are kept on the ticket's state record and listed under each ticket's `watch.facts` in
 `/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
@@ -116,7 +120,7 @@ cleans up after a merged or closed PR. The orchestrator starts a `Code Review` o
 the decision `dispatch`, and, with auto-merge on, a `Merging` landing agent only on `land_agent`.
 
 Some rows are recorded without an action until a later ticket applies them: a missing PR (R6), a
-changed base (R7), a closed PR (R8), review comments (R13), stepping behind competing PRs (R15), a
+changed base (R7), a closed PR (R8), review comments (R13), a
 required check that never reports (R17), a check only a person clears outside `Merging` (R18) and a
 check red on the base (R23). So are the CI rows with `pull_requests.checks` off and the landing rows
 (and a conflict in `Merging`) with `pull_requests.auto_merge` off.
@@ -138,6 +142,24 @@ the ticket doesn't move. The hold clears by itself once the fix ticket is termin
 restarts, and the head gets CI Fix runs again. The same failure reaching the backstop again after its
 fix landed is the self-heal lane's own escalation to a person.
 
-A conflict back after its 3 fix runs with no open PR ahead of it goes to `Rework` (R15a), where a
-run can change as much as the conflict needs. A conflict while a PR that shares its files is ahead
-in the landing order waits for that one to land (R14a), auto-merge off in `Merging`.
+A conflict back after its 3 fix runs with no open PR competing goes to `Rework` (R15a), where a
+run can change as much as the conflict needs.
+
+### Waiting on competing PRs
+
+A conflict while a PR that shares its files is ahead in the landing order waits for that one to
+land (R14a); a conflict back after its 3 fix runs while open PRs share its files waits on all of
+them and steps behind them in the landing order, so none of them waits for it (R15). The wait is a
+visible dependency (`SymphonyElixir.PrWatch.Competitors`): auto-merge off in `Merging`, a `Blocked`
+hold of the landing kind in place ("Waiting on TP-1 and PR #12 (Docs pass) to land: they change the
+same files (SPEC.md)"), never a move, and a Linear blocked-by link from each competitor's ticket
+that Linear doesn't have yet. A person's PR gets no link. The ticket's record keeps the competitors
+under `links`, with whether Symphony added each link, and `/api/v1/state` lists them under
+`watch.waits_on`.
+
+Each read judges the wait before deciding. A competitor that lands stays linked, as history; one
+that leaves the race (its PR closed, on a hold, idle two hours, or no longer sharing a file) is
+unlinked when Symphony added the link. The hold clears once no competitor is left, and the same
+read decides on the conflict: CI Fix, with the approvals carried forward. The R15 wait restarts the
+conflict count. A person's `Unblock` clears the hold and removes Symphony's links, and the ticket no
+longer waits on those PRs while they stay open.

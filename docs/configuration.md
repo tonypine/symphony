@@ -1116,7 +1116,11 @@ pull_requests:
     keeps the place of the state it returns to), then the one longest in its state. The others keep working, but get no conflict fix and no
     "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
     its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
-    one up, and a forced ticket never waits. `/api/v1/state` lists the waits under `landing_waits`
+    one up, and a forced ticket never waits. A PR that conflicts while one ahead shares its files,
+    or whose conflict came back after its 3 fix runs while other open PRs share them, waits on them
+    as a Linear blocked-by link and a `Blocked` hold ("Waiting on MT-1 to land: they change the
+    same files (SPEC.md)"), which clears by itself once they land or leave the race; Symphony
+    removes only the links it added. `/api/v1/state` lists the waits under `landing_waits`
     ("Lands after MT-1: they change the same files (lib/a.ex)"), the Mac app's ticket page shows
     them as Lands after, and the agent's first prompt names the open PRs that share files with its
     own, so it can stack on one instead. Nothing to configure.

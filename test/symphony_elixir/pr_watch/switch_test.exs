@@ -46,9 +46,17 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     alias SymphonyElixir.Linear.Issue
     alias SymphonyElixir.PrWatch.SwitchTest.World
 
+    # Each issue's blockers carry their current state, as Linear reads them.
     def fetch_issues_by_states_with_failures(states) do
       wanted = MapSet.new(states, &String.downcase/1)
-      {:ok, World.get(:issues) |> Map.values() |> Enum.filter(&MapSet.member?(wanted, String.downcase(&1.state))), []}
+      issues = World.get(:issues)
+
+      watched =
+        for issue <- Map.values(issues), MapSet.member?(wanted, String.downcase(issue.state)) do
+          %{issue | blocked_by: Enum.map(issue.blocked_by, &%{&1 | state: issues |> Map.get(&1.id, %{state: &1.state}) |> Map.fetch!(:state)})}
+        end
+
+      {:ok, watched, []}
     end
 
     def update_issue_state(issue_id, state) do
@@ -68,12 +76,29 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
   end
 
+  # Linear's blocked-by links: recorded, and shown on the blocked issue as Linear would.
+  defmodule Linker do
+    alias SymphonyElixir.PrWatch.SwitchTest.World
+
+    def add_blocked_by(blocker, issue_id) do
+      World.call(:link, {blocker, issue_id})
+      %{id: id, state: state} = World.get(:issues) |> Map.values() |> Enum.find(&(&1.identifier == blocker))
+      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: issue.blocked_by ++ [%{id: id, identifier: blocker, state: state}]} end))
+    end
+
+    def remove_blocked_by(blocker, issue_id) do
+      World.call(:unlink, {blocker, issue_id})
+      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: Enum.reject(issue.blocked_by, fn b -> b.identifier == blocker end)} end))
+    end
+  end
+
   defmodule GitHub do
     alias SymphonyElixir.PrWatch.SwitchTest.World
 
     def list_open_pull_requests(_pr_url, _opts) do
       case World.get(:open_pulls) do
         nil -> {:ok, []}
+        :error -> {:error, :boom}
         pulls -> {:ok, pulls}
       end
     end
@@ -190,6 +215,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       github: GitHub,
       fetch: Fetch,
       fixer: Fixer,
+      linker: Linker,
       interval_ms: 30_000,
       now: fn -> now() end
     ]
@@ -234,6 +260,29 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   defp seed_attempts!(issue_id, attempts) do
     SymphonyElixir.PrWatchSupport.update_watch!(@repo_key, issue_id, &%{&1 | attempts: Map.merge(&1.attempts, attempts)})
+  end
+
+  defp open_pull(number, files, attrs \\ []) do
+    Map.merge(
+      %{number: number, url: "https://github.com/acme/app/pull/#{number}", title: "Ticket #{number}", head_sha: "head-#{number}-1", files: files},
+      Map.new(attrs)
+    )
+  end
+
+  defp open_pulls!(pulls), do: World.update(:open_pulls, fn _ -> pulls end)
+
+  defp assert_waits!(issue_id, reason, keys) do
+    assert %{reason: ^reason, waits_on: %{type: "landing", keys: ^keys}} = Hold.get(@repo_key, issue_id, :blocked)
+  end
+
+  # A Merging ticket whose conflict exhausted its 3 fix runs, back in Merging on a conflicting head.
+  defp exhausted!(id, attrs \\ []) do
+    issue_id = ticket!(id, "Merging", dirty() ++ attrs)
+    pid = start!()
+    tick!(pid)
+    fix_run_returns!(issue_id, id, "Merging", "head-#{id}-2", dirty())
+    seed_attempts!(issue_id, %{conflict: 3})
+    {pid, issue_id}
   end
 
   defp clear_fix_ticket_hold!(issue_id) do
@@ -487,15 +536,19 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pid = start!()
       # The leader entered Merging first.
       tick!(pid)
-      tick!(pid, 2)
 
       assert %{rule: "R14a", kind: :wait_for_competitors, reason: "Lands after TP-1: they change the same files (lib/a.ex)", owner: :symphony} =
                decision(follower)
 
+      # The wait is a Blocked hold naming the leader, which reads as the wait on later ticks.
+      tick!(pid, 2)
+      reason = "Waiting on TP-1 to land: they change the same files (lib/a.ex)"
+      assert %{rule: "R4", kind: :wait, reason: ^reason, owner: :symphony} = decision(follower)
       assert decision(follower).waits_on == %{type: "pull_request", keys: ["TP-1"]}
       assert moves(follower) == []
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
-      assert [%{issue_identifier: "TP-2", waits_for: %{issue_identifier: "TP-1"}, reason: "Lands after TP-1" <> _}] = PrWatch.landing_waits()
+      assert World.calls(:link) == [{"TP-1", follower}]
+      assert [%{issue_identifier: "TP-2", waits_for: %{issue_identifier: "TP-1"}, reason: ^reason}] = PrWatch.landing_waits()
 
       # The leader merged and left the open PRs: the follower's conflict gets one fix run.
       pr!("1", pr: :merged)
@@ -505,36 +558,47 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert moves(leader) == ["Done"]
       assert moves(follower) == ["CI Fix"]
       assert %{rule: "R14"} = decision(follower)
+      assert World.calls(:unlink) == []
     end
 
-    test "a Merging PR that conflicts while a QA PR sharing its files is open waits for it, with no CI Fix, and gets one once it merged" do
+    test "a Merging PR that conflicts while a QA PR sharing SPEC.md is ahead waits on it as a blocked-by link and a landing hold (TP-989)" do
       leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
       follower = ticket!("2", "Merging", dirty() ++ [auto_merge: :armed])
-
-      World.update(:open_pulls, fn _ ->
-        [%{number: 1, head_sha: "head-1-1", files: ["lib/a.ex"]}, %{number: 2, head_sha: "head-2-1", files: ["lib/a.ex"]}]
-      end)
+      World.update(:open_pulls, fn _ -> [open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md", "lib/b.ex"])] end)
 
       pid = start!()
       tick!(pid)
 
       # The conflicting PR can't land before a fix run, so the conflict-free QA PR goes first.
-      assert %{rule: "R14a", kind: :wait_for_competitors, reason: "Lands after TP-1: they change the same files (lib/a.ex)"} =
-               decision(follower)
-
-      assert moves(follower) == []
-      assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
+      assert %{rule: "R14a", kind: :wait_for_competitors, outcome: :applied} = decision(follower)
       assert decision(leader).rule != "R14a"
+      assert_waits!(follower, "Waiting on TP-1 to land: they change the same files (SPEC.md)", ["TP-1"])
+      assert World.calls(:link) == [{"TP-1", follower}]
+      assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
+      assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
+      assert {follower, "Blocked"} in World.calls(:label)
+      assert [%{issue_identifier: "TP-1", linked: true, step_behind: false, files: ["SPEC.md"]}] = watch(follower).links
 
       tick!(pid, 2)
       assert moves(follower) == []
+      assert state(follower) == "Merging"
+      assert World.calls(:link) == [{"TP-1", follower}]
 
+      # The leader lands: on the next tick the hold clears, the link stays, and one CI Fix runs for the conflict.
       pr!("1", pr: :merged)
-      World.update(:open_pulls, fn _ -> [%{number: 2, head_sha: "head-2-1", files: ["lib/a.ex"]}] end)
-      tick!(pid, 2)
+      World.update(:open_pulls, fn _ -> [open_pull(2, ["SPEC.md", "lib/b.ex"])] end)
+      tick!(pid)
 
+      refute Hold.held?(@repo_key, follower, :blocked)
+      assert World.calls(:unlink) == []
+      assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
       assert moves(follower) == ["CI Fix"]
       assert %{rule: "R14"} = decision(follower)
+      assert CiFix.origin(@repo_key, follower) == "Merging"
+      assert watch(follower).links == []
+
+      tick!(pid, 2)
+      assert moves(follower) == ["CI Fix"]
     end
 
     test "a PR keeps its landing place while its ticket sits in CI Fix: the state the stay returns to counts" do
@@ -633,6 +697,225 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R31", kind: :land_agent} = decision(issue_id)
       assert [_one] = Enum.filter(comments(issue_id), &(&1 =~ "so a landing agent will merge it instead"))
       assert PrWatch.dispatch_reason(Map.fetch!(World.get(:issues), issue_id), Config.settings!()) == nil
+    end
+  end
+
+  describe "competing PRs wait as blocked-by links (TP-989, D14)" do
+    # TP-2 (Merging) conflicts while TP-1 (QA), sharing SPEC.md, is ahead: it waits on TP-1.
+    defp waiting!(attrs \\ []) do
+      leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
+      follower = ticket!("2", "Merging", dirty())
+      Enum.each(Keyword.get(attrs, :blocked_by, []), fn blocker -> World.update(:issues, &Map.update!(&1, follower, fn issue -> %{issue | blocked_by: [blocker]} end)) end)
+      open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
+      pid = start!()
+      tick!(pid)
+      assert_waits!(follower, "Waiting on TP-1 to land: they change the same files (SPEC.md)", ["TP-1"])
+      {pid, leader, follower}
+    end
+
+    defp left_race!(pid, follower) do
+      tick!(pid)
+      assert World.calls(:unlink) == [{"TP-1", follower}]
+      assert World.get(:issues)[follower].blocked_by == []
+      refute Hold.held?(@repo_key, follower, :blocked)
+      assert moves(follower) == ["CI Fix"]
+      assert watch(follower).links == []
+    end
+
+    test "the leader's PR closed without merging: Symphony removes the link it added and the hold clears" do
+      {pid, _leader, follower} = waiting!()
+      pr!("1", pr: :closed)
+      open_pulls!([open_pull(2, ["SPEC.md"])])
+      left_race!(pid, follower)
+    end
+
+    test "the leader gains a hold: it leaves the race" do
+      {pid, leader, follower} = waiting!()
+      :ok = Hold.set(@repo_key, leader, :needs_decision, %{reason: "A question"}, tracker: Tracker)
+      left_race!(pid, follower)
+    end
+
+    test "the leader idle two hours leaves the race" do
+      {pid, _leader, follower} = waiting!()
+      advance!(2 * 60 * 60 * 1000)
+      left_race!(pid, follower)
+    end
+
+    test "the leader no longer sharing a file leaves the race" do
+      {pid, _leader, follower} = waiting!()
+      open_pulls!([open_pull(1, ["lib/other.ex"]), open_pull(2, ["SPEC.md"])])
+      left_race!(pid, follower)
+    end
+
+    test "a link a person added is never removed" do
+      {pid, _leader, follower} = waiting!(blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}])
+      assert World.calls(:link) == []
+      assert [%{linked: false}] = watch(follower).links
+
+      pr!("1", pr: :closed)
+      open_pulls!([open_pull(2, ["SPEC.md"])])
+      tick!(pid)
+
+      assert World.calls(:unlink) == []
+      assert [%{identifier: "TP-1"}] = World.get(:issues)[follower].blocked_by
+      refute Hold.held?(@repo_key, follower, :blocked)
+    end
+
+    test "a restart keeps the hold and the record of Symphony's links" do
+      {_pid, _leader, follower} = waiting!()
+      stop_supervised!({Repo, @repo_key})
+
+      assert [%{issue_identifier: "TP-1", linked: true}] = @repo_key |> RunStore.get_ticket_state(follower) |> TicketState.pr_watch() |> Map.fetch!(:links)
+      assert Hold.held?(@repo_key, follower, :blocked)
+
+      pid = start!()
+      tick!(pid)
+      assert %{rule: "R4", reason: "Waiting on TP-1 to land" <> _} = decision(follower)
+
+      pr!("1", pr: :closed)
+      open_pulls!([open_pull(2, ["SPEC.md"])])
+      left_race!(pid, follower)
+    end
+
+    test "open PRs that can't be read keep the wait as it is" do
+      {pid, _leader, follower} = waiting!()
+      open_pulls!(:error)
+      capture_log(fn -> tick!(pid) end)
+
+      assert Hold.held?(@repo_key, follower, :blocked)
+      assert [%{linked: true}] = watch(follower).links
+      assert World.calls(:unlink) == []
+    end
+
+    test "a ticket that leaves the watched states ends its wait" do
+      {pid, _leader, follower} = waiting!()
+      move!(follower, "Todo")
+      tick!(pid)
+
+      refute Hold.held?(@repo_key, follower, :blocked)
+      assert World.calls(:unlink) == [{"TP-1", follower}]
+    end
+
+    test "a person's Unblock removes Symphony's links and the ticket no longer waits on those PRs" do
+      {pid, _leader, follower} = waiting!()
+      assert :ok = Repo.release(pid, follower)
+      :ok = Hold.clear(@repo_key, follower, :blocked, tracker: Tracker)
+      assert World.calls(:unlink) == [{"TP-1", follower}]
+      assert [%{released: true, linked: false}] = watch(follower).links
+
+      tick!(pid)
+      assert moves(follower) == ["CI Fix"]
+      assert World.calls(:link) == [{"TP-1", follower}]
+      assert [%{released: true}] = watch(follower).links
+
+      # The released PR merged: nothing is left to remember.
+      pr!("1", pr: :merged)
+      open_pulls!([open_pull(2, ["SPEC.md"])])
+      tick!(pid)
+      assert watch(follower).links == []
+    end
+
+    test "a conflict back after three fix runs steps behind every competing PR, so the one behind no longer waits for it" do
+      {pid, stepping} = exhausted!("2")
+      # TP-1's QA PR is in CI Fix with a run; TP-3's PR is In Progress: both conflict too, so both rank behind TP-2.
+      ahead = ticket!("1", "CI Fix", dirty())
+      :ok = CiFix.record_origin(@repo_key, ahead, "QA")
+      run!(ahead, "running")
+      behind = ticket!("3", "In Progress", dirty())
+      open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md", "lib/b.ex"]), open_pull(3, ["SPEC.md"])])
+
+      # While TP-2's run works, TP-3 waits for it.
+      run!(stepping, "running")
+      tick!(pid)
+      assert [%{issue_identifier: "TP-2"}] = watch(behind).facts.ahead
+
+      run!(stepping, "completed")
+      tick!(pid)
+
+      assert %{rule: "R15", kind: :wait_for_competitors, outcome: :applied} = decision(stepping)
+      assert_waits!(stepping, "Waiting on TP-1 and TP-3 to land: they change the same files (SPEC.md)", ["TP-1", "TP-3"])
+      assert World.calls(:link) == [{"TP-1", stepping}, {"TP-3", stepping}]
+      assert Enum.all?(watch(stepping).links, & &1.step_behind)
+      assert moves(stepping) == ["CI Fix"]
+      refute Enum.any?(watch(behind).facts.ahead, &(&1.issue_identifier == "TP-2"))
+
+      tick!(pid)
+      refute Enum.any?(watch(behind).facts.ahead, &(&1.issue_identifier == "TP-2"))
+      refute match?(%{waits_for: %{issue_identifier: "TP-2"}}, watch(behind).landing)
+      assert %{waits_for: %{issue_identifier: "TP-1"}} = watch(stepping).landing
+
+      # Both land: the hold clears and the conflict count restarts.
+      pr!("1", pr: :merged)
+      pr!("3", pr: :merged)
+      open_pulls!([open_pull(2, ["SPEC.md", "lib/b.ex"])])
+      tick!(pid)
+
+      refute Hold.held?(@repo_key, stepping, :blocked)
+      assert World.calls(:unlink) == []
+      assert %{rule: "R14", reason: "PR #2 conflicts with main: conflict fix run 1 of 3"} = decision(stepping)
+      assert moves(stepping) == ["CI Fix", "CI Fix"]
+    end
+
+    test "a link that would close a cycle is not added: TP-1 is blocked by TP-2, so TP-2 doesn't wait on TP-1" do
+      {pid, stepping} = exhausted!("2")
+      blocked = ticket!("1", "In Progress", dirty())
+      World.update(:issues, &Map.update!(&1, blocked, fn issue -> %{issue | blocked_by: [%{id: stepping, identifier: "TP-2", state: "Merging"}]} end))
+      open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
+      tick!(pid)
+
+      assert %{rule: "R15a"} = decision(stepping)
+      assert watch(stepping).facts.competing == []
+      assert World.calls(:link) == []
+      assert List.last(moves(stepping)) == "Rework"
+    end
+
+    test "a competing PR without a ticket is named in the hold, with no Linear call, and the hold clears when it merges" do
+      open_pulls!([open_pull(2, ["SPEC.md"]), open_pull(50, ["SPEC.md", "docs/a.md"], title: "Person change", head_sha: "p-1")])
+      {pid, stepping} = exhausted!("2")
+      tick!(pid)
+
+      assert %{rule: "R15"} = decision(stepping)
+      assert_waits!(stepping, "Waiting on PR #50 (Person change) to land: they change the same files (SPEC.md)", ["https://github.com/acme/app/pull/50"])
+      assert World.calls(:link) == []
+      assert [%{pr_number: 50, linked: false}] = watch(stepping).links
+
+      # Its head moved: it is still racing two hours later.
+      advance!(60 * 60 * 1000)
+      open_pulls!([open_pull(2, ["SPEC.md"]), open_pull(50, ["SPEC.md"], title: "Person change", head_sha: "p-2")])
+      tick!(pid)
+      advance!(60 * 60 * 1000)
+      tick!(pid)
+      assert Hold.held?(@repo_key, stepping, :blocked)
+
+      open_pulls!([open_pull(2, ["SPEC.md"])])
+      tick!(pid)
+      refute Hold.held?(@repo_key, stepping, :blocked)
+      assert World.calls(:unlink) == []
+      assert %{rule: "R14", reason: "PR #2 conflicts with main: conflict fix run 1 of 3"} = decision(stepping)
+    end
+
+    test "a competing PR without a ticket idle two hours leaves the race" do
+      open_pulls!([open_pull(2, ["SPEC.md"]), open_pull(50, ["SPEC.md"], head_sha: "p-1")])
+      {pid, stepping} = exhausted!("2")
+      tick!(pid)
+      assert Hold.held?(@repo_key, stepping, :blocked)
+
+      advance!(2 * 60 * 60 * 1000)
+      tick!(pid)
+      refute Hold.held?(@repo_key, stepping, :blocked)
+    end
+
+    test "a forced ticket with a conflict and a competitor ahead goes to CI Fix, with no link" do
+      ticket!("1", "QA", ci: :pending, mergeable: :blocked)
+      forced = ticket!("2", "Merging", dirty())
+      World.update(:issues, &Map.update!(&1, forced, fn issue -> %{issue | labels: ["expedite"]} end))
+      open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
+      tick!(start!())
+
+      assert %{rule: "R14"} = decision(forced)
+      assert moves(forced) == ["CI Fix"]
+      assert World.calls(:link) == []
+      refute Hold.held?(@repo_key, forced, :blocked)
     end
   end
 
@@ -843,8 +1126,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       follower = ticket!("2", "QA", dirty())
       World.update(:open_pulls, fn _ -> [%{number: 1, head_sha: "head-1-1", files: ["x"]}, %{number: 2, head_sha: "head-2-1", files: ["x"]}] end)
       pid = start!()
-      tick!(pid, 2)
+      tick!(pid)
       assert %{rule: "R14a"} = decision(follower)
+      tick!(pid)
+      assert %{rule: "R4", reason: "Waiting on TP-1 to land" <> _} = decision(follower)
       assert moves(follower) == []
     end
 

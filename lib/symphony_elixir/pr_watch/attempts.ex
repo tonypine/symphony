@@ -227,6 +227,10 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   @spec restart_red(t()) :: t()
   def restart_red(attempts), do: %{normalize(attempts) | red: 0, fix_failures: [], fix_ticket: nil}
 
+  @doc "Restarts the conflict count, once a wait that stepped behind competing PRs (R15) is over."
+  @spec restart_conflict(t()) :: t()
+  def restart_conflict(attempts), do: %{normalize(attempts) | conflict: 0}
+
   @doc "Records the head an update-branch moved past, or clears it (nil)."
   @spec updated_from(t(), String.t() | nil) :: t()
   def updated_from(attempts, head), do: %{normalize(attempts) | updated_from: string(head)}

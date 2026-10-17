@@ -32,12 +32,15 @@ defmodule SymphonyElixir.PrDecision.Apply do
       sub-issues are open.
     * `file_fix_ticket` – the red backstop: auto-merge off, then the self-heal lane files or reuses
       the fix ticket for the failing check and holds the ticket on it (D15 (c)).
-    * `wait_for_competitors` – a recorded wait for the PRs ahead in the landing order (TP-967); in
-      `Merging` auto-merge goes off.
+    * `wait_for_competitors` – the PRs ahead in the landing order (R14a), or every competing PR
+      once the conflict came back after its fix runs (R15): in `Merging` auto-merge goes off, then
+      a `Blocked` hold of the landing kind and a Linear blocked-by link from each competitor's
+      ticket (`SymphonyElixir.PrWatch.Competitors`). The ledger doesn't hold it back: a hold that
+      cleared on the same head while the conflict stays waits again.
     * `decision` – a `Merging` PR whose only red check is one a person must clear asks a person.
 
-  Rows other tickets build (a missing PR, a changed base, a closed PR, review comments, competing
-  PRs, a required check that never reports, a check red on the base) are recorded as the decision
+  Rows other tickets build (a missing PR, a changed base, a closed PR, review comments, a required
+  check that never reports, a check red on the base) are recorded as the decision
   without an action, and so are the CI rows with `pull_requests.checks` off and the landing rows
   with auto-merge off.
   """
@@ -63,6 +66,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
     TransitionGuard
   }
 
+  alias SymphonyElixir.PrWatch.Competitors
+
   alias SymphonyElixir.GitHub.FailedLog
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
@@ -73,12 +78,12 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @merging_state "Merging"
 
   # Rows a later ticket applies; until then their decision is only recorded.
-  @recorded_only ["R6", "R7", "R8", "R13", "R15", "R17", "R23"]
+  @recorded_only ["R6", "R7", "R8", "R13", "R17", "R23"]
   # The CI rows (`pull_requests.checks`).
   @ci_rules ["R19", "R20", "R21", "R22"]
   # The landing rows, and a conflict in `Merging` (`pull_requests.auto_merge`).
   @landing_rules ["R3", "R28", "R29", "R30", "R31"]
-  @conflict_rules ["R14", "R14a", "R15a"]
+  @conflict_rules ["R14", "R14a", "R15", "R15a"]
   # Kinds with nothing to apply.
   @no_op [:wait, :dispatch]
 
@@ -94,27 +99,29 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @typedoc """
   What applying needs: the repo and its settings, the ticket as Linear read it, the watcher's read
   of its PR (nil without one), the facts decided on, the attempts, this stay's ledger, the fix
-  context, the clock, and the injectable `opts` (`:tracker`, `:github`, `:run_store`, `:self_heal`,
-  `:fixer`, `:gh_runner`).
+  context, the competitors it recorded (`links`, `SymphonyElixir.PrWatch.Competitors`), the clock,
+  and the injectable `opts` (`:tracker`, `:github`, `:run_store`, `:self_heal`, `:fixer`,
+  `:gh_runner`, `:linker`).
   """
   @type ctx :: %{
-          repo_key: String.t(),
-          settings: map(),
-          issue: Issue.t(),
-          read: map() | nil,
-          facts: Facts.t(),
-          attempts: Attempts.t(),
-          applied: [entry()],
-          fix: fix(),
-          now: DateTime.t(),
-          opts: keyword()
+          required(:repo_key) => String.t(),
+          required(:settings) => map(),
+          required(:issue) => Issue.t(),
+          required(:read) => map() | nil,
+          required(:facts) => Facts.t(),
+          required(:attempts) => Attempts.t(),
+          required(:applied) => [entry()],
+          required(:fix) => fix(),
+          required(:now) => DateTime.t(),
+          required(:opts) => keyword(),
+          optional(:links) => [Competitors.link()]
         }
 
   @typedoc """
   What applying did: the action as recorded (a filed fix ticket names itself in the reason), the
   attempts, the ledger and the fix context to keep, and the outcome: `:applied`, `:recorded` (nothing
   to do, already done, or a row this ticket doesn't apply), or `{:error, reason}`, which keeps the
-  attempts, ledger and fix context the tick began with. `moved_to` is the phase a move put the ticket
+  attempts, ledger, fix context and links the tick began with. `moved_to` is the phase a move put the ticket
   in, which starts a new stay even when the next read already finds it back where it was.
   """
   @type result :: %{
@@ -122,6 +129,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
           attempts: Attempts.t(),
           applied: [entry()],
           fix: fix(),
+          links: [Competitors.link()],
           moved_to: Facts.phase() | nil,
           outcome: :applied | :recorded | {:error, term()}
         }
@@ -133,7 +141,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
       not owned?(action, ctx) -> recorded(action, ctx)
       action.kind in @no_op -> recorded(action, ctx)
       already_sent?(action, ctx) -> recorded(%{action | reason: "The CI Fix run already sent for this head takes the fix"}, ctx)
-      applied?(ctx, action.rule) -> recorded(action, ctx)
+      action.kind != :wait_for_competitors and applied?(ctx, action.rule) -> recorded(action, ctx)
       true -> action |> perform(ctx) |> finish(action, ctx)
     end
   end
@@ -158,7 +166,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   defp ci_enabled?(settings), do: settings.ci.enabled == true
 
-  defp recorded(action, ctx), do: %{action: action, attempts: ctx.attempts, applied: ctx.applied, fix: ctx.fix, moved_to: nil, outcome: :recorded}
+  defp recorded(action, ctx) do
+    %{action: action, attempts: ctx.attempts, applied: ctx.applied, fix: ctx.fix, links: links(ctx), moved_to: nil, outcome: :recorded}
+  end
 
   defp finish({:ok, changes}, action, ctx) do
     entry = %{head_sha: head(ctx), rule: action.rule, kind: action.kind, at: ctx.now}
@@ -168,6 +178,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
       attempts: Map.get(changes, :attempts, ctx.attempts),
       applied: ctx.applied ++ [entry],
       fix: Map.get(changes, :fix, ctx.fix),
+      links: Map.get(changes, :links, links(ctx)),
       moved_to: Map.get(changes, :moved_to),
       outcome: :applied
     }
@@ -293,8 +304,13 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
-  defp perform(%Action{kind: :wait_for_competitors}, ctx) do
-    with :ok <- disarm_in_merging(ctx, :conflict), do: {:ok, %{}}
+  defp perform(%Action{kind: :wait_for_competitors, args: %{prs: prs, step_behind: step_behind}}, ctx) do
+    opts = [repo_key: ctx.repo_key, now: ctx.now, links: links(ctx), tracker: tracker(ctx), store: store(ctx)] ++ Keyword.take(ctx.opts, [:linker])
+
+    with :ok <- disarm_in_merging(ctx, :conflict),
+         {:ok, links} <- Competitors.wait(ctx.issue, prs, step_behind, opts) do
+      {:ok, %{links: links}}
+    end
   end
 
   defp perform(%Action{kind: :decision}, ctx) do
@@ -578,6 +594,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp read_field(ctx, field), do: Map.get(ctx.read || %{}, field)
 
   defp head(ctx), do: read_field(ctx, :head_sha)
+  defp links(ctx), do: Map.get(ctx, :links, [])
   defp pr_url(ctx), do: read_field(ctx, :pr_url)
   defp pr_name(ctx), do: Request.pull_request(pr_url(ctx)) || "its pull request"
 

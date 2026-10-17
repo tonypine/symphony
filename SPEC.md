@@ -2385,8 +2385,8 @@ holds through the Needs Decision hold and the self-heal lane, GitHub calls throu
 
 Landing order of PRs that change the same files:
 
-- On each poll of a repository with two or more watched PRs, the watcher reads the repository's
-  open PRs and the paths each changes in one GraphQL query (the 100 most recently updated, the
+- On each poll of a repository with two or more watched PRs, or one whose PR conflicts or waits on
+  its competitors, the watcher reads the repository's open PRs and the paths each changes in one GraphQL query (the 100 most recently updated, the
   first 100 paths of each), so the files follow every head. When the read fails it logs it and
   keeps the paths and wait each record last had. A ticket's record keeps its overlap data under
   `landing`: the paths, the head they were read at, the state the ticket was read in and since
@@ -2403,10 +2403,31 @@ Landing order of PRs that change the same files:
   total, so a group of overlapping PRs never deadlocks.
 - A waiting PR keeps working (review, QA, rework); only its sync with the base branch waits: no
   conflict-fix run and no update-branch.
+- A PR that conflicts while one ahead of it shares a path (R14a), or whose conflict came back after
+  its 3 fix runs while other open PRs share its paths (R15), waits on them as a visible dependency:
+  a `Blocked` hold whose `waits_on` type is `landing`, in place, in any watched phase ("Waiting on
+  MT-1 and MT-2 to land: they change the same files (a.ex, b.md)"; auto-merge off in `Merging`),
+  and a Linear blocked-by link from each competitor's ticket that Linear doesn't have yet. A
+  competing PR with no ticket (a person's) gets no link; the hold names it by number and title. The
+  record keeps the competitors under `pr_watch.links`, with whether Symphony added each link.
+  `competing` (R15) is every open PR sharing a path, in any landing order, with its ticket when the
+  watcher watches it, except one on a hold or idle two hours, and the wait at R15 steps behind them
+  all: the ticket ranks after each, so none of them waits for it.
+- No wait closes a cycle: neither `ahead` nor `competing` names a ticket already blocked, directly
+  or through others, by the waiting one (its Linear blocked-by links and the waits the watcher
+  recorded).
+- The watcher judges the hold on every read: a competitor that lands (its ticket terminal, its PR
+  merged) stays linked, as history; one that leaves the race (PR closed, on a hold, idle two hours,
+  no longer sharing a path) is unlinked when Symphony added the link, never when a person did. The
+  hold clears once no competitor is left, and the same read decides on the conflict; the R15 wait
+  restarts the conflict count. A person's `Unblock` clears the hold, removes Symphony's links and
+  stops the wait on those PRs while they stay open. A ticket the watcher stops watching ends its
+  wait the same way.
 - `/api/v1/state` lists every waiting PR under `landing_waits`: `issue_id`, `issue_identifier`,
   `pull_request_url`, `state`, `waits_for` (`issue_id`, `issue_identifier`, `pull_request_url`,
-  `state`), `shared_files` (the count), `files` (the first 10 shared paths), `reason` (the
-  watcher's, `Lands after MT-1: they change the same files (lib/a.ex)`) and `since`.
+  `state`; for a landing hold whose competitors the order doesn't name, its first competitor),
+  `shared_files` (the count), `files` (the first 10 shared paths), `reason` (the landing hold's,
+  else the watcher's, `Lands after MT-1: they change the same files (lib/a.ex)`) and `since`.
 - The agent's first-turn prompt lists the other open PRs the watcher holds, with their state, URL
   and paths: the ones that share paths with the ticket's own PR (and the one it waits for), or,
   for a ticket with no PR in the map yet, every one, so the agent can stack its branch on one
@@ -4360,7 +4381,9 @@ Minimum endpoints:
     `repo_key` and `watch`: `facts`, the facts the decision table reads (`docs/pr-ci-decisions.md`)
     plus `pr_url`, `head_sha`, `source` (`poll`), `read_at`, `github` (`ok` or `rate_limited`, with
     `github_reset_at`) and `rate_limit` (`remaining`, `reset_at`); and `decision`, `applied` and
-    `links`, empty until the watcher decides. The facts are kept on the ticket's state record, so
+    `links`, empty until the watcher decides; and `waits_on`, what the ticket waits on: each
+    competing PR of its landing hold (`identifier`, `kind: "competitor"`, `pr_url`, `shared_files`,
+    `files`) and the fix ticket of the red backstop (`identifier`, `kind: "fix_ticket"`). The facts are kept on the ticket's state record, so
     they are listed right after a restart, before the watcher's first read.
   - `dispatch_skipped` lists every candidate the last dispatch pass neither started nor left waiting
     for a slot, each with its `repo_key`, `state`, the `reason` (the first closed gate: `blocked by

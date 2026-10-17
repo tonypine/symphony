@@ -19,7 +19,8 @@ defmodule SymphonyElixir.LandingOrder do
   no conflict fix (rule R14a) and doesn't update its branch (R28) until that PR lands or stops
   sharing files with it. The next one then merges the base branch once, with all of the leader's
   changes. A PR keeps its place while its ticket sits in `CI Fix`: the state the stay returns to
-  counts.
+  counts. A PR whose conflict came back after its fix runs steps behind every PR it then waits on
+  (rule R15, `behind`): it ranks after each of them, so none of them waits for it.
 
   A group never deadlocks:
 
@@ -61,7 +62,8 @@ defmodule SymphonyElixir.LandingOrder do
           optional(:state) => String.t() | nil,
           optional(:held) => boolean(),
           optional(:conflicting) => boolean(),
-          optional(:forced) => boolean()
+          optional(:forced) => boolean(),
+          optional(:behind) => [String.t()]
         }
 
   @doc """
@@ -70,17 +72,32 @@ defmodule SymphonyElixir.LandingOrder do
   """
   @spec waits([member()], DateTime.t()) :: %{String.t() => wait()}
   def waits(members, %DateTime{} = now) do
-    ranked = Enum.sort_by(members, &order_key/1)
+    ranked = members |> Enum.sort_by(&order_key/1) |> Enum.with_index()
 
-    ranked
-    |> Enum.with_index()
-    |> Enum.reduce(%{}, fn {member, index}, acc ->
-      case wait_for(member, Enum.take(ranked, index), now) do
+    Enum.reduce(ranked, %{}, fn {member, index}, acc ->
+      above =
+        for {other, other_index} <- ranked,
+            other.issue_id != member.issue_id,
+            ahead_of?({other, other_index}, {member, index}),
+            do: other
+
+      case wait_for(member, above, now) do
         nil -> acc
         wait -> Map.put(acc, member.issue_id, wait)
       end
     end)
   end
+
+  # A member that stepped behind another ranks after it, whatever the order says.
+  defp ahead_of?({other, other_index}, {member, index}) do
+    cond do
+      stepped_behind?(member, other) -> true
+      stepped_behind?(other, member) -> false
+      true -> other_index < index
+    end
+  end
+
+  defp stepped_behind?(member, other), do: other.issue_id in (Map.get(member, :behind) || [])
 
   @doc "How a wait reads: `waits for TP-1 to land (shares 3 files)`."
   @spec reason(wait()) :: String.t()
@@ -131,7 +148,13 @@ defmodule SymphonyElixir.LandingOrder do
     end)
   end
 
-  defp leads?(leader, now), do: Map.get(leader, :held) != true and DateTime.diff(now, leader.progress_at, :millisecond) < @idle_ms
+  @doc "How long a PR whose state and head haven't moved leads no one: two hours."
+  @spec idle_ms() :: pos_integer()
+  def idle_ms, do: @idle_ms
+
+  @doc "Whether `member` is in the race: not on a hold, and its state or head moved within `idle_ms/0`."
+  @spec leads?(member(), DateTime.t()) :: boolean()
+  def leads?(member, %DateTime{} = now), do: Map.get(member, :held) != true and DateTime.diff(now, member.progress_at, :millisecond) < @idle_ms
 
   defp order_key(member) do
     {if(Map.get(member, :conflicting) == true, do: 1, else: 0), -member.rank, DateTime.to_unix(member.state_since, :microsecond), Map.get(member, :pr_number) || :infinity,

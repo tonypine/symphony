@@ -25,9 +25,12 @@ defmodule SymphonyElixir.PrDecision.Facts do
   @typedoc "A PR that changes some of the same files, with its ticket when Symphony tracks it."
   @type competitor :: %{
           required(:files) => [String.t()],
+          optional(:issue_id) => String.t() | nil,
           optional(:issue_identifier) => String.t() | nil,
           optional(:pr_number) => pos_integer() | nil,
-          optional(:pr_url) => String.t() | nil
+          optional(:pr_url) => String.t() | nil,
+          optional(:title) => String.t() | nil,
+          optional(:head_sha) => String.t() | nil
         }
 
   @typedoc "One CI Fix run's failure: the check that failed and the first line of its error."
