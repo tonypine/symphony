@@ -1,0 +1,31 @@
+{
+  "about": "The Linear stand-in's answers (test/support/stubs/linear.py), by GraphQL operation name: the Add Repo sheet's projects, a project's teams and the labels. See test/support/README.md.",
+  "answers": {
+    "SymphonyBarProjects": {
+      "data": {
+        "projects": {
+          "nodes": [{"id": "p1", "name": "QA Project"}],
+          "pageInfo": {"hasNextPage": false, "endCursor": null}
+        }
+      }
+    },
+    "SymphonyBarProjectTeams": {
+      "data": {
+        "project": {
+          "teams": {
+            "nodes": [{"id": "t1"}],
+            "pageInfo": {"hasNextPage": false, "endCursor": null}
+          }
+        }
+      }
+    },
+    "SymphonyBarLabels": {
+      "data": {
+        "issueLabels": {
+          "nodes": [{"id": "l1", "name": "macos", "isGroup": false}],
+          "pageInfo": {"hasNextPage": false, "endCursor": null}
+        }
+      }
+    }
+  }
+}
