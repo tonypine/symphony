@@ -188,7 +188,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert %{"enabled" => true, "relay" => "gh_webhook_forward"} = webhooks()
     assert %{status: "failed", detail: "The GitHub CLI's webhook extension isn't installed."} = step(section, "relay")
     assert %{status: "done"} = step(section, "gh_ready")
-    assert %{status: "failed", detail: "acme/app isn't connected yet.", fix: "Run the webhook step for app."} = step(section, "repo:app")
+    # A repository whose step hasn't run is pending, not failed.
+    assert %{status: "pending", fix: nil} = step(section, "repo:app")
     assert section.turned_on_at == @t0
 
     section = act("run_step", %{"step" => "relay"}, opts)
@@ -371,6 +372,7 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = act("turn_on", %{"relay" => "smee", "url" => "https://smee.io/AbC/"}, opts)
     assert %{status: "done", detail: "Through smee.io"} = step(section, "relay")
     assert %{kind: "smee", url: "https://smee.io/AbC", payload_url: "https://smee.io/AbC", runs_in_symphony: false} = section.relay
+    assert %{status: "pending"} = step(section, "repo:app")
 
     act("run_step", %{"step" => "secret"}, opts)
     assert_received {:handed_off, secret}
@@ -406,7 +408,9 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
 
     section = act("recreate_secret", %{}, opts)
     assert_received {:handed_off, new_secret}
-    assert [{["api", "repos/acme/app/hooks/11", "--method", "PATCH", "--input", "-"], %{"config" => %{"secret" => ^new_secret, "content_type" => "json"}}}] = gh_calls()
+    assert [{["api", "repos/acme/app/hooks/11", "--method", "PATCH", "--input", "-"], patch}] = gh_calls()
+    # GitHub replaces the whole config, so the hook keeps its URL.
+    assert patch == %{"config" => %{"url" => "https://smee.io/AbC", "content_type" => "json", "insecure_ssl" => "0", "secret" => new_secret}}
     assert %{status: "done"} = step(section, "repo:app")
 
     section = act("turn_off", %{}, opts)
@@ -473,7 +477,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     section = act("turn_on", %{"relay" => "gh_webhook_forward"}, opts)
     assert {["api", "repos/acme/app/hooks/11", "--method", "DELETE"], nil} in gh_calls()
     assert repo(section, "app").hook == nil
-    assert %{status: "failed", detail: "acme/app isn't connected yet."} = step(section, "repo:app")
+    # The old relay's done step goes back to pending until the new relay connects it.
+    assert %{status: "pending", checked_at: nil} = step(section, "repo:app")
     assert %{status: "done"} = step(section, "secret")
   end
 

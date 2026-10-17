@@ -386,10 +386,26 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
 
   defp check_all(ctx) do
     Enum.each(step_ids(ctx), fn
-      "test:" <> _key -> :ok
-      step -> record_step(ctx, step, check(step, ctx))
+      "test:" <> _key ->
+        :ok
+
+      step ->
+        result = check(step, ctx)
+        # A repository whose step hasn't run yet stays pending rather than failed.
+        if not_run?(step, result, ctx), do: forget_step(ctx, step), else: record_step(ctx, step, result)
     end)
   end
+
+  defp not_run?("repo:" <> key, result, ctx) do
+    case find_repo(key, ctx) do
+      {:ok, repo} -> result == failure(:not_connected, repo)
+      _missing -> false
+    end
+  end
+
+  defp not_run?(_step, _result, _ctx), do: false
+
+  defp forget_step(ctx, step), do: update(ctx, &%{&1 | steps: Map.delete(&1.steps, step)})
 
   defp record_step(ctx, step, result) do
     entry =
@@ -499,10 +515,12 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     record = load(ctx)
 
     # Called right after a new secret was handed off.
+    # GitHub replaces the whole config on PATCH, so the hook's URL goes with the new secret.
     with %{id: id} <- Map.get(record.hooks, repo.key) || failure(:not_connected, repo),
-         secret = ctx.secret.(),
+         {:ok, payload_url} <- payload_url(record.relay_url, relay_kind(ctx)) |> url_failure(ctx),
+         %{config: config} = hook_body(payload_url, ctx.secret.(), ctx),
          {:ok, _output} <-
-           gh_with_input(ctx, api_args(repo, "hooks/#{id}") ++ ["--method", "PATCH"], %{config: %{secret: Secret.unwrap(secret), content_type: "json"}}) |> gh_failure({:hook_create, repo}) do
+           gh_with_input(ctx, api_args(repo, "hooks/#{id}") ++ ["--method", "PATCH"], %{config: config}) |> gh_failure({:hook_create, repo}) do
       :ok
     end
   end
@@ -550,18 +568,21 @@ defmodule SymphonyElixir.GitHub.WebhookSetup do
     }
   end
 
-  # The body goes through a file only the user can read, so the secret is never an argument.
+  # The body goes through a file only the user can read, so the secret is never an argument. The
+  # file is created exclusively: a path someone else made first, or a symlink at it, fails.
   defp gh_with_input(ctx, args, body) do
     file = Path.join(System.tmp_dir!(), "symphony-github-hook-#{System.unique_integer([:positive])}.json")
 
-    try do
-      with :ok <- File.write(file, ""),
-           :ok <- File.chmod(file, 0o600),
-           :ok <- File.write(file, Jason.encode!(body)) do
-        ctx.gh.(args ++ ["--input", file])
+    with {:ok, device} <- File.open(file, [:write, :exclusive]) do
+      try do
+        with :ok <- File.chmod(file, 0o600),
+             :ok <- IO.binwrite(device, Jason.encode!(body)) do
+          File.close(device)
+          ctx.gh.(args ++ ["--input", file])
+        end
+      after
+        File.rm(file)
       end
-    after
-      File.rm(file)
     end
   end
 
