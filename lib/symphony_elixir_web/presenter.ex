@@ -1,10 +1,9 @@
 defmodule SymphonyElixirWeb.Presenter do
   @moduledoc """
-  Shared projections for the observability API and dashboard.
+  Projections for the observability API.
   """
 
   alias SymphonyElixir.{
-    AuditLog,
     BuildInfo,
     Config,
     ForcedStatus,
@@ -27,21 +26,6 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixirWeb.WatchPayload
-
-  @audit_page_size 200
-  @audit_event_types ~w(
-    file_change
-    linear_comment
-    linear_state_change
-    poller_degraded
-    poller_recovered
-    pr_opened
-    prompt_sent
-    refused_agent_action
-    run_stopped
-    token_usage_delta
-    tool_call
-  )
 
   @empty_codex_totals %{
     input_tokens: 0,
@@ -412,47 +396,6 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  @spec audit_payload(map(), GenServer.name(), timeout()) :: map()
-  def audit_payload(params, orchestrator, snapshot_timeout_ms) when is_map(params) do
-    snapshot_context = audit_snapshot_context(orchestrator, snapshot_timeout_ms)
-    filters = audit_filters(params, snapshot_context)
-
-    query_opts = [
-      repo: filters.repo,
-      issue: filters.issue,
-      event_type: filters.event_type,
-      run_id: filters.run_id,
-      from: filters.date_from,
-      to: filters.date_to,
-      since: filters.since
-    ]
-
-    case AuditLog.query(query_opts) do
-      {:ok, stream} ->
-        raw_events = stream |> Enum.take(@audit_page_size + 1)
-        {page, overflow} = Enum.split(raw_events, @audit_page_size)
-
-        %{
-          filters: filters,
-          repos: snapshot_context.repos,
-          events: Enum.map(page, &audit_event_payload/1),
-          event_types: @audit_event_types,
-          truncated?: overflow != [],
-          error: nil
-        }
-
-      {:error, reason} ->
-        %{
-          filters: filters,
-          repos: snapshot_context.repos,
-          events: [],
-          event_types: @audit_event_types,
-          truncated?: false,
-          error: %{code: "invalid_audit_filter", message: inspect(reason)}
-        }
-    end
-  end
-
   @spec refresh_payload(GenServer.name()) :: {:ok, map()} | {:error, :unavailable}
   def refresh_payload(orchestrator) do
     case Orchestrator.request_refresh(orchestrator) do
@@ -463,76 +406,6 @@ defmodule SymphonyElixirWeb.Presenter do
         {:ok, Map.update!(payload, :requested_at, &DateTime.to_iso8601/1)}
     end
   end
-
-  @spec review_agent_verdict_summary(map()) :: String.t() | nil
-  def review_agent_verdict_summary(event) when is_map(event) do
-    if review_agent_verdict_event?(event) do
-      payload = event_payload(event)
-      verdict = payload |> map_value(["verdict", :verdict]) |> verdict_text()
-      round = map_value(payload, ["round", :round])
-      max_iterations = map_value(payload, ["max_iterations", :max_iterations])
-      reason = payload |> map_value(["reason", :reason]) |> present_string()
-      comments = payload |> map_value(["comments", :comments]) |> normalize_comments()
-      tokens = payload |> map_value(["tokens", :tokens]) |> normalize_token_map()
-
-      [
-        "Reviewer verdict: #{verdict}",
-        review_agent_round_text(round, max_iterations),
-        review_agent_reason_text(reason, comments),
-        review_agent_comments_text(comments),
-        "tokens in=#{tokens.input_tokens} out=#{tokens.output_tokens} total=#{tokens.total_tokens}"
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" | ")
-    end
-  end
-
-  def review_agent_verdict_summary(_event), do: nil
-
-  @spec review_agent_verdict(map()) :: String.t() | nil
-  def review_agent_verdict(event) when is_map(event) do
-    if review_agent_verdict_event?(event) do
-      event
-      |> event_payload()
-      |> map_value(["verdict", :verdict])
-      |> verdict_value()
-    end
-  end
-
-  def review_agent_verdict(_event), do: nil
-
-  @spec review_agent_verdict_event?(map()) :: boolean()
-  def review_agent_verdict_event?(event) when is_map(event) do
-    map_value(event, ["event", :event]) in [:review_agent_verdict, "review_agent_verdict"]
-  end
-
-  def review_agent_verdict_event?(_event), do: false
-
-  defp event_payload(event) when is_map(event), do: map_value(event, ["payload", :payload]) || %{}
-
-  defp review_agent_round_text(round, max_iterations) when is_integer(round) and is_integer(max_iterations) do
-    "review #{round} of #{max_iterations + 1}"
-  end
-
-  defp review_agent_round_text(_round, _max_iterations), do: nil
-
-  defp review_agent_reason_text(reason, _comments) when is_binary(reason), do: "reason: #{reason}"
-  defp review_agent_reason_text(_reason, [comment | _]) when is_binary(comment), do: "reason: #{comment}"
-  defp review_agent_reason_text(_reason, _comments), do: nil
-
-  defp review_agent_comments_text([]), do: "comments: 0"
-  defp review_agent_comments_text(comments) when is_list(comments), do: "comments: #{length(comments)}"
-
-  defp verdict_text(value) when is_atom(value), do: value |> Atom.to_string() |> String.replace("_", " ")
-  defp verdict_text(value) when is_binary(value), do: String.replace(value, "_", " ")
-  defp verdict_text(_value), do: "unknown"
-
-  defp verdict_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp verdict_value(value) when is_binary(value), do: value
-  defp verdict_value(_value), do: nil
-
-  defp normalize_comments(comments) when is_list(comments), do: Enum.filter(comments, &is_binary/1)
-  defp normalize_comments(_comments), do: []
 
   defp normalize_token_map(tokens) when is_map(tokens) do
     input_tokens = integer_map_value(tokens, :input_tokens)
@@ -552,8 +425,6 @@ defmodule SymphonyElixirWeb.Presenter do
       total_tokens: integer_map_value(tokens, :total_tokens)
     }
   end
-
-  defp normalize_token_map(_tokens), do: normalize_token_map(%{})
 
   # How long this Symphony has run: the Erlang VM's wall clock since it started.
   defp uptime_seconds do
@@ -635,132 +506,6 @@ defmodule SymphonyElixirWeb.Presenter do
       _value -> default
     end
   end
-
-  defp present_string(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp present_string(_value), do: nil
-
-  defp map_value(value, keys) when is_map(value) do
-    Enum.find_value(keys, fn key -> Map.get(value, key) end)
-  end
-
-  defp map_value(_value, _keys), do: nil
-
-  defp audit_snapshot_context(orchestrator, snapshot_timeout_ms) do
-    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
-      %{} = snapshot ->
-        %{
-          repos: repo_keys(snapshot),
-          poll_interval_ms: get_in(snapshot, [:polling, :poll_interval_ms])
-        }
-
-      _ ->
-        %{repos: [], poll_interval_ms: nil}
-    end
-  end
-
-  defp audit_filters(params, snapshot_context) do
-    today = Date.utc_today() |> Date.to_iso8601()
-    date_from = present_param(params, "from") || present_param(params, "date_from") || today
-    date_to = present_param(params, "to") || present_param(params, "date_to") || date_from
-    since_last_poll? = truthy_param?(Map.get(params, "since_last_poll"))
-
-    %{
-      repo: normalize_audit_repo(present_param(params, "repo"), snapshot_context.repos),
-      issue: present_param(params, "issue"),
-      event_type: present_param(params, "type") || present_param(params, "event_type"),
-      run_id: present_param(params, "run_id"),
-      date_from: date_from,
-      date_to: date_to,
-      since_last_poll?: since_last_poll?,
-      since: audit_since(since_last_poll?, snapshot_context.poll_interval_ms)
-    }
-  end
-
-  defp normalize_audit_repo(nil, _repos), do: nil
-  defp normalize_audit_repo("all", _repos), do: nil
-  defp normalize_audit_repo(repo, []), do: repo
-  defp normalize_audit_repo(repo, repos), do: if(repo in repos, do: repo)
-
-  defp audit_since(false, _poll_interval_ms), do: nil
-
-  defp audit_since(true, poll_interval_ms) when is_integer(poll_interval_ms) and poll_interval_ms > 0 do
-    DateTime.utc_now()
-    |> DateTime.add(-poll_interval_ms, :millisecond)
-    |> DateTime.to_iso8601()
-  end
-
-  defp audit_since(true, _poll_interval_ms) do
-    DateTime.utc_now()
-    |> DateTime.add(-60, :second)
-    |> DateTime.to_iso8601()
-  end
-
-  defp audit_event_payload(event) do
-    %{
-      timestamp: Map.get(event, "timestamp"),
-      event_type: Map.get(event, "event_type"),
-      issue: Map.get(event, "issue_identifier") || Map.get(event, "issue_id"),
-      issue_id: Map.get(event, "issue_id"),
-      issue_identifier: Map.get(event, "issue_identifier"),
-      repo_key: Map.get(event, "repo_key"),
-      run_id: Map.get(event, "run_id"),
-      date: Map.get(event, "date"),
-      record_hash: Map.get(event, "record_hash"),
-      preview: audit_preview(event),
-      record: event,
-      record_json: encode_record(event)
-    }
-  end
-
-  defp audit_preview(event) do
-    body =
-      Map.drop(event, [
-        "timestamp",
-        "event_type",
-        "issue_id",
-        "issue_identifier",
-        "repo_key",
-        "run_id",
-        "date",
-        "previous_hash",
-        "record_hash"
-      ])
-
-    case Jason.encode(body) do
-      {:ok, json} -> String.slice(json, 0, 220)
-      {:error, _reason} -> "(unencodable record)"
-    end
-  end
-
-  defp encode_record(event) do
-    case Jason.encode(event, pretty: true) do
-      {:ok, json} -> json
-      {:error, _reason} -> "(unencodable record)"
-    end
-  end
-
-  defp present_param(params, key) do
-    case Map.get(params, key) do
-      value when is_binary(value) ->
-        value
-        |> String.trim()
-        |> case do
-          "" -> nil
-          trimmed -> trimmed
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp truthy_param?(value), do: value in ["1", "true", "on", true]
 
   defp issue_payload_body(issue_identifier, running, retry, watching, waiting) do
     entries = [running, retry, watching, waiting && elem(waiting, 1)]

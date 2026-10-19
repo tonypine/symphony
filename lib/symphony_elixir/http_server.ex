@@ -110,7 +110,7 @@ defmodule SymphonyElixir.HttpServer do
   end
 
   @doc """
-  Phoenix `check_origin` callback for the dashboard WebSocket.
+  Whether a browser `Origin` may call Symphony's state-changing API endpoints.
 
   Accepts loopback origins unconditionally, the configured `server.host`,
   and any host listed in `SYMPHONY_DASHBOARD_ALLOWED_ORIGINS` (comma-separated,
@@ -203,7 +203,7 @@ defmodule SymphonyElixir.HttpServer do
       true ->
         {:error,
          "refusing to bind HTTP server to non-loopback host #{inspect(host)}: " <>
-           "the dashboard has no built-in auth. Put a reverse proxy with auth in " <>
+           "the API has no built-in auth. Put a reverse proxy with auth in " <>
            "front and keep SYMPHONY_SERVER_HOST=127.0.0.1, or set " <>
            "#{@allow_remote_bind_env}=1 if you understand the risk."}
     end

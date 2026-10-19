@@ -147,7 +147,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let developer = NSMenu(title: StatusMenu.developerTitle)
         developer.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
         developer.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
-        developer.addItem(menuItem(StatusMenu.openWebDashboardTitle, action: #selector(openWebDashboard(_:))))
         let developerItem = NSMenuItem(title: StatusMenu.developerTitle, action: nil, keyEquivalent: "")
         developerItem.submenu = developer
         menu.addItem(developerItem)
@@ -209,8 +208,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             guard let self else { return }
             reposWindow.show(status: machine.status, editing: key)
         }
-        symphonyWindow.openWebDashboard = { [weak self] in self?.openWebDashboard(nil) }
-        symphonyWindow.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard ?? false }
         symphonyWindow.canOpenLogs = { [weak self] in self?.canOpenLogs ?? false }
         symphonyWindow.afterControl = { [weak self] in self?.poller.pollNow() }
         symphonyWindow.update(status: machine.status, configPath: configPath)
@@ -463,8 +460,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(openTerminalDashboard(_:)):
             return isAnswering
-        case #selector(openWebDashboard(_:)):
-            return canOpenWebDashboard
         case #selector(openWaitingTicket(_:)):
             return menuItem.representedObject is URL
         case #selector(openLogs(_:)):
@@ -683,20 +678,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// The web dashboard opens while Symphony answers at a control URL; never the API fixtures' made-up one.
-    private var canOpenWebDashboard: Bool {
-        isAnswering && StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) != nil
-    }
-
     private var canOpenLogs: Bool {
         FileManager.default.fileExists(atPath: runner.logURL.path)
-    }
-
-    @objc private func openWebDashboard(_ sender: Any?) {
-        guard let url = StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) else {
-            return
-        }
-        NSWorkspace.shared.open(url)
     }
 
     /// Opens Terminal running `symphony dashboard`, through a `.command` script in the app's temporary folder.

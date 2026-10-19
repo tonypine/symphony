@@ -5674,7 +5674,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute rendered =~ "Dashboard:"
   end
 
-  test "status dashboard renders dashboard url on its own line when server port is configured" do
+  test "status dashboard prints no web dashboard link when server port is configured" do
     previous_port_override = Application.get_env(:symphony_elixir, :server_port_override)
 
     on_exit(fn ->
@@ -5700,8 +5700,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert rendered =~ "│ Repos:"
     assert rendered =~ "default"
-    assert rendered =~ "│ Dashboard:"
-    assert rendered =~ "http://127.0.0.1:4000/"
+    refute rendered =~ "Dashboard:"
+    refute rendered =~ "http://127.0.0.1:4000/"
   end
 
   test "status dashboard marks aged ETS snapshot data as stale and logs diagnostics once" do

@@ -447,7 +447,6 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.developerTitle, "Developer")
         XCTAssertEqual(StatusMenu.openTerminalDashboardTitle, "Open Dashboard in Terminal")
         XCTAssertEqual(StatusMenu.openLogsTitle, "Open Logs")
-        XCTAssertEqual(StatusMenu.openWebDashboardTitle, "Open Web Dashboard")
         XCTAssertFalse(StatusMenu.accessibilityLabel.isEmpty)
     }
 

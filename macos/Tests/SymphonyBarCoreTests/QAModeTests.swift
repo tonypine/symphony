@@ -59,7 +59,7 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(stores.apiFixtures?.requestLog, root.appendingPathComponent("api-requests.jsonl"))
         XCTAssertEqual(stores.apiFallback, APIFixtures.baseURL)
         XCTAssertEqual(stores.apiToken, APIFixtures.token)
-        // The control URL Open Web Dashboard uses stays unset in QA mode.
+        // The control URL fallback stays unset in QA mode: the fixtures' made-up URL takes its place.
         XCTAssertNil(stores.controlURLFallback)
     }
 
