@@ -149,12 +149,13 @@ defmodule SymphonyElixir.Setup do
 
   def handle_info({ref, {payload, linear}}, %{task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
-    Enum.each(state.waiters, &GenServer.reply(&1, payload))
-    state = %{state | payload: payload, linear: linear, task: nil, waiters: []}
+    {:noreply, finish_run(state, payload, linear)}
+  end
 
-    if state.rerun?,
-      do: {:noreply, start_run(%{state | rerun?: false, waiters: state.queued, queued: []})},
-      else: {:noreply, state}
+  # A run that crashed outside a check keeps the last result, and the next run starts as usual.
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{task: %Task{ref: ref}} = state) do
+    Logger.warning("Setup checks crashed: #{Exception.format_exit(reason)}")
+    {:noreply, finish_run(state, state.payload, state.linear)}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
@@ -162,6 +163,12 @@ defmodule SymphonyElixir.Setup do
   @impl true
   def terminate(_reason, state) do
     :telemetry.detach(state.handler)
+  end
+
+  defp finish_run(state, payload, linear) do
+    Enum.each(state.waiters, &GenServer.reply(&1, payload))
+    state = %{state | payload: payload, linear: linear, task: nil, waiters: []}
+    if state.rerun?, do: start_run(%{state | rerun?: false, waiters: state.queued, queued: []}), else: state
   end
 
   defp schedule_tick(state), do: Process.send_after(self(), :tick, state.interval_ms)

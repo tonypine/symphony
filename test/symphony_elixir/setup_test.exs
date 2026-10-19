@@ -80,6 +80,12 @@ defmodule SymphonyElixir.SetupTest do
     def run(_context), do: raise("boom")
   end
 
+  # Breaks the run itself, outside `run/1`.
+  defmodule BrokenStub do
+    def id, do: "broken_stub"
+    def needs_linear?, do: raise("broken")
+  end
+
   # Waits for the test's `:go` before it returns, so a test can hold a run open.
   defmodule BlockingStub do
     @behaviour SymphonyElixir.Setup.Check
@@ -447,6 +453,18 @@ defmodule SymphonyElixir.SetupTest do
       refute Task.yield(refresh, 0)
       send(second, :go)
       assert %{checked_at: "2026-10-19T09:00:00Z"} = Task.await(refresh)
+    end
+
+    test "a run that crashes keeps the last result and answers the refresh" do
+      clock = start_supervised!({Agent, fn -> @t1 end})
+      server = start_setup!(checks: [], now: fn -> Agent.get(clock, & &1) end)
+      assert %{checked_at: "2026-10-19T09:00:00Z"} = Setup.refresh(server)
+
+      :sys.replace_state(server, fn state -> put_in(state.opts[:checks], [BrokenStub]) end)
+      Agent.update(clock, fn _t1 -> @t2 end)
+
+      log = capture_log(fn -> assert %{checked_at: "2026-10-19T09:00:00Z"} = Setup.refresh(server) end)
+      assert log =~ "Setup checks crashed"
     end
 
     test "ignores unknown messages and stops cleanly" do
