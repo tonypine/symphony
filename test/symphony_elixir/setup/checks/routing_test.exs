@@ -20,7 +20,8 @@ defmodule SymphonyElixir.Setup.Checks.RoutingTest do
     Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [
       %{id: @symphony_id, name: "Symphony", slug_id: @symphony_slug},
       %{id: @jobs_id, name: "Job search", slug_id: "c3d4e5f60718"},
-      %{id: "web-a", name: "Web A", slug_id: "d4e5f6071829"},
+      # A project Linear gives no slug id.
+      %{id: "web-a", name: "Web A", slug_id: nil},
       %{id: "web-b", name: "Web B", slug_id: "e5f60718293a"}
     ])
 
