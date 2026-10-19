@@ -4751,7 +4751,8 @@ Minimum endpoints:
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
   - A check that can't run is not a failure: it is listed in `not_checked` (`id`, `title`,
-    `reason`). Without a Linear API key every Linear-side check is there, never a problem. When
+    `reason`). Without a Linear API key every Linear-side check is there, never a problem (the
+    missing key itself is one `secrets` error). When
     Linear can't be reached, the Linear-side problems of the last run that reached it are kept and
     `linear_checked_at` says when that run was. Linear-side checks read each team's workflow states
     and labels once per run, through a cache kept for the refresh interval and emptied on a refresh.
@@ -4771,7 +4772,14 @@ Minimum endpoints:
     id or the team's key when exactly one is a near match); an issue more than one non-default
     repo takes by its route or its poll (one `error` per set of repos, `open` `repos`); a repo
     whose polls fetched nothing for 24 hours (a `warning`). A default repo's poll of an issue a
-    scoped repo takes is routing as designed. A route change starts the repo's poll record over.
+    scoped repo takes is routing as designed. A route change starts the repo's poll record over;
+    and a secret the config needs but the service can't read (an `error` with an `open`
+    `settings` fix, naming the variable and the key, never a value): the Linear API key,
+    `OPENROUTER_API_KEY` when a run kind's profile resolves to `openrouter` (naming the run kinds),
+    each whole-value `$NAME` in `symphony.yml` whose variable is unset or empty (an MCP server's
+    `env` and `headers`, a notification channel's `url`, `webhook_url` and `headers`, and
+    `github.webhooks.secret` while no handed-off secret file stands in for it), and the GitHub CLI
+    signed in when a repo is a `workspace.source` repo.
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
