@@ -122,6 +122,14 @@ defmodule SymphonyElixir.Repo.Status do
 
   defp workflow_error(reason), do: Config.format_error(reason)
 
+  @doc "Why a repo's `WORKFLOW.md` did not load from its base ref (`WorkflowSource.ref_error/1`), redacted."
+  @spec ref_error_message(term()) :: String.t()
+  def ref_error_message(reason), do: reason |> ref_error() |> safe_message()
+
+  @doc "Why a `git fetch` the fetch log recorded failed, redacted."
+  @spec fetch_error_message(term()) :: String.t()
+  def fetch_error_message(reason), do: reason |> fetch_error() |> safe_message()
+
   defp ref_error({:git_failed, _args, _status, _output} = reason), do: fetch_error(reason)
   defp ref_error({:workflow_ref_not_found, refs}), do: "no #{Enum.join(refs, ", ")} ref in the checkout"
   defp ref_error(reason), do: Config.format_error(reason)
@@ -140,7 +148,7 @@ defmodule SymphonyElixir.Repo.Status do
     case FetchLog.last(repo_key) do
       nil -> nil
       %{at: at, result: :ok} -> %{at: iso8601(at), result: "ok", error: nil}
-      %{at: at, result: {:error, reason}} -> %{at: iso8601(at), result: "error", error: safe_message(fetch_error(reason))}
+      %{at: at, result: {:error, reason}} -> %{at: iso8601(at), result: "error", error: fetch_error_message(reason)}
     end
   end
 

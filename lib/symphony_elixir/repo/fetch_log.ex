@@ -6,7 +6,8 @@ defmodule SymphonyElixir.Repo.FetchLog do
   `SymphonyElixir.Workspace` records the fetch of a repo's worktree source (or the
   clone Symphony keeps of a `workspace.source` repo) and `SymphonyElixir.WorkflowSource`
   the fetch of the checkout its `WORKFLOW.md` is read from. `GET /api/v1/repos`
-  reports the last one per repo.
+  reports the last one per repo, and Setup warns about a repo whose fetch keeps failing: each entry
+  counts the failures in a row and says since when they last succeeded.
 
   Entries live in a public ETS table owned by this server, so recording never waits
   on a process. Without the server (some tests), recording is a no-op and every repo
@@ -17,7 +18,12 @@ defmodule SymphonyElixir.Repo.FetchLog do
 
   @table __MODULE__
 
-  @type entry :: %{at: DateTime.t(), result: :ok | {:error, term()}}
+  @type entry :: %{
+          at: DateTime.t(),
+          result: :ok | {:error, term()},
+          failures: non_neg_integer(),
+          failing_since: DateTime.t() | nil
+        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -33,9 +39,16 @@ defmodule SymphonyElixir.Repo.FetchLog do
   @doc "Records a fetch result for `repo_key` and returns the result unchanged."
   @spec record(String.t() | nil, result, DateTime.t()) :: result when result: term()
   def record(repo_key, result, %DateTime{} = at \\ DateTime.utc_now()) do
-    if is_binary(repo_key), do: insert(repo_key, %{at: at, result: normalize(result)})
+    if is_binary(repo_key), do: insert(repo_key, streak(normalize(result), at, last(repo_key)))
     result
   end
+
+  defp streak(:ok, at, _previous), do: %{at: at, result: :ok, failures: 0, failing_since: nil}
+
+  defp streak(error, at, %{failures: failures, failing_since: since}) when failures > 0,
+    do: %{at: at, result: error, failures: failures + 1, failing_since: since}
+
+  defp streak(error, at, _previous), do: %{at: at, result: error, failures: 1, failing_since: at}
 
   @doc "The last recorded fetch for `repo_key`, or nil."
   @spec last(String.t()) :: entry() | nil

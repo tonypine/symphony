@@ -2,25 +2,30 @@ defmodule SymphonyElixirWeb.SetupController do
   @moduledoc """
   `GET /api/v1/setup`, the health model the app's Setup reads, and the actions it takes.
 
-  The response holds one section per part of the setup. This one has `github_updates`
-  (`SymphonyElixir.GitHub.WebhookSetup`); TP-902's Setup adds the others next to it.
-  `POST /api/v1/setup/github_updates/:action` runs an action (`turn_on`, `run_step`, `test`,
-  `restart_relay`, `recreate_secret`, `change_relay`, `turn_off`) and answers with the section as
-  it leaves it.
+  The response holds the setup problems (`SymphonyElixir.Setup`: `problems`, `not_checked`,
+  `checked_at`, `linear_checked_at`) and one section per part of the setup, `github_updates`
+  (`SymphonyElixir.GitHub.WebhookSetup`). `POST /api/v1/setup/refresh` runs the checks again and
+  answers with the problems. `POST /api/v1/setup/github_updates/:action` runs an action (`turn_on`,
+  `run_step`, `test`, `restart_relay`, `recreate_secret`, `change_relay`, `turn_off`) and answers with
+  the section as it leaves it.
   """
 
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
   alias SymphonyElixir.GitHub.WebhookSetup
+  alias SymphonyElixir.Setup
   alias SymphonyElixirWeb.Endpoint
 
   @spec show(Conn.t(), map()) :: Conn.t()
   def show(conn, _params) do
-    json(conn, %{github_updates: WebhookSetup.section(opts())})
+    json(conn, Map.put(Setup.payload(setup()), :github_updates, WebhookSetup.section(opts())))
   rescue
     error in ArgumentError -> config_unavailable(conn, error)
   end
+
+  @spec refresh(Conn.t(), map()) :: Conn.t()
+  def refresh(conn, _params), do: json(conn, Setup.refresh(setup()))
 
   @spec github_updates(Conn.t(), map()) :: Conn.t()
   def github_updates(conn, %{"action" => action} = params) do
@@ -55,6 +60,9 @@ defmodule SymphonyElixirWeb.SetupController do
 
   # Tests name the setup's collaborators (a fake `gh`, the hand-off, the clock) in the endpoint's config.
   defp opts, do: Endpoint.config(:github_updates) || []
+
+  # Tests name a Setup server of their own.
+  defp setup, do: Endpoint.config(:setup) || Setup
 
   defp error_response(conn, status, code, message) do
     conn

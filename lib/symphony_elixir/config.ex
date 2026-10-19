@@ -140,8 +140,18 @@ defmodule SymphonyElixir.Config do
 
   @spec system() :: {:ok, SystemSchema.t()} | {:error, term()}
   def system do
-    with {:ok, config} <- unwrap_cache_result(Cache.get()),
-         {:ok, system_config} <- SystemSchema.parse(config),
+    with {:ok, config} <- unwrap_cache_result(Cache.get()) do
+      parse_system(config)
+    end
+  end
+
+  @doc """
+  Parses and validates a decoded `symphony.yml`: the schema, then the repositories' routing rules.
+  `Config.Cache` runs it before an edited file replaces the running config.
+  """
+  @spec parse_system(map()) :: {:ok, SystemSchema.t()} | {:error, term()}
+  def parse_system(config) when is_map(config) do
+    with {:ok, system_config} <- SystemSchema.parse(config),
          :ok <- validate_routing_repos(system_config.repos) do
       {:ok, system_config}
     end
@@ -358,10 +368,12 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp uncloned_managed_repo?(%SystemSchema.Repo{path: clone, workspace: %{github: github}}) when is_binary(github),
+  @doc "Whether `repo` is a `workspace.source` repo Symphony has not cloned yet."
+  @spec uncloned_managed_repo?(SystemSchema.Repo.t()) :: boolean()
+  def uncloned_managed_repo?(%SystemSchema.Repo{path: clone, workspace: %{github: github}}) when is_binary(github),
     do: not ManagedClone.cloned?(clone)
 
-  defp uncloned_managed_repo?(_repo), do: false
+  def uncloned_managed_repo?(_repo), do: false
 
   defp openrouter_findings([], _key, _opts), do: %{errors: [], warnings: []}
 

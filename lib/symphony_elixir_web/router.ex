@@ -60,6 +60,7 @@ defmodule SymphonyElixirWeb.Router do
 
     # The app's Setup turns instant GitHub updates on and off, and curl may too.
     post("/api/v1/setup/github_updates/:action", SetupController, :github_updates)
+    post("/api/v1/setup/refresh", SetupController, :refresh)
   end
 
   # GitHub webhook deliveries authenticate with their HMAC signature, not a browser origin.
@@ -107,6 +108,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup/github_updates/:action", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/setup/refresh", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/runs", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/history", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/shipped", ObservabilityApiController, :method_not_allowed)

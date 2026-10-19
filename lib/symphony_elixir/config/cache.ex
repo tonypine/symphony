@@ -1,24 +1,45 @@
 defmodule SymphonyElixir.Config.Cache do
   @moduledoc """
   Caches parsed `symphony.yml` and repo `WORKFLOW.md` files.
+
+  A reload that fails keeps the last known good value: a file that no longer reads or parses, a
+  `WORKFLOW.md` its schema rejects, or a `symphony.yml` `SymphonyElixir.Config.parse_system/1`
+  rejects (an unknown or removed key, an invalid value). The entry is then stale: `status/0` says
+  since when and why, and the rejected file is not read again until it changes. Each reload a file
+  event starts emits `[:symphony, :config, :cache, :reloaded]` once the entry is refreshed, so
+  `SymphonyElixir.Setup` checks the new config.
   """
 
   use GenServer
   require Logger
 
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.{Config, Workflow}
 
   @index_key {__MODULE__, :index}
   @watched_dirs_key {__MODULE__, :watched_dirs}
   @stale_option [stale: true]
   @telemetry_stale_event [:symphony, :config, :cache, :stale]
+  @telemetry_reloaded_event [:symphony, :config, :cache, :reloaded]
 
   defmodule Entry do
     @moduledoc false
 
     # `instructions` is the instruction directory a workflow's playbook line expanded and
-    # its `Workflow.instructions_stamp/1` before the load, or nil.
-    defstruct [:kind, :path, :stamp, :instructions, :value, :last_error, :updated_at, stale?: false]
+    # its `Workflow.instructions_stamp/1` before the load, or nil. `failed_stamp` is the stamp of
+    # the file a stale entry rejected, so it is not read again until it changes; `stale_since` is
+    # when the entry went stale.
+    defstruct [
+      :kind,
+      :path,
+      :stamp,
+      :instructions,
+      :value,
+      :last_error,
+      :updated_at,
+      :failed_stamp,
+      :stale_since,
+      stale?: false
+    ]
   end
 
   @type cache_kind :: :symphony | :workflow
@@ -29,7 +50,8 @@ defmodule SymphonyElixir.Config.Cache do
           path: Path.t(),
           stale?: boolean(),
           last_error: term() | nil,
-          updated_at: integer() | nil
+          updated_at: integer() | nil,
+          stale_since: integer() | nil
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -53,6 +75,10 @@ defmodule SymphonyElixir.Config.Cache do
     cached(:workflow, path)
   end
 
+  @doc "The event each reload a file event starts emits, with the reloaded `path` in its metadata."
+  @spec reloaded_event() :: [atom()]
+  def reloaded_event, do: @telemetry_reloaded_event
+
   @doc """
   Returns the current cached entries with their staleness state. Intended for
   introspection (dashboards, `/health` endpoints, tests) — callers should not
@@ -71,7 +97,8 @@ defmodule SymphonyElixir.Config.Cache do
               path: entry.path,
               stale?: entry.stale?,
               last_error: entry.last_error,
-              updated_at: entry.updated_at
+              updated_at: entry.updated_at,
+              stale_since: entry.stale_since
             }
           ]
 
@@ -158,12 +185,12 @@ defmodule SymphonyElixir.Config.Cache do
   defp refresh_entry(%Entry{} = entry, loader) do
     case current_stamp(entry.path) do
       {:ok, stamp} ->
-        if stamp == entry.stamp and instructions_current?(entry.instructions),
+        if current?(entry, stamp) and instructions_current?(entry.instructions),
           do: entry_result(entry),
           else: load_entry(entry.kind, entry.path, loader, entry, stamp)
 
       {:error, reason} ->
-        stale_entry(entry, {:missing_file, reason})
+        stale_entry(entry, {:missing_file, reason}, nil)
     end
   end
 
@@ -184,11 +211,15 @@ defmodule SymphonyElixir.Config.Cache do
     else
       {:error, reason} ->
         case previous do
-          %Entry{} = entry -> stale_entry(entry, reason)
+          %Entry{} = entry -> stale_entry(entry, reason, known_stamp)
           nil -> {:error, normalize_missing_reason(kind, path, reason)}
         end
     end
   end
+
+  # A stale entry is current for the file it rejected; the good file's stamp coming back reloads it.
+  defp current?(%Entry{stale?: true} = entry, stamp), do: stamp == entry.failed_stamp
+  defp current?(%Entry{} = entry, stamp), do: stamp == entry.stamp
 
   defp stamp_for(_path, stamp) when is_tuple(stamp), do: {:ok, stamp}
   defp stamp_for(path, _stamp), do: current_stamp(path)
@@ -196,12 +227,16 @@ defmodule SymphonyElixir.Config.Cache do
   defp instructions_current?(nil), do: true
   defp instructions_current?({dir, stamp}), do: Workflow.instructions_stamp(dir) == stamp
 
-  defp stale_entry(%Entry{} = entry, reason) do
+  defp stale_entry(%Entry{} = entry, reason, failed_stamp) do
+    now = System.system_time(:millisecond)
+
     stale = %{
       entry
       | stale?: true,
         last_error: reason,
-        updated_at: System.system_time(:millisecond)
+        failed_stamp: failed_stamp,
+        stale_since: if(entry.stale?, do: entry.stale_since, else: now),
+        updated_at: now
     }
 
     put_entry(stale)
@@ -235,13 +270,15 @@ defmodule SymphonyElixir.Config.Cache do
   defp reload_path(path) do
     keys = :persistent_term.get(@index_key, MapSet.new())
 
-    Enum.each(keys, fn key ->
-      case :persistent_term.get(key, nil) do
-        %Entry{path: ^path, kind: :symphony} = entry -> refresh_entry(entry, &load_symphony/1)
-        %Entry{path: ^path, kind: :workflow} = entry -> refresh_entry(entry, &load_workflow/1)
-        _entry -> :ok
-      end
-    end)
+    reloaded =
+      Enum.filter(keys, fn key ->
+        case :persistent_term.get(key, nil) do
+          %Entry{path: ^path, kind: kind} = entry -> refresh_entry(entry, loader_for(kind))
+          _entry -> false
+        end
+      end)
+
+    if reloaded != [], do: :telemetry.execute(@telemetry_reloaded_event, %{count: 1}, %{path: path})
   end
 
   defp cache_key(kind, path), do: {__MODULE__, kind, path}
@@ -253,9 +290,11 @@ defmodule SymphonyElixir.Config.Cache do
     end
   end
 
+  # A `symphony.yml` replaces the running config only when it validates.
   defp load_symphony(path) do
     with {:ok, content} <- read_file(path),
          {:ok, value} <- Workflow.parse_symphony(content),
+         {:ok, _system_config} <- Config.parse_system(value),
          do: {:ok, value, nil}
   end
 

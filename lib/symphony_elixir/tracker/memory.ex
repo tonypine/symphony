@@ -253,6 +253,30 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
+  @doc """
+  The seeded workflow states of the team `team` (by key or id). Each call sends
+  `{:memory_tracker_team_workflow_states, team}`, so a test can count requests.
+  """
+  @spec team_workflow_states(String.t()) :: {:ok, [Tracker.workflow_state()]} | {:error, term()}
+  def team_workflow_states(team) when is_binary(team) do
+    send_event({:memory_tracker_team_workflow_states, team})
+    with {:ok, states} <- workflow_states(), do: {:ok, Enum.filter(states, &in_team?(&1, team))}
+  end
+
+  @doc """
+  The seeded labels the team `team` can use: its own and the workspace's (no team). Each call sends
+  `{:memory_tracker_team_labels, team}`.
+  """
+  @spec team_labels(String.t()) :: {:ok, [Tracker.label()]} | {:error, term()}
+  def team_labels(team) when is_binary(team) do
+    send_event({:memory_tracker_team_labels, team})
+    with {:ok, labels} <- labels(), do: {:ok, Enum.filter(labels, &(workspace_label?(&1) or in_team?(&1, team)))}
+  end
+
+  defp in_team?(item, team), do: team in [Map.get(item, :team_key), Map.get(item, :team_id)]
+
+  defp workspace_label?(label), do: is_nil(Map.get(label, :team_key)) and is_nil(Map.get(label, :team_id))
+
   @spec create_label(String.t(), String.t()) :: {:ok, Tracker.label()} | {:error, term()}
   def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
     case next_result(:memory_tracker_create_label_result) do

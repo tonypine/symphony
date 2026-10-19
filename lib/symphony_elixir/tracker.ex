@@ -68,6 +68,8 @@ defmodule SymphonyElixir.Tracker do
   @callback workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
   @callback create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
   @callback labels() :: {:ok, [label()]} | {:error, term()}
+  @callback team_workflow_states(String.t()) :: {:ok, [workflow_state()]} | {:error, term()}
+  @callback team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
@@ -222,6 +224,14 @@ defmodule SymphonyElixir.Tracker do
   @doc "Every label the tracker defines, workspace-wide and per team."
   @spec labels() :: {:ok, [label()]} | {:error, term()}
   def labels, do: adapter().labels()
+
+  @doc "The workflow states of the team `team` (its key), in one request."
+  @spec team_workflow_states(String.t()) :: {:ok, [workflow_state()]} | {:error, term()}
+  def team_workflow_states(team) when is_binary(team), do: adapter().team_workflow_states(team)
+
+  @doc "The labels the team `team` (its key) can use, its own and the workspace's, in one request."
+  @spec team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
+  def team_labels(team) when is_binary(team), do: adapter().team_labels(team)
 
   @doc """
   Creates a label named `label_name` in `team` (a team key or id), and returns it. Used only by

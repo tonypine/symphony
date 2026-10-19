@@ -82,6 +82,36 @@ defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
     end
   end
 
+  describe "team_workflow_states/1 and team_labels/1" do
+    test "answer one team's states, and its labels with the workspace's, announcing each request" do
+      Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, [
+        %{id: "s1", name: "Todo", team_id: "t1", team_key: "TP"},
+        %{id: "s2", name: "Todo", team_id: "t2", team_key: "OPS"}
+      ])
+
+      Application.put_env(:symphony_elixir, :memory_tracker_labels_list, [
+        %{id: "l1", name: "plan", team_id: nil, team_key: nil},
+        %{id: "l2", name: "Blocked", team_id: "t1", team_key: "TP"},
+        %{id: "l3", name: "Blocked", team_id: "t2", team_key: "OPS"}
+      ])
+
+      assert {:ok, [%{id: "s1"}]} = Memory.team_workflow_states("TP")
+      assert {:ok, [%{id: "s2"}]} = Memory.team_workflow_states("t2")
+      assert {:ok, [%{id: "l1"}, %{id: "l2"}]} = Memory.team_labels("TP")
+      assert_received {:memory_tracker_team_workflow_states, "TP"}
+      assert_received {:memory_tracker_team_workflow_states, "t2"}
+      assert_received {:memory_tracker_team_labels, "TP"}
+    end
+
+    test "pass on a configured error" do
+      Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, {:error, :timeout})
+      Application.put_env(:symphony_elixir, :memory_tracker_labels_list, {:error, :timeout})
+
+      assert {:error, :timeout} = Memory.team_workflow_states("TP")
+      assert {:error, :timeout} = Memory.team_labels("TP")
+    end
+  end
+
   describe "create_label/2" do
     test "adds the label to the list, announces it, and keeps the earlier ones" do
       assert {:ok, label} = Memory.create_label("Blocked", "TP")

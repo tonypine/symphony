@@ -13,6 +13,8 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyWorkflowStatesByName", :workflow_states_by_name},
       {"SymphonyAllWorkflowStates", :workflow_states},
       {"SymphonyAllLabels", :labels},
+      {"SymphonyTeamWorkflowStates", :team_workflow_states},
+      {"SymphonyTeamLabels", :team_labels},
       {"SymphonyCreateWorkflowState", :create_workflow_state},
       {"SymphonyCreateLabel", :create_label},
       {"SymphonyCreateIssueScope", :create_issue_scope},
@@ -28,9 +30,15 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
         {_operation, :create_workflow_state} -> create_workflow_state(query, variables)
         {_operation, :create_issue} -> create_issue(variables)
         {_operation, :delete_issue_relation} -> delete_issue_relation(variables)
+        {_operation, key} when key in [:team_workflow_states, :team_labels] -> team_read(key, query, variables)
         {_operation, key} -> result(key, default(key))
         nil -> flunk("unexpected query: #{query}")
       end
+    end
+
+    defp team_read(key, query, variables) do
+      send(self(), {key, query, variables})
+      result(key, {:error, :unscripted})
     end
 
     defp delete_issue_relation(variables) do
@@ -216,6 +224,37 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
 
       put(:workflow_states, {:ok, %{"data" => %{}}})
       assert {:error, :workflow_states_unavailable} = Adapter.workflow_states()
+    end
+  end
+
+  describe "team_workflow_states/1 and team_labels/1" do
+    test "read one team's states, and its labels with the workspace's, in one request each" do
+      put(:team_workflow_states, {:ok, %{"data" => %{"workflowStates" => %{"nodes" => [%{"id" => "s1", "name" => "QA", "team" => @team}]}}}})
+
+      put(
+        :team_labels,
+        {:ok, %{"data" => %{"issueLabels" => %{"nodes" => [%{"id" => "l1", "name" => "Blocked", "team" => @team}, %{"id" => "l2", "name" => "plan", "team" => nil}]}}}}
+      )
+
+      assert {:ok, [%{id: "s1", name: "QA", team_id: "t1", team_key: "TP"}]} = Adapter.team_workflow_states("TP")
+      assert_received {:team_workflow_states, query, %{team: "TP"}}
+      assert query =~ "team: {key: {eqIgnoreCase: $team}}"
+
+      assert {:ok, [%{id: "l1", team_key: "TP"}, %{id: "l2", team_key: nil}]} = Adapter.team_labels("TP")
+      assert_received {:team_labels, query, %{team: "TP"}}
+      assert query =~ "{team: {null: true}}"
+    end
+
+    test "report a tracker error and an unusable response" do
+      put(:team_workflow_states, {:error, :timeout})
+      put(:team_labels, {:error, :timeout})
+      assert {:error, :timeout} = Adapter.team_workflow_states("TP")
+      assert {:error, :timeout} = Adapter.team_labels("TP")
+
+      put(:team_workflow_states, {:ok, %{"data" => %{}}})
+      put(:team_labels, {:ok, %{"data" => %{}}})
+      assert {:error, :workflow_states_unavailable} = Adapter.team_workflow_states("TP")
+      assert {:error, :labels_unavailable} = Adapter.team_labels("TP")
     end
   end
 

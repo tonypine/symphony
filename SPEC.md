@@ -1781,7 +1781,11 @@ Dynamic reload behavior:
   last known good workflow is kept. Until the ref has been read once, the local file is read
   with a warning, and readers switch to the ref without restart once it resolves.
 - `symphony.yml` is re-read through the config layer during runtime operations such as dispatch,
-  watchdog handling, and snapshots.
+  watchdog handling, and snapshots. The Elixir implementation validates an edited `symphony.yml`
+  (schema and routing rules) before it replaces the running config: an edit with an unknown or
+  removed key or an invalid value is rejected, the last good config keeps running, the rejected
+  file is not read again until it changes, and `GET /api/v1/setup` reports it as a problem until
+  the file loads.
 - Changes to `symphony.yml` values that affect OTP child topology, including the `repositories:` list,
   primary repo selection, PR/CI poller enablement, verification supervisors, and HTTP listener
   binding, require restart unless the implementation explicitly supports live rebind/re-supervision.
@@ -4725,8 +4729,38 @@ Minimum endpoints:
     ```
 
 - `GET /api/v1/setup`
-  - The health model the app's Setup reads, one section per part of the setup. Read-only and
-    served like `/api/v1/state`. `github_updates` is instant GitHub updates (webhooks): `mode`
+  - The health model the app's Setup reads. Read-only and served like `/api/v1/state`.
+  - `problems`, `not_checked`, `checked_at` and `linear_checked_at` are the setup checks' last
+    result; `/api/v1/state` carries the same four under `setup`. The Elixir implementation
+    (`SymphonyElixir.Setup`) runs every check at startup, after each config reload, every 15
+    minutes and on `POST /api/v1/setup/refresh`, in the background, so the endpoint never waits on
+    them. `checked_at` is `null` until the first run ends. A healthy setup is `problems: []` and
+    `not_checked: []`.
+  - Each problem: `id` (stable across runs: the check and its subject, such as
+    `deprecated_key:auto_review.enabled`), `severity` (`error` or `warning`), `category`
+    (`routing`, `teams`, `labels`, `statuses`, `keys`, `secrets`, `runtime`), `title`,
+    `consequence` (in plain words, what breaks), `repos` (repository keys), `tickets`
+    (`identifier`, `url`), `details` (`label`/`value` lines) and `fix`, or `null`:
+    - `{"kind": "config_edit", "path", "action": "remove" | "set" | "add", "value"}`: the app
+      applies it to `symphony.yml` through its settings writer once the operator confirms.
+    - `{"kind": "linear", "action", "team", "name", "type"}`: the service runs it once the operator
+      confirms.
+    - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
+      "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
+    Symphony never fixes a problem by itself.
+  - A check that can't run is not a failure: it is listed in `not_checked` (`id`, `title`,
+    `reason`). Without a Linear API key every Linear-side check is there, never a problem. When
+    Linear can't be reached, the Linear-side problems of the last run that reached it are kept and
+    `linear_checked_at` says when that run was. Linear-side checks read each team's workflow states
+    and labels once per run, through a cache kept for the refresh interval and emptied on a refresh.
+  - The checks: a deprecated or no-op `symphony.yml` key (a `warning` per key, with its path, its
+    replacement and line in `details`, and a `config_edit` remove fix, or an `open` fix for a key
+    that still acts); a `symphony.yml` or repo `WORKFLOW.md` edit that was rejected (an `error`
+    naming the file, the key or line and the reason, and since when the last good config has kept
+    running); a repo whose `WORKFLOW.md` fails to load from its base ref (an `error`); a repo whose
+    fetch failed three times in a row (a `warning`); a `workspace.source` repo not cloned yet (a
+    `warning`).
+  - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
     its `status` (`done`, `failed`, `waiting`, `pending`) and, when it failed, a plain-words
@@ -4734,6 +4768,10 @@ Minimum endpoints:
     in 24 hours, relay restarts, test), the poll intervals and GitHub's rate limit. `needs_setup`
     is `enabled: true` on a Mac whose setup never ran; `degraded` is a relay that can't restart, or
     no delivery for `silence_alert_minutes` after a read found a change none reported.
+- `POST /api/v1/setup/refresh`
+  - Runs the setup checks again, with the team cache emptied, and answers with `problems`,
+    `not_checked`, `checked_at` and `linear_checked_at` once they finish. A run already going
+    finishes first. Same-origin like Check Now.
 - `POST /api/v1/setup/github_updates/<action>`
   - `turn_on` (`relay`, `url`), `run_step` (`step`, and `url` for a URL relay's `relay` step),
     `test` (`repo` optional), `restart_relay`, `recreate_secret`, `change_relay` (`relay`, `url`)
