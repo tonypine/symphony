@@ -3,8 +3,10 @@ defmodule SymphonyElixir.QaDriver do
   Host-side driver behind the QA `qa_*` tools for the `macos_app` playbook.
 
   The QA agent runs sandboxed and cannot build Swift, launch GUI apps or read the
-  screen, so Symphony does those few things for it on the host, one driver per QA
-  pass. Every tool argument is checked here before anything runs:
+  screen, so Symphony does those few things for it, one driver per QA pass, on
+  the QA host (`:worker_host`, `auto_review.worker_host`): a QA VM reached over
+  SSH, never the Symphony host (see "QA host" below). Every tool argument is
+  checked here before anything runs:
 
   - `qa_build` runs only the configured `build` command, in the QA worktree, with
     the agent's scrubbed environment, and refuses a worktree with edits outside
@@ -12,20 +14,18 @@ defmodule SymphonyElixir.QaDriver do
     `SymphonyElixir.AgentEnv.owned_dirs/0`). Gitignored files count too (the
     build reads caches such as SwiftPM's `.build/`): none may exist before the first build, and after a
     build none may appear or change until the next one;
-  - a successful `qa_build` copies the configured `app` bundle, which must
-    resolve (symlinks included) inside the worktree, into the driver's private
-    directory. Symlinks inside the bundle must be relative and must not climb
-    with `..`, so the copy cannot reach back into the worktree;
-  - `qa_launch_app` starts only that private copy, only while its executable
-    still matches what the build produced and the worktree is as that build
-    left it, so later worktree edits cannot change what runs. The app always
-    gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
+  - a successful `qa_build` copies the configured `app` bundle, which must be a
+    real `.app` directory that resolves inside the build directory, into the
+    pass's run directory on the QA host;
+  - `qa_launch_app` starts only that copy, only while the worktree is as the
+    last build left it. The app always
+    gets `SYMPHONY_BAR_QA_ROOT` pointing at the run directory, so it never
     touches real settings or secrets, and `SYMPHONY_QA_OPENROUTER_URL` pointing
     at this pass's `SymphonyElixir.OpenRouter.Stub`, so its OpenRouter flows
     never need a real key (see "OpenRouter stub" below). With `api_fixtures`,
     a directory in the PR checkout (see
     `SymphonyElixir.QaDriver.Checks.read_fixture_dir/4`: regular files only, at
-    most 5 MB), the launch copies its checked files into a fresh
+    most 5 MB), the launch copies its checked files as a tar into a fresh
     `api-fixtures-<n>/` in the run directory and sets
     `SYMPHONY_BAR_QA_API_FIXTURES` to that copy, so the app reads Symphony's
     local API from those JSON files;
@@ -47,12 +47,11 @@ defmodule SymphonyElixir.QaDriver do
     `symphony.yml`, a `WORKFLOW.md`). It reads only a regular file of at most
     1 MB that resolves inside the worktree or the pass's `$TMPDIR` (`:tmp_dir`),
     and refuses a symlink, a file with other hard links, and a file swapped
-    between the check and the read. Locally it returns the file's path; on a QA
-    host it copies the checked bytes into the run directory's `files/` there and
-    returns that path;
+    between the check and the read. It copies the checked bytes into the run
+    directory's `files/` on the QA host and returns that path there;
   - `qa_put_checkout` hands the app a git checkout: a `git bundle` the agent
     made, read with the same checks as `qa_put_file`, is cloned (without hooks)
-    into the driver's `checkouts/<name>`, locally or on the QA host, and its
+    into the run directory's `checkouts/<name>` on the QA host, and its
     `origin` is set to the `https://github.com/<owner>/<repo>` URL the agent
     names. Nothing is fetched from GitHub;
   - `qa_open_status_menu` opens a launched app's status-bar menu on screen and
@@ -66,22 +65,22 @@ defmodule SymphonyElixir.QaDriver do
   - `qa_api_requests` returns the requests the app logged to `api-requests.jsonl`
     in its QA root since the last call (the POSTs it answered from
     `api_fixtures`), at most the last 500, and takes the log away so the next
-    call returns only newer ones. The QA root is outside the agent sandbox, on
-    the QA host for a `worker_host`, so the agent cannot read the log itself.
+    call returns only newer ones. The QA root is on the QA host, so the agent
+    cannot read the log itself.
 
   Release pair: `qa_build_release_pair` builds release N of the app and its
-  update N+1, signed with the QA host's test signing identity, into the private
-  directory where the app runs; `qa_launch_app` with `release_pair: true` starts
+  update N+1, signed with the QA host's test signing identity, into the run
+  directory; `qa_launch_app` with `release_pair: true` starts
   a fresh copy of N with the pair's update feed beside it; `qa_relaunched_app`
   starts the app N's update helper asks for after an install or a rollback; and
   `qa_update_feed` reads and switches the feed. See
   `SymphonyElixir.QaDriver.ReleasePair`. When the driver stops it also stops the
-  feed and any process whose command line names the private directory.
+  feed and any process whose command line names the run directory.
 
   Appearance: `qa_launch_app`'s optional `appearance`, `light` or `dark`, sets
   `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects the
-  appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built on the
-  machine the app runs on) with `DYLD_INSERT_LIBRARIES`: it reads the same
+  appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built in the
+  run directory on the QA host) with `DYLD_INSERT_LIBRARIES`: it reads the same
   variable and sets any AppKit app's appearance as the app finishes launching,
   so the app draws in that appearance whatever the host's. AppKit reads the
   system appearance from the global defaults only, so a launch argument such as
@@ -114,23 +113,22 @@ defmodule SymphonyElixir.QaDriver do
     `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's
     background update checks.
 
-  Screenshots and accessibility calls run in the helper app,
-  `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
-  Screen Recording and Accessibility grants so that Symphony and the agents it
-  spawns never do. Without them the tools fail with `qa_permission_missing` and
-  tell the agent to mark the app steps `blocked`, finish the other playbooks' steps
-  and answer `blocked`.
+  Screenshots and accessibility calls run in Symphony's Swift helper, compiled
+  into the pass's run directory on the QA host, under the Screen Recording and
+  Accessibility grants on the QA host's `sshd-keygen-wrapper`. Without them the
+  tools fail with `qa_permission_missing` and tell the agent to mark the app
+  steps `blocked`, finish the other playbooks' steps and answer `blocked`.
 
-  The private directory (bundle copies, screenshot staging and the app's QA
-  root) is a `0700` directory under Symphony's state root, outside every path
-  the agent sandbox may write.
+  The driver's private directory on this host (the canary, and staging for what
+  it copies to and from the QA host) is a `0700` directory under Symphony's
+  state root, outside every path the agent sandbox may write.
 
   Wide pass: `qa_resize_window` sizes an app's window to at least 1400×900 pt,
   or the screen's usable area when that is smaller, and remembers the size it
   reached. `qa_check_app` then says whether the app still runs, answers an
   accessibility request within 10 seconds, and has left no new
-  `~/Library/Logs/DiagnosticReports/<executable>*` crash report (listed at launch
-  and again at each check, on the QA host for a `worker_host`), naming the page
+  `~/Library/Logs/DiagnosticReports/<executable>*` crash report (listed on the QA
+  host at launch and again at each check), naming the page
   the agent passes and that window size in each problem. A resize on a screen
   whose usable area is under 1400×900 pt marks the pass's wide pass limited
   (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
@@ -149,15 +147,20 @@ defmodule SymphonyElixir.QaDriver do
 
   When the driver stops (the QA pass ends or crashes) it quits every app it
   launched, stops the stub, closes the host-port tunnel and removes its private
-  directory.
+  directory and the run directory.
 
-  With `:worker_host` (`auto_review.worker_host`) the build, the app and the
-  helper run on that QA host instead, through `SymphonyElixir.QaDriver.Remote`.
-  The worktree checks stay on the Symphony host; `qa_build` then ships the
+  QA host: the build, the app and the helper run on the QA host through
+  `SymphonyElixir.QaDriver.Remote`, never on the Symphony host, where PR code
+  would run with the operator's access. Without a `:worker_host` every tool
+  fails with `qa_worker_missing`, which names the QA VM setup, and nothing is
+  built or launched. A QA host that is this Mac under another name (same
+  `IOPlatformUUID`, see `SymphonyElixir.QaDriver.Machine`) is refused at start
+  with `qa_worker_same_machine`.
+  The worktree checks stay on the Symphony host; `qa_build` ships the
   worktree's `HEAD` (a `git archive`, so ignored files stay behind) into a fresh
-  build directory on the QA host, copies the bundle into Symphony's run
-  directory there and launches it from that copy. The agent cannot write on the
-  QA host, so the copy is not checked again before launch. Screenshots are
+  build directory in the pass's run directory on the QA host, copies the bundle
+  into the run directory's `builds/` and launches it from that copy. The agent
+  cannot write on the QA host, so the copy is not checked again before launch. Screenshots are
   captured there and copied back into `qa-evidence/`, and `qa_put_file` and
   `api_fixtures` copy fixtures there (`api_fixtures` as a tar of the checked
   files), because the app cannot read the Symphony host's files. Each
@@ -180,8 +183,8 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
-  alias SymphonyElixir.QaDriver.{Checks, Host, ReleasePair, Remote}
+  alias SymphonyElixir.{OpenRouter, PathSafety, Workspace}
+  alias SymphonyElixir.QaDriver.{Checks, Machine, ReleasePair, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -199,7 +202,8 @@ defmodule SymphonyElixir.QaDriver do
   # The app logs each request it answers from API fixtures here, under its QA root.
   @api_requests_log "api-requests.jsonl"
   @max_api_requests 500
-  # The QA host's loopback ports an app's SSH session may forward to the stub.
+  # The QA host's loopback ports an app's SSH session may forward to the stub,
+  # and the ports the release pair's feed may listen on there.
   @stub_remote_ports 20_000..59_999
   @host_port_count 3
   @tunnel_attempts 3
@@ -305,25 +309,27 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
+  @qa_vm_docs "docs/configuration.md#running-qa-in-a-qa-vm"
+
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
            ~w(qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
            ~w(qa_build_release_pair qa_relaunched_app qa_update_feed)
 
+  # The QA host's OS boundary: `SymphonyElixir.QaDriver.Remote.host/1`, unless a test overrides it.
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
           required(:launch) => (String.t(), keyword() -> {:ok, port(), pos_integer()} | {:error, term()}),
           required(:kill) => (pos_integer() -> :ok),
-          # A QA host's helper takes the pass's run directory.
-          required(:helper) => (-> helper_result()) | (String.t() -> helper_result()),
+          # The helper and the appearance library take the pass's run directory.
+          required(:helper) => (String.t() -> helper_result()),
           required(:call_helper) => (Path.t(), [String.t()], keyword() -> cmd_result()),
-          optional(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
-          # The appearance library `qa_launch_app` injects; a QA host's takes the run directory.
-          optional(:appearance_library) => (-> helper_result()) | (String.t() -> helper_result()),
-          optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
-          optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
-          optional(:put) => (Path.t(), String.t(), String.t() -> {:ok, String.t()} | {:error, String.t()}),
-          optional(:tunnel) => ([pos_integer()] -> {:ok, port()} | {:error, {:port_taken | :failed, String.t()}}),
-          optional(:cleanup) => (String.t() -> :ok)
+          required(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
+          required(:appearance_library) => (String.t() -> helper_result()),
+          required(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
+          required(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
+          required(:put) => (Path.t(), String.t(), String.t() -> {:ok, String.t()} | {:error, String.t()}),
+          required(:tunnel) => ([pos_integer()] -> {:ok, port()} | {:error, {:port_taken | :failed, String.t()}}),
+          required(:cleanup) => (String.t() -> :ok)
         }
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
   @type cmd_result :: {:ok, {String.t(), integer()}} | {:error, term()}
@@ -339,8 +345,10 @@ defmodule SymphonyElixir.QaDriver do
   Options: `:worktree` (required), `:playbook` (the selected `macos_app` playbook
   with `build`, `app` and optional `build_timeout_ms`), `:tmp_dir` (the pass's
   `$TMPDIR`, where `qa_put_file` may read besides the worktree), `:worker_host`
-  (the SSH host QA runs on, default this host), `:host` (overrides for the OS
-  boundary, see `t:host/0`), `:git` (a `fn args, cwd -> {output, status}`) and
+  (the SSH host QA runs on; without one every tool fails with
+  `qa_worker_missing`), `:host` (overrides for the QA host's OS boundary, see
+  `t:host/0`), `:local_uuid` (reads this host's `IOPlatformUUID`, default
+  `SymphonyElixir.QaDriver.Machine.local_uuid/0`), `:git` (a `fn args, cwd -> {output, status}`) and
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
   OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
   `:status_menu_poll` (`{attempts, interval_ms}` for `qa_open_status_menu`,
@@ -580,7 +588,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, app} <- GenServer.call(driver, {:app, pid}),
          {:ok, reports} <- crash_reports(config, app.name),
          {:ok, responding} <- responding(driver, config, pid, app) do
-      {:ok, health(pid, page, app, reports -- app.crash_reports, responding, config)}
+      {:ok, health(pid, page, app, reports -- app.crash_reports, responding)}
     end
   end
 
@@ -595,8 +603,8 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_put_file", _driver, config, args) do
     with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
          {:ok, name} <- put_file_name(Map.get(args, "remote_name"), local_path),
-         {:ok, path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_file") do
-      put_file(config, path, bytes, name)
+         {:ok, _path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_file") do
+      put_file(config, bytes, name)
     end
   end
 
@@ -639,7 +647,6 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, built} <- fetch_build(driver),
          {:ok, stand_ins} <- stand_ins(driver, config, args),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         :ok <- unchanged_build(config, built),
          name = Path.basename(built.executable),
          {:ok, reports} <- crash_reports(config, name),
          {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
@@ -723,8 +730,8 @@ defmodule SymphonyElixir.QaDriver do
   # a failed build's partial outputs do not block the next attempt.
   defp record_build(driver, config, 0, output, ignored) do
     case built_app(config) do
-      {:ok, fingerprint} ->
-        GenServer.call(driver, {:record_build, fingerprint, ignored})
+      {:ok, built} ->
+        GenServer.call(driver, {:record_build, built, ignored})
         {:ok, %{"exit_status" => 0, "output" => output, "app" => config.app}}
 
       {:error, _reason} = error ->
@@ -758,10 +765,8 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # On a QA host the build gets a fresh copy of the worktree's HEAD. The worktree
-  # is clean at this point, so HEAD is exactly what it holds.
-  defp ship(%{remote?: false}), do: :ok
-
+  # The build gets a fresh copy of the worktree's HEAD. The worktree is clean at
+  # this point, so HEAD is exactly what it holds.
   defp ship(config) do
     tar = Path.join(config.scratch_dir, "src.tar")
 
@@ -789,11 +794,10 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # `:env` is this host's environment; on a QA host the build gets only `:remote_env`.
+  # The build gets the QA user's login environment plus `:remote_env`.
   defp run_build(config, extra_env) do
     opts = [
       cd: config.build_dir,
-      env: AgentEnv.build_with(extra_env),
       remote_env: Enum.to_list(extra_env),
       timeout_ms: config.build_timeout_ms,
       output_limit: @output_limit
@@ -811,16 +815,7 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp built_app(%{remote?: false} = config) do
-    with {:ok, built} <- fingerprint_app(config),
-         {:ok, copy} <- copy_bundle(config, built.bundle),
-         {:ok, fingerprint} <- fingerprint_bundle(config, copy),
-         :ok <- same_build(built.digest, fingerprint.digest) do
-      {:ok, fingerprint}
-    end
-  end
-
-  # On a QA host only Symphony writes the build directory, so the bundle is
+  # Only Symphony writes the build directory on the QA host, so the bundle is
   # checked and copied by one script there.
   defp built_app(config) do
     destination = Path.join(config.host_dir, "builds/#{System.unique_integer([:positive])}")
@@ -829,7 +824,7 @@ defmodule SymphonyElixir.QaDriver do
     case config.host.cmd.("/bin/sh", args, timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
       {:ok, {output, 0}} ->
         case Regex.run(~r/^symphony-qa-app:(.+)$/m, output) do
-          [_line, executable] -> {:ok, %{executable: executable, digest: nil}}
+          [_line, executable] -> {:ok, %{executable: executable}}
           nil -> remote_app_missing(config, output)
         end
 
@@ -843,118 +838,6 @@ defmodule SymphonyElixir.QaDriver do
 
   defp remote_app_missing(config, output) do
     tool_error("qa_app_missing", "The configured app bundle #{config.app} is not a usable .app on the QA host: #{tail(String.trim(output), 500)}")
-  end
-
-  defp unchanged_build(%{remote?: true}, _built), do: :ok
-
-  defp unchanged_build(_config, built) do
-    with {:ok, digest} <- file_digest(built.executable) do
-      same_build(built.digest, digest)
-    end
-  end
-
-  defp fingerprint_app(config) do
-    with {:ok, bundle} <- resolve_inside(Path.expand(config.app, config.worktree), config.worktree, "qa_bundle_outside_worktree"),
-         :ok <- bundle_directory(bundle, config.app) do
-      fingerprint_bundle(config, bundle)
-    end
-  end
-
-  defp fingerprint_bundle(config, bundle) do
-    with {:ok, name} <- bundle_executable_name(config, bundle),
-         {:ok, executable} <- resolve_inside(Path.join([bundle, "Contents", "MacOS", name]), bundle, "qa_executable_outside_bundle"),
-         {:ok, digest} <- file_digest(executable) do
-      {:ok, %{bundle: bundle, executable: executable, digest: digest}}
-    end
-  end
-
-  # The worktree stays agent-writable after the build, so QA launches a copy in
-  # the driver's private directory. Each build gets its own copy because apps
-  # launched from an earlier one may still be running.
-  defp copy_bundle(config, bundle) do
-    destination = Path.join([config.scratch_dir, "builds", Integer.to_string(System.unique_integer([:positive])), Path.basename(bundle)])
-    File.mkdir_p!(Path.dirname(destination))
-
-    case copy_tree(bundle, destination) do
-      :ok ->
-        {:ok, destination}
-
-      {:error, reason} ->
-        File.rm_rf(Path.dirname(destination))
-        tool_error("qa_bundle_unsafe", "The app bundle could not be copied for launch: #{reason}.")
-    end
-  end
-
-  defp copy_tree(source, destination) do
-    case File.lstat(source) do
-      {:ok, %File.Stat{type: :directory}} ->
-        source |> copy_dir(destination) |> copy_result(source)
-
-      {:ok, %File.Stat{type: :regular}} ->
-        source |> File.cp(destination) |> copy_result(source)
-
-      {:ok, %File.Stat{type: :symlink}} ->
-        copy_symlink(source, destination)
-
-      {:ok, %File.Stat{}} ->
-        {:error, "#{source} is not a file, directory or symlink"}
-
-      error ->
-        copy_result(error, source)
-    end
-  end
-
-  defp copy_dir(source, destination) do
-    with :ok <- File.mkdir(destination),
-         {:ok, entries} <- File.ls(source) do
-      copy_entries(Enum.sort(entries), source, destination)
-    end
-  end
-
-  defp copy_entries([], _source, _destination), do: :ok
-
-  defp copy_entries([entry | rest], source, destination) do
-    case copy_tree(Path.join(source, entry), Path.join(destination, entry)) do
-      :ok -> copy_entries(rest, source, destination)
-      error -> error
-    end
-  end
-
-  defp copy_result({:error, reason}, source) when not is_binary(reason), do: {:error, "#{source}: #{inspect(reason)}"}
-  defp copy_result(result, _source), do: result
-
-  # A relative target without `..` only descends from the link's own directory,
-  # and every other link in the copy obeys the same rule, so it stays inside it.
-  defp copy_symlink(source, destination) do
-    with {:ok, target} <- copy_result(File.read_link(source), source) do
-      if Path.type(target) == :relative and ".." not in Path.split(target) do
-        target |> File.ln_s(destination) |> copy_result(source)
-      else
-        {:error, "#{source} links to #{target}; links in the bundle must be relative and stay inside it"}
-      end
-    end
-  end
-
-  defp resolve_inside(path, root, code) do
-    case PathSafety.canonicalize(path) do
-      {:ok, canonical} ->
-        if String.starts_with?(canonical, root <> "/") do
-          {:ok, canonical}
-        else
-          tool_error(code, "#{path} resolves to #{canonical}, outside #{root}. QA launches only the configured app bundle built in the QA worktree.")
-        end
-
-      {:error, reason} ->
-        tool_error(code, "#{path} could not be resolved: #{inspect(reason)}")
-    end
-  end
-
-  defp bundle_directory(bundle, app) do
-    if String.ends_with?(bundle, ".app") and File.dir?(bundle) do
-      :ok
-    else
-      tool_error("qa_app_missing", "The configured app bundle #{app} is not an .app directory in the QA worktree. Run qa_build and check its output.")
-    end
   end
 
   defp bundle_executable_name(config, bundle) do
@@ -976,25 +859,10 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp file_digest(path) do
-    case File.read(path) do
-      {:ok, bytes} -> {:ok, :crypto.hash(:sha256, bytes)}
-      {:error, reason} -> tool_error("qa_app_missing", "Could not read the app executable #{path}: #{inspect(reason)}")
-    end
-  end
-
   defp fetch_build(driver) do
     case GenServer.call(driver, :build) do
       nil -> tool_error("qa_not_built", "Run qa_build first; qa_launch_app launches only the app the last successful qa_build produced.")
       built -> {:ok, built}
-    end
-  end
-
-  defp same_build(built_digest, digest) do
-    if built_digest == digest do
-      :ok
-    else
-      tool_error("qa_app_changed", "The app executable changed after the last qa_build. Run qa_build again; QA launches only what the build produced.")
     end
   end
 
@@ -1091,10 +959,8 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- fixture files -----------------------------------------------------------
 
-  defp put_file(%{remote?: false}, path, bytes, _name), do: {:ok, %{"path" => path, "bytes" => byte_size(bytes)}}
-
   # The checked bytes travel, not the path, which the agent can still change.
-  defp put_file(config, _path, bytes, name) do
+  defp put_file(config, bytes, name) do
     local = Path.join(config.scratch_dir, "put-#{System.unique_integer([:positive])}")
     File.write!(local, bytes, [:exclusive])
 
@@ -1123,19 +989,6 @@ defmodule SymphonyElixir.QaDriver do
   # Each launch gets its own copy of the checked bytes, so an app still running
   # on an earlier copy keeps it, and later edits in the worktree change nothing.
   defp copy_api_fixtures(_config, nil), do: {:ok, nil}
-
-  defp copy_api_fixtures(%{remote?: false} = config, files) do
-    dest = Path.join(config.scratch_dir, "api-fixtures-#{System.unique_integer([:positive])}")
-    File.mkdir!(dest)
-
-    for {relative, bytes} <- files do
-      path = Path.join(dest, relative)
-      File.mkdir_p!(Path.dirname(path))
-      File.write!(path, bytes, [:exclusive])
-    end
-
-    {:ok, dest}
-  end
 
   defp copy_api_fixtures(config, files) do
     name = "api-fixtures-#{System.unique_integer([:positive])}"
@@ -1182,22 +1035,16 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- checkouts ---------------------------------------------------------------
 
-  # The bundle goes where the clone runs: the private directory locally, the
-  # run directory's `files/` on a QA host.
+  # The bundle goes where the clone runs: the run directory's `files/` on the QA host.
   defp stage_bundle(config, bytes, name) do
     local = Path.join(config.scratch_dir, "checkout-#{System.unique_integer([:positive])}.bundle")
     File.write!(local, bytes, [:exclusive])
+    result = config.host.put.(local, config.host_dir, name <> ".bundle")
+    File.rm(local)
 
-    if config.remote? do
-      result = config.host.put.(local, config.host_dir, name <> ".bundle")
-      File.rm(local)
-
-      case result do
-        {:ok, remote_path} -> {:ok, remote_path}
-        {:error, reason} -> tool_error("qa_put_checkout_failed", "The bundle could not be copied to the QA host: #{reason}")
-      end
-    else
-      {:ok, local}
+    case result do
+      {:ok, remote_path} -> {:ok, remote_path}
+      {:error, reason} -> tool_error("qa_put_checkout_failed", "The bundle could not be copied to the QA host: #{reason}")
     end
   end
 
@@ -1272,11 +1119,11 @@ defmodule SymphonyElixir.QaDriver do
 
   defp appearance_args(appearance), do: Map.get(@appearance_args, appearance, [])
 
-  # The environment that injects the appearance library, built on the machine the app runs on.
+  # The environment that injects the appearance library, built in the run directory on the QA host.
   defp appearance_library(_config, nil), do: {:ok, []}
 
   defp appearance_library(config, appearance) do
-    case if(config.remote?, do: config.host.appearance_library.(config.host_dir), else: config.host.appearance_library.()) do
+    case config.host.appearance_library.(config.host_dir) do
       {:ok, path} ->
         {:ok, [{"DYLD_INSERT_LIBRARIES", path}]}
 
@@ -1459,7 +1306,7 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp health(pid, page, app, new_reports, responding, config) do
+  defp health(pid, page, app, new_reports, responding) do
     where = where(page, app.window)
 
     problems =
@@ -1468,7 +1315,7 @@ defmodule SymphonyElixir.QaDriver do
           app.exit_status && "The app exited with status #{app.exit_status}#{where}. Last output: #{tail(app.output, 2_000)}",
           responding == false && "The app did not answer accessibility requests for 10 seconds#{where}: it is hung.",
           new_reports != [] &&
-            "New crash report#{where} in ~/Library/Logs/DiagnosticReports#{if config.remote?, do: " on the QA host"}: #{Enum.join(new_reports, ", ")}."
+            "New crash report#{where} in ~/Library/Logs/DiagnosticReports on the QA host: #{Enum.join(new_reports, ", ")}."
         ],
         &(&1 in [nil, false])
       )
@@ -1497,7 +1344,7 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- helper -----------------------------------------------------------------
 
-  # A QA host gets its own helper in each pass's run directory; the driver
+  # Each pass gets its own helper in its run directory on the QA host; the driver
   # remembers the path so later calls skip the round trip.
   defp helper(driver, config) do
     case GenServer.call(driver, :helper) do
@@ -1507,7 +1354,7 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   defp build_helper(driver, config) do
-    case if(config.remote?, do: config.host.helper.(config.host_dir), else: config.host.helper.()) do
+    case config.host.helper.(config.host_dir) do
       {:ok, path} ->
         GenServer.call(driver, {:helper, path})
         {:ok, path}
@@ -1520,7 +1367,7 @@ defmodule SymphonyElixir.QaDriver do
   defp require_screen_recording(config, helper) do
     case run_helper(config, helper, ["permissions"]) do
       {:ok, %{"screen_recording" => true}} -> :ok
-      {:ok, _permissions} -> permission_missing(config, "Screen Recording")
+      {:ok, _permissions} -> permission_missing("Screen Recording")
       {:error, _reason} = error -> error
     end
   end
@@ -1534,7 +1381,7 @@ defmodule SymphonyElixir.QaDriver do
   defp run_helper_raw(config, helper, args) do
     case config.host.call_helper.(helper, args, timeout_ms: @helper_timeout_ms, output_limit: @tree_bytes_limit + 1) do
       {:ok, {output, 0}} -> {:ok, output}
-      {:ok, {output, _status}} -> helper_error(config, output)
+      {:ok, {output, _status}} -> helper_error(output)
       {:error, :timeout} -> tool_error("qa_helper_timeout", "The app did not answer the accessibility request within #{@helper_timeout_ms} ms.")
       {:error, reason} -> tool_error("qa_helper_failed", "The QA helper could not run: #{inspect(reason)}")
     end
@@ -1547,10 +1394,10 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp helper_error(config, output) do
+  defp helper_error(output) do
     case Jason.decode(output) do
       {:ok, %{"error" => %{"code" => "accessibility_permission_missing"}}} ->
-        permission_missing(config, "Accessibility")
+        permission_missing("Accessibility")
 
       {:ok, %{"error" => %{"code" => code, "message" => message}}} when is_binary(code) and is_binary(message) ->
         tool_error("qa_" <> code, message)
@@ -1560,17 +1407,13 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp permission_missing(config, grant) do
-    {holder, grantee} =
-      if config.remote?,
-        do: {"SSH on the QA host", "/usr/libexec/sshd-keygen-wrapper on the QA host"},
-        else: {"The Symphony QA Driver helper app", "SymphonyQADriver.app"}
-
+  defp permission_missing(grant) do
     tool_error(
       "qa_permission_missing",
-      "#{holder} has no #{grant} permission, so QA cannot see the app. " <>
-        "#{Checks.blocked_hint()} An operator grants Screen Recording and Accessibility to #{grantee} " <>
-        "once in System Settings > Privacy & Security (see docs/configuration.md, macOS app QA)."
+      "SSH on the QA host has no #{grant} permission, so QA cannot see the app. " <>
+        "#{Checks.blocked_hint()} An operator grants Screen Recording and Accessibility to " <>
+        "/usr/libexec/sshd-keygen-wrapper on the QA host once in System Settings > Privacy & Security " <>
+        "(see docs/configuration.md, macOS app QA)."
     )
   end
 
@@ -1708,7 +1551,7 @@ defmodule SymphonyElixir.QaDriver do
     playbook = Keyword.fetch!(opts, :playbook)
     {:ok, worktree} = PathSafety.canonicalize(Keyword.fetch!(opts, :worktree))
     worker_host = Keyword.get(opts, :worker_host)
-    base_host = if worker_host, do: Remote.host(worker_host), else: Host.default()
+    base_host = if worker_host, do: Remote.host(worker_host), else: %{}
 
     config = %{
       worktree: worktree,
@@ -1717,8 +1560,8 @@ defmodule SymphonyElixir.QaDriver do
       build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms,
       scratch_dir: Checks.private_dir("qa-driver"),
       put_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
-      remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
+      local_uuid: Keyword.get(opts, :local_uuid, &Machine.local_uuid/0),
       git: Keyword.get(opts, :git, &default_git/2),
       start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0),
       status_menu_poll: Keyword.get(opts, :status_menu_poll, @status_menu_poll),
@@ -1746,9 +1589,7 @@ defmodule SymphonyElixir.QaDriver do
     ports
   end
 
-  # A local app reaches the host ports directly, and a QA host Symphony refused
-  # runs no app.
-  defp open_tunnel(%{config: %{remote?: false}} = state, _attempts), do: state
+  # A QA host Symphony refused, or none at all, runs no app.
   defp open_tunnel(%{config: %{unavailable: _error}} = state, _attempts), do: state
 
   defp open_tunnel(state, attempts) do
@@ -1767,16 +1608,46 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # `host_dir` holds the bundle copies, screenshot staging and the app's QA root
-  # wherever the app runs; `build_dir` is where the build runs.
-  defp host_dirs(%{remote?: false} = config, _worker_host) do
-    qa_root = Path.join(config.scratch_dir, "app-root")
-    File.mkdir!(qa_root)
-    Map.merge(config, %{host_dir: config.scratch_dir, build_dir: config.worktree, qa_root: qa_root})
+  # `host_dir` is the pass's run directory on the QA host: bundle copies,
+  # screenshot staging and the app's QA root; `build_dir` is where the build runs.
+  # PR code never runs on the Symphony host, so without a QA host nothing runs.
+  defp host_dirs(config, nil) do
+    Logger.warning("QA driver has no worker_host: macos_app QA runs only in a QA VM")
+
+    unavailable(
+      config,
+      "qa_worker_missing",
+      "No QA VM is set up: `auto_review.worker_host` is unset, and Symphony never builds or runs a PR's macOS app on its own host. " <>
+        "#{Checks.blocked_hint()} An operator sets up a QA VM and names it in `auto_review.worker_host` (see #{@qa_vm_docs})."
+    )
+  end
+
+  # The same hardware is the Symphony Mac under another name (`localhost`, its
+  # `.local` name, a LAN address), whichever user it logs in as.
+  defp host_dirs(config, worker_host) do
+    case Machine.same_machine?(config.host.cmd, config.local_uuid) do
+      {:ok, false} ->
+        prepare(config, worker_host)
+
+      {:ok, true} ->
+        Logger.warning("QA driver refused worker_host=#{worker_host}: it is the Symphony host")
+
+        unavailable(
+          config,
+          "qa_worker_same_machine",
+          "The QA host #{worker_host} is this Mac (the same IOPlatformUUID): QA must run in a VM, never on the Symphony host, " <>
+            "where PR code would run beside the operator's credentials. #{Checks.blocked_hint()} " <>
+            "An operator points `auto_review.worker_host` at a QA VM (see #{@qa_vm_docs})."
+        )
+
+      {:error, reason} ->
+        Logger.warning("QA driver could not tell worker_host=#{worker_host} from the Symphony host: #{reason}")
+        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be checked: #{reason}. #{Checks.blocked_hint()}")
+    end
   end
 
   # Only the operator can read the canary, so a QA host that reads it runs as the operator.
-  defp host_dirs(config, worker_host) do
+  defp prepare(config, worker_host) do
     canary = Path.join(config.scratch_dir, "canary")
     File.write!(canary, "")
     File.chmod!(canary, 0o600)
@@ -1816,8 +1687,8 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
   def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
-  def handle_call({:record_build, fingerprint, ignored}, _from, state),
-    do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}
+  def handle_call({:record_build, built, ignored}, _from, state),
+    do: {:reply, :ok, %{state | build: built, ignored: ignored}}
 
   def handle_call({:record_ignored, ignored}, _from, state), do: {:reply, :ok, %{state | ignored: ignored}}
   def handle_call({:record_pair, pair}, _from, state), do: {:reply, :ok, %{state | pair: pair}}
@@ -1930,14 +1801,14 @@ defmodule SymphonyElixir.QaDriver do
     if state.pair_launches != %{}, do: stop_strays(state.config)
     if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
     if state.tunnel && Port.info(state.tunnel), do: Port.close(state.tunnel)
-    if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
+    if state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
     File.rm_rf(state.config.scratch_dir)
     :ok
   end
 
   defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
-         {stub_url, forwards} = stub_route(state.config, state.stub.port),
+         {stub_url, forwards} = stub_route(state.stub.port),
          launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, app_env(info)), args: info.args, reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
@@ -1956,7 +1827,7 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   defp reopen_tunnel?(state),
-    do: state.config.remote? and state.tunnel == nil and not Map.has_key?(state.config, :unavailable)
+    do: state.tunnel == nil and not Map.has_key?(state.config, :unavailable)
 
   defp tunnel_closed_error(state) do
     tool_error(
@@ -1968,17 +1839,16 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- update feed --------------------------------------------------------------
 
-  # The feed runs where the app does, on a fresh port each attempt, and is ready
-  # once it answers its mode.
+  # The feed runs where the app does, on the QA host, on a fresh port each
+  # attempt, and is ready once it answers its mode.
   defp start_feed(%{feed: %{}} = state, _attempts), do: {:ok, state}
 
   defp start_feed(state, attempts) do
     config = state.config
-    number = feed_port(config)
+    number = Enum.random(@stub_remote_ports)
     {executable, args, log} = ReleasePair.feed_command(config, number)
-    env = if config.remote?, do: [], else: AgentEnv.build()
 
-    case config.host.launch.(executable, cd: ReleasePair.feed_dir(config), env: env, args: args) do
+    case config.host.launch.(executable, cd: ReleasePair.feed_dir(config), env: [], args: args) do
       {:ok, port, os_pid} ->
         feed = %{port: port, os_pid: os_pid, port_number: number, log: log}
 
@@ -2027,15 +1897,6 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp feed_port(%{remote?: true}), do: Enum.random(@stub_remote_ports)
-
-  defp feed_port(_config) do
-    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
-    {:ok, port} = :inet.port(socket)
-    :gen_tcp.close(socket)
-    port
-  end
-
   defp stop_feed(%{feed: nil}), do: :ok
 
   defp stop_feed(%{feed: feed, config: config}) do
@@ -2068,23 +1929,17 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # A local app reaches the stub directly. On a QA host the app's SSH session
-  # forwards a loopback port there back to the stub; a port already taken
-  # fails that launch, and the next one picks another.
-  defp stub_route(%{remote?: false}, port), do: {OpenRouter.Stub.url(port), []}
-
-  defp stub_route(%{remote?: true}, port) do
+  # The app's SSH session forwards a loopback port on the QA host back to the
+  # stub; a port already taken fails that launch, and the next one picks another.
+  defp stub_route(port) do
     remote_port = Enum.random(@stub_remote_ports)
     {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
   # The QA host has its own login environment; only the QA root, the stub's URL
   # and the launch's own variables (the API fixtures' copy, the stand-ins) cross over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, app_env),
+  defp launch_env(%{qa_root: qa_root}, stub_url, app_env),
     do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]
-
-  defp launch_env(config, stub_url, app_env),
-    do: AgentEnv.build_with(Map.new([{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | app_env]))
 
   defp app_env(%{api_fixtures: nil, stand_ins: stand_ins}), do: stand_ins
   defp app_env(%{api_fixtures: dir, stand_ins: stand_ins}), do: [{@api_fixtures_env, dir} | stand_ins]

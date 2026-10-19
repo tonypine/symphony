@@ -242,6 +242,9 @@ defmodule SymphonyElixir.QaAgentTest do
       "/bin/sh", ["-c", _script, "sh", "App"], _opts ->
         {:ok, {"", 0}}
 
+      "/bin/sh", ["-c", _script, "sh", _build_dir, "build/App.app", dest], _opts ->
+        {:ok, {"symphony-qa-app:#{dest}/App.app/Contents/MacOS/App\n", 0}}
+
       "/usr/bin/plutil", _args, _opts ->
         {:ok, {"App\n", 0}}
 
@@ -252,10 +255,38 @@ defmodule SymphonyElixir.QaAgentTest do
     %{
       cmd: cmd,
       call_helper: cmd,
-      helper: fn -> {:ok, "/fake/helper"} end,
+      helper: fn _dir -> {:ok, "/fake/helper"} end,
       launch: fn _executable, _opts -> {:ok, Port.open({:spawn, "cat"}, [:binary]), System.unique_integer([:positive]) + 100_000} end,
       kill: fn _pid -> :ok end
     }
+  end
+
+  # QA driver options for a fake QA VM, another machine than this one, whose run directory is a
+  # temporary directory. `host` overrides its functions.
+  defp qa_vm_opts(host \\ %{}) do
+    run_dir = Path.join(System.tmp_dir!(), "qa-agent-run-#{System.unique_integer([:positive])}")
+    cmd = Map.get(host, :cmd, fn _executable, _args, _opts -> {:ok, {"", 0}} end)
+
+    vm = %{
+      prepare: fn _operator_home, _canary -> File.mkdir_p!(run_dir) && {:ok, run_dir} end,
+      tunnel: fn _ports -> {:ok, Port.open({:spawn, "cat"}, [:binary])} end,
+      ship: fn _tar, dest -> File.mkdir_p!(dest) end,
+      put: fn local, dir, name ->
+        dest = Path.join([dir, "files", name])
+        File.mkdir_p!(Path.dirname(dest))
+        File.cp!(local, dest)
+        {:ok, dest}
+      end,
+      cleanup: fn dir -> File.rm_rf!(dir) && :ok end,
+      kill: fn _pid -> :ok end
+    }
+
+    ioreg = fn
+      "/usr/sbin/ioreg", _args, _opts -> {:ok, {~s(  "IOPlatformUUID" = "99999999-8888-7777-6666-555544443333"\n), 0}}
+      executable, args, opts -> cmd.(executable, args, opts)
+    end
+
+    [worker_host: "qa-vm", host: vm |> Map.merge(host) |> Map.put(:cmd, ioreg), local_uuid: fn -> {:ok, "1A2B3C4D-0000-1111-2222-333344445555"} end]
   end
 
   defp job(attrs \\ %{}) do
@@ -1372,7 +1403,7 @@ defmodule SymphonyElixir.QaAgentTest do
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: FakeSession,
-                 qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+                 qa_driver_opts: qa_vm_opts()
                )
 
       assert_receive {:qa_session_started, _worktree, session_opts}
@@ -1399,19 +1430,14 @@ defmodule SymphonyElixir.QaAgentTest do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      host = %{
-        kill: fn _pid -> :ok end,
-        prepare: fn _operator_home, _canary -> {:ok, "/Users/qa/symphony-qa/run-1"} end,
-        tunnel: fn _ports -> {:error, {:failed, "ssh exited with status 255: Connection refused"}} end,
-        cleanup: fn _dir -> :ok end
-      }
+      host = %{tunnel: fn _ports -> {:error, {:failed, "ssh exited with status 255: Connection refused"}} end}
 
       {result, log} =
         with_log(fn ->
           QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
             git: fake_git(),
             qa_agent_module: FakeSession,
-            qa_driver_opts: [worker_host: "qa-vm", host: host]
+            qa_driver_opts: qa_vm_opts(host)
           )
         end)
 
@@ -1432,7 +1458,7 @@ defmodule SymphonyElixir.QaAgentTest do
             QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
               git: fake_git(),
               qa_agent_module: WidePassSession,
-              qa_driver_opts: [host: wide_pass_host(screen), git: fn _args, _cwd -> {"", 0} end]
+              qa_driver_opts: qa_vm_opts(wide_pass_host(screen)) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
@@ -1477,7 +1503,7 @@ defmodule SymphonyElixir.QaAgentTest do
         QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
           git: fake_git(),
           qa_agent_module: FakeSession,
-          qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+          qa_driver_opts: qa_vm_opts()
         )
       end
 
@@ -1508,7 +1534,7 @@ defmodule SymphonyElixir.QaAgentTest do
             QaAgent.run(epic_job, Config.settings!(),
               git: fake_git(),
               qa_agent_module: session,
-              qa_driver_opts: [host: wide_pass_host({1920, 1200}), git: fn _args, _cwd -> {"", 0} end]
+              qa_driver_opts: qa_vm_opts(wide_pass_host({1920, 1200})) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
@@ -1532,12 +1558,13 @@ defmodule SymphonyElixir.QaAgentTest do
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: PutFileSession,
-                 qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+                 qa_driver_opts: qa_vm_opts()
                )
 
+      # The QA host gets a copy of the checked file in its run directory.
       assert_receive {:put_file, tmp_dir, {:ok, %{"path" => path, "bytes" => 10}}}
-      {:ok, canonical_tmp_dir} = SymphonyElixir.PathSafety.canonicalize(tmp_dir)
-      assert path == Path.join(canonical_tmp_dir, "symphony.yml")
+      assert String.ends_with?(path, "/files/symphony.yml")
+      refute String.starts_with?(path, tmp_dir)
     end
 
     test "gives an android_app pass an Android QA driver and stops it when the pass ends" do

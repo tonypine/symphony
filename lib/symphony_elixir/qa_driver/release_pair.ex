@@ -3,8 +3,8 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   The signed release pair behind `SymphonyElixir.QaDriver`'s `qa_build_release_pair`,
   `qa_launch_app`'s `release_pair`, `qa_relaunched_app` and `qa_update_feed`: release
   N of Symphony.app and its update N+1, built from the QA worktree's `HEAD` by
-  `make -C macos release-pair` (`test/support/README.md`) on the machine the app
-  runs on, so a QA pass can watch N find, verify and install N+1.
+  `make -C macos release-pair` (`test/support/README.md`) on the QA host, where
+  the app runs, so a QA pass can watch N find, verify and install N+1.
 
   Both are signed with the QA host's persistent test identity, which
   `scripts/qa/install-test-signing-identity.sh` installs and trusts once per QA
@@ -15,10 +15,10 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   QA agent reports as `blocked`. The minisign key is the throwaway one the build
   makes.
 
-  Everything lives in the pass's private directory (`host_dir`), never in the
-  worktree: the pair in `release-pair/`, a fresh copy of N for each launch in
+  Everything lives in the pass's run directory on the QA host (`host_dir`), never
+  in the worktree: the pair in `release-pair/`, a fresh copy of N for each launch in
   `pair-launches/<n>/`, the feed server's code (copied from the checkout's
-  `test/support/stubs/`) and its request log in `update-feed/`. On a QA host the
+  `test/support/stubs/`) and its request log in `update-feed/`. The
   build runs in `pair-src/`, a clone of a `git bundle` of the worktree's `HEAD`
   and tags, because the pair's release notes and manifest read git history,
   which a `git archive` leaves out.
@@ -115,12 +115,10 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   def feed_dir(config), do: Path.join(config.host_dir, "update-feed")
 
   @doc """
-  The checkout the pair builds from: the worktree itself on this host; on a QA
-  host a clone of a `git bundle` of its `HEAD` and tags in `pair-src/`.
+  The checkout the pair builds from: a clone on the QA host of a `git bundle` of
+  the worktree's `HEAD` and tags, in `pair-src/`.
   """
   @spec source(map()) :: {:ok, Path.t()} | tool_error()
-  def source(%{remote?: false} = config), do: {:ok, config.build_dir}
-
   def source(config) do
     staging = Path.join(config.scratch_dir, "pair-bundle")
     tar = Path.join(config.scratch_dir, "pair-bundle.tar")

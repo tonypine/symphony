@@ -32,7 +32,8 @@ defmodule SymphonyElixir.Setup do
     Checks.WorkflowFetch,
     Checks.UnclonedRepos,
     Checks.Routing,
-    Checks.Secrets
+    Checks.Secrets,
+    Checks.QaHost
   ]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}

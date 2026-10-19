@@ -315,7 +315,7 @@ defmodule SymphonyElixir.SetupTest do
 
     test "every check names itself, and only the routing check reads Linear" do
       # Each check's id starts each of its problems' ids.
-      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo", "routing", "secret"]
+      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo", "routing", "secret", "qa_host"]
 
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())

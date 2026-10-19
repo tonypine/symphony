@@ -1416,9 +1416,11 @@ Fields:
   non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
   `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
   merged over this map key by key, the repository's value winning.
-- `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
-  `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
-  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
+- `worker_host` (string, optional; required for the `macos_app` playbook): an SSH host
+  (`user@host` or `host:port`, the form `workers.ssh_hosts` uses), a QA VM, where the `macos_app`
+  playbook's `qa_*` tools run. Without it a `macos_app` pass builds and launches nothing: every
+  `qa_*` tool fails with `qa_worker_missing`, which names the QA VM setup, and tells the agent to
+  answer `blocked`. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
 - `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
   Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and
@@ -1466,19 +1468,19 @@ The QA agent:
   run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
   pinned package is missing the pass MUST be `blocked` without starting the agent. With
   `agent.network_access.mode: allowlist` the session also allows `localhost` and `127.0.0.1`.
-- A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
-  outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
-  changes outside `qa-evidence/`, including gitignored files that were not there after the last
-  build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
-  resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
-  directory the agent sandbox cannot write, refused under the same worktree check, always with
-  `SYMPHONY_BAR_QA_ROOT` set to a private directory; with `api_fixtures`, a directory in the QA
+- A pass that runs the `macos_app` playbook also gets `qa_*` tools, executed by Symphony outside
+  the agent sandbox on the QA VM (`worker_host`): `qa_build` (only the configured `build`, refused
+  when the worktree has changes outside `qa-evidence/`, including gitignored files that were not
+  there after the last build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
+  resolved inside the build directory, launched from a copy the last successful `qa_build` made in
+  the pass's run directory on the QA host, refused under the same worktree check, always with
+  `SYMPHONY_BAR_QA_ROOT` set to a private directory there; with `api_fixtures`, a directory in the QA
   worktree, also with `SYMPHONY_BAR_QA_API_FIXTURES` set to a copy of it where the app runs, which
   MUST resolve inside the worktree and hold only regular files without other hard links, of bounded
   total size, and MUST hold no symlinks), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
-  can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
-  directory there), and `qa_put_checkout`, which clones a git bundle the agent wrote into a
+  can open for a fixture file the agent wrote (a copy in the pass's run directory on the QA
+  host), and `qa_put_checkout`, which clones a git bundle the agent wrote into a
   checkout there, without hooks, with `origin` set to the GitHub URL the agent names.
   `qa_launch_app` MAY point the app, in QA mode only, at stand-ins on the pass's host ports: a
   fake `gh` that Symphony itself provides (never a script the agent wrote) forwarding each call to
@@ -1510,15 +1512,9 @@ The QA agent:
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
   the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
-  `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
-  app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
-  Symphony or the agents it spawns. The helper MUST answer only the Symphony process that opened
-  it, MUST NOT accept an owner that another Symphony process started, and MUST NOT run a screenshot
-  or accessibility command that its own server did not start. The helper MUST NOT tell Symphony
-  from an agent by the process tree alone: it MUST accept an owner only on proof the agent sandbox
-  cannot forge (an owner file in a fixed run directory the sandbox cannot write), and Symphony
-  MUST NOT put the helper's socket in a directory an agent can write. Other tool scopes MUST NOT
-  list or run the `qa_*` tools.
+  `blocked`. Screen Recording and Accessibility are granted on the QA host only, never to
+  Symphony or the agents it spawns on the Symphony host. Other tool scopes MUST NOT list or run
+  the `qa_*` tools.
 - A pass that runs the `android_app` playbook takes the Android emulator's lease and gets host-side
   `qa_android_*` tools. The agent runs the playbook's `build` in its own sandbox; these tools MUST
   NOT run it, Gradle or any other repository command on the host, only adb against Symphony's
@@ -1552,21 +1548,26 @@ The QA agent:
   the `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
   device tool itself, and to mark a step that needs an Android device `blocked` when no
   `android_app` playbook runs in the pass.
-- With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
-  screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
-  worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
-  local `qa-evidence/`. The accessibility helper MUST be compiled into that pass's own run
-  directory, never shared with a later pass. Before a pass uses the host, Symphony MUST refuse one
-  that can open the operator's `~/.ssh`, read their `~/.config/gh/hosts.yml` or login Keychain,
-  read a file only the operator can read, or holds push credentials of its own (a private key in `~/.ssh`, GitHub CLI
-  credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
-  with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
-  agent to answer `blocked`.
+- The `macos_app` build, the app, screenshots and accessibility calls MUST run on the
+  `worker_host` over SSH, never on the Symphony host, where PR code would run with the operator's
+  access; the worktree checks MUST stay on the Symphony host. `qa_build` ships the worktree's
+  `HEAD` into a fresh build directory there, and screenshots are copied back into the local
+  `qa-evidence/`. The accessibility helper MUST be compiled into that pass's own run directory,
+  never shared with a later pass. Before a pass uses the host, Symphony MUST refuse one that is
+  the Symphony host itself under any name (`localhost`, a loopback address, its `.local` name, a
+  LAN address), told by the hardware: the `IOPlatformUUID` that `ioreg -rd1 -c
+  IOPlatformExpertDevice` prints over SSH there matches this host's (`qa_worker_same_machine`; a
+  Symphony host that is not a Mac has none and matches no QA host). It MUST also refuse one that
+  can open the operator's `~/.ssh`, read their `~/.config/gh/hosts.yml` or login Keychain, read a
+  file only the operator can read, or holds push credentials of its own (a private key in
+  `~/.ssh`, GitHub CLI credentials, a global git credential helper or a forwarded SSH agent)
+  (`qa_worker_unsafe`). A host whose hardware UUID cannot be read, or that cannot be reached, is
+  refused too (`qa_worker_unreachable`). The `qa_*` tools then fail with that code and tell the
+  agent to answer `blocked`; nothing is built or launched.
 - A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
   and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. The
   playbook's `build` MUST get the same `QA_HOST_PORTS` in its environment, unless the forwards
-  could not open. With
-  `worker_host` set, Symphony MUST forward each of them from the QA host's loopback to the same
+  could not open. Symphony MUST forward each of them from the QA host's loopback to the same
   port on the Symphony host's `127.0.0.1` for the whole pass (one `ssh -R` session per pass, with
   `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
   `blocked` with the reason before the agent starts.
@@ -4779,7 +4780,11 @@ Minimum endpoints:
     each whole-value `$NAME` in `symphony.yml` whose variable is unset or empty (an MCP server's
     `env` and `headers`, a notification channel's `url`, `webhook_url` and `headers`, and
     `github.webhooks.secret` while no handed-off secret file stands in for it), and the GitHub CLI
-    signed in when a repo is a `workspace.source` repo.
+    signed in when a repo is a `workspace.source` repo; and where `macos_app` QA runs: a repo
+    whose playbooks include `macos_app` while `auto_review.worker_host` is unset, and a
+    `worker_host` whose `IOPlatformUUID` (read over SSH) is this host's (each an `error` with an
+    `open` `symphony_yml` fix whose `url` is the QA VM docs). The `worker_host` is read only when a
+    repo runs `macos_app`; one that can't be read leaves that check in `not_checked`.
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with

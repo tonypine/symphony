@@ -1,8 +1,9 @@
 defmodule SymphonyElixir.QaDriver.Remote do
   @moduledoc """
-  The OS boundary of `SymphonyElixir.QaDriver` on a separate QA host
-  (`auto_review.worker_host`): a dedicated macOS VM or macOS user reached with
-  `SymphonyElixir.SSH`, the transport `workers.ssh_hosts` uses.
+  The OS boundary of `SymphonyElixir.QaDriver`: the QA host
+  (`auto_review.worker_host`), a dedicated macOS VM reached with
+  `SymphonyElixir.SSH`, the transport `workers.ssh_hosts` uses. `QaDriver` refuses
+  one that is the Symphony host itself (`SymphonyElixir.QaDriver.Machine`).
 
   Every command runs on the QA host as `sh -c <script> sh <args...>`, with each
   argument shell-quoted. Symphony owns one `0700` run directory per pass under
@@ -264,10 +265,8 @@ defmodule SymphonyElixir.QaDriver.Remote do
   @doc "Path of the Swift helper in the run directory `dir` on the QA host, compiling it there on first use."
   @spec helper(String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def helper(ssh_host, dir) do
-    {_hash, source} = Host.helper_source()
-
     if Regex.match?(@run_dir, dir) do
-      compile_helper(ssh_host, dir, source)
+      compile_helper(ssh_host, dir, Host.helper_source())
     else
       {:error, {:not_a_run_dir, dir}}
     end
