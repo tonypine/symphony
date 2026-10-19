@@ -1371,7 +1371,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp fetch_due_repo_if_needed(nil), do: :not_due
 
-  # The poll log keeps what the poll fetched for the Setup routing check, which reads no issues itself.
+  # The poll log keeps what the poll fetched for the Setup routing check, which reads no issues itself,
+  # and for `RepoTeams`, whose last way to find a repo's team is the team of its polled issues.
   defp fetch_due_repo_if_needed(repo) do
     repo_name = repo_name(repo)
     {repo_name, PollLog.record(repo, Tracker.fetch_candidate_issues_for_repo(repo))}

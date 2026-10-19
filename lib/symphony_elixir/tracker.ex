@@ -47,13 +47,21 @@ defmodule SymphonyElixir.Tracker do
           team_key: String.t() | nil
         }
 
-  @typedoc "A Linear project a repo route can name: by its id, its slug id or its name."
-  @type project :: %{id: String.t() | nil, name: String.t() | nil, slug_id: String.t() | nil}
+  @typedoc """
+  A Linear project a repo route can name: by its id, its slug id or its name. `team_keys` are the
+  keys of the teams it belongs to, which `SymphonyElixir.RepoTeams` reads for a project-routed repo.
+  """
+  @type project :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          slug_id: String.t() | nil,
+          team_keys: [String.t()]
+        }
 
   @typedoc "A Linear team a repo route can name: by its key or its id."
   @type team :: %{id: String.t() | nil, key: String.t() | nil, name: String.t() | nil}
 
-  @typedoc "The workspace's projects and teams, read together for the Setup routing check."
+  @typedoc "The workspace's projects and teams, read together for the Setup routing and teams checks."
   @type projects_and_teams :: %{projects: [project()], teams: [team()]}
 
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}

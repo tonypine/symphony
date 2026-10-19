@@ -957,7 +957,8 @@ Fields:
     them 3 seconds later; only that read decides, through the same decision table as the timed
     poll, and only a read writes a green head. A `push` to a base branch re-reads every open
     watched PR on it, 1 second apart; a `ping` reads every watched PR. A published `release` of the
-    app's repository records its newest release, which the timed poll also reads. Polling stays
+    app's repository records its newest release, which the timed poll also reads and
+    `/api/v1/state` reports to the app under `app_update.latest_release`. Polling stays
     on: every `fallback_poll_interval_ms` while deliveries are healthy, and every
     `pull_requests.poll_interval_ms` once a read finds a change no delivery reported.
 
@@ -1892,7 +1893,8 @@ not require recognizing or validating extension fields unless that extension is 
   `issues.states.epic_review`, `issues.states.ci_fix`: the machine-owned phase states, string or
   null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
   MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
-  and create it when it is missing, logging what it created; a missing one MUST be reported with its
+  (the `issues` team and each repository's teams: its `route.team`, else the teams of the projects
+  its route names, else the teams of the issues its polls returned) and create it when it is missing, logging what it created; a missing one MUST be reported with its
   exact name and the `issues.states.*` key to point at the new name before it is created. The
   machine (see 7.6) dispatches from and moves into them.
 - `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
@@ -2703,7 +2705,10 @@ An issue is dispatch-eligible only if all are true:
     commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
     `ahead` nor `identical`). Its `blocked` entry has `kind: "app_update"` and a `reason` such as
     "waiting for an app update: MT-15 merged in `9f54098`, running `d3d301b`", and
-    `app_update.unblocks` counts these issues. Blockers merged in another repository, a build from a
+    `app_update.unblocks` counts these issues, and `app_update.latest_release` reports the newest
+    published release of the repository the app updates from (`repo`, `tag`, `published_at`,
+    `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
+    at once instead of waiting for its own timer. Blockers merged in another repository, a build from a
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
     the issue at once. A lookup that fails releases it too, as before.
 - Parent rule passes:
@@ -4540,7 +4545,11 @@ Minimum endpoints:
           "summary": "MT-658 waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`"
         }
       ],
-      "app_update": {"unblocks": 1, "issue_identifiers": ["MT-658"]},
+      "app_update": {
+        "unblocks": 1,
+        "issue_identifiers": ["MT-658"],
+        "latest_release": {"repo": "tonypine/symphony", "tag": "v0.0.1.583", "published_at": "2026-02-24T18:00:00Z", "source": "webhook"}
+      },
       "forced": [
         {
           "issue_id": "vwx234",
@@ -4779,7 +4788,11 @@ Minimum endpoints:
     each whole-value `$NAME` in `symphony.yml` whose variable is unset or empty (an MCP server's
     `env` and `headers`, a notification channel's `url`, `webhook_url` and `headers`, and
     `github.webhooks.secret` while no handed-off secret file stands in for it), and the GitHub CLI
-    signed in when a repo is a `workspace.source` repo.
+    signed in when a repo is a `workspace.source` repo; and a repo with no Linear team, so self-heal
+    can't file its fix tickets and its states and labels are never checked (an `error`), or without
+    `route.team` whose team is only found through Linear, its projects' teams (from the same read
+    of the workspace's projects) or its polled issues' (a `warning`, with a `config_edit` fix setting
+    `repositories[<key>].route.team` when that is exactly one team).
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with

@@ -117,7 +117,7 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&dispatch_skipped_payload/1),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
-          app_update: app_update_payload(blocked),
+          app_update: WatchPayload.app_update(blocked, PrWatch.Release.latest()),
           forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
           concurrency: Map.get(snapshot, :concurrency),
           claimed: Map.get(snapshot, :claimed, []),
@@ -1262,11 +1262,6 @@ defmodule SymphonyElixirWeb.Presenter do
   defp blocked_summary(identifier, nil, blockers), do: "#{identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
 
   # Tickets an app update would release: each one waits only for the running app to include a fix.
-  defp app_update_payload(blocked) do
-    identifiers = for %{kind: :app_update, identifier: identifier} <- blocked, do: identifier
-    %{unblocks: length(identifiers), issue_identifiers: identifiers}
-  end
-
   defp forced_payload(entry) do
     status = %{
       phase: Map.get(entry, :phase),

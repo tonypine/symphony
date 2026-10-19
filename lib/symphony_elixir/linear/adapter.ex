@@ -262,7 +262,8 @@ defmodule SymphonyElixir.Linear.Adapter do
   """
 
   # The Setup routing check reads every project and team once per run, to tell a route value Linear
-  # doesn't have from a near miss of one it does.
+  # doesn't have from a near miss of one it does. A project's teams give a project-routed repo its
+  # team (`SymphonyElixir.RepoTeams`); past a few, all that matters is that there are several.
   @projects_and_teams_query """
   query SymphonyProjectsAndTeams {
     projects(first: 250) {
@@ -270,6 +271,11 @@ defmodule SymphonyElixir.Linear.Adapter do
         id
         name
         slugId
+        teams(first: 10) {
+          nodes {
+            key
+          }
+        }
       }
     }
     teams(first: 250) {
@@ -774,7 +780,7 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
-  @doc "Every project (id, name, slug id) and team (id, key, name) in the workspace, in one request."
+  @doc "Every project (id, name, slug id, its teams' keys) and team (id, key, name) in the workspace, in one request."
   @spec projects_and_teams() :: {:ok, Tracker.projects_and_teams()} | {:error, term()}
   def projects_and_teams do
     with {:ok, response} <- client_module().graphql(@projects_and_teams_query, %{}),
@@ -782,13 +788,18 @@ defmodule SymphonyElixir.Linear.Adapter do
          teams when is_list(teams) <- get_in(response, ["data", "teams", "nodes"]) do
       {:ok,
        %{
-         projects: Enum.map(projects, &%{id: &1["id"], name: &1["name"], slug_id: &1["slugId"]}),
+         projects: Enum.map(projects, &project/1),
          teams: Enum.map(teams, &%{id: &1["id"], key: &1["key"], name: &1["name"]})
        }}
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :projects_unavailable}
     end
+  end
+
+  defp project(node) do
+    team_keys = for team <- List.wrap(get_in(node, ["teams", "nodes"])), is_binary(team["key"]), do: team["key"]
+    %{id: node["id"], name: node["name"], slug_id: node["slugId"], team_keys: team_keys}
   end
 
   @doc "Creates the label `label_name` in the team `team` (a key or an id), and returns it."

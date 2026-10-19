@@ -222,7 +222,8 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     end
 
     test "a slug route whose tickets carry only the project id is a routing error until its fix is applied" do
-      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      # The `issues` team gives every repo its team, so only routing problems show.
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
       project_id = "8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"
       Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [%{id: project_id, name: "Symphony", slug_id: "a1abb875ac02"}])
       Application.put_env(:symphony_elixir, :memory_tracker_teams_list, [%{id: "team-tp", key: "TP", name: "Tony Pine"}])

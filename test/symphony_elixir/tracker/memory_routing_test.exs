@@ -23,7 +23,23 @@ defmodule SymphonyElixir.Tracker.MemoryRoutingTest do
 
       Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@project])
       Application.put_env(:symphony_elixir, :memory_tracker_teams_list, [%{id: "t1", key: "TP", name: "Tony Pine"}])
-      assert Memory.projects_and_teams() == {:ok, %{projects: [@project], teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]}}
+      assert Memory.projects_and_teams() == {:ok, %{projects: [Map.put(@project, :team_keys, [])], teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]}}
+    end
+
+    test "a seeded project without team keys is in the teams of its issues" do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: "i1", team: %{key: "TP", name: nil}, project: %{id: @project.id, name: nil, slug_id: nil}},
+        %Issue{id: "i2", team: %{key: "OPS", name: nil}, project: %{id: nil, name: "Symphony", slug_id: nil}},
+        %Issue{id: "i3", team: %{key: "TP", name: nil}, project: %{id: "other", name: nil, slug_id: nil}},
+        %Issue{id: "i4", team: nil, project: %{id: @project.id, name: nil, slug_id: nil}},
+        %Issue{id: "i5", team: %{key: "TP", name: nil}, project: nil}
+      ])
+
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@project, %{id: "seeded", team_keys: ["WEB"]}])
+
+      assert {:ok, %{projects: [%{team_keys: ["TP", "OPS"]}, %{id: "seeded", team_keys: ["WEB"]}]}} = Memory.projects_and_teams()
     end
 
     test "passes on a configured error" do
@@ -43,6 +59,7 @@ defmodule SymphonyElixir.Tracker.MemoryRoutingTest do
         issues_file,
         Jason.encode!([
           %{"kind" => "project", "id" => @project.id, "name" => "Symphony", "slug_id" => "a1abb875ac02"},
+          %{"kind" => "project", "id" => "p2", "name" => "Ops", "teams" => ["OPS", 7]},
           %{"kind" => "team", "id" => "t1", "key" => "TP", "name" => "Tony Pine"},
           %{"id" => "issue-1", "identifier" => "TP-1", "state" => "Todo", "team" => %{"key" => "TP"}, "project" => %{"id" => @project.id}},
           %{"id" => "issue-2", "identifier" => "TP-2", "state" => "Todo", "project" => "not a map"}
@@ -51,7 +68,12 @@ defmodule SymphonyElixir.Tracker.MemoryRoutingTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_memory_issues_file: "issues.json")
 
-      assert Memory.projects_and_teams() == {:ok, %{projects: [@project], teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]}}
+      assert Memory.projects_and_teams() ==
+               {:ok,
+                %{
+                  projects: [Map.put(@project, :team_keys, ["TP"]), %{id: "p2", name: "Ops", slug_id: nil, team_keys: ["OPS"]}],
+                  teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]
+                }}
 
       assert {:ok, [first, second]} = Memory.fetch_candidate_issues()
       assert first.team == %{key: "TP", name: nil}
