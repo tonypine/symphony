@@ -37,6 +37,8 @@ When logging Codex execution lifecycle events, include:
   `pr_watch.competitors_unlinked` (`unlinked=`), both with issue context.
 - `WorkspaceCleanup`: removes ended issues' workspaces outside the orchestrator. A removal task that crashes logs `Workspace cleanup failed:`, and one that cannot start logs `Failed to start workspace cleanup:`, both with issue context, `worker_host=` and `reason=`.
 - `PrWatch.Repo`: a ticket that turns silent logs one `pr_watch.silent_wait` line with issue context, `repo_key=`, `phase=`, `since=`, `rule=`, `bound=` and `reason=` (`docs/pr-ci-decisions.md#silent-waits`); a read that leaves under a tenth of GitHub's rate limit logs `pr_watch.rate_limit_low`.
+- `QaVerification`: a blocked QA pass logs `QA blocked for` with issue context, `head=`, `model=`,
+  `needs_person=`, `playbooks=`, the attempt, `retrying` or `self-healing`, and the block's reason.
 - `Codex.AppServer`: log session start/completion/error with issue context and `session_id`.
 - `McpServer`: log JSON decode/framing failures, handler crashes, and response-send failures with MCP method, tool name, request ID, MCP session ID, payload byte size, and transport when available. Raw payload logging must stay redacted and preview-limited.
 

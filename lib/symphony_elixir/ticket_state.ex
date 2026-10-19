@@ -45,12 +45,16 @@ defmodule SymphonyElixir.TicketState do
           set_at: DateTime.t() | nil
         }
 
-  @typedoc "A verdict record binds an outcome to the head SHA it judged."
+  @typedoc """
+  A verdict record binds an outcome to the head SHA it judged. `details` is what the verdict
+  recorded about itself, such as a QA block's reason and the model it ran on; empty when none.
+  """
   @type verdict :: %{
           kind: String.t(),
           head_sha: String.t() | nil,
           outcome: String.t(),
-          recorded_at: DateTime.t() | nil
+          recorded_at: DateTime.t() | nil,
+          details: map()
         }
 
   @typedoc "One entry of the signals ledger."
@@ -422,16 +426,17 @@ defmodule SymphonyElixir.TicketState do
   end
 
   @doc """
-  Records a verdict bound to the head SHA it judged. A verdict is a decision recorded, so the runs
-  dispatched before it are no longer counted as a loop.
+  Records a verdict bound to the head SHA it judged, with the `details` it carries. A verdict is a
+  decision recorded, so the runs dispatched before it are no longer counted as a loop.
   """
-  @spec record_verdict(t(), String.t(), String.t() | nil, String.t(), DateTime.t()) :: t()
-  def record_verdict(record, kind, head_sha, outcome, at \\ DateTime.utc_now()) do
+  @spec record_verdict(t(), String.t(), String.t() | nil, String.t(), DateTime.t(), map()) :: t()
+  def record_verdict(record, kind, head_sha, outcome, at \\ DateTime.utc_now(), details \\ %{}) do
     verdict = %{
       kind: normalize_string(kind) || "",
       head_sha: normalize_string(head_sha),
       outcome: normalize_string(outcome) || "",
-      recorded_at: at
+      recorded_at: at,
+      details: Map.new(details || %{})
     }
 
     record
@@ -672,12 +677,17 @@ defmodule SymphonyElixir.TicketState do
         kind: kind,
         head_sha: map_string(verdict, :head_sha),
         outcome: map_string(verdict, :outcome) || "",
-        recorded_at: map_datetime(verdict, :recorded_at)
+        recorded_at: map_datetime(verdict, :recorded_at),
+        details: verdict_details(Map.get(verdict, :details))
       }
     ]
   end
 
   defp normalize_verdict(_verdict), do: []
+
+  # Verdicts recorded before verdicts carried details have none.
+  defp verdict_details(details) when is_map(details), do: details
+  defp verdict_details(_details), do: %{}
 
   defp normalize_ci_states(states) when is_list(states) do
     states
