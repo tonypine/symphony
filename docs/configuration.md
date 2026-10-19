@@ -993,8 +993,10 @@ Per-server declaration:
 **Env-var expansion** in `env` and `headers`: a value that is exactly `$NAME` (where `NAME` matches
 `[A-Za-z_][A-Za-z0-9_]*`) is resolved from the orchestrator's environment at config-load time.
 A set var substitutes the value; an empty var drops the entry; a missing var keeps the literal
-`$NAME` (so misconfigurations surface at the MCP server's own startup). Embedded references
-(`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose the literal.
+`$NAME` (so misconfigurations surface at the MCP server's own startup), and Setup
+(`GET /api/v1/setup`) reports it as a `secrets` error naming the key and the variable. Embedded
+references (`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose
+the literal.
 
 **Runtime-specific wiring:**
 

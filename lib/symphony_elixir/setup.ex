@@ -9,14 +9,15 @@ defmodule SymphonyElixir.Setup do
   `checked_at` (null until the first run ends) and `linear_checked_at`.
 
   A check that can't run is not a failure. Without a Linear API key every Linear-side check is listed
-  under `not_checked`. When Linear can't be reached, the Linear-side problems of the last run that
-  reached it are kept, and `linear_checked_at` says when that run was.
+  under `not_checked`, and the secrets check reports the missing key. When Linear can't be reached,
+  the Linear-side problems of the last run that reached it are kept, and `linear_checked_at` says
+  when that run was.
   """
 
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, Secret, Workflow}
+  alias SymphonyElixir.{Config, Workflow}
   alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.Setup.{Checks, Problem, TeamCache}
 
@@ -24,7 +25,14 @@ defmodule SymphonyElixir.Setup do
   @reload_debounce_ms 1_000
   @refresh_timeout_ms 60_000
 
-  @checks [Checks.DeprecatedKeys, Checks.FailedReload, Checks.WorkflowRef, Checks.WorkflowFetch, Checks.UnclonedRepos]
+  @checks [
+    Checks.DeprecatedKeys,
+    Checks.FailedReload,
+    Checks.WorkflowRef,
+    Checks.WorkflowFetch,
+    Checks.UnclonedRepos,
+    Checks.Secrets
+  ]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}
   @type payload :: %{
@@ -250,20 +258,7 @@ defmodule SymphonyElixir.Setup do
     end
   end
 
-  # The memory tracker stands in for Linear in tests and needs no key.
-  defp linear_api_key?(opts) do
-    case Keyword.fetch(opts, :linear_api_key?) do
-      {:ok, value} ->
-        value
-
-      :error ->
-        case Config.settings() do
-          {:ok, %{tracker: %{kind: "memory"}}} -> true
-          {:ok, %{tracker: %{api_key: key}}} -> Secret.present?(key)
-          {:error, _reason} -> false
-        end
-    end
-  end
+  defp linear_api_key?(opts), do: Keyword.get_lazy(opts, :linear_api_key?, &Checks.Secrets.linear_api_key?/0)
 
   defp now(opts), do: Keyword.get(opts, :now, &DateTime.utc_now/0).()
 

@@ -205,6 +205,45 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       assert build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("setup") == problems
     end
 
+    test "an unset $VAR a notification channel names is a secrets error without a value until it is set" do
+      previous = System.get_env("SLACK_URL")
+      System.delete_env("SLACK_URL")
+      on_exit(fn -> restore_env("SLACK_URL", previous) end)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        notifications: %{enabled: true, channels: [%{kind: "slack", url: "$SLACK_URL", events: ["run_failed"]}]}
+      )
+
+      assert %{"problems" => [problem]} = refresh() |> json_response(200)
+
+      assert %{
+               "id" => "secret:notifications.channels[0].url",
+               "severity" => "error",
+               "category" => "secrets",
+               "fix" => %{"kind" => "open", "target" => "settings"}
+             } = problem
+
+      assert %{"label" => "Key", "value" => "notifications.channels[0].url"} in problem["details"]
+      assert %{"label" => "Variable", "value" => "SLACK_URL"} in problem["details"]
+
+      System.put_env("SLACK_URL", "https://hooks.slack.test/services/T0/B0/sekret")
+      refresh()
+      conn = build_conn() |> get("/api/v1/setup")
+      assert %{"problems" => []} = json_response(conn, 200)
+      refute conn.resp_body =~ "sekret"
+    end
+
+    test "without a Linear API key the payload holds one secrets error for it" do
+      previous = System.get_env("LINEAR_API_KEY")
+      System.delete_env("LINEAR_API_KEY")
+      on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+
+      assert %{"problems" => [%{"id" => "secret:LINEAR_API_KEY", "severity" => "error", "title" => "Symphony can't read Linear: no ticket is picked up"}]} =
+               refresh() |> json_response(200)
+    end
+
     test "a refresh is refused from another site's page, and takes no other method" do
       assert refresh([{"content-type", "application/json"}, {"origin", "https://evil.example.com"}]).status == 403
       assert build_conn() |> get("/api/v1/setup/refresh") |> json_response(405)

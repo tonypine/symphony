@@ -123,6 +123,8 @@ defmodule SymphonyElixir.SetupTest do
     FetchLog.record("default", :ok)
     Application.put_env(:symphony_elixir, :setup_test_pid, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    # A managed repo has the secrets check ask `gh` whether it is signed in.
+    Application.put_env(:symphony_elixir, :setup_gh_runner, fn ["auth", "status"], _opts -> {"Logged in to github.com\n", 0} end)
 
     Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, [
       %{id: "s1", name: "Todo", team_id: "t1", team_key: "TP"},
@@ -135,7 +137,8 @@ defmodule SymphonyElixir.SetupTest do
             :setup_test_teams,
             :memory_tracker_recipient,
             :memory_tracker_workflow_states_list,
-            :memory_tracker_labels_list
+            :memory_tracker_labels_list,
+            :setup_gh_runner
           ],
           do: Application.delete_env(:symphony_elixir, key)
     end)
@@ -309,7 +312,7 @@ defmodule SymphonyElixir.SetupTest do
 
     test "every check names itself and reads no Linear" do
       # Each check's id starts each of its problems' ids.
-      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo"]
+      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo", "secret"]
 
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())
@@ -351,13 +354,13 @@ defmodule SymphonyElixir.SetupTest do
       assert problem.consequence =~ "Symphony clones acme/app into"
     end
 
-    test "without a Linear API key the Linear-side checks are not checked, never problems" do
+    test "without a Linear API key the Linear-side checks are not checked, and the secrets check reports the key" do
       previous = System.get_env("LINEAR_API_KEY")
       System.delete_env("LINEAR_API_KEY")
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
       write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
 
-      assert %{problems: [], not_checked: [not_checked]} = Setup.check(checks: [LinearStub | Setup.checks()])
+      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked]} = Setup.check(checks: [LinearStub | Setup.checks()])
       assert not_checked.id == "linear_stub"
       assert not_checked.reason =~ "No Linear API key"
       refute_received {:ran, LinearStub}
