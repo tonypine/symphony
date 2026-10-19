@@ -27,10 +27,11 @@ defmodule SymphonyElixir.QaAgent do
   `android_app` playbook gets the `qa_android_*` tools of a
   `SymphonyElixir.QaAndroid.Driver` in the same way, which uninstalls its apps and
   gives the emulator back when the pass ends. A pass that runs the
-  `web` playbook starts `verification.dev_server` on a pooled port from a second
-  worktree at the PR head (a server that fails its health check makes the pass
-  `blocked`), and its session alone gets a `browser` MCP server: headless Playwright
-  limited to the dev server's localhost origins, or the playbook's `browser_mcp`.
+  `web` playbook, or a playbook with `dev_server: true`, starts `verification.dev_server` on a
+  pooled port from a second worktree at the PR head, outside the agent's sandbox (a server that
+  fails its health check makes the pass `blocked`). A `web` pass's session alone gets a
+  `browser` MCP server: headless Playwright limited to the dev server's localhost origins, or
+  the playbook's `browser_mcp`.
   Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
   session gets as `CLAUDE_CODE_TMPDIR` and a Codex session as `TMPDIR`, so the agent's
   `$TMPDIR` is in it rather than in the `/tmp/claude-<uid>` every Claude session shares or
@@ -219,7 +220,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
-    #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
+    #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(job)}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     #{qa_jobs_section()}
     Playbooks to follow:
 
@@ -242,13 +243,23 @@ defmodule SymphonyElixir.QaAgent do
     a fake CLI, a stub service, a checkout, a folder or a driver tool the QA setup lacks is fixed by
     an agent through a fix ticket. Leave it false too when the cause is the build or the code.
 
-    A step whose real path needs a paid AI service, real credentials or a backend the QA host does
-    not run (a database, a toolchain to build a bundled server or CLI) is never `blocked` for want
-    of them, and never gets a real key: run the app against a stand-in you serve where the playbook
-    lets a server listen, such as a stub of the project's API answering with what the real path
-    would store, and judge what the app shows `pass` or `fail`. In `details`, name what the
-    stand-in replaced and the CI check that covers the real path. Mark the step `blocked` only when
-    the app cannot be pointed at a stand-in.
+    A step whose real path needs a paid AI service, real credentials or another outside service (a
+    third-party API, GitHub, Linear) is never `blocked` for want of them, and never gets a real
+    key: run the app against a stand-in you serve where the playbook lets a server listen,
+    answering with what the outside service would, and judge what the app shows `pass` or `fail`.
+    In `details`, name what the stand-in replaced and the CI check that covers the real path. Mark
+    the step `blocked` only when the app cannot be pointed at a stand-in.
+
+    Never stand in for the system under test: the project's own server, API or CLI, and the
+    database it stores in, are what the change runs on, and a stub you write of them judges the
+    stub, not the PR. Run the real one built from this PR head (the dev server below, when Symphony
+    started one), or use only the fixtures the playbook names. When it cannot build or start (a
+    missing toolchain, a database that refuses to start), mark each step that needs it `blocked`
+    with the error in `details`: that is never a reason to write a stub of it. Your sandbox cannot
+    use System V shared memory, so a database such as Postgres cannot start inside it (`initdb`
+    fails with `could not create shared memory segment: Operation not permitted`); do not try. A
+    playbook with `dev_server: true` has Symphony run the project's server, and its database,
+    outside your sandbox.
 
     When a QA tool or capability is missing and an open ticket already tracks adding it (one named
     in the issue, its comments or its relations), put that ticket's identifier in `covered_by`, so
@@ -671,16 +682,19 @@ defmodule SymphonyElixir.QaAgent do
     "\nNo HTML screens or image files are attached to this ticket or its parent: use the documents and the design docs above.\n"
   end
 
-  defp dev_server_section(url) when is_binary(url) do
+  defp dev_server_section(%{dev_server_url: url} = job) when is_binary(url) do
+    reach = if web_playbook(job), do: "The `browser` MCP server and your shell can reach it.", else: "Your shell can reach it."
+
     """
 
     Dev server:
-    Symphony started the project's dev server for this PR head at #{url} and stops it when the
-    pass ends. The `browser` MCP server can reach it.
+    Symphony started the project's dev server for this PR head at #{url}, from its own worktree
+    and outside your sandbox, and stops it when the pass ends. #{reach} It is the real server
+    built from this PR: do not start a second one, and do not serve a stand-in for it.
     """
   end
 
-  defp dev_server_section(_url), do: ""
+  defp dev_server_section(_job), do: ""
 
   # The `macos_app` playbook says how to use them.
   defp host_ports_section([_port | _rest] = ports) do
@@ -910,12 +924,13 @@ defmodule SymphonyElixir.QaAgent do
       "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
   end
 
-  # Only a pass that runs the `web` playbook starts the dev server. It runs from its own
-  # worktree at the PR head, so its build output never lands in the agent's worktree (where
-  # `qa_build` refuses untracked files), and is stopped, with its port released, when the
-  # pass ends.
+  # Only a pass that runs the `web` playbook, or one with `dev_server: true`, starts the dev
+  # server. It runs from its own worktree at the PR head, so its build output never lands in the
+  # agent's worktree (where `qa_build` refuses untracked files), and outside the agent's sandbox,
+  # which keeps a database such as Postgres from starting (TP-1092). It is stopped, with its port
+  # released, when the pass ends.
   defp with_dev_server(job, worktree, settings, opts, fun) do
-    if web_playbook(job) do
+    if Enum.any?(job.playbooks, &dev_server_playbook?/1) do
       git = Keyword.get(opts, :git, &default_git/2)
 
       case add_worktree(job, worktree <> "-dev-server", git) do
@@ -955,22 +970,32 @@ defmodule SymphonyElixir.QaAgent do
 
   defp web_playbook(job), do: Enum.find(job.playbooks, &(Map.get(&1, :kind) == "web"))
 
-  # The `browser` MCP server exists only in this QA session's settings. The agent's own
-  # sandbox may reach the dev server too: allowlist mode adds the localhost names.
+  defp dev_server_playbook?(playbook), do: Map.get(playbook, :kind) == "web" or Map.get(playbook, :dev_server) == true
+
+  # The agent's own sandbox may reach the dev server: allowlist mode adds the localhost names.
+  # The `browser` MCP server exists only in a `web` pass's session settings.
   defp put_browser_mcp(qa_settings, _job, _worktree, nil, _opts), do: {:ok, qa_settings}
 
   defp put_browser_mcp(%Schema{agent: agent} = qa_settings, job, worktree, dev_server, opts) do
-    with {:ok, attrs} <- browser_mcp_attrs(job, worktree, dev_server, opts),
-         attrs = attrs |> Map.put("name", @browser_mcp_name) |> Map.put_new("runtimes", [agent.kind]),
-         {:ok, server} <- browser_mcp_server(attrs) do
-      servers = Map.put(agent.mcp.servers || %{}, @browser_mcp_name, server)
-      agent = %{agent | mcp: %{agent.mcp | servers: servers}, network_access: allow_localhost(agent.network_access)}
-      {:ok, %{qa_settings | agent: agent}}
+    agent = %{agent | network_access: allow_localhost(agent.network_access)}
+
+    case web_playbook(job) do
+      nil -> {:ok, %{qa_settings | agent: agent}}
+      web -> put_browser_mcp_server(%{qa_settings | agent: agent}, web, worktree, dev_server, opts)
     end
   end
 
-  defp browser_mcp_attrs(job, worktree, dev_server, opts) do
-    case job |> web_playbook() |> Map.get(:browser_mcp) do
+  defp put_browser_mcp_server(%Schema{agent: agent} = qa_settings, web, worktree, dev_server, opts) do
+    with {:ok, attrs} <- browser_mcp_attrs(web, worktree, dev_server, opts),
+         attrs = attrs |> Map.put("name", @browser_mcp_name) |> Map.put_new("runtimes", [agent.kind]),
+         {:ok, server} <- browser_mcp_server(attrs) do
+      servers = Map.put(agent.mcp.servers || %{}, @browser_mcp_name, server)
+      {:ok, %{qa_settings | agent: %{agent | mcp: %{agent.mcp | servers: servers}}}}
+    end
+  end
+
+  defp browser_mcp_attrs(web, worktree, dev_server, opts) do
+    case Map.get(web, :browser_mcp) do
       nil ->
         with :ok <- check_playwright_mcp(Keyword.get(opts, :npx, &npx/1)),
              do: {:ok, default_browser_mcp(dev_server, worktree)}
@@ -1303,7 +1328,7 @@ defmodule SymphonyElixir.QaAgent do
   def blocked_reason({:remote_worker_unsupported, host}), do: "QA does not run on remote workers yet (#{host})"
 
   def blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
-    do: "the dev server failed its health check, so the web playbook could not run"
+    do: "the dev server failed its health check, so the playbooks that drive it could not run"
 
   def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, cause}}}),
     do:
