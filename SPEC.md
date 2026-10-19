@@ -1503,7 +1503,11 @@ The QA agent:
   `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an
   element's frame centre and `qa_key` presses a key with modifiers in the app's focused window; their
   mouse and key events MUST go to that app alone, and `qa_click` MUST refuse a point where the
-  window in front is not the app's own.
+  window in front is not the app's own. `qa_click` moves the pointer to the point before it clicks
+  and MAY press the element through accessibility when the click changed nothing, saying so in its
+  result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
+  and `qa_context_menu` right-clicks one and lists the menu that opens. They MUST refuse the same
+  points as `qa_click` before the pointer moves.
   `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10

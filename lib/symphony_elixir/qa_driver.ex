@@ -30,8 +30,8 @@ defmodule SymphonyElixir.QaDriver do
     `SYMPHONY_BAR_QA_API_FIXTURES` to that copy, so the app reads Symphony's
     local API from those JSON files;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
-    `qa_ax_set_value`, `qa_ax_select`, `qa_click`, `qa_key` and
-    `qa_resize_window` accept only a PID this driver launched and that is still
+    `qa_ax_set_value`, `qa_ax_select`, `qa_click`, `qa_hover`,
+    `qa_context_menu`, `qa_key` and `qa_resize_window` accept only a PID this driver launched and that is still
     running; `qa_check_app` also reports on one that has exited;
   - `qa_ax_select` selects a table or outline row (which answers no AXPress)
     through `AXSelectedRows` or `AXSelected`; `qa_click` clicks an element's
@@ -39,6 +39,12 @@ defmodule SymphonyElixir.QaDriver do
     accessibility hit test finds the app under it (the window list decides when
     the hit test has no answer), so a window that lets clicks through never
     counts as covering, and `qa_key` presses a named key with modifiers in the app's focused window.
+    `qa_click` moves the real pointer to the element first (SwiftUI buttons and
+    links check where it is when the mouse goes up) and presses the element
+    with `AXPress` when the click changed nothing; `qa_hover` moves the pointer
+    over an element or point and waits for the app to settle, and
+    `qa_context_menu` right-clicks one and lists the menu that opens. They pass
+    the same checks as `qa_click` before the pointer moves.
     The helper posts their mouse and key events to the app's PID alone;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
@@ -231,6 +237,10 @@ defmodule SymphonyElixir.QaDriver do
   @wide_width 1400
   @wide_height 900
   @max_window_size 8192
+  # Screen coordinates `qa_hover` and `qa_context_menu` take, in points; a
+  # display left of or above the main one has negative ones.
+  @max_coordinate 32_768
+  @pointer_commands %{"qa_hover" => "hover", "qa_context_menu" => "context-menu"}
 
   # Clones the bundle `$2` into `$1/checkouts/$3` without hooks (the empty
   # template and `core.hooksPath` keep the operator's out too) and points
@@ -306,7 +316,7 @@ defmodule SymphonyElixir.QaDriver do
   """
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
-           ~w(qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
+           ~w(qa_hover qa_context_menu qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
            ~w(qa_build_release_pair qa_relaunched_app qa_update_feed)
 
   @type host :: %{
@@ -551,6 +561,14 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, clicks} <- optional_integer(args, "clicks", 1, 2),
          {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["click", Integer.to_string(pid), path, Integer.to_string(clicks || 1)])
+    end
+  end
+
+  defp run_tool(tool, driver, config, args) when is_map_key(@pointer_commands, tool) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, target} <- pointer_target(args),
+         {:ok, helper} <- helper(driver, config) do
+      run_helper(config, helper, [@pointer_commands[tool], Integer.to_string(pid), target])
     end
   end
 
@@ -1351,6 +1369,21 @@ defmodule SymphonyElixir.QaDriver do
 
   defp optional_element_path(nil), do: {:ok, ""}
   defp optional_element_path(path), do: element_path(path)
+
+  # An element path, or a point on screen as the helper takes it: `x,y`.
+  defp pointer_target(%{"path" => _path} = args) when is_map_key(args, "x") or is_map_key(args, "y"),
+    do: tool_error("invalid_arguments", "Pass an element `path` or a point's `x` and `y`, not both.")
+
+  defp pointer_target(%{"path" => path}), do: element_path(path)
+
+  defp pointer_target(args) do
+    with {:ok, x} <- optional_integer(args, "x", -@max_coordinate, @max_coordinate),
+         {:ok, y} <- optional_integer(args, "y", -@max_coordinate, @max_coordinate) do
+      if x && y,
+        do: {:ok, "#{x},#{y}"},
+        else: tool_error("invalid_arguments", "Pass an element `path` from qa_ax_tree, or both `x` and `y` of a point on screen.")
+    end
+  end
 
   defp press_action(nil), do: {:ok, "AXPress"}
   defp press_action(action) when action in @press_actions, do: {:ok, action}
