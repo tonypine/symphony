@@ -24,7 +24,7 @@ defmodule SymphonyElixir.Setup do
   @reload_debounce_ms 1_000
   @refresh_timeout_ms 60_000
 
-  @checks [Checks.DeprecatedKeys, Checks.FailedReload, Checks.WorkflowRef, Checks.UnclonedRepos]
+  @checks [Checks.DeprecatedKeys, Checks.FailedReload, Checks.WorkflowRef, Checks.WorkflowFetch, Checks.UnclonedRepos]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}
   @type payload :: %{

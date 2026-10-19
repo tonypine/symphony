@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SetupTest do
 
   alias SymphonyElixir.Repo.FetchLog
   alias SymphonyElixir.Setup
-  alias SymphonyElixir.Setup.{Problem, TeamCache}
+  alias SymphonyElixir.Setup.{Checks, Problem, TeamCache}
 
   @t1 ~U[2026-10-19 09:00:00Z]
   @t2 ~U[2026-10-19 09:15:00Z]
@@ -252,7 +252,7 @@ defmodule SymphonyElixir.SetupTest do
       on_exit(fn -> File.rm_rf(Path.dirname(ref_error)) end)
 
       assert %{problems: [problem]} = Setup.check()
-      assert problem.id == "workflow_ref:default"
+      assert problem.id == "#{Checks.WorkflowRef.id()}:default"
       assert problem.severity == "error"
       assert problem.repos == ["default"]
       assert %{label: "Reason", value: "no origin/main ref in the checkout"} in problem.details
@@ -294,6 +294,9 @@ defmodule SymphonyElixir.SetupTest do
     end
 
     test "every check names itself and reads no Linear" do
+      # Each check's id starts each of its problems' ids.
+      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo"]
+
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())
         refute check.needs_linear?()
@@ -309,7 +312,7 @@ defmodule SymphonyElixir.SetupTest do
 
       FetchLog.record("default", failure, @t2)
       assert %{problems: [problem]} = Setup.check()
-      assert problem.id == "workflow_fetch:default"
+      assert problem.id == "#{Checks.WorkflowFetch.id()}:default"
       assert problem.severity == "warning"
       assert %{label: "Failed fetches in a row", value: "3"} in problem.details
       assert %{label: "Failing since", value: "2026-10-19T09:00:00Z"} in problem.details

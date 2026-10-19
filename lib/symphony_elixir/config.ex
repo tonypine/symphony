@@ -634,7 +634,7 @@ defmodule SymphonyElixir.Config do
   def check_repo_workflows, do: validate_repo_workflows(:check)
 
   defp validate_repo_workflows(source) do
-    with {:ok, system_config} <- system(),
+    with {:ok, system_config} <- source_system(source),
          {:ok, repo_settings} <- repo_runtime_settings(system_config, source: source),
          :ok <- validate_checked_workspaces(source, system_config, repo_settings) do
       :ok
@@ -649,6 +649,14 @@ defmodule SymphonyElixir.Config do
         {:error, reason}
     end
   end
+
+  # `symphony check` judges symphony.yml as it is on disk: a file the cache rejected fails the
+  # check instead of passing on the last good config the cache keeps running.
+  defp source_system(:check) do
+    with {:ok, config} <- Workflow.load_symphony(), do: parse_system(config)
+  end
+
+  defp source_system(_source), do: system()
 
   @spec linear_scoping_filter_configured?(map() | nil) :: boolean()
   def linear_scoping_filter_configured?(%{project_slug: project_slug, team: team, labels: labels}) do
