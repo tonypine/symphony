@@ -1891,7 +1891,8 @@ not require recognizing or validating extension fields unless that extension is 
   `issues.states.epic_review`, `issues.states.ci_fix`: the machine-owned phase states, string or
   null, defaulting to `Code Review`, `QA`, `Plan Review`, `Epic Review` and `CI Fix`. Two of them
   MUST NOT share a name. At startup Symphony MUST find each configured name in the configured teams
-  and create it when it is missing, logging what it created; a missing one MUST be reported with its
+  (the `issues` team and each repository's teams: its `route.team`, else the teams of the projects
+  its route names, else the teams of the issues its polls returned) and create it when it is missing, logging what it created; a missing one MUST be reported with its
   exact name and the `issues.states.*` key to point at the new name before it is created. The
   machine (see 7.6) dispatches from and moves into them.
 - `tickets.priorities`: list of Linear priority names (`urgent`, `high`, `medium`, `low`, `none`),
@@ -4760,7 +4761,11 @@ Minimum endpoints:
     naming the file, the key or line and the reason, and since when the last good config has kept
     running); a repo whose `WORKFLOW.md` fails to load from its base ref (an `error`); a repo whose
     fetch failed three times in a row (a `warning`); a `workspace.source` repo not cloned yet (a
-    `warning`).
+    `warning`); a repo with no Linear team, so self-heal can't file its fix tickets and its states
+    and labels are never checked (an `error`), or without `route.team` whose team is only found
+    through Linear (a `warning`, with a `config_edit` fix setting
+    `repositories[<key>].route.team` when that is exactly one team). The projects a route names are
+    looked up once per run, through the same cache.
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with

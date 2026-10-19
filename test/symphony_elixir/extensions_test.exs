@@ -314,7 +314,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           "description" => "From the file",
           "labels" => ["e2e", 7]
         },
-        %{"id" => "issue-file-2", "identifier" => "E2E-2", "state" => "Done"},
+        %{"id" => "issue-file-2", "identifier" => "E2E-2", "state" => "Done", "team" => "TP", "project" => "Symphony"},
+        %{"id" => "issue-file-4", "identifier" => "E2E-4", "state" => "Todo", "project" => %{"id" => "p1", "name" => "Web", "slugId" => "s1"}},
         %{"id" => "missing-state", "identifier" => "E2E-3"},
         "not an issue"
       ])
@@ -324,7 +325,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_memory_issues_file: "issues.json")
     assert Config.settings!().tracker.memory_issues_file == issues_file
 
-    assert {:ok, [first, second]} = Memory.fetch_candidate_issues()
+    assert {:ok, [first, second, fourth]} = Memory.fetch_candidate_issues()
+    assert %Issue{team: nil, project: nil} = first
+    assert %Issue{team: %{key: "TP"}, project: %{id: nil, name: "Symphony", slug_id: nil}} = second
+    assert %Issue{team: nil, project: %{id: "p1", name: "Web", slug_id: "s1"}} = fourth
+    # A project belongs to the teams of its issues.
+    assert {:ok, [%{name: "Symphony", team_keys: ["TP"]}, %{name: "Web", team_keys: []}]} = Memory.fetch_projects(["Symphony", "s1"])
 
     assert %Issue{
              id: "issue-file-1",

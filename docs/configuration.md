@@ -68,7 +68,9 @@ invalid value, YAML that doesn't parse) does not stop it: it keeps running the l
 loaded, logs the reason, and lists the rejected file under `problems` in `GET /api/v1/setup`
 (the key or line, the reason, and since when) until the file loads again. The same list warns
 about each deprecated key the file still sets, with what replaced it and, for a key that does
-nothing now, a fix that removes it. `POST /api/v1/setup/refresh` checks again at once. See
+nothing now, a fix that removes it, and about each repository with no Linear team (or one found
+only through its projects or tickets, with a fix that sets `route.team`).
+`POST /api/v1/setup/refresh` checks again at once. See
 [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
@@ -136,7 +138,9 @@ issues:
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
   `memory.issues_file` (relative to the folder holding `symphony.yml`), a JSON list of
   `{"id", "identifier", "state", "title", "description", "labels"}` objects, on every fetch, so a test
-  can change them while Symphony runs. Comments and state changes go nowhere.
+  can change them while Symphony runs. An issue may also carry a `"team"` key and a `"project"` (a
+  name or an `{"id", "name", "slugId"}` object); a project belongs to the teams of its issues.
+  Comments and state changes go nowhere.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
@@ -204,7 +208,8 @@ issues:
 - `states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review` and `states.ci_fix`:
   the machine-owned phase states — the board columns — defaulting to `Code Review`, `QA`,
   `Plan Review`, `Epic Review` and `CI Fix`; `null` turns one off. At startup Symphony finds each
-  one in the configured teams and creates it as a started state when it is missing, logging what
+  one in the configured teams (the `issues` team and each repository's: its `route.team`, else the
+  teams of the projects its route names, else the teams of the tickets it polls) and creates it as a started state when it is missing, logging what
   it created; a second start finds them all and creates nothing. A state renamed or deleted in
   Linear is reported at startup with its exact name and the `issues.states.*` key to point at the
   new name, and is then recreated, so a name is never silently duplicated. The

@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Setup.TeamCacheTest do
   defmodule FakeTracker do
     def team_workflow_states(team), do: answer({:states, team}, [%{id: "s", name: "Todo", team_id: "t", team_key: team}])
     def team_labels(team), do: answer({:labels, team}, [%{id: "l", name: "plan", team_id: nil, team_key: nil}])
+    def fetch_projects(refs), do: answer({:projects, refs}, [%{id: "p", name: "Symphony", slug_id: "s", team_keys: ["TP"]}])
 
     defp answer(request, value) do
       send(self(), {:tracker, request})
@@ -35,6 +36,13 @@ defmodule SymphonyElixir.Setup.TeamCacheTest do
     :counters.add(clock, 1, 100)
     assert {:ok, _states} = TeamCache.states(cache, "TP")
     assert_received {:tracker, {:states, "TP"}}
+  end
+
+  test "a route's projects are read once, whatever order it names them in", %{cache: cache} do
+    assert {:ok, [%{team_keys: ["TP"]}]} = TeamCache.projects(cache, ["b", "a"])
+    assert {:ok, _projects} = TeamCache.projects(cache, ["a", "b"])
+    assert_received {:tracker, {:projects, ["a", "b"]}}
+    refute_received {:tracker, _request}
   end
 
   test "invalidate forgets every team", %{cache: cache} do

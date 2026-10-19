@@ -19,7 +19,7 @@ defmodule SymphonyElixir.StateProvisioning do
   require Logger
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Tracker
+  alias SymphonyElixir.{RepoTeams, Tracker}
 
   @labels ["Blocked", "Needs Decision", "CI green", "CI red", "CI running"]
 
@@ -56,10 +56,16 @@ defmodule SymphonyElixir.StateProvisioning do
 
   def machine_states(_settings), do: []
 
-  @doc "The Linear team keys or ids Symphony is scoped to, from `issues` and `repositories`."
-  @spec configured_teams(Schema.t(), [map()]) :: [String.t()]
-  def configured_teams(%Schema{} = settings, repos) when is_list(repos) do
-    [settings.tracker.team | Enum.map(repos, &Map.get(&1, :team))]
+  @doc """
+  The Linear team keys or ids Symphony is scoped to: the `issues` team and each repository's teams
+  as `SymphonyElixir.RepoTeams.routed_teams/2` resolves them, so a repo routed only by project gets
+  its project's team. `opts` go to `routed_teams/2`.
+  """
+  @spec configured_teams(Schema.t(), [map()], keyword()) :: [String.t()]
+  def configured_teams(%Schema{} = settings, repos, opts \\ []) when is_list(repos) do
+    opts = Keyword.put_new(opts, :tracker, settings.tracker)
+
+    [settings.tracker.team | Enum.flat_map(repos, &RepoTeams.routed_teams(&1, opts))]
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
     |> Enum.uniq()
   end

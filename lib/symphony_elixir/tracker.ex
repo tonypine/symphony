@@ -47,6 +47,17 @@ defmodule SymphonyElixir.Tracker do
           team_key: String.t() | nil
         }
 
+  @typedoc """
+  A project as `SymphonyElixir.RepoTeams` reads it: its id, name and slug id (any of them is a
+  `route.projects` value), and the keys of the teams it belongs to.
+  """
+  @type project :: %{
+          id: String.t() | nil,
+          name: String.t() | nil,
+          slug_id: String.t() | nil,
+          team_keys: [String.t()]
+        }
+
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
@@ -71,6 +82,7 @@ defmodule SymphonyElixir.Tracker do
   @callback team_workflow_states(String.t()) :: {:ok, [workflow_state()]} | {:error, term()}
   @callback team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
+  @callback fetch_projects([String.t()]) :: {:ok, [project()]} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -241,6 +253,13 @@ defmodule SymphonyElixir.Tracker do
   def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
     adapter().create_label(label_name, team)
   end
+
+  @doc """
+  The projects named by `refs` (each a project's name, slug id or id, as `route.projects` names
+  them) with the teams they belong to, in one request.
+  """
+  @spec fetch_projects([String.t()]) :: {:ok, [project()]} | {:error, term()}
+  def fetch_projects(refs) when is_list(refs), do: adapter().fetch_projects(refs)
 
   @spec adapter() :: module()
   def adapter do

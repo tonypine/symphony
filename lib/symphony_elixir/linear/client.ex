@@ -658,6 +658,10 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  @doc "The project filter matching any of `projects` by name, slug id or id, as a poll reads them."
+  @spec project_filter([String.t()]) :: map()
+  def project_filter(projects) when is_list(projects), do: project_filter_clause(projects)
+
   defp repo_issue_filter(repo, tracker, state_names, graphql_fun) do
     with {:ok, assignee_filter} <- repo_assignee_filter(repo, tracker, graphql_fun) do
       {labels, label_mode} = effective_labels(repo, tracker)

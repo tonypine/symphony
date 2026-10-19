@@ -307,13 +307,13 @@ defmodule SymphonyElixir.SetupTest do
       end)
     end
 
-    test "every check names itself and reads no Linear" do
+    test "every check names itself, and only the teams check reads Linear" do
       # Each check's id starts each of its problems' ids.
-      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo"]
+      assert Enum.map(Setup.checks(), & &1.id()) == ["deprecated_key", "failed_reload", "workflow_ref", "workflow_fetch", "uncloned_repo", "teams"]
 
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())
-        refute check.needs_linear?()
+        assert check.needs_linear?() == (check == Checks.Teams)
       end
     end
 
@@ -357,7 +357,7 @@ defmodule SymphonyElixir.SetupTest do
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
       write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
 
-      assert %{problems: [], not_checked: [not_checked]} = Setup.check(checks: [LinearStub | Setup.checks()])
+      assert %{problems: [], not_checked: [not_checked, %{id: "teams"}]} = Setup.check(checks: [LinearStub | Setup.checks()])
       assert not_checked.id == "linear_stub"
       assert not_checked.reason =~ "No Linear API key"
       refute_received {:ran, LinearStub}
@@ -384,7 +384,7 @@ defmodule SymphonyElixir.SetupTest do
       File.write!(Workflow.symphony_file_path(), "pull_request: 1\n")
       Cache.clear()
 
-      assert %{problems: [], not_checked: []} = Setup.check(linear_api_key?: false)
+      assert %{problems: [], not_checked: [%{id: "teams"}]} = Setup.check(linear_api_key?: false)
     end
   end
 

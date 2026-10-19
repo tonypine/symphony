@@ -15,6 +15,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyAllLabels", :labels},
       {"SymphonyTeamWorkflowStates", :team_workflow_states},
       {"SymphonyTeamLabels", :team_labels},
+      {"SymphonyProjectTeams", :project_teams},
       {"SymphonyCreateWorkflowState", :create_workflow_state},
       {"SymphonyCreateLabel", :create_label},
       {"SymphonyCreateIssueScope", :create_issue_scope},
@@ -25,12 +26,15 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyDeleteIssueRelation", :delete_issue_relation}
     ]
 
+    # The reads a test scripts and checks the request of.
+    @reads [:team_workflow_states, :team_labels, :project_teams]
+
     def graphql(query, variables) do
       case Enum.find(@operations, fn {operation, _key} -> String.contains?(query, operation) end) do
         {_operation, :create_workflow_state} -> create_workflow_state(query, variables)
         {_operation, :create_issue} -> create_issue(variables)
         {_operation, :delete_issue_relation} -> delete_issue_relation(variables)
-        {_operation, key} when key in [:team_workflow_states, :team_labels] -> team_read(key, query, variables)
+        {_operation, key} when key in @reads -> team_read(key, query, variables)
         {_operation, key} -> result(key, default(key))
         nil -> flunk("unexpected query: #{query}")
       end
@@ -255,6 +259,38 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       put(:team_labels, {:ok, %{"data" => %{}}})
       assert {:error, :workflow_states_unavailable} = Adapter.team_workflow_states("TP")
       assert {:error, :labels_unavailable} = Adapter.team_labels("TP")
+    end
+  end
+
+  describe "fetch_projects/1" do
+    test "reads the named projects with their teams' keys, in one request" do
+      nodes = [
+        %{"id" => "p1", "name" => "Symphony", "slugId" => "a1abb875ac02", "teams" => %{"nodes" => [@team, %{"id" => "t2", "key" => nil}]}},
+        %{"id" => "p2", "name" => "Teamless", "slugId" => "b2", "teams" => nil}
+      ]
+
+      put(:project_teams, {:ok, %{"data" => %{"projects" => %{"nodes" => nodes}}}})
+
+      assert {:ok,
+              [
+                %{id: "p1", name: "Symphony", slug_id: "a1abb875ac02", team_keys: ["TP", "t2"]},
+                %{id: "p2", name: "Teamless", slug_id: "b2", team_keys: []}
+              ]} = Adapter.fetch_projects(["a1abb875ac02", "Teamless"])
+
+      assert_received {:project_teams, query, %{filter: %{"or" => [%{"name" => _names}, %{"slugId" => slugs}]}, first: 50}}
+      assert slugs == %{"in" => ["a1abb875ac02", "Teamless"]}
+      assert query =~ "teams(first: 50)"
+    end
+
+    test "asks nothing for no projects, and reports a tracker error and an unusable response" do
+      assert {:ok, []} = Adapter.fetch_projects([])
+      refute_received {:project_teams, _query, _variables}
+
+      put(:project_teams, {:error, :timeout})
+      assert {:error, :timeout} = Adapter.fetch_projects(["Symphony"])
+
+      put(:project_teams, {:ok, %{"data" => %{}}})
+      assert {:error, :projects_unavailable} = Adapter.fetch_projects(["Symphony"])
     end
   end
 

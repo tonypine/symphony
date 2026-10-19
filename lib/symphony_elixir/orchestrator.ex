@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Orchestrator do
     PrWatch,
     Quality,
     QualityGate,
+    RepoTeams,
     RetiredStates,
     RunKind,
     RunStore,
@@ -1370,9 +1371,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp fetch_due_repo_if_needed(nil), do: :not_due
 
+  # The teams of the polled issues are the last way `RepoTeams` finds a repo's team.
   defp fetch_due_repo_if_needed(repo) do
     repo_name = repo_name(repo)
-    {repo_name, Tracker.fetch_candidate_issues_for_repo(repo)}
+    result = Tracker.fetch_candidate_issues_for_repo(repo)
+    RepoTeams.observe(repo_name, result)
+    {repo_name, result}
   end
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that

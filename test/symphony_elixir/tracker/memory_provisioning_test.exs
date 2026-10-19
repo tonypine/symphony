@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Tracker.Memory
 
   @keys [
@@ -9,7 +10,9 @@ defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
     :memory_tracker_labels_list,
     :memory_tracker_create_workflow_state_result,
     :memory_tracker_create_label_result,
-    :memory_tracker_recipient
+    :memory_tracker_recipient,
+    :memory_tracker_projects,
+    :memory_tracker_issues
   ]
 
   setup do
@@ -127,6 +130,36 @@ defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
 
       assert {:error, :forbidden} = Memory.create_label("Blocked", "TP")
       refute_received {:memory_tracker_created_label, _, _}
+    end
+  end
+
+  describe "fetch_projects/1" do
+    test "answers the seeded projects a route names by name, slug id or id, announcing each request" do
+      projects = [
+        %{id: "p1", name: "Symphony", slug_id: "s1", team_keys: ["TP"]},
+        %{id: "p2", name: "Other", slug_id: "s2", team_keys: ["OPS"]},
+        %{id: "p3", name: "Third", slug_id: "s3", team_keys: []}
+      ]
+
+      Application.put_env(:symphony_elixir, :memory_tracker_projects, projects)
+
+      assert {:ok, [%{id: "p1"}, %{id: "p2"}, %{id: "p3"}]} = Memory.fetch_projects(["Symphony", "s2", "p3", "gone"])
+      assert_received {:memory_tracker_fetch_projects, ["Symphony", "s2", "p3", "gone"]}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_projects, {:error, :timeout})
+      assert {:error, :timeout} = Memory.fetch_projects(["Symphony"])
+    end
+
+    test "without seeded projects, each issue's project belongs to the teams of its issues" do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: "i1", team: %{key: "TP", name: nil}, project: %{id: "p1", name: "Symphony", slug_id: "s1"}},
+        %Issue{id: "i2", team: %{key: "OPS", name: nil}, project: %{id: "p1", name: "Symphony", slug_id: "s1"}},
+        %Issue{id: "i3", team: nil, project: %{id: "p2", name: "Teamless"}},
+        %Issue{id: "i4", team: %{key: "TP", name: nil}, project: nil}
+      ])
+
+      assert {:ok, [%{id: "p1", name: "Symphony", slug_id: "s1", team_keys: ["TP", "OPS"]}]} = Memory.fetch_projects(["s1"])
+      assert {:ok, [%{id: "p2", slug_id: nil, team_keys: []}]} = Memory.fetch_projects(["Teamless"])
     end
   end
 end

@@ -261,6 +261,27 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # The projects a repo's route names, with their teams, for `SymphonyElixir.RepoTeams`.
+  @projects_query """
+  query SymphonyProjectTeams($filter: ProjectFilter!, $first: Int!) {
+    projects(filter: $filter, first: $first) {
+      nodes {
+        id
+        name
+        slugId
+        teams(first: 50) {
+          nodes {
+            id
+            key
+          }
+        }
+      }
+    }
+  }
+  """
+
+  @project_page_size 50
+
   # A new phase state is a started state: it sits beside In Progress on the board. Linear requires
   # the color.
   @create_workflow_state_mutation """
@@ -766,6 +787,27 @@ defmodule SymphonyElixir.Linear.Adapter do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :label_create_failed}
     end
+  end
+
+  @doc "The projects `refs` names (names, slug ids or ids), with the keys of their teams."
+  @spec fetch_projects([String.t()]) :: {:ok, [Tracker.project()]} | {:error, term()}
+  def fetch_projects([]), do: {:ok, []}
+
+  def fetch_projects(refs) when is_list(refs) do
+    variables = %{filter: Client.project_filter(refs), first: @project_page_size}
+
+    with {:ok, response} <- client_module().graphql(@projects_query, variables),
+         nodes when is_list(nodes) <- get_in(response, ["data", "projects", "nodes"]) do
+      {:ok, Enum.map(nodes, &project/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :projects_unavailable}
+    end
+  end
+
+  defp project(node) do
+    team_keys = for team <- List.wrap(get_in(node, ["teams", "nodes"])), key = team["key"] || team["id"], is_binary(key), do: key
+    %{id: node["id"], name: node["name"], slug_id: node["slugId"], team_keys: team_keys}
   end
 
   defp workflow_state(node) do
