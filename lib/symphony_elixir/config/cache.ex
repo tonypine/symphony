@@ -5,9 +5,13 @@ defmodule SymphonyElixir.Config.Cache do
   A reload that fails keeps the last known good value: a file that no longer reads or parses, a
   `WORKFLOW.md` its schema rejects, or a `symphony.yml` `SymphonyElixir.Config.parse_system/1`
   rejects (an unknown or removed key, an invalid value). The entry is then stale: `status/0` says
-  since when and why, and the rejected file is not read again until it changes. Each reload a file
-  event starts emits `[:symphony, :config, :cache, :reloaded]` once the entry is refreshed, so
-  `SymphonyElixir.Setup` checks the new config.
+  since when and why, and the rejected file is not read again until it changes.
+
+  A cached file whose edit changes what the cache holds emits `[:symphony, :config, :cache, :reloaded]`
+  once the entry is refreshed, so `SymphonyElixir.Setup` checks the new config: a new good value, a
+  newly rejected or missing file, or a different rejected file. It does not matter how the edit was
+  found: a file event, or the stat check on a config read when the directory has no watcher. A
+  dropped entry (`invalidate/1`) emits it too, since the next read loads the file again.
   """
 
   use GenServer
@@ -75,7 +79,7 @@ defmodule SymphonyElixir.Config.Cache do
     cached(:workflow, path)
   end
 
-  @doc "The event each reload a file event starts emits, with the reloaded `path` in its metadata."
+  @doc "The event each reload of a cached file emits, with the reloaded `path` in its metadata."
   @spec reloaded_event() :: [atom()]
   def reloaded_event, do: @telemetry_reloaded_event
 
@@ -114,10 +118,12 @@ defmodule SymphonyElixir.Config.Cache do
   """
   @spec invalidate(Path.t()) :: :ok
   def invalidate(path) when is_binary(path) do
-    stale = for kind <- [:workflow, :symphony], do: cache_key(kind, Path.expand(path))
-    Enum.each(stale, &:persistent_term.erase/1)
+    path = Path.expand(path)
+    stale = for kind <- [:workflow, :symphony], do: cache_key(kind, path)
     keys = :persistent_term.get(@index_key, MapSet.new())
+    Enum.each(stale, &:persistent_term.erase/1)
     :persistent_term.put(@index_key, MapSet.difference(keys, MapSet.new(stale)))
+    if Enum.any?(stale, &MapSet.member?(keys, &1)), do: reloaded(path)
     :ok
   end
 
@@ -207,6 +213,7 @@ defmodule SymphonyElixir.Config.Cache do
       }
 
       put_entry(entry)
+      if previous, do: reloaded(path)
       {:ok, value}
     else
       {:error, reason} ->
@@ -249,6 +256,8 @@ defmodule SymphonyElixir.Config.Cache do
       %{kind: entry.kind, path: entry.path, reason: reason}
     )
 
+    # A file that stays missing is checked again on every read; only the change is a reload.
+    if not entry.stale? or entry.failed_stamp != failed_stamp, do: reloaded(entry.path)
     {:ok, stale.value, @stale_option}
   end
 
@@ -267,19 +276,18 @@ defmodule SymphonyElixir.Config.Cache do
     :persistent_term.put(@index_key, MapSet.put(keys, key))
   end
 
+  # A file event refreshes the entries that read `path`; the refresh emits the reload when it finds one.
   defp reload_path(path) do
-    keys = :persistent_term.get(@index_key, MapSet.new())
-
-    reloaded =
-      Enum.filter(keys, fn key ->
-        case :persistent_term.get(key, nil) do
-          %Entry{path: ^path, kind: kind} = entry -> refresh_entry(entry, loader_for(kind))
-          _entry -> false
-        end
-      end)
-
-    if reloaded != [], do: :telemetry.execute(@telemetry_reloaded_event, %{count: 1}, %{path: path})
+    :persistent_term.get(@index_key, MapSet.new())
+    |> Enum.each(fn key ->
+      case :persistent_term.get(key, nil) do
+        %Entry{path: ^path, kind: kind} = entry -> refresh_entry(entry, loader_for(kind))
+        _entry -> :ok
+      end
+    end)
   end
+
+  defp reloaded(path), do: :telemetry.execute(@telemetry_reloaded_event, %{count: 1}, %{path: path})
 
   defp cache_key(kind, path), do: {__MODULE__, kind, path}
 

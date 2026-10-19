@@ -80,6 +80,20 @@ defmodule SymphonyElixir.SetupTest do
     def run(_context), do: raise("boom")
   end
 
+  # A local check that says when it ran.
+  defmodule LocalStub do
+    @behaviour SymphonyElixir.Setup.Check
+
+    def id, do: "local_stub"
+    def title, do: "Local stub"
+    def needs_linear?, do: false
+
+    def run(_context) do
+      send(Application.get_env(:symphony_elixir, :setup_test_pid), {:ran, __MODULE__})
+      []
+    end
+  end
+
   # Breaks the run itself, outside `run/1`.
   defmodule BrokenStub do
     def id, do: "broken_stub"
@@ -424,6 +438,47 @@ defmodule SymphonyElixir.SetupTest do
       start_setup!(checks: [LinearStub], interval_ms: 1)
 
       for _run <- 1..3, do: assert_receive({:ran, LinearStub})
+    end
+
+    test "an edit a config read finds runs the checks again, with no file watcher" do
+      # TestSupport runs the config cache without a watcher, as the escript does: only reads find edits.
+      path = Workflow.symphony_file_path()
+      good = File.read!(path)
+      server = start_setup!(checks: [Checks.DeprecatedKeys, Checks.FailedReload, LocalStub], reload_debounce_ms: 0)
+      assert_receive {:ran, LocalStub}
+      await_idle(server, 1_000)
+      assert %{problems: []} = Setup.payload(server)
+
+      # The orchestrator's poll reads the config; here the test does.
+      append_symphony!("auto_review:\n  enabled: true\n")
+      assert {:ok, _system} = Config.system()
+      assert_receive {:ran, LocalStub}
+      await_idle(server, 1_000)
+      assert %{problems: [%{id: "deprecated_key:auto_review.enabled"}]} = Setup.payload(server)
+
+      File.write!(path, good)
+      bump_mtime!(path)
+      assert {:ok, _system} = Config.system()
+      assert_receive {:ran, LocalStub}
+      await_idle(server, 1_000)
+      assert %{problems: []} = Setup.payload(server)
+
+      capture_log(fn ->
+        append_symphony!("pull_request:\n  enabled: true\n")
+        assert {:ok, _system} = Config.system()
+        assert_receive {:ran, LocalStub}
+        await_idle(server, 1_000)
+      end)
+
+      assert %{problems: [%{id: "failed_reload:" <> _path, title: title}]} = Setup.payload(server)
+      assert title =~ "pull_request"
+
+      File.write!(path, good)
+      bump_mtime!(path)
+      assert {:ok, _system} = Config.system()
+      assert_receive {:ran, LocalStub}
+      await_idle(server, 1_000)
+      assert %{problems: []} = Setup.payload(server)
     end
 
     test "a config reload runs the checks once, however many events it sends" do

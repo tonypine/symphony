@@ -4734,7 +4734,8 @@ Minimum endpoints:
     result; `/api/v1/state` carries the same four under `setup`. The Elixir implementation
     (`SymphonyElixir.Setup`) runs every check at startup, after each config reload, every 15
     minutes and on `POST /api/v1/setup/refresh`, in the background, so the endpoint never waits on
-    them. `checked_at` is `null` until the first run ends. A healthy setup is `problems: []` and
+    them. A reload counts however the edit was found: a file-watcher event, or the file's changed
+    stamp on a config read when no watcher runs (the escript, which can't start one). `checked_at` is `null` until the first run ends. A healthy setup is `problems: []` and
     `not_checked: []`.
   - Each problem: `id` (stable across runs: the check and its subject, such as
     `deprecated_key:auto_review.enabled`), `severity` (`error` or `warning`), `category`

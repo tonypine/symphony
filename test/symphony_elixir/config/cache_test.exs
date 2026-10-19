@@ -196,6 +196,71 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
+  describe "reload event without a watcher" do
+    test "a read that finds an edit emits the reload once per change", %{root: root} do
+      # As under the escript, which can't start the file watcher.
+      Application.put_env(:symphony_elixir, :config_cache_watcher, fn _dir -> :ignore end)
+      symphony_path = Path.expand(Path.join(root, "symphony.yml"))
+      write_stamped!(symphony_path, config(1), 1)
+      attach_reloaded!()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+          :sys.get_state(Cache)
+        end)
+
+      assert log =~ "falling back to stat-based polling"
+      # The first load is not a reload.
+      refute_received {:reloaded, ^symphony_path}
+
+      write_stamped!(symphony_path, config(2), 2)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+      assert_received {:reloaded, ^symphony_path}
+      refute_received {:reloaded, ^symphony_path}
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        # A rejected edit, read twice.
+        write_stamped!(symphony_path, config(2) <> "pull_request:\n  enabled: true\n", 3)
+        assert {:ok, %{"repositories" => [%{"key" => "r2"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert_received {:reloaded, ^symphony_path}
+        refute_received {:reloaded, ^symphony_path}
+
+        # Another rejected edit.
+        write_stamped!(symphony_path, config(2) <> "pull_request:\n  enabled: false\n", 4)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert_received {:reloaded, ^symphony_path}
+
+        # The file gone, read twice.
+        File.rm!(symphony_path)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert {:ok, _value, [stale: true]} = Cache.get_symphony(symphony_path)
+        assert_received {:reloaded, ^symphony_path}
+        refute_received {:reloaded, ^symphony_path}
+      end)
+
+      # The file fixed.
+      write_stamped!(symphony_path, config(3), 5)
+      assert {:ok, %{"repositories" => [%{"key" => "r3"}]}} = Cache.get_symphony(symphony_path)
+      assert_received {:reloaded, ^symphony_path}
+    end
+
+    test "dropping a cached file is a reload, dropping one the cache never read is not", %{root: root} do
+      symphony_path = Path.expand(Path.join(root, "symphony.yml"))
+      File.write!(symphony_path, config(1))
+      assert {:ok, _value} = Cache.get_symphony(symphony_path)
+      attach_reloaded!()
+
+      assert :ok = Cache.invalidate(symphony_path)
+      assert_received {:reloaded, ^symphony_path}
+
+      assert :ok = Cache.invalidate(symphony_path)
+      refute_received {:reloaded, ^symphony_path}
+    end
+  end
+
   describe ":stop watcher cleanup" do
     test "does not retry unavailable watcher backend on every cache read", %{root: root} do
       # Not set as the node's config path: any process reading config would
@@ -378,6 +443,19 @@ defmodule SymphonyElixir.Config.CacheTest do
   # (TP-304, TP-382). An unnamed instance under the test supervisor lives
   # exactly as long as the test. Watch state is shared through
   # `:persistent_term`, which setup and `on_exit` clear.
+  # Writes `content` with its own mtime, so each write is a new stamp even within one second.
+  defp write_stamped!(path, content, n) do
+    File.write!(path, content)
+    File.touch!(path, 1_700_000_000 + n)
+  end
+
+  defp attach_reloaded! do
+    handler_id = "cache-reloaded-test-#{System.unique_integer([:positive])}"
+    test_pid = self()
+    :telemetry.attach(handler_id, Cache.reloaded_event(), fn _event, _measurements, metadata, _config -> send(test_pid, {:reloaded, metadata.path}) end, nil)
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   defp start_private_cache! do
     start_supervised!({Cache, name: nil})
   end
