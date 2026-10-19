@@ -811,16 +811,22 @@ defmodule SymphonyElixir.RunStore do
   Appends a verdict, bound to the head SHA it judged and carrying `details`, to the ticket's record,
   creating the record when none exists. The read-modify-write runs in one durable transaction.
   """
+  @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t()) ::
+          :ok | {:error, term()}
+  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome),
+    do: record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, %{})
+
   @spec record_ticket_verdict(String.t(), String.t(), String.t(), String.t() | nil, String.t(), map()) ::
           :ok | {:error, term()}
-  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}) do
-    with true <- is_binary(issue_id) || {:error, :invalid_issue_id},
-         {:ok, repo_key} <- normalize_repo_key(repo_key),
+  def record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
       durable_transaction(fn -> write_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) end)
       |> unwrap_nested_error()
     end
   end
+
+  def record_ticket_verdict(_repo_key, _issue_id, _kind, _head_sha, _outcome, _details), do: {:error, :invalid_issue_id}
 
   @doc """
   Sets (or replaces) the hold of `kind` on the ticket's record, creating the record when none
