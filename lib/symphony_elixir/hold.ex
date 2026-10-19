@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Hold do
 
   require Logger
 
+  alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.{RunStore, TicketState, Tracker}
 
   @kind_labels %{blocked: "Blocked", needs_decision: "Needs Decision"}
@@ -182,27 +183,58 @@ defmodule SymphonyElixir.Hold do
 
   @doc """
   Reads the ticket's store record and its board labels and reports any drift, so a hand-added hold
-  label (or a store hold the board is missing) is visible. Returns the drift it reported.
+  label (or a store hold the board is missing) is visible. Returns the drift it saw.
+
+  The drift is recorded per ticket (`SymphonyElixir.Hold.Drift`) for the Setup check, and its
+  warning is logged once per change rather than on every poll. `opts[:identifier]` and `opts[:url]`
+  name the ticket there; `opts[:now]` is the time of the poll.
   """
   @spec report_drift(String.t() | nil, String.t() | nil, [String.t()] | nil, keyword()) ::
           :ok | {:stray_label, kind()} | {:missing_label, kind()}
   def report_drift(repo_key, issue_id, labels, opts \\ []) do
-    case drift(record(repo_key, issue_id, opts), labels) do
-      :ok ->
-        :ok
+    drift = drift(record(repo_key, issue_id, opts), labels)
+    if record_drift(repo_key, issue_id, drift, opts) == :changed, do: log_drift(issue_id, drift)
+    drift
+  end
 
-      {:stray_label, kind} = drift ->
-        Logger.warning(
-          "Machine label #{inspect(label(kind))} is on issue_id=#{issue_id} with no store hold; " <>
-            "a hand-added label — the store is the truth"
-        )
+  @doc """
+  Re-syncs the ticket's `kind` label from the store, as the Setup fix for a drifted ticket asks: the
+  label is set when the store holds the hold and cleared when it doesn't. Unlike `set/5` and
+  `clear/4`, a label write the tracker refuses is returned, and the ticket's drift is forgotten only
+  once the write went through.
+  """
+  @spec resync(String.t() | nil, String.t() | nil, kind(), keyword()) :: :ok | {:error, term()}
+  def resync(repo_key, issue_id, kind, opts \\ []) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
 
-        drift
-
-      {:missing_label, kind} = drift ->
-        Logger.warning("Store hold #{inspect(kind)} on issue_id=#{issue_id} is missing its machine label")
-        drift
+    with name when is_binary(name) <- label(kind) || {:error, {:unknown_hold_kind, kind}},
+         :ok <- require_repo_key(repo_key, issue_id),
+         :ok <- resync_label(tracker, issue_id, name, held?(repo_key, issue_id, kind, opts)) do
+      Drift.forget(repo_key, issue_id)
     end
+  end
+
+  defp resync_label(tracker, issue_id, name, true = _held?), do: tracker.set_machine_label(issue_id, name)
+  defp resync_label(tracker, issue_id, name, false = _held?), do: tracker.clear_machine_label(issue_id, name)
+
+  # A ticket read with no repo key is reported where it is read; its drift has no repo to show under.
+  defp record_drift(repo_key, issue_id, drift, opts) when is_binary(repo_key) and repo_key != "" and is_binary(issue_id) do
+    ticket = %{identifier: opts[:identifier], url: opts[:url]}
+    Drift.record(repo_key, issue_id, drift, ticket, Keyword.get_lazy(opts, :now, &DateTime.utc_now/0))
+  end
+
+  defp record_drift(_repo_key, _issue_id, :ok, _opts), do: :unchanged
+  defp record_drift(_repo_key, _issue_id, _drift, _opts), do: :changed
+
+  defp log_drift(issue_id, {:stray_label, kind}) do
+    Logger.warning(
+      "Machine label #{inspect(label(kind))} is on issue_id=#{issue_id} with no store hold; " <>
+        "a hand-added label — the store is the truth"
+    )
+  end
+
+  defp log_drift(issue_id, {:missing_label, kind}) do
+    Logger.warning("Store hold #{inspect(kind)} on issue_id=#{issue_id} is missing its machine label")
   end
 
   defp project(tracker, issue_id, kind, action) do

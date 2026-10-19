@@ -73,7 +73,14 @@ last poll fetched: tickets that don't route back to the repo (with a fix that ad
 id to `route.projects`), a route value Linear has no project or team for, two repos taking the same
 tickets, and a route that has matched nothing for 24 hours. It flags each repository with no Linear
 team (an error), and one whose team is found only through its projects or tickets (a warning,
-with a fix that sets `route.team`). `POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
+with a fix that sets `route.team`). In each routed Linear team it checks the labels Symphony
+applies or reads (`Blocked`, `Needs Decision`, the CI labels, `plan`, `qa:skip`, the
+`agent.concurrency.force_label`, each `escalate.labels` entry and the others), with a fix that
+creates a missing one; a label one typo away from one of them; the deprecated `human-action`
+label in `escalate.labels` (a fix removes it) or on open tickets; and tickets whose `Blocked` or
+`Needs Decision` label disagrees with the hold Symphony keeps, with a fix that re-syncs the label.
+`POST /api/v1/setup/fixes` runs a Linear fix the last check proposed, and
+`POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 

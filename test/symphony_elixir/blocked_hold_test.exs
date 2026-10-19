@@ -3,6 +3,7 @@ defmodule SymphonyElixir.BlockedHoldTest do
 
   alias SymphonyElixir.{BlockedHold, Hold, RunStore, UpdateHold, Workflow}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Hold.Drift
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "repo-a"
@@ -204,6 +205,18 @@ defmodule SymphonyElixir.BlockedHoldTest do
       assert log =~ "with no store hold"
       assert labels() == []
       assert stored_hold() == nil
+    end
+
+    test "a stray Blocked label the poll can't clear is logged once over several syncs, and recorded for Setup" do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{labels: ["Blocked"]})])
+      Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, {:error, :forbidden})
+      stray = issue(%{labels: ["Blocked"]})
+
+      log = capture_log(fn -> for _poll <- 1..4, do: BlockedHold.sync(stray, @terminal, settings: designed_settings()) end)
+
+      assert length(String.split(log, "with no store hold")) == 2
+      assert labels() == ["Blocked"]
+      assert [%{issue_id: @issue_id, identifier: "TP-817", drift: {:stray_label, :blocked}}] = Drift.entries()
     end
 
     test "re-projects a store hold whose Blocked label is missing" do

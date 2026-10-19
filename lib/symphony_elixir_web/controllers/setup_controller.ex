@@ -5,7 +5,11 @@ defmodule SymphonyElixirWeb.SetupController do
   The response holds the setup problems (`SymphonyElixir.Setup`: `problems`, `not_checked`,
   `checked_at`, `linear_checked_at`) and one section per part of the setup, `github_updates`
   (`SymphonyElixir.GitHub.WebhookSetup`). `POST /api/v1/setup/refresh` runs the checks again and
-  answers with the problems. `POST /api/v1/setup/github_updates/:action` runs an action (`turn_on`,
+  answers with the problems. `POST /api/v1/setup/fixes` runs a `linear` fix the latest check
+  proposed (`SymphonyElixir.Setup.Fixes`, the descriptor as the payload lists it, or under `fix`)
+  and answers with the problems after it: 422 `fix_not_proposed` for one the check didn't propose,
+  422 `fix_refused` with Linear's reason and the unchanged problems when Linear refused it.
+  `POST /api/v1/setup/github_updates/:action` runs an action (`turn_on`,
   `run_step`, `test`, `restart_relay`, `recreate_secret`, `change_relay`, `turn_off`) and answers with
   the section as it leaves it.
   """
@@ -15,6 +19,7 @@ defmodule SymphonyElixirWeb.SetupController do
   alias Plug.Conn
   alias SymphonyElixir.GitHub.WebhookSetup
   alias SymphonyElixir.Setup
+  alias SymphonyElixir.Setup.Fixes
   alias SymphonyElixirWeb.Endpoint
 
   @spec show(Conn.t(), map()) :: Conn.t()
@@ -26,6 +31,24 @@ defmodule SymphonyElixirWeb.SetupController do
 
   @spec refresh(Conn.t(), map()) :: Conn.t()
   def refresh(conn, _params), do: json(conn, Setup.refresh(setup()))
+
+  @spec fixes(Conn.t(), map()) :: Conn.t()
+  def fixes(conn, params) do
+    params = json_form(params)
+
+    case Fixes.run(Map.get(params, "fix", params), server: setup()) do
+      {:ok, payload} ->
+        json(conn, payload)
+
+      {:error, :not_proposed} ->
+        error_response(conn, 422, "fix_not_proposed", "The latest setup check didn't propose this fix. Check again, then use a fix it lists.")
+
+      {:error, {:refused, message}} ->
+        conn
+        |> put_status(422)
+        |> json(Map.put(Setup.payload(setup()), :error, %{code: "fix_refused", message: message}))
+    end
+  end
 
   @spec github_updates(Conn.t(), map()) :: Conn.t()
   def github_updates(conn, %{"action" => action} = params) do

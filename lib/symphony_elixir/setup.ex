@@ -33,7 +33,10 @@ defmodule SymphonyElixir.Setup do
     Checks.UnclonedRepos,
     Checks.Routing,
     Checks.Secrets,
-    Checks.Teams
+    Checks.Teams,
+    Checks.Labels,
+    Checks.DeprecatedLabels,
+    Checks.HoldDrift
   ]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}

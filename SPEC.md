@@ -4755,7 +4755,9 @@ Minimum endpoints:
     - `{"kind": "config_edit", "path", "action": "remove" | "set" | "add", "value"}`: the app
       applies it to `symphony.yml` through its settings writer once the operator confirms.
     - `{"kind": "linear", "action", "team", "name", "type"}`: the service runs it once the operator
-      confirms.
+      confirms, through `POST /api/v1/setup/fixes`. `create_label` creates the label `name` in the
+      team `team`; `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each
+      ticket's hold label from the store.
     - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
@@ -4792,7 +4794,20 @@ Minimum endpoints:
     can't file its fix tickets and its states and labels are never checked (an `error`), or without
     `route.team` whose team is only found through Linear, its projects' teams (from the same read
     of the workspace's projects) or its polled issues' (a `warning`, with a `config_edit` fix setting
-    `repositories[<key>].route.team` when that is exactly one team).
+    `repositories[<key>].route.team` when that is exactly one team); the labels Symphony applies
+    or reads, in each routed team, from one labels read per team: one missing (an `error` for
+    `Blocked`, `Needs Decision` and the CI labels, which count only spelled exactly; a `warning`
+    for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold`, the
+    `agent.concurrency.force_label` and each `escalate.labels` entry, which count in any case),
+    with a `create_label` fix for the exact name; a label close to one of them (only case or
+    spaces apart, or a short edit distance) or one that is both a team and a workspace label (a
+    `warning` naming both, `open` `linear`); the deprecated `human-action` label in an
+    `escalate.labels` list (a `warning` with a `config_edit` `remove` of it) or on polled open
+    tickets (a `warning` naming them); and a ticket whose hold label drifted from the store (a
+    `Blocked` or `Needs Decision` label with no hold, or a hold with no label) through two checks
+    without a poll putting it right (one `warning` per repo naming the tickets, a `details` line
+    each saying which way and since when, and a `resync_hold` fix). The poll logs each drift once
+    per change, not on every poll.
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
@@ -4805,6 +4820,14 @@ Minimum endpoints:
   - Runs the setup checks again, with the team cache emptied, and answers with `problems`,
     `not_checked`, `checked_at` and `linear_checked_at` once they finish. A run already going
     finishes first. Same-origin like Check Now.
+- `POST /api/v1/setup/fixes`
+  - Runs a `linear` fix (the descriptor as a problem lists it, or under `fix`): it does exactly
+    what the descriptor says, runs the checks again with the team cache emptied and answers like
+    a refresh. `resync_hold` may name one of the problem's tickets or all of them. `422`
+    `fix_not_proposed` for a descriptor no problem of the latest check lists. When Linear refuses
+    (permissions, a name already taken) it answers `422` `fix_refused` with the reason and what to
+    do in plain words, next to the problems as they were; nothing is half created. Same-origin like
+    Check Now.
 - `POST /api/v1/setup/github_updates/<action>`
   - `turn_on` (`relay`, `url`), `run_step` (`step`, and `url` for a URL relay's `relay` step),
     `test` (`repo` optional), `restart_relay`, `recreate_secret`, `change_relay` (`relay`, `url`)
