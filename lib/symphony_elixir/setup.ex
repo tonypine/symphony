@@ -32,7 +32,8 @@ defmodule SymphonyElixir.Setup do
     Checks.WorkflowFetch,
     Checks.UnclonedRepos,
     Checks.Routing,
-    Checks.Secrets
+    Checks.Secrets,
+    Checks.Teams
   ]
 
   @type not_checked :: %{id: String.t(), title: String.t(), reason: String.t()}
@@ -81,6 +82,17 @@ defmodule SymphonyElixir.Setup do
   @doc "Empties the team cache, as a Setup fix that changed Linear does."
   @spec invalidate_team_cache(GenServer.server()) :: :ok
   def invalidate_team_cache(server \\ __MODULE__), do: GenServer.call(server, :invalidate_team_cache)
+
+  @doc """
+  The running server's team cache, for a read outside the checks that should share it
+  (`SymphonyElixir.RepoTeams`'s projects lookup). `nil` without a running server.
+  """
+  @spec team_cache(GenServer.server()) :: TeamCache.t() | nil
+  def team_cache(server \\ __MODULE__) do
+    if GenServer.whereis(server), do: GenServer.call(server, :team_cache)
+  catch
+    :exit, _reason -> nil
+  end
 
   @doc "Runs `checks` once, with a cache of its own, and returns the payload."
   @spec check(keyword()) :: payload()
@@ -139,6 +151,8 @@ defmodule SymphonyElixir.Setup do
   def handle_call(:refresh, from, state), do: {:noreply, request_run(%{state | empty_cache?: true}, from)}
 
   def handle_call(:invalidate_team_cache, _from, state), do: {:reply, TeamCache.invalidate(state.team_cache), state}
+
+  def handle_call(:team_cache, _from, state), do: {:reply, state.team_cache, state}
 
   @impl true
   def handle_info(:tick, state) do

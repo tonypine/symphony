@@ -71,8 +71,9 @@ about each deprecated key the file still sets, with what replaced it and, for a 
 nothing now, a fix that removes it. It also checks each repo's `route` against the tickets its
 last poll fetched: tickets that don't route back to the repo (with a fix that adds their project
 id to `route.projects`), a route value Linear has no project or team for, two repos taking the same
-tickets, and a route that has matched nothing for 24 hours. `POST /api/v1/setup/refresh` checks
-again at once. See [SPEC.md](../SPEC.md) for the problem shape.
+tickets, and a route that has matched nothing for 24 hours. It flags each repository with no Linear
+team (an error), and one whose team is found only through its projects or tickets (a warning,
+with a fix that sets `route.team`). `POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 
@@ -142,8 +143,9 @@ issues:
   `"team": {"key", "name"}` and `"project": {"id", "name", "slug_id"}`), on every fetch, so a test
   can change them while Symphony runs. Entries with `"kind": "project"` (`id`, `name`, `slug_id`) or
   `"kind": "team"` (`id`, `key`, `name`) are the fake workspace's projects and teams: a route that
-  names a project by any of them polls its issues, as Linear does. Comments and state changes go
-  nowhere.
+  names a project by any of them polls its issues, as Linear does. A project's optional `"teams"`
+  lists its team keys; without it, the project is in the teams of its issues. Comments and state
+  changes go nowhere.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
@@ -211,7 +213,8 @@ issues:
 - `states.code_review`, `states.qa`, `states.plan_review`, `states.epic_review` and `states.ci_fix`:
   the machine-owned phase states — the board columns — defaulting to `Code Review`, `QA`,
   `Plan Review`, `Epic Review` and `CI Fix`; `null` turns one off. At startup Symphony finds each
-  one in the configured teams and creates it as a started state when it is missing, logging what
+  one in the configured teams (the `issues` team and each repository's: its `route.team`, else the
+  teams of the projects its route names, else the teams of the tickets it polls) and creates it as a started state when it is missing, logging what
   it created; a second start finds them all and creates nothing. A state renamed or deleted in
   Linear is reported at startup with its exact name and the `issues.states.*` key to point at the
   new name, and is then recreated, so a name is never silently duplicated. The
