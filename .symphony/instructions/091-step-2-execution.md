@@ -71,3 +71,16 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Then push the updates to the same branch; that push is the handoff to `Code Review`.
+
+### Visual work
+
+Apply this whenever a ticket adds or changes a screen or pane.
+
+- Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each: `functional` (every control reachable; scroll and collapse allowed; nothing clipped) or `optimize` (use the space). Where a repo names none, the QA wide pass size (1400×900 pt) is the functional viewport.
+- Design before code, recorded in the workpad under `### Design`:
+  1. Layout: the top-level sections and, per viewport, what shows, what collapses, what scrolls, what hides. Persistent chrome (navigation, side panels, detail panes) is part of the budget: when one opens, content gives way by a mechanism, never by being pushed off-screen or truncated to unreadability.
+  2. Each section designed on its own, then reviewed together.
+  3. Responsiveness pass, answered in writing: Is horizontal scroll needed, and where? Which panes resize or collapse? Is every control reachable at each viewport?
+  4. Interactivity pass: hover, pressed, focused, disabled and loading states for every control; keyboard reachability.
+  5. Accessibility pass: AX labels on every control; contrast per the repo's design system.
+- Offscreen renders (`ImageRenderer`) per viewport where the view renders offscreen; where it doesn't (`Table`, `NavigationSplitView`, `Form`), say so in the workpad and leave the sight check to QA.

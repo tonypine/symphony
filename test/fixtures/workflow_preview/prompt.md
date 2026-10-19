@@ -747,6 +747,19 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Then push the updates to the same branch; that push is the handoff to `Code Review`.
 
+### Visual work
+
+Apply this whenever a ticket adds or changes a screen or pane.
+
+- Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each: `functional` (every control reachable; scroll and collapse allowed; nothing clipped) or `optimize` (use the space). Where a repo names none, the QA wide pass size (1400×900 pt) is the functional viewport.
+- Design before code, recorded in the workpad under `### Design`:
+  1. Layout: the top-level sections and, per viewport, what shows, what collapses, what scrolls, what hides. Persistent chrome (navigation, side panels, detail panes) is part of the budget: when one opens, content gives way by a mechanism, never by being pushed off-screen or truncated to unreadability.
+  2. Each section designed on its own, then reviewed together.
+  3. Responsiveness pass, answered in writing: Is horizontal scroll needed, and where? Which panes resize or collapse? Is every control reachable at each viewport?
+  4. Interactivity pass: hover, pressed, focused, disabled and loading states for every control; keyboard reachability.
+  5. Accessibility pass: AX labels on every control; contrast per the repo's design system.
+- Offscreen renders (`ImageRenderer`) per viewport where the view renders offscreen; where it doesn't (`Table`, `NavigationSplitView`, `Form`), say so in the workpad and leave the sight check to QA.
+
 ## Step 3: Code Review, QA and merge handling
 
 1. After the handoff push the machine runs the review: do not code or change ticket content while the ticket is in `Code Review`, `QA` or `Merging`, or while a hold is set. Holds are requested, never performed: ask for a person with `linear_request_human_action` (a `Needs Decision` hold) or report a block (a `Blocked` hold), and Symphony sets and clears the label.
@@ -764,9 +777,11 @@ In this repository, a walkthrough step that judges the macOS app by sight in dar
 
 1. `Rework` means the work came back for changes. Continue on the **same** pull request and the same branch: never close the PR, never cut a new branch, and never move the workpad's prior plan aside.
 2. Read what sent it back — the reviewer's verdict and reasons, the failing assertions, the user journey QA ran — and address it directly. The old verdict does not survive the change: the new head is reviewed again from scratch.
-3. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
-4. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
-5. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with an `## Action needed:` request rather than starting over on your own.
+3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing) in the workpad, with the head each was found on.
+   - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Write `## Action needed:` with the finding history and two layout options for a person to choose, and stop.
+4. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
+5. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
+6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with an `## Action needed:` request rather than starting over on your own.
 
 ## Review brief
 
