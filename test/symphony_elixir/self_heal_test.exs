@@ -292,7 +292,7 @@ defmodule SymphonyElixir.SelfHealTest do
                Process.get(:fixer_create)
 
       assert description =~ "the Jobs page needs the hub, and hub-server needs Postgres"
-      assert description =~ "`verification.dev_server`"
+      assert description =~ "`verification.enabled: true` and `verification.dev_server`"
       assert description =~ "set `dev_server: true` on the QA playbook"
       assert %{component: "dev_server", scope: @repo_key} = Process.get(:recorded_self_heal)
     end
