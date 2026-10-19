@@ -41,6 +41,7 @@ defmodule SymphonyElixir.QaVerification do
   alias SymphonyElixir.{
     CiWait,
     ClosedPullRequest,
+    Config,
     Handoff,
     MergeConfirmation,
     QaPolicy,
@@ -410,18 +411,38 @@ defmodule SymphonyElixir.QaVerification do
   # (`SymphonyElixir.SelfHeal`), which files or reuses the fix ticket for the broken component,
   # holds the ticket on it, and resumes it by itself when the fix lands — or, for a block only a
   # person can clear, takes the access hold a person lifts. Either way the ticket pauses in QA
-  # rather than failing silently.
-  defp blocked(issue, opts, _settings, head, outcome) do
-    record_verdict(issue, opts, head, "blocked")
+  # rather than failing silently. The block's reason, whether it needs a person, the model the run
+  # used and the playbooks it ran are logged and recorded on the verdict, so a block can be
+  # diagnosed after the fact.
+  defp blocked(issue, opts, settings, head, outcome) do
+    details = blocked_details(opts, settings, outcome)
+    record_verdict(issue, opts, head, "blocked", details)
     attempts = blocked_attempts(issue, opts, head)
+    retry? = retry_blocked?(attempts, outcome)
     publish_report(issue, opts, head, outcome, blocked_target(attempts, outcome))
 
-    if retry_blocked?(attempts, outcome) do
-      Logger.warning("QA blocked for #{issue_label(issue)} head=#{head} (attempt #{attempts}/#{@max_blocked_attempts}); retrying")
-      :ok
-    else
-      self_heal(issue, opts, attempts, outcome)
-    end
+    Logger.warning(
+      "QA blocked for #{issue_label(issue)} head=#{head} model=#{details.model} needs_person=#{details.needs_person} " <>
+        "playbooks=#{Enum.join(details.playbooks, ",")} (attempt #{attempts}/#{@max_blocked_attempts}); " <>
+        "#{if retry?, do: "retrying", else: "self-healing"}: #{details.reason}"
+    )
+
+    if retry?, do: :ok, else: self_heal(issue, opts, attempts, outcome)
+  end
+
+  defp blocked_details(opts, settings, outcome) do
+    %{
+      reason: verdict_reason(outcome),
+      needs_person: needs_person?(outcome),
+      model: qa_model(opts, settings),
+      playbooks: Enum.map(Map.get(outcome, :playbooks, []), &to_string/1)
+    }
+  end
+
+  # The model the QA agent ran on: the run's profile, else the QA profile `QaAgent` starts with.
+  defp qa_model(opts, settings) do
+    profile = Keyword.get(opts, :run_profile) || Config.qa_profile(settings)
+    Map.get(profile, :model) || "default"
   end
 
   defp self_heal(issue, opts, attempts, outcome) do
@@ -553,8 +574,8 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  defp record_verdict(issue, opts, head, outcome) do
-    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome)
+  defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
+    TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details)
   end
 
   defp record_move_signal(issue, opts, signal, extra) do
