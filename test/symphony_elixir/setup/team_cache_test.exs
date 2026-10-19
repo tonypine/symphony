@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Setup.TeamCacheTest do
   defmodule FakeTracker do
     def team_workflow_states(team), do: answer({:states, team}, [%{id: "s", name: "Todo", team_id: "t", team_key: team}])
     def team_labels(team), do: answer({:labels, team}, [%{id: "l", name: "plan", team_id: nil, team_key: nil}])
+    def projects_and_teams, do: answer(:projects_and_teams, %{projects: [], teams: [%{id: "t", key: "TP", name: "Tony Pine"}]})
 
     defp answer(request, value) do
       send(self(), {:tracker, request})
@@ -35,6 +36,17 @@ defmodule SymphonyElixir.Setup.TeamCacheTest do
     :counters.add(clock, 1, 100)
     assert {:ok, _states} = TeamCache.states(cache, "TP")
     assert_received {:tracker, {:states, "TP"}}
+  end
+
+  test "the workspace's projects and teams are read once until they expire", %{cache: cache, clock: clock} do
+    assert {:ok, %{teams: [%{key: "TP"}]}} = TeamCache.projects_and_teams(cache)
+    assert {:ok, _catalog} = TeamCache.projects_and_teams(cache)
+    assert_received {:tracker, :projects_and_teams}
+    refute_received {:tracker, _request}
+
+    :counters.add(clock, 1, 100)
+    assert {:ok, _catalog} = TeamCache.projects_and_teams(cache)
+    assert_received {:tracker, :projects_and_teams}
   end
 
   test "invalidate forgets every team", %{cache: cache} do

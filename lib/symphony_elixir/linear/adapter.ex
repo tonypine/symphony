@@ -261,6 +261,27 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # The Setup routing check reads every project and team once per run, to tell a route value Linear
+  # doesn't have from a near miss of one it does.
+  @projects_and_teams_query """
+  query SymphonyProjectsAndTeams {
+    projects(first: 250) {
+      nodes {
+        id
+        name
+        slugId
+      }
+    }
+    teams(first: 250) {
+      nodes {
+        id
+        key
+        name
+      }
+    }
+  }
+  """
+
   # A new phase state is a started state: it sits beside In Progress on the board. Linear requires
   # the color.
   @create_workflow_state_mutation """
@@ -750,6 +771,23 @@ defmodule SymphonyElixir.Linear.Adapter do
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :labels_unavailable}
+    end
+  end
+
+  @doc "Every project (id, name, slug id) and team (id, key, name) in the workspace, in one request."
+  @spec projects_and_teams() :: {:ok, Tracker.projects_and_teams()} | {:error, term()}
+  def projects_and_teams do
+    with {:ok, response} <- client_module().graphql(@projects_and_teams_query, %{}),
+         projects when is_list(projects) <- get_in(response, ["data", "projects", "nodes"]),
+         teams when is_list(teams) <- get_in(response, ["data", "teams", "nodes"]) do
+      {:ok,
+       %{
+         projects: Enum.map(projects, &%{id: &1["id"], name: &1["name"], slug_id: &1["slugId"]}),
+         teams: Enum.map(teams, &%{id: &1["id"], key: &1["key"], name: &1["name"]})
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :projects_unavailable}
     end
   end
 

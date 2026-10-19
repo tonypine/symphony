@@ -68,8 +68,11 @@ invalid value, YAML that doesn't parse) does not stop it: it keeps running the l
 loaded, logs the reason, and lists the rejected file under `problems` in `GET /api/v1/setup`
 (the key or line, the reason, and since when) until the file loads again. The same list warns
 about each deprecated key the file still sets, with what replaced it and, for a key that does
-nothing now, a fix that removes it. `POST /api/v1/setup/refresh` checks again at once. See
-[SPEC.md](../SPEC.md) for the problem shape.
+nothing now, a fix that removes it. It also checks each repo's `route` against the tickets its
+last poll fetched: tickets that don't route back to the repo (with a fix that adds their project
+id to `route.projects`), a route value Linear has no project or team for, two repos taking the same
+tickets, and a route that has matched nothing for 24 hours. `POST /api/v1/setup/refresh` checks
+again at once. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 
@@ -135,8 +138,12 @@ issues:
 
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
   `memory.issues_file` (relative to the folder holding `symphony.yml`), a JSON list of
-  `{"id", "identifier", "state", "title", "description", "labels"}` objects, on every fetch, so a test
-  can change them while Symphony runs. Comments and state changes go nowhere.
+  `{"id", "identifier", "state", "title", "description", "labels"}` objects (with an optional
+  `"team": {"key", "name"}` and `"project": {"id", "name", "slug_id"}`), on every fetch, so a test
+  can change them while Symphony runs. Entries with `"kind": "project"` (`id`, `name`, `slug_id`) or
+  `"kind": "team"` (`id`, `key`, `name`) are the fake workspace's projects and teams: a route that
+  names a project by any of them polls its issues, as Linear does. Comments and state changes go
+  nowhere.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.

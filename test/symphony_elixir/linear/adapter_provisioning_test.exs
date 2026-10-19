@@ -15,6 +15,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyAllLabels", :labels},
       {"SymphonyTeamWorkflowStates", :team_workflow_states},
       {"SymphonyTeamLabels", :team_labels},
+      {"SymphonyProjectsAndTeams", :projects_and_teams},
       {"SymphonyCreateWorkflowState", :create_workflow_state},
       {"SymphonyCreateLabel", :create_label},
       {"SymphonyCreateIssueScope", :create_issue_scope},
@@ -76,6 +77,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     defp default(:workflow_states_by_name), do: %{"data" => %{"workflowStates" => %{"nodes" => []}}}
     defp default(:workflow_states), do: %{"data" => %{"workflowStates" => %{"nodes" => []}}}
     defp default(:labels), do: %{"data" => %{"issueLabels" => %{"nodes" => []}}}
+    defp default(:projects_and_teams), do: %{"data" => %{"projects" => %{"nodes" => []}, "teams" => %{"nodes" => []}}}
     defp default(:create_workflow_state), do: created_state()
     defp default(:create_label), do: created_label()
     defp default(:create_issue_scope), do: team_scope()
@@ -255,6 +257,32 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       put(:team_labels, {:ok, %{"data" => %{}}})
       assert {:error, :workflow_states_unavailable} = Adapter.team_workflow_states("TP")
       assert {:error, :labels_unavailable} = Adapter.team_labels("TP")
+    end
+  end
+
+  describe "projects_and_teams/0" do
+    test "reads every project and team in one request" do
+      put(
+        :projects_and_teams,
+        {:ok,
+         %{
+           "data" => %{
+             "projects" => %{"nodes" => [%{"id" => "p1", "name" => "Symphony", "slugId" => "a1abb875ac02"}]},
+             "teams" => %{"nodes" => [%{"id" => "t1", "key" => "TP", "name" => "Tony Pine"}]}
+           }
+         }}
+      )
+
+      assert Adapter.projects_and_teams() ==
+               {:ok, %{projects: [%{id: "p1", name: "Symphony", slug_id: "a1abb875ac02"}], teams: [%{id: "t1", key: "TP", name: "Tony Pine"}]}}
+    end
+
+    test "reports a tracker error and an unusable response" do
+      put(:projects_and_teams, {:error, :timeout})
+      assert {:error, :timeout} = Adapter.projects_and_teams()
+
+      put(:projects_and_teams, {:ok, %{"data" => %{"projects" => %{"nodes" => []}}}})
+      assert {:error, :projects_unavailable} = Adapter.projects_and_teams()
     end
   end
 
