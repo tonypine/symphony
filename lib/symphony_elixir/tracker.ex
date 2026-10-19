@@ -47,6 +47,15 @@ defmodule SymphonyElixir.Tracker do
           team_key: String.t() | nil
         }
 
+  @typedoc "A Linear project a repo route can name: by its id, its slug id or its name."
+  @type project :: %{id: String.t() | nil, name: String.t() | nil, slug_id: String.t() | nil}
+
+  @typedoc "A Linear team a repo route can name: by its key or its id."
+  @type team :: %{id: String.t() | nil, key: String.t() | nil, name: String.t() | nil}
+
+  @typedoc "The workspace's projects and teams, read together for the Setup routing check."
+  @type projects_and_teams :: %{projects: [project()], teams: [team()]}
+
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
@@ -71,6 +80,7 @@ defmodule SymphonyElixir.Tracker do
   @callback team_workflow_states(String.t()) :: {:ok, [workflow_state()]} | {:error, term()}
   @callback team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
+  @callback projects_and_teams() :: {:ok, projects_and_teams()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -232,6 +242,10 @@ defmodule SymphonyElixir.Tracker do
   @doc "The labels the team `team` (its key) can use, its own and the workspace's, in one request."
   @spec team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   def team_labels(team) when is_binary(team), do: adapter().team_labels(team)
+
+  @doc "The workspace's projects and teams, in one request."
+  @spec projects_and_teams() :: {:ok, projects_and_teams()} | {:error, term()}
+  def projects_and_teams, do: adapter().projects_and_teams()
 
   @doc """
   Creates a label named `label_name` in `team` (a team key or id), and returns it. Used only by

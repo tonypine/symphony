@@ -1878,7 +1878,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.linear.scope.labels`: optional list of Linear label names
 - At least one issue-level or repository route selector is REQUIRED when provider is linear.
 - `issues.memory.issues_file`: optional path, relative to `symphony.yml`, of a JSON list of issues
-  the memory provider reads on every fetch
+  the memory provider reads on every fetch; entries with `"kind": "project"` or `"kind": "team"`
+  are its projects and teams
 - `issues.linear.assignee`: optional string or `$VAR`, canonical env `LINEAR_ASSIGNEE`;
   `"me"` resolves the current Linear viewer
 - `issues.states.active`: list of strings, default `["Todo", "In Progress"]`
@@ -4761,7 +4762,18 @@ Minimum endpoints:
     naming the file, the key or line and the reason, and since when the last good config has kept
     running); a repo whose `WORKFLOW.md` fails to load from its base ref (an `error`); a repo whose
     fetch failed three times in a row (a `warning`); a `workspace.source` repo not cloned yet (a
-    `warning`); a secret the config needs but the service can't read (an `error` with an `open`
+    `warning`); and each repo's route, judged on the issues its last poll fetched (no issue query
+    of its own) and one read of the workspace's projects and teams per run, cached with the team
+    cache. Its problems: polled issues that `with_repo_key` doesn't key back to the repo (an
+    `error` with up to five tickets, "N of M come back", and a `config_edit` `add` of their project
+    id to `repositories[<key>].route.projects` when re-running the resolver with it routes them
+    all back, else `open` `repos`); a `route.projects` or `route.team` value no Linear project (id,
+    slug id, name) or team (key, id) has (an `error`, with a `config_edit` `set` to the project's
+    id or the team's key when exactly one is a near match); an issue more than one non-default
+    repo takes by its route or its poll (one `error` per set of repos, `open` `repos`); a repo
+    whose polls fetched nothing for 24 hours (a `warning`). A default repo's poll of an issue a
+    scoped repo takes is routing as designed. A route change starts the repo's poll record over;
+    and a secret the config needs but the service can't read (an `error` with an `open`
     `settings` fix, naming the variable and the key, never a value): the Linear API key,
     `OPENROUTER_API_KEY` when a run kind's profile resolves to `openrouter` (naming the run kinds),
     each whole-value `$NAME` in `symphony.yml` whose variable is unset or empty (an MCP server's

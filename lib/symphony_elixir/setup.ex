@@ -31,6 +31,7 @@ defmodule SymphonyElixir.Setup do
     Checks.WorkflowRef,
     Checks.WorkflowFetch,
     Checks.UnclonedRepos,
+    Checks.Routing,
     Checks.Secrets
   ]
 
