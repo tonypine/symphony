@@ -37,6 +37,8 @@
 //   ax-ping <pid>
 //   ax-select <pid> <path>
 //   click <pid> <path> <clicks>
+//   hover <pid> <path or x,y>
+//   context-menu <pid> <path or x,y>
 //   key <pid> <key> <modifiers, comma-separated, or "">
 //
 // `ax-set-value` types into a text field the way a person does (see
@@ -46,6 +48,8 @@
 // grant like the other `ax-` commands. `ax-select` selects a table or outline
 // row, which answers no AXPress, and `click` and `key` send mouse and key
 // events to the app's PID alone (see `selectRow`, `click` and `pressKey`).
+// `click`, `hover` and `context-menu` move the real pointer to the target first
+// (see `movePointer`), only once the app's own window is in front there.
 //
 // Opened with no arguments (by hand, from Finder or `open`), it asks for both
 // permissions, so that it is listed in System Settings.
@@ -644,45 +648,259 @@ func coverer(at point: CGPoint, pid: pid_t, windows: [[String: Any]]) -> String?
 }
 
 let clickPause: useconds_t = 50_000
+// Time the app gets to answer a pointer move (tracking areas, `onHover`) before
+// the helper reads its tree.
+let pointerPause: useconds_t = 100_000
+let settlePause: useconds_t = 150_000
+// Nodes the change check reads: enough for a window's controls, few enough to
+// read several times a second.
+let fingerprintLimit = 1500
 
-// Clicks the centre of the element's frame. The click goes only to the app's
-// PID, and only when the app's own window is on screen at that point and
-// nothing else would take the click there, so a covered or off-screen element
-// fails rather than clicking something else.
-func click(_ pid: pid_t, _ path: String, clicks: Int) {
-    let app = application(pid)
-    let target = resolve(app, path)
+// Where the pointer goes: an element's frame centre, or a point on screen in the
+// coordinates of `qa_ax_tree`'s frames (top left of the main screen is 0,0).
+struct PointerTarget {
+    let point: CGPoint
+    let element: AXUIElement?
+    let path: String
+    let label: String
+}
+
+func elementTarget(_ target: AXUIElement, _ path: String) -> PointerTarget {
     guard let origin = point(attribute(target, kAXPositionAttribute as String)),
           let extent = size(attribute(target, kAXSizeAttribute as String)), extent.width >= 1, extent.height >= 1 else {
-        fail("no_frame", "The element at \(path) has no frame to click.")
+        fail("no_frame", "The element at \(path) has no frame to point at.")
     }
 
     let centre = CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2)
-    bringForward(app, target)
+    return PointerTarget(point: centre, element: target, path: path, label: "the element at \(path)")
+}
 
-    let windows = onScreenWindows(at: centre)
+// An element path, or `x,y`.
+func pointerTarget(_ app: AXUIElement, _ argument: String) -> PointerTarget {
+    let parts = argument.split(separator: ",", omittingEmptySubsequences: false)
+    guard parts.count == 2 else { return elementTarget(resolve(app, argument), argument) }
+    guard let x = Double(parts[0]), let y = Double(parts[1]) else { fail("invalid_point", "A point looks like 120,340.") }
+    return PointerTarget(point: CGPoint(x: x, y: y), element: nil, path: "", label: "point \(argument)")
+}
+
+// Brings the app and the target's window forward and returns the number of the
+// app's window under the point. Fails when the app has no window on screen
+// there or something else would take the pointer, so nothing that follows can
+// land on another app.
+func reach(_ app: AXUIElement, _ pid: pid_t, _ target: PointerTarget) -> Int {
+    bringForward(app, target.element)
+
+    let windows = onScreenWindows(at: target.point)
     guard let window = windows.first(where: { ownerPID($0) == pid }), let number = windowNumber(window) else {
-        fail("not_on_screen", "The element at \(path) is not on screen; scroll it into view or raise its window.")
+        fail("not_on_screen", "\(capitalized(target.label)) is not on screen; scroll it into view or raise its window.")
     }
-    if let blocker = coverer(at: centre, pid: pid, windows: windows) {
-        fail("covered", "\(blocker) covers the element at \(path); QA clicks only inside the app's own windows.")
+    if let blocker = coverer(at: target.point, pid: pid, windows: windows) {
+        fail("covered", "\(blocker) covers \(target.label); QA points and clicks only inside the app's own windows.")
     }
+
+    return number
+}
+
+func capitalized(_ text: String) -> String { text.prefix(1).uppercased() + text.dropFirst() }
+
+// Moves the real pointer, as a person's mouse would. The window server keeps
+// the pointer's position: hover (tracking areas, SwiftUI `onHover`) follows it,
+// and a SwiftUI button or link checks it when the mouse goes up, so a click
+// posted away from it does nothing. `reach` has checked that the app's own
+// window is in front at the point, so the move reaches no other app.
+func movePointer(to point: CGPoint) {
+    guard let event = CGEvent(mouseEventSource: keySource, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+        fail("pointer_failed", "Could not create a mouse event.")
+    }
+    event.post(tap: .cghidEventTap)
+    usleep(pointerPause)
+}
+
+// The app's own element under the point, as the accessibility hit test sees it.
+func elementUnder(_ app: AXUIElement, _ point: CGPoint) -> [String: Any]? {
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success, let hit else { return nil }
+    var node = describe(hit, path: "")
+    node.removeValue(forKey: "path")
+    return node
+}
+
+// Mouse events go to the app's PID alone, aimed at its window under the point.
+func postMouse(_ pid: pid_t, _ types: [CGEventType], at point: CGPoint, button: CGMouseButton, window: Int, clickState: Int) {
+    for type in types {
+        guard let event = CGEvent(mouseEventSource: keySource, mouseType: type, mouseCursorPosition: point, mouseButton: button) else {
+            fail("click_failed", "Could not create a mouse event.")
+        }
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window))
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window))
+        event.postToPid(pid)
+        usleep(keyPause)
+    }
+}
+
+// What the app shows, in short: its on-screen windows and, for each element
+// outside the menu bar, its role, title, value, description, state and number
+// of children. Two equal fingerprints mean nothing the tree reports changed.
+func fingerprint(_ app: AXUIElement, _ pid: pid_t) -> String {
+    var lines = ownedWindows(pid).filter { $0["onscreen"] as? Bool == true }.map { "window \($0["id"] ?? "") \($0["title"] ?? "")" }
+    var visited = 0
+
+    func walk(_ element: AXUIElement, _ depth: Int) {
+        guard visited < fingerprintLimit else { return }
+        visited += 1
+        let role = text(attribute(element, kAXRoleAttribute as String)) ?? ""
+        if role == kAXMenuBarRole as String { return }
+
+        let kids = children(element)
+        let fields = [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute, kAXSelectedAttribute, kAXFocusedAttribute, kAXEnabledAttribute]
+        lines.append(([String(depth), role, String(kids.count)] + fields.map { text(attribute(element, $0 as String)) ?? "" }).joined(separator: "|"))
+        if depth < 40 { kids.forEach { walk($0, depth + 1) } }
+    }
+
+    walk(app, 0)
+    return lines.joined(separator: "\n")
+}
+
+// Reads the fingerprint until two reads in a row agree, for at most `seconds`.
+func settle(_ app: AXUIElement, _ pid: pid_t, within seconds: TimeInterval) -> (fingerprint: String, settled: Bool) {
+    let deadline = Date().addingTimeInterval(seconds)
+    var last = fingerprint(app, pid)
+
+    while Date() < deadline {
+        usleep(settlePause)
+        let next = fingerprint(app, pid)
+        if next == last { return (next, true) }
+        last = next
+    }
+
+    return (last, false)
+}
+
+func actionNames(_ element: AXUIElement) -> [String] {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(element, &names) == .success else { return [] }
+    return (names as? [String]) ?? []
+}
+
+// Clicks the centre of the element's frame. The pointer moves there first and
+// the click goes only to the app's PID, and only when the app's own window is
+// on screen at that point and nothing else would take the click there, so a
+// covered or off-screen element fails rather than clicking something else.
+// When a single click changed nothing the tree or the window list reports and
+// the element answers AXPress, it is pressed that way instead, and the result
+// says so.
+func click(_ pid: pid_t, _ path: String, clicks: Int) {
+    let app = application(pid)
+    let element = resolve(app, path)
+    let target = elementTarget(element, path)
+    let window = reach(app, pid, target)
+    movePointer(to: target.point)
+    let under = elementUnder(app, target.point)
+    let before = settle(app, pid, within: 1).fingerprint
 
     for count in 1...clicks {
-        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-            guard let event = CGEvent(mouseEventSource: keySource, mouseType: type, mouseCursorPosition: centre, mouseButton: .left) else {
-                fail("click_failed", "Could not create a mouse event.")
-            }
-            event.setIntegerValueField(.mouseEventClickState, value: Int64(count))
-            event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(number))
-            event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(number))
-            event.postToPid(pid)
-            usleep(keyPause)
-        }
+        postMouse(pid, [.leftMouseDown, .leftMouseUp], at: target.point, button: .left, window: window, clickState: count)
     }
 
     usleep(clickPause)
-    emit(["ok": true, "clicked": ["x": Int(centre.x), "y": Int(centre.y)], "clicks": clicks, "element": describe(target, path: path)])
+    let changed = waitUntil(1) { fingerprint(app, pid) != before }
+    var result: [String: Any] = [
+        "ok": true,
+        "clicked": ["x": Int(target.point.x), "y": Int(target.point.y)],
+        "clicks": clicks,
+        "changed": changed,
+        "element": describe(element, path: path)
+    ]
+    result["under_pointer"] = under
+
+    if !changed, clicks == 1, actionNames(element).contains(kAXPressAction as String),
+       AXUIElementPerformAction(element, kAXPressAction as CFString) == .success {
+        result["fallback"] = "AXPress"
+        result["note"] = "The click changed nothing in the app's accessibility tree or windows, so qa_click pressed the element with AXPress instead. Read qa_ax_tree to see what the press did."
+    }
+
+    emit(result)
+}
+
+// Moves the pointer over an element's centre or a point and waits for the app
+// to settle, so a hover state (a button that shows on hover, a highlight, a
+// tooltip's trigger) can be screenshotted. The pointer stays there.
+func hover(_ pid: pid_t, _ argument: String) {
+    let app = application(pid)
+    let target = pointerTarget(app, argument)
+    _ = reach(app, pid, target)
+    movePointer(to: target.point)
+    let settled = settle(app, pid, within: 2).settled
+
+    var result: [String: Any] = [
+        "ok": true,
+        "hovered": ["x": Int(target.point.x), "y": Int(target.point.y)],
+        "settled": settled,
+        "note": "The pointer stays here until the next qa_click, qa_hover or qa_context_menu: take qa_screenshot now."
+    ]
+    result["under_pointer"] = elementUnder(app, target.point)
+    if let element = target.element { result["element"] = describe(element, path: target.path) }
+    emit(result)
+}
+
+// An open menu outside the menu bar (a context menu is a child of the app while
+// it shows), with its path. Closed menus have no frame.
+func openMenu(_ app: AXUIElement) -> (element: AXUIElement, path: String)? {
+    func find(_ element: AXUIElement, _ path: String, _ depth: Int) -> (element: AXUIElement, path: String)? {
+        for (index, child) in children(element).enumerated() {
+            let role = attribute(child, kAXRoleAttribute as String) as? String
+            if role == kAXMenuBarRole as String { continue }
+            let path = childPath(path, index)
+            if role == kAXMenuRole as String, let size = size(attribute(child, kAXSizeAttribute as String)), size.width > 0, size.height > 0 {
+                return (child, path)
+            }
+            if depth < 3, let found = find(child, path, depth + 1) { return found }
+        }
+        return nil
+    }
+
+    return find(app, "", 0)
+}
+
+func menuItems(_ menu: AXUIElement, _ path: String) -> [[String: Any]] {
+    children(menu).enumerated().map { index, item in
+        var node = describe(item, path: childPath(path, index))
+        node["shortcut"] = text(attribute(item, kAXMenuItemCmdCharAttribute as String))
+        if children(item).contains(where: { attribute($0, kAXRoleAttribute as String) as? String == kAXMenuRole as String }) {
+            node["submenu"] = true
+        }
+        return node
+    }
+}
+
+// Right-clicks an element's centre or a point, as a person opens a row's or a
+// control's context menu, then lists the menu's items for `qa_ax_press`. The
+// pointer moves there first; the click goes to the app's PID alone.
+func contextMenu(_ pid: pid_t, _ argument: String) {
+    let app = application(pid)
+    let target = pointerTarget(app, argument)
+    let window = reach(app, pid, target)
+    movePointer(to: target.point)
+    postMouse(pid, [.rightMouseDown, .rightMouseUp], at: target.point, button: .right, window: window, clickState: 1)
+
+    var found: (element: AXUIElement, path: String)?
+    guard waitUntil(2, { found = openMenu(app); return found != nil }), let menu = found else {
+        fail("no_menu", "No context menu opened at \(target.label). Try qa_ax_press with action AXShowMenu, or another element.")
+    }
+
+    var described = describe(menu.element, path: menu.path)
+    described["items"] = menuItems(menu.element, menu.path)
+    let popUp = ownedWindows(pid).first { $0["layer"] as? Int == 101 && $0["onscreen"] as? Bool == true }
+
+    var result: [String: Any] = [
+        "ok": true,
+        "clicked": ["x": Int(target.point.x), "y": Int(target.point.y)],
+        "menu": described,
+        "note": "Press an item with qa_ax_press on its path, or close the menu with qa_key and key escape. Screenshot it with qa_screenshot and its window_id."
+    ]
+    result["window_id"] = popUp?["id"]
+    emit(result)
 }
 
 // US-layout virtual key codes; the event also carries the character, so a key
@@ -748,7 +966,7 @@ func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
 
 // -- server ---------------------------------------------------------------------
 
-let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping", "ax-select", "click", "key"]
+let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping", "ax-select", "click", "hover", "context-menu", "key"]
 let requestLimit = 64 * 1024
 let commandTimeout: TimeInterval = 60
 // Symphony waits 15 s for the helper it opens, so an older owner file was left
@@ -1043,6 +1261,14 @@ case "click" where args.count == 4:
     requireAccessibility()
     guard let clicks = Int(args[3]), (1...2).contains(clicks) else { fail("invalid_clicks", "Clicks must be 1 or 2.") }
     click(pidArgument(args[1]), args[2], clicks: clicks)
+
+case "hover" where args.count == 3:
+    requireAccessibility()
+    hover(pidArgument(args[1]), args[2])
+
+case "context-menu" where args.count == 3:
+    requireAccessibility()
+    contextMenu(pidArgument(args[1]), args[2])
 
 case "key" where args.count == 4:
     requireAccessibility()

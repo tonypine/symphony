@@ -34,9 +34,23 @@ for you on the host. They only act on this worktree's configured app and on apps
   `control`) in the app's focused window. A shortcut such as ⌘[ is `key: "["`,
   `modifiers: ["command"]`. It returns the `window` and `focused` element the key went to.
 - `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
-  no accessibility action reaches. It fails with `not_on_screen` when the element is scrolled out
-  of the app's window, and with `covered` when another app would take the click at that point;
-  the message names that app, so quote it in the step's `details`.
+  no accessibility action reaches. The pointer moves there first, as a person's mouse would, and
+  the result names the element under it (`under_pointer`) and whether the tree or the windows
+  `changed`. When a single click changed nothing and the element answers `AXPress`, it is
+  pressed that way instead and `fallback` is `AXPress`: say so in the step's `details`. It fails
+  with `not_on_screen` when the element is scrolled out of the app's window, and with `covered`
+  when another app would take the click at that point; the message names that app, so quote it
+  in the step's `details`.
+- `qa_hover`: moves the pointer over an element's centre (`path`) or a point on screen (`x`,
+  `y`, in the points of `qa_ax_tree`'s frames) and waits for the app to settle (`settled`). The
+  pointer stays there, so a hover state (a button that only shows on hover, a highlight) is in
+  the next `qa_ax_tree` and `qa_screenshot`. A `qa_click` on what the hover showed moves the
+  pointer onto it, as a person's would. It fails like `qa_click`.
+- `qa_context_menu`: right-clicks an element's centre or a point and returns the `menu` that
+  opened, with each item's `path`, `title`, `enabled` and `shortcut`, and its `window_id` for
+  `qa_screenshot`. Press an item with `qa_ax_press` on its `path`; close the menu with `qa_key`
+  and `key: "escape"`. Use it for a row or control whose `AXShowMenu` is `unsupported`. It fails
+  with `no_menu` when no menu opened.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
   usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
@@ -281,7 +295,9 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
      read `qa_ax_tree` again to check what the selection shows (an inspector, a detail pane);
    - a step that names a key or shortcut (Return opens the selected item, ⌘[ goes back, Escape
      closes): press it with `qa_key` after selecting what it acts on;
-   - any other control: `qa_click` it.
+   - any other control: `qa_click` it;
+   - a step that hovers over something (to show a button, a highlight) or right-clicks it: use
+     `qa_hover` or `qa_context_menu` on it, and screenshot the state it shows.
 4. Let every window settle before you judge it. A window can open at the right size and
    collapse seconds later, so a check right after opening proves nothing:
    - wait about 10 seconds after the window opens (`sleep 10` in your shell);

@@ -789,10 +789,20 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       for {tool, args} <- [
             {"qa_ax_select", %{"pid" => 1, "path" => "0.1"}},
             {"qa_click", %{"pid" => 1, "path" => "0.1", "clicks" => 2}},
+            {"qa_hover", %{"pid" => 1, "x" => -20, "y" => 340}},
+            {"qa_context_menu", %{"pid" => 1, "path" => "0.1"}},
             {"qa_key", %{"pid" => 1, "key" => "[", "modifiers" => ["command"]}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+      end
+
+      response = DynamicTool.execute("qa_hover", %{"pid" => 1, "path" => "0.1", "clicks" => 2}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      for name <- ["qa_hover", "qa_context_menu"] do
+        spec = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == name))
+        assert %{"x" => %{"type" => "integer"}, "y" => %{"type" => "integer"}, "path" => %{"type" => "string"}} = spec["inputSchema"]["properties"]
       end
 
       key = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_key"))
