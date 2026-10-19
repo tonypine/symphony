@@ -303,7 +303,8 @@ defmodule SymphonyElixir.Tracker.Memory do
   The projects and teams a test seeds in `:memory_tracker_projects_list` and
   `:memory_tracker_teams_list` (or `{:error, reason}` in either), else the entries of the issues
   file with `"kind": "project"` (`id`, `name`, `slug_id`, `teams`) or `"kind": "team"` (`id`, `key`,
-  `name`). A project that names no teams is in the teams of its issues. Each call sends `{:memory_tracker_projects_and_teams}`, so a test can count requests.
+  `name`). A project that names no teams is in the teams of its issues. Each call sends
+  `{:memory_tracker_projects_and_teams}`, so a test can count requests.
   """
   @spec projects_and_teams() :: {:ok, Tracker.projects_and_teams()} | {:error, term()}
   def projects_and_teams do

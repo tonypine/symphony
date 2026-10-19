@@ -8,7 +8,8 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   Urgent, so `tickets.priorities` dispatches it like the ticket it unblocks), else at High, in the
   affected ticket's Linear team (else the team of the repo the scope rule names,
   `SymphonyElixir.SelfHeal.scope/3`, as `SymphonyElixir.RepoTeams.routed_teams/2` resolves it: its
-  `route.team`, else its routed projects' team) and in the affected ticket's project when
+  `route.team`, else its routed projects' team, else its polled tickets') and in the affected
+  ticket's project when
   the fix belongs to its own repo, else the scope repo's first routed project. The affected
   ticket is linked to it as blocked-by, and a recurring failure attaches its evidence as a comment
   on the fix ticket it already has. A reused fix ticket keeps the priority it was filed at.
