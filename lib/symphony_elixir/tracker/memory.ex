@@ -15,7 +15,8 @@ defmodule SymphonyElixir.Tracker.Memory do
   `"project": {"id", "name", "slug_id"}`), so a release binary (the menu bar app's
   end-to-end test) can run against a fake Linear whose issues the test edits while
   Symphony runs. Entries with `"kind": "project"` or `"kind": "team"` are the
-  workspace's projects and teams instead (`projects_and_teams/0`).
+  workspace's projects and teams instead (`projects_and_teams/0`); a project's
+  optional `"teams"` lists its team keys.
   """
 
   @behaviour SymphonyElixir.Tracker
@@ -301,8 +302,9 @@ defmodule SymphonyElixir.Tracker.Memory do
   @doc """
   The projects and teams a test seeds in `:memory_tracker_projects_list` and
   `:memory_tracker_teams_list` (or `{:error, reason}` in either), else the entries of the issues
-  file with `"kind": "project"` (`id`, `name`, `slug_id`) or `"kind": "team"` (`id`, `key`, `name`).
-  Each call sends `{:memory_tracker_projects_and_teams}`, so a test can count requests.
+  file with `"kind": "project"` (`id`, `name`, `slug_id`, `teams`) or `"kind": "team"` (`id`, `key`,
+  `name`). A project that names no teams is in the teams of its issues. Each call sends
+  `{:memory_tracker_projects_and_teams}`, so a test can count requests.
   """
   @spec projects_and_teams() :: {:ok, Tracker.projects_and_teams()} | {:error, term()}
   def projects_and_teams do
@@ -311,8 +313,20 @@ defmodule SymphonyElixir.Tracker.Memory do
     case {catalog(:memory_tracker_projects_list, "project"), catalog(:memory_tracker_teams_list, "team")} do
       {{:error, _reason} = error, _teams} -> error
       {_projects, {:error, _reason} = error} -> error
-      {projects, teams} -> {:ok, %{projects: projects, teams: teams}}
+      {projects, teams} -> {:ok, %{projects: Enum.map(projects, &with_team_keys/1), teams: teams}}
     end
+  end
+
+  defp with_team_keys(project), do: Map.put_new_lazy(project, :team_keys, fn -> issue_team_keys(project) end)
+
+  defp issue_team_keys(project) do
+    names = project_names(project)
+
+    for %Issue{project: %{} = issue_project, team: %{key: key}} <- issue_entries(),
+        is_binary(key),
+        Enum.any?(project_names(issue_project), &(&1 in names)),
+        uniq: true,
+        do: key
   end
 
   defp catalog(key, kind) do
@@ -321,6 +335,9 @@ defmodule SymphonyElixir.Tracker.Memory do
       :error -> Enum.flat_map(file_entries(), &catalog_entry(&1, kind))
     end
   end
+
+  defp catalog_entry(%{"kind" => "project", "teams" => teams} = entry, "project") when is_list(teams),
+    do: [%{id: entry["id"], name: entry["name"], slug_id: entry["slug_id"], team_keys: Enum.filter(teams, &is_binary/1)}]
 
   defp catalog_entry(%{"kind" => "project"} = entry, "project"), do: [%{id: entry["id"], name: entry["name"], slug_id: entry["slug_id"]}]
   defp catalog_entry(%{"kind" => "team"} = entry, "team"), do: [%{id: entry["id"], key: entry["key"], name: entry["name"]}]
