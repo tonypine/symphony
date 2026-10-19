@@ -11,8 +11,11 @@ defmodule SymphonyElixir.Setup.Problem do
       to `symphony.yml` through its settings writer once the operator confirms it.
     * `linear` (`action`, `team`, `name`, `type`): the service runs it once the operator confirms,
       through `POST /api/v1/setup/fixes` (`SymphonyElixir.Setup.Fixes`). `create_label` creates the
-      label `name` in the team `team`. `resync_hold` (`repo`, `tickets`) re-syncs each ticket's hold
-      label from the store; the operator may send it for one of its tickets or for all of them.
+      label `name` in the team `team`. `create_state` (`after`, `position`) creates the workflow
+      state `name` of the type `type` in the team `team`, at `position` in its board: just after the
+      state `after` (nil when the state goes first of its type). `resync_hold` (`repo`, `tickets`)
+      re-syncs each ticket's hold label from the store; the operator may send it for one of its
+      tickets or for all of them.
     * `open` (`target` `settings` | `symphony_yml` | `linear` | `drain_report` | `repos`, `url`): no
       fix is safe, so the app shows the button that goes where the operator fixes it.
   """
@@ -70,6 +73,15 @@ defmodule SymphonyElixir.Setup.Problem do
   @spec linear(String.t(), String.t(), String.t(), String.t() | nil) :: fix()
   def linear(action, team, name, type \\ nil) when is_binary(action) and is_binary(team) and is_binary(name) do
     %{kind: "linear", action: action, team: team, name: name, type: type}
+  end
+
+  @doc """
+  Creates the workflow state `name` of `type` in `team`, at `position` (nil: where Linear puts it),
+  just after the state `after`.
+  """
+  @spec create_state(String.t(), String.t(), String.t(), String.t() | nil, number() | nil) :: fix()
+  def create_state(team, name, type, after_state, position) when is_binary(type) do
+    Map.merge(linear("create_state", team, name, type), %{after: after_state, position: position})
   end
 
   @doc "Re-syncs the hold labels of `tickets` (identifiers) in the repo `repo` from the store."

@@ -35,7 +35,7 @@ defmodule SymphonyElixir.Setup.Checks.Labels do
   def run(%{system: nil}), do: []
 
   def run(%{system: system, team_cache: cache}) do
-    with {:ok, teams} <- teams(system.repos, cache) do
+    with {:ok, teams} <- RepoTeams.cached_teams(system.repos, cache) do
       Enum.reduce_while(teams, [], &add_team(&1, &2, system, cache))
     end
   end
@@ -53,25 +53,6 @@ defmodule SymphonyElixir.Setup.Checks.Labels do
       {:ok, []} -> []
       {:ok, labels} -> team_problems(team, repos, wanted(system, repos), labels)
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # Each routed team, in the order the repos name them, with the repos routed to it.
-  defp teams(repos, cache) do
-    opts = [projects: fn -> RepoTeams.cached_projects(cache) end]
-
-    Enum.reduce_while(repos, {:ok, []}, fn repo, {:ok, teams} ->
-      case RepoTeams.resolve(repo, opts) do
-        {:ok, %{teams: repo_teams}} -> {:cont, {:ok, Enum.reduce(repo_teams, teams, &add_repo(&2, &1, repo.name))}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp add_repo(teams, team, repo_name) do
-    case List.keyfind(teams, team, 0) do
-      nil -> teams ++ [{team, [repo_name]}]
-      {^team, names} -> List.keyreplace(teams, team, 0, {team, Enum.uniq(names ++ [repo_name])})
     end
   end
 

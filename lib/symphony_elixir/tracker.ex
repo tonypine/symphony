@@ -26,15 +26,22 @@ defmodule SymphonyElixir.Tracker do
         }
 
   @typedoc """
-  A workflow state as `SymphonyElixir.StateProvisioning` reads it: its name and the team it belongs
-  to (`team_key` is the team's short key, `team_id` its id).
+  A workflow state as `SymphonyElixir.StateProvisioning` and the Setup checks read it: its name, the
+  team it belongs to (`team_key` is the team's short key, `team_id` its id) and, when the read asks
+  for them, its `type` (`unstarted`, `started`, `completed`, `canceled`, …) and its `position` in
+  the team's board.
   """
   @type workflow_state :: %{
-          id: String.t() | nil,
-          name: String.t() | nil,
-          team_id: String.t() | nil,
-          team_key: String.t() | nil
+          required(:id) => String.t() | nil,
+          required(:name) => String.t() | nil,
+          required(:team_id) => String.t() | nil,
+          required(:team_key) => String.t() | nil,
+          optional(:type) => String.t() | nil,
+          optional(:position) => number() | nil
         }
+
+  @typedoc "What a create of a workflow state answers: the state it created, or why it didn't."
+  @type created_state :: {:ok, workflow_state()} | {:error, term()}
 
   @typedoc """
   A label as provisioning reads it: its name and the team that defines it (`team_key` is the team's
@@ -83,7 +90,7 @@ defmodule SymphonyElixir.Tracker do
   @callback create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   @callback workflow_states() :: {:ok, [workflow_state()]} | {:error, term()}
-  @callback create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
+  @callback create_workflow_state(String.t(), String.t(), String.t(), keyword()) :: created_state()
   @callback labels() :: {:ok, [label()]} | {:error, term()}
   @callback team_workflow_states(String.t()) :: {:ok, [workflow_state()]} | {:error, term()}
   @callback team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
@@ -232,11 +239,13 @@ defmodule SymphonyElixir.Tracker do
 
   @doc """
   Creates a workflow state named `state_name` with the hex `color` in `team` (a team key or id), and
-  returns it. Used only by `SymphonyElixir.StateProvisioning` to create a state that is missing.
+  returns it: `SymphonyElixir.StateProvisioning` creates a missing phase state, and a confirmed Setup
+  fix (`SymphonyElixir.Setup.Fixes`) a missing designed state. `opts`: `:type` (`started` by
+  default) and `:position` (left to the tracker when absent or nil).
   """
-  @spec create_workflow_state(String.t(), String.t(), String.t()) :: {:ok, workflow_state()} | {:error, term()}
-  def create_workflow_state(state_name, team, color) when is_binary(state_name) and is_binary(team) and is_binary(color) do
-    adapter().create_workflow_state(state_name, team, color)
+  @spec create_workflow_state(String.t(), String.t(), String.t(), keyword()) :: created_state()
+  def create_workflow_state(state_name, team, color, opts \\ []) when is_binary(state_name) and is_binary(team) and is_binary(color) do
+    adapter().create_workflow_state(state_name, team, color, opts)
   end
 
   @doc "Every label the tracker defines, workspace-wide and per team."

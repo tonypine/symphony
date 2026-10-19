@@ -133,6 +133,29 @@ defmodule SymphonyElixir.RepoTeams do
   @spec cached_projects(TeamCache.t()) :: {:ok, [Tracker.project()]} | {:error, term()}
   def cached_projects(%TeamCache{} = cache), do: projects(TeamCache.projects_and_teams(cache))
 
+  @doc """
+  Each team `repos` are routed to, in the order the repos name them, with the names of the repos
+  routed to it, resolved through `cache` as the Setup checks read Linear.
+  """
+  @spec cached_teams([map()], TeamCache.t()) :: {:ok, [{String.t(), [String.t()]}]} | {:error, term()}
+  def cached_teams(repos, %TeamCache{} = cache) when is_list(repos) do
+    opts = [projects: fn -> cached_projects(cache) end]
+
+    Enum.reduce_while(repos, {:ok, []}, fn repo, {:ok, teams} ->
+      case resolve(repo, opts) do
+        {:ok, %{teams: repo_teams}} -> {:cont, {:ok, Enum.reduce(repo_teams, teams, &add_repo(&2, &1, repo.name))}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp add_repo(teams, team, repo_name) do
+    case List.keyfind(teams, team, 0) do
+      nil -> teams ++ [{team, [repo_name]}]
+      {^team, names} -> List.keyreplace(teams, team, 0, {team, Enum.uniq(names ++ [repo_name])})
+    end
+  end
+
   defp lookup_projects do
     case Setup.team_cache() do
       %TeamCache{} = cache -> cached_projects(cache)

@@ -2,9 +2,11 @@ defmodule SymphonyElixir.SetupTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.RetiredStates
   alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixir.Setup
   alias SymphonyElixir.Setup.{Checks, Problem, TeamCache}
+  alias SymphonyElixir.SubIssueWait
 
   @t1 ~U[2026-10-19 09:00:00Z]
   @t2 ~U[2026-10-19 09:15:00Z]
@@ -124,6 +126,11 @@ defmodule SymphonyElixir.SetupTest do
     # the poll log.
     FetchLog.record("default", :ok)
     :ets.delete_all_objects(PollLog)
+    # So may labels, a drain report or a turned-off waiting state: each would put a problem in a
+    # healthy payload.
+    Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
+    RetiredStates.reset_for_test()
+    SubIssueWait.reset_for_test("Waiting on sub-tickets")
     Application.put_env(:symphony_elixir, :setup_test_pid, self())
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     # A managed repo has the secrets check ask `gh` whether it is signed in.
@@ -313,7 +320,7 @@ defmodule SymphonyElixir.SetupTest do
       end)
     end
 
-    test "every check names itself, and only the routing, teams and labels checks read Linear" do
+    test "every check names itself, and only the routing, teams, labels and statuses checks read Linear" do
       # Each check's id starts each of its problems' ids.
       assert Enum.map(Setup.checks(), & &1.id()) == [
                "deprecated_key",
@@ -326,12 +333,14 @@ defmodule SymphonyElixir.SetupTest do
                "teams",
                "labels",
                "deprecated_label",
-               "hold_drift"
+               "hold_drift",
+               "statuses",
+               "status_use"
              ]
 
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())
-        assert check.needs_linear?() == check in [Checks.Routing, Checks.Teams, Checks.Labels]
+        assert check.needs_linear?() == check in [Checks.Routing, Checks.Teams, Checks.Labels, Checks.Statuses]
       end
     end
 
@@ -375,7 +384,7 @@ defmodule SymphonyElixir.SetupTest do
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
       write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
 
-      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing, %{id: "teams"}, %{id: "labels"}]} =
+      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing, %{id: "teams"}, %{id: "labels"}, %{id: "statuses"}]} =
                Setup.check(checks: [LinearStub | Setup.checks()])
 
       assert not_checked.id == "linear_stub"

@@ -7,20 +7,22 @@ defmodule SymphonyElixir.Setup.Fixes do
   says:
 
     * `create_label` creates the label `name` in the team `team`;
+    * `create_state` creates the workflow state `name` of the type `type` in the team `team`, at
+      `position` (`SymphonyElixir.Setup.Checks.Statuses` works it out from the team's board);
     * `resync_hold` re-syncs the hold label of each ticket it names from the store
       (`SymphonyElixir.Hold.resync/4`): one of the tickets the check listed, or all of them.
 
   Then the checks run again with the team cache emptied (`SymphonyElixir.Setup.refresh/1`), and the
   new payload is returned. When Linear refuses (permissions, a name already taken), the error says
   so in plain words with what to do, the checks are not re-run, and the problem stays where it was.
-  A create is one Linear write,
+  A create (a label or a state) is one Linear write,
   so it lands whole or not at all; a re-sync of several tickets puts right the ones Linear accepts
   and names the rest.
   """
 
   alias SymphonyElixir.{Hold, Setup, Tracker}
   alias SymphonyElixir.Hold.Drift
-  alias SymphonyElixir.Setup.Checks.HoldDrift
+  alias SymphonyElixir.Setup.Checks.{HoldDrift, Statuses}
 
   @doc """
   Runs `descriptor` (a fix as the payload lists it, with string keys). Options: `:server` (the Setup
@@ -48,6 +50,10 @@ defmodule SymphonyElixir.Setup.Fixes do
     Map.take(fix, ~w(kind action team name)) == Map.take(descriptor, ~w(kind action team name))
   end
 
+  defp covers?(%{"kind" => "linear", "action" => "create_state"} = fix, descriptor) do
+    Map.take(fix, ~w(kind action team name type after position)) == Map.take(descriptor, ~w(kind action team name type after position))
+  end
+
   defp covers?(%{"kind" => "linear", "action" => "resync_hold", "repo" => repo, "tickets" => tickets}, descriptor) do
     case descriptor do
       %{"kind" => "linear", "action" => "resync_hold", "repo" => ^repo, "tickets" => [_ | _] = wanted} -> Enum.all?(wanted, &(&1 in tickets))
@@ -63,6 +69,13 @@ defmodule SymphonyElixir.Setup.Fixes do
     case tracker.create_label(name, team) do
       {:ok, _label} -> :ok
       {:error, reason} -> {:error, {:refused, refusal(~s(create the label "#{name}" in team #{team}), reason)}}
+    end
+  end
+
+  defp apply_fix(%{"action" => "create_state", "team" => team, "name" => name, "type" => type} = fix, tracker) do
+    case tracker.create_workflow_state(name, team, Statuses.color(type), type: type, position: fix["position"]) do
+      {:ok, _state} -> :ok
+      {:error, reason} -> {:error, {:refused, refusal(~s(create the state "#{name}" in team #{team}), reason)}}
     end
   end
 
@@ -89,6 +102,9 @@ defmodule SymphonyElixir.Setup.Fixes do
 
   defp describe(:label_create_failed),
     do: "a label with that name may already exist in the team or the workspace. Rename or remove it in Linear, then check again."
+
+  defp describe(:workflow_state_create_failed),
+    do: "a state with that name may already exist in the team. Rename or remove it in Linear, then check again."
 
   defp describe({:linear_api_status, status, _body}) when status in [401, 403],
     do: "the Linear API key isn't allowed to (HTTP #{status}). Ask an admin of the team to do it, or use a key that may."

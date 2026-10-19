@@ -67,11 +67,13 @@ defmodule SymphonyElixir.Tracker.MemoryProvisioningTest do
   describe "create_workflow_state/3" do
     test "adds the state to the list, announces it, and keeps the earlier ones" do
       assert {:ok, state} = Memory.create_workflow_state("QA", "TP", "#e5b53b")
-      assert state == %{id: "state:TP:QA", name: "QA", team_id: "TP", team_key: "TP"}
+      assert state == %{id: "state:TP:QA", name: "QA", team_id: "TP", team_key: "TP", type: "started", position: nil}
       assert_received {:memory_tracker_created_workflow_state, "QA", "TP"}
 
+      assert {:ok, %{type: "completed", position: 4.5}} = Memory.create_workflow_state("Done", "TP", "#5e6ad2", type: "completed", position: 4.5)
+
       assert {:ok, _} = Memory.create_workflow_state("CI Fix", "TP", "#eb5757")
-      assert {:ok, [%{name: "QA"}, %{name: "CI Fix"}]} = Memory.workflow_states()
+      assert {:ok, [%{name: "QA"}, %{name: "Done"}, %{name: "CI Fix"}]} = Memory.workflow_states()
     end
 
     test "passes on a scripted failure" do

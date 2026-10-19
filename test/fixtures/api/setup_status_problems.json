@@ -1,0 +1,121 @@
+{
+  "problems": [
+    {
+      "category": "statuses",
+      "consequence": "Tickets that pass Code Review can't move on to QA.",
+      "details": [
+        {
+          "label": "Team",
+          "value": "TP"
+        },
+        {
+          "label": "State",
+          "value": "QA"
+        },
+        {
+          "label": "Type",
+          "value": "started"
+        },
+        {
+          "label": "After",
+          "value": "Code Review"
+        },
+        {
+          "label": "Set by",
+          "value": "issues.states.qa"
+        }
+      ],
+      "fix": {
+        "action": "create_state",
+        "after": "Code Review",
+        "kind": "linear",
+        "name": "QA",
+        "position": 3.0,
+        "team": "TP",
+        "type": "started"
+      },
+      "id": "statuses:missing:TP:QA",
+      "repos": [
+        "default"
+      ],
+      "severity": "error",
+      "tickets": [],
+      "title": "Team TP has no \"QA\" state"
+    },
+    {
+      "category": "statuses",
+      "consequence": "In Review is retired: no run starts there and nothing moves a ticket on from it, so each waits for good. Move each one by hand; the drain report says where.",
+      "details": [
+        {
+          "label": "TP-1",
+          "value": "move it by hand to Code Review (its PR is open) or In Progress"
+        },
+        {
+          "label": "TP-2",
+          "value": "move it by hand to Code Review (its PR is open) or In Progress"
+        },
+        {
+          "label": "TP-3",
+          "value": "move it by hand to Code Review (its PR is open) or In Progress"
+        }
+      ],
+      "fix": {
+        "kind": "open",
+        "target": "drain_report",
+        "url": null
+      },
+      "id": "status_use:retired:In Review",
+      "repos": [],
+      "severity": "warning",
+      "tickets": [
+        {
+          "identifier": "TP-1",
+          "url": "https://linear.app/t/issue/TP-1"
+        },
+        {
+          "identifier": "TP-2",
+          "url": "https://linear.app/t/issue/TP-2"
+        },
+        {
+          "identifier": "TP-3",
+          "url": "https://linear.app/t/issue/TP-3"
+        }
+      ],
+      "title": "3 tickets are still in the retired In Review state"
+    },
+    {
+      "category": "statuses",
+      "consequence": "Symphony never picks up tickets from \"In Progres\": no state in team TP has that name. Check the spelling in Settings.",
+      "details": [
+        {
+          "label": "Key",
+          "value": "issues.states.active"
+        },
+        {
+          "label": "Value",
+          "value": "In Progres"
+        },
+        {
+          "label": "Team",
+          "value": "TP"
+        },
+        {
+          "label": "Closest state",
+          "value": "In Progress"
+        }
+      ],
+      "fix": {
+        "kind": "open",
+        "target": "settings",
+        "url": null
+      },
+      "id": "statuses:unknown:TP:issues.states.active:In Progres",
+      "repos": [
+        "default"
+      ],
+      "severity": "error",
+      "tickets": [],
+      "title": "issues.states.active names \"In Progres\", which team TP has no state for"
+    }
+  ]
+}

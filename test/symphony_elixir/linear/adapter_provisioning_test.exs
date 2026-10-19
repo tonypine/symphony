@@ -216,8 +216,8 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       )
 
       assert {:ok, [qa, backlog]} = Adapter.workflow_states()
-      assert qa == %{id: "s1", name: "QA", team_id: "t1", team_key: "TP"}
-      assert backlog == %{id: "s2", name: "Backlog", team_id: nil, team_key: nil}
+      assert qa == %{id: "s1", name: "QA", team_id: "t1", team_key: "TP", type: nil, position: nil}
+      assert backlog == %{id: "s2", name: "Backlog", team_id: nil, team_key: nil, type: nil, position: nil}
     end
 
     test "reports a tracker error and an unusable response" do
@@ -231,16 +231,20 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
 
   describe "team_workflow_states/1 and team_labels/1" do
     test "read one team's states, and its labels with the workspace's, in one request each" do
-      put(:team_workflow_states, {:ok, %{"data" => %{"workflowStates" => %{"nodes" => [%{"id" => "s1", "name" => "QA", "team" => @team}]}}}})
+      qa = %{"id" => "s1", "name" => "QA", "type" => "started", "position" => 3.5, "team" => @team}
+      put(:team_workflow_states, {:ok, %{"data" => %{"workflowStates" => %{"nodes" => [qa]}}}})
 
       put(
         :team_labels,
         {:ok, %{"data" => %{"issueLabels" => %{"nodes" => [%{"id" => "l1", "name" => "Blocked", "team" => @team}, %{"id" => "l2", "name" => "plan", "team" => nil}]}}}}
       )
 
-      assert {:ok, [%{id: "s1", name: "QA", team_id: "t1", team_key: "TP"}]} = Adapter.team_workflow_states("TP")
+      assert {:ok, [state]} = Adapter.team_workflow_states("TP")
+      assert state == %{id: "s1", name: "QA", team_id: "t1", team_key: "TP", type: "started", position: 3.5}
       assert_received {:team_workflow_states, query, %{team: "TP"}}
       assert query =~ "team: {key: {eqIgnoreCase: $team}}"
+      assert query =~ "type"
+      assert query =~ "position"
 
       assert {:ok, [%{id: "l1", team_key: "TP"}, %{id: "l2", team_key: nil}]} = Adapter.team_labels("TP")
       assert_received {:team_labels, query, %{team: "TP"}}
@@ -334,7 +338,23 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       put(:teams, {:ok, @teams_response})
 
       assert {:ok, state} = Adapter.create_workflow_state("QA", "TP", "#e5b53b")
-      assert state == %{id: "s9", name: "QA", team_id: "t1", team_key: "TP"}
+      assert state == %{id: "s9", name: "QA", team_id: "t1", team_key: "TP", type: nil, position: nil}
+
+      # A started state, placed by Linear: no position variable at all.
+      assert_received {:create_workflow_state_variables, variables}
+      assert variables == %{name: "QA", teamId: "t1", color: "#e5b53b", type: "started"}
+    end
+
+    test "creates a state of the type and at the position asked for" do
+      put(:teams, {:ok, @teams_response})
+
+      assert {:ok, _state} = Adapter.create_workflow_state("Done", "TP", "#5e6ad2", type: "completed", position: 2.5)
+      assert_received {:create_workflow_state_variables, %{type: "completed", position: 2.5}}
+
+      assert {:ok, _state} = Adapter.create_workflow_state("QA", "TP", "#e5b53b", type: nil, position: nil)
+      assert_received {:create_workflow_state_variables, variables}
+      assert variables.type == "started"
+      refute Map.has_key?(variables, :position)
     end
 
     test "resolves a team given by id" do
