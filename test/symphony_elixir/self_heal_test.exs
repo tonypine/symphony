@@ -157,6 +157,7 @@ defmodule SymphonyElixir.SelfHealTest do
         {{:dev_server_not_on_socket, "s"}, "dev_server"},
         {{:dev_server_not_configured}, "dev_server"},
         {:health_timeout, "dev_server"},
+        {:qa_needs_dev_server, "dev_server"},
         {{:remote_worker_unsupported, "worker-1"}, "worker_host"},
         {"no QA playbook applies to this change", "qa_playbook"},
         {"QA cannot run on the remote worker \"worker-1\"", "worker_host"},
@@ -202,6 +203,9 @@ defmodule SymphonyElixir.SelfHealTest do
       assert SelfHeal.signature(%{cause: "  a   spaced\n reason "}) == "a spaced reason"
       assert SelfHeal.signature(%{cause: nil, reason: nil}) == ""
       assert SelfHeal.signature(:not_a_map) == ""
+
+      assert SelfHeal.signature(%{cause: :qa_needs_dev_server, reason: "the hub needs Postgres"}) ==
+               "QA needs the project's own server, and no QA playbook starts it (dev_server: true)"
     end
 
     test "a QA agent's own block is named by its blocked steps and covering ticket, not its wording" do
@@ -277,6 +281,44 @@ defmodule SymphonyElixir.SelfHealTest do
       assert :filed = SelfHeal.heal(issue(), heal_opts(Map.delete(ci, :head_sha)))
       assert %{description: description} = Process.get(:fixer_create)
       assert description =~ "- Pull request: https://github.com/acme/app/pull/7\n"
+    end
+
+    test "a QA step that needs the project's own server files the fix ticket in the project's repo" do
+      outcome = outcome(:qa_needs_dev_server, %{reason: "the Jobs page needs the hub, and hub-server needs Postgres"})
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome))
+
+      assert %{scope: @repo_key, component: "dev_server", title: "Self-heal: repair the dev_server block", description: description} =
+               Process.get(:fixer_create)
+
+      assert description =~ "the Jobs page needs the hub, and hub-server needs Postgres"
+      assert description =~ "`verification.dev_server`"
+      assert description =~ "set `dev_server: true` on the QA playbook"
+      assert %{component: "dev_server", scope: @repo_key} = Process.get(:recorded_self_heal)
+    end
+
+    test "a changed block that moved to the project's repo after Symphony's fix landed files there instead of retrying" do
+      # TP-1102: its first block went to Symphony as a qa_environment gap; once that fix landed, QA
+      # names the gap as the project's own server.
+      previous =
+        recorded(@repo_key, @issue_id, %{
+          component: "qa_environment",
+          scope: @symphony_repo_key,
+          signature: "blocked steps: Jobs page header with the inspector open",
+          fix_ticket: nil
+        })
+
+      Process.put(:ticket_state, previous)
+
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:qa_needs_dev_server), attempts: 3))
+      assert %{scope: @repo_key, component: "dev_server"} = Process.get(:fixer_create)
+      assert {:blocked, %{waits_on: %{keys: [@fix_ticket]}}} = Process.get(:hold_attrs)
+
+      # The head's attempts still bound it.
+      Process.delete(:fixer_create)
+      Process.put(:ticket_state, previous)
+      capture_log(fn -> assert :escalated = SelfHeal.heal(issue(), heal_opts(outcome(:qa_needs_dev_server), attempts: 5)) end)
+      assert Process.get(:fixer_create) == nil
     end
 
     test "a CI check failing after another component's block, or another check's, files its own fix ticket" do

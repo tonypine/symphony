@@ -1437,6 +1437,12 @@ outside service (a paid AI service, real credentials, a third-party API). When t
 server cannot build or start, the steps that need it are `blocked`, never judged against a stub
 the agent wrote.
 
+When a step is `blocked` because it needs the project's own server and no playbook in the pass
+started a dev server, the QA agent says so (`needs_dev_server` in its answer). The self-heal lane
+then files the fix ticket in the project's own repo, as its `dev_server` component, asking it to
+configure `verification.dev_server` in its `WORKFLOW.md` and set `dev_server: true` on the playbook
+that needs it, rather than filing it against Symphony.
+
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
 there; any other one fails the repository's workflow with an error pointing at `symphony.yml`.

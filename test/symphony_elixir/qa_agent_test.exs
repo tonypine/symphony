@@ -647,6 +647,24 @@ defmodule SymphonyElixir.QaAgentTest do
       end
     end
 
+    test "keeps a blocked answer's needs_dev_server, which names the project's repo as the fix's owner when no dev server ran" do
+      text = ~s({"verdict":"blocked","reason":"the hub needs Postgres","needs_dev_server":true})
+      assert {:ok, %{verdict: :blocked, needs_dev_server: true} = blocked} = QaAgent.parse_response(text)
+
+      assert QaAgent.blocked_cause(blocked, [%{kind: "macos_app"}]) == :qa_needs_dev_server
+      assert QaAgent.blocked_cause(blocked, []) == :qa_needs_dev_server
+
+      # A pass whose dev server ran keeps the agent's reason.
+      assert QaAgent.blocked_cause(blocked, [%{kind: "macos_app", dev_server: true}]) == nil
+      assert QaAgent.blocked_cause(blocked, [%{kind: "web"}]) == nil
+
+      # Only a blocked answer that says so.
+      assert {:ok, other} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"x","needs_dev_server":"yes"}))
+      refute Map.has_key?(other, :needs_dev_server)
+      assert QaAgent.blocked_cause(other, []) == nil
+      assert QaAgent.blocked_cause(%{blocked | verdict: :pass}, []) == nil
+    end
+
     test "marks the steps a parent walkthrough reports for its verification checklist" do
       text =
         ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":"yes"},{"name":"Quit","status":"pass"}]})
@@ -747,6 +765,11 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "mark each step that needs it `blocked` with the error in `details`: that is never a reason to write a stub of it"
       assert prompt =~ "a database such as Postgres cannot start inside it"
       assert prompt =~ "A playbook with `dev_server: true` has Symphony run the project's server, and its database, outside your sandbox."
+
+      assert prompt =~
+               "and Symphony started no dev server for this pass, set `needs_dev_server` to true: the project's repository then gets the fix ticket"
+
+      assert prompt =~ ~s("needs_dev_server": true | false)
     end
 
     test "includes the ticket, the parent's criteria and the playbooks" do

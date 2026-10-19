@@ -495,6 +495,7 @@ defmodule SymphonyElixir.QaVerification do
       reason: Map.get(result, :reason),
       needs_person: Map.get(result, :needs_person, false),
       covered_by: Map.get(result, :covered_by),
+      cause: QaAgent.blocked_cause(result, playbooks),
       tokens: tokens,
       playbooks: playbook_kinds(playbooks)
     }

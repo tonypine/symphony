@@ -2643,7 +2643,11 @@ Rules:
   QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
   hold then waits on that ticket, linked as blocked-by, and nothing is filed. A missing QA tool or
   QA host capability is never `needs_person`: only a secret,
-  an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
+  an account or a device the host lacks is. A QA answer whose blocked step needs the project's own
+  server (`needs_dev_server`), in a pass where no playbook started a dev server, is the project's
+  `dev_server` component: its fix ticket goes to the project's repo, and a changed failure that
+  moves to another repo than the landed fix's files or reuses the fix ticket there instead of
+  retrying. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a
   `Todo` ticket, it stays, its reason saying so, until the running build includes the fix's merge
   commit. Only the same failure recurring with no new information escalates to a

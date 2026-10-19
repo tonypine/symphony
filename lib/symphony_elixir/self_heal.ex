@@ -27,7 +27,9 @@ defmodule SymphonyElixir.SelfHeal do
     * when a repair has landed and the block recurs, compares the new failure against the last one
       (`compare/2`): a narrowed or otherwise changed failure is progress and earns another attempt,
       and the same failure with no new information escalates to a `Needs Decision` hold, with its
-      decision request posted on the ticket. The retries are bounded: a head with
+      decision request posted on the ticket. A changed failure that now belongs to another repo than
+      the landed repair's (a QA block that needs the project's own server, first filed against
+      Symphony) files or reuses the fix ticket in that repo instead. The retries are bounded: a head with
       #{@max_head_attempts} blocked runs escalates however the failure changed, so a run that words
       the same block differently each time cannot loop.
 
@@ -50,6 +52,8 @@ defmodule SymphonyElixir.SelfHeal do
   @dev_server "dev_server"
   @worker_host "worker_host"
   @playbook "qa_playbook"
+  # A QA step that needs the project's own server, in a pass with no dev server (`QaAgent.blocked_cause/2`).
+  @needs_dev_server :qa_needs_dev_server
 
   # The components whose fix belongs to the repo that hit the block, rather than to Symphony: its
   # own build/test/run setup, and each of its CI checks (`ci:<check name>`, the red backstop of the
@@ -221,6 +225,12 @@ defmodule SymphonyElixir.SelfHeal do
   defp revisit(%{attempts: attempts} = ctx, _change) when attempts >= @max_head_attempts do
     escalate(ctx, :out_of_attempts)
   end
+
+  # A changed failure that now belongs to another repo than the one whose fix landed (a QA block
+  # first filed against Symphony, then named as the project's own run setup) is a different break:
+  # retrying would only meet the same gap, so its fix ticket is filed, or reused, in the repo that
+  # owns it. A narrowed one is still the landed repair's progress and retries.
+  defp revisit(%{previous: %{scope: scope}} = ctx, :changed) when is_binary(scope) and scope != ctx.scope, do: open(ctx)
 
   defp revisit(ctx, change) do
     record(ctx, %{
@@ -477,6 +487,13 @@ defmodule SymphonyElixir.SelfHeal do
     """
   end
 
+  defp fix_description(issue, @dev_server, signature, %{cause: @needs_dev_server} = outcome) do
+    """
+    #{evidence(issue, signature, outcome)}
+    QA could not test the change because it needs this project's own server (and the database it stores in) running, and no QA playbook in the pass had Symphony start one. QA may not stand in for the project's own server, and its sandbox cannot start a database such as Postgres. Set up the dev server in this repo's `WORKFLOW.md`: `verification.dev_server` with a `start_cmd` that starts the database and the server, listening on `$SYMPHONY_VERIFICATION_SOCKET` (the database on a unix socket in that socket's folder, with `listen_addresses=''`), and a `health_check_url`; then set `dev_server: true` on the QA playbook that needs it under `auto_review.playbooks`. Symphony then runs that server outside the QA sandbox for each pass. Every ticket blocked on this one resumes on its own when this ticket goes terminal — no person has to move anything.
+    """
+  end
+
   defp fix_description(issue, component, signature, outcome) do
     """
     #{evidence(issue, signature, outcome)}
@@ -542,6 +559,7 @@ defmodule SymphonyElixir.SelfHeal do
   defp component_for({:dev_server_not_on_socket, _socket}), do: @dev_server
   defp component_for({:dev_server_not_configured}), do: @dev_server
   defp component_for(:health_timeout), do: @dev_server
+  defp component_for(@needs_dev_server), do: @dev_server
   defp component_for({:remote_worker_unsupported, _host}), do: @worker_host
   defp component_for(reason) when is_binary(reason), do: binary_component(reason)
   defp component_for(_cause), do: @default_component
@@ -579,6 +597,7 @@ defmodule SymphonyElixir.SelfHeal do
   # A failed CI check is its name and the first line of its error, as the PR watcher's streak reads it.
   defp signature_for({:ci_check_failed, check, error}) when is_binary(check) and is_binary(error), do: normalize("#{check}: #{error}")
   defp signature_for(nil), do: ""
+  defp signature_for(@needs_dev_server), do: "QA needs the project's own server, and no QA playbook starts it (dev_server: true)"
   defp signature_for(cause), do: cause |> inspect() |> normalize()
 
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.replace(~r/\s+/, " ")
