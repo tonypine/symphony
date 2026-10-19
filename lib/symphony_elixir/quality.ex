@@ -66,27 +66,6 @@ defmodule SymphonyElixir.Quality do
     end
   end
 
-  @spec dashboard_payload(map()) :: map()
-  def dashboard_payload(params) when is_map(params) do
-    filters =
-      case parse_filters(params, default_limit: @default_window_limit) do
-        {:ok, parsed} -> parsed
-        {:error, _reason} -> [limit: @default_window_limit]
-      end
-
-    runs =
-      case RunStore.list_eval_logs(Config.repo_key!(), filters) do
-        records when is_list(records) -> records
-        {:error, _reason} -> []
-      end
-
-    %{
-      filters: filter_payload(filters),
-      metrics: metrics(runs),
-      runs: Enum.map(runs, &run_payload/1)
-    }
-  end
-
   @spec session_report(String.t(), map()) :: {:ok, map()} | {:error, :session_not_found | term()}
   def session_report(session_id, params \\ %{}) when is_binary(session_id) and is_map(params) do
     with {:ok, filters} <- parse_filters(params, default_limit: :all) do

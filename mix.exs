@@ -8,7 +8,6 @@ defmodule SymphonyElixir.MixProject do
       app: :symphony_elixir,
       version: @version,
       elixir: "~> 1.19",
-      compilers: [:phoenix_live_view] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       test_coverage: [
         summary: [
@@ -66,20 +65,12 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.WorkflowStore,
           SymphonyElixir.Workspace,
           SymphonyElixirWeb.AuditController,
-          SymphonyElixirWeb.AuditLive,
-          SymphonyElixirWeb.DashboardLive,
           SymphonyElixirWeb.Endpoint,
           SymphonyElixirWeb.ErrorHTML,
           SymphonyElixirWeb.ErrorJSON,
-          SymphonyElixirWeb.Layouts,
           SymphonyElixirWeb.ControlApiController,
-          SymphonyElixirWeb.LearningsLive,
           SymphonyElixirWeb.ObservabilityApiController,
           SymphonyElixirWeb.Presenter,
-          SymphonyElixirWeb.QualityLive,
-          SymphonyElixirWeb.StaticAssetController,
-          SymphonyElixirWeb.StaticAssets,
-          SymphonyElixirWeb.TranscriptLive,
           SymphonyElixirWeb.Router,
           SymphonyElixirWeb.Router.Helpers,
           Mix.Tasks.Symphony.Pause,
@@ -140,11 +131,7 @@ defmodule SymphonyElixir.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.12"},
-      {:floki, ">= 0.30.0", only: :test},
-      {:lazy_html, ">= 0.1.13", only: :test},
       {:phoenix, "~> 1.8.15"},
-      {:phoenix_html, "~> 4.2"},
-      {:phoenix_live_view, "~> 1.1.33"},
       {:req, "~> 0.7.4"},
       {:jason, "~> 1.4"},
       {:file_system, "~> 1.1"},
@@ -192,16 +179,14 @@ defmodule SymphonyElixir.MixProject do
 
   # Files the assembled release never uses at runtime, removed so Symphony.app's
   # zip stays small: ERTS's developer tools, OpenSSL's test engine, JavaScript
-  # source maps, and the priv/ assets that are read only at compile time (the
-  # dashboard embeds Phoenix's JavaScript; date_time_parser embeds its tzdata) or
-  # by mix generators (Phoenix's templates).
+  # source maps, and the priv/ assets that are read only at compile time
+  # (date_time_parser embeds its tzdata) or by mix generators (Phoenix's
+  # templates and JavaScript).
   @release_bin_unused ~w(ct_run dialyzer dyn_erl erl_call erlc escript run_erl to_erl typer yielding_c_fun)
   @release_lib_unused ~w(
     crypto-*/priv/lib/otp_test_engine.so
     date_time_parser-*/priv
     phoenix-*/priv
-    phoenix_html-*/priv
-    phoenix_live_view-*/priv
     */priv/**/*.map
   )
 

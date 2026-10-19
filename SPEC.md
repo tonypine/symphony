@@ -4215,7 +4215,7 @@ SHOULD return:
   profile kind, such as `implementation` or `code_review`);
   each row has `kind`,
   `issue_id`, `issue_identifier`, `repo_key` and `started_at`. Landing runs are agent runs. Every
-  surface that says what runs (the web dashboard, the terminal dashboard, the macOS menu bar)
+  surface that says what runs (the terminal dashboard, the macOS app and its menu bar)
   SHOULD read it from this list, so a session that isn't an agent run is never missed
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)
@@ -4344,9 +4344,9 @@ This section defines an OPTIONAL HTTP interface for observability and operationa
 If implemented:
 
 - The HTTP server is an extension and is not REQUIRED for conformance.
-- The implementation MAY serve server-rendered HTML or a client-side application for the dashboard.
-- The dashboard/API MUST be observability/control surfaces only and MUST NOT become REQUIRED for
-  orchestrator correctness.
+- The implementation MAY serve server-rendered HTML or a client-side application for a dashboard.
+- The API (and any dashboard) MUST be observability/control surfaces only and MUST NOT become
+  REQUIRED for orchestrator correctness.
 
 Extension config:
 
@@ -4369,11 +4369,13 @@ Enablement (extension):
 
 #### 13.8.1 Human-Readable Dashboard (`/`)
 
-- Host a human-readable dashboard at `/`.
-- The returned document SHOULD depict the current state of the system (for example active sessions,
-  retry delays, token consumption, runtime totals, recent events, and health/error indicators).
-- It is up to the implementation whether this is server-generated HTML or a client-side app that
-  consumes the JSON API below.
+- An implementation MAY host a human-readable dashboard at `/`.
+- If it does, the returned document SHOULD depict the current state of the system (for example
+  active sessions, retry delays, token consumption, runtime totals, recent events, and health/error
+  indicators), as server-generated HTML or a client-side app that consumes the JSON API below.
+- This implementation hosts none: its UI is the macOS app (and `symphony dashboard` in a terminal),
+  both reading the JSON API below. `/` and every other path outside the API answer the API's
+  `404 not_found` error.
 
 #### 13.8.2 JSON REST API (`/api/v1/*`)
 
@@ -5001,8 +5003,7 @@ Minimum endpoints:
     `from`, `to` and `total`.
 
 - `GET /api/v1/learnings?repo=&tag=&q=`
-  - The learnings of every configured repo, from the learnings store the web dashboard's
-    `/learnings` reads, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
+  - The learnings of every configured repo, from the learnings store, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
     whose rule, evidence, tags or ticket identifier contain the text, in any case; a blank filter is
     ignored.
   - Each record has `id`, `repo_key`, `repo`, `rule`, `tags`, `evidence_quote`,
@@ -5013,7 +5014,7 @@ Minimum endpoints:
 
 - `GET /api/v1/audit?from=&to=&issue=&repo=&type=&run_id=&since=`
   - The local audit records of the inclusive UTC date range (default today), oldest first, as NDJSON
-    (`application/x-ndjson`), redacted as the web dashboard's `/audit` shows them; the filters
+    (`application/x-ndjson`), redacted; the filters
     match exactly. `download=1` adds a `content-disposition` for `symphony-audit.ndjson`.
   - `limit=N` pages from the start of the range: `x-next-cursor` names the cursor that reads the
     next page with `cursor=`. `last=N` instead serves the N newest matching records (still oldest

@@ -711,7 +711,7 @@ agent:
   trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. The pre-push
   reviewer runs inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
   `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
-- The web dashboard and the terminal status dashboard show the kind, model and effort of each
+- The Mac app and the terminal status dashboard show the kind, model and effort of each
   running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
 - Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
   from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
@@ -755,7 +755,7 @@ agent:
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
-  ticket's phase is its current part's. The terminal and web dashboards show a "Forced" section
+  ticket's phase is its current part's. The terminal dashboard and the Mac app show a "Forced" section
   above the running agents (identifier, phase, waiting on, forced for), a ⚡ on forced rows elsewhere,
   and the forced count over `forced_max` in the header. When a forced plan ticket enters
   `Plan Review`, Symphony sends a `forced_human_gate` notification saying it
@@ -2113,15 +2113,15 @@ dashboard:
 
 CLI `--host` and `--port` override these listener settings.
 
-`enabled` switches only the terminal dashboard Symphony draws on its own output. The web dashboard, the
-HTTP API and the control plane stay up when it is `false`. Symphony also skips the terminal dashboard when
+`enabled` switches only the terminal dashboard Symphony draws on its own output. The HTTP API and the
+control plane stay up when it is `false`. Symphony also skips the terminal dashboard when
 its output isn't a terminal (a file or a pipe). `symphony dashboard [--url <control url>]` draws the same
 view in another terminal by polling `GET /api/v1/state?format=terminal&columns=<n>` on the control plane.
 
-The dashboard also serves an Audit tab at `/audit` (filters, per-record expansion, daily hash-chain
-verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`, and each
-day's chain verification from `/api/v1/audit/verify?date=YYYY-MM-DD` (see SPEC §13.8.2).
-Per-issue transcripts are available in the dashboard and as JSON at
+Symphony serves no web dashboard: its UI is the Mac app, which reads the JSON API. The filtered
+audit stream (NDJSON) is available from `/api/v1/audit`, and each day's chain verification from
+`/api/v1/audit/verify?date=YYYY-MM-DD` (see SPEC §13.8.2). Per-issue transcripts are available in
+the Mac app and as JSON at
 `/api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript` (or
 `/api/v1/issues/<issue_identifier>/transcript` for the default repository).
 

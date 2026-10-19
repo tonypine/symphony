@@ -45,7 +45,7 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     assert rendered =~ "workspace free space below threshold"
   end
 
-  test "snapshot fixture: idle dashboard with observability url" do
+  test "the dashboard names no web page while Symphony serves its API on a port" do
     previous_port_override = Application.get_env(:symphony_elixir, :server_port_override)
 
     on_exit(fn ->
@@ -67,7 +67,10 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          rate_limits: nil
        }}
 
-    Snapshot.assert_dashboard_snapshot!("idle_with_dashboard_url", render_snapshot(snapshot_data, 0.0))
+    rendered = render_snapshot(snapshot_data, 0.0)
+    assert rendered =~ "Repos: "
+    refute rendered =~ "Dashboard:"
+    refute rendered =~ "http://127.0.0.1:4000"
   end
 
   test "snapshot fixture: super busy dashboard" do

@@ -135,8 +135,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
 - **Open Symphony** (⌘O) opens the [Symphony window](#the-symphony-window), or brings it to the front.
-- **Developer** holds the items for looking under the hood: **Open Web Dashboard** opens Symphony's web
-  dashboard in the browser, **Open Logs** opens Symphony's output log, and **Open Dashboard in Terminal**
+- **Developer** holds the items for looking under the hood: **Open Logs** opens Symphony's output log, and
+  **Open Dashboard in Terminal**
   opens a Terminal window running `symphony dashboard`: the live terminal
   dashboard (running agents, retry queue, recent events) of the Symphony the app watches. It runs the same
   binary as Start (`bin/symphony` from the checkout in Development mode). Press `q` or Ctrl-C, or close the
@@ -343,8 +343,7 @@ It keeps App Nap off so the poll keeps that pace in the background.
 While Symphony answers, the menu shows `N running · M retrying`, and while dispatch is paused, the pause
 reason and since when. If a Symphony the app didn't start (for example one started from the CLI) answers,
 the app attaches to it as "running (external)": Start, Stop and Restart stay disabled, so the app neither
-starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
-Open Logs opens `menubar-child.log`.
+starts a second Symphony nor stops one it doesn't own. Open Logs opens `menubar-child.log`.
 
 While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans in
 `Plan Review`, open decisions, tickets the quality gate
@@ -1100,8 +1099,8 @@ state. The window opens on the Inbox the first time.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
-  JSON** copies `/api/v1/state` as Symphony served it, and **Open Logs** and **Open Web Dashboard** do what
-  the menu items do.
+  JSON** copies `/api/v1/state` as Symphony served it, and **Open Logs** does what
+  the menu item does.
 - While Symphony doesn't answer, every view shows one placeholder instead: **Start Symphony** while it is
   stopped, a spinner while it starts, **Open Logs** and **Restart Symphony** when it stopped answering, and
   **Open Settings…** while no `symphony.yml` is set. A view whose endpoint an older Symphony doesn't serve

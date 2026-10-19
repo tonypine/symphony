@@ -166,14 +166,12 @@ final class SymphonyWindowModel: ObservableObject {
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
     var apiURL: () -> URL? = { nil }
-    var canOpenWebDashboard: () -> Bool = { false }
     var canOpenLogs: () -> Bool = { false }
 
     var onSelect: (SymphonyView) -> Void = { _ in }
     var onAction: (WindowState.Action) -> Void = { _ in }
     /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var onOpenRepos: (String?) -> Void = { _ in }
-    var onOpenWebDashboard: () -> Void = {}
     var onScopeChange: (OverviewScope) -> Void = { _ in }
     /// Sends a control request to Symphony, or to the API fixtures in QA mode, and says how it went.
     var onControl: (ControlAction) async -> ControlResult = { _ in .done }
@@ -913,8 +911,7 @@ struct DiagnosticsContent: View {
                 report: DiagnosticsReport(payload: payload, apiURL: model.apiURL(), lastUpdate: client.lastUpdate),
                 actions: DiagnosticsView.Actions(
                     copyStateJSON: model.copyStateJSON,
-                    openLogs: model.canOpenLogs() ? { model.onAction(.openLogs) } : nil,
-                    openWebDashboard: model.canOpenWebDashboard() ? model.onOpenWebDashboard : nil
+                    openLogs: model.canOpenLogs() ? { model.onAction(.openLogs) } : nil
                 )
             )
         } else if client.stateResult == .unsupported {
@@ -931,7 +928,6 @@ struct DiagnosticsView: View {
         var copyStateJSON: () -> Void
         /// Nil while the action can't be taken, which disables its button.
         var openLogs: (() -> Void)?
-        var openWebDashboard: (() -> Void)?
     }
 
     let report: DiagnosticsReport
@@ -956,8 +952,6 @@ struct DiagnosticsCards: View {
                 Button("Copy State JSON", action: actions.copyStateJSON)
                 Button(StatusMenu.openLogsTitle) { actions.openLogs?() }
                     .disabled(actions.openLogs == nil)
-                Button(StatusMenu.openWebDashboardTitle) { actions.openWebDashboard?() }
-                    .disabled(actions.openWebDashboard == nil)
             }
             ForEach(report.groups, id: \.title) { group in
                 Card(title: group.title) {
