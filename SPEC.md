@@ -1878,7 +1878,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.linear.scope.labels`: optional list of Linear label names
 - At least one issue-level or repository route selector is REQUIRED when provider is linear.
 - `issues.memory.issues_file`: optional path, relative to `symphony.yml`, of a JSON list of issues
-  the memory provider reads on every fetch
+  the memory provider reads on every fetch; entries with `"kind": "project"` or `"kind": "team"`
+  are its projects and teams
 - `issues.linear.assignee`: optional string or `$VAR`, canonical env `LINEAR_ASSIGNEE`;
   `"me"` resolves the current Linear viewer
 - `issues.states.active`: list of strings, default `["Todo", "In Progress"]`
@@ -4751,7 +4752,8 @@ Minimum endpoints:
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
   - A check that can't run is not a failure: it is listed in `not_checked` (`id`, `title`,
-    `reason`). Without a Linear API key every Linear-side check is there, never a problem. When
+    `reason`). Without a Linear API key every Linear-side check is there, never a problem (the
+    missing key itself is one `secrets` error). When
     Linear can't be reached, the Linear-side problems of the last run that reached it are kept and
     `linear_checked_at` says when that run was. Linear-side checks read each team's workflow states
     and labels once per run, through a cache kept for the refresh interval and emptied on a refresh.
@@ -4761,11 +4763,28 @@ Minimum endpoints:
     naming the file, the key or line and the reason, and since when the last good config has kept
     running); a repo whose `WORKFLOW.md` fails to load from its base ref (an `error`); a repo whose
     fetch failed three times in a row (a `warning`); a `workspace.source` repo not cloned yet (a
-    `warning`); a repo with no Linear team, so self-heal can't file its fix tickets and its states
-    and labels are never checked (an `error`), or without `route.team` whose team is only found
-    through Linear (a `warning`, with a `config_edit` fix setting
-    `repositories[<key>].route.team` when that is exactly one team). The projects a route names are
-    looked up once per run, through the same cache.
+    `warning`); and each repo's route, judged on the issues its last poll fetched (no issue query
+    of its own) and one read of the workspace's projects and teams per run, cached with the team
+    cache. Its problems: polled issues that `with_repo_key` doesn't key back to the repo (an
+    `error` with up to five tickets, "N of M come back", and a `config_edit` `add` of their project
+    id to `repositories[<key>].route.projects` when re-running the resolver with it routes them
+    all back, else `open` `repos`); a `route.projects` or `route.team` value no Linear project (id,
+    slug id, name) or team (key, id) has (an `error`, with a `config_edit` `set` to the project's
+    id or the team's key when exactly one is a near match); an issue more than one non-default
+    repo takes by its route or its poll (one `error` per set of repos, `open` `repos`); a repo
+    whose polls fetched nothing for 24 hours (a `warning`). A default repo's poll of an issue a
+    scoped repo takes is routing as designed. A route change starts the repo's poll record over;
+    and a secret the config needs but the service can't read (an `error` with an `open`
+    `settings` fix, naming the variable and the key, never a value): the Linear API key,
+    `OPENROUTER_API_KEY` when a run kind's profile resolves to `openrouter` (naming the run kinds),
+    each whole-value `$NAME` in `symphony.yml` whose variable is unset or empty (an MCP server's
+    `env` and `headers`, a notification channel's `url`, `webhook_url` and `headers`, and
+    `github.webhooks.secret` while no handed-off secret file stands in for it), and the GitHub CLI
+    signed in when a repo is a `workspace.source` repo; and a repo with no Linear team, so self-heal
+    can't file its fix tickets and its states and labels are never checked (an `error`), or without
+    `route.team` whose team is only found through Linear, its projects' teams (from the same read
+    of the workspace's projects) or its polled issues' (a `warning`, with a `config_edit` fix setting
+    `repositories[<key>].route.team` when that is exactly one team).
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with

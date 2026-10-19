@@ -16,7 +16,7 @@ defmodule SymphonyElixir.Setup.Checks.Teams do
   @behaviour SymphonyElixir.Setup.Check
 
   alias SymphonyElixir.RepoTeams
-  alias SymphonyElixir.Setup.{Problem, TeamCache}
+  alias SymphonyElixir.Setup.Problem
 
   @impl true
   def id, do: "teams"
@@ -31,7 +31,7 @@ defmodule SymphonyElixir.Setup.Checks.Teams do
   def run(%{system: nil}), do: []
 
   def run(%{system: system, team_cache: cache}) do
-    opts = [projects: &TeamCache.projects(cache, &1)]
+    opts = [projects: fn -> RepoTeams.cached_projects(cache) end]
 
     Enum.reduce_while(system.repos, [], fn repo, problems ->
       case RepoTeams.resolve(repo, opts) do

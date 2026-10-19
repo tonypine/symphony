@@ -3,6 +3,7 @@ defmodule SymphonyElixir.RepoTeamsTest do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.RepoTeams
+  alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixir.Setup
   alias SymphonyElixir.Setup.TeamCache
 
@@ -14,9 +15,9 @@ defmodule SymphonyElixir.RepoTeamsTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     on_exit(fn ->
-      RepoTeams.forget(repo_key)
+      :ets.delete(PollLog, repo_key)
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-      Application.delete_env(:symphony_elixir, :memory_tracker_projects)
+      Application.delete_env(:symphony_elixir, :memory_tracker_projects_list)
     end)
 
     {:ok, repo_key: repo_key}
@@ -24,12 +25,14 @@ defmodule SymphonyElixir.RepoTeamsTest do
 
   @symphony %{id: "p1", name: "Symphony", slug_id: "s1", team_keys: ["TP"]}
 
-  defp lookup(projects), do: fn refs -> send(self(), {:lookup, refs}) && {:ok, projects} end
+  defp lookup(projects), do: fn -> send(self(), :lookup) && {:ok, projects} end
 
   # Resolves with no `issues` team or project unless the test gives `tracker`, and the projects given.
   defp resolve(repo, projects, tracker \\ @tracker), do: RepoTeams.resolve(repo, tracker: tracker, projects: lookup(projects))
 
   defp issue(team), do: %Issue{id: "i-#{team}", team: %{key: team, name: nil}}
+
+  defp polled(repo, issues), do: PollLog.record(repo, {:ok, issues})
 
   describe "resolve/2" do
     test "route.team wins, and the issues team counts as the route's", %{repo_key: key} do
@@ -39,7 +42,7 @@ defmodule SymphonyElixir.RepoTeamsTest do
       issues_team = %{@tracker | team: "OPS"}
       assert {:ok, %{source: :route, teams: ["OPS"]}} = resolve(%{name: key, team: nil, projects: []}, [], issues_team)
 
-      refute_received {:lookup, _refs}
+      refute_received :lookup
     end
 
     test "a repo routed only by project finds its projects' teams, by name, slug id or id", %{repo_key: key} do
@@ -51,7 +54,7 @@ defmodule SymphonyElixir.RepoTeamsTest do
       assert {:ok, %{source: :projects, teams: ["TP"], project_teams: ["TP"], unresolved_projects: []}} =
                resolve(%{name: key, projects: ["a1abb875ac02"]}, projects)
 
-      assert_received {:lookup, ["a1abb875ac02"]}
+      assert_received :lookup
 
       assert {:ok, %{source: :projects, teams: ["TP", "OPS"], unresolved_projects: ["Gone"]}} =
                resolve(%{name: key, projects: ["Symphony", "p2", "Gone", " "]}, projects)
@@ -69,23 +72,27 @@ defmodule SymphonyElixir.RepoTeamsTest do
 
       assert {:ok, %{source: :none, teams: [], unresolved_projects: ["Gone"]}} = resolve(repo, [])
       assert {:ok, %{source: :none, projects: []}} = resolve(%{name: key}, [])
-      refute_received {:lookup, []}
+      assert_received :lookup
+      refute_received :lookup
 
-      :ok = RepoTeams.observe(key, {:ok, [issue("TP"), %Issue{id: "no-team"}, issue("TP")]})
+      polled(repo, [issue("TP"), %Issue{id: "no-team"}, issue("TP")])
 
       assert {:ok, %{source: :issues, teams: ["TP"], unresolved_projects: ["Gone"]}} = resolve(repo, [])
     end
 
     test "a failed projects lookup is an error", %{repo_key: key} do
-      failing = fn _refs -> {:error, :timeout} end
+      failing = fn -> {:error, :timeout} end
       assert {:error, :timeout} = RepoTeams.resolve(%{name: key, projects: ["Symphony"]}, tracker: @tracker, projects: failing)
     end
 
     test "reads the running config's issues settings and the tracker by default", %{repo_key: key} do
-      Application.put_env(:symphony_elixir, :memory_tracker_projects, [@symphony])
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@symphony])
 
       assert {:ok, %{source: :projects, teams: ["TP"]}} = RepoTeams.resolve(%{name: key, projects: ["Symphony"]})
-      assert_received {:memory_tracker_fetch_projects, ["Symphony"]}
+      assert_received {:memory_tracker_projects_and_teams}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, {:error, :timeout})
+      assert {:error, :timeout} = RepoTeams.resolve(%{name: key, projects: ["Symphony"]})
     end
 
     test "a config that doesn't load leaves only the route's own team and projects", %{repo_key: key} do
@@ -96,15 +103,17 @@ defmodule SymphonyElixir.RepoTeamsTest do
       assert {:ok, %{source: :route, teams: ["TP"]}} = RepoTeams.resolve(%{name: key, team: "TP"})
     end
 
-    test "reads through the running Setup server's team cache", %{repo_key: key} do
-      Application.put_env(:symphony_elixir, :memory_tracker_projects, [@symphony])
+    test "reads through the running Setup server's team cache, one request for every repo", %{repo_key: key} do
+      web = %{id: "p2", name: "Web", slug_id: "w", team_keys: ["WEB"]}
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@symphony, web])
       start_supervised!({Setup, checks: [], name: Setup})
       assert %TeamCache{} = Setup.team_cache()
 
-      for _read <- 1..2, do: assert({:ok, %{teams: ["TP"]}} = RepoTeams.resolve(%{name: key, projects: ["Symphony"]}))
+      assert {:ok, %{teams: ["TP"]}} = RepoTeams.resolve(%{name: key, projects: ["Symphony"]})
+      assert {:ok, %{teams: ["WEB"]}} = RepoTeams.resolve(%{name: "#{key}-web", projects: ["Web"]})
 
-      assert_received {:memory_tracker_fetch_projects, ["Symphony"]}
-      refute_received {:memory_tracker_fetch_projects, _refs}
+      assert_received {:memory_tracker_projects_and_teams}
+      refute_received {:memory_tracker_projects_and_teams}
     end
   end
 
@@ -115,34 +124,31 @@ defmodule SymphonyElixir.RepoTeamsTest do
     end
 
     test "a failed projects lookup is logged and the polled issues' teams still count", %{repo_key: key} do
-      :ok = RepoTeams.observe(key, {:ok, [issue("OPS")]})
       repo = %{name: key, projects: ["Symphony"]}
+      polled(repo, [issue("OPS")])
 
       log =
         capture_log(fn ->
-          assert RepoTeams.routed_teams(repo, tracker: @tracker, projects: fn _refs -> {:error, :timeout} end) == ["OPS"]
+          assert RepoTeams.routed_teams(repo, tracker: @tracker, projects: fn -> {:error, :timeout} end) == ["OPS"]
         end)
 
       assert log =~ "Could not look up the Linear teams of repo=#{key}'s routed projects: :timeout"
     end
   end
 
-  describe "observe/2" do
-    test "a failed or empty poll keeps what an earlier one saw, and another repo key sees nothing", %{repo_key: key} do
-      assert RepoTeams.issue_teams(key) == []
-      assert RepoTeams.issue_teams(nil) == []
+  describe "issue_teams/1" do
+    test "the teams of the last poll under the repo's current route", %{repo_key: key} do
+      repo = %{name: key, team: nil, projects: ["Symphony"]}
+      assert RepoTeams.issue_teams(repo) == []
+      assert RepoTeams.issue_teams(%{team: "TP"}) == []
 
-      :ok = RepoTeams.observe(key, {:ok, [issue("TP")]})
-      :ok = RepoTeams.observe(key, {:ok, []})
-      :ok = RepoTeams.observe(key, {:error, :timeout})
-      :ok = RepoTeams.observe(nil, {:ok, [issue("OPS")]})
-      assert RepoTeams.issue_teams(key) == ["TP"]
+      polled(repo, [issue("OPS"), issue("TP"), issue("OPS")])
+      assert RepoTeams.issue_teams(repo) == ["OPS", "TP"]
 
-      :ok = RepoTeams.observe(key, {:ok, [issue("OPS"), issue("TP")]})
-      assert RepoTeams.issue_teams(key) == ["OPS", "TP"]
-
-      assert :ok = RepoTeams.forget(key)
-      assert RepoTeams.issue_teams(key) == []
+      # A failed poll keeps the last one; a route change starts over.
+      PollLog.record(repo, {:error, :timeout})
+      assert RepoTeams.issue_teams(repo) == ["OPS", "TP"]
+      assert RepoTeams.issue_teams(%{repo | projects: ["Web"]}) == []
     end
   end
 

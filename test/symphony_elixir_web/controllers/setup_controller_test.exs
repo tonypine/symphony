@@ -7,6 +7,8 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   alias SymphonyElixir.GitHub.{RelaySupervisor, WebhookSetup}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
+  alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.Routing.{PollLog, Resolver}
   alias SymphonyElixir.Secret
   alias SymphonyElixir.Setup
 
@@ -32,6 +34,10 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     file = Workflow.symphony_file_path()
     File.write!(file, file |> File.read!() |> String.split("\n") |> Enum.reject(&String.starts_with?(&1, "dashboard:")) |> Enum.join("\n"))
     Cache.clear()
+    # Earlier tests may have left failed fetches of `default` in the shared fetch log, and polls in
+    # the poll log: either would put a problem in a healthy payload.
+    FetchLog.record("default", :ok)
+    :ets.delete_all_objects(PollLog)
 
     dir = Path.join(System.tmp_dir!(), "setup-controller-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -93,6 +99,16 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   defp refresh(headers \\ [{"content-type", "application/json"}]) do
     Enum.reduce(headers, build_conn(), fn {name, value}, conn -> put_req_header(conn, name, value) end)
     |> post("/api/v1/setup/refresh", "{}")
+  end
+
+  # Writes the repos into symphony.yml and records each one's poll, as the orchestrator's poll does.
+  defp route_and_poll!(repos) do
+    path = Workflow.symphony_file_path()
+    repos = Enum.map(repos, &Map.put(&1, "workflow", Workflow.workflow_file_path()))
+    File.write!(path, String.replace(File.read!(path), ~r/^repositories: .*$/m, "repositories: " <> Jason.encode!(repos)))
+    Cache.clear()
+
+    for repo <- Config.system!().repos, do: PollLog.record(repo, Tracker.fetch_candidate_issues_for_repo(repo))
   end
 
   defp fake_gh(["auth", "status"]), do: {:ok, "  - Token scopes: 'admin:repo_hook', 'repo'\n"}
@@ -203,6 +219,88 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
 
       assert build_conn() |> get("/api/v1/setup") |> json_response(200) |> Map.delete("github_updates") == problems
       assert build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("setup") == problems
+    end
+
+    test "a slug route whose tickets carry only the project id is a routing error until its fix is applied" do
+      # The `issues` team gives every repo its team, so only routing problems show.
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
+      project_id = "8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [%{id: project_id, name: "Symphony", slug_id: "a1abb875ac02"}])
+      Application.put_env(:symphony_elixir, :memory_tracker_teams_list, [%{id: "team-tp", key: "TP", name: "Tony Pine"}])
+      issues = for number <- 1..3, do: %Issue{id: "issue-#{number}", identifier: "TP-#{number}", state: "Todo", project: %{id: project_id}}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+      on_exit(fn ->
+        :ets.delete_all_objects(PollLog)
+        Enum.each([:memory_tracker_projects_list, :memory_tracker_teams_list], &Application.delete_env(:symphony_elixir, &1))
+      end)
+
+      symphony = %{"key" => "symphony", "route" => %{"projects" => ["a1abb875ac02"]}}
+      route_and_poll!([symphony])
+
+      assert %{"problems" => [problem]} = refresh() |> json_response(200)
+
+      assert %{
+               "id" => "routing:round_trip:symphony",
+               "severity" => "error",
+               "category" => "routing",
+               "repos" => ["symphony"],
+               "fix" => %{"kind" => "config_edit", "path" => "repositories[symphony].route.projects", "action" => "add", "value" => ^project_id}
+             } = problem
+
+      assert %{"label" => "Resolves", "value" => "0 of 3 come back to symphony"} in problem["details"]
+
+      # The fix applied: the tickets route back, so holds and decisions find their repo.
+      symphony = put_in(symphony, ["route", "projects"], ["a1abb875ac02", project_id])
+      route_and_poll!([symphony])
+
+      assert %{"problems" => []} = refresh() |> json_response(200)
+      assert Enum.all?(issues, &(Resolver.with_repo_key(&1, Config.system!().repos).repo_key == "symphony"))
+
+      # A second repo routed to the same project.
+      route_and_poll!([symphony, %{"key" => "web", "route" => %{"projects" => [project_id]}}])
+
+      assert %{"problems" => [%{"id" => "routing:overlap:symphony+web", "severity" => "error", "repos" => ["symphony", "web"], "fix" => %{"kind" => "open", "target" => "repos"}}]} =
+               refresh() |> json_response(200)
+    end
+
+    test "an unset $VAR a notification channel names is a secrets error without a value until it is set" do
+      previous = System.get_env("SLACK_URL")
+      System.delete_env("SLACK_URL")
+      on_exit(fn -> restore_env("SLACK_URL", previous) end)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        notifications: %{enabled: true, channels: [%{kind: "slack", url: "$SLACK_URL", events: ["run_failed"]}]}
+      )
+
+      assert %{"problems" => [problem]} = refresh() |> json_response(200)
+
+      assert %{
+               "id" => "secret:notifications.channels[0].url",
+               "severity" => "error",
+               "category" => "secrets",
+               "fix" => %{"kind" => "open", "target" => "settings"}
+             } = problem
+
+      assert %{"label" => "Key", "value" => "notifications.channels[0].url"} in problem["details"]
+      assert %{"label" => "Variable", "value" => "SLACK_URL"} in problem["details"]
+
+      System.put_env("SLACK_URL", "https://hooks.slack.test/services/T0/B0/sekret")
+      refresh()
+      conn = build_conn() |> get("/api/v1/setup")
+      assert %{"problems" => []} = json_response(conn, 200)
+      refute conn.resp_body =~ "sekret"
+    end
+
+    test "without a Linear API key the payload holds one secrets error for it" do
+      previous = System.get_env("LINEAR_API_KEY")
+      System.delete_env("LINEAR_API_KEY")
+      on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
+
+      assert %{"problems" => [%{"id" => "secret:LINEAR_API_KEY", "severity" => "error", "title" => "Symphony can't read Linear: no ticket is picked up"}]} =
+               refresh() |> json_response(200)
     end
 
     test "a refresh is refused from another site's page, and takes no other method" do

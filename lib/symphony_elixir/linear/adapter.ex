@@ -261,26 +261,32 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
-  # The projects a repo's route names, with their teams, for `SymphonyElixir.RepoTeams`.
-  @projects_query """
-  query SymphonyProjectTeams($filter: ProjectFilter!, $first: Int!) {
-    projects(filter: $filter, first: $first) {
+  # The Setup routing check reads every project and team once per run, to tell a route value Linear
+  # doesn't have from a near miss of one it does. A project's teams give a project-routed repo its
+  # team (`SymphonyElixir.RepoTeams`); past a few, all that matters is that there are several.
+  @projects_and_teams_query """
+  query SymphonyProjectsAndTeams {
+    projects(first: 250) {
       nodes {
         id
         name
         slugId
-        teams(first: 50) {
+        teams(first: 10) {
           nodes {
-            id
             key
           }
         }
       }
     }
+    teams(first: 250) {
+      nodes {
+        id
+        key
+        name
+      }
+    }
   }
   """
-
-  @project_page_size 50
 
   # A new phase state is a started state: it sits beside In Progress on the board. Linear requires
   # the color.
@@ -774,6 +780,28 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @doc "Every project (id, name, slug id, its teams' keys) and team (id, key, name) in the workspace, in one request."
+  @spec projects_and_teams() :: {:ok, Tracker.projects_and_teams()} | {:error, term()}
+  def projects_and_teams do
+    with {:ok, response} <- client_module().graphql(@projects_and_teams_query, %{}),
+         projects when is_list(projects) <- get_in(response, ["data", "projects", "nodes"]),
+         teams when is_list(teams) <- get_in(response, ["data", "teams", "nodes"]) do
+      {:ok,
+       %{
+         projects: Enum.map(projects, &project/1),
+         teams: Enum.map(teams, &%{id: &1["id"], key: &1["key"], name: &1["name"]})
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :projects_unavailable}
+    end
+  end
+
+  defp project(node) do
+    team_keys = for team <- List.wrap(get_in(node, ["teams", "nodes"])), is_binary(team["key"]), do: team["key"]
+    %{id: node["id"], name: node["name"], slug_id: node["slugId"], team_keys: team_keys}
+  end
+
   @doc "Creates the label `label_name` in the team `team` (a key or an id), and returns it."
   @spec create_label(String.t(), String.t()) :: {:ok, Tracker.label()} | {:error, term()}
   def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
@@ -787,27 +815,6 @@ defmodule SymphonyElixir.Linear.Adapter do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :label_create_failed}
     end
-  end
-
-  @doc "The projects `refs` names (names, slug ids or ids), with the keys of their teams."
-  @spec fetch_projects([String.t()]) :: {:ok, [Tracker.project()]} | {:error, term()}
-  def fetch_projects([]), do: {:ok, []}
-
-  def fetch_projects(refs) when is_list(refs) do
-    variables = %{filter: Client.project_filter(refs), first: @project_page_size}
-
-    with {:ok, response} <- client_module().graphql(@projects_query, variables),
-         nodes when is_list(nodes) <- get_in(response, ["data", "projects", "nodes"]) do
-      {:ok, Enum.map(nodes, &project/1)}
-    else
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :projects_unavailable}
-    end
-  end
-
-  defp project(node) do
-    team_keys = for team <- List.wrap(get_in(node, ["teams", "nodes"])), key = team["key"] || team["id"], is_binary(key), do: key
-    %{id: node["id"], name: node["name"], slug_id: node["slugId"], team_keys: team_keys}
   end
 
   defp workflow_state(node) do

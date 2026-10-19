@@ -68,10 +68,12 @@ invalid value, YAML that doesn't parse) does not stop it: it keeps running the l
 loaded, logs the reason, and lists the rejected file under `problems` in `GET /api/v1/setup`
 (the key or line, the reason, and since when) until the file loads again. The same list warns
 about each deprecated key the file still sets, with what replaced it and, for a key that does
-nothing now, a fix that removes it, and about each repository with no Linear team (or one found
-only through its projects or tickets, with a fix that sets `route.team`).
-`POST /api/v1/setup/refresh` checks again at once. See
-[SPEC.md](../SPEC.md) for the problem shape.
+nothing now, a fix that removes it. It also checks each repo's `route` against the tickets its
+last poll fetched: tickets that don't route back to the repo (with a fix that adds their project
+id to `route.projects`), a route value Linear has no project or team for, two repos taking the same
+tickets, and a route that has matched nothing for 24 hours. It flags each repository with no Linear
+team (an error), and one whose team is found only through its projects or tickets (a warning,
+with a fix that sets `route.team`). `POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 
@@ -137,10 +139,13 @@ issues:
 
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
   `memory.issues_file` (relative to the folder holding `symphony.yml`), a JSON list of
-  `{"id", "identifier", "state", "title", "description", "labels"}` objects, on every fetch, so a test
-  can change them while Symphony runs. An issue may also carry a `"team"` key and a `"project"` (a
-  name or an `{"id", "name", "slugId"}` object); a project belongs to the teams of its issues.
-  Comments and state changes go nowhere.
+  `{"id", "identifier", "state", "title", "description", "labels"}` objects (with an optional
+  `"team": {"key", "name"}` and `"project": {"id", "name", "slug_id"}`), on every fetch, so a test
+  can change them while Symphony runs. Entries with `"kind": "project"` (`id`, `name`, `slug_id`) or
+  `"kind": "team"` (`id`, `key`, `name`) are the fake workspace's projects and teams: a route that
+  names a project by any of them polls its issues, as Linear does. A project's optional `"teams"`
+  lists its team keys; without it, the project is in the teams of its issues. Comments and state
+  changes go nowhere.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
@@ -998,8 +1003,10 @@ Per-server declaration:
 **Env-var expansion** in `env` and `headers`: a value that is exactly `$NAME` (where `NAME` matches
 `[A-Za-z_][A-Za-z0-9_]*`) is resolved from the orchestrator's environment at config-load time.
 A set var substitutes the value; an empty var drops the entry; a missing var keeps the literal
-`$NAME` (so misconfigurations surface at the MCP server's own startup). Embedded references
-(`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose the literal.
+`$NAME` (so misconfigurations surface at the MCP server's own startup), and Setup
+(`GET /api/v1/setup`) reports it as a `secrets` error naming the key and the variable. Embedded
+references (`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose
+the literal.
 
 **Runtime-specific wiring:**
 

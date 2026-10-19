@@ -17,7 +17,7 @@ defmodule SymphonyElixir.StateProvisioningTest do
   @symphony_project %{id: "p1", name: "Symphony", slug_id: "s1", team_keys: ["TP"]}
   @memory_keys [
     :memory_tracker_recipient,
-    :memory_tracker_projects,
+    :memory_tracker_projects_list,
     :memory_tracker_workflow_states_list,
     :memory_tracker_labels_list
   ]
@@ -101,14 +101,14 @@ defmodule SymphonyElixir.StateProvisioningTest do
 
     test "a repo routed only by project adds its project's team, and with route.team set nothing is looked up" do
       {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}})
-      lookup = fn refs -> send(self(), {:lookup, refs}) && {:ok, [@symphony_project]} end
+      lookup = fn -> send(self(), :lookup) && {:ok, [@symphony_project]} end
       repos = [%{name: "app", team: "APP"}, %{name: "web", projects: ["Symphony"]}]
 
       assert StateProvisioning.configured_teams(settings, repos, projects: lookup) == ["APP", "TP"]
 
-      assert_received {:lookup, ["Symphony"]}
+      assert_received :lookup
       assert StateProvisioning.configured_teams(settings, [%{name: "app", team: "APP"}], projects: lookup) == ["APP"]
-      refute_received {:lookup, _refs}
+      refute_received :lookup
     end
 
     # Walkthrough 1: the memory tracker, a repo routed only by a project of team TP, no route.team.
@@ -118,7 +118,7 @@ defmodule SymphonyElixir.StateProvisioningTest do
       write_workflow_file!(path, tracker_kind: "memory", tracker_project_slug: nil, repos: repos)
       code_review = %{id: "s1", name: "Code Review", team_id: "t1", team_key: "TP"}
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-      Application.put_env(:symphony_elixir, :memory_tracker_projects, [@symphony_project])
+      Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [@symphony_project])
       Application.put_env(:symphony_elixir, :memory_tracker_workflow_states_list, [code_review])
 
       on_exit(fn ->

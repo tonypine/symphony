@@ -48,8 +48,8 @@ defmodule SymphonyElixir.Tracker do
         }
 
   @typedoc """
-  A project as `SymphonyElixir.RepoTeams` reads it: its id, name and slug id (any of them is a
-  `route.projects` value), and the keys of the teams it belongs to.
+  A Linear project a repo route can name: by its id, its slug id or its name. `team_keys` are the
+  keys of the teams it belongs to, which `SymphonyElixir.RepoTeams` reads for a project-routed repo.
   """
   @type project :: %{
           id: String.t() | nil,
@@ -57,6 +57,12 @@ defmodule SymphonyElixir.Tracker do
           slug_id: String.t() | nil,
           team_keys: [String.t()]
         }
+
+  @typedoc "A Linear team a repo route can name: by its key or its id."
+  @type team :: %{id: String.t() | nil, key: String.t() | nil, name: String.t() | nil}
+
+  @typedoc "The workspace's projects and teams, read together for the Setup routing and teams checks."
+  @type projects_and_teams :: %{projects: [project()], teams: [team()]}
 
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
@@ -82,7 +88,7 @@ defmodule SymphonyElixir.Tracker do
   @callback team_workflow_states(String.t()) :: {:ok, [workflow_state()]} | {:error, term()}
   @callback team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   @callback create_label(String.t(), String.t()) :: {:ok, label()} | {:error, term()}
-  @callback fetch_projects([String.t()]) :: {:ok, [project()]} | {:error, term()}
+  @callback projects_and_teams() :: {:ok, projects_and_teams()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -245,6 +251,10 @@ defmodule SymphonyElixir.Tracker do
   @spec team_labels(String.t()) :: {:ok, [label()]} | {:error, term()}
   def team_labels(team) when is_binary(team), do: adapter().team_labels(team)
 
+  @doc "The workspace's projects and teams, in one request."
+  @spec projects_and_teams() :: {:ok, projects_and_teams()} | {:error, term()}
+  def projects_and_teams, do: adapter().projects_and_teams()
+
   @doc """
   Creates a label named `label_name` in `team` (a team key or id), and returns it. Used only by
   `SymphonyElixir.StateProvisioning` to create a label that is missing.
@@ -253,13 +263,6 @@ defmodule SymphonyElixir.Tracker do
   def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
     adapter().create_label(label_name, team)
   end
-
-  @doc """
-  The projects named by `refs` (each a project's name, slug id or id, as `route.projects` names
-  them) with the teams they belong to, in one request.
-  """
-  @spec fetch_projects([String.t()]) :: {:ok, [project()]} | {:error, term()}
-  def fetch_projects(refs) when is_list(refs), do: adapter().fetch_projects(refs)
 
   @spec adapter() :: module()
   def adapter do

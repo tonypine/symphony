@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
         query =~ "SymphonyCreateIssueScope" -> Process.get(:scope_result, {:ok, scope_response()})
         query =~ "SymphonyCreateIssueRelation" -> Process.get(:relation_result, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}})
         query =~ "SymphonyCreateIssue" -> Process.get(:create_result, {:ok, create_response()})
-        query =~ "SymphonyProjectTeams" -> Process.get(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => []}}}})
+        query =~ "SymphonyProjectsAndTeams" -> Process.get(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => []}, "teams" => %{"nodes" => []}}}})
         query =~ "SymphonyIssueId" -> Process.get(:issue_id_result, {:ok, %{"data" => %{"issue" => %{"id" => "blocker-id"}}}})
         true -> flunk("unexpected query: #{query}")
       end
@@ -206,11 +206,11 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
     end
 
     test "a repo routed only by project files in its project's team when the affected ticket carries none" do
-      project = %{"id" => "p1", "name" => "Fix Project", "slugId" => "a1abb875ac02", "teams" => %{"nodes" => [%{"id" => "t1", "key" => "TP"}]}}
-      Process.put(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => [project]}}}})
+      project = %{"id" => "p1", "name" => "Fix Project", "slugId" => "a1abb875ac02", "teams" => %{"nodes" => [%{"key" => "TP"}]}}
+      Process.put(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => [project]}, "teams" => %{"nodes" => []}}}})
 
       # Through the Linear adapter's projects lookup, whichever tracker the test config names.
-      lookup = fn refs -> Linear.Adapter.fetch_projects(refs) end
+      lookup = fn -> with {:ok, %{projects: projects}} <- Linear.Adapter.projects_and_teams(), do: {:ok, projects} end
       routed_teams = &RepoTeams.routed_teams(&1, tracker: @no_issues_scope, projects: lookup)
       opts = Keyword.put(repo(nil, ["a1abb875ac02"]), :routed_teams, routed_teams)
 

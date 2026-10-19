@@ -10,10 +10,10 @@ defmodule SymphonyElixir.RepoTeams do
 
     1. its `route.team`, else the `issues` team its poll filters by too;
     2. else the teams of the projects its route names (`route.projects`, else the `issues`
-       project), from the projects lookup cached with Setup's per-team cache
-       (`SymphonyElixir.Setup.TeamCache`), so a project-routed repo costs one Linear request per
-       refresh interval;
-    3. else the teams of the issues its last poll returned (`observe/2`).
+       project), from the workspace's projects lookup the Setup routing check reads too, cached
+       with Setup's per-team cache (`SymphonyElixir.Setup.TeamCache`), so every project-routed repo
+       together costs one Linear request per refresh interval;
+    3. else the teams of the issues its last poll returned (`SymphonyElixir.Routing.PollLog`).
 
   A repo that resolves nothing has no team: self-heal can't file its fix tickets, and its states and
   labels are never checked. The Setup `teams` check reports it.
@@ -23,6 +23,7 @@ defmodule SymphonyElixir.RepoTeams do
 
   alias SymphonyElixir.{Config, Setup, Tracker}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixir.Setup.TeamCache
 
   @typedoc """
@@ -38,8 +39,8 @@ defmodule SymphonyElixir.RepoTeams do
           unresolved_projects: [String.t()]
         }
 
-  @typedoc "Reads the projects a route names, with their teams."
-  @type projects_lookup :: ([String.t()] -> {:ok, [Tracker.project()]} | {:error, term()})
+  @typedoc "Reads the workspace's projects, with their teams."
+  @type projects_lookup :: (-> {:ok, [Tracker.project()]} | {:error, term()})
 
   @doc """
   The team keys of `repo` (a `SystemSchema.Repo` or a map with `name`, `team` and `projects`), most
@@ -53,8 +54,8 @@ defmodule SymphonyElixir.RepoTeams do
         teams
 
       {:error, reason} ->
-        Logger.warning("Could not look up the Linear teams of repo=#{repo_key(repo)}'s routed projects: #{inspect(reason)}")
-        issue_teams(repo_key(repo))
+        Logger.warning("Could not look up the Linear teams of repo=#{Map.get(repo, :name)}'s routed projects: #{inspect(reason)}")
+        issue_teams(repo)
     end
   end
 
@@ -71,42 +72,26 @@ defmodule SymphonyElixir.RepoTeams do
     projects = routed_projects(repo, tracker)
 
     case present(Map.get(repo, :team)) || present(tracker && Map.get(tracker, :team)) do
-      nil -> resolve_projects(repo, projects, Keyword.get(opts, :projects, &lookup_projects/1))
+      nil -> resolve_projects(repo, projects, Keyword.get(opts, :projects, &lookup_projects/0))
       team -> {:ok, resolution(:route, [team], projects, [], [])}
     end
   end
 
-  @doc """
-  Remembers the teams of the issues a poll of `repo_key` returned, the last step of `resolve/2`. A
-  failed or empty poll keeps what an earlier one saw.
-  """
-  @spec observe(String.t() | nil, {:ok, [term()]} | {:error, term()} | term()) :: :ok
-  def observe(repo_key, {:ok, issues}) when is_binary(repo_key) and is_list(issues) do
-    teams = issues |> Enum.flat_map(&issue_team/1) |> Enum.uniq()
-
-    # A persistent term is rewritten only when the teams change, which a steady poll never does.
-    if teams != [] and teams != issue_teams(repo_key), do: :persistent_term.put(issue_teams_key(repo_key), teams)
-    :ok
+  @doc "The teams of the issues the last poll of `repo` returned, under the route it has now."
+  @spec issue_teams(map()) :: [String.t()]
+  def issue_teams(%{name: name} = repo) when is_binary(name) do
+    case PollLog.last(repo) do
+      %{issues: issues} -> issues |> Enum.flat_map(&issue_team/1) |> Enum.uniq()
+      nil -> []
+    end
   end
 
-  def observe(_repo_key, _poll_result), do: :ok
-
-  @doc "The teams of the issues the last poll of `repo_key` returned (`observe/2`)."
-  @spec issue_teams(String.t() | nil) :: [String.t()]
-  def issue_teams(repo_key) when is_binary(repo_key), do: :persistent_term.get(issue_teams_key(repo_key), [])
-  def issue_teams(_repo_key), do: []
-
-  @doc "Forgets what the polls of `repo_key` saw."
-  @spec forget(String.t()) :: :ok
-  def forget(repo_key) when is_binary(repo_key) do
-    :persistent_term.erase(issue_teams_key(repo_key))
-    :ok
-  end
+  def issue_teams(_repo), do: []
 
   defp resolve_projects(repo, [], _lookup), do: {:ok, issues_resolution(repo, [], [], [])}
 
   defp resolve_projects(repo, projects, lookup) do
-    with {:ok, found} <- lookup.(projects) do
+    with {:ok, found} <- lookup.() do
       by_ref = Enum.map(projects, &{&1, project_team_keys(found, &1)})
       project_teams = by_ref |> Enum.flat_map(&elem(&1, 1)) |> Enum.uniq()
       unresolved = for {ref, []} <- by_ref, do: ref
@@ -119,7 +104,7 @@ defmodule SymphonyElixir.RepoTeams do
   end
 
   defp issues_resolution(repo, projects, project_teams, unresolved) do
-    case issue_teams(repo_key(repo)) do
+    case issue_teams(repo) do
       [] -> resolution(:none, [], projects, project_teams, unresolved)
       teams -> resolution(:issues, teams, projects, project_teams, unresolved)
     end
@@ -144,12 +129,19 @@ defmodule SymphonyElixir.RepoTeams do
     end
   end
 
-  defp lookup_projects(refs) do
+  @doc "The workspace's projects from `cache`, as `resolve/2`'s `:projects` lookup reads them."
+  @spec cached_projects(TeamCache.t()) :: {:ok, [Tracker.project()]} | {:error, term()}
+  def cached_projects(%TeamCache{} = cache), do: projects(TeamCache.projects_and_teams(cache))
+
+  defp lookup_projects do
     case Setup.team_cache() do
-      %TeamCache{} = cache -> TeamCache.projects(cache, refs)
-      nil -> Tracker.fetch_projects(refs)
+      %TeamCache{} = cache -> cached_projects(cache)
+      nil -> projects(Tracker.projects_and_teams())
     end
   end
+
+  defp projects({:ok, %{projects: projects}}), do: {:ok, projects}
+  defp projects({:error, _reason} = error), do: error
 
   defp tracker_settings do
     case Config.settings() do
@@ -160,10 +152,6 @@ defmodule SymphonyElixir.RepoTeams do
 
   defp issue_team(%Issue{team: %{key: key}}) when is_binary(key) and key != "", do: [key]
   defp issue_team(_issue), do: []
-
-  defp repo_key(repo), do: Map.get(repo, :name)
-
-  defp issue_teams_key(repo_key), do: {__MODULE__, :issue_teams, repo_key}
 
   defp present(value) when is_binary(value) do
     case String.trim(value) do

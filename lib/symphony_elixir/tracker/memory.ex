@@ -11,9 +11,12 @@ defmodule SymphonyElixir.Tracker.Memory do
   The issues come from `:memory_tracker_issues` when it is set. Otherwise they
   are read on every fetch from the JSON file `issues.memory.issues_file` names, a
   list of `{"id", "identifier", "state", "title", "description", "labels"}`
-  objects (optionally with a `"team"` key and a `"project"`, a name or an
-  `{"id", "name", "slugId"}` object), so a release binary (the menu bar app's end-to-end test) can run
-  against a fake Linear whose issues the test edits while Symphony runs.
+  objects (with an optional `"team": {"key", "name"}` and
+  `"project": {"id", "name", "slug_id"}`), so a release binary (the menu bar app's
+  end-to-end test) can run against a fake Linear whose issues the test edits while
+  Symphony runs. Entries with `"kind": "project"` or `"kind": "team"` are the
+  workspace's projects and teams instead (`projects_and_teams/0`); a project's
+  optional `"teams"` lists its team keys.
   """
 
   @behaviour SymphonyElixir.Tracker
@@ -34,8 +37,26 @@ defmodule SymphonyElixir.Tracker.Memory do
   @spec fetch_candidate_issues_for_repo(term()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues_for_repo(repo) do
     maybe_sleep(:memory_tracker_fetch_candidate_sleep_ms)
+    repo = with_named_projects(repo)
     {:ok, Enum.filter(issue_entries(), &Resolver.matches?(&1, repo))}
   end
+
+  # Linear filters a route's projects on its side, by id, slug id or name, so a route value polls
+  # the issues of the project it names however little of that project the issue itself carries.
+  defp with_named_projects(%{projects: [_ | _] = values} = repo) do
+    named =
+      for project <- List.wrap(catalog(:memory_tracker_projects_list, "project")),
+          is_map(project),
+          Enum.any?(values, &(&1 in project_names(project))),
+          name <- project_names(project),
+          do: name
+
+    %{repo | projects: Enum.uniq(values ++ named)}
+  end
+
+  defp with_named_projects(repo), do: repo
+
+  defp project_names(project), do: Enum.filter([project[:id], project[:slug_id], project[:name]], &is_binary/1)
 
   @spec fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
   def fetch_issue_by_identifier(identifier) when is_binary(identifier) do
@@ -278,6 +299,49 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   defp workspace_label?(label), do: is_nil(Map.get(label, :team_key)) and is_nil(Map.get(label, :team_id))
 
+  @doc """
+  The projects and teams a test seeds in `:memory_tracker_projects_list` and
+  `:memory_tracker_teams_list` (or `{:error, reason}` in either), else the entries of the issues
+  file with `"kind": "project"` (`id`, `name`, `slug_id`, `teams`) or `"kind": "team"` (`id`, `key`,
+  `name`). A project that names no teams is in the teams of its issues. Each call sends `{:memory_tracker_projects_and_teams}`, so a test can count requests.
+  """
+  @spec projects_and_teams() :: {:ok, Tracker.projects_and_teams()} | {:error, term()}
+  def projects_and_teams do
+    send_event({:memory_tracker_projects_and_teams})
+
+    case {catalog(:memory_tracker_projects_list, "project"), catalog(:memory_tracker_teams_list, "team")} do
+      {{:error, _reason} = error, _teams} -> error
+      {_projects, {:error, _reason} = error} -> error
+      {projects, teams} -> {:ok, %{projects: Enum.map(projects, &with_team_keys/1), teams: teams}}
+    end
+  end
+
+  defp with_team_keys(project), do: Map.put_new_lazy(project, :team_keys, fn -> issue_team_keys(project) end)
+
+  defp issue_team_keys(project) do
+    names = project_names(project)
+
+    for %Issue{project: %{} = issue_project, team: %{key: key}} <- issue_entries(),
+        is_binary(key),
+        Enum.any?(project_names(issue_project), &(&1 in names)),
+        uniq: true,
+        do: key
+  end
+
+  defp catalog(key, kind) do
+    case Application.fetch_env(:symphony_elixir, key) do
+      {:ok, entries} -> entries
+      :error -> Enum.flat_map(file_entries(), &catalog_entry(&1, kind))
+    end
+  end
+
+  defp catalog_entry(%{"kind" => "project", "teams" => teams} = entry, "project") when is_list(teams),
+    do: [%{id: entry["id"], name: entry["name"], slug_id: entry["slug_id"], team_keys: Enum.filter(teams, &is_binary/1)}]
+
+  defp catalog_entry(%{"kind" => "project"} = entry, "project"), do: [%{id: entry["id"], name: entry["name"], slug_id: entry["slug_id"]}]
+  defp catalog_entry(%{"kind" => "team"} = entry, "team"), do: [%{id: entry["id"], key: entry["key"], name: entry["name"]}]
+  defp catalog_entry(_entry, _kind), do: []
+
   @spec create_label(String.t(), String.t()) :: {:ok, Tracker.label()} | {:error, term()}
   def create_label(label_name, team) when is_binary(label_name) and is_binary(team) do
     case next_result(:memory_tracker_create_label_result) do
@@ -291,34 +355,6 @@ defmodule SymphonyElixir.Tracker.Memory do
         error
     end
   end
-
-  @doc """
-  The projects `refs` names by name, slug id or id: the `Tracker.project()` maps a test seeds in
-  `:memory_tracker_projects`, else the projects of the issues, each in the teams of its issues. Each
-  call sends `{:memory_tracker_fetch_projects, refs}`.
-  """
-  @spec fetch_projects([String.t()]) :: {:ok, [Tracker.project()]} | {:error, term()}
-  def fetch_projects(refs) when is_list(refs) do
-    send_event({:memory_tracker_fetch_projects, refs})
-
-    case Application.get_env(:symphony_elixir, :memory_tracker_projects) do
-      {:error, _reason} = error -> error
-      nil -> {:ok, Enum.filter(issue_projects(), &named?(&1, refs))}
-      projects -> {:ok, Enum.filter(projects, &named?(&1, refs))}
-    end
-  end
-
-  defp issue_projects do
-    issue_entries()
-    |> Enum.filter(&is_map(&1.project))
-    |> Enum.group_by(&Map.take(&1.project, [:id, :name, :slug_id]))
-    |> Enum.map(fn {project, issues} ->
-      team_keys = issues |> Enum.map(&(&1.team && &1.team.key)) |> Enum.filter(&is_binary/1) |> Enum.uniq()
-      %{id: project[:id], name: project[:name], slug_id: project[:slug_id], team_keys: team_keys}
-    end)
-  end
-
-  defp named?(project, refs), do: Enum.any?([project[:id], project[:name], project[:slug_id]], &(is_binary(&1) and &1 in refs))
 
   defp put_env_list(key, value) do
     Application.put_env(:symphony_elixir, key, List.wrap(Application.get_env(:symphony_elixir, key)) ++ [value])
@@ -393,7 +429,9 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
-  defp issues_from_file do
+  defp issues_from_file, do: Enum.flat_map(file_entries(), &issue_from_json/1)
+
+  defp file_entries do
     case Config.settings() do
       {:ok, %{tracker: %{memory_issues_file: path}}} when is_binary(path) -> read_issues_file(path)
       _settings -> []
@@ -403,7 +441,7 @@ defmodule SymphonyElixir.Tracker.Memory do
   defp read_issues_file(path) do
     with {:ok, body} <- File.read(path),
          {:ok, entries} when is_list(entries) <- Jason.decode(body) do
-      Enum.flat_map(entries, &issue_from_json/1)
+      entries
     else
       error ->
         Logger.warning("Memory tracker could not read issues_file=#{path}: #{inspect(error)}")
@@ -421,20 +459,17 @@ defmodule SymphonyElixir.Tracker.Memory do
         title: Map.get(entry, "title"),
         description: Map.get(entry, "description"),
         labels: Enum.filter(List.wrap(Map.get(entry, "labels")), &is_binary/1),
-        team: json_team(Map.get(entry, "team")),
-        project: json_project(Map.get(entry, "project"))
+        team: json_map(entry["team"], key: "key", name: "name"),
+        project: json_map(entry["project"], id: "id", name: "name", slug_id: "slug_id")
       }
     ]
   end
 
   defp issue_from_json(_entry), do: []
 
-  defp json_team(key) when is_binary(key), do: %{key: key, name: nil}
-  defp json_team(_team), do: nil
-
-  defp json_project(name) when is_binary(name), do: %{id: nil, name: name, slug_id: nil}
-  defp json_project(%{} = project), do: %{id: project["id"], name: project["name"], slug_id: project["slugId"]}
-  defp json_project(_project), do: nil
+  # The team (`key`, `name`) or project (`id`, `name`, `slug_id`) of an issues-file entry.
+  defp json_map(%{} = value, fields), do: Map.new(fields, fn {field, key} -> {field, value[key]} end)
+  defp json_map(_value, _fields), do: nil
 
   defp issue_entries do
     Enum.filter(configured_issues(), &match?(%Issue{}, &1))

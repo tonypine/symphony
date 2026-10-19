@@ -2,16 +2,17 @@ defmodule SymphonyElixir.Setup.Checks.TeamsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.RepoTeams
+  alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixir.Setup
-  alias SymphonyElixir.Setup.Checks.Teams
+  alias SymphonyElixir.Setup.Checks.{Routing, Teams}
   alias SymphonyElixir.Setup.TeamCache
 
   setup do
     on_exit(fn ->
-      RepoTeams.forget("app")
-      Application.delete_env(:symphony_elixir, :memory_tracker_projects)
-      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      :ets.delete(PollLog, "app")
+
+      for key <- [:memory_tracker_projects_list, :memory_tracker_issues, :memory_tracker_recipient],
+          do: Application.delete_env(:symphony_elixir, key)
     end)
 
     :ok
@@ -23,7 +24,7 @@ defmodule SymphonyElixir.Setup.Checks.TeamsTest do
     write_workflow_file!(path, Keyword.merge([tracker_kind: "memory", repos: repos], overrides))
   end
 
-  defp projects!(projects), do: Application.put_env(:symphony_elixir, :memory_tracker_projects, projects)
+  defp projects!(projects), do: Application.put_env(:symphony_elixir, :memory_tracker_projects_list, projects)
 
   defp check, do: Setup.check(checks: [Teams])
 
@@ -37,10 +38,9 @@ defmodule SymphonyElixir.Setup.Checks.TeamsTest do
   test "a repo with route.team set is never a problem and needs no lookup" do
     route!(%{team: "TP", projects: ["Gone"]})
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
 
     assert %{problems: [], not_checked: []} = check()
-    refute_received {:memory_tracker_fetch_projects, _refs}
+    refute_received {:memory_tracker_projects_and_teams}
   end
 
   # Walkthrough 1: a repo routed only by a project of team TP resolves, so it is no error.
@@ -82,7 +82,8 @@ defmodule SymphonyElixir.Setup.Checks.TeamsTest do
 
     assert %{problems: [%{severity: "error", details: []}]} = check()
 
-    :ok = RepoTeams.observe("app", {:ok, [%Issue{id: "i1", team: %{key: "OPS", name: nil}}]})
+    [repo] = Config.system!().repos
+    PollLog.record(repo, {:ok, [%Issue{id: "i1", team: %{key: "OPS", name: nil}}]})
 
     assert %{problems: [problem]} = check()
     assert problem.severity == "warning"
@@ -109,17 +110,21 @@ defmodule SymphonyElixir.Setup.Checks.TeamsTest do
     assert reason =~ "couldn't reach Linear"
   end
 
-  test "a run reads each route's projects once, from the team cache" do
+  test "a run reads the workspace's projects once, from the team cache the routing check reads too" do
     route!(%{projects: ["Symphony"]})
     projects!([%{id: "p1", name: "Symphony", slug_id: "s1", team_keys: ["TP"]}])
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
     cache = TeamCache.new(ttl_ms: 60_000)
     context = %{system: Config.system!(), team_cache: cache}
 
     assert [%{id: "teams:app"}] = Teams.run(context)
     assert [%{id: "teams:app"}] = Teams.run(context)
-    assert_received {:memory_tracker_fetch_projects, ["Symphony"]}
-    refute_received {:memory_tracker_fetch_projects, _refs}
+    assert_received {:memory_tracker_projects_and_teams}
+    refute_received {:memory_tracker_projects_and_teams}
+
+    assert %{problems: problems} = Setup.check(checks: [Routing, Teams])
+    assert "teams:app" in Enum.map(problems, & &1.id)
+    assert_received {:memory_tracker_projects_and_teams}
+    refute_received {:memory_tracker_projects_and_teams}
   end
 end
