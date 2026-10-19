@@ -21,7 +21,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
   `qa_*` tools of `SymphonyElixir.QaDriver` build and launch. The built-in `web`
   playbook is on only when `verification.dev_server` is configured
   (`dev_server?: true`), since its pass drives that server in a browser; its
-  optional `browser_mcp` replaces the default Playwright MCP server. The built-in
+  optional `browser_mcp` replaces the default Playwright MCP server. Any other
+  playbook with `dev_server: true` (a project server and the database it needs,
+  which the agent's sandbox cannot start) has Symphony start that dev server for its
+  passes too, and needs it configured the same way. The built-in
   `android_app` playbook is on only when its config names the `build` command the
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
@@ -122,14 +125,16 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:build_timeout_ms) => pos_integer() | nil,
           optional(:apk_paths) => [String.t()],
           optional(:application_ids) => [String.t()],
-          optional(:browser_mcp) => map() | nil
+          optional(:browser_mcp) => map() | nil,
+          optional(:dev_server) => true
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 
   @doc """
   Selects playbooks for `issue` given the PR's changed paths and `auto_review` config.
   `dev_server?: true` says `verification.dev_server` is configured, which the `web`
-  playbook needs; the `android_app` playbook reads `auto_review.android.avd`.
+  playbook and any playbook with `dev_server: true` need; the `android_app` playbook reads
+  `auto_review.android.avd`.
   """
   @spec decide(Issue.t(), [String.t()], map(), keyword()) :: decision()
   def decide(%Issue{} = issue, changed_paths, auto_review, opts \\ []) when is_list(changed_paths) do
@@ -236,7 +241,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
   end
 
   defp build_playbook(kind, override) do
-    put_host_settings(%{kind: kind, paths: paths(kind, override), prompt: prompt(kind, override)}, kind, override)
+    playbook = %{kind: kind, paths: paths(kind, override), prompt: prompt(kind, override)}
+    playbook = if dev_server?(kind, override), do: Map.put(playbook, :dev_server, true), else: playbook
+    put_host_settings(playbook, kind, override)
   end
 
   defp prompt(kind, override), do: string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
@@ -247,15 +254,19 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   defp off_reason(kind, override, host) do
     cond do
-      Map.get(override, "enabled") == false -> "`enabled: false`"
-      is_nil(prompt(kind, override)) -> "no `prompt`"
-      (missing = missing_settings(kind, override, host)) != [] -> "needs " <> Enum.map_join(missing, ", ", &"`#{&1}`")
-      true -> nil
+      Map.get(override, "enabled") == false ->
+        "`enabled: false`"
+
+      is_nil(prompt(kind, override)) ->
+        "no `prompt`"
+
+      (missing = missing_settings(kind, override, host) ++ missing_dev_server(kind, override, host)) != [] ->
+        "needs " <> Enum.map_join(missing, ", ", &"`#{&1}`")
+
+      true ->
+        nil
     end
   end
-
-  # The `web` playbook drives the verification dev server, so it needs one configured.
-  defp missing_settings("web", _override, host), do: if(host.dev_server?, do: [], else: ["verification.dev_server"])
 
   # The `android_app` playbook also needs an APK, the app's IDs and an emulator to run it on.
   defp missing_settings("android_app", override, host) do
@@ -272,6 +283,15 @@ defmodule SymphonyElixir.QaAgent.Selection do
   defp missing_named_settings(kind, override) do
     for key <- Map.get(@required_settings, kind, []), is_nil(string_value(Map.get(override, key))), do: "auto_review.playbooks.#{kind}.#{key}"
   end
+
+  # A playbook that drives the verification dev server (the `web` one, or one with
+  # `dev_server: true`) needs one configured.
+  defp missing_dev_server(kind, override, host) do
+    if dev_server?(kind, override) and not host.dev_server?, do: ["verification.dev_server"], else: []
+  end
+
+  defp dev_server?("web", _override), do: true
+  defp dev_server?(_kind, override), do: Map.get(override, "dev_server") == true
 
   defp application_ids(override) do
     override |> Map.get("application_ids") |> string_list() |> List.wrap() |> Enum.filter(&string_value/1)

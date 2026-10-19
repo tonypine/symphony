@@ -1457,16 +1457,23 @@ The QA agent:
   instructions, `priv/qa_playbooks/<kind>.md`, and on the host driver behind its tools: the
   `macos_app` playbook on `lib/symphony_elixir/qa_driver.ex`, `lib/symphony_elixir/qa_driver/**`
   and `priv/qa_driver/**`, the `android_app` playbook on `lib/symphony_elixir/qa_android/**`.
-- A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
+- A pass that runs the `web` playbook, or a playbook with `dev_server: true`, MUST start
+  `verification.dev_server` on a port from the
   verification port pool, from its own worktree at the PR head (never the agent's), before the
   agent starts, give the agent its URL, and stop it, release the port and remove that worktree
   when the pass ends. A dev server that does not start or fails its health check MUST make the
-  pass `blocked`, not `fail`, without starting the agent. Only that QA session
+  pass `blocked`, not `fail`, without starting the agent. A playbook with `dev_server: true` is
+  off when `verification.dev_server` is not configured. Only a `web` pass's session
   gets a `browser` MCP server: `browser_mcp` when set, otherwise headless Playwright MCP limited
   to the dev server's localhost origins and writing into `qa-evidence/`. The default server MUST
   run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
   pinned package is missing the pass MUST be `blocked` without starting the agent. With
-  `agent.network_access.mode: allowlist` the session also allows `localhost` and `127.0.0.1`.
+  `agent.network_access.mode: allowlist` a session with a dev server also allows `localhost` and
+  `127.0.0.1`.
+- The QA agent MUST NOT judge a step against a stand-in it wrote for the system under test (the
+  project's own server, API or CLI, or the database it stores in); a stand-in replaces only an
+  outside service. When the project's server cannot build or start, the steps that need it are
+  `blocked`.
 - A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
   outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
   changes outside `qa-evidence/`, including gitignored files that were not there after the last
