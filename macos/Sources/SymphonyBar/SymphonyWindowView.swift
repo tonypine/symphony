@@ -162,6 +162,26 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var dispatchInFlight = false
     /// What went wrong with it, shown in the sheet or the popover.
     @Published var dispatchError: String?
+    /// The Setup payload the last fix or Check Again answered with; the page shows it while it is newer than the
+    /// state poll's (SU3).
+    @Published var setupAnswer: SetupPayload?
+    /// The Setup rows in the order shown: they keep their places, new ones join below (P7).
+    @Published var setupOrder: [String] = []
+    /// The fix's consequence sheet shown (SU7, SU8); nothing changes until its button is pressed.
+    @Published var setupSheet: SetupFixSheet?
+    /// True while Check Again is on its way: the toolbar's spinner.
+    @Published var setupChecking = false
+    /// The banner after a fix, with Undo for 10 s after a settings fix (SU10).
+    @Published var setupBanner: SetupBanner?
+    var setupBannerTask: Task<Void, Never>?
+    /// The app's own build, for the build warning (J11).
+    var appBuild = AppBuild(build: 0, isDevelopment: true)
+    /// The `symphony.yml` path in Settings.
+    var configPath: () -> String = { "" }
+    /// Check Again with no fix, a Linear fix with one: `POST /api/v1/setup/refresh` or `/fixes`.
+    var onSetupRequest: (_ fix: [String: Any]?) async -> SetupAPI.Result = { _ in .failed("") }
+    /// `symphony check` on a copy of `symphony.yml`, as the settings writer runs it.
+    var onCheckConfig: (String) async -> ConfigCheckResult = { _ in .passed }
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -223,6 +243,7 @@ final class SymphonyWindowModel: ObservableObject {
                 guard let self else { return }
                 overviewState = data.flatMap(OverviewState.decode)
                 watchState = data.map(WatchState.decode) ?? WatchState()
+                holdSetupOrder()
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
@@ -239,7 +260,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// The Overview item's badge: what needs attention in every repo, whatever the scope; 0 hides it, as do
     /// unknown counts.
     var attentionBadge: Int {
-        guard state.countsKnown, let overviewState else { return 0 }
+        guard state.countsKnown, let overviewState = overviewWithSetup else { return 0 }
         return Overview.badgeCount(overviewState, now: Date())
     }
 
@@ -464,6 +485,8 @@ final class SymphonyWindowModel: ObservableObject {
             checkNow(identifier)
         case let .openTicket(identifier):
             openTicket(identifier)
+        case .openSetup:
+            show(.setup)
         }
     }
 
@@ -692,12 +715,25 @@ struct SymphonyWindowView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            client.refresh()
-                        } label: {
-                            Label("Refresh", systemImage: "arrow.clockwise")
+                        // On Setup, ⌘R is Check Again, with a spinner while it runs (SU3).
+                        if model.showsSetupCheck {
+                            Button { model.refresh() } label: {
+                                if model.setupChecking {
+                                    ProgressView().controlSize(.small).accessibilityLabel("Checking")
+                                } else {
+                                    Label(SetupPage.checkAgainTitle, systemImage: "arrow.clockwise")
+                                }
+                            }
+                            .help("\(SetupPage.checkAgainTitle) (⌘R)")
+                            .disabled(model.setupChecking)
+                        } else {
+                            Button {
+                                model.refresh()
+                            } label: {
+                                Label("Refresh", systemImage: "arrow.clockwise")
+                            }
+                            .help("Refresh (⌘R)")
                         }
-                        .help("Refresh (⌘R)")
                     }
                 }
         }
@@ -736,8 +772,8 @@ struct SymphonySidebar: View {
                         HStack(spacing: DesignTokens.Space.s2) {
                             Label(view.title, systemImage: view.symbol)
                             Spacer(minLength: 0)
-                            if badge(view) > 0 {
-                                SidebarBadge(count: badge(view), tint: view == .inbox ? DesignTokens.Status.you.tint : DesignTokens.Status.problem.tint)
+                            if let badge = badge(view) {
+                                SidebarBadge(count: badge.count, tint: badge.status.tint)
                             }
                         }
                         .accessibilityElement(children: .combine)
@@ -788,11 +824,14 @@ struct SymphonySidebar: View {
         )
     }
 
-    private func badge(_ view: SymphonyView) -> Int {
+    /// C1's count and its color: the Inbox's in `status.you`, the Overview's in `status.problem`, Setup's errors in
+    /// `status.problem` or else its warnings in `status.you` (SU1); nil hides it.
+    private func badge(_ view: SymphonyView) -> (count: Int, status: DesignTokens.Status)? {
         switch view {
-        case .inbox: model.inboxBadge
-        case .overview: model.attentionBadge
-        default: 0
+        case .inbox: model.inboxBadge > 0 ? (model.inboxBadge, .you) : nil
+        case .overview: model.attentionBadge > 0 ? (model.attentionBadge, .problem) : nil
+        case .setup: model.setupSummary.badge
+        default: nil
         }
     }
 
@@ -801,6 +840,7 @@ struct SymphonySidebar: View {
         switch view {
         case .inbox where model.inboxBadge > 0: "\(model.inboxBadge) waiting"
         case .overview where model.attentionBadge > 0: "\(model.attentionBadge) need attention"
+        case .setup: model.setupSummary.accessibilityValue
         default: ""
         }
     }
@@ -862,6 +902,8 @@ struct SymphonyDetail: View {
                 ShippedContent(model: model)
             case .audit:
                 AuditContent(model: model)
+            case .setup:
+                SetupContent(model: model)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }
@@ -875,7 +917,7 @@ struct OverviewContent: View {
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
-        if let state = model.overviewState {
+        if let state = model.overviewWithSetup {
             OverviewView(
                 overview: Overview(state: state, scope: model.scope, repos: model.repos, updating: model.updateHold != nil, now: Date()),
                 actions: OverviewActions(

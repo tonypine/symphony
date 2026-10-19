@@ -281,8 +281,9 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
     }
 
-    /// `symphony check` on the copy of `symphony.yml` at `path`, run as Start would run Symphony now.
-    private static func configCheck(_ path: String, secrets: SecretsReader) async -> ConfigCheckResult {
+    /// `symphony check` on the copy of `symphony.yml` at `path`, run as Start would run Symphony now. Setup's settings
+    /// fixes run it too.
+    static func configCheck(_ path: String, secrets: SecretsReader) async -> ConfigCheckResult {
         let settings = AppStores.current.settingsStore().loadSettings()
         let read = await withCheckedContinuation { continuation in
             secrets.read { continuation.resume(returning: $0) }

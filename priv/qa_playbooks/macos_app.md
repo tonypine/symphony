@@ -188,6 +188,31 @@ GitHub or Linear in QA:
     Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
   - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
     next, since when, Updated), each action row as one, and each button by its title.
+- **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
+  state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
+  warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before
+  Remove, copy the fixture's `config/symphony.yml` to `qa-evidence/`, `qa_put_file` it, and type
+  the returned path into Settings' config field: Remove edits that file, and `symphony check`
+  passes on it before and after.
+  - Sidebar: **Setup** between Repos and Diagnostics with a red badge of 1; Overview's Needs
+    attention has "Setup has 1 error." with **Open Setup**; the status-bar menu has
+    "Setup: 1 error, 1 warning" (it opens the Setup page) and the icon's dot is red.
+  - The fixtures answer in turn, so press each button once, in this order: **Create Label…** then
+    the sheet's **Create Label** (`qa_api_requests` lists `POST /api/v1/setup/fixes` with
+    `fix.action` `create_label`, `team` `TP`, `name` `Needs Decision`): the error row leaves and
+    the badge turns orange with 1. **Remove…** shows the two removed lines (`auto_review:`,
+    `  enabled: true`); **Remove**: the row leaves and the banner names the
+    `symphony.yml.<time>.bak` copy and offers **Undo**. **Undo** within 10 s: the warning row is
+    back, and **Remove…** shows the same two lines again (the key is back in the file). **Remove**
+    again, then **Check Again** (⌘R): "Symphony is set up right." with "at 12:05", and no badge.
+    Each of these posts `POST /api/v1/setup/refresh`. That the file loses the key, the backup
+    holds the old bytes and Undo restores them byte for byte is proved by
+    `SetupConfigEditTests`, not by reading the file.
+  - Refused: launch again with `macos/Tests/Fixtures/director-app/setup-refused`. **Create Label…**
+    then **Create Label**: the sheet stays open with "Linear refused to create the label …
+    (HTTP 403) …" in red, **Try Again** and **Close**; the row is still there.
+  - Look: judge the page, its Details, both sheets and the banner in light and dark against
+    `macos/Tests/Snapshots/setup-*.png`.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
 can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
