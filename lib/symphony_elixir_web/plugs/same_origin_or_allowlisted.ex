@@ -1,6 +1,6 @@
 defmodule SymphonyElixirWeb.Plugs.SameOriginOrAllowlisted do
   @moduledoc """
-  Rejects non-GET requests unless their Origin is trusted by the dashboard policy.
+  Rejects non-GET requests unless their Origin is trusted by `SymphonyElixir.HttpServer.allowed_origin?/1`.
 
   With `allow_missing: true`, a request with no Origin passes too: browsers send one on every
   cross-origin POST, so only a non-browser client (curl, the app) sends none.

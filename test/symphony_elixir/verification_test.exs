@@ -698,12 +698,12 @@ defmodule SymphonyElixir.VerificationTest do
     # (scripts/qa-dashboard-build.sh) fetches deps and builds the escript in the build sandbox, which
     # lets Mix listen on loopback and can take minutes; `start_cmd` then runs in the dev server's
     # sandbox, which allows no TCP listener and so no Mix (see the guard in
-    # `scripts/qa-dashboard-server.sh`), and the bridge serves the dashboard. A plain `mix test`
+    # `scripts/qa-dashboard-server.sh`), and the bridge serves Symphony's API. A plain `mix test`
     # skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
     @tag :seatbelt
     @tag :qa_dashboard_e2e
     @tag timeout: 1_800_000
-    test "serves the dashboard from a fresh worktree, built by build_cmd, from inside the real sandboxes", %{root: root, port: port} do
+    test "serves Symphony's API from a fresh worktree, built by build_cmd, from inside the real sandboxes", %{root: root, port: port} do
       worktree = Path.join(root, "pr-head")
       {output, 0} = System.cmd("git", ["worktree", "add", "--detach", worktree, "HEAD"], stderr_to_stdout: true)
       on_exit(fn -> System.cmd("git", ["worktree", "remove", "--force", worktree], stderr_to_stdout: true) end)
@@ -740,9 +740,9 @@ defmodule SymphonyElixir.VerificationTest do
       case result do
         {:ok, dev_server} ->
           assert File.exists?(Path.join(worktree, "bin/symphony"))
-          # The health check answered on `/api/v1/state`; the dashboard's first page render on a
-          # fresh server, in the sandbox, on a shared runner, can take longer than one short try.
-          assert_http_ok_within("http://127.0.0.1:#{port}/", 10_000)
+          # The health check answered on `/api/v1/state` through the bridge; ask it once more, with
+          # room for a fresh server, in the sandbox, on a shared runner.
+          assert_http_ok_within("http://127.0.0.1:#{port}/api/v1/state", 10_000)
           assert :ok = Verification.stop_qa_dev_server(dev_server)
 
         {:error, reason} ->

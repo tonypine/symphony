@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Notifications.Event do
   @moduledoc false
 
-  alias SymphonyElixir.{Config, HttpServer, TicketPullRequest, URLUtils}
+  alias SymphonyElixir.{Config, TicketPullRequest, URLUtils}
   alias SymphonyElixir.Linear.Issue
 
   @known_events [
@@ -42,7 +42,6 @@ defmodule SymphonyElixir.Notifications.Event do
     :run_id,
     :session_id,
     :attempt,
-    :transcript_url,
     :timestamp,
     tokens: %{},
     metadata: %{}
@@ -62,7 +61,6 @@ defmodule SymphonyElixir.Notifications.Event do
           run_id: String.t() | nil,
           session_id: String.t() | nil,
           attempt: integer() | nil,
-          transcript_url: String.t() | nil,
           timestamp: DateTime.t(),
           tokens: map(),
           metadata: map()
@@ -95,7 +93,6 @@ defmodule SymphonyElixir.Notifications.Event do
           run_id: string_value(attrs, [:run_id, "run_id"]),
           session_id: string_value(attrs, [:session_id, "session_id"]),
           attempt: integer_value(attrs, [:attempt, "attempt"]),
-          transcript_url: string_value(attrs, [:transcript_url, "transcript_url"]) || transcript_url(repo_key, identifier),
           timestamp: timestamp_value(attrs),
           tokens: map_value(attrs, [:tokens, "tokens"]) || %{},
           metadata: map_value(attrs, [:metadata, "metadata"]) || %{}
@@ -238,15 +235,6 @@ defmodule SymphonyElixir.Notifications.Event do
       _ -> DateTime.utc_now()
     end
   end
-
-  defp transcript_url(repo_key, identifier) when is_binary(repo_key) and is_binary(identifier) do
-    settings = Config.settings!()
-    URLUtils.transcript_url(repo_key, identifier, settings.server.host, Config.server_port(), HttpServer.bound_port())
-  rescue
-    _error -> nil
-  end
-
-  defp transcript_url(_repo_key, _identifier), do: nil
 
   defp default_repo_key, do: Config.repo_key_or_nil()
 end

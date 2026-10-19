@@ -21,8 +21,6 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     var onAction: (WindowState.Action) -> Void = { _ in }
     /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var openRepos: (String?) -> Void = { _ in }
-    var openWebDashboard: () -> Void = {}
-    var canOpenWebDashboard: () -> Bool = { false }
     var canOpenLogs: () -> Bool = { false }
     /// Called once a control request from the window was answered, so the menu follows too.
     var afterControl: () -> Void = {}
@@ -99,11 +97,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.appVersion = appVersion
             model.apiURL = { [weak self] in self.flatMap { StateRoot.controlURL(in: $0.stateRoot(), fallback: AppStores.current.apiFallback) } }
             model.canOpenLogs = { [weak self] in self?.canOpenLogs() ?? false }
-            model.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard() ?? false }
             model.onSelect = { view in AppStores.current.defaults.set(view.rawValue, forKey: Self.viewKey) }
             model.onAction = { [weak self] action in self?.onAction(action) }
             model.onOpenRepos = { [weak self] key in self?.openRepos(key) }
-            model.onOpenWebDashboard = { [weak self] in self?.openWebDashboard() }
             model.scope = OverviewScope.load(from: AppStores.current.defaults)
             model.onScopeChange = { scope in scope.save(to: AppStores.current.defaults) }
             model.onControl = { [weak self] action in

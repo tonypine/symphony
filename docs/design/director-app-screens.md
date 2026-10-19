@@ -10,7 +10,9 @@
 - **Data:** every repo, ticket and number is made up.
 - **Since approval:** the acceptance gate, `In Review`, `Human Review` and `Final verification:` sign-offs were
   retired while the app was built. The screens below keep the approved wording; how the app on `main` reads them is
-  in [Stories and journeys](director-app.md) (**Since approval**).
+  in [Stories and journeys](director-app.md) (**Since approval**). The web dashboard was removed in
+  [TP-1093](https://linear.app/tonypine/issue/TP-1093/remove-the-legacy-web-dashboard), and Open Web Dashboard with
+  it (see DD6).
 
 ## 0. The window
 
@@ -57,7 +59,7 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Shows:** status line with counts; **Waiting on you** (the oldest 5, each with its kind symbol and age; a click
   opens the window on it); **Open Symphony** (⌘O); Pause Dispatch…, Force a Ticket…, Forced ›; Start/Stop/Restart;
-  updates; Repos…, Settings…; **Developer ›** (Open Dashboard in Terminal, Open Logs, Open Web Dashboard); Quit.
+  updates; Repos…, Settings…; **Developer ›** (Open Dashboard in Terminal, Open Logs); Quit.
 - **States:** a badge dot on the icon while the Inbox isn't empty; stopped, starting, paused and usage-limit lines as
   today.
 - **Conventions:** `NSStatusItem` menu (AppKit, as today); title-case items, "…" for items that ask more.
@@ -412,7 +414,7 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Shows:** connection (version, API, uptime, last update); capacity (agent slots, landing slots, forced allowance,
   initiative slots); Linear requests by caller; GitHub webhooks and the CI poller; stray processes.
-- **Actions:** Copy State JSON, Open Logs, Open Web Dashboard.
+- **Actions:** Copy State JSON, Open Logs.
 - **Data:** `linear_usage`, `pollers`, `concurrency`, `finishing`, `epic_lanes`, `stray_processes` in `/api/v1/state`
   (exist).
 
@@ -501,6 +503,9 @@ The Director approved the recommended option of every decision on 2026-10-07.
   there is no Mac app. Remove it later, by its own decision, once nothing depends on it.
 - B. Remove it when the app ships. Leaves Linux and remote use with only the terminal dashboard.
 - C. Rebuild it with the same layout as the app. Two UIs to keep in step.
+
+[TP-1093](https://linear.app/tonypine/issue/TP-1093/remove-the-legacy-web-dashboard) later removed it: the Mac app
+is the supported UI, and Linear stands in on other devices.
 
 ### DD7. When a run counts as stuck
 

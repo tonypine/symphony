@@ -343,11 +343,9 @@ public enum StatusMenu {
     /// Title of the submenu that holds the developer items below.
     public static let developerTitle = "Developer"
 
-    /// Titles of the Developer items that open Symphony's terminal dashboard in Terminal, its log, and its web
-    /// dashboard in the browser.
+    /// Titles of the Developer items that open Symphony's terminal dashboard in Terminal and its log.
     public static let openTerminalDashboardTitle = "Open Dashboard in Terminal"
     public static let openLogsTitle = "Open Logs"
-    public static let openWebDashboardTitle = "Open Web Dashboard"
 
     /// Title of the menu item that starts Symphony.
     public static let startTitle = "Start Symphony"
