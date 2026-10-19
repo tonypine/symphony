@@ -6,7 +6,7 @@ defmodule SymphonyElixir.Routing.PollLog do
   The orchestrator's poll task records each repo poll that worked, so the Setup routing check reads
   the issues the poll already fetched instead of asking Linear again. An entry keeps the route it
   was polled with: a poll under a changed route starts a new entry, so the issues of the old route
-  are never judged against the new one (`last/2` answers nil until the new route polls).
+  are never judged against the new one (`last/1` answers nil until the new route polls).
 
   Entries live in a public ETS table owned by this server, so recording never waits on a process.
   Without the server (some tests), recording is a no-op and every repo has no last poll.
