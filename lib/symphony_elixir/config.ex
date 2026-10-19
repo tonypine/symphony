@@ -140,8 +140,18 @@ defmodule SymphonyElixir.Config do
 
   @spec system() :: {:ok, SystemSchema.t()} | {:error, term()}
   def system do
-    with {:ok, config} <- unwrap_cache_result(Cache.get()),
-         {:ok, system_config} <- SystemSchema.parse(config),
+    with {:ok, config} <- unwrap_cache_result(Cache.get()) do
+      parse_system(config)
+    end
+  end
+
+  @doc """
+  Parses and validates a decoded `symphony.yml`: the schema, then the repositories' routing rules.
+  `Config.Cache` runs it before an edited file replaces the running config.
+  """
+  @spec parse_system(map()) :: {:ok, SystemSchema.t()} | {:error, term()}
+  def parse_system(config) when is_map(config) do
+    with {:ok, system_config} <- SystemSchema.parse(config),
          :ok <- validate_routing_repos(system_config.repos) do
       {:ok, system_config}
     end
@@ -358,10 +368,12 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp uncloned_managed_repo?(%SystemSchema.Repo{path: clone, workspace: %{github: github}}) when is_binary(github),
+  @doc "Whether `repo` is a `workspace.source` repo Symphony has not cloned yet."
+  @spec uncloned_managed_repo?(SystemSchema.Repo.t()) :: boolean()
+  def uncloned_managed_repo?(%SystemSchema.Repo{path: clone, workspace: %{github: github}}) when is_binary(github),
     do: not ManagedClone.cloned?(clone)
 
-  defp uncloned_managed_repo?(_repo), do: false
+  def uncloned_managed_repo?(_repo), do: false
 
   defp openrouter_findings([], _key, _opts), do: %{errors: [], warnings: []}
 
@@ -622,7 +634,7 @@ defmodule SymphonyElixir.Config do
   def check_repo_workflows, do: validate_repo_workflows(:check)
 
   defp validate_repo_workflows(source) do
-    with {:ok, system_config} <- system(),
+    with {:ok, system_config} <- source_system(source),
          {:ok, repo_settings} <- repo_runtime_settings(system_config, source: source),
          :ok <- validate_checked_workspaces(source, system_config, repo_settings) do
       :ok
@@ -637,6 +649,14 @@ defmodule SymphonyElixir.Config do
         {:error, reason}
     end
   end
+
+  # `symphony check` judges symphony.yml as it is on disk: a file the cache rejected fails the
+  # check instead of passing on the last good config the cache keeps running.
+  defp source_system(:check) do
+    with {:ok, config} <- Workflow.load_symphony(), do: parse_system(config)
+  end
+
+  defp source_system(_source), do: system()
 
   @spec linear_scoping_filter_configured?(map() | nil) :: boolean()
   def linear_scoping_filter_configured?(%{project_slug: project_slug, team: team, labels: labels}) do

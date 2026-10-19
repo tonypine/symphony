@@ -63,6 +63,17 @@ that repository.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
+Symphony reloads both files when they change. An edit it rejects (an unknown or removed key, an
+invalid value, YAML that doesn't parse) does not stop it: it keeps running the last settings that
+loaded, logs the reason, and lists the rejected file under `problems` in `GET /api/v1/setup`
+(the key or line, the reason, and since when) until the file loads again. The same list warns
+about each deprecated key the file still sets, with what replaced it and, for a key that does
+nothing now, a fix that removes it. It also checks each repo's `route` against the tickets its
+last poll fetched: tickets that don't route back to the repo (with a fix that adds their project
+id to `route.projects`), a route value Linear has no project or team for, two repos taking the same
+tickets, and a route that has matched nothing for 24 hours. `POST /api/v1/setup/refresh` checks
+again at once. See [SPEC.md](../SPEC.md) for the problem shape.
+
 ## Settings in the macOS app
 
 Every `symphony.yml` setting gets a control in the macOS app, or a person's exemption. When a
@@ -127,8 +138,12 @@ issues:
 
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
   `memory.issues_file` (relative to the folder holding `symphony.yml`), a JSON list of
-  `{"id", "identifier", "state", "title", "description", "labels"}` objects, on every fetch, so a test
-  can change them while Symphony runs. Comments and state changes go nowhere.
+  `{"id", "identifier", "state", "title", "description", "labels"}` objects (with an optional
+  `"team": {"key", "name"}` and `"project": {"id", "name", "slug_id"}`), on every fetch, so a test
+  can change them while Symphony runs. Entries with `"kind": "project"` (`id`, `name`, `slug_id`) or
+  `"kind": "team"` (`id`, `key`, `name`) are the fake workspace's projects and teams: a route that
+  names a project by any of them polls its issues, as Linear does. Comments and state changes go
+  nowhere.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
@@ -985,8 +1000,10 @@ Per-server declaration:
 **Env-var expansion** in `env` and `headers`: a value that is exactly `$NAME` (where `NAME` matches
 `[A-Za-z_][A-Za-z0-9_]*`) is resolved from the orchestrator's environment at config-load time.
 A set var substitutes the value; an empty var drops the entry; a missing var keeps the literal
-`$NAME` (so misconfigurations surface at the MCP server's own startup). Embedded references
-(`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose the literal.
+`$NAME` (so misconfigurations surface at the MCP server's own startup), and Setup
+(`GET /api/v1/setup`) reports it as a `secrets` error naming the key and the variable. Embedded
+references (`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose
+the literal.
 
 **Runtime-specific wiring:**
 
@@ -2265,8 +2282,8 @@ github:
   # GitHub webhooks through a relay; they feed the PR and CI watcher, whose poll stays on.
   webhooks:
     enabled: false
-    relay: smee # smee | cloudflare_tunnel | gh_webhook_forward
-    secret: $GITHUB_WEBHOOK_SECRET # unset: read <state-root>/github_webhook_secret
+    relay: smee # smee | cloudflare_tunnel | tailscale_funnel | gh_webhook_forward
+    secret: $SYMPHONY_GITHUB_WEBHOOK_SECRET # unset: read <state-root>/github_webhook_secret
     events: [check_suite, check_run, workflow_run, pull_request, push, release]
     fallback_poll_interval_ms: 300000 # the safety-net poll while deliveries are healthy
     silence_alert_minutes: 10 # warn after this long without a delivery
@@ -2298,6 +2315,14 @@ GitHub webhooks card shows whether webhooks are on, when the last delivery arriv
 results came through the relay and how many by polling. Both intervals are in the app's Settings
 window, under **GitHub updates**. See [github-webhooks.md](github-webhooks.md) for relay setup on
 macOS.
+
+Symphony can set webhooks up itself (`GET /api/v1/setup` → `github_updates`, and
+`POST /api/v1/setup/github_updates/<action>`): turning them on writes `enabled` and `relay`, the
+secret step writes `secret: $SYMPHONY_GITHUB_WEBHOOK_SECRET` (never the value), and the port step
+pins `dashboard.port`; turning them off writes `enabled: false`. With `relay: gh_webhook_forward`
+Symphony runs one `gh webhook forward` per connected repository and restarts it when it drops; the
+other relays need their public URL, and Symphony adds a hook to each repository with
+`gh api repos/:repo/hooks`.
 
 ### `notifications`
 

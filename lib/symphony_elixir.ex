@@ -81,6 +81,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.DirectorMoves,
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
+          SymphonyElixir.Routing.PollLog,
           SymphonyElixir.PullRequestPage,
           SymphonyElixir.Repo.Fetcher,
           SymphonyElixir.McpServer,
@@ -108,7 +109,10 @@ defmodule SymphonyElixir.Application do
              human_actions_child_spec(system_config),
              inbox_child_spec(system_config),
              initiatives_child_spec(system_config),
+             SymphonyElixir.Setup,
              SymphonyElixir.HttpServer,
+             # After the HTTP server: a relay forwards to the port it listens on.
+             SymphonyElixir.GitHub.RelaySupervisor,
              SymphonyElixir.StatusDashboard
            ])
         |> List.flatten()

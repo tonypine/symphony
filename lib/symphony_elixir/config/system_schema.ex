@@ -452,12 +452,31 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   @type t :: %__MODULE__{}
 
+  @typedoc """
+  A deprecated or no-op key a `symphony.yml` sets: its dotted `path` (`auto_review.enabled`,
+  `repositories[app].state_machine`), what replaced it, the warning logged for it, and whether the
+  key still acts (`no_effect?: false`) so removing it would change what Symphony does.
+  """
+  @type deprecation :: %{path: String.t(), replacement: String.t(), message: String.t(), no_effect?: boolean()}
+
   @spec parse(map()) :: {:ok, t()} | {:error, {:invalid_symphony_config, String.t()}}
   def parse(config) when is_map(config) do
+    {result, deprecations} = parse_collecting(config)
+    log_deprecations(deprecations, config)
+    result
+  end
+
+  @doc """
+  The deprecated and no-op keys `config` sets, in the order `parse/1` finds them. Nothing is
+  logged: `parse/1` logs each once per config.
+  """
+  @spec deprecations(map()) :: [deprecation()]
+  def deprecations(config) when is_map(config), do: config |> parse_collecting() |> elem(1)
+
+  defp parse_collecting(config) do
     Process.put(@deprecations_key, [])
     result = parse_config(config)
-    log_deprecations(Process.delete(@deprecations_key), config)
-    result
+    {result, @deprecations_key |> Process.delete() |> Enum.reverse()}
   end
 
   defp parse_config(config) do
@@ -487,9 +506,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # first parses of the same config don't each log.
   defp log_deprecations([], _config), do: :ok
 
-  defp log_deprecations(messages, config) do
+  defp log_deprecations(deprecations, config) do
     if claim_deprecations({@deprecations_key, :erlang.phash2(config)}) do
-      messages |> Enum.reverse() |> Enum.each(&Logger.warning/1)
+      Enum.each(deprecations, &Logger.warning(&1.message))
     end
 
     :ok
@@ -509,15 +528,20 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  defp deprecation_warning(message) do
-    Process.put(@deprecations_key, [message | Process.get(@deprecations_key, [])])
+  defp deprecation_warning(path, replacement, message, no_effect? \\ true) do
+    deprecation = %{path: path, replacement: replacement, message: message, no_effect?: no_effect?}
+    Process.put(@deprecations_key, [deprecation | Process.get(@deprecations_key, [])])
   end
+
+  # The usual warning for a key that does nothing now: what replaced it, and to remove it.
+  defp no_effect_warning(path, replacement),
+    do: deprecation_warning(path, replacement, "symphony.yml `#{path}` is deprecated and has no effect: #{replacement}. Remove it")
 
   # A key the retired legacy state machine read: it still loads, says once per config that it does
   # nothing now, and is dropped before the section's keys are checked.
   defp drop_retired_key(section, key, path, replacement) do
     if Map.has_key?(section, key) do
-      deprecation_warning("symphony.yml `#{path}.#{key}` is deprecated and has no effect: #{replacement}. Remove it")
+      no_effect_warning("#{path}.#{key}", replacement)
       Map.delete(section, key)
     else
       section
@@ -1082,10 +1106,15 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # that still sets a mode loads unchanged and says once per config what its mode now means, and
   # where the setting it maps to lives.
   defp warn_deprecated_gate_mode(mode, path) when is_binary(mode) do
+    replacement = "the per-repo `manual_review` setting; `#{mode}` maps to `manual_review: #{manual_review_for_gate_mode(mode)}`"
+
     deprecation_warning(
+      "#{path}.mode",
+      replacement,
       "symphony.yml `#{path}.mode` is deprecated and will be removed: review authority is now the per-repo " <>
         "`manual_review` setting. `#{mode}` maps to `manual_review: #{manual_review_for_gate_mode(mode)}` " <>
-        "(shadow/advise → on; off/enforce/decide → off; watch is operator monitoring)"
+        "(shadow/advise → on; off/enforce/decide → off; watch is operator monitoring)",
+      false
     )
   end
 
@@ -1106,7 +1135,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp warn_retired_auto_review_keys(config) do
     for {key, replacement} <- @retired_auto_review_keys, Map.has_key?(config, key) do
-      deprecation_warning("symphony.yml `auto_review.#{key}` is deprecated and has no effect: Auto Review is retired; #{replacement}. Remove it")
+      no_effect_warning("auto_review.#{key}", "Auto Review is retired; #{replacement}")
     end
 
     :ok
@@ -1118,25 +1147,25 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp warn_retired_gate_keys(config, escalate, path) do
     for key <- @retired_gate_keys, Map.has_key?(config, key) do
-      deprecation_warning(
-        "symphony.yml `#{path}.#{key}` is deprecated and has no effect: the acceptance gate is retired, and Code Review judges the " <>
-          "pull request with the `pre_push_review` reviewer. Remove it"
+      no_effect_warning(
+        "#{path}.#{key}",
+        "the acceptance gate is retired, and Code Review judges the pull request with the `pre_push_review` reviewer"
       )
     end
 
     if Map.has_key?(config, "escalate") do
       deprecation_warning(
+        "#{path}.escalate",
+        "its rules now act in Code Review",
         "symphony.yml `#{path}.escalate` is deprecated and will move when the acceptance gate's block is removed: its rules now act in " <>
           "Code Review (`labels` and `ticket_patterns` pause the ticket on a Needs Decision hold; `paths`, `diff_patterns`, " <>
-          "`dependencies`, `max_changed_lines` and `busy_files` deepen the review)"
+          "`dependencies`, `max_changed_lines` and `busy_files` deepen the review)",
+        false
       )
     end
 
     if Map.has_key?(escalate, "inconclusive_limit") do
-      deprecation_warning(
-        "symphony.yml `#{path}.escalate.inconclusive_limit` is deprecated and has no effect: Code Review retries an inconclusive " <>
-          "review twice on the same head, then asks a person. Remove it"
-      )
+      no_effect_warning("#{path}.escalate.inconclusive_limit", "Code Review retries an inconclusive review twice on the same head, then asks a person")
     end
 
     :ok
@@ -1153,7 +1182,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp drop_retired_run_profiles(profiles, path) when is_map(profiles) do
     Enum.reduce(@retired_run_profiles, profiles, fn {kind, reason}, acc ->
       if Map.has_key?(acc, kind) do
-        deprecation_warning("symphony.yml `#{path}.#{kind}` is deprecated and has no effect: #{reason}. Remove it")
+        no_effect_warning("#{path}.#{kind}", reason)
         Map.delete(acc, kind)
       else
         acc
@@ -1171,10 +1200,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # CI the fix runs could not make green no longer moves to a configured state: it pauses the ticket
   # on a Needs Decision hold.
   defp warn_retired_escalation_state(%{"escalate_to_state" => _state}) do
-    deprecation_warning(
-      "symphony.yml `pull_requests.checks.escalate_to_state` is deprecated and has no effect: CI the fix runs could not make green " <>
-        "pauses the ticket on a Needs Decision hold. Remove it"
-    )
+    no_effect_warning("pull_requests.checks.escalate_to_state", "CI the fix runs could not make green pauses the ticket on a Needs Decision hold")
   end
 
   defp warn_retired_escalation_state(_checks), do: :ok

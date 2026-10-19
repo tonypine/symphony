@@ -60,6 +60,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
+  alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @continuation_retry_delay_ms 1_000
@@ -1370,9 +1371,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp fetch_due_repo_if_needed(nil), do: :not_due
 
+  # The poll log keeps what the poll fetched for the Setup routing check, which reads no issues itself.
   defp fetch_due_repo_if_needed(repo) do
     repo_name = repo_name(repo)
-    {repo_name, Tracker.fetch_candidate_issues_for_repo(repo)}
+    {repo_name, PollLog.record(repo, Tracker.fetch_candidate_issues_for_repo(repo))}
   end
 
   # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that

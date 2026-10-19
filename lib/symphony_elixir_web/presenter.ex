@@ -17,6 +17,7 @@ defmodule SymphonyElixirWeb.Presenter do
     RunKind,
     RunStore,
     Sessions,
+    Setup,
     StrayProcesses,
     TicketState,
     URLUtils,
@@ -52,8 +53,8 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox) do
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name(), GenServer.server()) :: map()
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox, setup \\ Setup) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -87,6 +88,7 @@ defmodule SymphonyElixirWeb.Presenter do
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           drain_report: drain_report_payload(RetiredStates.drain_report()),
+          setup: Setup.payload(setup),
           awaiting_clarification:
             snapshot
             |> Map.get(:awaiting_clarification, [])

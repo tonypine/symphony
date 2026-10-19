@@ -24,13 +24,17 @@ defmodule SymphonyElixir.RepoStatusTest do
       at = ~U[2026-10-04 12:00:00Z]
 
       assert FetchLog.record("status-a", {:ok, "output"}, at) == {:ok, "output"}
-      assert FetchLog.last("status-a") == %{at: at, result: :ok}
+      assert FetchLog.last("status-a") == %{at: at, result: :ok, failures: 0, failing_since: nil}
 
       assert FetchLog.record("status-a", {:error, :boom, "fatal: no"}, at) == {:error, :boom, "fatal: no"}
-      assert FetchLog.last("status-a") == %{at: at, result: {:error, {:boom, "fatal: no"}}}
+      assert FetchLog.last("status-a") == %{at: at, result: {:error, {:boom, "fatal: no"}}, failures: 1, failing_since: at}
 
+      # Failures in a row count up, and keep when they started.
       assert FetchLog.record("status-a", {:error, :boom}) == {:error, :boom}
-      assert %{result: {:error, :boom}, at: %DateTime{}} = FetchLog.last("status-a")
+      assert %{result: {:error, :boom}, at: %DateTime{}, failures: 2, failing_since: ^at} = FetchLog.last("status-a")
+
+      FetchLog.record("status-a", :ok)
+      assert %{failures: 0, failing_since: nil} = FetchLog.last("status-a")
 
       assert FetchLog.record(nil, :ok) == :ok
       assert FetchLog.last("status-never") == nil

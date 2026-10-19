@@ -90,6 +90,28 @@ defmodule SymphonyElixirWeb.GitHubWebhookControllerTest do
     assert_receive {:watcher_cast, {:ingest, :ping, nil}}
   end
 
+  test "a verified delivery reaches the PR watcher even when the setup test bookkeeping fails" do
+    defmodule FailingStore do
+      def get_github_updates(_key), do: raise("store down")
+    end
+
+    endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint)
+    Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, Keyword.put(endpoint_config, :github_updates, run_store: FailingStore))
+    stop_supervised!(SymphonyElixirWeb.Endpoint)
+    start_supervised!({SymphonyElixirWeb.Endpoint, []})
+
+    body = Jason.encode!(%{"ref" => "refs/heads/main", "after" => "abc", "repository" => %{"html_url" => "https://github.com/acme/app"}})
+
+    log =
+      capture_log(fn ->
+        conn = post_webhook(body, [{"content-type", "application/json"}, {"x-github-event", "push"}, signature(body)])
+        assert json_response(conn, 202) == %{"status" => "accepted"}
+      end)
+
+    assert_receive {:watcher_cast, {:ingest, {:push, %{ref: "main"}}, "https://github.com/acme/app"}}
+    assert log =~ "couldn't record a test delivery"
+  end
+
   test "answers 503 while no PR watcher runs, except for a release, which is recorded anyway" do
     stop_supervised!(ForwardingWatcher)
     body = Jason.encode!(%{"action" => "completed", "check_suite" => %{"head_sha" => "abc123"}})

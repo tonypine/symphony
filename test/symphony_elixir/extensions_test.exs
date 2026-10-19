@@ -643,10 +643,16 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     # A named inbox this test never starts, so the payload's inbox state is the same on every
     # run: an unstarted inbox reads as read (`Inbox.read?/1`), independent of the app's Inbox poller.
+    # A Setup with no checks, so the payload doesn't depend on what earlier tests left behind.
+    setup_name = Module.concat(__MODULE__, :ObservabilityApiSetup)
+    start_supervised!({SymphonyElixir.Setup, name: setup_name, checks: [], linear_api_key?: false, now: fn -> ~U[2026-10-19 09:00:00Z] end})
+    assert %{checked_at: "2026-10-19T09:00:00Z"} = SymphonyElixir.Setup.refresh(setup_name)
+
     start_test_endpoint(
       orchestrator: orchestrator_name,
       snapshot_timeout_ms: 50,
-      inbox: Module.concat(__MODULE__, :ObservabilityApiInbox)
+      inbox: Module.concat(__MODULE__, :ObservabilityApiInbox),
+      setup: setup_name
     )
 
     conn = get(build_conn(), "/api/v1/state")
@@ -742,6 +748,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                }
              ],
              "drain_report" => state_payload["drain_report"],
+             "setup" => %{"problems" => [], "not_checked" => [], "checked_at" => "2026-10-19T09:00:00Z", "linear_checked_at" => nil},
              "awaiting_clarification" => [],
              "skipped" => [],
              "run_history" => [
