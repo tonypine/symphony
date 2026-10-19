@@ -40,6 +40,9 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     # the poll log: either would put a problem in a healthy payload.
     FetchLog.record("default", :ok)
     :ets.delete_all_objects(PollLog)
+    # So may the labels an earlier test's orchestrator provisioned in the memory tracker: a team with
+    # some labels is one the labels check judges.
+    Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
 
     dir = Path.join(System.tmp_dir!(), "setup-controller-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
