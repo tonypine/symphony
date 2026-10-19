@@ -647,6 +647,16 @@ defmodule SymphonyElixir.QaAgentTest do
       end
     end
 
+    test "keeps project_setup only when the blocked answer sets it to true" do
+      assert {:ok, %{verdict: :blocked, project_setup: true}} =
+               QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub can run in QA","project_setup":true}))
+
+      for project_setup <- ["false", ~s("yes"), "null"] do
+        assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub can run in QA","project_setup":#{project_setup}}))
+        refute Map.has_key?(blocked, :project_setup)
+      end
+    end
+
     test "marks the steps a parent walkthrough reports for its verification checklist" do
       text =
         ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":"yes"},{"name":"Quit","status":"pass"}]})
@@ -764,6 +774,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ ~s("needs_person": true | false)
       assert prompt =~ "Set `needs_person` to true only when the block is something only a person can hand over"
       assert prompt =~ ~s("covered_by": )
+      assert prompt =~ ~s("project_setup": true | false)
+      assert prompt =~ "Set `project_setup` to true when the block is the project's own build or run setup"
       assert prompt =~ "Ending your turn ends the session"
       assert prompt =~ ~r/Do not leave\s+work running in the background/
       # The gap rule and its fields are the epic review's alone.

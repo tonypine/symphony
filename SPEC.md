@@ -2641,7 +2641,11 @@ Rules:
   is reused only while it is open and was filed for the same failure (the same normalized cause); a
   terminal one, or one for another failure of the same component, gets a new fix ticket instead. A
   QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
-  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A missing QA tool or
+  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A QA answer may also
+  say the block is the project's own build or run setup (`project_setup`: its server cannot build or
+  start, or nothing runs it for the pass); its fix ticket is then filed in the affected ticket's
+  repo, not Symphony's. A block whose fix moves to another repo than the last recorded one is filed
+  there afresh rather than compared with the earlier failure, while its head has attempts left. A missing QA tool or
   QA host capability is never `needs_person`: only a secret,
   an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a

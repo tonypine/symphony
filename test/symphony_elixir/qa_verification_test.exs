@@ -759,6 +759,22 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{waits_on: %{type: "fix_ticket", keys: ["TP-716"]}} = Hold.get(@repo_key, @issue_id, :blocked)
     end
 
+    test "a block a QA answer names as the project's own setup files its fix ticket in the project's repo" do
+      {workspace, _head} = git_workspace!()
+
+      steps = [%{name: "Design check: Pipeline", status: "blocked", details: "no hub", evidence: []}]
+      blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "no hub with Pipeline data can run in QA", project_setup: true}
+      Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{input: 1, output: 1}}})
+
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+
+      assert_received {:fixer_create, attrs}
+      assert attrs.scope == @repo_key
+      assert attrs.component == "project_setup"
+      assert %{waits_on: %{type: "fix_ticket", keys: [@fix_ticket]}} = Hold.get(@repo_key, @issue_id, :blocked)
+    end
+
     test "a second ticket hitting the same break reuses the one fix ticket" do
       {workspace, _head} = git_workspace!()
 

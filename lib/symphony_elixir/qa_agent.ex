@@ -15,7 +15,9 @@ defmodule SymphonyElixir.QaAgent do
   `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
   is left (`SymphonyElixir.SelfHeal` then keeps the ticket on an access hold a person lifts), or
   `covered_by` naming an open ticket that already tracks a missing QA tool (self-heal then holds
-  the ticket on that one instead of filing a fix ticket). An answer without that object gets
+  the ticket on that one instead of filing a fix ticket), or `project_setup` when the block is the
+  project's own build or run setup (self-heal then files the fix ticket in the project's repo).
+  An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
@@ -95,6 +97,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:reason) => String.t(),
           optional(:needs_person) => true,
           optional(:covered_by) => String.t(),
+          optional(:project_setup) => true,
           optional(:follow_ups) => pos_integer()
         }
   @type job :: %{
@@ -261,6 +264,13 @@ defmodule SymphonyElixir.QaAgent do
     playbook with `dev_server: true` has Symphony run the project's server, and its database,
     outside your sandbox.
 
+    Set `project_setup` to true when the block is the project's own build or run setup, which its
+    repo fixes rather than Symphony: its server or database cannot build or start from this head,
+    or nothing lets this pass run it (no dev server, seed data or committed fixture for the
+    playbook), so the app has nothing to show. Symphony then files the fix ticket in the project's
+    repo. Leave it false when the block is the QA setup itself (a `qa_*` tool, your sandbox, the QA
+    host) or when the change's own code is the cause.
+
     When a QA tool or capability is missing and an open ticket already tracks adding it (one named
     in the issue, its comments or its relations), put that ticket's identifier in `covered_by`, so
     Symphony waits on that ticket instead of filing another. Leave `covered_by` out otherwise.
@@ -288,6 +298,7 @@ defmodule SymphonyElixir.QaAgent do
       "findings": ["<required for fail: one actionable defect per entry>"],
       "reason": "<required for blocked>",
       "needs_person": true | false,
+      "project_setup": true | false,
       "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"
     }
     """
@@ -757,6 +768,7 @@ defmodule SymphonyElixir.QaAgent do
       result = %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings}
       result = if reason, do: Map.put(result, :reason, reason), else: result
       result = if Map.get(decoded, "needs_person") == true, do: Map.put(result, :needs_person, true), else: result
+      result = if Map.get(decoded, "project_setup") == true, do: Map.put(result, :project_setup, true), else: result
       {:ok, put_covered_by(result, Map.get(decoded, "covered_by"))}
     else
       {:error, reason} -> {:error, {:malformed_qa_response, reason}}

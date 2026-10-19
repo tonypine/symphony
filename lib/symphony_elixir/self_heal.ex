@@ -50,12 +50,14 @@ defmodule SymphonyElixir.SelfHeal do
   @dev_server "dev_server"
   @worker_host "worker_host"
   @playbook "qa_playbook"
+  @project_setup "project_setup"
 
   # The components whose fix belongs to the repo that hit the block, rather than to Symphony: its
-  # own build/test/run setup, and each of its CI checks (`ci:<check name>`, the red backstop of the
-  # PR and CI watcher). Everything else is structural — orchestration, agent transports, QA
-  # coverage — and lands in Symphony (see §Guards "Fix-ticket scope").
-  @repo_components [@dev_server]
+  # own build/test/run setup (its dev server, or the setup a QA run named with `project_setup`),
+  # and each of its CI checks (`ci:<check name>`, the red backstop of the PR and CI watcher).
+  # Everything else is structural — orchestration, agent transports, QA coverage — and lands in
+  # Symphony (see §Guards "Fix-ticket scope").
+  @repo_components [@dev_server, @project_setup]
 
   @access_type "access"
   @fix_ticket_type "fix_ticket"
@@ -70,10 +72,17 @@ defmodule SymphonyElixir.SelfHeal do
 
   @doc """
   The broken component an outcome names, the unit a fix ticket is filed per. The causes the flows
-  raise today map to a small closed set; anything unrecognized is the flow's own environment.
+  raise today map to a small closed set; a QA run with no machine cause that says the block is the
+  project's own setup (`project_setup: true`) names `#{@project_setup}`; anything unrecognized is the
+  flow's own environment.
   """
   @spec component(outcome() | term()) :: String.t()
-  def component(outcome) when is_map(outcome), do: outcome |> cause() |> component_for()
+  def component(outcome) when is_map(outcome) do
+    if is_nil(Map.get(outcome, :cause)) and Map.get(outcome, :project_setup) == true,
+      do: @project_setup,
+      else: outcome |> cause() |> component_for()
+  end
+
   def component(_outcome), do: @default_component
 
   @doc """
@@ -178,9 +187,10 @@ defmodule SymphonyElixir.SelfHeal do
 
       ctx = Map.put(ctx, :covering, covering_ticket(ctx))
 
-      case {ctx.covering, compare(previous_signature(previous, component), signature)} do
+      case {ctx.covering, change(previous, component, scope, signature)} do
         {%{}, _change} -> open(ctx)
         {nil, :first} -> open(ctx)
+        {nil, :moved} -> move(ctx)
         {nil, :same} -> escalate(ctx, :unchanged)
         {nil, change} -> revisit(ctx, change)
       end
@@ -212,6 +222,23 @@ defmodule SymphonyElixir.SelfHeal do
         {:error, {:self_heal_fix_ticket_failed, reason}}
     end
   end
+
+  # How this failure compares with the last recorded one (`compare/2`), or `:moved` when the last
+  # repair was another repo's and this block's fix belongs to `scope`: say a QA run that now names
+  # the project's own setup after a Symphony fix landed. Nothing that repair changed says anything
+  # about this one, so it is filed afresh in its own repo rather than compared, while the head has
+  # attempts left.
+  defp change(previous, component, scope, signature) do
+    case previous_signature(previous, component) do
+      nil -> :first
+      old -> if moved?(previous, scope), do: :moved, else: compare(old, signature)
+    end
+  end
+
+  defp moved?(%{scope: previous_scope}, scope), do: is_binary(previous_scope) and previous_scope != scope
+
+  defp move(%{attempts: attempts} = ctx) when attempts >= @max_head_attempts, do: escalate(ctx, :out_of_attempts)
+  defp move(ctx), do: open(ctx)
 
   # A repair landed and the block came back different: that is new information, so the flow earns
   # another attempt. The new failure is recorded — so the next identical one escalates — and
