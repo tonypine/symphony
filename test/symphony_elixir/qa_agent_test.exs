@@ -633,6 +633,14 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no simulator","needs_person":"yes"}))
       refute Map.has_key?(blocked, :needs_person)
+
+      assert {:ok, %{verdict: :blocked, needs_dev_server: true} = blocked} =
+               QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub running","needs_dev_server":true}))
+
+      refute Map.has_key?(blocked, :needs_person)
+
+      assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no hub running","needs_dev_server":"yes"}))
+      refute Map.has_key?(blocked, :needs_dev_server)
     end
 
     test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
@@ -747,6 +755,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "mark each step that needs it `blocked` with the error in `details`: that is never a reason to write a stub of it"
       assert prompt =~ "a database such as Postgres cannot start inside it"
       assert prompt =~ "A playbook with `dev_server: true` has Symphony run the project's server, and its database, outside your sandbox."
+
+      assert prompt =~
+               "When Symphony started no dev server for this pass and a step is blocked because the project's own server or database is not running, set `needs_dev_server` to true"
     end
 
     test "includes the ticket, the parent's criteria and the playbooks" do
@@ -762,6 +773,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
       assert prompt =~ ~s("needs_person": true | false)
+      assert prompt =~ ~s("needs_dev_server": true | false)
       assert prompt =~ "Set `needs_person` to true only when the block is something only a person can hand over"
       assert prompt =~ ~s("covered_by": )
       assert prompt =~ "Ending your turn ends the session"

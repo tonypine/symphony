@@ -1435,7 +1435,9 @@ folder of `$SYMPHONY_VERIFICATION_SOCKET`), since on macOS that sandbox allows n
 The QA agent never stands in for the system under test: a stand-in it serves replaces only an
 outside service (a paid AI service, real credentials, a third-party API). When the project's own
 server cannot build or start, the steps that need it are `blocked`, never judged against a stub
-the agent wrote.
+the agent wrote. When they are blocked because the pass had no dev server at all, the agent says
+so (`needs_dev_server`), and the self-heal fix ticket lands in the project's own repository, asking
+it to set `verification.dev_server` and `dev_server: true` on the playbook.
 
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
