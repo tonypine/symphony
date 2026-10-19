@@ -541,7 +541,7 @@ GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote add
 
 Connections out stay open to the host's loopback, so the server can still reach other services
 there, such as Symphony's own dashboard and API, which have no authentication (see
-[Local-only dashboard bind](#local-only-dashboard-bind)).
+[Local-only API bind](#local-only-api-bind)).
 
 On Linux, `bwrap` builds the same limits from mounts and namespaces:
 
@@ -597,9 +597,10 @@ actions, token deltas) are appended to `<state-root>/audit/YYYY-MM-DD.ndjson`. E
 hashes plus a redacted preview — never raw — and configured secrets and common API-key env vars
 are scrubbed before write. See [logging.md](logging.md).
 
-### Local-only dashboard bind
+### Local-only API bind
 
-The LiveView dashboard and `/api/v1/*` endpoints have **no built-in authentication**. Symphony
+The `/api/v1/*` read endpoints have **no built-in authentication** (the control API needs its bearer
+token). Symphony
 refuses to bind to non-loopback hosts unless `SYMPHONY_ALLOW_REMOTE_BIND=1` is set explicitly, and
 the error message points operators at a reverse-proxy front door (Tailscale, Cloudflare Access,
 nginx basic auth, etc.).
@@ -614,7 +615,7 @@ read from environment variables. The quality gate explicitly ignores credentials
 
 ### Deployment
 
-- Keep `SYMPHONY_SERVER_HOST=127.0.0.1` and front the dashboard with an authenticated reverse proxy.
+- Keep `SYMPHONY_SERVER_HOST=127.0.0.1` and front the API with an authenticated reverse proxy.
   Only set `SYMPHONY_ALLOW_REMOTE_BIND=1` when you know exactly what is in front of the port.
 - Apply infrastructure-level egress filtering on the Symphony host or container. The orchestrator's
   HTTP calls (tracker, quality gate, learnings, notifications) are not covered by the agent's

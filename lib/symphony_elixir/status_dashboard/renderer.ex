@@ -10,7 +10,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   """
 
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.{Config, ForcedStatus, Format, HttpServer, RunKind, URLUtils, UsageLimit}
+  alias SymphonyElixir.{Config, ForcedStatus, Format, RunKind, URLUtils, UsageLimit}
 
   @throughput_window_ms 5_000
   @throughput_graph_window_ms 10 * 60 * 1000
@@ -66,7 +66,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
         skipped = Map.get(snapshot, :skipped, [])
         rate_limits = Map.get(snapshot, :rate_limits)
         workspace_lifecycle = Map.get(snapshot, :workspace_lifecycle)
-        scope_link_lines = format_scope_link_lines()
+        scope_line = format_scope_line()
         refresh_line = format_refresh_line(Map.get(snapshot, :polling))
         workspace_lifecycle_lines = format_workspace_lifecycle_lines(workspace_lifecycle)
 
@@ -129,7 +129,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
                colorize("out #{format_count(codex_output_tokens)}", @ansi_yellow),
              colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
              workspace_lifecycle_lines,
-             scope_link_lines,
+             scope_line,
              refresh_line,
              forced_rows,
              colorize("├─ Running", @ansi_bold),
@@ -162,7 +162,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
           colorize("╭─ SYMPHONY STATUS", @ansi_bold),
           colorize("│ Orchestrator snapshot unavailable", @ansi_red),
           colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
-          format_scope_link_lines(),
+          format_scope_line(),
           format_refresh_line(nil),
           closing_border()
         ]
@@ -176,7 +176,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
             colorize("starting", @ansi_yellow) <>
             colorize(" (waiting for orchestrator)", @ansi_gray),
           colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
-          format_scope_link_lines(),
+          format_scope_line(),
           format_refresh_line(nil),
           closing_border()
         ]
@@ -391,16 +391,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
 
   ## Private helpers
 
-  defp format_scope_link_lines do
-    repo_line = colorize("│ Repos: ", @ansi_bold) <> format_repo_scope()
-
-    case dashboard_url() do
-      url when is_binary(url) ->
-        [repo_line, colorize("│ Dashboard: ", @ansi_bold) <> colorize(url, @ansi_cyan)]
-
-      _ ->
-        [repo_line]
-    end
+  defp format_scope_line do
+    colorize("│ Repos: ", @ansi_bold) <> format_repo_scope()
   end
 
   defp format_repo_scope do
@@ -548,10 +540,6 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   end
 
   defp format_mailbox_depth(_mailbox_len), do: nil
-
-  defp dashboard_url do
-    URLUtils.dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())
-  end
 
   defp format_running_rows(running, running_event_width) do
     if running == [] do

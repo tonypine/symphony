@@ -74,8 +74,9 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
 
 - **Multi-repo orchestration** — one process supervises several repositories from a single
   `symphony.yml`, with per-repo Linear selectors and conflict detection.
-- **LiveView dashboard** — active runs, watched issues, the retry queue, quality-gate state,
-  per-issue transcripts with JSON access, and an audit timeline.
+- **Observability and control API** — active runs, watched issues, the retry queue, quality-gate
+  state, per-issue transcripts and the audit log as JSON under `/api/v1`, which the Mac app and
+  `symphony dashboard` read.
 - **Operator controls** — pause, resume, and stop, persisted across restarts.
 - **PR-driven runs** — work an existing pull request from the CLI for review comments, failing CI, and
   conflict fixes.
@@ -138,8 +139,6 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
   the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
   [macos/README.md](macos/README.md).
-
-![Symphony Web dashboard screenshot](.github/media/elixir-screenshot-web.png)
 
 ## Quickstart
 
@@ -206,9 +205,10 @@ Run Symphony from a checkout to work on Symphony itself, or on a platform withou
    The menu bar app can run a checkout too: turn on Development mode in its Settings. See
    [Development mode](macos/README.md#development-mode).
 
-The LiveView dashboard runs at `http://127.0.0.1:4000` by default. It has no built-in authentication
-and binds to loopback only — to expose it remotely, front it with a reverse proxy that handles auth
-(Tailscale, Cloudflare Access, nginx). See [docs/security.md](docs/security.md) for details.
+Symphony serves its JSON API at `http://127.0.0.1:4000` by default; the Mac app is its UI (there is
+no web dashboard). The read endpoints have no built-in authentication and the server binds to
+loopback only — to expose it remotely, front it with a reverse proxy that handles auth (Tailscale,
+Cloudflare Access, nginx). See [docs/security.md](docs/security.md) for details.
 
 ## Configuration
 
@@ -342,7 +342,7 @@ Forcing never changes a ticket's state: a ticket in `Backlog` stays there
 an active state. An unknown ticket, a missing or rejected control token, an unreachable Symphony and
 a Linear error each print a message and exit non-zero.
 
-The terminal and web dashboards list forced tickets in a "Forced" section above the running agents,
+The terminal dashboard and the Mac app list forced tickets in a "Forced" section above the running agents,
 with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.

@@ -283,6 +283,30 @@ defmodule SymphonyElixir.StateProvisioningTest do
       assert StateProvisioning.labels() == ["Blocked", "Needs Decision", "CI green", "CI red", "CI running"]
     end
 
+    test "machine_labels/2 lists every label Symphony applies or reads, once each, without human-action" do
+      labels = StateProvisioning.machine_labels("Rush ", ["needs-human", "plan", "Human-Action", "security", "SECURITY", nil, " "])
+
+      assert Enum.map(labels, & &1.names) == [
+               ["Blocked"],
+               ["Needs Decision"],
+               ["CI green"],
+               ["CI red"],
+               ["CI running"],
+               ["plan", "breakdown"],
+               ["qa:skip"],
+               ["protected-paths-approved"],
+               ["skip-update-hold"],
+               ["Rush"],
+               ["needs-human"],
+               ["security"]
+             ]
+
+      assert %{severity: :error, exact?: true, shows: "Decisions you are asked for can't be marked on the ticket."} = Enum.at(labels, 1)
+      assert %{severity: :warning, exact?: false} = List.last(labels)
+      assert length(StateProvisioning.machine_labels(nil, [])) == 9
+      assert StateProvisioning.deprecated_labels() == ["human-action"]
+    end
+
     test "machine_states/1 is empty for settings that are not a Schema" do
       assert StateProvisioning.machine_states(%{}) == []
     end

@@ -1457,16 +1457,23 @@ The QA agent:
   instructions, `priv/qa_playbooks/<kind>.md`, and on the host driver behind its tools: the
   `macos_app` playbook on `lib/symphony_elixir/qa_driver.ex`, `lib/symphony_elixir/qa_driver/**`
   and `priv/qa_driver/**`, the `android_app` playbook on `lib/symphony_elixir/qa_android/**`.
-- A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
+- A pass that runs the `web` playbook, or a playbook with `dev_server: true`, MUST start
+  `verification.dev_server` on a port from the
   verification port pool, from its own worktree at the PR head (never the agent's), before the
   agent starts, give the agent its URL, and stop it, release the port and remove that worktree
   when the pass ends. A dev server that does not start or fails its health check MUST make the
-  pass `blocked`, not `fail`, without starting the agent. Only that QA session
+  pass `blocked`, not `fail`, without starting the agent. A playbook with `dev_server: true` is
+  off when `verification.dev_server` is not configured. Only a `web` pass's session
   gets a `browser` MCP server: `browser_mcp` when set, otherwise headless Playwright MCP limited
   to the dev server's localhost origins and writing into `qa-evidence/`. The default server MUST
   run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
   pinned package is missing the pass MUST be `blocked` without starting the agent. With
-  `agent.network_access.mode: allowlist` the session also allows `localhost` and `127.0.0.1`.
+  `agent.network_access.mode: allowlist` a session with a dev server also allows `localhost` and
+  `127.0.0.1`.
+- The QA agent MUST NOT judge a step against a stand-in it wrote for the system under test (the
+  project's own server, API or CLI, or the database it stores in); a stand-in replaces only an
+  outside service. When the project's server cannot build or start, the steps that need it are
+  `blocked`.
 - A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
   outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
   changes outside `qa-evidence/`, including gitignored files that were not there after the last
@@ -4219,7 +4226,7 @@ SHOULD return:
   profile kind, such as `implementation` or `code_review`);
   each row has `kind`,
   `issue_id`, `issue_identifier`, `repo_key` and `started_at`. Landing runs are agent runs. Every
-  surface that says what runs (the web dashboard, the terminal dashboard, the macOS menu bar)
+  surface that says what runs (the terminal dashboard, the macOS app and its menu bar)
   SHOULD read it from this list, so a session that isn't an agent run is never missed
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)
@@ -4348,9 +4355,9 @@ This section defines an OPTIONAL HTTP interface for observability and operationa
 If implemented:
 
 - The HTTP server is an extension and is not REQUIRED for conformance.
-- The implementation MAY serve server-rendered HTML or a client-side application for the dashboard.
-- The dashboard/API MUST be observability/control surfaces only and MUST NOT become REQUIRED for
-  orchestrator correctness.
+- The implementation MAY serve server-rendered HTML or a client-side application for a dashboard.
+- The API (and any dashboard) MUST be observability/control surfaces only and MUST NOT become
+  REQUIRED for orchestrator correctness.
 
 Extension config:
 
@@ -4373,11 +4380,13 @@ Enablement (extension):
 
 #### 13.8.1 Human-Readable Dashboard (`/`)
 
-- Host a human-readable dashboard at `/`.
-- The returned document SHOULD depict the current state of the system (for example active sessions,
-  retry delays, token consumption, runtime totals, recent events, and health/error indicators).
-- It is up to the implementation whether this is server-generated HTML or a client-side app that
-  consumes the JSON API below.
+- An implementation MAY host a human-readable dashboard at `/`.
+- If it does, the returned document SHOULD depict the current state of the system (for example
+  active sessions, retry delays, token consumption, runtime totals, recent events, and health/error
+  indicators), as server-generated HTML or a client-side app that consumes the JSON API below.
+- This implementation hosts none: its UI is the macOS app (and `symphony dashboard` in a terminal),
+  both reading the JSON API below. `/` and every other path outside the API answer the API's
+  `404 not_found` error.
 
 #### 13.8.2 JSON REST API (`/api/v1/*`)
 
@@ -4760,7 +4769,9 @@ Minimum endpoints:
     - `{"kind": "config_edit", "path", "action": "remove" | "set" | "add", "value"}`: the app
       applies it to `symphony.yml` through its settings writer once the operator confirms.
     - `{"kind": "linear", "action", "team", "name", "type"}`: the service runs it once the operator
-      confirms.
+      confirms, through `POST /api/v1/setup/fixes`. `create_label` creates the label `name` in the
+      team `team`; `{"kind": "linear", "action": "resync_hold", "repo", "tickets"}` re-syncs each
+      ticket's hold label from the store.
     - `{"kind": "open", "target": "settings" | "symphony_yml" | "linear" | "drain_report" | "repos",
       "url"}`: no fix is safe; the app shows the button that goes where the operator fixes it.
     Symphony never fixes a problem by itself.
@@ -4797,7 +4808,20 @@ Minimum endpoints:
     can't file its fix tickets and its states and labels are never checked (an `error`), or without
     `route.team` whose team is only found through Linear, its projects' teams (from the same read
     of the workspace's projects) or its polled issues' (a `warning`, with a `config_edit` fix setting
-    `repositories[<key>].route.team` when that is exactly one team).
+    `repositories[<key>].route.team` when that is exactly one team); the labels Symphony applies
+    or reads, in each routed team, from one labels read per team: one missing (an `error` for
+    `Blocked`, `Needs Decision` and the CI labels, which count only spelled exactly; a `warning`
+    for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold`, the
+    `agent.concurrency.force_label` and each `escalate.labels` entry, which count in any case),
+    with a `create_label` fix for the exact name; a label close to one of them (only case or
+    spaces apart, or a short edit distance) or one that is both a team and a workspace label (a
+    `warning` naming both, `open` `linear`); the deprecated `human-action` label in an
+    `escalate.labels` list (a `warning` with a `config_edit` `remove` of it) or on polled open
+    tickets (a `warning` naming them); and a ticket whose hold label drifted from the store (a
+    `Blocked` or `Needs Decision` label with no hold, or a hold with no label) through two checks
+    without a poll putting it right (one `warning` per repo naming the tickets, a `details` line
+    each saying which way and since when, and a `resync_hold` fix). The poll logs each drift once
+    per change, not on every poll.
   - `github_updates` is instant GitHub updates (webhooks): `mode`
     (`off`, `setting_up`, `on`, `degraded`, `needs_setup`), the relay, the secret's presence (never
     its value), each step (`relay`, `gh_ready`, `secret`, `port`, `repo:<key>`, `test:<key>`) with
@@ -4810,6 +4834,14 @@ Minimum endpoints:
   - Runs the setup checks again, with the team cache emptied, and answers with `problems`,
     `not_checked`, `checked_at` and `linear_checked_at` once they finish. A run already going
     finishes first. Same-origin like Check Now.
+- `POST /api/v1/setup/fixes`
+  - Runs a `linear` fix (the descriptor as a problem lists it, or under `fix`): it does exactly
+    what the descriptor says, runs the checks again with the team cache emptied and answers like
+    a refresh. `resync_hold` may name one of the problem's tickets or all of them. `422`
+    `fix_not_proposed` for a descriptor no problem of the latest check lists. When Linear refuses
+    (permissions, a name already taken) it answers `422` `fix_refused` with the reason and what to
+    do in plain words, next to the problems as they were; nothing is half created. Same-origin like
+    Check Now.
 - `POST /api/v1/setup/github_updates/<action>`
   - `turn_on` (`relay`, `url`), `run_step` (`step`, and `url` for a URL relay's `relay` step),
     `test` (`repo` optional), `restart_relay`, `recreate_secret`, `change_relay` (`relay`, `url`)
@@ -5005,8 +5037,7 @@ Minimum endpoints:
     `from`, `to` and `total`.
 
 - `GET /api/v1/learnings?repo=&tag=&q=`
-  - The learnings of every configured repo, from the learnings store the web dashboard's
-    `/learnings` reads, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
+  - The learnings of every configured repo, from the learnings store, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
     whose rule, evidence, tags or ticket identifier contain the text, in any case; a blank filter is
     ignored.
   - Each record has `id`, `repo_key`, `repo`, `rule`, `tags`, `evidence_quote`,
@@ -5017,7 +5048,7 @@ Minimum endpoints:
 
 - `GET /api/v1/audit?from=&to=&issue=&repo=&type=&run_id=&since=`
   - The local audit records of the inclusive UTC date range (default today), oldest first, as NDJSON
-    (`application/x-ndjson`), redacted as the web dashboard's `/audit` shows them; the filters
+    (`application/x-ndjson`), redacted; the filters
     match exactly. `download=1` adds a `content-disposition` for `symphony-audit.ndjson`.
   - `limit=N` pages from the start of the range: `x-next-cursor` names the cursor that reads the
     next page with `cursor=`. `last=N` instead serves the N newest matching records (still oldest

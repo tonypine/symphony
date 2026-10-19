@@ -63,7 +63,7 @@ defmodule SymphonyElixir.HttpServerTest do
       assert {:error, message} = HttpServer.start_link(host: "0.0.0.0", port: 0)
 
       assert message =~ ~s(refusing to bind HTTP server to non-loopback host "0.0.0.0")
-      assert message =~ "the dashboard has no built-in auth"
+      assert message =~ "the API has no built-in auth"
       assert message =~ "SYMPHONY_ALLOW_REMOTE_BIND=1"
       assert HttpServer.bound_port() == nil
     end
@@ -192,14 +192,14 @@ defmodule SymphonyElixir.HttpServerTest do
     end
   end
 
-  describe "live websocket check_origin enforcement" do
-    test "rejects WebSocket upgrades from disallowed origins" do
+  describe "no web dashboard socket" do
+    test "answers a WebSocket upgrade with the API's 404, from any origin" do
       start_supervised!({HttpServer, [host: "127.0.0.1", port: 0]})
       port = HttpServer.bound_port()
       assert is_integer(port)
 
-      assert ws_upgrade_status(port, "http://evil.example") in 400..499
-      assert ws_upgrade_status(port, "http://127.0.0.1:#{port}") == 101
+      assert ws_upgrade_status(port, "http://evil.example") == 404
+      assert ws_upgrade_status(port, "http://127.0.0.1:#{port}") == 404
     end
   end
 

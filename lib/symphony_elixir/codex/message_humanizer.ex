@@ -2,9 +2,8 @@ defmodule SymphonyElixir.Codex.MessageHumanizer do
   @moduledoc """
   Renders codex orchestrator messages as short, human-readable summaries.
 
-  Used by the status dashboard's running-row label, the LiveView transcript,
-  and the web presenter — anywhere a single codex event needs to become a
-  one-line description.
+  Used by the status dashboard's running-row label and the API presenter —
+  anywhere a single codex event needs to become a one-line description.
   """
 
   alias SymphonyElixir.Format

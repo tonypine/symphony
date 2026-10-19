@@ -289,9 +289,7 @@ defmodule SymphonyElixir.NotificationsTest do
     assert message =~ "allow_private"
   end
 
-  test "event builder normalizes attrs, issue structs, and transcript links" do
-    write_workflow_file!(Workflow.workflow_file_path(), server_port: 4105, server_host: "0.0.0.0")
-
+  test "event builder normalizes attrs and issue structs" do
     assert Event.known_events() == [
              "pr_opened",
              "awaiting_review",
@@ -322,7 +320,6 @@ defmodule SymphonyElixir.NotificationsTest do
     assert default_event.event == "run_failed"
     assert default_event.repo_key == "default"
     assert default_event.issue_id == nil
-    assert default_event.transcript_url == nil
 
     {:ok, event} =
       Event.new(:run_failed,
@@ -342,7 +339,6 @@ defmodule SymphonyElixir.NotificationsTest do
     assert event.reason == "{:exit, :killed}"
     assert event.state == "done"
     assert event.repo_key == "default"
-    assert event.transcript_url == "http://127.0.0.1:4105/repos/default/issues/ACME-6/transcript"
 
     assert {:error, {:unknown_notification_event, 123}} = Event.new(123, %{})
     assert {:ok, %Event{issue_identifier: nil}} = Event.new(:run_failed, :invalid_attrs)
@@ -385,44 +381,6 @@ defmodule SymphonyElixir.NotificationsTest do
              Event.from_issue(:awaiting_review, issue, repo_key: "repo-n")
   end
 
-  test "event transcript link falls back cleanly when config cannot load" do
-    workflow_path = Workflow.workflow_file_path()
-    missing_path = Path.join(System.tmp_dir!(), "missing-workflow-#{System.unique_integer([:positive])}.md")
-
-    Enum.each(["default", "symphony", Application.get_env(:symphony_elixir, :primary_repo_name)], fn
-      nil ->
-        :ok
-
-      repo_name ->
-        supervisor = SymphonyElixir.Repo.Supervisor.supervisor_name(repo_name)
-
-        if GenServer.whereis(supervisor) do
-          Supervisor.terminate_child(supervisor, {SymphonyElixir.WorkflowStore, repo_name})
-        end
-    end)
-
-    if pid = Process.whereis(SymphonyElixir.WorkflowStore), do: GenServer.stop(pid)
-
-    try do
-      Workflow.set_workflow_file_path(missing_path)
-      assert {:ok, %Event{transcript_url: nil}} = Event.new(:run_failed, %{issue_identifier: "ACME-9"})
-    after
-      Workflow.set_workflow_file_path(workflow_path)
-
-      Enum.each(["default", "symphony", Application.get_env(:symphony_elixir, :primary_repo_name)], fn
-        nil ->
-          :ok
-
-        repo_name ->
-          supervisor = SymphonyElixir.Repo.Supervisor.supervisor_name(repo_name)
-
-          if GenServer.whereis(supervisor) do
-            Supervisor.restart_child(supervisor, {SymphonyElixir.WorkflowStore, repo_name})
-          end
-      end)
-    end
-  end
-
   test "formatter builds stable webhook payload and redacts titles" do
     {:ok, event} =
       Event.new(:pr_opened, %{
@@ -431,7 +389,6 @@ defmodule SymphonyElixir.NotificationsTest do
         issue_title: "Sensitive title",
         issue_url: "https://linear.test/ACME-1",
         pr_url: "https://github.test/org/repo/pull/1",
-        transcript_url: "http://127.0.0.1:4000/issues/ACME-1/transcript",
         timestamp: ~U[2026-05-06 08:00:00Z]
       })
 
@@ -443,20 +400,19 @@ defmodule SymphonyElixir.NotificationsTest do
     assert payload["issue_identifier"] == "ACME-1"
     assert payload["issue_title"] == "Sensitive title"
     assert payload["state_url"] == "https://github.test/org/repo/pull/1"
-    assert payload["transcript_url"] == "http://127.0.0.1:4000/issues/ACME-1/transcript"
+    refute Map.has_key?(payload, "transcript_url")
     refute Map.has_key?(redacted, "issue_title")
     assert redacted["issue_identifier"] == "ACME-1"
     assert redacted["issue_url"] == "https://linear.test/ACME-1"
   end
 
-  test "formatter builds Slack block attachment payload with state URL and transcript link" do
+  test "formatter builds Slack block attachment payload with state URL" do
     {:ok, event} =
       Event.new("run_failed", %{
         issue_identifier: "ACME-2",
         issue_title: "Broken run",
         issue_url: "https://linear.test/ACME-2",
         pr_url: "https://github.test/org/repo/pull/2",
-        transcript_url: "http://127.0.0.1:4000/issues/ACME-2/transcript",
         reason: "agent exited"
       })
 
@@ -469,7 +425,7 @@ defmodule SymphonyElixir.NotificationsTest do
     assert encoded =~ "ACME-2"
     assert encoded =~ "Broken run"
     assert encoded =~ "https://github.test/org/repo/pull/2"
-    assert encoded =~ "http://127.0.0.1:4000/issues/ACME-2/transcript"
+    refute encoded =~ "Transcript"
 
     redacted = Formatter.slack_payload(event, redact_titles: true)
     refute Jason.encode!(redacted) =~ "Broken run"
@@ -562,7 +518,6 @@ defmodule SymphonyElixir.NotificationsTest do
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do
     issue_url = "https://linear.test/ACME-2407"
     pr_url = "https://github.test/org/repo/pull/2407"
-    transcript_url = "http://127.0.0.1:4000/issues/ACME-2407/transcript"
 
     for {event_name, title} <- [
           {"reviewer_commented", "Reviewer commented"},
@@ -575,7 +530,6 @@ defmodule SymphonyElixir.NotificationsTest do
           issue_title: "Reviewer feedback",
           issue_url: issue_url,
           pr_url: pr_url,
-          transcript_url: transcript_url,
           timestamp: ~U[2026-05-06 08:00:00Z]
         })
 
@@ -588,7 +542,6 @@ defmodule SymphonyElixir.NotificationsTest do
       assert payload["issue_url"] == issue_url
       assert payload["pr_url"] == pr_url
       assert payload["state_url"] == pr_url
-      assert payload["transcript_url"] == transcript_url
       assert payload["timestamp"] == "2026-05-06T08:00:00Z"
       refute Map.has_key?(redacted_payload, "issue_title")
 
@@ -597,13 +550,30 @@ defmodule SymphonyElixir.NotificationsTest do
 
       assert slack_payload["text"] == "#{title}: ACME-2407"
 
-      for value <- [title, "ACME-2407", "Reviewer feedback", issue_url, pr_url, transcript_url, "2026-05-06T08:00:00Z"] do
+      for value <- [title, "ACME-2407", "Reviewer feedback", issue_url, pr_url, "2026-05-06T08:00:00Z"] do
         assert encoded_slack =~ value
       end
 
       redacted_slack = Formatter.slack_payload(event, redact_titles: true)
       refute Jason.encode!(redacted_slack) =~ "Reviewer feedback"
     end
+  end
+
+  test "formatter leaves out a link field whose URL is empty" do
+    event = %Event{
+      event: "issue_completed",
+      issue_identifier: "ACME-3",
+      issue_url: "https://linear.test/ACME-3",
+      pr_url: "",
+      timestamp: ~U[2026-05-06 10:00:00Z],
+      tokens: %{},
+      metadata: %{}
+    }
+
+    encoded = event |> Formatter.slack_payload() |> Jason.encode!()
+
+    refute encoded =~ "Pull request"
+    assert encoded =~ "https://linear.test/ACME-3"
   end
 
   test "formatter covers event titles, fallback URLs, empty fields, and escaping" do
@@ -629,7 +599,6 @@ defmodule SymphonyElixir.NotificationsTest do
         issue_title: nil,
         state: :done,
         reason: "",
-        transcript_url: "",
         timestamp: ~U[2026-05-06 10:00:00Z],
         tokens: %{},
         metadata: %{}

@@ -4,13 +4,13 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, json_response: 2]
   import Plug.Conn, only: [put_req_header: 3]
 
+  alias SymphonyElixir.{BlockedHold, Setup, StateProvisioning}
   alias SymphonyElixir.GitHub.{RelaySupervisor, WebhookSetup}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
   alias SymphonyElixir.Repo.FetchLog
   alias SymphonyElixir.Routing.{PollLog, Resolver}
   alias SymphonyElixir.Secret
-  alias SymphonyElixir.Setup
 
   @endpoint SymphonyElixirWeb.Endpoint
   @t0 ~U[2026-10-17 09:00:00Z]
@@ -19,6 +19,8 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   @fixture Path.expand("../../fixtures/api/github_updates.json", __DIR__)
   # The setup problems' contract with the app, for its Setup screens.
   @problems_fixture Path.expand("../../fixtures/api/setup_problems.json", __DIR__)
+  # The label problems and their Linear fixes, for the app's Setup confirm sheets.
+  @labels_fixture Path.expand("../../fixtures/api/setup_label_problems.json", __DIR__)
 
   # Answers the snapshot `/api/v1/state` reads: nothing running.
   defmodule IdleOrchestrator do
@@ -38,6 +40,9 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     # the poll log: either would put a problem in a healthy payload.
     FetchLog.record("default", :ok)
     :ets.delete_all_objects(PollLog)
+    # So may the labels an earlier test's orchestrator provisioned in the memory tracker: a team with
+    # some labels is one the labels check judges.
+    Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
 
     dir = Path.join(System.tmp_dir!(), "setup-controller-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -306,6 +311,100 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     test "a refresh is refused from another site's page, and takes no other method" do
       assert refresh([{"content-type", "application/json"}, {"origin", "https://evil.example.com"}]).status == 403
       assert build_conn() |> get("/api/v1/setup/refresh") |> json_response(405)
+    end
+  end
+
+  describe "label fixes" do
+    setup do
+      on_exit(fn ->
+        for key <- [:memory_tracker_labels_list, :memory_tracker_create_label_result],
+            do: Application.delete_env(:symphony_elixir, key)
+      end)
+
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_team: "TP")
+      wanted = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), name != "Needs Decision", do: name
+      Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(wanted, &%{id: &1, name: &1, team_id: "id-TP", team_key: "TP"}))
+      :ok
+    end
+
+    defp post_fix(body, headers \\ [{"content-type", "application/json"}]) do
+      Enum.reduce(headers, build_conn(), fn {name, value}, conn -> put_req_header(conn, name, value) end)
+      |> post("/api/v1/setup/fixes", body)
+    end
+
+    defp problem(payload, id), do: Enum.find(payload["problems"], &(&1["id"] == id))
+
+    # A poll of the ticket, as the orchestrator's Blocked hold sweep runs it.
+    defp poll!(issue) do
+      capture_log(fn -> BlockedHold.sync(issue, ["Done"], settings: Config.settings!(), repo_key: "default", now: @t0) end)
+    end
+
+    defp ticket_labels, do: hd(Application.get_env(:symphony_elixir, :memory_tracker_issues)).labels
+
+    # The user walkthrough: create the missing label, re-sync a drifted ticket, refuse what the check didn't propose.
+    test "a missing label is created by its fix, a drifted ticket is re-synced, and an unproposed fix is refused" do
+      # 1. Team TP has no `Needs Decision`: a label error with a create_label fix.
+      refresh()
+      missing = problem(build_conn() |> get("/api/v1/setup") |> json_response(200), "labels:missing:TP:Needs Decision")
+      assert %{"severity" => "error", "fix" => %{"kind" => "linear", "action" => "create_label", "team" => "TP", "name" => "Needs Decision"} = fix} = missing
+
+      # 2. Running it creates exactly that label in TP, and the error is gone.
+      payload = post_fix(Jason.encode!(fix)) |> json_response(200)
+      assert payload["problems"] == []
+      assert %{name: "Needs Decision", team_id: "TP"} = List.last(Application.get_env(:symphony_elixir, :memory_tracker_labels_list))
+
+      # 3. A Blocked label with no hold, which the polls fail to clear, for two checks: a drift
+      # warning naming the ticket.
+      issue = %Issue{id: "issue-1", identifier: "TP-7", url: "https://linear.app/t/issue/TP-7", state: "Todo", labels: ["Blocked"]}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      forbidden = {:error, :forbidden}
+      Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, [forbidden, forbidden])
+
+      for _check <- 1..2 do
+        poll!(issue)
+        refresh()
+      end
+
+      payload = build_conn() |> get("/api/v1/setup") |> json_response(200)
+      drift = problem(payload, "hold_drift:default")
+
+      assert %{
+               "severity" => "warning",
+               "tickets" => [%{"identifier" => "TP-7", "url" => "https://linear.app/t/issue/TP-7"}],
+               "details" => [%{"label" => "TP-7", "value" => "Blocked label with no hold, since 2026-10-17 09:00 UTC"}],
+               "fix" => %{"kind" => "linear", "action" => "resync_hold", "repo" => "default", "tickets" => ["TP-7"]} = resync
+             } = drift
+
+      # The contract the app's Setup decodes for both Linear fixes.
+      contract = %{"problems" => [missing | payload["problems"]]}
+      if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1", do: File.write!(@labels_fixture, Jason.encode_to_iodata!(contract, pretty: true))
+      assert contract == @labels_fixture |> File.read!() |> Jason.decode!()
+
+      # Its fix removes the label, and the warning clears.
+      assert post_fix(Jason.encode!(%{fix: resync})) |> json_response(200) |> Map.fetch!("problems") == []
+      assert ticket_labels() == []
+
+      # 4. A descriptor the check didn't propose is refused.
+      assert %{"error" => %{"code" => "fix_not_proposed"}} = post_fix(Jason.encode!(resync)) |> json_response(422)
+      assert %{"error" => %{"code" => "fix_not_proposed"}} = post_fix(Jason.encode!(fix)) |> json_response(422)
+    end
+
+    test "a create Linear refuses answers its reason and leaves the problem in place" do
+      refresh()
+      taken = {:error, {:linear_graphql_errors, [%{"message" => "Label name already taken"}]}}
+      Application.put_env(:symphony_elixir, :memory_tracker_create_label_result, taken)
+      fix = %{kind: "linear", action: "create_label", team: "TP", name: "Needs Decision"}
+
+      payload = post_fix(Jason.encode!(fix), [{"content-type", "application/x-www-form-urlencoded"}]) |> json_response(422)
+
+      assert %{"code" => "fix_refused", "message" => message} = payload["error"]
+      assert message =~ ~s(Linear refused to create the label "Needs Decision" in team TP: Label name already taken.)
+      assert problem(payload, "labels:missing:TP:Needs Decision")
+    end
+
+    test "fixes are refused from another site's page, and take no other method" do
+      assert post_fix("{}", [{"content-type", "application/json"}, {"origin", "https://evil.example.com"}]).status == 403
+      assert build_conn() |> get("/api/v1/setup/fixes") |> json_response(405)
     end
   end
 

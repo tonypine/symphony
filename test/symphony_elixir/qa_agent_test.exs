@@ -513,6 +513,21 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [_cli] = Selection.playbooks(%{playbooks: %{"web" => %{"enabled" => false}}}, dev_server?: true)
     end
 
+    test "a playbook with dev_server: true carries it and runs only when the verification dev server is configured" do
+      server = %{"paths" => ["server/**"], "prompt" => "### Playbook: server", "dev_server" => true}
+      api = %{"paths" => ["api/**"], "prompt" => "### Playbook: api"}
+      config = %{playbooks: %{"cli" => %{"enabled" => false}, "server" => server, "api" => api}}
+
+      assert {:run, [%{kind: "server", dev_server: true}]} = Selection.decide(issue(), ["server/main.go"], config, dev_server?: true)
+      assert {:run, [%{kind: "api"} = api_playbook]} = Selection.decide(issue(), ["api/a.go"], config, dev_server?: true)
+      refute Map.has_key?(api_playbook, :dev_server)
+      assert {:run, [%{kind: "web", dev_server: true}]} = Selection.decide(issue(), ["assets/app.css"], config, dev_server?: true)
+
+      assert {:skip, _reason} = Selection.decide(issue(), ["server/main.go"], config)
+      assert {"server", "needs `verification.dev_server`"} in Selection.unavailable(config)
+      refute Enum.any?(Selection.unavailable(config, dev_server?: true), &(elem(&1, 0) == "server"))
+    end
+
     test "unavailable/2 says why each playbook is off" do
       assert Selection.unavailable(%{playbooks: %{}}) == [
                {"macos_app", "needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`"},
@@ -710,15 +725,28 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "Leave `covered_by` out otherwise.\n\nWhen one playbook"
     end
 
-    test "a step needing paid AI, real credentials or a backend QA lacks is judged through a stand-in, not blocked" do
+    test "a step needing paid AI, real credentials or an outside service is judged through a stand-in, not blocked" do
       prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
 
       assert prompt =~
-               "needs a paid AI service, real credentials or a backend the QA host does not run (a database, a toolchain to build a bundled server or CLI) is never `blocked` for want of them, and never gets a real key"
+               "needs a paid AI service, real credentials or another outside service (a third-party API, GitHub, Linear) is never `blocked` for want of them, and never gets a real key"
 
       assert prompt =~ "run the app against a stand-in you serve where the playbook lets a server listen"
       assert prompt =~ "name what the stand-in replaced and the CI check that covers the real path"
       assert prompt =~ "Mark the step `blocked` only when the app cannot be pointed at a stand-in."
+      refute prompt =~ "a stub of the project's API"
+    end
+
+    test "the system under test is never stubbed: a server that cannot start makes its steps blocked" do
+      prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
+
+      assert prompt =~
+               "Never stand in for the system under test: the project's own server, API or CLI, and the database it stores in"
+
+      assert prompt =~ "Run the real one built from this PR head"
+      assert prompt =~ "mark each step that needs it `blocked` with the error in `details`: that is never a reason to write a stub of it"
+      assert prompt =~ "a database such as Postgres cannot start inside it"
+      assert prompt =~ "A playbook with `dev_server: true` has Symphony run the project's server, and its database, outside your sandbox."
     end
 
     test "includes the ticket, the parent's criteria and the playbooks" do
@@ -1680,6 +1708,33 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_receive {:qa_session_started, _worktree, cli_opts}
       refute Map.has_key?(cli_opts[:settings].agent.mcp.servers, "browser")
       refute QaAgent.prompt(job(), nil) =~ "Dev server:"
+    end
+
+    test "gives a dev_server playbook's pass the real server outside the agent sandbox, without a browser" do
+      config = %{playbooks: %{"cli" => %{"enabled" => false}, "server" => %{"paths" => ["server/**"], "prompt" => "### Playbook: server", "dev_server" => true}}}
+      [web, server] = Selection.playbooks(config, dev_server?: true)
+      settings = Config.settings!()
+      worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(%{playbooks: [server]}), settings, git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
+
+      server_worktree = worktree <> "-dev-server"
+      assert_receive {:dev_server_started, "TP-900", "qa-run-1", ^server_worktree, _start_opts}
+      assert_receive {:qa_session_started, ^worktree, session_opts}
+      refute Map.has_key?(session_opts[:settings].agent.mcp.servers || %{}, "browser")
+      assert ["localhost", "127.0.0.1"] -- session_opts[:settings].agent.network_access.allowed_domains == []
+
+      assert_receive {:qa_turn, _session, prompt, _issue, _opts}
+      flat = String.replace(prompt, ~r/\s+/, " ")
+      assert flat =~ "dev server for this PR head at http://localhost:4321/, from its own worktree and outside your sandbox"
+      assert flat =~ "Your shell can reach it. It is the real server built from this PR"
+      refute flat =~ "The `browser` MCP server and your shell can reach it."
+      assert_receive {:dev_server_stopped, 4321}
+      refute File.exists?(server_worktree)
+
+      web_prompt = QaAgent.prompt(job(%{playbooks: [web], dev_server_url: "http://localhost:4321/"}), nil)
+      assert String.replace(web_prompt, ~r/\s+/, " ") =~ "The `browser` MCP server and your shell can reach it."
     end
 
     test "uses the operator's browser MCP server and leaves other network modes alone" do

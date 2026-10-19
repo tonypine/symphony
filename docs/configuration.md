@@ -73,7 +73,14 @@ last poll fetched: tickets that don't route back to the repo (with a fix that ad
 id to `route.projects`), a route value Linear has no project or team for, two repos taking the same
 tickets, and a route that has matched nothing for 24 hours. It flags each repository with no Linear
 team (an error), and one whose team is found only through its projects or tickets (a warning,
-with a fix that sets `route.team`). `POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
+with a fix that sets `route.team`). In each routed Linear team it checks the labels Symphony
+applies or reads (`Blocked`, `Needs Decision`, the CI labels, `plan`, `qa:skip`, the
+`agent.concurrency.force_label`, each `escalate.labels` entry and the others), with a fix that
+creates a missing one; a label one typo away from one of them; the deprecated `human-action`
+label in `escalate.labels` (a fix removes it) or on open tickets; and tickets whose `Blocked` or
+`Needs Decision` label disagrees with the hold Symphony keeps, with a fix that re-syncs the label.
+`POST /api/v1/setup/fixes` runs a Linear fix the last check proposed, and
+`POST /api/v1/setup/refresh` checks again at once. See [SPEC.md](../SPEC.md) for the problem shape.
 
 ## Settings in the macOS app
 
@@ -711,7 +718,7 @@ agent:
   trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. The pre-push
   reviewer runs inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
   `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
-- The web dashboard and the terminal status dashboard show the kind, model and effort of each
+- The Mac app and the terminal status dashboard show the kind, model and effort of each
   running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
 - Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
   from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
@@ -755,7 +762,7 @@ agent:
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
   `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
-  ticket's phase is its current part's. The terminal and web dashboards show a "Forced" section
+  ticket's phase is its current part's. The terminal dashboard and the Mac app show a "Forced" section
   above the running agents (identifier, phase, waiting on, forced for), a ⚡ on forced rows elsewhere,
   and the forced count over `forced_max` in the header. When a forced plan ticket enters
   `Plan Review`, Symphony sends a `forced_human_gate` notification saying it
@@ -1398,6 +1405,37 @@ auto_review:
 ```
 
 Set `enabled: false` on a kind to turn it off.
+
+Set `dev_server: true` on a kind of your own when its pass needs the project's server running,
+such as an API and the Postgres it stores in that the app under test talks to. Symphony then
+starts `verification.dev_server` for that pass as it does for `web` (from its own worktree at the
+PR head, on a pooled port, outside the agent's sandbox), gives the agent its URL and lets the
+agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. Without
+a configured dev server the kind is off, and the `QA selection` log line says it needs
+`verification.dev_server`:
+
+```yaml
+auto_review:
+  playbooks:
+    server:
+      paths: ["server/**"]
+      dev_server: true
+      prompt: |
+        ### Playbook: server
+        Call the changed endpoints on the dev server and check the responses.
+```
+
+The QA agent's own sandbox cannot run a database such as Postgres: it lets a process create a
+System V shared memory segment but not look it up again or remove it, so `initdb` fails with
+`could not create shared memory segment: Operation not permitted`. The dev server's sandbox leaves
+System V IPC alone. Start the database from the dev server's `start_cmd`, listening only on a unix
+socket in the dev server's temp folder (`listen_addresses=''`, `unix_socket_directories` set to the
+folder of `$SYMPHONY_VERIFICATION_SOCKET`), since on macOS that sandbox allows no TCP listener.
+
+The QA agent never stands in for the system under test: a stand-in it serves replaces only an
+outside service (a paid AI service, real credentials, a third-party API). When the project's own
+server cannot build or start, the steps that need it are `blocked`, never judged against a stub
+the agent wrote.
 
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
@@ -2115,15 +2153,15 @@ dashboard:
 
 CLI `--host` and `--port` override these listener settings.
 
-`enabled` switches only the terminal dashboard Symphony draws on its own output. The web dashboard, the
-HTTP API and the control plane stay up when it is `false`. Symphony also skips the terminal dashboard when
+`enabled` switches only the terminal dashboard Symphony draws on its own output. The HTTP API and the
+control plane stay up when it is `false`. Symphony also skips the terminal dashboard when
 its output isn't a terminal (a file or a pipe). `symphony dashboard [--url <control url>]` draws the same
 view in another terminal by polling `GET /api/v1/state?format=terminal&columns=<n>` on the control plane.
 
-The dashboard also serves an Audit tab at `/audit` (filters, per-record expansion, daily hash-chain
-verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`, and each
-day's chain verification from `/api/v1/audit/verify?date=YYYY-MM-DD` (see SPEC §13.8.2).
-Per-issue transcripts are available in the dashboard and as JSON at
+Symphony serves no web dashboard: its UI is the Mac app, which reads the JSON API. The filtered
+audit stream (NDJSON) is available from `/api/v1/audit`, and each day's chain verification from
+`/api/v1/audit/verify?date=YYYY-MM-DD` (see SPEC §13.8.2). Per-issue transcripts are available in
+the Mac app and as JSON at
 `/api/v1/repos/<repo_key>/issues/<issue_identifier>/transcript` (or
 `/api/v1/issues/<issue_identifier>/transcript` for the default repository).
 
