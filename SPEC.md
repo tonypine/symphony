@@ -2645,7 +2645,11 @@ Rules:
   is reused only while it is open and was filed for the same failure (the same normalized cause); a
   terminal one, or one for another failure of the same component, gets a new fix ticket instead. A
   QA answer may name an open ticket that already tracks the missing QA tool (`covered_by`); the
-  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A missing QA tool or
+  hold then waits on that ticket, linked as blocked-by, and nothing is filed. A QA answer that says
+  a step needs the project's own server and the pass had no dev server (`needs_dev_server`) names
+  the `dev_server` component, whose fix ticket lands in the project's repository. A block whose fix
+  belongs to another repository than the last recorded one is a new break, filed there rather than
+  compared with the old failure. A missing QA tool or
   QA host capability is never `needs_person`: only a secret,
   an account or a device the host lacks is. The hold lifts when the fix ticket is terminal, except
   for a fix merged into the repository the running build comes from: like the app-update hold on a
