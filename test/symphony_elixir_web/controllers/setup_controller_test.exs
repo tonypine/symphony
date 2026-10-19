@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
   alias SymphonyElixir.GitHub.{RelaySupervisor, WebhookSetup}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.PrWatch.Health
+  alias SymphonyElixir.Repo.FetchLog
   alias SymphonyElixir.Routing.{PollLog, Resolver}
   alias SymphonyElixir.Secret
   alias SymphonyElixir.Setup
@@ -33,6 +34,10 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     file = Workflow.symphony_file_path()
     File.write!(file, file |> File.read!() |> String.split("\n") |> Enum.reject(&String.starts_with?(&1, "dashboard:")) |> Enum.join("\n"))
     Cache.clear()
+    # Earlier tests may have left failed fetches of `default` in the shared fetch log, and polls in
+    # the poll log: either would put a problem in a healthy payload.
+    FetchLog.record("default", :ok)
+    :ets.delete_all_objects(PollLog)
 
     dir = Path.join(System.tmp_dir!(), "setup-controller-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -219,7 +224,6 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
     test "a slug route whose tickets carry only the project id is a routing error until its fix is applied" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
       project_id = "8e6f0c39-6a8b-4c1e-9d0e-1f2a3b4c5d6e"
-      :ets.delete_all_objects(PollLog)
       Application.put_env(:symphony_elixir, :memory_tracker_projects_list, [%{id: project_id, name: "Symphony", slug_id: "a1abb875ac02"}])
       Application.put_env(:symphony_elixir, :memory_tracker_teams_list, [%{id: "team-tp", key: "TP", name: "Tony Pine"}])
       issues = for number <- 1..3, do: %Issue{id: "issue-#{number}", identifier: "TP-#{number}", state: "Todo", project: %{id: project_id}}
