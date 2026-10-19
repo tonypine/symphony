@@ -2625,7 +2625,8 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. A new fix ticket takes the affected ticket's priority when that is more urgent than
+  waiting on it. Each blocked QA attempt logs, and records on its `blocked` verdict, the block's
+  reason, whether it needs a person, the model the run used and the playbooks it ran. A new fix ticket takes the affected ticket's priority when that is more urgent than
   High (an Urgent ticket's fix is Urgent, so `tickets.priorities` dispatches it), else High; a
   reused one keeps its priority. A new fix ticket is assigned to the user the fix's repo polls for
   (its route's `assignee`, else `issues.linear.assignee`), so Symphony dispatches it; with none

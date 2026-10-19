@@ -370,7 +370,7 @@ defmodule SymphonyElixir.RunStoreTest do
 
     assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
     assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-2", "blocked", %{reason: "tooling"})
-    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "abc123", "pass")
+    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "abc123", "pass", %{model: "claude-opus"})
 
     assert [%{name: "handoff", details: %{to: "Code Review"}}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
     assert [%{name: "blocked"}] = RunStore.get_ticket_state(@repo_key, "issue-2").signals
@@ -382,7 +382,10 @@ defmodule SymphonyElixir.RunStoreTest do
 
     assert %{phase: "Merging"} = RunStore.get_ticket_state(@repo_key, "issue-1")
     assert [%{name: "handoff"}] = RunStore.get_ticket_state(@repo_key, "issue-1").signals
-    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
+
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass", details: %{model: "claude-opus"}}] =
+             RunStore.get_ticket_state(@repo_key, "issue-1").verdicts
+
     assert %{phase: "Done"} = RunStore.get_ticket_state(@other_repo_key, "issue-1")
 
     assert Enum.sort(Enum.map(RunStore.list_ticket_states(@repo_key), & &1.issue_id)) == ["issue-1", "issue-2"]

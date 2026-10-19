@@ -654,6 +654,42 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "**Verdict:** blocked → QA (blocked)"
     end
 
+    test "a block logs and records its reason, the model and the playbooks it ran" do
+      {workspace, head} = git_workspace!()
+
+      Process.put(:qa_agent_result, blocked_result(["Open the window"], "the model could not drive the QA tools"))
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~
+               "QA blocked for TP-816 head=#{head} model=default needs_person=false playbooks=cli (attempt 1/2); " <>
+                 "retrying: the model could not drive the QA tools"
+
+      assert [%{outcome: "blocked", details: details}] = verdicts()
+      assert details == %{reason: "the model could not drive the QA tools", needs_person: false, model: "default", playbooks: ["cli"]}
+
+      profile = %{kind: :qa, model: "~deepseek/deepseek-flash-latest", effort: nil, provider: "openrouter"}
+      log = capture_log(fn -> assert :ok = run(workspace, run_profile: profile) end)
+
+      assert log =~
+               "QA blocked for TP-816 head=#{head} model=~deepseek/deepseek-flash-latest needs_person=false playbooks=cli (attempt 2/2); " <>
+                 "self-healing: the model could not drive the QA tools"
+
+      assert [%{details: %{model: "~deepseek/deepseek-flash-latest"}}, %{details: %{model: "default"}}] = verdicts()
+    end
+
+    test "a block that needs a person logs it" do
+      {workspace, _head} = git_workspace!()
+
+      result = %{verdict: :blocked, summary: "No key.", steps: [], findings: [], needs_person: true, reason: "the QA host has no signing key"}
+      Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{}}})
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "needs_person=true playbooks=cli (attempt 1/2); self-healing: the QA host has no signing key"
+      assert [%{details: %{needs_person: true, reason: "the QA host has no signing key"}}] = verdicts()
+    end
+
     test "a usage limit holds the run instead of recording a blocked verdict" do
       {workspace, _head} = git_workspace!()
 
