@@ -216,10 +216,12 @@ install works is proved by the `macos-e2e` check, not by you: do not report the 
 step you proved, judge what the app shows.
 
 **One-time setup on the QA host.** The QA host gets a persistent test identity, installed and
-trusted once, rather than a throwaway one trusted for each pass: trusting a certificate needs
-`sudo`, so per-pass trust would need passwordless `sudo` for the QA user on every pass, and a pass
-that died would leave its trust setting behind. Whoever provisions the host does this as the QA
-user, from a checkout of this repository:
+trusted once, rather than a throwaway one trusted for each pass: a pass that died would leave its
+trust setting behind. On a QA VM (a `worker_host`) whose QA user has passwordless `sudo`,
+`qa_build_release_pair` installs it itself the first time it finds none, or finds it untrusted,
+with Symphony's own copy of the script, and builds the pair in the same call. Anywhere else (QA on
+Symphony's own host, or a QA user whose `sudo` asks for a password) whoever provisions the host
+runs it by hand as the QA user, from a checkout of this repository:
 
 ```sh
 scripts/qa/install-test-signing-identity.sh          # asks for sudo once, to trust the certificate
@@ -234,14 +236,17 @@ only finds an identity there) and trusts the certificate for code signing only
 (`sudo security add-trusted-cert -d -r trustRoot -p codeSign`). Running it again changes nothing
 once the identity is installed and trusted, and finishes an install that stopped half way. The
 pair's build also needs `minisign` and `jq` (`brew install minisign jq`) and the repository's
-toolchain for `make release`. This is host setup, not a pass step: you never install it yourself,
-and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` fails with
-`qa_signing_identity_missing` or `qa_signing_identity_untrusted`, as **Build** below says.
+toolchain for `make release`. You never install it yourself, and the QA sandbox cannot run `sudo`
+anyway: Symphony's tool does it, or it is host setup. Where it can't be installed,
+`qa_build_release_pair` fails with `qa_signing_identity_missing` or
+`qa_signing_identity_untrusted`, as **Build** below says.
 
 - **Build:** `qa_build_release_pair` builds release N and its update N+1 on the machine the app
   runs on and returns their `manifest` (each one's `version` and `build`). It takes several
   minutes; call it once, after `qa_build`. A non-zero `exit_status` is a failing step; quote the
-  end of the output. When it fails with `qa_signing_identity_missing` or
+  end of the output. When its result has `signing_identity_installed: true`, Symphony installed the
+  QA host's test signing identity in that call: say so in the report. When it fails with
+  `qa_signing_identity_missing` or
   `qa_signing_identity_untrusted`, the QA host lacks its test signing identity: mark the steps that
   need the pair `blocked` with the tool's message, finish the other steps, and answer `blocked`
   with that message.
