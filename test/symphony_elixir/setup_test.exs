@@ -434,7 +434,7 @@ defmodule SymphonyElixir.SetupTest do
 
       :telemetry.execute(Cache.reloaded_event(), %{count: 1}, %{path: Workflow.symphony_file_path()})
       assert_receive {:ran, LinearStub}
-      await_idle(server, 1_000)
+      await_idle(server)
       refute_received {:memory_tracker_team_workflow_states, "TP"}
 
       assert :ok = Setup.invalidate_team_cache(server)
@@ -454,28 +454,28 @@ defmodule SymphonyElixir.SetupTest do
       good = File.read!(path)
       server = start_setup!(checks: [Checks.DeprecatedKeys, Checks.FailedReload, LocalStub], reload_debounce_ms: 0)
       assert_receive {:ran, LocalStub}
-      await_idle(server, 1_000)
+      await_idle(server)
       assert %{problems: []} = Setup.payload(server)
 
       # The orchestrator's poll reads the config; here the test does.
       append_symphony!("auto_review:\n  enabled: true\n")
       assert {:ok, _system} = Config.system()
       assert_receive {:ran, LocalStub}
-      await_idle(server, 1_000)
+      await_idle(server)
       assert %{problems: [%{id: "deprecated_key:auto_review.enabled"}]} = Setup.payload(server)
 
       File.write!(path, good)
       bump_mtime!(path)
       assert {:ok, _system} = Config.system()
       assert_receive {:ran, LocalStub}
-      await_idle(server, 1_000)
+      await_idle(server)
       assert %{problems: []} = Setup.payload(server)
 
       capture_log(fn ->
         append_symphony!("pull_request:\n  enabled: true\n")
         assert {:ok, _system} = Config.system()
         assert_receive {:ran, LocalStub}
-        await_idle(server, 1_000)
+        await_idle(server)
       end)
 
       assert %{problems: [%{id: "failed_reload:" <> _path, title: title}]} = Setup.payload(server)
@@ -485,7 +485,7 @@ defmodule SymphonyElixir.SetupTest do
       bump_mtime!(path)
       assert {:ok, _system} = Config.system()
       assert_receive {:ran, LocalStub}
-      await_idle(server, 1_000)
+      await_idle(server)
       assert %{problems: []} = Setup.payload(server)
     end
 
@@ -493,7 +493,7 @@ defmodule SymphonyElixir.SetupTest do
       server = start_setup!(checks: [BlockingStub], reload_debounce_ms: 0)
       assert_receive {:blocked, task}
       send(task, :go)
-      await_idle(server, 1_000)
+      await_idle(server)
 
       # Both events wait in the mailbox before the first one starts the debounce timer.
       :sys.suspend(server)
@@ -502,7 +502,7 @@ defmodule SymphonyElixir.SetupTest do
       :sys.resume(server)
       assert_receive {:blocked, task}
       send(task, :go)
-      await_idle(server, 1_000)
+      await_idle(server)
       refute_received {:blocked, _task}
     end
 
@@ -511,14 +511,15 @@ defmodule SymphonyElixir.SetupTest do
       assert_receive {:blocked, first}
       assert %{checked_at: nil, problems: []} = Setup.payload(server)
 
-      refresh = Task.async(fn -> Setup.refresh(server) end)
-      wait_until_queued(server, 1_000)
+      # The test sends the refresh itself, so the server takes it before the read that follows.
+      refresh = :gen_server.send_request(server, :refresh)
+      assert %{queued: [_from]} = :sys.get_state(server)
 
       send(first, :go)
       assert_receive {:blocked, second}
-      refute Task.yield(refresh, 0)
+      assert :timeout = :gen_server.wait_response(refresh, 0)
       send(second, :go)
-      assert %{checked_at: "2026-10-19T09:00:00Z"} = Task.await(refresh)
+      assert {:reply, %{checked_at: "2026-10-19T09:00:00Z"}} = :gen_server.receive_response(refresh, 5_000)
     end
 
     test "a run that crashes keeps the last result and answers the refresh" do
@@ -557,12 +558,22 @@ defmodule SymphonyElixir.SetupTest do
     end
   end
 
-  defp await_idle(server, attempts) when attempts > 0 do
-    state = :sys.get_state(server)
-    if state.task || state.reload_timer, do: await_idle(server, attempts - 1), else: :ok
-  end
+  # Waits until the server has no run going and no reload waiting to start one. A run is waited on
+  # through its task's monitor, not a count of reads: a slow run (under coverage, on a busy runner)
+  # outlasts any count.
+  defp await_idle(server) do
+    case :sys.get_state(server) do
+      %{task: %Task{pid: pid}} ->
+        ref = Process.monitor(pid)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+        await_idle(server)
 
-  defp wait_until_queued(server, attempts) when attempts > 0 do
-    if :sys.get_state(server).queued == [], do: wait_until_queued(server, attempts - 1), else: :ok
+      # These tests debounce reloads by 0 ms: the timer's message is due, and a later read finds its run.
+      %{reload_timer: timer} when is_reference(timer) ->
+        await_idle(server)
+
+      _idle ->
+        :ok
+    end
   end
 end
