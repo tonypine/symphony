@@ -313,7 +313,7 @@ defmodule SymphonyElixir.SetupTest do
       end)
     end
 
-    test "every check names itself, and only the routing and teams checks read Linear" do
+    test "every check names itself, and only the routing, teams and labels checks read Linear" do
       # Each check's id starts each of its problems' ids.
       assert Enum.map(Setup.checks(), & &1.id()) == [
                "deprecated_key",
@@ -323,12 +323,15 @@ defmodule SymphonyElixir.SetupTest do
                "uncloned_repo",
                "routing",
                "secret",
-               "teams"
+               "teams",
+               "labels",
+               "deprecated_label",
+               "hold_drift"
              ]
 
       for check <- Setup.checks() do
         assert is_binary(check.id()) and is_binary(check.title())
-        assert check.needs_linear?() == check in [Checks.Routing, Checks.Teams]
+        assert check.needs_linear?() == check in [Checks.Routing, Checks.Teams, Checks.Labels]
       end
     end
 
@@ -372,7 +375,7 @@ defmodule SymphonyElixir.SetupTest do
       on_exit(fn -> restore_env("LINEAR_API_KEY", previous) end)
       write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: nil)
 
-      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing, %{id: "teams"}]} =
+      assert %{problems: [%{id: "secret:LINEAR_API_KEY"}], not_checked: [not_checked, routing, %{id: "teams"}, %{id: "labels"}]} =
                Setup.check(checks: [LinearStub | Setup.checks()])
 
       assert not_checked.id == "linear_stub"

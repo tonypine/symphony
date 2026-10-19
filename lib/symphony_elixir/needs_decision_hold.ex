@@ -125,7 +125,7 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   end
 
   defp sync_ticket(repo_key, %{"id" => issue_id} = node, settings, opts) when is_binary(issue_id) do
-    repair_drift(repo_key, issue_id, labels(node), opts)
+    repair_drift(repo_key, issue_id, node, opts)
     # The answers go into the ticket's scope on the read that sees them, whatever the hold does.
     _ = Decisions.sync(node, opts |> Keyword.take([:tracker]) |> Keyword.put(:repo_key, repo_key))
     current = Hold.get(repo_key, issue_id, :needs_decision, opts)
@@ -219,8 +219,8 @@ defmodule SymphonyElixir.NeedsDecisionHold do
   # `Needs Decision` label with no store hold is a hand-added label, reported and cleared, and a
   # store hold whose label is missing is re-projected, so a hold that pauses dispatch is never
   # silently invisible.
-  defp repair_drift(repo_key, issue_id, labels, opts) do
-    case Hold.report_drift(repo_key, issue_id, labels, opts) do
+  defp repair_drift(repo_key, issue_id, node, opts) do
+    case Hold.report_drift(repo_key, issue_id, labels(node), Keyword.merge(opts, identifier: node["identifier"], url: node["url"])) do
       {:stray_label, :needs_decision} -> clear_label(repo_key, issue_id, opts)
       {:missing_label, :needs_decision} -> reproject_label(repo_key, issue_id, opts)
       _ok_or_other_kind -> :ok

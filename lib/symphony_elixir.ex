@@ -82,6 +82,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
           SymphonyElixir.Routing.PollLog,
+          SymphonyElixir.Hold.Drift,
           SymphonyElixir.PullRequestPage,
           SymphonyElixir.Repo.Fetcher,
           SymphonyElixir.McpServer,
