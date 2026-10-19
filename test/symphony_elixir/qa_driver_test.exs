@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaDriverTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
-  alias SymphonyElixir.QaDriver.Host
+  alias SymphonyElixir.QaDriver.{Host, ReleasePair}
 
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
@@ -1623,15 +1623,17 @@ defmodule SymphonyElixir.QaDriverTest do
     defp remote_git(["archive" | _args], _cwd), do: {"fatal: not a valid object name HEAD\n", 128}
     defp remote_git(args, cwd), do: clean_git(args, cwd)
 
-    defp remote_driver(worktree, host, git \\ &clean_git/2) do
+    defp remote_driver(worktree, host, git \\ &clean_git/2, opts \\ []) do
       {{:ok, driver}, _log} =
         with_log(fn ->
           QaDriver.start_link(
-            worktree: worktree,
-            worker_host: "qa@qa-vm",
-            playbook: %{build: "make app", app: @app},
-            host: host,
-            git: git
+            [
+              worktree: worktree,
+              worker_host: "qa@qa-vm",
+              playbook: %{build: "make app", app: @app},
+              host: host,
+              git: git
+            ] ++ opts
           )
         end)
 
@@ -2045,6 +2047,121 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_received {:cleanup, @run_dir}
     end
 
+    @missing {:ok, {"install-test-signing-identity: not installed: there is no keychain\n", 3}}
+    @untrusted {:ok, {"install-test-signing-identity: not trusted\n", 4}}
+    @log_context "issue_id=issue-1 issue_identifier=TP-1"
+    @symphony_installer Path.expand("../../scripts/qa/install-test-signing-identity.sh", __DIR__)
+
+    # The QA host's `--use` answers `uses` in turn, then the identity; `sudo -n
+    # true` answers `sudo` and Symphony's installer `install`.
+    defp installing_pair(uses, sudo, install \\ {:ok, {"ready\n", 0}}) do
+      {:ok, replies} = Agent.start_link(fn -> uses end)
+
+      fn
+        "/bin/sh", [_script, "--use"] = args, opts ->
+          case Agent.get_and_update(replies, &next_reply/1) do
+            :pass -> remote_pair("/bin/sh", args, opts)
+            reply -> reply
+          end
+
+        "/usr/bin/sudo", ["-n", "true"], _opts ->
+          sudo
+
+        "/bin/sh", ["-c", _installer, "sh"], _opts ->
+          install
+
+        executable, args, opts ->
+          remote_pair(executable, args, opts)
+      end
+    end
+
+    defp next_reply([reply | rest]), do: {reply, rest}
+    defp next_reply([]), do: {:pass, []}
+
+    defp installing_driver(worktree, intercept),
+      do: remote_driver(worktree, remote_host(%{intercept: intercept}), bundling_git(self()), log_context: @log_context)
+
+    test "installs a missing or untrusted QA signing identity on a QA host with passwordless sudo, then builds the pair", %{worktree: worktree} do
+      # The PR under test may change its own copy of the script; Symphony runs its own.
+      pr_copy = Path.join(worktree, "scripts/qa/install-test-signing-identity.sh")
+      File.mkdir_p!(Path.dirname(pr_copy))
+      File.write!(pr_copy, "#!/bin/sh\necho the PR's copy\n")
+      script = @run_dir <> "/pair-src/scripts/qa/install-test-signing-identity.sh"
+
+      for reply <- [@missing, @untrusted] do
+        driver = installing_driver(worktree, installing_pair([reply], {:ok, {"", 0}}))
+        {result, log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build_release_pair", %{}) end)
+
+        assert {:ok, %{"exit_status" => 0, "manifest" => %{"n" => _n}, "signing_identity_installed" => true, "signing_identity_note" => note}} = result
+        assert note =~ "Symphony installed the QA host's QA signing identity this pass"
+        assert log =~ "QA driver installed the QA signing identity #{@log_context} worker_host=qa@qa-vm outcome=completed"
+        assert_received {:cmd, "/bin/sh", [^script, "--use"], _opts}
+        assert_received {:cmd, "/usr/bin/sudo", ["-n", "true"], _opts}
+        assert_received {:cmd, "/bin/sh", ["-c", installer, "sh"], install_opts}
+        assert installer == File.read!(@symphony_installer)
+        assert installer == ReleasePair.installer()
+        refute installer == File.read!(pr_copy)
+        assert install_opts[:cd] == @run_dir
+        assert install_opts[:remote_env] == [{"SYMPHONY_QA_SIGNING_SUDO", "sudo -n"}]
+        assert_received {:cmd, "/bin/sh", [^script, "--use"], _opts}
+        assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], build_opts}
+        assert {"SYMPHONY_E2E_SIGNING_IDENTITY", String.duplicate("AB", 20)} in build_opts[:remote_env]
+
+        # The next pass finds the identity and installs nothing.
+        assert {:ok, %{"exit_status" => 0} = again} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+        refute Map.has_key?(again, "signing_identity_installed")
+        refute_received {:cmd, "/usr/bin/sudo", _args, _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
+        QaDriver.stop(driver)
+      end
+    end
+
+    test "leaves the QA signing identity to an operator when sudo on the QA host needs a password", %{worktree: worktree} do
+      for {reply, code, text} <- [
+            {@missing, "qa_signing_identity_missing", "The QA host has no QA signing identity: install-test-signing-identity: not installed"},
+            {@untrusted, "qa_signing_identity_untrusted", "is not trusted for code signing: install-test-signing-identity: not trusted"}
+          ],
+          sudo <- [{:ok, {"sudo: a password is required\n", 1}}, {:error, :timeout}] do
+        driver = installing_driver(worktree, installing_pair([reply], sudo))
+        {result, log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build_release_pair", %{}) end)
+
+        assert {:error, {:qa_tool, ^code, message}} = result
+        assert message =~ text
+        assert message =~ "answer with verdict `blocked`"
+        assert message =~ "An operator runs scripts/qa/install-test-signing-identity.sh once on the QA host"
+        refute message =~ "Symphony could not install"
+        assert log =~ "QA driver left the QA signing identity to an operator #{@log_context} worker_host=qa@qa-vm reason=no_passwordless_sudo"
+        assert_received {:cmd, "/usr/bin/sudo", ["-n", "true"], _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        QaDriver.stop(driver)
+      end
+    end
+
+    test "reports an install that fails, or that leaves the identity unusable", %{worktree: worktree} do
+      ready = {:ok, {"ready\n", 0}}
+
+      for {uses, install, code, text} <- [
+            {[@missing], {:ok, {"install-test-signing-identity: couldn't create the keychain\n", 1}}, "qa_signing_identity_missing",
+             "Symphony could not install it on the QA host: exit 1: install-test-signing-identity: couldn't create the keychain."},
+            {[@untrusted], {:error, :timeout}, "qa_signing_identity_untrusted", "Symphony could not install it on the QA host: :timeout."},
+            {[@missing, @untrusted], ready, "qa_signing_identity_untrusted", "Symphony installed it on the QA host this pass, and the check still fails."},
+            {[@untrusted, {:ok, {"sh: no such file\n", 127}}], ready, "qa_signing_identity_check_failed", "The QA signing identity check failed: exit 127"}
+          ] do
+        driver = installing_driver(worktree, installing_pair(uses, {:ok, {"", 0}}, install))
+        {result, log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build_release_pair", %{}) end)
+
+        assert {:error, {:qa_tool, ^code, message}} = result
+        assert message =~ text
+        assert message =~ "answer with verdict `blocked`"
+        outcome = if install == ready, do: "outcome=completed", else: "outcome=failed"
+        assert log =~ "#{@log_context} worker_host=qa@qa-vm #{outcome}"
+        assert_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        QaDriver.stop(driver)
+      end
+    end
+
     test "reports a checkout it can't bundle, copy or clone on the QA host", %{worktree: worktree} do
       test = self()
 
@@ -2236,6 +2353,9 @@ defmodule SymphonyElixir.QaDriverTest do
         assert message =~ "answer with verdict `blocked`"
         assert message =~ "scripts/qa/install-test-signing-identity.sh once on the QA host"
         refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        # Never on this host: the trust root would land in the operator's System keychain.
+        refute_received {:cmd, "/usr/bin/sudo", _args, _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
         assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
         QaDriver.stop(driver)
       end

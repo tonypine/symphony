@@ -339,7 +339,8 @@ defmodule SymphonyElixir.QaDriver do
   Options: `:worktree` (required), `:playbook` (the selected `macos_app` playbook
   with `build`, `app` and optional `build_timeout_ms`), `:tmp_dir` (the pass's
   `$TMPDIR`, where `qa_put_file` may read besides the worktree), `:worker_host`
-  (the SSH host QA runs on, default this host), `:host` (overrides for the OS
+  (the SSH host QA runs on, default this host), `:log_context` (the issue's
+  `issue_id=… issue_identifier=…` for the driver's logs), `:host` (overrides for the OS
   boundary, see `t:host/0`), `:git` (a `fn args, cwd -> {output, status}`) and
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
   OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
@@ -450,7 +451,9 @@ defmodule SymphonyElixir.QaDriver do
          :ok <- GenServer.call(driver, :stop_feed, 30_000),
          {:ok, {output, status}} <- ReleasePair.build(config, source, identity) |> rebaseline_on_timeout(driver, config),
          {:ok, ignored, _dirty} <- worktree_status(config) do
-      record_pair(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
+      driver
+      |> record_pair(config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
+      |> identity_installed(identity)
     end
   end
 
@@ -1022,6 +1025,13 @@ defmodule SymphonyElixir.QaDriver do
     GenServer.call(driver, {:record_pair, nil})
     {:ok, %{"exit_status" => status, "output" => output}}
   end
+
+  defp identity_installed({:ok, payload}, %{installed?: true}) do
+    note = "Symphony installed the QA host's QA signing identity this pass: the host had none, or did not trust it. Say so in the QA report."
+    {:ok, Map.merge(payload, %{"signing_identity_installed" => true, "signing_identity_note" => note})}
+  end
+
+  defp identity_installed(result, _identity), do: result
 
   defp fetch_pair(driver) do
     case GenServer.call(driver, :pair) do
@@ -1718,6 +1728,8 @@ defmodule SymphonyElixir.QaDriver do
       scratch_dir: Checks.private_dir("qa-driver"),
       put_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
       remote?: worker_host != nil,
+      worker_host: worker_host,
+      log_context: Keyword.get(opts, :log_context),
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       git: Keyword.get(opts, :git, &default_git/2),
       start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0),

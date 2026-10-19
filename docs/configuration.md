@@ -1610,7 +1610,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
 | `qa_put_checkout` | puts a git checkout where the app can open it: clones a `git bundle` the agent made into `checkouts/<remote_name>` in the driver's directory (the run directory on a `worker_host`) with no hooks, sets its `origin` to `remote_url`, and returns its path. Nothing is fetched from GitHub | the bundle files `qa_put_file` refuses, a `remote_url` that is not `https://github.com/<owner>/<repo>`, a `remote_name` that is not a plain file name, a checkout name already taken in the pass |
-| `qa_build_release_pair` | builds the [signed release pair](#the-signed-release-pair) (`make -C macos release-pair`) where the app runs, signed with the QA host's test signing identity, into the pass's private directory, and returns its `manifest.json` | a worktree `qa_build` would refuse; a QA host without the identity (`qa_signing_identity_missing`) or whose identity is not trusted for code signing (`qa_signing_identity_untrusted`), which the QA agent reports as `blocked` |
+| `qa_build_release_pair` | builds the [signed release pair](#the-signed-release-pair) (`make -C macos release-pair`) where the app runs, signed with the QA host's test signing identity, into the pass's private directory, and returns its `manifest.json` | a worktree `qa_build` would refuse; a QA host without the identity (`qa_signing_identity_missing`) or whose identity is not trusted for code signing (`qa_signing_identity_untrusted`), which the QA agent reports as `blocked`, unless a `worker_host` with passwordless `sudo` lets Symphony install it first (`signing_identity_installed: true`) |
 | `qa_relaunched_app` | waits up to `wait_seconds` (default 60) for the update helper of a release pair's app to ask for the app to start again, after an install or a rollback, starts that bundle in QA mode with the launch's environment and returns its PID, `version` and `build` | a pass that launched no `release_pair` app; a bundle no `release_pair` launch made; no request in time (`qa_no_relaunch`) |
 | `qa_update_feed` | returns the release pair's feed's `mode`, `url` and the app's `requests` to it (oldest first, at most 200), after switching it to `mode` when given: `publish` offers N+1, `none` nothing newer, `forbidden` answers 403 | a pass whose feed is not running; another `mode` |
 | `qa_api_requests` | returns the requests an app launched with `api_fixtures` logged to `api-requests.jsonl` in its QA root since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; on a `worker_host` it reads the log there | a log that cannot be read |
@@ -1806,8 +1806,10 @@ home as shared by every PR it has built.
    on. Commands started over SSH are attributed to it, so this covers `screencapture` and the
    helper. Restart the VM.
 5. Install whatever `build` needs (for example the repo's toolchain) and run the build once by hand
-   over SSH to confirm it works. For walkthroughs that judge the app after an update, also set up
-   the [signed release pair](#the-signed-release-pair)'s test signing identity.
+   over SSH to confirm it works. The [signed release pair](#the-signed-release-pair)'s test
+   signing identity needs nothing here: the tart image's `admin` has passwordless `sudo`, so QA
+   installs it the first time a pass builds the pair, and again on a clone reset from an image
+   without it.
 6. Stop the VM and keep it as a clean image. To reset it between passes, delete the working copy
    and clone it again: `tart delete symphony-qa-run; tart clone symphony-qa symphony-qa-run;
    tart run --no-graphics symphony-qa-run`. Point `worker_host` at the clone (`tart ip
@@ -1866,10 +1868,22 @@ QA only judges by sight what the app shows afterwards.
   directory, such as an update helper still waiting.
 
 **One-time setup on the QA host.** A persistent test identity, installed and trusted once, rather
-than a throwaway one trusted for each pass: trusting a certificate needs `sudo`, so per-pass trust
-would need passwordless `sudo` for the QA user on every pass, and a pass that died would leave its
-trust setting behind. As the QA user on the QA host (the clean image, for a VM you reset), from a
-checkout of this repository:
+than a throwaway one trusted for each pass: a pass that died would leave its trust setting behind.
+
+On a `worker_host` whose QA user has passwordless `sudo` (`sudo -n true` succeeds there, as for
+the tart VM's `admin`), QA installs it itself: when `--use` finds no identity, or one that is not
+trusted, `qa_build_release_pair` runs the installer below on the QA host, with `sudo -n` for the
+trust step, then `--use` again, and builds the pair in the same call. It runs Symphony's own copy
+of the script, built into the running Symphony, never the PR checkout's, which the PR under test
+may change. Symphony logs the install with the issue's context, and the tool's result says
+`signing_identity_installed: true`, so the QA report shows it. The next pass finds the identity
+and installs nothing.
+
+Symphony never installs it on its own host (QA with no `worker_host`): that would add a
+code-signing trust root to the operator's System keychain, with a key the PR's build can read.
+There, and on a `worker_host` whose `sudo` asks for a password (a separate macOS user), run it by
+hand as the QA user on the QA host (the clean image, for a VM you reset), from a checkout of this
+repository:
 
 ```sh
 scripts/qa/install-test-signing-identity.sh          # asks for sudo once, to trust the certificate
@@ -1884,9 +1898,9 @@ only finds an identity there) and trusts the certificate for code signing only
 (`sudo security add-trusted-cert -d -r trustRoot -p codeSign`). Running it again changes nothing
 once the identity is installed and trusted, and finishes an install that stopped half way. The
 pair's build also needs `minisign` and `jq` (`brew install minisign jq`) and the repository's
-toolchain for `make release`. Without the identity `qa_build_release_pair` fails with
-`qa_signing_identity_missing` or `qa_signing_identity_untrusted`, and the QA agent answers
-`blocked` with that message.
+toolchain for `make release`. Without the identity, where QA cannot install it,
+`qa_build_release_pair` fails with `qa_signing_identity_missing` or
+`qa_signing_identity_untrusted`, and the QA agent answers `blocked` with that message.
 
 QA needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`: the `QA` run only
 dispatches on a head the CI poller has seen green.
