@@ -12,6 +12,9 @@ public struct StateSnapshot: Equatable {
     public var budget: Budget?
     /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
     public var updateUnblocks: Int
+    /// The newest published release of the repository the app updates from, as Symphony last heard of it; nil when
+    /// Symphony knows none, or predates `app_update.latest_release`.
+    public var latestRelease: ReportedRelease?
     /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
     public var forced: [ForcedTicket]
     /// The running agents, in Symphony's order; empty when none runs.
@@ -262,6 +265,7 @@ public struct StateSnapshot: Equatable {
         usageLimits: [UsageLimit] = [],
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
+        latestRelease: ReportedRelease? = nil,
         forced: [ForcedTicket] = [],
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
@@ -274,11 +278,32 @@ public struct StateSnapshot: Equatable {
         self.usageLimits = usageLimits
         self.budget = budget
         self.updateUnblocks = updateUnblocks
+        self.latestRelease = latestRelease
         self.forced = forced
         self.runs = runs
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
         self.sessionKinds = sessionKinds
+    }
+}
+
+/// The newest published release Symphony reports under `/api/v1/state`'s `app_update`, from GitHub's `release`
+/// delivery or its own timed read. The app checks for an update at once when it is newer than the build it runs
+/// (`UpdateCheckSchedule.checksAtOnce`).
+public struct ReportedRelease: Equatable {
+    /// For example `v0.0.1.583`.
+    public var tag: String
+    /// When GitHub published it; nil when Symphony didn't say.
+    public var publishedAt: Date?
+
+    public init(tag: String, publishedAt: Date? = nil) {
+        self.tag = tag
+        self.publishedAt = publishedAt
+    }
+
+    /// The tag without its `v`, as `Release.version` and `AppBuild.version` read it: `0.0.1.583`.
+    public var version: String {
+        tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
     }
 }
 
@@ -339,6 +364,9 @@ public enum SymphonyState {
         var snapshot = StateSnapshot(
             running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
         )
+        if let release = payload.appUpdate?.latestRelease, let tag = release.tag, !tag.isEmpty {
+            snapshot.latestRelease = ReportedRelease(tag: tag, publishedAt: release.publishedAt.flatMap(parseDate))
+        }
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
         }
@@ -468,7 +496,14 @@ public enum SymphonyState {
         }
 
         struct AppUpdate: Decodable {
+            struct LatestRelease: Decodable {
+                let tag: String?
+                let publishedAt: String?
+            }
+
             let unblocks: Int?
+            /// Missing before Symphony reported the newest release.
+            let latestRelease: LatestRelease?
         }
 
         struct Forced: Decodable {

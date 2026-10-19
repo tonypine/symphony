@@ -155,6 +155,21 @@ final class APIFixturesTests: XCTestCase {
         }
     }
 
+    /// The fixture behind a walkthrough where Symphony reports the release pair's N+1 (`make -C macos release-pair`'s
+    /// default build), so a launch on N hears of N+1 on its first poll and checks at once instead of on its timer.
+    func testTheUpdateReportedFixtureReportsTheReleasePairsNextRelease() throws {
+        let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent("update-reported", isDirectory: true)
+        let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+        let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+        guard case .state(let snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("the update-reported fixture doesn't read as a state")
+        }
+        XCTAssertEqual(
+            snapshot.latestRelease,
+            ReportedRelease(tag: "v0.0.1.90002", publishedAt: Date(timeIntervalSince1970: 1_792_137_600))
+        )
+    }
+
     /// The update fixtures QA launches with the update feed's `--fake-release 9.9.9 9999`: dispatch paused for an
     /// update to v9.9.9, with two runs finishing (`update-paused`) or none (`update-paused-idle`).
     func testTheUpdateFixturesReadAsDispatchPausedForAnUpdate() throws {

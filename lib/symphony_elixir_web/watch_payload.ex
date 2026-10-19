@@ -2,10 +2,12 @@ defmodule SymphonyElixirWeb.WatchPayload do
   @moduledoc """
   The PR and CI watcher's record of a ticket as the API serves it (`docs/pr-ci-decisions.md`): the
   `watch` block of `GET /api/v1/state`'s `issues`, of `GET /api/v1/:issue_identifier` and of Check
-  Now, an entry of `silent_waits`, and GitHub's `rate_limit`.
+  Now, an entry of `silent_waits`, GitHub's `rate_limit`, and `app_update`: the tickets an app update
+  would unblock and the app repository's newest release.
 
-  The `watch` block's shape is a contract with the app: `test/fixtures/api/watch_block.json` is an
-  example of it, which the API's tests compare against and the app's decoding tests read.
+  The `watch` and `app_update` blocks' shapes are contracts with the app:
+  `test/fixtures/api/watch_block.json` and `test/fixtures/api/app_update_block.json` are examples of
+  them, which the API's tests compare against and the app's decoding tests read.
   """
 
   alias SymphonyElixir.PrDecision.Action
@@ -84,6 +86,23 @@ defmodule SymphonyElixirWeb.WatchPayload do
   @spec rate_limit(map() | nil) :: map() | nil
   def rate_limit(%{} = rate_limit), do: %{remaining: rate_limit.remaining, limit: Map.get(rate_limit, :limit), reset: iso8601(rate_limit.reset_at)}
   def rate_limit(nil), do: nil
+
+  @doc """
+  The `app_update` block of `GET /api/v1/state`: the tickets held only for an app update (the
+  `:app_update` entries of the snapshot's `blocked`), and `latest_release`, the newest published
+  release of the repository the app updates from (`SymphonyElixir.PrWatch.Release`), nil until
+  Symphony knows one. The app checks for an update at once when it is newer than the build it runs.
+  """
+  @spec app_update([map()], SymphonyElixir.PrWatch.Release.t() | nil) :: map()
+  def app_update(blocked, release) do
+    identifiers = for %{kind: :app_update, identifier: identifier} <- blocked, do: identifier
+    %{unblocks: length(identifiers), issue_identifiers: identifiers, latest_release: latest_release(release)}
+  end
+
+  defp latest_release(%{} = release),
+    do: %{repo: release.repo, tag: release.tag, published_at: iso8601(release.published_at), source: release.source}
+
+  defp latest_release(nil), do: nil
 
   # Who acts next and what clears it: a wait's own, or for an action Symphony carries out (such as
   # `dispatch`), Symphony until the action is done.

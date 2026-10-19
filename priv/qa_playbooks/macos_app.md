@@ -247,7 +247,9 @@ and the QA sandbox cannot run `sudo` anyway. Without it `qa_build_release_pair` 
   with that message.
 - **Launch N:** `qa_launch_app` with `release_pair: true` (plus the walkthrough's `appearance`,
   `api_fixtures` and `update_check_interval_seconds`; not `update_feed_port`). N starts from a fresh
-  copy, and its update checks read the pair's own feed, which offers N+1.
+  copy, and its update checks read the pair's own feed, which offers N+1. When the walkthrough has
+  Symphony report N+1, so the app checks at once instead of on its timer, pass
+  `macos/Tests/Fixtures/director-app/update-reported` as `api_fixtures`: its state reports N+1's tag.
 - **The feed:** `qa_update_feed` returns its `mode` and the `requests` the app sent it (the
   `/releases/latest` checks, the zip's download). Pass `mode` to switch it: `none` offers nothing
   newer (the app is up to date), `forbidden` answers 403 (GitHub's rate limit), `publish` offers
