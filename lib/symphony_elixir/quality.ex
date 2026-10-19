@@ -388,8 +388,6 @@ defmodule SymphonyElixir.Quality do
     Enum.count(records, &(Map.get(&1, :outcome) == outcome))
   end
 
-  defp average_tokens([]), do: nil
-
   defp average_tokens(records) do
     total =
       Enum.reduce(records, 0, fn record, acc ->

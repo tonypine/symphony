@@ -426,8 +426,6 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  defp normalize_token_map(_tokens), do: normalize_token_map(%{})
-
   # How long this Symphony has run: the Erlang VM's wall clock since it started.
   defp uptime_seconds do
     {uptime_ms, _since_last_call} = :erlang.statistics(:wall_clock)

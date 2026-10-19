@@ -2,8 +2,8 @@
 
 Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Open
 Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a Ticket…,
-Check for Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs, Open Web
-Dashboard) and Quit. Open Symphony opens the [Symphony window](#the-symphony-window).
+Check for Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs) and Quit.
+Open Symphony opens the [Symphony window](#the-symphony-window).
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
 self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md)), so
