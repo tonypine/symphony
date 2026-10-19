@@ -74,7 +74,9 @@ for you on the host. They only act on this worktree's configured app and on apps
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
 
-Servers the app talks to (a stub of the project's API, a proxy) run in your shell on this host:
+Servers the app talks to (a stand-in for an outside service, a proxy to the dev server Symphony
+started) run in your shell on this host; never a stub you write of the project's own server or
+API, which is the system under test. For each one:
 - Bind each one to `127.0.0.1` at a port from `QA_HOST_PORTS` (see "Host ports" above), never
   to `0.0.0.0` or another port, and point the app at `http://localhost:<port>`. The app may run on
   a separate QA machine: Symphony forwards those ports, and only those, from its `localhost` to

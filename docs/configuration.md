@@ -1406,6 +1406,37 @@ auto_review:
 
 Set `enabled: false` on a kind to turn it off.
 
+Set `dev_server: true` on a kind of your own when its pass needs the project's server running,
+such as an API and the Postgres it stores in that the app under test talks to. Symphony then
+starts `verification.dev_server` for that pass as it does for `web` (from its own worktree at the
+PR head, on a pooled port, outside the agent's sandbox), gives the agent its URL and lets the
+agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. Without
+a configured dev server the kind is off, and the `QA selection` log line says it needs
+`verification.dev_server`:
+
+```yaml
+auto_review:
+  playbooks:
+    server:
+      paths: ["server/**"]
+      dev_server: true
+      prompt: |
+        ### Playbook: server
+        Call the changed endpoints on the dev server and check the responses.
+```
+
+The QA agent's own sandbox cannot run a database such as Postgres: it lets a process create a
+System V shared memory segment but not look it up again or remove it, so `initdb` fails with
+`could not create shared memory segment: Operation not permitted`. The dev server's sandbox leaves
+System V IPC alone. Start the database from the dev server's `start_cmd`, listening only on a unix
+socket in the dev server's temp folder (`listen_addresses=''`, `unix_socket_directories` set to the
+folder of `$SYMPHONY_VERIFICATION_SOCKET`), since on macOS that sandbox allows no TCP listener.
+
+The QA agent never stands in for the system under test: a stand-in it serves replaces only an
+outside service (a paid AI service, real credentials, a third-party API). When the project's own
+server cannot build or start, the steps that need it are `blocked`, never judged against a stub
+the agent wrote.
+
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
 there; any other one fails the repository's workflow with an error pointing at `symphony.yml`.
